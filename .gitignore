@@ -1,0 +1,16 @@
+# MoonBit build artifacts
+_build/
+target
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies (managed by moon)
+.mooncakes/

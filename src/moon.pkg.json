@@ -1,0 +1,19 @@
+{
+  "import": [
+    {
+      "path": "moonbitlang/wasm5/core",
+      "alias": "core"
+    },
+    {
+      "path": "moonbitlang/wasm5/runtime",
+      "alias": "runtime"
+    },
+    {
+      "path": "moonbitlang/wasm5/encode",
+      "alias": "encode"
+    },
+    "moonbitlang/async",
+    "moonbitlang/async/fs",
+    "moonbitlang/core/env"
+  ]
+}
