@@ -70,6 +70,7 @@ pub struct JSPropMap {
 pub struct JSArray {
   id : Int
   items : Array[JSValue]
+  present : Array[Bool]
   props : Array[JSProp]
   mut length : Int
   mut prototype : JSValue?
@@ -570,7 +571,7 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
       } else {
 
         let idx = @strconv.parse_int(key) catch { _ => -1 }
-        if idx >= 0 && idx < arr.items.length() {
+        if idx >= 0 && idx < arr.items.length() && arr.present[idx] {
           arr.items[idx]
         } else {
           for prop in arr.props {
@@ -631,7 +632,7 @@ pub fn js_has_prop(obj : JSValue, key : String) -> Bool {
         true
       } else {
         let idx = @strconv.parse_int(key) catch { _ => -1 }
-        if idx >= 0 && idx < arr.items.length() {
+        if idx >= 0 && idx < arr.items.length() && arr.present[idx] {
           true
         } else {
           let mut found = false
@@ -766,10 +767,12 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
           if new_len < arr.items.length() {
             while arr.items.length() > new_len {
               let _ = arr.items.pop()
+              let _ = arr.present.pop()
             }
           } else if new_len <= MAX_DENSE_ARRAY_LENGTH {
             while arr.items.length() < new_len {
               arr.items.push(Undefined)
+              arr.present.push(false)
             }
           }
           arr.length = new_len
@@ -782,8 +785,10 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
           // array
           while arr.items.length() <= idx {
             arr.items.push(Undefined)
+            arr.present.push(false)
           }
           arr.items[idx] = value
+          arr.present[idx] = true
         } else {
           let mut replaced = false
           for i, prop in arr.props {
@@ -898,7 +903,7 @@ pub fn js_delete_prop(obj : JSValue, key : String) -> Bool {
       } else {
         let idx = @strconv.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < arr.items.length() {
-          arr.items[idx] = Undefined
+          arr.present[idx] = false
         } else {
           let mut i = 0
           while i < arr.props.length() {
@@ -988,10 +993,12 @@ pub fn js_define_data_prop(
           if new_len < arr.items.length() {
             while arr.items.length() > new_len {
               let _ = arr.items.pop()
+              let _ = arr.present.pop()
             }
           } else if new_len <= MAX_DENSE_ARRAY_LENGTH {
             while arr.items.length() < new_len {
               arr.items.push(Undefined)
+              arr.present.push(false)
             }
           }
           arr.length = new_len
@@ -1003,8 +1010,10 @@ pub fn js_define_data_prop(
         if idx < MAX_DENSE_ARRAY_LENGTH {
           while arr.items.length() <= idx {
             arr.items.push(Undefined)
+            arr.present.push(false)
           }
           arr.items[idx] = value
+          arr.present[idx] = true
         } else {
           let mut replaced = false
           for i, prop in arr.props {
@@ -1215,6 +1224,7 @@ pub fn js_new_array() -> JSValue {
   Array({
     id: fresh_array_id(),
     items: [],
+    present: [],
     props: [],
     length: 0,
     prototype: array_proto_holder.proto,
@@ -1224,9 +1234,14 @@ pub fn js_new_array() -> JSValue {
 ///|
 // / arrayliteralcreate
 pub fn js_array_from(items : Array[JSValue]) -> JSValue {
+  let present : Array[Bool] = []
+  for _ in items {
+    present.push(true)
+  }
   Array({
     id: fresh_array_id(),
     items,
+    present,
     props: [],
     length: items.length(),
     prototype: array_proto_holder.proto,
@@ -1239,6 +1254,7 @@ pub fn js_array_push(arr : JSValue, value : JSValue) -> JSValue {
   match arr {
     Array(arr_map) => {
       arr_map.items.push(value)
+      arr_map.present.push(true)
       let new_len = arr_map.items.length()
       if new_len > arr_map.length {
         arr_map.length = new_len

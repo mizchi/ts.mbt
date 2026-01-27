@@ -458,11 +458,14 @@ async fn run_test262(test_path : String) -> Unit {
     }
   }
 
+  let total_files = files.length()
+  let progress_interval = 200
+  let per_test_step_limit = 200_000
   let mut passed = 0
   let mut failed = 0
   let mut skipped = 0
 
-  for path in files {
+  for i, path in files {
     let content = @fs.read_file(path).text() catch {
       e => {
         failed += 1
@@ -490,6 +493,7 @@ async fn run_test262(test_path : String) -> Unit {
     }
 
     let interp = @runtime.JSInterpreter::new()
+    interp.set_step_limit(per_test_step_limit)
     let mut source = include_src + content
     if contains(meta.flags, "onlyStrict") {
       source = "\"use strict\";\n" + source
@@ -516,8 +520,15 @@ async fn run_test262(test_path : String) -> Unit {
       }
       _ => passed += 1
     }
+    let done = i + 1
+    if done % progress_interval == 0 || done == total_files {
+      println(
+        "test262 progress: \{done}/\{total_files} (passed=\{passed}, failed=\{failed}, skipped=\{skipped})",
+      )
+    }
   }
 
-  let total = passed + failed + skipped
-  println("test262 results: total=\{total}, passed=\{passed}, failed=\{failed}, skipped=\{skipped}")
+  println(
+    "test262 results: total=\{total_files}, passed=\{passed}, failed=\{failed}, skipped=\{skipped}",
+  )
 }
