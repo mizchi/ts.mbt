@@ -71,6 +71,9 @@ pub(all) enum TsExpr {
   // 代入式 (式として)
   AssignExpr(String, TsExpr)
 
+  // 複合代入式 (式として)
+  CompoundAssignExpr(TsExpr, TsCompoundOp, TsExpr)
+
   // プロパティ代入式
   PropAssignExpr(TsExpr, String, TsExpr)
 

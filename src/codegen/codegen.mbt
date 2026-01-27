@@ -190,6 +190,7 @@ fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
     @parser.TsExpr::Seq(_, right) => infer_literal_type(right)
     @parser.TsExpr::PropAssignExpr(_, _, value) => infer_literal_type(value)
     @parser.TsExpr::IndexAssignExpr(_, _, value) => infer_literal_type(value)
+    @parser.TsExpr::CompoundAssignExpr(left, _, _) => infer_literal_type(left)
     @parser.TsExpr::BinOp(op, lhs, _) =>
       // 比較演算子は @parser.TsType::Boolean を返す
       match op {
@@ -377,6 +378,7 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
     @parser.TsExpr::Seq(_, right) => infer_type(ctx, right)
     @parser.TsExpr::PropAssignExpr(_, _, value) => infer_type(ctx, value)
     @parser.TsExpr::IndexAssignExpr(_, _, value) => infer_type(ctx, value)
+    @parser.TsExpr::CompoundAssignExpr(left, _, _) => infer_type(ctx, left)
     @parser.TsExpr::Yield(_) => @parser.TsType::Any
     @parser.TsExpr::Var(name) =>
       match ctx.get_local(name) {
@@ -567,6 +569,8 @@ fn compile_expr(
       compile_prop_assign_expr(ctx, obj, prop, value)
     @parser.TsExpr::IndexAssignExpr(arr, index, value) =>
       compile_index_assign_expr(ctx, arr, index, value)
+    @parser.TsExpr::CompoundAssignExpr(left, op, right) =>
+      compile_compound_assign_expr(ctx, left, op, right)
     @parser.TsExpr::BinOp(op, left, right) => compile_binop(ctx, op, left, right, expected_type)
     @parser.TsExpr::UnaryOp(op, operand) => compile_unaryop(ctx, op, operand, expected_type)
     @parser.TsExpr::Call(name, args) => compile_call(ctx, name, args, expected_type)
@@ -1351,6 +1355,204 @@ fn compile_index_assign_expr(
 
   // 値を返す
   ctx.emit(LocalGet(val_local))
+}
+
+///|
+fn emit_compound_op_instr(
+  ctx : CodeGenCtx,
+  op : @parser.TsCompoundOp,
+  operand_type : @parser.TsType,
+) -> Unit raise CodeGenError {
+  if operand_type == @parser.TsType::String_ {
+    raise CodeGenError("string compound assignment is not supported in Wasm compiler")
+  }
+  match op {
+    @parser.TsCompoundOp::BitAndAssign
+    | @parser.TsCompoundOp::BitOrAssign
+    | @parser.TsCompoundOp::BitXorAssign
+    | @parser.TsCompoundOp::ShlAssign
+    | @parser.TsCompoundOp::ShrAssign
+    | @parser.TsCompoundOp::UShrAssign
+    | @parser.TsCompoundOp::PowAssign =>
+      raise CodeGenError(
+        "compound op is not supported in Wasm compiler (use interpreter)",
+      )
+    _ => ()
+  }
+  if is_f64_type(operand_type) {
+    match op {
+      @parser.TsCompoundOp::AddAssign => ctx.emit(F64Add)
+      @parser.TsCompoundOp::SubAssign => ctx.emit(F64Sub)
+      @parser.TsCompoundOp::MulAssign => ctx.emit(F64Mul)
+      @parser.TsCompoundOp::DivAssign => ctx.emit(F64Div)
+      @parser.TsCompoundOp::ModAssign =>
+        raise CodeGenError("f64 mod is not supported in Wasm compiler")
+      _ =>
+        raise CodeGenError(
+          "compound op is not supported in Wasm compiler (use interpreter)",
+        )
+    }
+  } else {
+    match op {
+      @parser.TsCompoundOp::AddAssign => ctx.emit(I32Add)
+      @parser.TsCompoundOp::SubAssign => ctx.emit(I32Sub)
+      @parser.TsCompoundOp::MulAssign => ctx.emit(I32Mul)
+      @parser.TsCompoundOp::DivAssign => ctx.emit(I32DivS)
+      @parser.TsCompoundOp::ModAssign => ctx.emit(I32RemS)
+      _ =>
+        raise CodeGenError(
+          "compound op is not supported in Wasm compiler (use interpreter)",
+        )
+    }
+  }
+}
+
+///|
+fn compile_var_compound_assign_expr(
+  ctx : CodeGenCtx,
+  name : String,
+  op : @parser.TsCompoundOp,
+  value : @parser.TsExpr,
+) -> Unit raise CodeGenError {
+  match ctx.get_local(name) {
+    Some(lvar) => {
+      let operand_type = lvar.type_
+      ctx.emit(LocalGet(lvar.index))
+      compile_expr(ctx, value, operand_type)
+      emit_compound_op_instr(ctx, op, operand_type)
+      ctx.emit(LocalTee(lvar.index))
+    }
+    None => raise CodeGenError("Undefined variable: \{name}")
+  }
+}
+
+///|
+fn compile_prop_compound_assign_expr(
+  ctx : CodeGenCtx,
+  obj : @parser.TsExpr,
+  prop : String,
+  op : @parser.TsCompoundOp,
+  value : @parser.TsExpr,
+) -> Unit raise CodeGenError {
+  let obj_type = infer_type(ctx, obj)
+  match obj_type {
+    @parser.TsType::Named(type_name) =>
+      match ctx.interfaces.get(type_name) {
+        Some(fields) =>
+          match field_offset(fields, prop) {
+            Some(offset) =>
+              match field_type(fields, prop) {
+                Some(ft) => {
+                  let obj_local = ctx.add_temp_local(@parser.TsType::Int)
+                  let addr_local = ctx.add_temp_local(@parser.TsType::Int)
+                  let val_local = ctx.add_temp_local(ft)
+                  compile_expr(ctx, obj, obj_type)
+                  ctx.emit(LocalSet(obj_local))
+                  ctx.emit(LocalGet(obj_local))
+                  ctx.emit(I32Const(offset.reinterpret_as_uint()))
+                  ctx.emit(I32Add)
+                  ctx.emit(LocalSet(addr_local))
+
+                  ctx.emit(LocalGet(addr_local))
+                  if is_f64_type(ft) {
+                    ctx.emit(F64Load(3U, 0U, 0U))
+                  } else {
+                    ctx.emit(I32Load(2U, 0U, 0U))
+                  }
+                  compile_expr(ctx, value, ft)
+                  emit_compound_op_instr(ctx, op, ft)
+                  ctx.emit(LocalSet(val_local))
+                  ctx.emit(LocalGet(addr_local))
+                  ctx.emit(LocalGet(val_local))
+                  if is_f64_type(ft) {
+                    ctx.emit(F64Store(3U, 0U, 0U))
+                  } else {
+                    ctx.emit(I32Store(2U, 0U, 0U))
+                  }
+                  ctx.emit(LocalGet(val_local))
+                  return
+                }
+                None => ()
+              }
+            None => ()
+          }
+        None => ()
+      }
+    _ => ()
+  }
+  raise CodeGenError("Cannot assign to property: \{prop}")
+}
+
+///|
+fn compile_index_compound_assign_expr(
+  ctx : CodeGenCtx,
+  arr : @parser.TsExpr,
+  index : @parser.TsExpr,
+  op : @parser.TsCompoundOp,
+  value : @parser.TsExpr,
+) -> Unit raise CodeGenError {
+  let arr_type = infer_type(ctx, arr)
+  let elem_type = match arr_type {
+    @parser.TsType::Array(t) => t
+    _ => @parser.TsType::Number
+  }
+  let elem_sz = element_size(elem_type)
+  let arr_local = ctx.add_temp_local(@parser.TsType::Int)
+  let idx_local = ctx.add_temp_local(@parser.TsType::Int)
+  let addr_local = ctx.add_temp_local(@parser.TsType::Int)
+  let val_local = ctx.add_temp_local(elem_type)
+
+  compile_expr(ctx, arr, arr_type)
+  ctx.emit(LocalSet(arr_local))
+  compile_expr(ctx, index, @parser.TsType::Int)
+  ctx.emit(LocalSet(idx_local))
+
+  ctx.emit(LocalGet(arr_local))
+  ctx.emit(I32Const(4U))
+  ctx.emit(I32Add)
+  ctx.emit(LocalGet(idx_local))
+  ctx.emit(I32Const(elem_sz.reinterpret_as_uint()))
+  ctx.emit(I32Mul)
+  ctx.emit(I32Add)
+  ctx.emit(LocalSet(addr_local))
+
+  ctx.emit(LocalGet(addr_local))
+  if is_f64_type(elem_type) {
+    ctx.emit(F64Load(3U, 0U, 0U))
+  } else {
+    ctx.emit(I32Load(2U, 0U, 0U))
+  }
+  compile_expr(ctx, value, elem_type)
+  emit_compound_op_instr(ctx, op, elem_type)
+  ctx.emit(LocalSet(val_local))
+  ctx.emit(LocalGet(addr_local))
+  ctx.emit(LocalGet(val_local))
+  if is_f64_type(elem_type) {
+    ctx.emit(F64Store(3U, 0U, 0U))
+  } else {
+    ctx.emit(I32Store(2U, 0U, 0U))
+  }
+  ctx.emit(LocalGet(val_local))
+}
+
+///|
+fn compile_compound_assign_expr(
+  ctx : CodeGenCtx,
+  left : @parser.TsExpr,
+  op : @parser.TsCompoundOp,
+  value : @parser.TsExpr,
+) -> Unit raise CodeGenError {
+  match left {
+    @parser.TsExpr::Var(name) => compile_var_compound_assign_expr(ctx, name, op, value)
+    @parser.TsExpr::PropAccess(obj, prop) =>
+      compile_prop_compound_assign_expr(ctx, obj, prop, op, value)
+    @parser.TsExpr::IndexAccess(arr, index) =>
+      compile_index_compound_assign_expr(ctx, arr, index, op, value)
+    _ =>
+      raise CodeGenError(
+        "compound assignment target is not supported in Wasm compiler",
+      )
+  }
 }
 
 ///|

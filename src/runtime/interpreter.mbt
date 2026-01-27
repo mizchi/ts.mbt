@@ -204,7 +204,7 @@ fn JSInterpreter::calc_bound_length(
 ///|
 /// strict mode 判定
 fn JSInterpreter::is_strict_body(
-  self : JSInterpreter,
+  _self : JSInterpreter,
   body : @parser.TsBlock,
   inherit_strict : Bool,
 ) -> Bool {
@@ -346,13 +346,13 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let obj_is_ext = self.make_native("Object.isExtensible")
   self.set_function_length(obj_is_ext, 1.0)
   let _ = js_set_prop(object_ctor, "isExtensible", obj_is_ext)
-  self.global_env.define("Object", object_ctor)
+  self.global_env.define_var("Object", object_ctor)
   let _ = js_set_prop(global_obj, "Object", object_ctor)
 
   // console
   let console = self.new_object()
   let _ = js_set_prop(console, "log", self.make_native("console.log"))
-  self.global_env.define("console", console)
+  self.global_env.define_var("console", console)
   let _ = js_set_prop(global_obj, "console", console)
 
   // Math
@@ -373,7 +373,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let _ = js_define_data_prop(math, "PI", Number(@math.PI), false, false, false)
   let _ = js_define_data_prop(math, "E", Number(@math.exp(1.0)), false, false, false)
   let _ = js_define_data_prop(math, "LN2", Number(@math.ln(2.0)), false, false, false)
-  self.global_env.define("Math", math)
+  self.global_env.define_var("Math", math)
   let _ = js_set_prop(global_obj, "Math", math)
 
   // Function
@@ -396,7 +396,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.set_function_name(function_ctor, "Function")
   let _ = js_define_data_prop(function_ctor, "prototype", self.function_proto, true, false, true)
   let _ = js_set_prop(self.function_proto, "constructor", function_ctor)
-  self.global_env.define("Function", function_ctor)
+  self.global_env.define_var("Function", function_ctor)
   let _ = js_set_prop(global_obj, "Function", function_ctor)
 
   // Boolean / Number / String
@@ -409,7 +409,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let bool_value_of = self.make_native("Boolean.prototype.valueOf")
   self.set_function_length(bool_value_of, 0.0)
   let _ = js_set_prop(boolean_proto, "valueOf", bool_value_of)
-  self.global_env.define("Boolean", boolean_ctor)
+  self.global_env.define_var("Boolean", boolean_ctor)
   let _ = js_set_prop(global_obj, "Boolean", boolean_ctor)
 
   let number_proto = self.new_object()
@@ -423,7 +423,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let _ = js_set_prop(number_proto, "valueOf", num_value_of)
   let max_safe = JSValue::Number(9007199254740991.0)
   let _ = js_define_data_prop(number_ctor, "MAX_SAFE_INTEGER", max_safe, false, false, false)
-  self.global_env.define("Number", number_ctor)
+  self.global_env.define_var("Number", number_ctor)
   let _ = js_set_prop(global_obj, "Number", number_ctor)
 
   let string_proto = self.new_object()
@@ -516,7 +516,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let str_from_code_point = self.make_native("String.fromCodePoint")
   self.set_function_length(str_from_code_point, 1.0)
   let _ = js_set_prop(string_ctor, "fromCodePoint", str_from_code_point)
-  self.global_env.define("String", string_ctor)
+  self.global_env.define_var("String", string_ctor)
   let _ = js_set_prop(global_obj, "String", string_ctor)
 
   // RegExp (minimal)
@@ -532,7 +532,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let re_test = self.make_native("RegExp.prototype.test")
   self.set_function_length(re_test, 1.0)
   let _ = js_set_prop(regexp_proto, "test", re_test)
-  self.global_env.define("RegExp", regexp_ctor)
+  self.global_env.define_var("RegExp", regexp_ctor)
   let _ = js_set_prop(global_obj, "RegExp", regexp_ctor)
 
   // Array
@@ -645,7 +645,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let is_array_fn = self.make_native("Array.isArray")
   self.set_function_length(is_array_fn, 1.0)
   let _ = js_set_prop(array_ctor, "isArray", is_array_fn)
-  self.global_env.define("Array", array_ctor)
+  self.global_env.define_var("Array", array_ctor)
   let _ = js_set_prop(global_obj, "Array", array_ctor)
 
   // Date
@@ -655,34 +655,34 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.set_function_name(date_ctor, "Date")
   let _ = js_define_data_prop(date_ctor, "prototype", date_proto, true, false, true)
   let _ = js_set_prop(date_proto, "constructor", date_ctor)
-  self.global_env.define("Date", date_ctor)
+  self.global_env.define_var("Date", date_ctor)
   let _ = js_set_prop(global_obj, "Date", date_ctor)
 
   // Errors (minimal)
   let syntax_ctor = self.make_native("SyntaxError")
   self.set_function_name(syntax_ctor, "SyntaxError")
   let _ = js_define_data_prop(syntax_ctor, "prototype", self.new_object(), true, false, true)
-  self.global_env.define("SyntaxError", syntax_ctor)
+  self.global_env.define_var("SyntaxError", syntax_ctor)
   let _ = js_set_prop(global_obj, "SyntaxError", syntax_ctor)
   let type_ctor = self.make_native("TypeError")
   self.set_function_name(type_ctor, "TypeError")
   let _ = js_define_data_prop(type_ctor, "prototype", self.new_object(), true, false, true)
-  self.global_env.define("TypeError", type_ctor)
+  self.global_env.define_var("TypeError", type_ctor)
   let _ = js_set_prop(global_obj, "TypeError", type_ctor)
   let ref_ctor = self.make_native("ReferenceError")
   self.set_function_name(ref_ctor, "ReferenceError")
   let _ = js_define_data_prop(ref_ctor, "prototype", self.new_object(), true, false, true)
-  self.global_env.define("ReferenceError", ref_ctor)
+  self.global_env.define_var("ReferenceError", ref_ctor)
   let _ = js_set_prop(global_obj, "ReferenceError", ref_ctor)
   let range_ctor = self.make_native("RangeError")
   self.set_function_name(range_ctor, "RangeError")
   let _ = js_define_data_prop(range_ctor, "prototype", self.new_object(), true, false, true)
-  self.global_env.define("RangeError", range_ctor)
+  self.global_env.define_var("RangeError", range_ctor)
   let _ = js_set_prop(global_obj, "RangeError", range_ctor)
   let test262_ctor = self.make_native("Test262Error")
   self.set_function_name(test262_ctor, "Test262Error")
   let _ = js_define_data_prop(test262_ctor, "prototype", self.new_object(), true, false, true)
-  self.global_env.define("Test262Error", test262_ctor)
+  self.global_env.define_var("Test262Error", test262_ctor)
   let _ = js_set_prop(global_obj, "Test262Error", test262_ctor)
 
   // assert (callable object)
@@ -708,31 +708,31 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
     "throws",
     self.make_native("assert.throws"),
   )
-  self.global_env.define("assert", assert_obj)
+  self.global_env.define_var("assert", assert_obj)
   let _ = js_set_prop(global_obj, "assert", assert_obj)
 
   // print
   let print_fn = self.make_native("print")
-  self.global_env.define("print", print_fn)
+  self.global_env.define_var("print", print_fn)
   let _ = js_set_prop(global_obj, "print", print_fn)
 
   // eval
   let eval_fn = self.make_native("eval")
   self.set_function_length(eval_fn, 1.0)
-  self.global_env.define("eval", eval_fn)
+  self.global_env.define_var("eval", eval_fn)
   let _ = js_set_prop(global_obj, "eval", eval_fn)
 
   // $DONOTEVALUATE
   let donotevaluate_fn = self.make_native("$DONOTEVALUATE")
-  self.global_env.define("$DONOTEVALUATE", donotevaluate_fn)
+  self.global_env.define_var("$DONOTEVALUATE", donotevaluate_fn)
   let _ = js_set_prop(global_obj, "$DONOTEVALUATE", donotevaluate_fn)
 
   // $ERROR / $DONE
   let error_fn = self.make_native("$ERROR")
-  self.global_env.define("$ERROR", error_fn)
+  self.global_env.define_var("$ERROR", error_fn)
   let _ = js_set_prop(global_obj, "$ERROR", error_fn)
   let done_fn = self.make_native("$DONE")
-  self.global_env.define("$DONE", done_fn)
+  self.global_env.define_var("$DONE", done_fn)
   let _ = js_set_prop(global_obj, "$DONE", done_fn)
 
   // $262
@@ -740,19 +740,19 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let _ = js_set_prop(t262, "global", global_obj)
   let _ = js_set_prop(t262, "evalScript", self.make_native("$262.evalScript"))
   let _ = js_set_prop(t262, "createRealm", self.make_native("$262.createRealm"))
-  self.global_env.define("$262", t262)
+  self.global_env.define_var("$262", t262)
   let _ = js_set_prop(global_obj, "$262", t262)
 
   // globalThis / global
-  self.global_env.define("globalThis", global_obj)
-  self.global_env.define("global", global_obj)
-  self.global_env.define("this", global_obj)
-  self.global_env.define("undefined", Undefined)
+  self.global_env.define_var("globalThis", global_obj)
+  self.global_env.define_var("global", global_obj)
+  self.global_env.define_var("this", global_obj)
+  self.global_env.define_var("undefined", Undefined)
   let _ = js_set_prop(global_obj, "undefined", Undefined)
   let nan = JSValue::Number(0.0 / 0.0)
   let inf = JSValue::Number(1.0 / 0.0)
-  self.global_env.define("NaN", nan)
-  self.global_env.define("Infinity", inf)
+  self.global_env.define_var("NaN", nan)
+  self.global_env.define_var("Infinity", inf)
   let _ = js_set_prop(global_obj, "NaN", nan)
   let _ = js_set_prop(global_obj, "Infinity", inf)
 
@@ -760,13 +760,13 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let symbol_fn = self.make_native("Symbol")
   self.set_function_length(symbol_fn, 0.0)
   let _ = js_set_prop(symbol_fn, "hasInstance", String("@@hasInstance"))
-  self.global_env.define("Symbol", symbol_fn)
+  self.global_env.define_var("Symbol", symbol_fn)
   let _ = js_set_prop(global_obj, "Symbol", symbol_fn)
 
   // Reflect
   let reflect = self.new_object()
   let _ = js_set_prop(reflect, "construct", self.make_native("Reflect.construct"))
-  self.global_env.define("Reflect", reflect)
+  self.global_env.define_var("Reflect", reflect)
   let _ = js_set_prop(global_obj, "Reflect", reflect)
 }
 
@@ -1105,11 +1105,50 @@ pub fn JSInterpreter::eval_expr(
         }
       }
     }
+    @parser.TsExpr::CompoundAssignExpr(left, op, right) => {
+      match left {
+        @parser.TsExpr::Var(name) => {
+          let current = env.get(name)
+          let val = self.eval_expr(right, env)
+          let new_val = apply_compound_op(op, current, val)
+          if not(env.set(name, new_val)) {
+            self.global_env.define_var(name, new_val)
+            let global_obj = self.global_env.get("globalThis")
+            let _ = js_set_prop(global_obj, name, new_val)
+          }
+          new_val
+        }
+        @parser.TsExpr::PropAccess(obj_expr, prop) => {
+          let obj = self.eval_expr(obj_expr, env)
+          let current = self.get_prop_value(obj, prop)
+          let val = self.eval_expr(right, env)
+          let new_val = apply_compound_op(op, current, val)
+          let _ = js_set_prop(obj, prop, new_val)
+          new_val
+        }
+        @parser.TsExpr::IndexAccess(obj_expr, idx_expr) => {
+          let obj = self.eval_expr(obj_expr, env)
+          let idx = self.eval_expr(idx_expr, env)
+          let key = idx.to_js_string()
+          let current = self.get_prop_value(obj, key)
+          let val = self.eval_expr(right, env)
+          let new_val = apply_compound_op(op, current, val)
+          match obj {
+            Array(_) | Object(_) => {
+              let _ = js_set_prop(obj, key, new_val)
+            }
+            _ => ()
+          }
+          new_val
+        }
+        _ => self.eval_expr(right, env)
+      }
+    }
     @parser.TsExpr::AssignExpr(name, val_expr) => {
       let val = self.eval_expr(val_expr, env)
       if not(env.set(name, val)) {
         // 変数が見つからない場合はグローバルに定義
-        self.global_env.define(name, val)
+        self.global_env.define_var(name, val)
         let global_obj = self.global_env.get("globalThis")
         let _ = js_set_prop(global_obj, name, val)
       }
@@ -1232,26 +1271,13 @@ pub fn JSInterpreter::eval_expr(
 ///|
 /// direct eval: 同一環境で式/文を実行
 fn JSInterpreter::direct_eval(self : JSInterpreter, source : String, env : JSEnv) -> JSValue {
-  let parsed_expr = try { @parser.parse_expr_from_source(source) } catch {
-    @parser.ParseError::ParseError(msg) => {
-      let _ = self.set_error_kind("SyntaxError", msg)
-      return JSValue::Undefined
-    }
-    _ => {
-      let _ = self.set_error_kind("SyntaxError", "eval parse error")
-      return JSValue::Undefined
-    }
-  }
+  let parsed_expr = try { @parser.parse_expr_from_source(source) } catch { _ => None }
   match parsed_expr {
     Some(expr) => self.eval_expr(expr, env)
     None => {
       let block = try { @parser.parse_block_from_source(source) } catch {
         @parser.ParseError::ParseError(msg) => {
           let _ = self.set_error_kind("SyntaxError", msg)
-          return JSValue::Undefined
-        }
-        _ => {
-          let _ = self.set_error_kind("SyntaxError", "eval parse error")
           return JSValue::Undefined
         }
       }
@@ -1283,6 +1309,57 @@ fn JSInterpreter::exec_eval_block(
 }
 
 ///|
+fn apply_compound_op(
+  op : @parser.TsCompoundOp,
+  current : JSValue,
+  val : JSValue,
+) -> JSValue {
+  match op {
+    @parser.TsCompoundOp::AddAssign => js_add(current, val)
+    @parser.TsCompoundOp::SubAssign => js_sub(current, val)
+    @parser.TsCompoundOp::MulAssign => js_mul(current, val)
+    @parser.TsCompoundOp::DivAssign => js_div(current, val)
+    @parser.TsCompoundOp::ModAssign => js_mod(current, val)
+    @parser.TsCompoundOp::BitAndAssign => {
+      let li = current.to_number().to_int()
+      let ri = val.to_number().to_int()
+      Number((li & ri).to_double())
+    }
+    @parser.TsCompoundOp::BitOrAssign => {
+      let li = current.to_number().to_int()
+      let ri = val.to_number().to_int()
+      Number((li | ri).to_double())
+    }
+    @parser.TsCompoundOp::BitXorAssign => {
+      let li = current.to_number().to_int()
+      let ri = val.to_number().to_int()
+      Number((li ^ ri).to_double())
+    }
+    @parser.TsCompoundOp::ShlAssign => {
+      let li = current.to_number().to_int()
+      let ri = val.to_number().to_int()
+      let shift = ri & 31
+      Number((li << shift).to_double())
+    }
+    @parser.TsCompoundOp::ShrAssign => {
+      let li = current.to_number().to_int()
+      let ri = val.to_number().to_int()
+      let shift = ri & 31
+      Number((li >> shift).to_double())
+    }
+    @parser.TsCompoundOp::UShrAssign => {
+      let li = current.to_number()
+      let ri = val.to_number().to_int()
+      let shift = ri & 31
+      let u = if li < 0.0 { li + 4294967296.0 } else { li }
+      let denom = @math.pow(2.0, shift.to_double())
+      Number(@math.floor(u / denom))
+    }
+    @parser.TsCompoundOp::PowAssign => Number(@math.pow(current.to_number(), val.to_number()))
+  }
+}
+
+///|
 /// 文を実行（戻り値はReturnの場合のみSome）
 pub fn JSInterpreter::exec_stmt(
   self : JSInterpreter,
@@ -1302,7 +1379,7 @@ pub fn JSInterpreter::exec_stmt(
         None => ()
       }
       self.maybe_set_function_name(val, name)
-      env.define(name, val)
+      env.define_var(name, val)
       match env.parent {
         None => {
           let global_obj = self.global_env.get("globalThis")
@@ -1329,7 +1406,7 @@ pub fn JSInterpreter::exec_stmt(
       }
       self.maybe_set_function_name(val, name)
       if not(env.set(name, val)) {
-        self.global_env.define(name, val)
+        self.global_env.define_var(name, val)
         let global_obj = self.global_env.get("globalThis")
         let _ = js_set_prop(global_obj, name, val)
       }
@@ -1362,7 +1439,7 @@ pub fn JSInterpreter::exec_stmt(
                     None => "error"
                   }
                   let catch_env = js_new_env(Some(env))
-                  catch_env.define(name, err)
+                  catch_env.define_var(name, err)
                   result = self.exec_block(block, catch_env)
                 }
                 None => pending_error = Some(err)
@@ -1491,49 +1568,7 @@ pub fn JSInterpreter::exec_stmt(
         Some(err) => return Some(err)
         None => ()
       }
-      let new_val = match op {
-        @parser.TsCompoundOp::AddAssign => js_add(current, val)
-        @parser.TsCompoundOp::SubAssign => js_sub(current, val)
-        @parser.TsCompoundOp::MulAssign => js_mul(current, val)
-        @parser.TsCompoundOp::DivAssign => js_div(current, val)
-        @parser.TsCompoundOp::ModAssign => js_mod(current, val)
-        @parser.TsCompoundOp::BitAndAssign => {
-          let li = current.to_number().to_int()
-          let ri = val.to_number().to_int()
-          Number((li & ri).to_double())
-        }
-        @parser.TsCompoundOp::BitOrAssign => {
-          let li = current.to_number().to_int()
-          let ri = val.to_number().to_int()
-          Number((li | ri).to_double())
-        }
-        @parser.TsCompoundOp::BitXorAssign => {
-          let li = current.to_number().to_int()
-          let ri = val.to_number().to_int()
-          Number((li ^ ri).to_double())
-        }
-        @parser.TsCompoundOp::ShlAssign => {
-          let li = current.to_number().to_int()
-          let ri = val.to_number().to_int()
-          let shift = ri & 31
-          Number((li << shift).to_double())
-        }
-        @parser.TsCompoundOp::ShrAssign => {
-          let li = current.to_number().to_int()
-          let ri = val.to_number().to_int()
-          let shift = ri & 31
-          Number((li >> shift).to_double())
-        }
-        @parser.TsCompoundOp::UShrAssign => {
-          let li = current.to_number()
-          let ri = val.to_number().to_int()
-          let shift = ri & 31
-          let u = if li < 0.0 { li + 4294967296.0 } else { li }
-          let denom = @math.pow(2.0, shift.to_double())
-          Number(@math.floor(u / denom))
-        }
-        @parser.TsCompoundOp::PowAssign => Number(@math.pow(current.to_number(), val.to_number()))
-      }
+      let new_val = apply_compound_op(op, current, val)
       let _ = env.set(name, new_val)
       None
     }
@@ -1575,7 +1610,7 @@ pub fn JSInterpreter::exec_stmt(
           let mut idx = 0
           while idx < arr.items.length() {
             let item = arr.items[idx]
-            env.define(var_name, item)
+            env.define_var(var_name, item)
             match self.exec_block(body, env) {
               Some(BreakSignal) => break
               Some(ContinueSignal) => {
@@ -1593,7 +1628,7 @@ pub fn JSInterpreter::exec_stmt(
           let mut idx = 0
           while idx < s.length() {
             let char_str = try { s[idx:idx + 1].to_string() } catch { _ => "" }
-            env.define(var_name, String(char_str))
+            env.define_var(var_name, String(char_str))
             match self.exec_block(body, env) {
               Some(BreakSignal) => break
               Some(ContinueSignal) => {
@@ -1630,22 +1665,8 @@ pub fn JSInterpreter::exec_block(
 }
 
 ///|
-/// this バインディングの正規化
-fn JSInterpreter::normalize_this(self : JSInterpreter, value : JSValue) -> JSValue {
-  match value {
-    Undefined | Null => self.global_env.get("globalThis")
-    Bool(_) | Number(_) | String(_) => {
-      let obj = self.new_object()
-      let _ = js_set_prop(obj, "value", value)
-      obj
-    }
-    _ => value
-  }
-}
-
-///|
 /// プロトタイプを取得
-fn JSInterpreter::get_proto(self : JSInterpreter, value : JSValue) -> JSValue? {
+fn JSInterpreter::get_proto(_self : JSInterpreter, value : JSValue) -> JSValue? {
   match value {
     Object(map) => map.prototype
     Function(closure) => closure.object_proto
@@ -1744,7 +1765,7 @@ fn JSInterpreter::eval_prop_value(
 
 ///|
 /// own property 判定
-fn JSInterpreter::has_own_prop(self : JSInterpreter, obj : JSValue, key : String) -> Bool {
+fn JSInterpreter::has_own_prop(_self : JSInterpreter, obj : JSValue, key : String) -> Bool {
   match obj {
     Function(closure) => {
       for prop in closure.props {
@@ -1793,7 +1814,7 @@ fn JSInterpreter::has_own_prop(self : JSInterpreter, obj : JSValue, key : String
 
 ///|
 /// enumerable 判定
-fn JSInterpreter::is_enumerable(self : JSInterpreter, obj : JSValue, key : String) -> Bool {
+fn JSInterpreter::is_enumerable(_self : JSInterpreter, obj : JSValue, key : String) -> Bool {
   match obj {
     Function(closure) => {
       for prop in closure.props {
@@ -2007,7 +2028,7 @@ fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @parser.TsStmt, env : 
   match stmt {
     @parser.TsStmt::Let(name, _, _) | @parser.TsStmt::Const(name, _, _) =>
       if not(env.has(name)) {
-        env.define(name, Undefined)
+        env.define_var(name, Undefined)
         match env.parent {
           None => {
             let global_obj = self.global_env.get("globalThis")
@@ -2034,7 +2055,7 @@ fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @parser.TsStmt, env : 
     }
     @parser.TsStmt::ForOf(name, _, _, body) => {
       if not(env.has(name)) {
-        env.define(name, Undefined)
+        env.define_var(name, Undefined)
         match env.parent {
           None => {
             let global_obj = self.global_env.get("globalThis")
@@ -2069,7 +2090,7 @@ fn JSInterpreter::hoist_block(self : JSInterpreter, block : @parser.TsBlock, env
 
 ///|
 /// 呼び出し可能かを判定
-fn JSInterpreter::is_callable(self : JSInterpreter, value : JSValue) -> Bool {
+fn JSInterpreter::is_callable(_self : JSInterpreter, value : JSValue) -> Bool {
   match value {
     Function(_) => true
     Object(map) =>
@@ -2104,7 +2125,7 @@ fn JSInterpreter::make_generator(
 ) -> JSValue {
   let call_env = js_new_env(Some(closure.env))
   if closure.is_strict {
-    call_env.define("__strict__", Bool(true))
+    call_env.define_var("__strict__", Bool(true))
   }
   let bound_this = if closure.is_strict {
     this_arg
@@ -2115,12 +2136,12 @@ fn JSInterpreter::make_generator(
       _ => this_arg
     }
   }
-  call_env.define("this", bound_this)
+  call_env.define_var("this", bound_this)
   let new_meta = self.new_object()
   let _ = js_set_prop(new_meta, "target", new_target)
-  call_env.define("new", new_meta)
+  call_env.define_var("new", new_meta)
   let args_obj = js_array_from(args)
-  call_env.define("arguments", args_obj)
+  call_env.define_var("arguments", args_obj)
   match closure.body {
     Ast(func_def) => {
       self.bind_params(func_def.params, args, call_env)
@@ -2153,7 +2174,7 @@ fn contains_key(keys : Array[String], key : String) -> Bool {
 }
 
 ///|
-fn JSInterpreter::array_like_length(self : JSInterpreter, value : JSValue) -> Int {
+fn JSInterpreter::array_like_length(_self : JSInterpreter, value : JSValue) -> Int {
   match js_get_prop(value, "length") {
     Number(n) => n.to_int()
     _ => 0
@@ -2161,7 +2182,7 @@ fn JSInterpreter::array_like_length(self : JSInterpreter, value : JSValue) -> In
 }
 
 ///|
-fn JSInterpreter::array_like_get(self : JSInterpreter, value : JSValue, index : Int) -> JSValue {
+fn JSInterpreter::array_like_get(_self : JSInterpreter, value : JSValue, index : Int) -> JSValue {
   js_get_prop(value, index.to_string())
 }
 
@@ -2211,7 +2232,7 @@ fn JSInterpreter::bind_pattern(
   env : JSEnv,
 ) -> Unit {
   match binding {
-    @parser.TsBinding::Ident(name) => env.define(name, value)
+    @parser.TsBinding::Ident(name) => env.define_var(name, value)
     @parser.TsBinding::Array(arr) => self.bind_array_pattern(arr, value, env)
     @parser.TsBinding::Object(obj) => self.bind_object_pattern(obj, value, env)
   }
@@ -2402,7 +2423,7 @@ fn JSInterpreter::bind_object_pattern(
         }
         _ => ()
       }
-      env.define(rest_name, rest_obj)
+      env.define_var(rest_name, rest_obj)
     }
   }
 }
@@ -2448,7 +2469,7 @@ fn JSInterpreter::bind_params(
         if used_default {
           self.maybe_set_function_name(val, param.name)
         }
-        env.define(param.name, val)
+        env.define_var(param.name, val)
       }
     }
   }
@@ -2467,7 +2488,7 @@ fn JSInterpreter::make_iter_result(
 }
 
 ///|
-fn JSInterpreter::get_generator_id(self : JSInterpreter, value : JSValue) -> Int? {
+fn JSInterpreter::get_generator_id(_self : JSInterpreter, value : JSValue) -> Int? {
   match js_get_prop(value, "__gen_id") {
     Number(n) => Some(n.to_int())
     _ => None
@@ -2515,7 +2536,7 @@ fn JSInterpreter::generator_next(self : JSInterpreter, gen_id : Int) -> JSValue 
 
 ///|
 fn JSInterpreter::iter_result_value_done(
-  self : JSInterpreter,
+  _self : JSInterpreter,
   result : JSValue,
 ) -> (Bool, JSValue) {
   match result {
@@ -2606,41 +2627,41 @@ pub fn JSInterpreter::call_function(
       // 新しい環境を作成
       let call_env = js_new_env(Some(closure.env))
       if closure.is_strict {
-        call_env.define("__strict__", Bool(true))
+        call_env.define_var("__strict__", Bool(true))
       }
       if not(closure.is_arrow) {
         if closure.is_strict {
-          call_env.define("this", this_arg)
+          call_env.define_var("this", this_arg)
         } else {
           let bound_this = match this_arg {
             Undefined | Null => closure.env.get("globalThis")
             Bool(_) | Number(_) | String(_) => self.wrap_primitive(closure.env, this_arg)
             _ => this_arg
           }
-          call_env.define("this", bound_this)
+          call_env.define_var("this", bound_this)
         }
         let new_meta = self.new_object()
         let _ = js_set_prop(new_meta, "target", new_target)
-        call_env.define("new", new_meta)
+        call_env.define_var("new", new_meta)
 
         let args_obj = js_array_from(args)
-        call_env.define("arguments", args_obj)
+        call_env.define_var("arguments", args_obj)
       }
 
       let super_ctor = js_get_prop(func, "__super_ctor")
       match super_ctor {
         Undefined => ()
         _ => {
-          call_env.define("__super_ctor", super_ctor)
-          call_env.define("__super_called", Bool(false))
+          call_env.define_var("__super_ctor", super_ctor)
+          call_env.define_var("__super_called", Bool(false))
         }
       }
       let super_proto = js_get_prop(func, "__super_proto")
       match super_proto {
         Undefined => ()
         _ => {
-          call_env.define("__super_proto", super_proto)
-          call_env.define("__super_this", call_env.get("this"))
+          call_env.define_var("__super_proto", super_proto)
+          call_env.define_var("__super_this", call_env.get("this"))
         }
       }
 
@@ -2650,7 +2671,7 @@ pub fn JSInterpreter::call_function(
         _ =>
           for i, param in closure.params {
             let val = if i < args.length() { args[i] } else { Undefined }
-            call_env.define(param, val)
+            call_env.define_var(param, val)
           }
       }
 
@@ -2672,7 +2693,6 @@ pub fn JSInterpreter::call_function(
           }
           self.call_function(target, bound_this, merged)
         }
-        Compiled(_) => Undefined // TODO
       }
     }
     Object(map) => {
@@ -2784,7 +2804,7 @@ fn JSInterpreter::function_method(
 ///|
 /// 文字列メソッド
 fn JSInterpreter::string_method(
-  self : JSInterpreter,
+  _self : JSInterpreter,
   s : String,
   method_name : String,
   args : Array[JSValue],
@@ -4595,10 +4615,6 @@ fn JSInterpreter::call_native(
           let _ = self.set_error_kind("SyntaxError", "Function parse error: " + msg)
           JSValue::Undefined
         }
-        _ => {
-          let _ = self.set_error_kind("SyntaxError", "Function parse error")
-          JSValue::Undefined
-        }
       }
       func_value
     }
@@ -4947,10 +4963,6 @@ fn JSInterpreter::call_native(
       } catch {
         @parser.ParseError::ParseError(msg) => {
           let _ = self.set_error_kind("SyntaxError", msg)
-          Undefined
-        }
-        _ => {
-          let _ = self.set_error_kind("SyntaxError", "eval parse error")
           Undefined
         }
       }
@@ -5374,7 +5386,7 @@ pub fn JSInterpreter::run_module(
     let proto = self.new_object()
     let _ = js_set_prop(proto, "constructor", closure)
     let _ = js_define_data_prop(closure, "prototype", proto, true, false, true)
-    self.global_env.define(func.name, closure)
+    self.global_env.define_var(func.name, closure)
   }
 
   // main関数があれば実行
@@ -5384,7 +5396,7 @@ pub fn JSInterpreter::run_module(
       match closure.body {
         Ast(func_def) => {
           if closure.is_strict && not(self.global_env.has("__strict__")) {
-            self.global_env.define("__strict__", Bool(true))
+            self.global_env.define_var("__strict__", Bool(true))
           }
           self.hoist_block(func_def.body, self.global_env)
           match self.exec_block(func_def.body, self.global_env) {

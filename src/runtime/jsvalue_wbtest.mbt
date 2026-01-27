@@ -238,8 +238,8 @@ test "jsvalue: environment" {
   let env = js_new_env(None)
 
   // 変数定義
-  env.define("x", JSValue::Number(10.0))
-  env.define("y", JSValue::Number(20.0))
+  env.define_var("x", JSValue::Number(10.0))
+  env.define_var("y", JSValue::Number(20.0))
 
   // 取得
   match env.get("x") {
@@ -264,9 +264,9 @@ test "jsvalue: environment" {
 ///|
 test "jsvalue: nested environment" {
   let outer = js_new_env(None)
-  outer.define("x", JSValue::Number(10.0))
+  outer.define_var("x", JSValue::Number(10.0))
   let inner = js_new_env(Some(outer))
-  inner.define("y", JSValue::Number(20.0))
+  inner.define_var("y", JSValue::Number(20.0))
 
   // innerからouterの変数にアクセス
   match inner.get("x") {

@@ -72,7 +72,7 @@ priv struct Test262Meta {
 
 ///|
 fn join_path(base : String, name : String) -> String {
-  if base.ends_with("/") {
+  if base.has_suffix("/") {
     base + name
   } else {
     base + "/" + name
@@ -106,7 +106,7 @@ fn parse_bracket_list(line : String) -> Array[String] {
       continue
     }
     let stripped =
-      if trimmed.length() >= 2 && trimmed.starts_with("\"") && trimmed.ends_with("\"") {
+      if trimmed.length() >= 2 && trimmed.has_prefix("\"") && trimmed.has_suffix("\"") {
         try { trimmed[1:trimmed.length() - 1].to_string() } catch { _ => trimmed }
       } else {
         trimmed
@@ -145,7 +145,7 @@ fn parse_test262_meta(content : String) -> Test262Meta {
       if trimmed.length() == 0 {
         continue
       }
-      if not(trimmed.starts_with("//")) {
+      if not(trimmed.has_prefix("//")) {
         break
       }
       let body = try { trimmed[2:].trim().to_string() } catch { _ => "" }
@@ -155,20 +155,20 @@ fn parse_test262_meta(content : String) -> Test262Meta {
   for raw in lines {
     let line = raw.trim().to_string()
     let body =
-      if line.starts_with("*") {
+      if line.has_prefix("*") {
         try { line[1:].trim().to_string() } catch { _ => line }
       } else {
         line
       }
-    if body.starts_with("includes:") {
+    if body.has_prefix("includes:") {
       for item in parse_bracket_list(body) {
         includes.push(item)
       }
-    } else if body.starts_with("flags:") {
+    } else if body.has_prefix("flags:") {
       for item in parse_bracket_list(body) {
         flags.push(item)
       }
-    } else if body.starts_with("negative:") {
+    } else if body.has_prefix("negative:") {
       negative = true
     }
   }
@@ -231,10 +231,10 @@ fn should_skip_test(meta : Test262Meta, content : String) -> String? {
   }
   for line in content.split("\n") {
     let trimmed = line.trim().to_string()
-    if trimmed.starts_with("import ") || trimmed.starts_with("export ") {
+    if trimmed.has_prefix("import ") || trimmed.has_prefix("export ") {
       return Some("module syntax")
     }
-    if trimmed.starts_with("with ") || trimmed.starts_with("with(") {
+    if trimmed.has_prefix("with ") || trimmed.has_prefix("with(") {
       return Some("with statement not supported")
     }
   }
@@ -261,7 +261,7 @@ async fn collect_test_files(path : String, out : Array[String]) -> Unit {
       }
     }
     @fs.FileKind::Regular =>
-      if path.ends_with(".js") {
+      if path.has_suffix(".js") {
         out.push(path)
       }
     _ => ()
@@ -281,7 +281,7 @@ fn load_test_list(content : String) -> Array[String] {
     if trimmed.length() == 0 {
       continue
     }
-    if trimmed.starts_with("#") {
+    if trimmed.has_prefix("#") {
       continue
     }
     result.push(trimmed)
@@ -359,7 +359,7 @@ fn match_segment(pat : String, seg : String) -> Bool {
 fn split_path_parts(path : String) -> Array[String] {
   let parts : Array[String] = []
   for part in path.split("/") {
-    let s = try { part.to_string() } catch { _ => "" }
+    let s = part.to_string()
     parts.push(s)
   }
   parts
@@ -419,7 +419,7 @@ async fn run_test262(test_path : String) -> Unit {
   match kind {
     @fs.FileKind::Directory => collect_test_files(test_path, files)
     @fs.FileKind::Regular =>
-      if test_path.ends_with(".txt") {
+      if test_path.has_suffix(".txt") {
         let list_content = @fs.read_file(test_path).text() catch {
           e => {
             println("Error reading test list: \{e}")

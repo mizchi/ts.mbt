@@ -31,8 +31,6 @@ pub enum TokenKind {
   Finally
   Throw
   Yield
-  True
-  False
   Typeof
   Delete
 

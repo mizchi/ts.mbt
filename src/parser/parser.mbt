@@ -458,73 +458,97 @@ fn Parser::parse_assignment(self : Parser) -> TsExpr raise ParseError {
   } else if self.match_(PlusEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(Add, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), AddAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), AddAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), AddAssign, right)
       _ => right
     }
   } else if self.match_(MinusEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(Sub, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), SubAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), SubAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), SubAssign, right)
       _ => right
     }
   } else if self.match_(StarEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(Mul, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), MulAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), MulAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), MulAssign, right)
       _ => right
     }
   } else if self.match_(SlashEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(Div, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), DivAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), DivAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), DivAssign, right)
       _ => right
     }
   } else if self.match_(PercentEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(Mod, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), ModAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), ModAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), ModAssign, right)
       _ => right
     }
   } else if self.match_(AmpEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(BitAnd, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), BitAndAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), BitAndAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), BitAndAssign, right)
       _ => right
     }
   } else if self.match_(PipeEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(BitOr, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), BitOrAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), BitOrAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), BitOrAssign, right)
       _ => right
     }
   } else if self.match_(CaretEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(BitXor, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), BitXorAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), BitXorAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), BitXorAssign, right)
       _ => right
     }
   } else if self.match_(LtLtEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(Shl, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), ShlAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), ShlAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), ShlAssign, right)
       _ => right
     }
   } else if self.match_(GtGtEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(Shr, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), ShrAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), ShrAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), ShrAssign, right)
       _ => right
     }
   } else if self.match_(GtGtGtEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(UShr, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), UShrAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), UShrAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), UShrAssign, right)
       _ => right
     }
   } else if self.match_(StarStarEq) {
     let right = self.parse_assignment()
     match left {
-      Var(name) => AssignExpr(name, BinOp(Pow, Var(name), right))
+      Var(name) => CompoundAssignExpr(Var(name), PowAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), PowAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), PowAssign, right)
       _ => right
     }
   } else {

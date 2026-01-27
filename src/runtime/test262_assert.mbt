@@ -8,20 +8,6 @@ pub enum AssertResult {
 }
 
 ///|
-/// 基本的な assert 関数
-pub fn assert(must_be_true : Bool, message : String?) -> AssertResult {
-  if must_be_true {
-    Success
-  } else {
-    let msg = match message {
-      Some(m) => m
-      None => "Expected true but got false"
-    }
-    Failure(msg)
-  }
-}
-
-///|
 /// SameValue アルゴリズム
 pub fn is_same_value(a : JSValue, b : JSValue) -> Bool {
   let eq = js_strict_eq(a, b)

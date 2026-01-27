@@ -132,7 +132,6 @@ pub enum JSFuncBody {
   Ast(@parser.TsFunc) // 解釈実行用
   Native(String) // ネイティブ関数名
   Bound(JSValue, JSValue, Array[JSValue]) // target, thisArg, bound args
-  Compiled(Int) // コンパイル済み関数インデックス
 } derive(Show)
 
 // === ID generator (object/function/array identity) ===
@@ -1269,7 +1268,7 @@ pub fn js_new_env(parent : JSEnv?) -> JSEnv {
 
 ///|
 /// 環境に変数を定義
-pub fn JSEnv::define(self : JSEnv, name : String, value : JSValue) -> Unit {
+pub fn JSEnv::define_var(self : JSEnv, name : String, value : JSValue) -> Unit {
   self.bindings.push((name, value))
 }
 
