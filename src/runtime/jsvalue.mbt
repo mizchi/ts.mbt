@@ -438,10 +438,24 @@ pub fn js_strict_ne(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
+fn is_html_dda(value : JSValue) -> Bool {
+  match value {
+    Object(_) | Function(_) =>
+      match js_get_prop(value, "__class") {
+        String("IsHTMLDDA") => true
+        _ => false
+      }
+    _ => false
+  }
+}
+
+///|
 // / (==) - typeconversion
 pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
   Bool(
     match (left, right) {
+      (a, Undefined) | (a, Null) if is_html_dda(a) => true
+      (Undefined, b) | (Null, b) if is_html_dda(b) => true
       // type
       (Undefined, Undefined) => true
       (Null, Null) => true

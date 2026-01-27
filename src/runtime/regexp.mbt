@@ -24,9 +24,21 @@ fn regexp_source(value : JSValue) -> String {
 ///|
 fn regexp_flags(value : JSValue) -> String {
   match js_get_prop(value, "flags") {
-    String(s) => s
+    String(s) => normalize_regexp_flags(s)
     _ => ""
   }
+}
+
+///|
+fn normalize_regexp_flags(flags : String) -> String {
+  let mut out = ""
+  if flags.contains("g") { out = out + "g" }
+  if flags.contains("i") { out = out + "i" }
+  if flags.contains("m") { out = out + "m" }
+  if flags.contains("s") { out = out + "s" }
+  if flags.contains("u") { out = out + "u" }
+  if flags.contains("y") { out = out + "y" }
+  out
 }
 
 ///|

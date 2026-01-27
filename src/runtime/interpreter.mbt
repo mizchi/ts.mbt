@@ -145,6 +145,7 @@ fn JSInterpreter::make_regexp(
       return self.set_error_kind("SyntaxError", "Invalid regular expression")
     Some(_) => ()
   }
+  let norm_flags = normalize_regexp_flags(flags)
   let ctor = self.global_env.get("RegExp")
   let proto = match ctor {
     Function(_) => js_get_prop(ctor, "prototype")
@@ -153,8 +154,8 @@ fn JSInterpreter::make_regexp(
   let obj = js_new_object_with_proto(Some(proto))
   let _ = js_set_prop(obj, "__class", String("RegExp"))
   let _ = js_set_prop(obj, "source", String(pattern))
-  let _ = js_set_prop(obj, "flags", String(flags))
-  let _ = js_set_prop(obj, "global", Bool(regexp_has_global(flags)))
+  let _ = js_set_prop(obj, "flags", String(norm_flags))
+  let _ = js_set_prop(obj, "global", Bool(regexp_has_global(norm_flags)))
   let _ = js_set_prop(obj, "lastIndex", Number(0.0))
   obj
 }
@@ -323,4 +324,3 @@ fn JSInterpreter::peek_error(self : JSInterpreter) -> JSValue? {
 fn JSInterpreter::new_object(self : JSInterpreter) -> JSValue {
   js_new_object_with_proto(Some(self.object_proto))
 }
-

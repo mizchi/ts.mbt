@@ -553,6 +553,31 @@ fn trim_js_string(s : String, mode : String) -> String {
 }
 
 ///|
+// / SameValue check
+fn JSInterpreter::same_value(
+  _self : JSInterpreter,
+  left : JSValue,
+  right : JSValue,
+) -> Bool {
+  match (left, right) {
+    (Number(l), Number(r)) => {
+      if l.is_nan() && r.is_nan() {
+        true
+      } else if l == 0.0 && r == 0.0 {
+        (1.0 / l) == (1.0 / r)
+      } else {
+        l == r
+      }
+    }
+    _ =>
+      match js_strict_eq(left, right) {
+        Bool(true) => true
+        _ => false
+      }
+  }
+}
+
+///|
 // / SameValueZero check
 fn JSInterpreter::same_value_zero(
   _self : JSInterpreter,

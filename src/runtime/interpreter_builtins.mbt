@@ -43,6 +43,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let obj_is_ext = self.make_native("Object.isExtensible")
   self.set_function_length(obj_is_ext, 1.0)
   let _ = js_set_prop(object_ctor, "isExtensible", obj_is_ext)
+  let obj_is = self.make_native("Object.is")
+  self.set_function_length(obj_is, 2.0)
+  let _ = js_set_prop(object_ctor, "is", obj_is)
   self.global_env.define_var("Object", object_ctor)
   let _ = js_set_prop(global_obj, "Object", object_ctor)
 
@@ -241,6 +244,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let re_test = self.make_native("RegExp.prototype.test")
   self.set_function_length(re_test, 1.0)
   let _ = js_set_prop(regexp_proto, "test", re_test)
+  let re_compile = self.make_native("RegExp.prototype.compile")
+  self.set_function_length(re_compile, 2.0)
+  let _ = js_set_prop(regexp_proto, "compile", re_compile)
   self.global_env.define_var("RegExp", regexp_ctor)
   let _ = js_set_prop(global_obj, "RegExp", regexp_ctor)
 
@@ -454,6 +460,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let _ = js_set_prop(t262, "global", global_obj)
   let _ = js_set_prop(t262, "evalScript", self.make_native("$262.evalScript"))
   let _ = js_set_prop(t262, "createRealm", self.make_native("$262.createRealm"))
+  let html_dda = self.new_object()
+  let _ = js_set_prop(html_dda, "__class", String("IsHTMLDDA"))
+  let _ = js_set_prop(t262, "IsHTMLDDA", html_dda)
   self.global_env.define_var("$262", t262)
   let _ = js_set_prop(global_obj, "$262", t262)
 
@@ -864,6 +873,11 @@ fn JSInterpreter::call_native(
         Object(_) | Function(_) | Array(_) => Bool(true)
         _ => Bool(false)
       }
+    }
+    "Object.is" => {
+      let left = if args.length() > 0 { args[0] } else { Undefined }
+      let right = if args.length() > 1 { args[1] } else { Undefined }
+      Bool(self.same_value(left, right))
     }
     "Object.prototype.toString" => {
       let tag = match this_arg {
@@ -1327,6 +1341,31 @@ fn JSInterpreter::call_native(
           arr
         }
       }
+    }
+    "RegExp.prototype.compile" => {
+      if not(is_regexp(this_arg)) {
+        return self.set_error_kind("TypeError", "RegExp.prototype.compile called on non-RegExp")
+      }
+      let pattern_val = if args.length() > 0 { args[0] } else { String("") }
+      let flags_val = if args.length() > 1 { args[1] } else { Undefined }
+      let (pattern, flags) =
+        if is_regexp(pattern_val) && flags_val is Undefined {
+          (regexp_source(pattern_val), regexp_flags(pattern_val))
+        } else {
+          let p = pattern_val.to_js_string()
+          let f = if flags_val is Undefined { "" } else { flags_val.to_js_string() }
+          (p, f)
+        }
+      match regexp_compile(pattern, flags) {
+        None => return self.set_error_kind("SyntaxError", "Invalid regular expression")
+        Some(_) => ()
+      }
+      let norm_flags = normalize_regexp_flags(flags)
+      let _ = js_set_prop(this_arg, "source", String(pattern))
+      let _ = js_set_prop(this_arg, "flags", String(norm_flags))
+      let _ = js_set_prop(this_arg, "global", Bool(regexp_has_global(norm_flags)))
+      let _ = js_set_prop(this_arg, "lastIndex", Number(0.0))
+      this_arg
     }
     "RegExp.prototype.test" => {
       if not(is_regexp(this_arg)) {
