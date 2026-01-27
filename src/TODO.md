@@ -1,29 +1,29 @@
-## test262 統合状況
+## test262 integration status
 
-### 実装完了
+### Done
 
-### 実装進行中
+### In progress
 
-#### Phase 2: this キーワード
-- [ ] メソッド呼び出し時の this バインディング
-- [ ] コンストラクタ内の this 参照
-- [ ] bind/call/apply メソッド
+#### Phase 2: this keyword
+- [ ] this binding on method calls
+- [ ] this reference in constructors
+- [ ] bind/call/apply methods
 
-### 未実装
-- [ ] Phase 3: パーサ拡演算子（??, ?. ）
-- [ ] Phase 4: try/catch/finally 構造
-- [ ] Phase 5: モジュール
-- [ ] Phase 6: クラス構文
-- [ ] 正規表現
-- [ ] ジェネレータ
+### Not implemented
+- [ ] Phase 3: parser for ?? and ?. operators
+- [ ] Phase 4: try/catch/finally
+- [ ] Phase 5: modules
+- [ ] Phase 6: class syntax
+- [ ] RegExp
+- [ ] Generators
 - [ ] Symbol/WeakMap/WeakSet
 - [ ] Proxy/Reflect
 
-### 既存の課題
-- [ ] Number/JSValue 型の曖昧性
-- [ ] 配列メソッドの実装で大量のコンパイルエラー
+### Known issues
+- [ ] Ambiguity between Number/JSValue types
+- [ ] Many compile errors in Array method implementations
 
-### 次のステップ
-1. Array メソッドのコンパイルエラーを解消
-2. test262 harness の実装を完了する
-3. test262 ホスト定義関数を追加して、テストランナーを作成
+### Next steps
+1. Fix compile errors in Array methods
+2. Finish test262 harness implementation
+3. Add test262 host-defined functions and create a test runner

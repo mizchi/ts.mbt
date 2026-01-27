@@ -1,4 +1,4 @@
-// パーサーのテスト
+// test
 
 ///|
 test "lexer: tokenize simple" {
@@ -52,7 +52,7 @@ test "parser: parse simple expr" {
 test "parser: parse complex expr" {
   let parser = Parser::from_source("1 + 2 * 3")
   let expr = parser.parse_expr()
-  // 1 + (2 * 3) になるはず
+  // 1 + (2 * 3)
   match expr {
     BinOp(Add, IntLit(1), BinOp(Mul, IntLit(2), IntLit(3))) => ()
     _ => fail("unexpected result: \{expr}")
@@ -390,7 +390,7 @@ test "parser: parse module with imports" {
 
 ///|
 test "parser: parse javascript without type annotations" {
-  // 型注釈なしの JavaScript スタイル
+  // type JavaScript
   let src =
     #|function add(a, b) {
     #|  return a + b;
@@ -400,10 +400,10 @@ test "parser: parse javascript without type annotations" {
   assert_eq(f.name, "add")
   assert_eq(f.params.length(), 2)
   assert_eq(f.params[0].name, "a")
-  assert_eq(f.params[0].type_, Any) // 型注釈なしは Any
+  assert_eq(f.params[0].type_, Any) // type Any
   assert_eq(f.params[1].name, "b")
   assert_eq(f.params[1].type_, Any)
-  assert_eq(f.return_type, Any) // 戻り値型も Any
+  assert_eq(f.return_type, Any) // return valuetype Any
 }
 
 ///|
@@ -418,7 +418,7 @@ test "parser: parse let without type annotation" {
 
 ///|
 test "parser: parse mixed typed and untyped" {
-  // 一部だけ型付き
+  // typed
   let src =
     #|function mixed(a: number, b) {
     #|  let x = 1;
@@ -427,7 +427,7 @@ test "parser: parse mixed typed and untyped" {
     #|}
   let parser = Parser::from_source(src)
   let f = parser.parse_function()
-  assert_eq(f.params[0].type_, Number) // 型あり
-  assert_eq(f.params[1].type_, Any) // 型なし
-  assert_eq(f.return_type, Any) // 戻り値型なし
+  assert_eq(f.params[0].type_, Number) // type
+  assert_eq(f.params[1].type_, Any) // type
+  assert_eq(f.return_type, Any) // return valuetype
 }

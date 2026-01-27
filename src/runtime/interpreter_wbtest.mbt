@@ -1,4 +1,4 @@
-// インタプリタのテスト
+// interpretertest
 
 ///|
 test "interpreter: simple arithmetic" {
@@ -267,7 +267,7 @@ test "interpreter: logical and" {
 test "interpreter: logical or" {
   let interp = JSInterpreter::new()
 
-  // || short-circuit: 0がfalsyなので42を返す
+  // || short-circuit: 0falsy42
   let result = interp.run(
     (
       #|function main() {
@@ -275,7 +275,7 @@ test "interpreter: logical or" {
       #|}
     ),
   )
-  // 実際の値を確認
+  // check
   println("Result: \{result}")
   match result {
     Number(n) => assert_eq(n, 42.0)

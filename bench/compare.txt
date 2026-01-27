@@ -73,7 +73,7 @@ Warning: [0012]
 Warning: [0006]
      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/jsvalue.mbt:121:3 ]
      │
- 121 │   Compiled(Int) // コンパイル済み関数インデックス
+ 121 │   Compiled(Int) // compiled function index
      │   ────┬───  
      │       ╰───── Warning (unused_constructor): Variant 'Compiled' is never constructed
 ─────╯

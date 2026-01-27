@@ -1,4 +1,4 @@
-// CodeGen のテスト
+// CodeGen test
 
 ///|
 test "compile_to_wasm: generates valid wasm binary" {
@@ -8,13 +8,13 @@ test "compile_to_wasm: generates valid wasm binary" {
     #|}
   let wasm = compile_to_wasm(src)
 
-  // Wasm マジックナンバーをチェック: 0x00 0x61 0x73 0x6D (= "\0asm")
+  // Wasm magic numbercheck: 0x00 0x61 0x73 0x6D (= "\0asm")
   assert_eq(wasm[0], b'\x00')
   assert_eq(wasm[1], b'\x61') // 'a'
   assert_eq(wasm[2], b'\x73') // 's'
   assert_eq(wasm[3], b'\x6D') // 'm'
 
-  // バージョン 1.0: 0x01 0x00 0x00 0x00
+  // version 1.0: 0x01 0x00 0x00 0x00
   assert_eq(wasm[4], b'\x01')
   assert_eq(wasm[5], b'\x00')
   assert_eq(wasm[6], b'\x00')
@@ -33,11 +33,11 @@ test "compile_to_wasm: factorial" {
     #|}
   let wasm = compile_to_wasm(src)
 
-  // Wasm マジックナンバーをチェック
+  // Wasm magic numbercheck
   assert_eq(wasm[0], b'\x00')
   assert_eq(wasm[1], b'\x61')
 
-  // 生成されたバイナリが実行可能か確認 (wasm5 runtime で)
+  // generateruncheck (wasm5 runtime )
   let parser = @parser.Parser::from_source(src)
   let ts_module = parser.parse_module()
   let wasm_module = compile_module(ts_module)
@@ -56,12 +56,12 @@ test "compile: convenience function" {
     #|}
   let wasm_module = compile(src)
 
-  // Module が正しく生成されているか
+  // Module generate
   assert_eq(wasm_module.funcs.length(), 1)
   assert_eq(wasm_module.exports.length(), 1)
   assert_eq(wasm_module.codes.length(), 1)
 
-  // 実行テスト
+  // runtest
   let runtime = @runtime.Runtime::load(wasm_module)
   runtime.run_start()
   let results = runtime.call_compiled(b"double", [@runtime.Value::F64(21.0)])
@@ -275,9 +275,9 @@ test "codegen: array literal and access" {
   let ts_module = parser.parse_module()
   let wasm_module = compile_module(ts_module)
 
-  // モジュール構造の確認
-  assert_eq(wasm_module.mems.length(), 1) // メモリあり
-  assert_eq(wasm_module.globals.length(), 1) // ヒープポインタ
+  // check
+  assert_eq(wasm_module.mems.length(), 1)
+  assert_eq(wasm_module.globals.length(), 1)
   let runtime = @runtime.Runtime::load(wasm_module)
   runtime.run_start()
   let results = runtime.call_compiled(b"sum_array", [])
@@ -527,28 +527,28 @@ test "codegen: module with imports generates correct wasm" {
   let parser = @parser.Parser::from_source(src)
   let ts_module = parser.parse_module()
 
-  // インポートが正しくパースされている
+  // import
   assert_eq(ts_module.imports.length(), 2)
 
-  // Wasm モジュールを生成
+  // Wasm generate
   let wasm_module = compile_module(ts_module)
 
-  // インポートが正しく生成されている
+  // importgenerate
   assert_eq(wasm_module.imports.length(), 2)
 
-  // 型定義にインポート関数の型が含まれている (2つのインポート + 1つのユーザー関数)
+  // typedefineimportfunctiontype (2import + 1function)
   assert_eq(wasm_module.types.length(), 3)
 
-  // funcs にはユーザー定義関数のみ (インポート関数はimportsセクション)
+  // funcs definefunction (importfunctionimportssection)
   assert_eq(wasm_module.funcs.length(), 1)
 
-  // エクスポートはユーザー定義関数のみ
+  // exportdefinefunction
   assert_eq(wasm_module.exports.length(), 1)
 }
 
 ///|
 test "codegen: javascript style code with type inference" {
-  // 型注釈なしの JavaScript スタイル
+  // type JavaScript
   let src =
     #|function add(a, b) {
     #|  let x = 1;
@@ -559,24 +559,24 @@ test "codegen: javascript style code with type inference" {
   let ts_module = parser.parse_module()
   let wasm_module = compile_module(ts_module)
 
-  // パラメータは Any → f64 (デフォルト)
-  // ローカル変数 x, y は Int として推論される
+  // parameter Any -> f64 ()
+  // variable x, y Int
   let runtime = @runtime.Runtime::load(wasm_module)
   runtime.run_start()
-  // add(0, 0) を呼び出し - 結果は 3 (1 + 2)
-  // パラメータは使わないが Any=f64 として渡す
+  // add(0, 0) - result 3 (1 + 2)
+  // parameter Any=f64
   let results = runtime.call_compiled(b"add", [
     @runtime.Value::F64(0.0),
     @runtime.Value::F64(0.0),
   ])
-  // 戻り値も Any=f64 だが、内部では Int として計算されている
-  // f64 → i32 の変換が発生する可能性があるため、結果を確認
+  // return value Any=f64 , internal Int compute
+  // f64 -> i32 conversion, resultcheck
   assert_eq(results.length(), 1)
 }
 
 ///|
 test "js: simple arithmetic" {
-  // JavaScript: シンプルな算術演算
+  // JavaScript:
   let src =
     #|function calc(): int {
     #|  let a = 10;
@@ -593,7 +593,7 @@ test "js: simple arithmetic" {
 
 ///|
 test "js: multiple functions call" {
-  // JavaScript: 複数関数の相互呼び出し
+  // JavaScript: function
   let src =
     #|function double(x: int): int {
     #|  return x * 2;
@@ -623,32 +623,32 @@ test "codegen: type metadata in custom section" {
   let ts_module = parser.parse_module()
   let wasm_module = compile_module(ts_module)
 
-  // カスタムセクションが生成されている
+  // sectiongenerate
   assert_eq(wasm_module.customs.length(), 1)
 
-  // セクション名が "tstype"
+  // section "tstype"
   let custom = wasm_module.customs[0]
   assert_eq(custom.name, b"tstype")
 
-  // メタデータのマジックをチェック "TSTY"
+  // datamagiccheck "TSTY"
   let data = custom.data
   assert_eq(data[0], b'\x54') // T
   assert_eq(data[1], b'\x53') // S
   assert_eq(data[2], b'\x54') // T
   assert_eq(data[3], b'\x59') // Y
 
-  // バージョン = 1
+  // version = 1
   assert_eq(data[4], b'\x01')
 
-  // インポート数 = 1 (u16 LE)
+  // import = 1 (u16 LE)
   assert_eq(data[5], b'\x01')
   assert_eq(data[6], b'\x00')
 
-  // インターフェース数 = 1 (u16 LE)
+  // interface = 1 (u16 LE)
   assert_eq(data[7], b'\x01')
   assert_eq(data[8], b'\x00')
 
-  // エクスポート数 = 1 (u16 LE)
+  // export = 1 (u16 LE)
   assert_eq(data[9], b'\x01')
   assert_eq(data[10], b'\x00')
 }

@@ -1,55 +1,55 @@
-// TypeScript AST → wasm5 Instr 変換
+// TypeScript AST -> wasm5 Instr lowering
 
 ///|
-/// コード生成エラー
+// / codegenerror
 pub suberror CodeGenError {
   CodeGenError(String)
 } derive(Show)
 
 ///|
-/// 文字列プール (スナップショット用)
+// / string (snapshot)
 priv struct StringPool {
-  // 文字列 → オフセット
+  // string ->
   strings : Map[String, Int]
-  // 文字列データ (順番に格納)
+  // stringdata (order)
   data : Array[Byte]
 }
 
 ///|
-/// 文字列プール作成
+// / stringcreate
 fn StringPool::new() -> StringPool {
   { strings: {}, data: [] }
 }
 
 ///|
-/// 現在のオフセットを取得
+// / currentget
 fn StringPool::offset(self : StringPool) -> Int {
   self.data.length()
 }
 
 ///|
-/// 文字列を追加してオフセットを返す
+// / stringadd
 fn StringPool::add(self : StringPool, s : String) -> Int {
-  // 既に存在するかチェック
+  // existencecheck
   match self.strings.get(s) {
     Some(offset) => offset
     None => {
       let offset = self.data.length()
       self.strings[s] = offset
 
-      // 長さを格納 (4バイト、リトルエンディアン)
+      // length (4, )
       let len = s.length()
       self.data.push((len & 0xFF).to_byte())
       self.data.push(((len >> 8) & 0xFF).to_byte())
       self.data.push(((len >> 16) & 0xFF).to_byte())
       self.data.push(((len >> 24) & 0xFF).to_byte())
 
-      // 文字列データを格納
+      // stringdata
       for i = 0; i < len; i = i + 1 {
         self.data.push((s[i].to_int() & 0xFF).to_byte())
       }
 
-      // 4バイトアライン
+      // 4
       let total = 4 + len
       let aligned = (total + 3) / 4 * 4
       let padding = aligned - total
@@ -64,11 +64,11 @@ fn StringPool::add(self : StringPool, s : String) -> Int {
 }
 
 // ============================================
-// 型メタデータシリアライザ (スナップショット用)
+// type metadata (snapshot)
 // ============================================
 
 ///|
-/// @parser.TsType を 1 バイトにエンコード
+// / @parser.TsType 1 encode
 fn encode_type(t : @parser.TsType) -> Byte {
   match t {
     @parser.TsType::Number => b'\x00'
@@ -85,69 +85,69 @@ fn encode_type(t : @parser.TsType) -> Byte {
 }
 
 ///|
-/// 型メタデータをシリアライズ
+// / type metadataserialize
 fn serialize_type_metadata(module_ : @parser.TsModule) -> Bytes {
   let buf : Array[Byte] = []
 
-  // マジック "TSTY"
+  // magic "TSTY"
   buf.push(b'\x54') // T
   buf.push(b'\x53') // S
   buf.push(b'\x54') // T
   buf.push(b'\x59') // Y
 
-  // バージョン
+  // version
   buf.push(b'\x01')
 
-  // インポート数 (u16 LE)
+  // import (u16 LE)
   let import_count = module_.imports.length()
   buf.push((import_count & 0xFF).to_byte())
   buf.push(((import_count >> 8) & 0xFF).to_byte())
 
-  // インターフェース数 (u16 LE)
+  // interface (u16 LE)
   let iface_count = module_.interfaces.length()
   buf.push((iface_count & 0xFF).to_byte())
   buf.push(((iface_count >> 8) & 0xFF).to_byte())
 
-  // エクスポート数 (u16 LE)
+  // export (u16 LE)
   let export_count = module_.funcs.length()
   buf.push((export_count & 0xFF).to_byte())
   buf.push(((export_count >> 8) & 0xFF).to_byte())
 
-  // インポート配列
+  // importarray
   for imp in module_.imports {
-    // 関数名
+    // function
     let name_len = imp.name.length()
     buf.push((name_len & 0xFF).to_byte())
     for i = 0; i < name_len; i = i + 1 {
       buf.push((imp.name[i].to_int() & 0xFF).to_byte())
     }
-    // モジュール名
+
     let mod_len = imp.module_.length()
     buf.push((mod_len & 0xFF).to_byte())
     for i = 0; i < mod_len; i = i + 1 {
       buf.push((imp.module_[i].to_int() & 0xFF).to_byte())
     }
-    // パラメータ数
+    // parameter
     buf.push((imp.params.length() & 0xFF).to_byte())
-    // パラメータ型
+    // parametertype
     for param in imp.params {
       buf.push(encode_type(param.1))
     }
-    // 戻り値型
+    // return valuetype
     buf.push(encode_type(imp.return_type))
   }
 
-  // インターフェース配列
+  // interfacearray
   for iface in module_.interfaces {
-    // インターフェース名
+    // interface
     let name_len = iface.name.length()
     buf.push((name_len & 0xFF).to_byte())
     for i = 0; i < name_len; i = i + 1 {
       buf.push((iface.name[i].to_int() & 0xFF).to_byte())
     }
-    // フィールド数
+    // field
     buf.push((iface.fields.length() & 0xFF).to_byte())
-    // 各フィールド
+    // field
     for field in iface.fields {
       let (field_name, field_type) = field
       let fn_len = field_name.length()
@@ -159,7 +159,7 @@ fn serialize_type_metadata(module_ : @parser.TsModule) -> Bytes {
     }
   }
 
-  // エクスポート配列 (関数名のみ)
+  // exportarray (function)
   for func in module_.funcs {
     let name_len = func.name.length()
     buf.push((name_len & 0xFF).to_byte())
@@ -171,28 +171,28 @@ fn serialize_type_metadata(module_ : @parser.TsModule) -> Bytes {
 }
 
 // ============================================
-// 型推論 (リテラルから)
+// type inference (literal)
 // ============================================
 
 ///|
-/// リテラルから型を推論（コンテキスト不要）
+// / literaltype()
 fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
   match expr {
     @parser.TsExpr::IntLit(_) => @parser.TsType::Int
     @parser.TsExpr::NumberLit(_) => @parser.TsType::Number
     @parser.TsExpr::BoolLit(_) => @parser.TsType::Boolean
     @parser.TsExpr::StringLit(_) => @parser.TsType::String_
-    @parser.TsExpr::NullLit => @parser.TsType::Any // null は @parser.TsType::Any
-    @parser.TsExpr::ArrayLit(_) => @parser.TsType::Any // 要素型の推論は複雑なので @parser.TsType::Any
-    @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // オブジェクトリテラルは @parser.TsType::Any
-    @parser.TsExpr::Var(_) => @parser.TsType::Any // 変数は文脈から推論する必要あり
+    @parser.TsExpr::NullLit => @parser.TsType::Any // null @parser.TsType::Any
+    @parser.TsExpr::ArrayLit(_) => @parser.TsType::Any // elementtype @parser.TsType::Any
+    @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // objectliteral @parser.TsType::Any
+    @parser.TsExpr::Var(_) => @parser.TsType::Any // variablestatement
     @parser.TsExpr::Yield(_) => @parser.TsType::Any
     @parser.TsExpr::Seq(_, right) => infer_literal_type(right)
     @parser.TsExpr::PropAssignExpr(_, _, value) => infer_literal_type(value)
     @parser.TsExpr::IndexAssignExpr(_, _, value) => infer_literal_type(value)
     @parser.TsExpr::CompoundAssignExpr(left, _, _) => infer_literal_type(left)
     @parser.TsExpr::BinOp(op, lhs, _) =>
-      // 比較演算子は @parser.TsType::Boolean を返す
+      // comparisonoperator @parser.TsType::Boolean
       match op {
         @parser.TsBinOp::BinEq
         | @parser.TsBinOp::BinNe
@@ -208,7 +208,7 @@ fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
         | @parser.TsBinOp::Or => @parser.TsType::Boolean
         @parser.TsBinOp::Add | @parser.TsBinOp::Sub | @parser.TsBinOp::Mul | @parser.TsBinOp::Div | @parser.TsBinOp::Mod | @parser.TsBinOp::Pow | @parser.TsBinOp::BitAnd | @parser.TsBinOp::BitOr | @parser.TsBinOp::BitXor | @parser.TsBinOp::Shl | @parser.TsBinOp::Shr
         | @parser.TsBinOp::UShr =>
-          infer_literal_type(lhs) // 左辺の型を継承
+          infer_literal_type(lhs) // type
       }
     @parser.TsExpr::UnaryOp(op, e) =>
       match op {
@@ -219,27 +219,27 @@ fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
         @parser.TsUnaryOp::Delete => @parser.TsType::Boolean
         @parser.TsUnaryOp::PreInc | @parser.TsUnaryOp::PreDec | @parser.TsUnaryOp::PostInc | @parser.TsUnaryOp::PostDec => infer_literal_type(e)
       }
-    @parser.TsExpr::Call(_, _) => @parser.TsType::Any // 関数の戻り値型は文脈が必要
+    @parser.TsExpr::Call(_, _) => @parser.TsType::Any // functionreturn valuetypestatement
     @parser.TsExpr::CallExpr(_, _) => @parser.TsType::Any
-    @parser.TsExpr::Cond(_, then_, _) => infer_literal_type(then_) // then 節の型
-    @parser.TsExpr::IndexAccess(_, _) => @parser.TsType::Any // 配列要素型
+    @parser.TsExpr::Cond(_, then_, _) => infer_literal_type(then_) // then type
+    @parser.TsExpr::IndexAccess(_, _) => @parser.TsType::Any // arrayelementtype
     @parser.TsExpr::PropAccess(_, prop) =>
       if prop == "length" {
         @parser.TsType::Int
       } else {
         @parser.TsType::Any
       }
-    @parser.TsExpr::New(_, _) => @parser.TsType::Any // コンストラクタの型
+    @parser.TsExpr::New(_, _) => @parser.TsType::Any // type
     @parser.TsExpr::NewExpr(_, _) => @parser.TsType::Any
-    @parser.TsExpr::MethodCall(_, _, _) => @parser.TsType::Any // メソッドの戻り値型
-    @parser.TsExpr::AssignExpr(_, e) => infer_literal_type(e) // 代入式の型は右辺の型
-    @parser.TsExpr::ArrowFunc(_, _) => @parser.TsType::Any // アロー関数は @parser.TsType::Any
-    @parser.TsExpr::FuncExpr(_) => @parser.TsType::Any // 関数式は @parser.TsType::Any
+    @parser.TsExpr::MethodCall(_, _, _) => @parser.TsType::Any // methodreturn valuetype
+    @parser.TsExpr::AssignExpr(_, e) => infer_literal_type(e) // assignmentexpressiontypetype
+    @parser.TsExpr::ArrowFunc(_, _) => @parser.TsType::Any // function @parser.TsType::Any
+    @parser.TsExpr::FuncExpr(_) => @parser.TsType::Any // functionexpression @parser.TsType::Any
   }
 }
 
 ///|
-/// @parser.TsType::Any 型を解決する（可能であれば）
+// / @parser.TsType::Any typeresolve()
 fn resolve_any(declared : @parser.TsType, init : @parser.TsExpr) -> @parser.TsType {
   match declared {
     @parser.TsType::Any => infer_literal_type(init)
@@ -248,39 +248,39 @@ fn resolve_any(declared : @parser.TsType, init : @parser.TsExpr) -> @parser.TsTy
 }
 
 ///|
-/// ローカル変数情報
+// / variable
 priv struct LocalVar {
   index : UInt
   type_ : @parser.TsType
 }
 
 ///|
-/// コード生成コンテキスト
+// / codegen
 priv struct CodeGenCtx {
-  // ローカル変数マップ (名前 → インデックス)
+  // variable ( -> )
   locals : Map[String, LocalVar]
-  // ローカル変数の型リスト (インデックス順)
+  // variabletype ()
   local_types : Array[@parser.TsType]
-  // 次のローカル変数インデックス
+  // variable
   mut next_local : UInt
-  // 関数マップ (名前 → インデックス)
+  // function ( -> )
   funcs : Map[String, UInt]
-  // インターフェースマップ (名前 → フィールド情報)
+  // interface ( -> field)
   interfaces : Map[String, Array[(String, @parser.TsType)]]
-  // インポート関数の型情報 (名前 → パラメータ型と戻り値型)
+  // importfunctiontype ( -> parametertypereturn valuetype)
   import_types : Map[String, (Array[@parser.TsType], @parser.TsType)]
-  // 生成された命令列
+  // generate
   instrs : Array[@core.Instr]
-  // ループのネスト深さ (break/continue 用)
+  // loopnest (break/continue )
   mut loop_depth : Int
-  // 文字列プール
+  // string
   string_pool : StringPool
-  // 使用されたビルトイン関数
+  // function
   builtins_used : Map[String, Bool]
 }
 
 ///|
-/// コンテキスト作成
+// / create
 fn CodeGenCtx::new(
   funcs : Map[String, UInt],
   interfaces : Map[String, Array[(String, @parser.TsType)]],
@@ -303,7 +303,7 @@ fn CodeGenCtx::new(
 }
 
 ///|
-/// ローカル変数を追加
+// / variableadd
 fn CodeGenCtx::add_local(
   self : CodeGenCtx,
   name : String,
@@ -317,7 +317,7 @@ fn CodeGenCtx::add_local(
 }
 
 ///|
-/// 一時ローカルを追加（名前解決には使わない）
+// / add(resolve)
 fn CodeGenCtx::add_temp_local(self : CodeGenCtx, type_ : @parser.TsType) -> UInt {
   let idx = self.next_local
   self.local_types.push(type_)
@@ -326,19 +326,19 @@ fn CodeGenCtx::add_temp_local(self : CodeGenCtx, type_ : @parser.TsType) -> UInt
 }
 
 ///|
-/// ローカル変数を検索
+// / variablelookup
 fn CodeGenCtx::get_local(self : CodeGenCtx, name : String) -> LocalVar? {
   self.locals.get(name)
 }
 
 ///|
-/// 命令を追加
+// / add
 fn CodeGenCtx::emit(self : CodeGenCtx, instr : @core.Instr) -> Unit {
   self.instrs.push(instr)
 }
 
 // ============================================
-// 型変換
+// typeconversion
 // ============================================
 
 ///|
@@ -348,16 +348,16 @@ fn ts_type_to_valtype(t : @parser.TsType) -> @core.ValType {
     @parser.TsType::Number => F64
     @parser.TsType::Int => I32
     @parser.TsType::Boolean => I32
-    @parser.TsType::String_ => I32 // 文字列はメモリ上のポインタ
-    @parser.TsType::Array(_) => I32 // 配列はメモリ上のポインタ
-    @parser.TsType::Named(_) => I32 // struct 参照はポインタ
-    @parser.TsType::Void => I32 // void は実際には使わない
-    _ => F64 // デフォルトは f64
+    @parser.TsType::String_ => I32 // string
+    @parser.TsType::Array(_) => I32 // array
+    @parser.TsType::Named(_) => I32 // struct reference
+    @parser.TsType::Void => I32 // void
+    _ => F64 // f64
   }
 }
 
 ///|
-/// @parser.TsType が f64 か
+// / @parser.TsType f64
 fn is_f64_type(t : @parser.TsType) -> Bool {
   match t {
     @parser.TsType::Number => true
@@ -366,15 +366,15 @@ fn is_f64_type(t : @parser.TsType) -> Bool {
 }
 
 ///|
-/// 式の型を推論
+// / expressiontype
 fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
   match expr {
     @parser.TsExpr::NumberLit(_) => @parser.TsType::Number
     @parser.TsExpr::IntLit(_) => @parser.TsType::Int
     @parser.TsExpr::BoolLit(_) => @parser.TsType::Boolean
     @parser.TsExpr::StringLit(_) => @parser.TsType::String_
-    @parser.TsExpr::NullLit => @parser.TsType::Any // null は @parser.TsType::Any
-    @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // オブジェクトリテラルは @parser.TsType::Any
+    @parser.TsExpr::NullLit => @parser.TsType::Any // null @parser.TsType::Any
+    @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // objectliteral @parser.TsType::Any
     @parser.TsExpr::Seq(_, right) => infer_type(ctx, right)
     @parser.TsExpr::PropAssignExpr(_, _, value) => infer_type(ctx, value)
     @parser.TsExpr::IndexAssignExpr(_, _, value) => infer_type(ctx, value)
@@ -383,11 +383,11 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
     @parser.TsExpr::Var(name) =>
       match ctx.get_local(name) {
         Some(local_var) => local_var.type_
-        None => @parser.TsType::Number // デフォルト
+        None => @parser.TsType::Number
       }
     @parser.TsExpr::BinOp(op, left, right) =>
       match op {
-        // 比較演算子は @parser.TsType::Boolean を返す
+        // comparisonoperator @parser.TsType::Boolean
         @parser.TsBinOp::BinLt
         | @parser.TsBinOp::BinLe
         | @parser.TsBinOp::BinGt
@@ -398,9 +398,9 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
         | @parser.TsBinOp::AbstractNe
         | @parser.TsBinOp::Instanceof
         | @parser.TsBinOp::In => @parser.TsType::Boolean
-        // 論理演算子は @parser.TsType::Boolean を返す
+        // operator @parser.TsType::Boolean
         @parser.TsBinOp::And | @parser.TsBinOp::Or => @parser.TsType::Boolean
-        // @parser.TsBinOp::Add: 文字列連結のチェック
+        // @parser.TsBinOp::Add: stringcheck
         @parser.TsBinOp::Add => {
           let left_t = infer_type(ctx, left)
           let right_t = infer_type(ctx, right)
@@ -410,7 +410,7 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
             left_t
           }
         }
-        // その他の算術演算子は左辺の型を継承
+        // operatortype
         _ => infer_type(ctx, left)
       }
     @parser.TsExpr::UnaryOp(op, operand) =>
@@ -422,14 +422,14 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
         @parser.TsUnaryOp::Delete => @parser.TsType::Boolean
         @parser.TsUnaryOp::PreInc | @parser.TsUnaryOp::PreDec | @parser.TsUnaryOp::PostInc | @parser.TsUnaryOp::PostDec => infer_type(ctx, operand)
       }
-    @parser.TsExpr::Call(_, _) => @parser.TsType::Number // 関数の戻り値型は後で取得
+    @parser.TsExpr::Call(_, _) => @parser.TsType::Number // functionreturn valuetypeget
     @parser.TsExpr::CallExpr(_, _) => @parser.TsType::Number
     @parser.TsExpr::Cond(_, then_expr, _) => infer_type(ctx, then_expr)
     @parser.TsExpr::ArrayLit(elements) =>
       if elements.length() > 0 {
         @parser.TsType::Array(infer_type(ctx, elements[0]))
       } else {
-        @parser.TsType::Array(@parser.TsType::Number) // デフォルト
+        @parser.TsType::Array(@parser.TsType::Number)
       }
     @parser.TsExpr::IndexAccess(arr, _) =>
       match infer_type(ctx, arr) {
@@ -464,29 +464,29 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
         _ => @parser.TsType::Number
       }
     }
-    @parser.TsExpr::AssignExpr(_, e) => infer_type(ctx, e) // 代入式の型は右辺の型
-    @parser.TsExpr::ArrowFunc(_, _) => @parser.TsType::Any // アロー関数は @parser.TsType::Any
-    @parser.TsExpr::FuncExpr(_) => @parser.TsType::Any // 関数式は @parser.TsType::Any
+    @parser.TsExpr::AssignExpr(_, e) => infer_type(ctx, e) // assignmentexpressiontypetype
+    @parser.TsExpr::ArrowFunc(_, _) => @parser.TsType::Any // function @parser.TsType::Any
+    @parser.TsExpr::FuncExpr(_) => @parser.TsType::Any // functionexpression @parser.TsType::Any
   }
 }
 
 ///|
-/// 要素サイズを取得 (バイト単位)
+// / elementget ()
 fn element_size(t : @parser.TsType) -> Int {
   match t {
     @parser.TsType::Number => 8 // f64 = 8 bytes
     @parser.TsType::Int => 4 // i32 = 4 bytes
     @parser.TsType::Boolean => 4 // i32 = 4 bytes
-    @parser.TsType::String_ => 4 // ポインタ = 4 bytes
-    @parser.TsType::Array(_) => 4 // ポインタ = 4 bytes
-    @parser.TsType::Named(_) => 4 // 構造体ポインタ = 4 bytes
-    @parser.TsType::Struct(_, _) => 4 // 構造体ポインタ = 4 bytes
+    @parser.TsType::String_ => 4 // = 4 bytes
+    @parser.TsType::Array(_) => 4 // = 4 bytes
+    @parser.TsType::Named(_) => 4 // struct = 4 bytes
+    @parser.TsType::Struct(_, _) => 4 // struct = 4 bytes
     _ => 8
   }
 }
 
 ///|
-/// 構造体のサイズを計算
+// / structcompute
 fn struct_size(fields : Array[(String, @parser.TsType)]) -> Int {
   let mut size = 0
   for i = 0; i < fields.length(); i = i + 1 {
@@ -497,7 +497,7 @@ fn struct_size(fields : Array[(String, @parser.TsType)]) -> Int {
 }
 
 ///|
-/// 構造体フィールドのオフセットを計算
+// / structfieldcompute
 fn field_offset(fields : Array[(String, @parser.TsType)], field_name : String) -> Int? {
   let mut offset = 0
   for i = 0; i < fields.length(); i = i + 1 {
@@ -511,7 +511,7 @@ fn field_offset(fields : Array[(String, @parser.TsType)], field_name : String) -
 }
 
 ///|
-/// 構造体フィールドの型を取得
+// / structfieldtypeget
 fn field_type(fields : Array[(String, @parser.TsType)], field_name : String) -> @parser.TsType? {
   for i = 0; i < fields.length(); i = i + 1 {
     let (name, field_type) = fields[i]
@@ -523,11 +523,11 @@ fn field_type(fields : Array[(String, @parser.TsType)], field_name : String) -> 
 }
 
 // ============================================
-// 式のコード生成
+// expressioncodegen
 // ============================================
 
 ///|
-/// 式をコンパイル
+// / expression
 fn compile_expr(
   ctx : CodeGenCtx,
   expr : @parser.TsExpr,
@@ -538,7 +538,7 @@ fn compile_expr(
       if is_f64_type(expected_type) {
         ctx.emit(F64Const(n))
       } else {
-        // i32 にキャスト
+        // i32
         ctx.emit(I32Const(n.to_int().reinterpret_as_uint()))
       }
     @parser.TsExpr::IntLit(i) =>
@@ -549,9 +549,9 @@ fn compile_expr(
       }
     @parser.TsExpr::BoolLit(b) => ctx.emit(I32Const(if b { 1U } else { 0U }))
     @parser.TsExpr::StringLit(s) => {
-      // 文字列プールに追加してオフセットを取得 (スナップショット方式)
+      // stringaddget (snapshotexpression)
       let offset = ctx.string_pool.add(s)
-      // データセクションへのポインタを返す
+      // datasection
       ctx.emit(I32Const(offset.reinterpret_as_uint()))
     }
     @parser.TsExpr::Var(name) =>
@@ -577,9 +577,9 @@ fn compile_expr(
     @parser.TsExpr::CallExpr(_, _) =>
       raise CodeGenError("call expression is not supported in Wasm compiler")
     @parser.TsExpr::Cond(cond, then_expr, else_expr) => {
-      // 条件をコンパイル
+      // condition
       compile_expr(ctx, cond, @parser.TsType::Boolean)
-      // then 部分
+      // then
       let then_ctx : CodeGenCtx = {
         locals: ctx.locals,
         local_types: ctx.local_types,
@@ -593,7 +593,7 @@ fn compile_expr(
         builtins_used: ctx.builtins_used,
       }
       compile_expr(then_ctx, then_expr, expected_type)
-      // else 部分
+      // else
       let else_ctx : CodeGenCtx = {
         locals: ctx.locals,
         local_types: ctx.local_types,
@@ -607,7 +607,7 @@ fn compile_expr(
         builtins_used: ctx.builtins_used,
       }
       compile_expr(else_ctx, else_expr, expected_type)
-      // If 式として生成
+      // If expressiongenerate
       let result_type = ts_type_to_valtype(expected_type)
       ctx.emit(If(Value(result_type), then_ctx.instrs, else_ctx.instrs))
     }
@@ -621,7 +621,7 @@ fn compile_expr(
       raise CodeGenError("new expression is not supported in Wasm compiler")
     @parser.TsExpr::MethodCall(receiver, method_name, args) =>
       compile_method_call(ctx, receiver, method_name, args, expected_type)
-    // 以下は静的Wasmコンパイラでは未サポート（インタプリタのみ）
+    // Wasm(interpreter)
     @parser.TsExpr::NullLit => ctx.emit(I32Const(0U)) // null = 0
     @parser.TsExpr::ObjectLit(_) =>
       raise CodeGenError(
@@ -647,7 +647,7 @@ fn compile_expr(
 }
 
 ///|
-/// 配列リテラルをコンパイル
+// / arrayliteral
 fn compile_array_lit(
   ctx : CodeGenCtx,
   elements : Array[@parser.TsExpr],
@@ -660,16 +660,16 @@ fn compile_array_lit(
   let elem_sz = element_size(elem_type)
   let length = elements.length()
 
-  // メモリ割り当て: 4 (length) + length * elem_size
-  // グローバル変数 0 = ヒープポインタ
-  ctx.emit(GlobalGet(0U)) // 現在のヒープポインタを取得
+  // : 4 (length) + length * elem_size
+  // variable 0 =
+  ctx.emit(GlobalGet(0U)) // currentget
 
-  // 長さを格納
+  // length
   ctx.emit(GlobalGet(0U))
   ctx.emit(I32Const(length.reinterpret_as_uint()))
   ctx.emit(I32Store(2U, 0U, 0U))
 
-  // 各要素を格納
+  // element
   for i, elem in elements {
     ctx.emit(GlobalGet(0U))
     ctx.emit(I32Const((4 + i * elem_sz).reinterpret_as_uint()))
@@ -682,7 +682,7 @@ fn compile_array_lit(
     }
   }
 
-  // ヒープポインタを進める
+
   ctx.emit(GlobalGet(0U))
   ctx.emit(I32Const((4 + length * elem_sz).reinterpret_as_uint()))
   ctx.emit(I32Add)
@@ -690,7 +690,7 @@ fn compile_array_lit(
 }
 
 ///|
-/// 配列アクセスをコンパイル
+// / array
 fn compile_index_access(
   ctx : CodeGenCtx,
   arr : @parser.TsExpr,
@@ -704,16 +704,16 @@ fn compile_index_access(
   }
   let elem_sz = element_size(elem_type)
 
-  // アドレス計算: arr + 4 + index * elem_size
-  compile_expr(ctx, arr, arr_type) // 配列のベースアドレス
-  ctx.emit(I32Const(4U)) // 長さフィールドをスキップ
+  // compute: arr + 4 + index * elem_size
+  compile_expr(ctx, arr, arr_type) // array
+  ctx.emit(I32Const(4U)) // lengthfield
   ctx.emit(I32Add)
   compile_expr(ctx, index, @parser.TsType::Int)
   ctx.emit(I32Const(elem_sz.reinterpret_as_uint()))
   ctx.emit(I32Mul)
   ctx.emit(I32Add)
 
-  // 値をロード
+
   if is_f64_type(elem_type) {
     ctx.emit(F64Load(3U, 0U, 0U))
   } else {
@@ -722,7 +722,7 @@ fn compile_index_access(
 }
 
 ///|
-/// プロパティアクセスをコンパイル
+// / property
 fn compile_prop_access(
   ctx : CodeGenCtx,
   obj : @parser.TsExpr,
@@ -731,30 +731,30 @@ fn compile_prop_access(
 ) -> Unit raise CodeGenError {
   let obj_type = infer_type(ctx, obj)
 
-  // 配列/文字列の length プロパティ
+  // array/string length property
   match obj_type {
     @parser.TsType::Array(_) =>
       if prop == "length" {
         compile_expr(ctx, obj, obj_type)
-        ctx.emit(I32Load(2U, 0U, 0U)) // 最初の4バイト = 長さ
+        ctx.emit(I32Load(2U, 0U, 0U)) // 4 = length
         return
       }
     @parser.TsType::String_ =>
       if prop == "length" {
         compile_expr(ctx, obj, obj_type)
-        ctx.emit(I32Load(2U, 0U, 0U)) // 最初の4バイト = 長さ
+        ctx.emit(I32Load(2U, 0U, 0U)) // 4 = length
         return
       }
     @parser.TsType::Named(type_name) =>
-      // 構造体フィールドアクセス
+      // structfield
       match ctx.interfaces.get(type_name) {
         Some(fields) =>
           match field_offset(fields, prop) {
             Some(offset) => {
-              compile_expr(ctx, obj, obj_type) // 構造体のアドレス
+              compile_expr(ctx, obj, obj_type) // struct
               ctx.emit(I32Const(offset.reinterpret_as_uint()))
               ctx.emit(I32Add)
-              // フィールドの型に応じてロード
+              // fieldtype
               match field_type(fields, prop) {
                 Some(@parser.TsType::Number) => ctx.emit(F64Load(3U, 0U, 0U))
                 Some(_) => ctx.emit(I32Load(2U, 0U, 0U))
@@ -772,7 +772,7 @@ fn compile_prop_access(
 }
 
 ///|
-/// new 式をコンパイル
+// / new expression
 fn compile_new_expr(
   ctx : CodeGenCtx,
   type_name : String,
@@ -790,20 +790,20 @@ fn compile_new_expr(
       raise CodeGenError("Array constructor requires size argument")
     }
 
-    // サイズを取得
+    // get
     compile_expr(ctx, args[0], @parser.TsType::Int)
     let size_local = ctx.add_local("__array_size__", @parser.TsType::Int)
     ctx.emit(LocalSet(size_local))
 
-    // 現在のヒープポインタを配列のアドレスとして使う
+    // currentarray
     ctx.emit(GlobalGet(0U))
 
-    // 長さを格納
+    // length
     ctx.emit(GlobalGet(0U))
     ctx.emit(LocalGet(size_local))
     ctx.emit(I32Store(2U, 0U, 0U))
 
-    // ヒープポインタを進める: 4 + size * elem_size
+    // : 4 + size * elem_size
     ctx.emit(GlobalGet(0U))
     ctx.emit(I32Const(4U))
     ctx.emit(I32Add)
@@ -813,15 +813,15 @@ fn compile_new_expr(
     ctx.emit(I32Add)
     ctx.emit(GlobalSet(0U))
   } else {
-    // 構造体の new
+    // struct new
     match ctx.interfaces.get(type_name) {
       Some(fields) => {
         let size = struct_size(fields)
 
-        // 現在のヒープポインタを構造体のアドレスとして使う
+        // currentstruct
         ctx.emit(GlobalGet(0U))
 
-        // ヒープポインタを進める
+
         ctx.emit(GlobalGet(0U))
         ctx.emit(I32Const(size.reinterpret_as_uint()))
         ctx.emit(I32Add)
@@ -833,7 +833,7 @@ fn compile_new_expr(
 }
 
 ///|
-/// メソッド呼び出しをコンパイル
+// / method
 fn compile_method_call(
   ctx : CodeGenCtx,
   receiver : @parser.TsExpr,
@@ -850,7 +850,7 @@ fn compile_method_call(
 }
 
 ///|
-/// 文字列メソッドをコンパイル
+// / stringmethod
 fn compile_string_method(
   ctx : CodeGenCtx,
   receiver : @parser.TsExpr,
@@ -859,23 +859,23 @@ fn compile_string_method(
 ) -> Unit raise CodeGenError {
   match method_name {
     "charCodeAt" => {
-      // str.charCodeAt(index) → str[4 + index] (1バイト読み込み)
+      // str.charCodeAt(index) -> str[4 + index] (1load)
       if args.length() < 1 {
         raise CodeGenError("charCodeAt requires 1 argument")
       }
-      compile_expr(ctx, receiver, @parser.TsType::String_) // 文字列のアドレス
-      ctx.emit(I32Const(4U)) // 長さフィールドをスキップ
+      compile_expr(ctx, receiver, @parser.TsType::String_) // string
+      ctx.emit(I32Const(4U)) // lengthfield
       ctx.emit(I32Add)
-      compile_expr(ctx, args[0], @parser.TsType::Int) // インデックス
+      compile_expr(ctx, args[0], @parser.TsType::Int)
       ctx.emit(I32Add)
-      ctx.emit(I32Load8U(0U, 0U, 0U)) // 1バイト読み込み (符号なし)
+      ctx.emit(I32Load8U(0U, 0U, 0U)) // 1load ()
     }
     "charAt" => {
-      // str.charAt(index) → 新しい1文字の文字列を作成
+      // str.charAt(index) -> 1statementstringcreate
       if args.length() < 1 {
         raise CodeGenError("charAt requires 1 argument")
       }
-      // 文字コードを取得
+      // statementget
       compile_expr(ctx, receiver, @parser.TsType::String_)
       ctx.emit(I32Const(4U))
       ctx.emit(I32Add)
@@ -885,33 +885,33 @@ fn compile_string_method(
       let char_local = ctx.add_local("__char__", @parser.TsType::Int)
       ctx.emit(LocalSet(char_local))
 
-      // 新しい文字列を作成: [length=1][char]
-      ctx.emit(GlobalGet(0U)) // 結果のアドレス
+      // stringcreate: [length=1][char]
+      ctx.emit(GlobalGet(0U)) // result
 
-      // 長さを格納
+      // length
       ctx.emit(GlobalGet(0U))
       ctx.emit(I32Const(1U)) // length = 1
       ctx.emit(I32Store(2U, 0U, 0U))
 
-      // 文字を格納
+      // statement
       ctx.emit(GlobalGet(0U))
       ctx.emit(I32Const(4U))
       ctx.emit(I32Add)
       ctx.emit(LocalGet(char_local))
       ctx.emit(I32Store8(0U, 0U, 0U))
 
-      // ヒープポインタを進める (8バイトアライン)
+      // (8)
       ctx.emit(GlobalGet(0U))
       ctx.emit(I32Const(8U))
       ctx.emit(I32Add)
       ctx.emit(GlobalSet(0U))
     }
     "substring" => {
-      // str.substring(start, end) → 部分文字列
+      // str.substring(start, end) -> string
       if args.length() < 2 {
         raise CodeGenError("substring requires 2 arguments")
       }
-      // 引数を評価
+      // argument
       compile_expr(ctx, args[0], @parser.TsType::Int)
       let start_local = ctx.add_local("__substr_start__", @parser.TsType::Int)
       ctx.emit(LocalSet(start_local))
@@ -919,48 +919,48 @@ fn compile_string_method(
       let end_local = ctx.add_local("__substr_end__", @parser.TsType::Int)
       ctx.emit(LocalSet(end_local))
 
-      // 長さを計算
+      // lengthcompute
       ctx.emit(LocalGet(end_local))
       ctx.emit(LocalGet(start_local))
       ctx.emit(I32Sub)
       let len_local = ctx.add_local("__substr_len__", @parser.TsType::Int)
       ctx.emit(LocalSet(len_local))
 
-      // 新しい文字列のアドレス
+      // string
       ctx.emit(GlobalGet(0U))
 
-      // 長さを格納
+      // length
       ctx.emit(GlobalGet(0U))
       ctx.emit(LocalGet(len_local))
       ctx.emit(I32Store(2U, 0U, 0U))
 
-      // 元の文字列のアドレスを取得
+      // stringget
       compile_expr(ctx, receiver, @parser.TsType::String_)
       let src_local = ctx.add_local("__substr_src__", @parser.TsType::Int)
       ctx.emit(LocalSet(src_local))
 
-      // コピーループ (memory.copy がない場合の簡易実装)
+      // loop (memory.copy simpleimplementation)
       let i_local = ctx.add_local("__substr_i__", @parser.TsType::Int)
       ctx.emit(I32Const(0U))
       ctx.emit(LocalSet(i_local))
 
-      // ループ開始
+      // loop
       let loop_instrs : Array[@core.Instr] = []
-      // 条件: i < len
+      // condition: i < len
       loop_instrs.push(LocalGet(i_local))
       loop_instrs.push(LocalGet(len_local))
       loop_instrs.push(I32GeS)
       loop_instrs.push(BrIf(1U))
 
-      // コピー: dst[4+i] = src[4+start+i]
-      // dst アドレス
+      // : dst[4+i] = src[4+start+i]
+      // dst
       loop_instrs.push(GlobalGet(0U))
       loop_instrs.push(I32Const(4U))
       loop_instrs.push(I32Add)
       loop_instrs.push(LocalGet(i_local))
       loop_instrs.push(I32Add)
 
-      // src から読み込み
+      // src load
       loop_instrs.push(LocalGet(src_local))
       loop_instrs.push(I32Const(4U))
       loop_instrs.push(I32Add)
@@ -970,7 +970,7 @@ fn compile_string_method(
       loop_instrs.push(I32Add)
       loop_instrs.push(I32Load8U(0U, 0U, 0U))
 
-      // 書き込み
+      // store
       loop_instrs.push(I32Store8(0U, 0U, 0U))
 
       // i++
@@ -981,12 +981,12 @@ fn compile_string_method(
       loop_instrs.push(Br(0U))
       ctx.emit(Block(Empty, [Loop(Empty, loop_instrs)]))
 
-      // ヒープポインタを進める
+
       ctx.emit(GlobalGet(0U))
       ctx.emit(I32Const(4U))
       ctx.emit(LocalGet(len_local))
       ctx.emit(I32Add)
-      // 4バイトアライン
+      // 4
       ctx.emit(I32Const(3U))
       ctx.emit(I32Add)
       ctx.emit(I32Const(0xFFFFFFFCU))
@@ -995,7 +995,7 @@ fn compile_string_method(
       ctx.emit(GlobalSet(0U))
     }
     "concat" => {
-      // str.concat(other) → 連結した新しい文字列
+      // str.concat(other) -> string
       if args.length() < 1 {
         raise CodeGenError("concat requires 1 argument")
       }
@@ -1006,50 +1006,50 @@ fn compile_string_method(
 }
 
 ///|
-/// 文字列連結をコンパイル
+// / string
 fn compile_string_concat(
   ctx : CodeGenCtx,
   left : @parser.TsExpr,
   right : @parser.TsExpr,
 ) -> Unit raise CodeGenError {
-  // 左の文字列
+  // string
   compile_expr(ctx, left, @parser.TsType::String_)
   let left_local = ctx.add_local("__concat_left__", @parser.TsType::Int)
   ctx.emit(LocalSet(left_local))
 
-  // 右の文字列
+  // string
   compile_expr(ctx, right, @parser.TsType::String_)
   let right_local = ctx.add_local("__concat_right__", @parser.TsType::Int)
   ctx.emit(LocalSet(right_local))
 
-  // 左の長さ
+  // length
   ctx.emit(LocalGet(left_local))
   ctx.emit(I32Load(2U, 0U, 0U))
   let left_len = ctx.add_local("__concat_left_len__", @parser.TsType::Int)
   ctx.emit(LocalSet(left_len))
 
-  // 右の長さ
+  // length
   ctx.emit(LocalGet(right_local))
   ctx.emit(I32Load(2U, 0U, 0U))
   let right_len = ctx.add_local("__concat_right_len__", @parser.TsType::Int)
   ctx.emit(LocalSet(right_len))
 
-  // 合計長さ
+  // length
   ctx.emit(LocalGet(left_len))
   ctx.emit(LocalGet(right_len))
   ctx.emit(I32Add)
   let total_len = ctx.add_local("__concat_total_len__", @parser.TsType::Int)
   ctx.emit(LocalSet(total_len))
 
-  // 新しい文字列のアドレス
+  // string
   ctx.emit(GlobalGet(0U))
 
-  // 長さを格納
+  // length
   ctx.emit(GlobalGet(0U))
   ctx.emit(LocalGet(total_len))
   ctx.emit(I32Store(2U, 0U, 0U))
 
-  // 左側をコピー
+
   let i_local = ctx.add_local("__concat_i__", @parser.TsType::Int)
   ctx.emit(I32Const(0U))
   ctx.emit(LocalSet(i_local))
@@ -1079,7 +1079,7 @@ fn compile_string_concat(
   loop1.push(Br(0U))
   ctx.emit(Block(Empty, [Loop(Empty, loop1)]))
 
-  // 右側をコピー
+
   ctx.emit(I32Const(0U))
   ctx.emit(LocalSet(i_local))
   let loop2 : Array[@core.Instr] = []
@@ -1110,7 +1110,7 @@ fn compile_string_concat(
   loop2.push(Br(0U))
   ctx.emit(Block(Empty, [Loop(Empty, loop2)]))
 
-  // ヒープポインタを進める
+
   ctx.emit(GlobalGet(0U))
   ctx.emit(I32Const(4U))
   ctx.emit(LocalGet(total_len))
@@ -1124,7 +1124,7 @@ fn compile_string_concat(
 }
 
 ///|
-/// 配列メソッドをコンパイル
+// / arraymethod
 fn compile_array_method(
   ctx : CodeGenCtx,
   receiver : @parser.TsExpr,
@@ -1138,22 +1138,22 @@ fn compile_array_method(
   }
   match method_name {
     "push" => {
-      // arr.push(value) → 要素を追加して新しい長さを返す
+      // arr.push(value) -> elementaddlength
       if args.length() < 1 {
         raise CodeGenError("push requires 1 argument")
       }
-      // 配列のアドレスを取得
+      // arrayget
       compile_expr(ctx, receiver, arr_type)
       let arr_local = ctx.add_local("__push_arr__", @parser.TsType::Int)
       ctx.emit(LocalSet(arr_local))
 
-      // 現在の長さを取得
+      // currentlengthget
       ctx.emit(LocalGet(arr_local))
       ctx.emit(I32Load(2U, 0U, 0U))
       let len_local = ctx.add_local("__push_len__", @parser.TsType::Int)
       ctx.emit(LocalSet(len_local))
 
-      // 新しい要素を格納
+      // element
       let elem_sz = element_size(elem_type)
       ctx.emit(LocalGet(arr_local))
       ctx.emit(I32Const(4U))
@@ -1169,14 +1169,14 @@ fn compile_array_method(
         ctx.emit(I32Store(2U, 0U, 0U))
       }
 
-      // 長さを更新
+      // lengthupdate
       ctx.emit(LocalGet(arr_local))
       ctx.emit(LocalGet(len_local))
       ctx.emit(I32Const(1U))
       ctx.emit(I32Add)
       ctx.emit(I32Store(2U, 0U, 0U))
 
-      // 新しい長さを返す
+      // length
       ctx.emit(LocalGet(len_local))
       ctx.emit(I32Const(1U))
       ctx.emit(I32Add)
@@ -1186,7 +1186,7 @@ fn compile_array_method(
 }
 
 ///|
-/// プロパティへの代入をコンパイル
+// / propertyassignment
 fn compile_prop_assign(
   ctx : CodeGenCtx,
   obj : @parser.TsExpr,
@@ -1200,11 +1200,11 @@ fn compile_prop_assign(
         Some(fields) =>
           match field_offset(fields, prop) {
             Some(offset) => {
-              // アドレス計算
+              // compute
               compile_expr(ctx, obj, obj_type)
               ctx.emit(I32Const(offset.reinterpret_as_uint()))
               ctx.emit(I32Add)
-              // 値をストア
+
               match field_type(fields, prop) {
                 Some(ft) => {
                   compile_expr(ctx, value, ft)
@@ -1228,7 +1228,7 @@ fn compile_prop_assign(
 }
 
 ///|
-/// プロパティへの代入式をコンパイル（値を返す）
+// / propertyassignmentexpression()
 fn compile_prop_assign_expr(
   ctx : CodeGenCtx,
   obj : @parser.TsExpr,
@@ -1246,13 +1246,13 @@ fn compile_prop_assign_expr(
                 Some(ft) => {
                   let obj_local = ctx.add_temp_local(@parser.TsType::Int)
                   let val_local = ctx.add_temp_local(ft)
-                  // obj を先に評価
+                  // obj
                   compile_expr(ctx, obj, obj_type)
                   ctx.emit(LocalSet(obj_local))
-                  // value を評価
+                  // value
                   compile_expr(ctx, value, ft)
                   ctx.emit(LocalSet(val_local))
-                  // ストア
+
                   ctx.emit(LocalGet(obj_local))
                   ctx.emit(I32Const(offset.reinterpret_as_uint()))
                   ctx.emit(I32Add)
@@ -1262,7 +1262,7 @@ fn compile_prop_assign_expr(
                   } else {
                     ctx.emit(I32Store(2U, 0U, 0U))
                   }
-                  // 値を返す
+
                   ctx.emit(LocalGet(val_local))
                   return
                 }
@@ -1278,7 +1278,7 @@ fn compile_prop_assign_expr(
 }
 
 ///|
-/// 配列要素への代入をコンパイル
+// / arrayelementassignment
 fn compile_index_assign(
   ctx : CodeGenCtx,
   arr : @parser.TsExpr,
@@ -1292,16 +1292,16 @@ fn compile_index_assign(
   }
   let elem_sz = element_size(elem_type)
 
-  // アドレス計算: arr + 4 + index * elem_size
-  compile_expr(ctx, arr, arr_type) // 配列のベースアドレス
-  ctx.emit(I32Const(4U)) // 長さフィールドをスキップ
+  // compute: arr + 4 + index * elem_size
+  compile_expr(ctx, arr, arr_type) // array
+  ctx.emit(I32Const(4U)) // lengthfield
   ctx.emit(I32Add)
   compile_expr(ctx, index, @parser.TsType::Int)
   ctx.emit(I32Const(elem_sz.reinterpret_as_uint()))
   ctx.emit(I32Mul)
   ctx.emit(I32Add)
 
-  // 値をストア
+
   compile_expr(ctx, value, elem_type)
   if is_f64_type(elem_type) {
     ctx.emit(F64Store(3U, 0U, 0U))
@@ -1311,7 +1311,7 @@ fn compile_index_assign(
 }
 
 ///|
-/// 配列要素への代入式をコンパイル（値を返す）
+// / arrayelementassignmentexpression()
 fn compile_index_assign_expr(
   ctx : CodeGenCtx,
   arr : @parser.TsExpr,
@@ -1328,7 +1328,7 @@ fn compile_index_assign_expr(
   let idx_local = ctx.add_temp_local(@parser.TsType::Int)
   let val_local = ctx.add_temp_local(elem_type)
 
-  // arr -> index -> value の順で評価
+  // arr -> index -> value
   compile_expr(ctx, arr, arr_type)
   ctx.emit(LocalSet(arr_local))
   compile_expr(ctx, index, @parser.TsType::Int)
@@ -1336,7 +1336,7 @@ fn compile_index_assign_expr(
   compile_expr(ctx, value, elem_type)
   ctx.emit(LocalSet(val_local))
 
-  // アドレス計算: arr + 4 + index * elem_size
+  // compute: arr + 4 + index * elem_size
   ctx.emit(LocalGet(arr_local))
   ctx.emit(I32Const(4U))
   ctx.emit(I32Add)
@@ -1345,7 +1345,7 @@ fn compile_index_assign_expr(
   ctx.emit(I32Mul)
   ctx.emit(I32Add)
 
-  // 値をストア
+
   ctx.emit(LocalGet(val_local))
   if is_f64_type(elem_type) {
     ctx.emit(F64Store(3U, 0U, 0U))
@@ -1353,7 +1353,7 @@ fn compile_index_assign_expr(
     ctx.emit(I32Store(2U, 0U, 0U))
   }
 
-  // 値を返す
+
   ctx.emit(LocalGet(val_local))
 }
 
@@ -1556,7 +1556,7 @@ fn compile_compound_assign_expr(
 }
 
 ///|
-/// 二項演算をコンパイル
+// / binary
 fn compile_binop(
   ctx : CodeGenCtx,
   op : @parser.TsBinOp,
@@ -1564,11 +1564,11 @@ fn compile_binop(
   right : @parser.TsExpr,
   expected_type : @parser.TsType,
 ) -> Unit raise CodeGenError {
-  // 文字列連結のチェック
+  // stringcheck
   let left_type = infer_type(ctx, left)
   let right_type = infer_type(ctx, right)
   if op == @parser.TsBinOp::Add && (left_type == @parser.TsType::String_ || right_type == @parser.TsType::String_) {
-    // 文字列連結
+    // string
     compile_string_concat(ctx, left, right)
     return
   }
@@ -1580,7 +1580,7 @@ fn compile_binop(
     _ => ()
   }
 
-  // 比較演算子のオペランドはオペランドの型を推論、論理演算子は @parser.TsType::Boolean
+  // comparisonoperatortype, operator @parser.TsType::Boolean
   let operand_type = match op {
     @parser.TsBinOp::Add
     | @parser.TsBinOp::Sub
@@ -1602,7 +1602,7 @@ fn compile_binop(
     | @parser.TsBinOp::BinNe
     | @parser.TsBinOp::AbstractEq
     | @parser.TsBinOp::AbstractNe =>
-      // 両方 Int なら Int、それ以外は @parser.TsType::Number
+      // Int Int, @parser.TsType::Number
       if left_type == @parser.TsType::Int && right_type == @parser.TsType::Int {
         @parser.TsType::Int
       } else {
@@ -1617,7 +1617,7 @@ fn compile_binop(
   compile_expr(ctx, left, operand_type)
   compile_expr(ctx, right, operand_type)
   if is_f64_type(operand_type) {
-    // f64 演算
+    // f64
     match op {
       @parser.TsBinOp::Add => ctx.emit(F64Add)
       @parser.TsBinOp::Sub => ctx.emit(F64Sub)
@@ -1643,7 +1643,7 @@ fn compile_binop(
       @parser.TsBinOp::And | @parser.TsBinOp::Or => raise CodeGenError("Logical op on f64")
     }
   } else {
-    // i32 演算
+    // i32
     match op {
       @parser.TsBinOp::Add => ctx.emit(I32Add)
       @parser.TsBinOp::Sub => ctx.emit(I32Sub)
@@ -1677,7 +1677,7 @@ fn compile_binop(
 }
 
 ///|
-/// 単項演算をコンパイル
+// / unary
 fn compile_unaryop(
   ctx : CodeGenCtx,
   op : @parser.TsUnaryOp,
@@ -1787,15 +1787,15 @@ fn compile_unaryop(
         _ => raise CodeGenError("Invalid operand for --")
       }
     @parser.TsUnaryOp::Plus =>
-      // 単項プラス: 数値への変換（そのまま出力）
+      // unary: conversion()
       compile_expr(ctx, operand, expected_type)
     @parser.TsUnaryOp::Typeof =>
-      // typeof は静的Wasmコンパイラでは未サポート
+      // typeof Wasm
       raise CodeGenError(
         "typeof is not supported in Wasm compiler (use interpreter)",
       )
     @parser.TsUnaryOp::Void =>
-      // void も未サポート
+      // void
       raise CodeGenError(
         "void is not supported in Wasm compiler (use interpreter)",
       )
@@ -1807,30 +1807,30 @@ fn compile_unaryop(
 }
 
 ///|
-/// 関数呼び出しをコンパイル
+// / function
 fn compile_call(
   ctx : CodeGenCtx,
   name : String,
   args : Array[@parser.TsExpr],
   expected_type : @parser.TsType,
 ) -> Unit raise CodeGenError {
-  // 関数インデックスを取得
+  // functionget
   match ctx.funcs.get(name) {
     Some(idx) => {
-      // インポート関数の型情報があれば使用
+      // importfunctiontype
       match ctx.import_types.get(name) {
         Some((param_types, _)) =>
-          // インポート関数: パラメータ型を参照
+          // importfunction: parametertypereference
           for i, arg in args {
             let param_type = if i < param_types.length() {
               param_types[i]
             } else {
-              expected_type // 可変長引数の場合
+              expected_type // argument
             }
             compile_expr(ctx, arg, param_type)
           }
         None =>
-          // ユーザー定義関数: expected_type を使用
+          // definefunction: expected_type
           for arg in args {
             compile_expr(ctx, arg, expected_type)
           }
@@ -1842,11 +1842,11 @@ fn compile_call(
 }
 
 // ============================================
-// 文のコード生成
+// statementcodegen
 // ============================================
 
 ///|
-/// 文をコンパイル
+// / statement
 fn compile_stmt(
   ctx : CodeGenCtx,
   stmt : @parser.TsStmt,
@@ -1854,14 +1854,14 @@ fn compile_stmt(
 ) -> Unit raise CodeGenError {
   match stmt {
     @parser.TsStmt::Let(name, type_, init) => {
-      // @parser.TsType::Any 型はリテラルから推論
+      // @parser.TsType::Any typeliteral
       let resolved_type = resolve_any(type_, init)
       let idx = ctx.add_local(name, resolved_type)
       compile_expr(ctx, init, resolved_type)
       ctx.emit(LocalSet(idx))
     }
     @parser.TsStmt::Const(name, type_, init) => {
-      // const も let と同じ扱い、@parser.TsType::Any 型はリテラルから推論
+      // const let , @parser.TsType::Any typeliteral
       let resolved_type = resolve_any(type_, init)
       let idx = ctx.add_local(name, resolved_type)
       compile_expr(ctx, init, resolved_type)
@@ -1952,16 +1952,16 @@ fn compile_stmt(
     @parser.TsStmt::ForOf(var_name, var_type, iterable, body) =>
       compile_for_of(ctx, var_name, var_type, iterable, body, return_type)
     Break =>
-      // loop の外側の block へジャンプ
+      // loop block
       ctx.emit(Br((ctx.loop_depth * 2 - 1).reinterpret_as_uint()))
     Continue =>
-      // loop の先頭へジャンプ
+      // loop head
       ctx.emit(Br(((ctx.loop_depth - 1) * 2).reinterpret_as_uint()))
   }
 }
 
 ///|
-/// if 文をコンパイル
+// / if statement
 fn compile_if(
   ctx : CodeGenCtx,
   cond : @parser.TsExpr,
@@ -1979,7 +1979,7 @@ fn compile_if(
 }
 
 ///|
-/// while 文をコンパイル
+// / while statement
 fn compile_while(
   ctx : CodeGenCtx,
   cond : @parser.TsExpr,
@@ -1991,7 +1991,7 @@ fn compile_while(
   // Block(Loop([cond, BrIf(1), ...body, Br(0)]))
   let loop_instrs : Array[@core.Instr] = []
 
-  // 条件チェック用の一時コンテキスト
+  // conditioncheck
   let cond_ctx : CodeGenCtx = {
     locals: ctx.locals,
     local_types: ctx.local_types,
@@ -2009,20 +2009,20 @@ fn compile_while(
     loop_instrs.push(instr)
   }
   loop_instrs.push(I32Eqz)
-  loop_instrs.push(BrIf(1U)) // 条件が偽なら外のブロックへ
+  loop_instrs.push(BrIf(1U)) // conditionblock
 
   // body
   let body_instrs = compile_block_to_instrs(ctx, body, return_type)
   for instr in body_instrs {
     loop_instrs.push(instr)
   }
-  loop_instrs.push(Br(0U)) // ループ先頭へ
+  loop_instrs.push(Br(0U)) // loophead
   ctx.emit(Block(Empty, [Loop(Empty, loop_instrs)]))
   ctx.loop_depth -= 1
 }
 
 ///|
-/// for 文をコンパイル
+// / for statement
 fn compile_for(
   ctx : CodeGenCtx,
   init : @parser.TsStmt?,
@@ -2092,13 +2092,13 @@ fn compile_for(
     }
     None => ()
   }
-  loop_instrs.push(Br(0U)) // ループ先頭へ
+  loop_instrs.push(Br(0U)) // loophead
   ctx.emit(Block(Empty, [Loop(Empty, loop_instrs)]))
   ctx.loop_depth -= 1
 }
 
 ///|
-/// for...of をコンパイル
+// / for...of
 fn compile_for_of(
   ctx : CodeGenCtx,
   var_name : String,
@@ -2107,41 +2107,41 @@ fn compile_for_of(
   body : @parser.TsBlock,
   return_type : @parser.TsType,
 ) -> Unit raise CodeGenError {
-  // 配列を取得してローカル変数に保存
+  // arraygetvariablesave
   let arr_type = infer_type(ctx, iterable)
   let elem_type = match arr_type {
     @parser.TsType::Array(t) => t
     _ => @parser.TsType::Number
   }
 
-  // 配列のアドレスを保存
+  // arraysave
   let arr_local = ctx.add_local("__for_of_arr__", arr_type)
   compile_expr(ctx, iterable, arr_type)
   ctx.emit(LocalSet(arr_local))
 
-  // 配列の長さを取得して保存
+  // arraylengthgetsave
   let len_local = ctx.add_local("__for_of_len__", @parser.TsType::Int)
   ctx.emit(LocalGet(arr_local))
   ctx.emit(I32Load(2U, 0U, 0U))
   ctx.emit(LocalSet(len_local))
 
-  // インデックス変数
+  // variable
   let idx_local = ctx.add_local("__for_of_idx__", @parser.TsType::Int)
   ctx.emit(I32Const(0U))
   ctx.emit(LocalSet(idx_local))
 
-  // ループ変数
+  // loopvariable
   let loop_var_idx = ctx.add_local(var_name, elem_type)
   ctx.loop_depth += 1
   let loop_instrs : Array[@core.Instr] = []
 
-  // 条件: idx < len
+  // condition: idx < len
   loop_instrs.push(LocalGet(idx_local))
   loop_instrs.push(LocalGet(len_local))
   loop_instrs.push(I32GeS)
   loop_instrs.push(BrIf(1U))
 
-  // ループ変数に arr[idx] を代入
+  // loopvariable arr[idx] assignment
   let elem_sz = element_size(elem_type)
   loop_instrs.push(LocalGet(arr_local))
   loop_instrs.push(I32Const(4U))
@@ -2174,13 +2174,13 @@ fn compile_for_of(
 }
 
 ///|
-/// ブロックを命令列に変換（コンテキストを共有）
+// / blockconversion()
 fn compile_block_to_instrs(
   ctx : CodeGenCtx,
   block : @parser.TsBlock,
   return_type : @parser.TsType,
 ) -> Array[@core.Instr] raise CodeGenError {
-  // 同じコンテキストの locals と local_types を使う
+  // locals local_types
   let sub_ctx : CodeGenCtx = {
     locals: ctx.locals,
     local_types: ctx.local_types,
@@ -2197,17 +2197,17 @@ fn compile_block_to_instrs(
     compile_stmt(sub_ctx, stmt, return_type)
   }
 
-  // ローカル変数の更新を反映
+  // variableupdate
   ctx.next_local = sub_ctx.next_local
   sub_ctx.instrs
 }
 
 // ============================================
-// 関数のコード生成
+// functioncodegen
 // ============================================
 
 ///|
-/// 関数をコンパイル
+// / function
 fn compile_function(
   func : @parser.TsFunc,
   func_map : Map[String, UInt],
@@ -2220,21 +2220,21 @@ fn compile_function(
     func_map, interfaces, import_types, string_pool, builtins_used,
   )
 
-  // パラメータをローカル変数として登録
+  // parametervariable
   for param in func.params {
     let _ = ctx.add_local(param.name, param.type_)
 
   }
 
-  // パラメータ以外のローカル変数を追跡
+  // parametervariable
   let param_count = func.params.length().reinterpret_as_uint()
 
-  // 関数本体をコンパイル
+  // function
   for stmt in func.body.stmts {
     compile_stmt(ctx, stmt, func.return_type)
   }
 
-  // 型定義
+  // typedefine
   let params : Array[@core.ValType] = []
   for param in func.params {
     params.push(ts_type_to_valtype(param.type_))
@@ -2245,7 +2245,7 @@ fn compile_function(
   }
   let func_type : @core.TypeDef = @core.TypeDef::Func({ params, results })
 
-  // ローカル変数（パラメータ以外）
+  // variable(parameter)
   let locals : Array[@core.ValType] = []
   let mut i = param_count.reinterpret_as_int()
   while i < ctx.next_local.reinterpret_as_int() {
@@ -2253,7 +2253,7 @@ fn compile_function(
     i += 1
   }
 
-  // コード
+
   let code : @core.Code = {
     locals,
     body: @core.Expr::{ instrs: ctx.instrs },
@@ -2264,35 +2264,35 @@ fn compile_function(
 }
 
 // ============================================
-// モジュールのコード生成
+// codegen
 // ============================================
 
 ///|
-/// モジュールをコンパイル
+// /
 pub fn compile_module(module_ : @parser.TsModule) -> @core.Module raise CodeGenError {
-  // インポート数を計算
+  // importcompute
   let num_imports = module_.imports.length().reinterpret_as_uint()
 
-  // 関数マップを作成
+  // functioncreate
   let func_map : Map[String, UInt] = {}
 
-  // インポート関数を func_map に追加 (インデックス 0 から)
+  // importfunction func_map add ( 0 )
   for i, imp in module_.imports {
     func_map[imp.name] = i.reinterpret_as_uint()
   }
 
-  // ユーザー定義関数を func_map に追加 (インポートの後)
+  // definefunction func_map add (import)
   for i, func in module_.funcs {
     func_map[func.name] = i.reinterpret_as_uint() + num_imports
   }
 
-  // インターフェースマップを作成
+  // interfacecreate
   let interface_map : Map[String, Array[(String, @parser.TsType)]] = {}
   for iface in module_.interfaces {
     interface_map[iface.name] = iface.fields
   }
 
-  // インポート関数の型情報マップを作成
+  // importfunctiontypecreate
   let import_types : Map[String, (Array[@parser.TsType], @parser.TsType)] = {}
   for imp in module_.imports {
     let param_types : Array[@parser.TsType] = []
@@ -2302,10 +2302,10 @@ pub fn compile_module(module_ : @parser.TsModule) -> @core.Module raise CodeGenE
     import_types[imp.name] = (param_types, imp.return_type)
   }
 
-  // 文字列プールを作成 (スナップショット)
+  // stringcreate (snapshot)
   let string_pool = StringPool::new()
 
-  // 型定義 (インポート関数の型を先に追加)
+  // typedefine (importfunctiontypeadd)
   let types : Array[@core.TypeDef] = []
   for imp in module_.imports {
     let params : Array[@core.ValType] = []
@@ -2319,7 +2319,7 @@ pub fn compile_module(module_ : @parser.TsModule) -> @core.Module raise CodeGenE
     types.push(@core.TypeDef::Func({ params, results }))
   }
 
-  // 各関数をコンパイル
+  // function
   let codes : Array[@core.Code] = []
   let funcs : Array[UInt] = []
   let exports : Array[@core.Export] = []
@@ -2333,27 +2333,27 @@ pub fn compile_module(module_ : @parser.TsModule) -> @core.Module raise CodeGenE
     let func_idx = i.reinterpret_as_uint() + num_imports
     funcs.push(func_idx)
 
-    // すべての関数をエクスポート
+    // functionexport
     let name_bytes = string_to_bytes(func.name)
     exports.push({ name: name_bytes, desc: @core.ExportDesc::Func(func_idx) })
   }
 
-  // Wasm インポートを生成
+  // Wasm importgenerate
   let imports : Array[@core.Import] = []
   for i, imp in module_.imports {
     imports.push({
       module_: string_to_bytes(imp.module_),
       name: string_to_bytes(imp.name),
-      desc: @core.ImportDesc::Func(i.reinterpret_as_uint()), // 型インデックス
+      desc: @core.ImportDesc::Func(i.reinterpret_as_uint()), // type
     })
   }
 
-  // メモリ (1ページ = 64KB)
+  // (1 = 64KB)
   let mems : Array[@core.MemType] = [
     { limits: { min: 1UL, max: Some(16UL) }, shared: false, memory64: false },
   ]
 
-  // 文字列プールデータをデータセクションに格納
+  // stringdatadatasection
   let datas : Array[@core.Data] = if string_pool.data.length() > 0 {
     [
       {
@@ -2367,11 +2367,11 @@ pub fn compile_module(module_ : @parser.TsModule) -> @core.Module raise CodeGenE
     []
   }
 
-  // ヒープポインタの初期値 = 文字列プールの終端 (4バイトアライン)
+  // = string (4)
   let heap_start = (string_pool.offset() + 3) / 4 * 4
   let heap_start_aligned = if heap_start < 1024 { 1024 } else { heap_start }
 
-  // グローバル変数 (ヒープポインタ)
+  // variable ()
   let globals : Array[@core.Global] = [
     {
       type_: { val_type: I32, mutable: true },
@@ -2379,7 +2379,7 @@ pub fn compile_module(module_ : @parser.TsModule) -> @core.Module raise CodeGenE
     },
   ]
 
-  // 型メタデータをカスタムセクションに格納 (スナップショット)
+  // type metadatasection (snapshot)
   let type_metadata = serialize_type_metadata(module_)
   let customs : Array[@core.CustomSection] = [
     { name: string_to_bytes("tstype"), data: type_metadata, placement: End },
@@ -2403,7 +2403,7 @@ pub fn compile_module(module_ : @parser.TsModule) -> @core.Module raise CodeGenE
 }
 
 ///|
-/// 文字列を Bytes に変換 (ASCII)
+// / string Bytes conversion (ASCII)
 fn string_to_bytes(s : String) -> Bytes {
   let arr : Array[Byte] = []
   for i = 0; i < s.length(); i = i + 1 {
@@ -2413,31 +2413,31 @@ fn string_to_bytes(s : String) -> Bytes {
 }
 
 // ============================================
-// 便利な統合関数
+// function
 // ============================================
 
 ///|
-/// コンパイルエラー (パース + コード生成)
+// / error ( + codegen)
 pub suberror CompileError {
   CompileError(String)
 } derive(Show)
 
 ///|
-/// TypeScript ソースコードを Wasm バイナリにコンパイル
+// / TypeScript Wasm
 pub fn compile_to_wasm(source : String) -> Bytes raise CompileError {
-  // パース
+
   let parser = @parser.Parser::from_source(source)
   let ts_module = parser.parse_module() catch {
     @parser.ParseError::ParseError(msg) =>
       raise CompileError("Parse error: \{msg}")
   }
 
-  // コード生成
+  // codegen
   let wasm_module = compile_module(ts_module) catch {
     CodeGenError(msg) => raise CompileError("CodeGen error: \{msg}")
   }
 
-  // Wasm バイナリにエンコード
+  // Wasm encode
   @encode.encode(wasm_module) catch {
     @encode.EncodeError::Unsupported(msg) =>
       raise CompileError("Encode error: \{msg}")
@@ -2445,7 +2445,7 @@ pub fn compile_to_wasm(source : String) -> Bytes raise CompileError {
 }
 
 ///|
-/// TypeScript ソースコードをパースして wasm5 Module を生成
+// / TypeScript wasm5 Module generate
 pub fn compile(source : String) -> @core.Module raise CompileError {
   let parser = @parser.Parser::from_source(source)
   let ts_module = parser.parse_module() catch {

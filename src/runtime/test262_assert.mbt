@@ -1,14 +1,14 @@
 // test262 harness implementation for MoonBit JS interpreter
 
 ///|
-/// AssertResult テスト結果
+// / AssertResult testresult
 pub enum AssertResult {
   Success
   Failure(String)
 }
 
 ///|
-/// SameValue アルゴリズム
+// / SameValue
 pub fn is_same_value(a : JSValue, b : JSValue) -> Bool {
   let eq = js_strict_eq(a, b)
   match eq {
@@ -101,7 +101,7 @@ pub fn assert_not_same_value(
 }
 
 ///|
-/// 配列比較ユーティリティ
+// / arraycomparison
 pub fn compare_array(
   actual : JSValue,
   expected : JSValue,

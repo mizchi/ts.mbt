@@ -1,4 +1,4 @@
-// JSValue のテスト
+// JSValue test
 
 ///|
 test "jsvalue: type checks" {
@@ -177,20 +177,20 @@ test "jsvalue: typeof" {
 test "jsvalue: object property" {
   let obj = js_new_object()
 
-  // 初期状態はundefined
+  // stateundefined
   match js_get_prop(obj, "foo") {
     Undefined => ()
     _ => fail("expected Undefined")
   }
 
-  // プロパティを設定
+  // propertyset
   let _ = js_set_prop(obj, "foo", JSValue::Number(42.0))
   match js_get_prop(obj, "foo") {
     Number(n) => assert_eq(n, 42.0)
     _ => fail("expected Number")
   }
 
-  // プロパティを更新
+  // propertyupdate
   let _ = js_set_prop(obj, "foo", JSValue::String("bar"))
   match js_get_prop(obj, "foo") {
     String(s) => assert_eq(s, "bar")
@@ -202,7 +202,7 @@ test "jsvalue: object property" {
 test "jsvalue: array operations" {
   let arr = js_new_array()
 
-  // 空配列の長さ
+  // arraylength
   match js_array_length(arr) {
     Number(n) => assert_eq(n, 0.0)
     _ => fail("expected Number")
@@ -216,7 +216,7 @@ test "jsvalue: array operations" {
     _ => fail("expected Number")
   }
 
-  // インデックスアクセス
+
   match js_get_prop(arr, "0") {
     Number(n) => assert_eq(n, 10.0)
     _ => fail("expected Number")
@@ -237,24 +237,24 @@ test "jsvalue: array operations" {
 test "jsvalue: environment" {
   let env = js_new_env(None)
 
-  // 変数定義
+  // variabledefine
   env.define_var("x", JSValue::Number(10.0))
   env.define_var("y", JSValue::Number(20.0))
 
-  // 取得
+  // get
   match env.get("x") {
     Number(n) => assert_eq(n, 10.0)
     _ => fail("expected Number")
   }
 
-  // 更新
+  // update
   assert_true(env.set("x", JSValue::Number(100.0)))
   match env.get("x") {
     Number(n) => assert_eq(n, 100.0)
     _ => fail("expected Number")
   }
 
-  // 存在しない変数
+  // existencevariable
   match env.get("z") {
     Undefined => ()
     _ => fail("expected Undefined")
@@ -268,19 +268,19 @@ test "jsvalue: nested environment" {
   let inner = js_new_env(Some(outer))
   inner.define_var("y", JSValue::Number(20.0))
 
-  // innerからouterの変数にアクセス
+  // inneroutervariable
   match inner.get("x") {
     Number(n) => assert_eq(n, 10.0)
     _ => fail("expected Number")
   }
 
-  // innerの変数
+  // innervariable
   match inner.get("y") {
     Number(n) => assert_eq(n, 20.0)
     _ => fail("expected Number")
   }
 
-  // innerからouterの変数を更新
+  // inneroutervariableupdate
   assert_true(inner.set("x", JSValue::Number(100.0)))
   match outer.get("x") {
     Number(n) => assert_eq(n, 100.0)

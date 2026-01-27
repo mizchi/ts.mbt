@@ -1,8 +1,8 @@
-// JSValue インタプリタ
-// ASTを直接解釈実行する
+// JSValue interpreter
+// ASTrun
 
 ///|
-/// インタプリタ
+// / interpreter
 pub struct JSInterpreter {
   global_env : JSEnv
   mut last_error : JSValue?
@@ -29,7 +29,7 @@ priv enum GenSignal {
 }
 
 ///|
-/// インタプリタを作成
+// / interpretercreate
 pub fn JSInterpreter::new() -> JSInterpreter {
   let env = js_new_env(None)
   let object_proto = js_new_object()
@@ -58,7 +58,7 @@ pub fn JSInterpreter::new() -> JSInterpreter {
 }
 
 ///|
-/// ネイティブ関数を作成
+// / functioncreate
 fn JSInterpreter::make_native(self : JSInterpreter, name : String) -> JSValue {
   JSValue::Function({
     id: fresh_function_id(),
@@ -74,7 +74,7 @@ fn JSInterpreter::make_native(self : JSInterpreter, name : String) -> JSValue {
 }
 
 ///|
-/// 関数の length プロパティを設定
+// / function length propertyset
 fn JSInterpreter::set_function_length(
   _self : JSInterpreter,
   func : JSValue,
@@ -84,7 +84,7 @@ fn JSInterpreter::set_function_length(
 }
 
 ///|
-/// 関数の name プロパティを設定
+// / function name propertyset
 fn JSInterpreter::set_function_name(
   _self : JSInterpreter,
   func : JSValue,
@@ -94,7 +94,7 @@ fn JSInterpreter::set_function_name(
 }
 
 ///|
-/// データディスクリプタを作成
+// / datacreate
 fn JSInterpreter::make_data_descriptor(
   self : JSInterpreter,
   value : JSValue,
@@ -111,7 +111,7 @@ fn JSInterpreter::make_data_descriptor(
 }
 
 ///|
-/// RegExp オブジェクトを作成
+// / RegExp objectcreate
 fn JSInterpreter::make_regexp(
   self : JSInterpreter,
   pattern : String,
@@ -137,7 +137,7 @@ fn JSInterpreter::make_regexp(
 }
 
 ///|
-/// アクセサディスクリプタを作成
+// / create
 fn JSInterpreter::make_accessor_descriptor(
   self : JSInterpreter,
   get : JSValue?,
@@ -168,7 +168,7 @@ fn JSInterpreter::make_accessor_descriptor(
 }
 
 ///|
-/// bound 関数の length 計算
+// / bound function length compute
 fn JSInterpreter::calc_bound_length(
   _self : JSInterpreter,
   target : JSValue,
@@ -202,7 +202,7 @@ fn JSInterpreter::calc_bound_length(
 }
 
 ///|
-/// strict mode 判定
+// / strict mode check
 fn JSInterpreter::is_strict_body(
   _self : JSInterpreter,
   body : @parser.TsBlock,
@@ -221,13 +221,13 @@ fn JSInterpreter::is_strict_body(
 }
 
 ///|
-/// エラーオブジェクトを作成して保持
+// / errorobjectcreate
 fn JSInterpreter::set_error(self : JSInterpreter, message : String) -> JSValue {
   self.set_error_kind("Error", message)
 }
 
 ///|
-/// エラー種別付きのエラーオブジェクトを作成して保持
+// / errorerrorobjectcreate
 fn JSInterpreter::set_error_kind(
   self : JSInterpreter,
   name : String,
@@ -240,7 +240,7 @@ fn JSInterpreter::set_error_kind(
 }
 
 ///|
-/// エラーオブジェクトを作成
+// / errorobjectcreate
 fn JSInterpreter::make_error_obj(
   self : JSInterpreter,
   name : String,
@@ -264,7 +264,7 @@ fn JSInterpreter::make_error_obj(
 }
 
 ///|
-/// 実行ステップをカウントして暴走を抑制
+// / run
 fn JSInterpreter::tick(self : JSInterpreter) -> Unit {
   match self.last_error {
     Some(_) => ()
@@ -278,7 +278,7 @@ fn JSInterpreter::tick(self : JSInterpreter) -> Unit {
 }
 
 ///|
-/// エラーを取得してクリア
+// / errorget
 fn JSInterpreter::take_error(self : JSInterpreter) -> JSValue? {
   match self.last_error {
     Some(err) => {
@@ -290,19 +290,19 @@ fn JSInterpreter::take_error(self : JSInterpreter) -> JSValue? {
 }
 
 ///|
-/// エラーを覗く（クリアしない）
+// / error()
 fn JSInterpreter::peek_error(self : JSInterpreter) -> JSValue? {
   self.last_error
 }
 
 ///|
-/// Object.prototype を持つオブジェクトを作成
+// / Object.prototype objectcreate
 fn JSInterpreter::new_object(self : JSInterpreter) -> JSValue {
   js_new_object_with_proto(Some(self.object_proto))
 }
 
 ///|
-/// グローバル組み込みをセットアップ
+// /
 fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let global_obj = self.new_object()
 
@@ -771,7 +771,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
 }
 
 ///|
-/// 式を評価
+// / expression
 pub fn JSInterpreter::eval_expr(
   self : JSInterpreter,
   expr : @parser.TsExpr,
@@ -867,14 +867,14 @@ pub fn JSInterpreter::eval_expr(
         @parser.TsBinOp::Instanceof => Bool(self.instanceof(lval, rval))
         @parser.TsBinOp::In => Bool(js_has_prop(rval, lval.to_js_string()))
         @parser.TsBinOp::And =>
-          // 短絡評価: lvalがfalsyならlval、そうでなければrval
+          // : lvalfalsylval, rval
           if lval.to_boolean() {
             rval
           } else {
             lval
           }
         @parser.TsBinOp::Or =>
-          // 短絡評価: lvalがtruthyならlval、そうでなければrval
+          // : lvaltruthylval, rval
           if lval.to_boolean() {
             lval
           } else {
@@ -885,7 +885,7 @@ pub fn JSInterpreter::eval_expr(
     @parser.TsExpr::UnaryOp(op, operand) =>
       match op {
         @parser.TsUnaryOp::PreInc =>
-          // ++x: インクリメントして新しい値を返す
+          // ++x:
           match operand {
             @parser.TsExpr::Var(name) => {
               let old_val = env.get(name)
@@ -899,7 +899,7 @@ pub fn JSInterpreter::eval_expr(
             }
           }
         @parser.TsUnaryOp::PreDec =>
-          // --x: デクリメントして新しい値を返す
+          // --x:
           match operand {
             @parser.TsExpr::Var(name) => {
               let old_val = env.get(name)
@@ -913,7 +913,7 @@ pub fn JSInterpreter::eval_expr(
             }
           }
         @parser.TsUnaryOp::PostInc =>
-          // x++: 古い値を返してからインクリメント
+          // x++:
           match operand {
             @parser.TsExpr::Var(name) => {
               let old_val = env.get(name)
@@ -923,11 +923,11 @@ pub fn JSInterpreter::eval_expr(
             }
             _ => {
               let val = self.eval_expr(operand, env)
-              val // 副作用なし
+              val
             }
           }
         @parser.TsUnaryOp::PostDec =>
-          // x--: 古い値を返してからデクリメント
+          // x--:
           match operand {
             @parser.TsExpr::Var(name) => {
               let old_val = env.get(name)
@@ -937,7 +937,7 @@ pub fn JSInterpreter::eval_expr(
             }
             _ => {
               let val = self.eval_expr(operand, env)
-              val // 副作用なし
+              val
             }
           }
         @parser.TsUnaryOp::Neg => js_neg(self.eval_expr(operand, env))
@@ -1011,7 +1011,7 @@ pub fn JSInterpreter::eval_expr(
         }
         return Undefined
       }
-      // 関数を環境から取得
+      // functionget
       let func = env.get(name)
       let arg_values : Array[JSValue] = []
       for arg in args {
@@ -1147,7 +1147,7 @@ pub fn JSInterpreter::eval_expr(
     @parser.TsExpr::AssignExpr(name, val_expr) => {
       let val = self.eval_expr(val_expr, env)
       if not(env.set(name, val)) {
-        // 変数が見つからない場合はグローバルに定義
+        // variabledefine
         self.global_env.define_var(name, val)
         let global_obj = self.global_env.get("globalThis")
         let _ = js_set_prop(global_obj, name, val)
@@ -1269,7 +1269,7 @@ pub fn JSInterpreter::eval_expr(
 }
 
 ///|
-/// direct eval: 同一環境で式/文を実行
+// / direct eval: expression/statementrun
 fn JSInterpreter::direct_eval(self : JSInterpreter, source : String, env : JSEnv) -> JSValue {
   let parsed_expr = try { @parser.parse_expr_from_source(source) } catch { _ => None }
   match parsed_expr {
@@ -1360,7 +1360,7 @@ fn apply_compound_op(
 }
 
 ///|
-/// 文を実行（戻り値はReturnの場合のみSome）
+// / statementrun(return valueReturnSome)
 pub fn JSInterpreter::exec_stmt(
   self : JSInterpreter,
   stmt : @parser.TsStmt,
@@ -1506,7 +1506,7 @@ pub fn JSInterpreter::exec_stmt(
       None
     }
     @parser.TsStmt::For(init, cond, update, body) => {
-      // 初期化
+      // initialize
       match init {
         Some(init_stmt) => {
           match self.exec_stmt(init_stmt, env) {
@@ -1517,7 +1517,7 @@ pub fn JSInterpreter::exec_stmt(
         }
         None => ()
       }
-      // ループ
+      // loop
       while (match cond {
               Some(c) => self.eval_expr(c, env).to_boolean()
               None => true
@@ -1529,7 +1529,7 @@ pub fn JSInterpreter::exec_stmt(
         match self.exec_block(body, env) {
           Some(BreakSignal) => break
           Some(ContinueSignal) => {
-            // 更新を実行してから次のイテレーションへ
+            // updaterun
             match update {
               Some(u) => {
                 match self.exec_stmt(u, env) {
@@ -1545,7 +1545,7 @@ pub fn JSInterpreter::exec_stmt(
           Some(val) => return Some(val)
           None => ()
         }
-        // 更新
+        // update
         match update {
           Some(u) => {
             match self.exec_stmt(u, env) {
@@ -1624,7 +1624,7 @@ pub fn JSInterpreter::exec_stmt(
           }
         }
         String(s) => {
-          // 文字列のイテレーション
+          // string
           let mut idx = 0
           while idx < s.length() {
             let char_str = try { s[idx:idx + 1].to_string() } catch { _ => "" }
@@ -1641,7 +1641,7 @@ pub fn JSInterpreter::exec_stmt(
             idx += 1
           }
         }
-        _ => () // イテレート不可
+        _ => ()
       }
       None
     }
@@ -1649,7 +1649,7 @@ pub fn JSInterpreter::exec_stmt(
 }
 
 ///|
-/// ブロックを実行
+// / blockrun
 pub fn JSInterpreter::exec_block(
   self : JSInterpreter,
   block : @parser.TsBlock,
@@ -1665,7 +1665,7 @@ pub fn JSInterpreter::exec_block(
 }
 
 ///|
-/// プロトタイプを取得
+// / get
 fn JSInterpreter::get_proto(_self : JSInterpreter, value : JSValue) -> JSValue? {
   match value {
     Object(map) => map.prototype
@@ -1676,13 +1676,13 @@ fn JSInterpreter::get_proto(_self : JSInterpreter, value : JSValue) -> JSValue? 
 }
 
 ///|
-/// プロパティ値を取得（アクセサ対応）
+// / propertyget()
 fn JSInterpreter::get_prop_value(self : JSInterpreter, obj : JSValue, key : String) -> JSValue {
   self.get_prop_value_with_receiver(obj, obj, key)
 }
 
 ///|
-/// レシーバ付きプロパティ取得
+// / propertyget
 fn JSInterpreter::get_prop_value_with_receiver(
   self : JSInterpreter,
   target : JSValue,
@@ -1751,7 +1751,7 @@ fn JSInterpreter::get_prop_value_with_receiver(
 }
 
 ///|
-/// プロパティ値評価
+// / property
 fn JSInterpreter::eval_prop_value(
   self : JSInterpreter,
   receiver : JSValue,
@@ -1764,7 +1764,7 @@ fn JSInterpreter::eval_prop_value(
 }
 
 ///|
-/// own property 判定
+// / own property check
 fn JSInterpreter::has_own_prop(_self : JSInterpreter, obj : JSValue, key : String) -> Bool {
   match obj {
     Function(closure) => {
@@ -1813,7 +1813,7 @@ fn JSInterpreter::has_own_prop(_self : JSInterpreter, obj : JSValue, key : Strin
 }
 
 ///|
-/// enumerable 判定
+// / enumerable check
 fn JSInterpreter::is_enumerable(_self : JSInterpreter, obj : JSValue, key : String) -> Bool {
   match obj {
     Function(closure) => {
@@ -1862,7 +1862,7 @@ fn JSInterpreter::is_enumerable(_self : JSInterpreter, obj : JSValue, key : Stri
 }
 
 ///|
-/// Instanceof 判定
+// / Instanceof check
 fn JSInterpreter::ordinary_has_instance(
   self : JSInterpreter,
   ctor : JSValue,
@@ -1900,7 +1900,7 @@ fn JSInterpreter::ordinary_has_instance(
 }
 
 ///|
-/// new-target を使ったインスタンス生成
+// / new-target generate
 fn JSInterpreter::construct_with(
   self : JSInterpreter,
   ctor : JSValue,
@@ -1944,7 +1944,7 @@ fn JSInterpreter::construct_with(
 }
 
 ///|
-/// プリミティブをラッパーオブジェクト化
+// / object
 fn JSInterpreter::wrap_primitive(self : JSInterpreter, env : JSEnv, value : JSValue) -> JSValue {
   match value {
     Bool(_) => {
@@ -1982,7 +1982,7 @@ fn JSInterpreter::wrap_primitive(self : JSInterpreter, env : JSEnv, value : JSVa
 }
 
 ///|
-/// ToPrimitive(+) 相当（Object は value / toString を試す）
+// / ToPrimitive(+) (Object value / toString )
 fn JSInterpreter::to_primitive_for_add(
   self : JSInterpreter,
   value : JSValue,
@@ -1996,7 +1996,7 @@ fn JSInterpreter::to_primitive_for_add(
 }
 
 ///|
-/// JS の ToString 相当（Object は toString を呼ぶ）
+// / JS ToString (Object toString )
 fn JSInterpreter::to_string_value(self : JSInterpreter, value : JSValue) -> String {
   match value {
     Object(_) | Array(_) | Function(_) => {
@@ -2023,7 +2023,7 @@ fn JSInterpreter::to_string_value(self : JSInterpreter, value : JSValue) -> Stri
 }
 
 ///|
-/// 変数宣言の簡易ホイスト
+// / variablesimple
 fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @parser.TsStmt, env : JSEnv) -> Unit {
   match stmt {
     @parser.TsStmt::Let(name, _, _) | @parser.TsStmt::Const(name, _, _) =>
@@ -2089,7 +2089,7 @@ fn JSInterpreter::hoist_block(self : JSInterpreter, block : @parser.TsBlock, env
 }
 
 ///|
-/// 呼び出し可能かを判定
+// / check
 fn JSInterpreter::is_callable(_self : JSInterpreter, value : JSValue) -> Bool {
   match value {
     Function(_) => true
@@ -2103,7 +2103,7 @@ fn JSInterpreter::is_callable(_self : JSInterpreter, value : JSValue) -> Bool {
 }
 
 ///|
-/// constructor 判定
+// / constructor check
 fn JSInterpreter::is_constructor(self : JSInterpreter, value : JSValue) -> Bool {
   match value {
     Function(closure) =>
@@ -2605,13 +2605,13 @@ fn JSInterpreter::exec_stmt_gen(
 }
 
 ///|
-/// instanceof の簡易判定
+// / instanceof simplecheck
 fn JSInterpreter::instanceof(self : JSInterpreter, left : JSValue, right : JSValue) -> Bool {
   self.ordinary_has_instance(right, left)
 }
 
 ///|
-/// 関数を呼び出す
+// / function
 pub fn JSInterpreter::call_function(
   self : JSInterpreter,
   func : JSValue,
@@ -2624,7 +2624,7 @@ pub fn JSInterpreter::call_function(
       if closure.is_generator {
         return self.make_generator(closure, this_arg, args, new_target)
       }
-      // 新しい環境を作成
+      // create
       let call_env = js_new_env(Some(closure.env))
       if closure.is_strict {
         call_env.define_var("__strict__", Bool(true))
@@ -2665,7 +2665,7 @@ pub fn JSInterpreter::call_function(
         }
       }
 
-      // 引数をバインド
+      // argument
       match closure.body {
         Ast(func_def) => self.bind_params(func_def.params, args, call_env)
         _ =>
@@ -2675,7 +2675,7 @@ pub fn JSInterpreter::call_function(
           }
       }
 
-      // 本体を実行
+      // run
       match closure.body {
         Ast(func_def) =>
           match self.exec_block(func_def.body, call_env) {
@@ -2707,7 +2707,7 @@ pub fn JSInterpreter::call_function(
 }
 
 ///|
-/// メソッドを呼び出す
+// / method
 pub fn JSInterpreter::call_method(
   self : JSInterpreter,
   obj : JSValue,
@@ -2726,7 +2726,7 @@ pub fn JSInterpreter::call_method(
         }
       }
     Object(map) => {
-      // オブジェクトのメソッドを検索
+      // objectmethodlookup
       let func = self.get_prop_value(Object(map), method_name)
       self.call_function(func, obj, args)
     }
@@ -2735,7 +2735,7 @@ pub fn JSInterpreter::call_method(
 }
 
 ///|
-/// 関数メソッド (call/apply/bind)
+// / functionmethod (call/apply/bind)
 fn JSInterpreter::function_method(
   self : JSInterpreter,
   func : JSValue,
@@ -2802,7 +2802,7 @@ fn JSInterpreter::function_method(
 }
 
 ///|
-/// 文字列メソッド
+// / stringmethod
 fn JSInterpreter::string_method(
   _self : JSInterpreter,
   s : String,
@@ -3220,7 +3220,7 @@ fn JSInterpreter::string_method(
 }
 
 ///|
-/// JS 仕様の trim 用ホワイトスペース判定
+// / JS trim check
 fn is_js_trim_whitespace(unit : UInt16) -> Bool {
   let code = unit.to_int()
   if code == 0x0009 { return true }
@@ -3242,7 +3242,7 @@ fn is_js_trim_whitespace(unit : UInt16) -> Bool {
 }
 
 ///|
-/// JS 仕様の trim 実装
+// / JS trim implementation
 fn trim_js_string(s : String, mode : String) -> String {
   let len = s.length()
   let mut start = 0
@@ -3261,7 +3261,7 @@ fn trim_js_string(s : String, mode : String) -> String {
 }
 
 ///|
-/// SameValueZero 判定
+// / SameValueZero check
 fn JSInterpreter::same_value_zero(
   _self : JSInterpreter,
   left : JSValue,
@@ -3284,7 +3284,7 @@ fn JSInterpreter::same_value_zero(
 }
 
 ///|
-/// 配列のフラット化
+// / array
 fn JSInterpreter::flatten_array_items(
   self : JSInterpreter,
   items : Array[JSValue],
@@ -3306,7 +3306,7 @@ fn JSInterpreter::flatten_array_items(
 }
 
 ///|
-/// 配列メソッド
+// / arraymethod
 fn JSInterpreter::array_method(
   self : JSInterpreter,
   arr : JSArray,
@@ -5097,7 +5097,7 @@ fn JSInterpreter::call_native(
         Number(js_nan)
       }
     "Math.random" =>
-      // TODO: 適切なランダム実装
+      // TODO: implementation
       Number(0.5)
     // test262 harness functions
     "print" => {
@@ -5252,7 +5252,7 @@ fn JSInterpreter::call_native(
 }
 
 ///|
-/// newでインスタンスを作成
+// / newcreate
 fn JSInterpreter::new_instance(
   self : JSInterpreter,
   class_name : String,
@@ -5348,7 +5348,7 @@ fn JSInterpreter::new_instance(
     }
     "Object" => self.new_object()
     _ => {
-      // カスタムクラスのコンストラクタを検索
+      // lookup
       let ctor = env.get(class_name)
       match ctor {
         Function(_) => self.construct_with(ctor, ctor, args)
@@ -5359,12 +5359,12 @@ fn JSInterpreter::new_instance(
 }
 
 ///|
-/// モジュールを実行
+// / run
 pub fn JSInterpreter::run_module(
   self : JSInterpreter,
   module_ : @parser.TsModule,
 ) -> JSValue {
-  // 関数を登録
+  // function
   for func in module_.funcs {
     let param_names : Array[String] = []
     for param in func.params {
@@ -5389,7 +5389,7 @@ pub fn JSInterpreter::run_module(
     self.global_env.define_var(func.name, closure)
   }
 
-  // main関数があれば実行
+  // mainfunctionrun
   let main_func = self.global_env.get("main")
   match main_func {
     Function(closure) =>
@@ -5411,7 +5411,7 @@ pub fn JSInterpreter::run_module(
 }
 
 ///|
-/// ソースコードを直接実行
+// / run
 pub fn JSInterpreter::run(
   self : JSInterpreter,
   source : String,

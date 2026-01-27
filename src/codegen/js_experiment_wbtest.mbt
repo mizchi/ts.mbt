@@ -1,4 +1,4 @@
-// JS → Instr 変換の実験用テスト
+// JS -> Instr conversionexperimenttest
 
 ///|
 /// JS: function answer() { return 42; }
@@ -34,7 +34,7 @@ test "js experiment: constant function" {
 
 ///|
 /// JS: function add(a: number, b: number): number { return a + b; }
-/// (i32 版)
+// / (i32 )
 test "js experiment: add function i32" {
   let func_type : @core.TypeDef = Func({ params: [I32, I32], results: [I32] })
   let code : @core.Code = {
@@ -73,7 +73,7 @@ test "js experiment: add function i32" {
 
 ///|
 /// JS: function add(a: number, b: number): number { return a + b; }
-/// (f64 版 - JS の number に近い)
+// / (f64 - JS number )
 test "js experiment: add function f64" {
   let func_type : @core.TypeDef = Func({ params: [F64, F64], results: [F64] })
   let code : @core.Code = {
@@ -187,7 +187,7 @@ test "js experiment: recursive factorial" {
             LocalGet(0U), // n
             I32Const(1U),
             I32Sub, // n - 1
-            Call(0U), // factorial(n - 1) - func index 0 は自分自身
+            Call(0U), // factorial(n - 1) - func index 0
             I32Mul, // n * result
           ],
         ),

@@ -1,17 +1,17 @@
-// TypeScript サブセット用レキサー
+// TypeScript
 
 ///|
-/// トークン種別
+// /
 pub enum TokenKind {
-  // リテラル
+  // literal
   Number(Double)
   Int(Int)
   Bool(Bool)
-  Str(String) // 文字列リテラル
+  Str(String) // stringliteral
   Regex(String, String) // /pattern/flags
   Ident(String)
 
-  // キーワード
+
   Function
   Class
   Extends
@@ -34,14 +34,14 @@ pub enum TokenKind {
   Typeof
   Delete
 
-  // 型キーワード
+  // type
   NumberType // number
   BooleanType // boolean
   VoidType // void
-  IntType // int (拡張)
+  IntType // int ()
   StringType // string
 
-  // 演算子
+  // operator
   Plus // +
   Minus // -
   Star // *
@@ -85,7 +85,7 @@ pub enum TokenKind {
   Arrow // =>
   Ellipsis // ...
 
-  // 区切り
+
   LParen // (
   RParen // )
   LBrace // {
@@ -97,28 +97,28 @@ pub enum TokenKind {
   Semicolon // ;
   Dot // .
 
-  // キーワード (追加)
+  // (add)
   New // new
   Interface // interface
   Type // type (type alias)
   Of // of (for...of)
   In // in (for...in)
-  Declare // declare (外部インポート宣言)
+  Declare // declare (externalimport)
   Null // null
 
-  // 終端
+
   Eof
 } derive(Eq, Show)
 
 ///|
-/// トークン
+// /
 pub struct Token {
   kind : TokenKind
-  pos : Int // 開始位置
+  pos : Int // position
 } derive(Show)
 
 ///|
-/// レキサー
+// /
 pub struct Lexer {
   src : String
   mut pos : Int
@@ -126,7 +126,7 @@ pub struct Lexer {
 } derive(Show)
 
 ///|
-/// 16進数1桁を読む（読めたら advance 済み）
+// / 161( advance )
 fn Lexer::read_hex_digit(self : Lexer) -> Int? {
   match self.peek() {
     Some(c) =>
@@ -147,13 +147,13 @@ fn Lexer::read_hex_digit(self : Lexer) -> Int? {
 }
 
 ///|
-/// レキサー作成
+// / create
 pub fn Lexer::new(src : String) -> Lexer {
   { src, pos: 0, allow_regex: true }
 }
 
 ///|
-/// 現在の文字を取得
+// / currentstatementget
 fn Lexer::peek(self : Lexer) -> Char? {
   if self.pos >= self.src.length() {
     None
@@ -163,7 +163,7 @@ fn Lexer::peek(self : Lexer) -> Char? {
 }
 
 ///|
-/// 次の文字を覗く
+// / statement
 fn Lexer::peek_next(self : Lexer) -> Char? {
   if self.pos + 1 >= self.src.length() {
     None
@@ -173,7 +173,7 @@ fn Lexer::peek_next(self : Lexer) -> Char? {
 }
 
 ///|
-/// 位置オフセットのバイトを取得
+// / positionget
 fn Lexer::peek_byte(self : Lexer, offset : Int) -> Int? {
   let idx = self.pos + offset
   if idx >= self.src.length() || idx < 0 {
@@ -184,7 +184,7 @@ fn Lexer::peek_byte(self : Lexer, offset : Int) -> Int? {
 }
 
 ///|
-/// 文字を消費
+// / statement
 fn Lexer::advance(self : Lexer) -> Char? {
   let c = self.peek()
   if c is Some(_) {
@@ -194,7 +194,7 @@ fn Lexer::advance(self : Lexer) -> Char? {
 }
 
 ///|
-/// 空白をスキップ
+// /
 fn Lexer::skip_whitespace(self : Lexer) -> Unit {
   while true {
     match self.peek_byte(0) {
@@ -243,11 +243,11 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
         let _ = self.advance()
 
       }
-      // コメントスキップ
+
       Some('/') =>
         match self.peek_next() {
           Some('/') => {
-            // 行コメント
+
             let _ = self.advance()
             let _ = self.advance()
             while true {
@@ -261,7 +261,7 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             }
           }
           Some('*') => {
-            // ブロックコメント
+            // block
             let _ = self.advance()
             let _ = self.advance()
             while true {
@@ -294,7 +294,7 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
 }
 
 ///|
-/// 数値リテラルをパース
+// / literal
 fn Lexer::scan_number(self : Lexer) -> TokenKind {
   let start = self.pos
   // Radix-prefixed integers: 0x / 0o / 0b
@@ -576,7 +576,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
       raw
     }
   if has_dot || has_exp || is_bigint {
-    // Double としてパース
+    // Double
     try {
       let d = @strconv.parse_double(s)
       Number(d)
@@ -584,7 +584,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
       _ => Number(0.0)
     }
   } else {
-    // Int としてパース
+    // Int
     try {
       let i = @strconv.parse_int(s)
       Int(i)
@@ -595,7 +595,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
 }
 
 ///|
-/// 識別子/キーワードをパース
+// / /
 fn Lexer::scan_ident(self : Lexer) -> TokenKind {
   let start = self.pos
   while true {
@@ -693,18 +693,18 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
 }
 
 ///|
-/// 文字列リテラルをパース
+// / stringliteral
 fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
   let buf = StringBuilder::new()
   while true {
     match self.peek() {
-      None => break // 終端（エラーだが簡易処理）
+      None => break // (errorsimplehandle)
       Some(c) =>
         if c == quote {
-          let _ = self.advance() // 閉じ引用符を消費
+          let _ = self.advance()
           break
         } else if c == '\\' {
-          // エスケープシーケンス
+
           let _ = self.advance()
           match self.peek() {
             Some('n') => {
@@ -787,7 +787,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
             }
             Some(other) => {
               let _ = self.advance()
-              buf.write_char(other) // 不明なエスケープはそのまま
+              buf.write_char(other)
             }
             None => break
           }
@@ -801,7 +801,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
 }
 
 ///|
-/// テンプレートリテラルをパース (`...`)
+// / literal (`...`)
 fn Lexer::scan_template(self : Lexer) -> TokenKind {
   let buf = StringBuilder::new()
   while true {
@@ -908,7 +908,7 @@ fn Lexer::scan_template(self : Lexer) -> TokenKind {
 }
 
 ///|
-/// テンプレート内の ${ ... } をスキップ
+// / ${ ... }
 fn Lexer::skip_template_expr(self : Lexer) -> Unit {
   let mut depth = 1
   while depth > 0 {
@@ -931,7 +931,7 @@ fn Lexer::skip_template_expr(self : Lexer) -> Unit {
 }
 
 ///|
-/// 文字列ボディをスキップ（開始クォートは既に消費済み）
+// / string()
 fn Lexer::skip_string_body(self : Lexer, quote : Char) -> Unit {
   while true {
     match self.peek() {
@@ -950,7 +950,7 @@ fn Lexer::skip_string_body(self : Lexer, quote : Char) -> Unit {
 }
 
 ///|
-/// 正規表現リテラルをパース (/pattern/flags)
+// / literal (/pattern/flags)
 fn Lexer::scan_regex(self : Lexer) -> TokenKind {
   let buf = StringBuilder::new()
   let mut in_class = false
@@ -999,7 +999,7 @@ fn Lexer::scan_regex(self : Lexer) -> TokenKind {
 }
 
 ///|
-/// 式を終端できるトークンか
+// / expression
 fn token_can_end_expr(kind : TokenKind) -> Bool {
   match kind {
     Number(_)
@@ -1019,7 +1019,7 @@ fn token_can_end_expr(kind : TokenKind) -> Bool {
 }
 
 ///|
-/// 次のトークンを取得
+// / get
 pub fn Lexer::next_token(self : Lexer) -> Token {
   self.skip_whitespace()
   let pos = self.pos
@@ -1027,12 +1027,12 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
     None => { kind: Eof, pos }
     Some(c) => {
       let kind : TokenKind = match c {
-        // 数値
+
         '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
-          self.pos -= 1 // 戻す
+          self.pos -= 1
           self.scan_number()
         }
-        // 識別子/キーワード
+        // /
         'a'
         | 'b'
         | 'c'
@@ -1090,7 +1090,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
           self.pos -= 1
           self.scan_ident()
         }
-        // 演算子
+        // operator
         '+' =>
           match self.peek() {
             Some('+') => {
@@ -1269,7 +1269,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
             }
             _ => Caret
           }
-        // 区切り
+
         '(' => LParen
         ')' => RParen
         '{' => LBrace
@@ -1297,15 +1297,15 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
             _ => Dot
           }
         '"' | '\'' => {
-          // 文字列リテラル
+          // stringliteral
           let quote = c
           self.scan_string(quote)
         }
         '`' => {
-          // テンプレートリテラル
+          // literal
           self.scan_template()
         }
-        _ => Eof // 未知の文字
+        _ => Eof // statement
       }
       self.allow_regex = not(token_can_end_expr(kind))
       { kind, pos }
@@ -1314,7 +1314,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
 }
 
 ///|
-/// すべてのトークンを取得
+// / get
 pub fn Lexer::tokenize(self : Lexer) -> Array[Token] {
   let len = self.src.length()
   let tokens : Array[Token] =

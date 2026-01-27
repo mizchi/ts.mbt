@@ -1,146 +1,146 @@
-// TypeScript サブセットの型システム
+// TypeScript type
 
 ///|
-/// 型
+// / type
 pub(all) enum TsType {
-  // プリミティブ
-  Number // f64 にマップ
-  Int // i32 にマップ (最適化用)
-  Boolean // i32 (0/1) にマップ
-  String_ // 文字列 (メモリ上のポインタ)
+
+  Number // f64
+  Int // i32 ()
+  Boolean // i32 (0/1)
+  String_ // string ()
   Void
-  // Any (JavaScript互換 - 型推論で解決)
+  // Any (JavaScript - type inferenceresolve)
   Any
-  // 複合型 (Phase 2)
+  // compoundtype (Phase 2)
   Array(TsType)
   Struct(String, Array[(String, TsType)]) // name, fields
   Func(Array[TsType], TsType) // params, return
-  // 型参照
+  // typereference
   Named(String)
 } derive(Eq, Show)
 
 ///|
-/// 型付き式
+// / typedexpression
 pub(all) enum TsExpr {
-  // リテラル
+  // literal
   NumberLit(Double)
   IntLit(Int)
   BoolLit(Bool)
   StringLit(String)
-  NullLit // null リテラル
+  NullLit // null literal
 
-  // 変数
+  // variable
   Var(String)
 
-  // 二項演算
+  // binary
   BinOp(TsBinOp, TsExpr, TsExpr)
 
-  // 単項演算
+  // unary
   UnaryOp(TsUnaryOp, TsExpr)
 
-  // 関数呼び出し
+  // function
   Call(String, Array[TsExpr])
 
-  // 関数呼び出し (式)
+  // function (expression)
   CallExpr(TsExpr, Array[TsExpr])
 
-  // 条件式 (三項演算子)
+  // conditionexpression (operator)
   Cond(TsExpr, TsExpr, TsExpr)
 
-  // 配列リテラル
+  // arrayliteral
   ArrayLit(Array[TsExpr])
 
-  // オブジェクトリテラル
+  // objectliteral
   ObjectLit(Array[(String, TsExpr)]) // [(key, value)]
 
-  // 配列アクセス
+  // array
   IndexAccess(TsExpr, TsExpr)
 
-  // プロパティアクセス
+  // property
   PropAccess(TsExpr, String)
 
-  // new 式 (配列等)
+  // new expression (array)
   New(String, Array[TsExpr])
 
-  // new 式 (式)
+  // new expression (expression)
   NewExpr(TsExpr, Array[TsExpr])
 
-  // メソッド呼び出し (receiver.method(args))
+  // method (receiver.method(args))
   MethodCall(TsExpr, String, Array[TsExpr])
 
-  // 代入式 (式として)
+  // assignmentexpression (expression)
   AssignExpr(String, TsExpr)
 
-  // 複合代入式 (式として)
+  // compoundassignmentexpression (expression)
   CompoundAssignExpr(TsExpr, TsCompoundOp, TsExpr)
 
-  // プロパティ代入式
+  // propertyassignmentexpression
   PropAssignExpr(TsExpr, String, TsExpr)
 
-  // 添字代入式
+  // assignmentexpression
   IndexAssignExpr(TsExpr, TsExpr, TsExpr)
 
-  // カンマ演算子
+  // operator
   Seq(TsExpr, TsExpr)
 
-  // アロー関数
+  // function
   ArrowFunc(Array[TsParam], TsArrowBody)
 
-  // 関数式 (function() {})
+  // functionexpression (function() {})
   FuncExpr(TsFunc)
 
-  // yield 式 (generator)
+  // yield expression (generator)
   Yield(TsExpr?)
 } derive(Show)
 
 ///|
-/// アロー関数の本体
+// / function
 pub(all) enum TsArrowBody {
   ArrowExpr(TsExpr) // () => expr
   ArrowBlock(TsBlock) // () => { ... }
 } derive(Show)
 
 ///|
-/// 二項演算子
+// / binaryoperator
 pub(all) enum TsBinOp {
-  // 算術
+
   Add // +
   Sub // -
   Mul // *
   Div // /
   Mod // %
   Pow // **
-  // ビット演算/シフト
+  // /
   BitAnd // &
   BitOr // |
   BitXor // ^
   Shl // <<
   Shr // >>
   UShr // >>>
-  // 比較 (厳密)
+  // comparison ()
   BinEq // ===
   BinNe // !==
-  // 比較 (抽象 - 型変換あり)
+  // comparison ( - typeconversion)
   AbstractEq // ==
   AbstractNe // !=
-  // 比較 (順序)
+  // comparison ()
   BinLt // <
   BinLe // <=
   BinGt // >
   BinGe // >=
   Instanceof // instanceof
   In // in
-  // 論理
+
   And // &&
   Or // ||
 } derive(Eq, Show)
 
 ///|
-/// 単項演算子
+// / unaryoperator
 pub(all) enum TsUnaryOp {
   Neg // -
   Not // !
-  Plus // + (単項プラス)
+  Plus // + (unary)
   Typeof // typeof
   Void // void
   Delete // delete
@@ -151,7 +151,7 @@ pub(all) enum TsUnaryOp {
 } derive(Eq, Show)
 
 ///|
-/// 複合代入演算子
+// / compoundassignmentoperator
 pub(all) enum TsCompoundOp {
   AddAssign // +=
   SubAssign // -=
@@ -168,25 +168,25 @@ pub(all) enum TsCompoundOp {
 } derive(Eq, Show)
 
 ///|
-/// 文
+// / statement
 pub(all) enum TsStmt {
-  // 変数宣言
+  // variable
   Let(String, TsType, TsExpr)
   Const(String, TsType, TsExpr)
 
-  // 代入
+  // assignment
   Assign(String, TsExpr)
 
-  // 複合代入: x += 1
+  // compoundassignment: x += 1
   CompoundAssign(String, TsCompoundOp, TsExpr)
 
-  // 配列要素への代入
+  // arrayelementassignment
   IndexAssign(TsExpr, TsExpr, TsExpr) // array, index, value
 
-  // プロパティへの代入
+  // propertyassignment
   PropAssign(TsExpr, String, TsExpr) // object, property, value
 
-  // 式文
+  // expressionstatement
   Expr(TsExpr)
   Empty
 
@@ -199,7 +199,7 @@ pub(all) enum TsStmt {
   // try/catch/finally
   Try(TsBlock, String?, TsBlock?, TsBlock?)
 
-  // 制御フロー
+
   If(TsExpr, TsBlock, TsBlock?)
   While(TsExpr, TsBlock)
   For(TsStmt?, TsExpr?, TsStmt?, TsBlock) // init, cond, update, body
@@ -212,23 +212,23 @@ pub(all) enum TsStmt {
 } derive(Show)
 
 ///|
-/// ブロック (文の配列)
+// / block (statementarray)
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
 } derive(Show)
 
 ///|
-/// 関数パラメータ
+// / functionparameter
 pub(all) struct TsParam {
   name : String
   binding : TsBinding?
   is_rest : Bool
   type_ : TsType
-  default : TsExpr? // デフォルト値 (省略可能)
+  default : TsExpr? // ()
 } derive(Show)
 
 ///|
-/// バインディングパターン
+// /
 pub(all) enum TsBinding {
   Ident(String)
   Array(TsArrayBinding)
@@ -261,7 +261,7 @@ pub(all) struct TsObjectBinding {
 } derive(Show)
 
 ///|
-/// 関数定義
+// / functiondefine
 pub(all) struct TsFunc {
   name : String
   params : Array[TsParam]
@@ -271,57 +271,57 @@ pub(all) struct TsFunc {
 } derive(Show)
 
 ///|
-/// インターフェース (構造体型)
+// / interface (structtype)
 pub(all) struct TsInterface {
   name : String
   fields : Array[(String, TsType)] // (fieldName, type)
 } derive(Show)
 
 ///|
-/// 外部関数インポート宣言
+// / externalfunctionimport
 pub(all) struct TsImport {
-  name : String // 関数名
-  module_ : String // インポート元モジュール (デフォルト: "env")
-  params : Array[(String, TsType)] // パラメータ (name, type)
-  return_type : TsType // 戻り値型
+  name : String // function
+  module_ : String // import (: "env")
+  params : Array[(String, TsType)] // parameter (name, type)
+  return_type : TsType // return valuetype
 } derive(Show)
 
 ///|
-/// モジュール (トップレベル)
+// / ()
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
-  imports : Array[TsImport] // 外部インポート
+  imports : Array[TsImport] // externalimport
 } derive(Show)
 
 // ============================================
-// Typed AST (型解決済み)
+// Typed AST (type-resolved)
 // ============================================
 
 ///|
-/// 型付き式 (型情報付き)
+// / typedexpression (type)
 pub(all) struct TypedExpr {
   expr : TsExpr
   type_ : TsType
 } derive(Show)
 
 ///|
-/// 型付き文
+// / typedstatement
 pub(all) struct TypedStmt {
   stmt : TsStmt
-  // 追加のメタ情報があれば
+  // add
 } derive(Show)
 
 ///|
-/// 型付き関数
+// / typedfunction
 pub(all) struct TypedFunc {
   func : TsFunc
-  // ローカル変数の型マップ
+  // variabletype
   locals : Array[(String, TsType)]
 } derive(Show)
 
 ///|
-/// 型付きモジュール
+// / typed
 pub(all) struct TypedModule {
   funcs : Array[TypedFunc]
 } derive(Show)

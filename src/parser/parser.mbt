@@ -1,13 +1,13 @@
-// TypeScript サブセット用パーサー
+// TypeScript
 
 ///|
-/// パースエラー
+// / error
 pub(all) suberror ParseError {
   ParseError(String)
 } derive(Show)
 
 ///|
-/// パーサー
+// /
 pub struct Parser {
   tokens : Array[Token]
   mut pos : Int
@@ -15,13 +15,13 @@ pub struct Parser {
 } derive(Show)
 
 ///|
-/// パーサー作成
+// / create
 pub fn Parser::new(tokens : Array[Token]) -> Parser {
   { tokens, pos: 0, in_generator: false }
 }
 
 ///|
-/// ソースからパーサー作成
+// / create
 pub fn Parser::from_source(src : String) -> Parser {
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
@@ -29,7 +29,7 @@ pub fn Parser::from_source(src : String) -> Parser {
 }
 
 ///|
-/// 現在のトークンを取得
+// / currentget
 fn Parser::peek(self : Parser) -> Token {
   if self.pos >= self.tokens.length() {
     { kind: Eof, pos: 0 }
@@ -39,7 +39,7 @@ fn Parser::peek(self : Parser) -> Token {
 }
 
 ///|
-/// トークンを消費
+// /
 fn Parser::advance(self : Parser) -> Token {
   let tok = self.peek()
   if tok.kind != Eof {
@@ -49,7 +49,7 @@ fn Parser::advance(self : Parser) -> Token {
 }
 
 ///|
-/// 特定のトークンを期待して消費
+// /
 fn Parser::expect(
   self : Parser,
   expected : TokenKind,
@@ -63,13 +63,13 @@ fn Parser::expect(
 }
 
 ///|
-/// トークン種別が一致するか
+// /
 fn Parser::check(self : Parser, kind : TokenKind) -> Bool {
   self.peek().kind == kind
 }
 
 ///|
-/// 指定オフセット先のトークンを取得
+// / get
 fn Parser::peek_at(self : Parser, offset : Int) -> Token {
   let idx = self.pos + offset
   if idx >= self.tokens.length() {
@@ -80,17 +80,17 @@ fn Parser::peek_at(self : Parser, offset : Int) -> Token {
 }
 
 ///|
-/// アロー関数パターンかどうかを判定 (現在位置が `(` であること前提)
+// / functioncheck (currentposition `(` )
 fn Parser::is_arrow_function(self : Parser) -> Bool {
-  // () => の場合
+  // () =>
   if self.peek_at(1).kind == RParen && self.peek_at(2).kind == Arrow {
     return true
   }
-  // (ident) => または (ident: type) => または複数パラメータの場合
-  // 簡易判定: ( の後を辿って ) を見つけ、その次が => かどうか
+  // (ident) => (ident: type) => parameter
+  // simplecheck: ( ) , =>
   let mut i = 1
   let mut depth = 1
-  while depth > 0 && i < 100 { // 安全のため上限
+  while depth > 0 && i < 100 {
     let tok = self.peek_at(i)
     match tok.kind {
       LParen => depth += 1
@@ -100,12 +100,12 @@ fn Parser::is_arrow_function(self : Parser) -> Bool {
     }
     i += 1
   }
-  // i-1 が ) の位置、i が ) の次
+  // i-1 ) position, i )
   self.peek_at(i).kind == Arrow
 }
 
 ///|
-/// 一致すれば消費
+// /
 fn Parser::match_(self : Parser, kind : TokenKind) -> Bool {
   if self.check(kind) {
     let _ = self.advance()
@@ -116,7 +116,7 @@ fn Parser::match_(self : Parser, kind : TokenKind) -> Bool {
 }
 
 ///|
-/// セミコロンを消費 (ASIの簡易対応)
+// / (ASIsimple)
 fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
   if self.match_(Semicolon) {
     return
@@ -124,7 +124,7 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
   if self.check(RBrace) || self.check(Eof) {
     return
   }
-  // ASIの簡易対応: 次のトークンが文の開始とみなせる場合は省略を許可
+  // ASIsimple: statement
   match self.peek().kind {
     Var
     | Let
@@ -163,7 +163,7 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
 }
 
 ///|
-/// バインディングパターンを消費して代表名を返す
+// /
 fn Parser::consume_binding_name(self : Parser) -> String raise ParseError {
   let _ = self.advance()
   let mut depth = 1
@@ -190,7 +190,7 @@ fn Parser::consume_binding_name(self : Parser) -> String raise ParseError {
 }
 
 ///|
-/// バインディング識別子をパース
+// /
 fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
   match self.peek().kind {
     Ident(_) => match self.advance().kind {
@@ -380,17 +380,17 @@ fn Parser::parse_binding_pattern(self : Parser) -> TsBinding raise ParseError {
 }
 
 ///|
-/// ... を消費
+// / ...
 fn Parser::match_ellipsis(self : Parser) -> Bool {
   self.match_(Ellipsis)
 }
 
 // ============================================
-// 型パース
+// type
 // ============================================
 
 ///|
-/// 型をパース
+// / type
 fn Parser::parse_type(self : Parser) -> TsType raise ParseError {
   let tok = self.advance()
   let base_type : TsType = match tok.kind {
@@ -402,7 +402,7 @@ fn Parser::parse_type(self : Parser) -> TsType raise ParseError {
     Ident(name) => Named(name)
     _ => raise ParseError("Expected type, got \{tok.kind}")
   }
-  // 配列型をチェック: type[]
+  // arraytypecheck: type[]
   if self.match_(LBracket) {
     let _ = self.expect(RBracket)
     Array(base_type)
@@ -412,17 +412,17 @@ fn Parser::parse_type(self : Parser) -> TsType raise ParseError {
 }
 
 // ============================================
-// 式パース
+// expression
 // ============================================
 
 ///|
-/// 式をパース (最低優先度)
+// / expression (prefer)
 pub fn Parser::parse_expr(self : Parser) -> TsExpr raise ParseError {
   self.parse_comma()
 }
 
 ///|
-/// カンマ演算子
+// / operator
 fn Parser::parse_comma(self : Parser) -> TsExpr raise ParseError {
   let mut expr = self.parse_assignment()
   while self.match_(Comma) {
@@ -433,7 +433,7 @@ fn Parser::parse_comma(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// 代入式
+// / assignmentexpression
 fn Parser::parse_assignment(self : Parser) -> TsExpr raise ParseError {
   let left = self.parse_ternary()
   if self.check(Eq) {
@@ -557,7 +557,7 @@ fn Parser::parse_assignment(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// 三項演算子: cond ? then : else
+// / operator: cond ? then : else
 fn Parser::parse_ternary(self : Parser) -> TsExpr raise ParseError {
   let cond = self.parse_or()
   if self.match_(Question) {
@@ -571,7 +571,7 @@ fn Parser::parse_ternary(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// || (論理OR)
+// / || (OR)
 fn Parser::parse_or(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_and()
   while self.match_(PipePipe) {
@@ -582,7 +582,7 @@ fn Parser::parse_or(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// && (論理AND)
+// / && (AND)
 fn Parser::parse_and(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_bit_or()
   while self.match_(AmpAmp) {
@@ -593,7 +593,7 @@ fn Parser::parse_and(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// | (ビットOR)
+// / | (OR)
 fn Parser::parse_bit_or(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_bit_xor()
   while self.match_(Pipe) {
@@ -604,7 +604,7 @@ fn Parser::parse_bit_or(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// ^ (ビットXOR)
+// / ^ (XOR)
 fn Parser::parse_bit_xor(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_bit_and()
   while self.match_(Caret) {
@@ -615,7 +615,7 @@ fn Parser::parse_bit_xor(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// & (ビットAND)
+// / & (AND)
 fn Parser::parse_bit_and(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_equality()
   while self.match_(Amp) {
@@ -626,7 +626,7 @@ fn Parser::parse_bit_and(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// === !== == != (等価比較)
+// / === !== == != (comparison)
 fn Parser::parse_equality(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_comparison()
   while true {
@@ -650,7 +650,7 @@ fn Parser::parse_equality(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// < <= > >= (比較)
+// / < <= > >= (comparison)
 fn Parser::parse_comparison(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_shift()
   while true {
@@ -680,7 +680,7 @@ fn Parser::parse_comparison(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// << >> >>> (シフト)
+// / << >> >>> ()
 fn Parser::parse_shift(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_additive()
   while true {
@@ -701,7 +701,7 @@ fn Parser::parse_shift(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// + - (加減算)
+// / + - ()
 fn Parser::parse_additive(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_multiplicative()
   while true {
@@ -719,7 +719,7 @@ fn Parser::parse_additive(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// * / % (乗除算)
+// / * / % ()
 fn Parser::parse_multiplicative(self : Parser) -> TsExpr raise ParseError {
   let mut left = self.parse_exponent()
   while true {
@@ -740,7 +740,7 @@ fn Parser::parse_multiplicative(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// ** (べき乗)
+// / ** ()
 fn Parser::parse_exponent(self : Parser) -> TsExpr raise ParseError {
   let left = self.parse_unary()
   if self.match_(StarStar) {
@@ -752,7 +752,7 @@ fn Parser::parse_exponent(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// 単項演算子
+// / unaryoperator
 fn Parser::parse_unary(self : Parser) -> TsExpr raise ParseError {
   if self.match_(Minus) {
     let operand = self.parse_unary()
@@ -773,11 +773,11 @@ fn Parser::parse_unary(self : Parser) -> TsExpr raise ParseError {
     let operand = self.parse_unary()
     UnaryOp(Not, operand)
   } else if self.match_(PlusPlus) {
-    // ++x (前置インクリメント)
+    // ++x ()
     let operand = self.parse_unary()
     UnaryOp(PreInc, operand)
   } else if self.match_(MinusMinus) {
-    // --x (前置デクリメント)
+    // --x ()
     let operand = self.parse_unary()
     UnaryOp(PreDec, operand)
   } else if self.match_(Yield) {
@@ -802,7 +802,7 @@ fn Parser::parse_unary(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// 後置演算子 (x++, x--)
+// / operator (x++, x--)
 fn Parser::parse_postfix(self : Parser) -> TsExpr raise ParseError {
   let mut expr = self.parse_call()
   while true {
@@ -818,14 +818,14 @@ fn Parser::parse_postfix(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// 関数呼び出し、配列アクセス、プロパティアクセス、メソッド呼び出し
+// / function, array, property, method
 fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
   let mut expr = self.parse_primary()
 
-  // 後置演算子をチェック
+  // operatorcheck
   while true {
     if self.match_(LParen) {
-      // 関数呼び出し or メソッド呼び出し
+      // function or method
       let args = self.parse_args()
       let _ = self.expect(RParen)
       match expr {
@@ -833,7 +833,7 @@ fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
           expr = Call(name, args)
         }
         PropAccess(receiver, method_name) => {
-          // メソッド呼び出し: receiver.method(args)
+          // method: receiver.method(args)
           expr = MethodCall(receiver, method_name, args)
         }
         _ => {
@@ -841,12 +841,12 @@ fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
         }
       }
     } else if self.match_(LBracket) {
-      // 配列アクセス
+      // array
       let index = self.parse_expr()
       let _ = self.expect(RBracket)
       expr = IndexAccess(expr, index)
     } else if self.check(Dot) {
-      // プロパティアクセス
+      // property
       let _ = self.advance()
       let prop = match self.advance().kind {
         Ident(name) => name
@@ -889,7 +889,7 @@ fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-/// 引数リストをパース
+// / argument
 fn Parser::parse_args(self : Parser) -> Array[TsExpr] raise ParseError {
   let args : Array[TsExpr] = []
   if not(self.check(RParen)) {
@@ -913,7 +913,7 @@ fn Parser::parse_args(self : Parser) -> Array[TsExpr] raise ParseError {
 }
 
 ///|
-/// プライマリ式 (リテラル、変数、括弧、配列、new)
+// / expression (literal, variable, , array, new)
 fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
   let tok = self.peek()
   match tok.kind {
@@ -994,14 +994,14 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
       }
     }
     LParen =>
-      // アロー関数かどうか判定
+      // functioncheck
       if self.is_arrow_function() {
-        // アロー関数: (params) => body
+        // function: (params) => body
         let _ = self.advance() // (
         let params = self.parse_params()
         let _ = self.expect(RParen)
         let _ = self.expect(Arrow)
-        // ボディ: ブロックか式
+        // : blockexpression
         let body = if self.check(LBrace) {
           let block = self.parse_block()
           ArrowBlock(block)
@@ -1011,14 +1011,14 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
         }
         ArrowFunc(params, body)
       } else {
-        // 通常の括弧付き式
+        // regularexpression
         let _ = self.advance()
         let expr = self.parse_expr()
         let _ = self.expect(RParen)
         expr
       }
     LBracket => {
-      // 配列リテラル: [1, 2, 3]
+      // arrayliteral: [1, 2, 3]
       let _ = self.advance()
       let elements : Array[TsExpr] = []
       while not(self.check(RBracket)) {
@@ -1051,7 +1051,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
       ArrayLit(elements)
     }
     New => {
-      // new 式: new Array<number>(10)
+      // new expression: new Array<number>(10)
       let _ = self.advance()
       if self.match_(Dot) {
         let prop = match self.advance().kind {
@@ -1103,7 +1103,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
             expr = PropAccess(expr, part)
           }
           callee_expr = Some(expr)
-          // ジェネリクス型パラメータをスキップ (簡易実装)
+          // typeparameter (simpleimplementation)
           if self.match_(Lt) {
             let _ = self.parse_type()
             let _ = self.expect(Gt)
@@ -1191,14 +1191,14 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
       }
     }
     LBrace => {
-      // オブジェクトリテラル: { key: value, ... }
+      // objectliteral: { key: value, ... }
       let _ = self.advance()
       let fields : Array[(String, TsExpr)] = []
       if not(self.check(RBrace)) {
         if self.match_ellipsis() {
           let _ = self.parse_assignment()
         } else {
-        // 最初のフィールド
+        // field
         let mut is_ident_key = false
         let _ = self.match_(Star)
         let key = if self.match_(LBracket) {
@@ -1341,7 +1341,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
           }
         fields.push((prop_key, value))
         }
-        // 残りのフィールド
+        // field
         while self.match_(Comma) {
           if self.check(RBrace) {
             break // trailing comma
@@ -1501,7 +1501,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
       FuncExpr(func)
     }
     Null => {
-      // null リテラル
+      // null literal
       let _ = self.advance()
       NullLit
     }
@@ -1510,11 +1510,11 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
 }
 
 // ============================================
-// 文パース
+// statement
 // ============================================
 
 ///|
-/// 文をパース
+// / statement
 pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
   let tok = self.peek()
   match tok.kind {
@@ -1530,8 +1530,8 @@ pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
     For => self.parse_for()
     Try => self.parse_try()
     Function => {
-      // 内部関数定義: function name() { ... }
-      // Let(name, Any, FuncExpr(func)) として扱う
+      // internalfunctiondefine: function name() { ... }
+      // Let(name, Any, FuncExpr(func))
       let func = self.parse_function()
       Let(func.name, Any, FuncExpr(func))
     }
@@ -1556,24 +1556,24 @@ pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
     Ident(_) if self.peek_at(1).kind == Colon => {
       let _ = self.advance()
       let _ = self.expect(Colon)
-      // ラベルは無視して文として扱う
+      // statement
       self.parse_stmt()
     }
     _ =>
-      // 代入 or 式文
+      // assignment or expressionstatement
       self.parse_assign_or_expr()
   }
 }
 
 ///|
-/// let 文 (型注釈はオプショナル)
+// / let statement (type)
 fn Parser::parse_let(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(Let)
   self.parse_let_like(false)
 }
 
 ///|
-/// const 文 (型注釈はオプショナル)
+// / const statement (type)
 fn Parser::parse_const(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(Const)
   self.parse_let_like(true)
@@ -1626,12 +1626,12 @@ fn Parser::parse_let_like(self : Parser, is_const : Bool) -> TsStmt raise ParseE
         LBracket | LBrace => self.consume_binding_name()
         k => raise ParseError("Expected identifier, got \{k}")
       }
-    // 型注釈 (オプショナル)
+    // type ()
     let type_ = if self.check(Colon) {
       let _ = self.advance()
       self.parse_type()
     } else {
-      Any // 型注釈がなければ Any
+      Any // type Any
     }
     let init =
       if self.match_(Eq) {
@@ -1660,7 +1660,7 @@ fn Parser::parse_let_like(self : Parser, is_const : Bool) -> TsStmt raise ParseE
 }
 
 ///|
-/// return 文
+// / return statement
 fn Parser::parse_return(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(Return)
   if self.check(Semicolon) {
@@ -1674,7 +1674,7 @@ fn Parser::parse_return(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-/// throw 文
+// / throw statement
 fn Parser::parse_throw(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(Throw)
   let expr = self.parse_expr()
@@ -1683,7 +1683,7 @@ fn Parser::parse_throw(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-/// try/catch/finally 文
+// / try/catch/finally statement
 fn Parser::parse_try(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(Try)
   let try_block = self.parse_block()
@@ -1714,7 +1714,7 @@ fn Parser::parse_try(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-/// if 文
+// / if statement
 fn Parser::parse_if(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(If)
   let _ = self.expect(LParen)
@@ -1735,7 +1735,7 @@ fn Parser::parse_if(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-/// while 文
+// / while statement
 fn Parser::parse_while(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(While)
   let _ = self.expect(LParen)
@@ -1746,7 +1746,7 @@ fn Parser::parse_while(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-/// do-while 文
+// / do-while statement
 fn Parser::parse_do_while(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(Do)
   let body = self.parse_block_or_stmt()
@@ -1755,17 +1755,17 @@ fn Parser::parse_do_while(self : Parser) -> TsStmt raise ParseError {
   let cond = self.parse_expr()
   let _ = self.expect(RParen)
   self.consume_semicolon()
-  // 簡易的に while として扱う
+  // simple while
   While(cond, body)
 }
 
 ///|
-/// for 文 (通常のforまたはfor...of)
+// / for statement (regularforfor...of)
 fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
   let _ = self.expect(For)
   let _ = self.expect(LParen)
 
-  // for...of のチェック: for (var/let/const x of arr)
+  // for...of check: for (var/let/const x of arr)
   if self.check(Let) || self.check(Const) || self.check(Var) {
     let _ = self.advance() // let/const
     let var_name =
@@ -1805,21 +1805,21 @@ fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
         LBracket | LBrace => self.consume_binding_name()
         k => raise ParseError("Expected variable name, got \{k}")
       }
-    // for...of / for...in かチェック
+    // for...of / for...in check
     if self.check(Of) || self.check(In) {
       let _ = self.advance() // of/in
       let iterable = self.parse_expr()
       let _ = self.expect(RParen)
       let body = self.parse_block_or_stmt()
-      // 配列の要素型を推論 (デフォルトは Number)
+      // arrayelementtype ( Number)
       return ForOf(var_name, Number, iterable, body)
     }
-    // 通常の for (let x: type = init; ...) or for (let x = init; ...)
+    // regular for (let x: type = init; ...) or for (let x = init; ...)
     let var_type = if self.check(Colon) {
       let _ = self.advance()
       self.parse_type()
     } else {
-      Any // 型注釈がなければ Any
+      Any // type Any
     }
     let _ = self.expect(Eq)
     let init_expr = self.parse_expr()
@@ -1946,7 +1946,7 @@ fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-/// for文の残りをパース (cond, update, body)
+// / forstatement (cond, update, body)
 fn Parser::parse_for_rest(
   self : Parser,
   init : TsStmt?,
@@ -1960,7 +1960,7 @@ fn Parser::parse_for_rest(
   }
   let _ = self.expect(Semicolon)
 
-  // update (セミコロンなし)
+  // update ()
   let update : TsStmt? = if self.check(RParen) {
     None
   } else {
@@ -2055,12 +2055,12 @@ fn Parser::parse_for_rest(
 }
 
 ///|
-/// 代入または式文
+// / assignmentexpressionstatement
 fn Parser::parse_assign_or_expr(self : Parser) -> TsStmt raise ParseError {
-  // まず式をパース
+  // expression
   let expr = self.parse_expr()
 
-  // 代入かチェック
+  // assignmentcheck
   if self.match_(Eq) {
     let value = self.parse_expr()
     self.consume_semicolon()
@@ -2170,7 +2170,7 @@ fn Parser::parse_assign_or_expr(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-/// ブロックをパース
+// / block
 pub fn Parser::parse_block(self : Parser) -> TsBlock raise ParseError {
   let _ = self.expect(LBrace)
   let stmts : Array[TsStmt] = []
@@ -2360,7 +2360,7 @@ fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-/// ブロックまたは単一文をパース
+// / blockstatement
 fn Parser::parse_block_or_stmt(self : Parser) -> TsBlock raise ParseError {
   if self.check(LBrace) {
     self.parse_block()
@@ -2370,23 +2370,23 @@ fn Parser::parse_block_or_stmt(self : Parser) -> TsBlock raise ParseError {
 }
 
 // ============================================
-// 関数・モジュールパース
+// function
 // ============================================
 
 ///|
-/// パラメータをパース
+// / parameter
 fn Parser::parse_param(self : Parser) -> TsParam raise ParseError {
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
-  // 型注釈 (オプショナル)
+  // type ()
   let type_ = if self.check(Colon) {
     let _ = self.advance()
     self.parse_type()
   } else {
-    Any // 型注釈がなければ Any
+    Any // type Any
   }
-  // デフォルト値をチェック
+  // check
   let default : TsExpr? = if self.match_(Eq) {
     Some(self.parse_assignment())
   } else {
@@ -2396,7 +2396,7 @@ fn Parser::parse_param(self : Parser) -> TsParam raise ParseError {
 }
 
 ///|
-/// パラメータリストをパース
+// / parameter
 fn Parser::parse_params(self : Parser) -> Array[TsParam] raise ParseError {
   let params : Array[TsParam] = []
   if not(self.check(RParen)) {
@@ -2412,7 +2412,7 @@ fn Parser::parse_params(self : Parser) -> Array[TsParam] raise ParseError {
 }
 
 ///|
-/// 関数をパース
+// / function
 pub fn Parser::parse_function(self : Parser) -> TsFunc raise ParseError {
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
@@ -2423,12 +2423,12 @@ pub fn Parser::parse_function(self : Parser) -> TsFunc raise ParseError {
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
-  // 戻り値型 (オプショナル)
+  // return valuetype ()
   let return_type = if self.check(Colon) {
     let _ = self.advance()
     self.parse_type()
   } else {
-    Any // 型注釈がなければ Any
+    Any // type Any
   }
   let prev = self.in_generator
   if is_generator {
@@ -2440,7 +2440,7 @@ pub fn Parser::parse_function(self : Parser) -> TsFunc raise ParseError {
 }
 
 ///|
-/// 関数式をパース（名前はオプショナル）
+// / functionexpression()
 fn Parser::parse_function_expr(self : Parser) -> TsFunc raise ParseError {
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
@@ -2470,7 +2470,7 @@ fn Parser::parse_function_expr(self : Parser) -> TsFunc raise ParseError {
 }
 
 ///|
-/// インターフェースをパース
+// / interface
 pub fn Parser::parse_interface(self : Parser) -> TsInterface raise ParseError {
   let _ = self.expect(Interface)
   let name = match self.advance().kind {
@@ -2495,19 +2495,19 @@ pub fn Parser::parse_interface(self : Parser) -> TsInterface raise ParseError {
 }
 
 ///|
-/// declare function をパース
+// / declare function
 /// declare function name(params): returnType;
 pub fn Parser::parse_import(self : Parser) -> TsImport raise ParseError {
   let _ = self.expect(Declare)
   let _ = self.expect(Function)
 
-  // 関数名
+  // function
   let name = match self.advance().kind {
     Ident(n) => n
     _ => raise ParseError("Expected function name after 'declare function'")
   }
 
-  // パラメータ
+  // parameter
   let _ = self.expect(LParen)
   let params : Array[(String, TsType)] = []
   while not(self.check(RParen)) {
@@ -2525,17 +2525,17 @@ pub fn Parser::parse_import(self : Parser) -> TsImport raise ParseError {
   }
   let _ = self.expect(RParen)
 
-  // 戻り値型
+  // return valuetype
   let _ = self.expect(Colon)
   let return_type = self.parse_type()
 
-  // セミコロン
+
   let _ = self.expect(Semicolon)
   { name, module_: "env", params, return_type }
 }
 
 ///|
-/// モジュールをパース
+// /
 pub fn Parser::parse_module(self : Parser) -> TsModule raise ParseError {
   let funcs : Array[TsFunc] = []
   let interfaces : Array[TsInterface] = []
@@ -2555,7 +2555,7 @@ pub fn Parser::parse_module(self : Parser) -> TsModule raise ParseError {
 }
 
 ///|
-/// eval 用: 式を1つだけパースできるときは Some(expr)
+// / eval : expression1 Some(expr)
 pub fn parse_expr_from_source(source : String) -> TsExpr? raise ParseError {
   let parser = Parser::from_source(source)
   let expr = parser.parse_expr()
@@ -2567,7 +2567,7 @@ pub fn parse_expr_from_source(source : String) -> TsExpr? raise ParseError {
 }
 
 ///|
-/// eval 用: 文を順にパースしてブロック化
+// / eval : statementblock
 pub fn parse_block_from_source(source : String) -> TsBlock raise ParseError {
   let parser = Parser::from_source(source)
   let stmts : Array[TsStmt] = []

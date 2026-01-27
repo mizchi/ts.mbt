@@ -1,8 +1,8 @@
-// JSValue - ボックス化されたJavaScript値の表現
-// WasmGC struct ベースの動的型付けランタイム
+// JSValue - JavaScript
+// WasmGC struct typeruntime
 
 ///|
-/// JSValueのタグ
+// / JSValue
 pub enum JSTag {
   Undefined // 0
   Null // 1
@@ -15,7 +15,7 @@ pub enum JSTag {
 } derive(Show, Eq)
 
 ///|
-/// JSTag を i32 に変換
+// / JSTag i32 conversion
 pub fn JSTag::to_i32(self : JSTag) -> Int {
   match self {
     Undefined => 0
@@ -30,7 +30,7 @@ pub fn JSTag::to_i32(self : JSTag) -> Int {
 }
 
 ///|
-/// i32 から JSTag に変換
+// / i32 JSTag conversion
 pub fn JSTag::from_i32(n : Int) -> JSTag {
   match n {
     0 => Undefined
@@ -46,7 +46,7 @@ pub fn JSTag::from_i32(n : Int) -> JSTag {
 }
 
 ///|
-/// プロパティエントリ
+// / property
 pub struct JSProp {
   key : String
   value : JSValue
@@ -58,15 +58,15 @@ pub struct JSProp {
 } derive(Show)
 
 ///|
-/// オブジェクトのプロパティマップ
+// / objectproperty
 pub struct JSPropMap {
   id : Int
   props : Array[JSProp]
-  mut prototype : JSValue? // プロトタイプチェーン
+  mut prototype : JSValue?
 } derive(Show)
 
 ///|
-/// 配列
+// / array
 pub struct JSArray {
   id : Int
   items : Array[JSValue]
@@ -84,20 +84,20 @@ priv struct ArrayProtoHolder {
 let array_proto_holder : ArrayProtoHolder = { proto: None }
 
 ///|
-/// 配列のデフォルト prototype を設定
+// / array prototype set
 pub fn js_set_default_array_proto(proto : JSValue) -> Unit {
   array_proto_holder.proto = Some(proto)
 }
 
 ///|
-/// クロージャ環境
+// /
 pub struct JSEnv {
   parent : JSEnv?
   bindings : Array[(String, JSValue)]
 } derive(Show)
 
 ///|
-/// JSValue - すべてのJS値を表現
+// / JSValue - JS
 pub enum JSValue {
   Undefined
   Null
@@ -107,13 +107,13 @@ pub enum JSValue {
   Object(JSPropMap)
   Array(JSArray)
   Function(JSClosure)
-  // 内部制御フロー信号
+  // internal
   BreakSignal
   ContinueSignal
 } derive(Show)
 
 ///|
-/// クロージャ
+// /
 pub struct JSClosure {
   id : Int
   params : Array[String]
@@ -127,10 +127,10 @@ pub struct JSClosure {
 } derive(Show)
 
 ///|
-/// 関数本体（ASTまたはコンパイル済みコード）
+// / function(AST)
 pub enum JSFuncBody {
-  Ast(@parser.TsFunc) // 解釈実行用
-  Native(String) // ネイティブ関数名
+  Ast(@parser.TsFunc) // run
+  Native(String) // function
   Bound(JSValue, JSValue, Array[JSValue]) // target, thisArg, bound args
 } derive(Show)
 
@@ -162,7 +162,7 @@ fn fresh_array_id() -> Int {
   id
 }
 
-// === 型判定 ===
+// === typecheck ===
 
 ///|
 pub fn JSValue::tag(self : JSValue) -> JSTag {
@@ -175,7 +175,7 @@ pub fn JSValue::tag(self : JSValue) -> JSTag {
     Object(_) => JSTag::Object
     Array(_) => JSTag::Array
     Function(_) => JSTag::Function
-    BreakSignal | ContinueSignal => JSTag::Undefined // 内部信号
+    BreakSignal | ContinueSignal => JSTag::Undefined // internal
   }
 }
 
@@ -251,10 +251,10 @@ pub fn JSValue::is_function(self : JSValue) -> Bool {
   }
 }
 
-// === 型変換 (ToBoolean, ToNumber, ToString) ===
+// === typeconversion (ToBoolean, ToNumber, ToString) ===
 
 ///|
-/// ToBoolean - JSの真偽値変換
+// / ToBoolean - JSconversion
 pub fn JSValue::to_boolean(self : JSValue) -> Bool {
   match self {
     Undefined => false
@@ -265,16 +265,16 @@ pub fn JSValue::to_boolean(self : JSValue) -> Bool {
     Object(_) => true
     Array(_) => true
     Function(_) => true
-    BreakSignal | ContinueSignal => false // 内部信号
+    BreakSignal | ContinueSignal => false // internal
   }
 }
 
 ///|
-/// NaN定数
+// / NaN
 let js_nan : Double = 0.0 / 0.0
 
 ///|
-/// ToNumber - JSの数値変換
+// / ToNumber - JSconversion
 pub fn JSValue::to_number(self : JSValue) -> Double {
   match self {
     Undefined => js_nan
@@ -283,11 +283,11 @@ pub fn JSValue::to_number(self : JSValue) -> Double {
     Bool(false) => 0.0
     Number(n) => n
     String(s) =>
-      // 簡易実装：空文字列は0、それ以外はパース試行
+      // simpleimplementation: string0,
       if s.length() == 0 {
         0.0
       } else {
-        // TODO: 適切な数値パース
+        // TODO:
         @strconv.parse_double(s) catch {
           _ => js_nan
         }
@@ -299,12 +299,12 @@ pub fn JSValue::to_number(self : JSValue) -> Double {
         _ => prim.to_number()
       }
     }
-    BreakSignal | ContinueSignal => js_nan // 内部信号
+    BreakSignal | ContinueSignal => js_nan // internal
   }
 }
 
 ///|
-/// ToString - JSの文字列変換
+// / ToString - JSstringconversion
 pub fn JSValue::to_js_string(self : JSValue) -> String {
   match self {
     Undefined => "undefined"
@@ -322,16 +322,16 @@ pub fn JSValue::to_js_string(self : JSValue) -> String {
       parts.join(",")
     }
     Function(_) => "[function]"
-    BreakSignal | ContinueSignal => "" // 内部信号
+    BreakSignal | ContinueSignal => "" // internal
   }
 }
 
-// === 演算子 ===
+// === operator ===
 
 ///|
-/// 加算 (+) - 数値加算または文字列連結
+// / (+) - string
 pub fn js_add(left : JSValue, right : JSValue) -> JSValue {
-  // どちらかが文字列なら文字列連結
+  // stringstring
   match (left, right) {
     (String(a), String(b)) => String(a + b)
     (String(a), b) => String(a + b.to_js_string())
@@ -341,72 +341,72 @@ pub fn js_add(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
-/// 減算 (-)
+// / (-)
 pub fn js_sub(left : JSValue, right : JSValue) -> JSValue {
   Number(left.to_number() - right.to_number())
 }
 
 ///|
-/// 乗算 (*)
+// / (*)
 pub fn js_mul(left : JSValue, right : JSValue) -> JSValue {
   Number(left.to_number() * right.to_number())
 }
 
 ///|
-/// 除算 (/)
+// / (/)
 pub fn js_div(left : JSValue, right : JSValue) -> JSValue {
   Number(left.to_number() / right.to_number())
 }
 
 ///|
-/// 剰余 (%)
+// / (%)
 pub fn js_mod(left : JSValue, right : JSValue) -> JSValue {
   let a = left.to_number()
   let b = right.to_number()
-  // JSの剰余演算はfmod相当
+  // JSfmod
   Number(a - (a / b).floor() * b)
 }
 
 ///|
-/// 単項マイナス
+// / unary
 pub fn js_neg(val : JSValue) -> JSValue {
   Number(-val.to_number())
 }
 
 ///|
-/// 単項プラス（数値変換）
+// / unary(conversion)
 pub fn js_pos(val : JSValue) -> JSValue {
   Number(val.to_number())
 }
 
 ///|
-/// 論理NOT
+// / NOT
 pub fn js_not(val : JSValue) -> JSValue {
   Bool(not(val.to_boolean()))
 }
 
 ///|
-/// typeof演算子
+// / typeofoperator
 pub fn js_typeof(val : JSValue) -> JSValue {
   String(
     match val {
       Undefined => "undefined"
-      Null => "object" // JSの有名なバグ
+      Null => "object" // JS
       Bool(_) => "boolean"
       Number(_) => "number"
       String(_) => "string"
       Object(_) => "object"
       Array(_) => "object"
     Function(_) => "function"
-    BreakSignal | ContinueSignal => "undefined" // 内部信号
+    BreakSignal | ContinueSignal => "undefined" // internal
   },
   )
 }
 
-// === 比較演算子 ===
+// === comparisonoperator ===
 
 ///|
-/// 厳密等価 (===)
+// / (===)
 pub fn js_strict_eq(left : JSValue, right : JSValue) -> JSValue {
   Bool(
     match (left, right) {
@@ -424,7 +424,7 @@ pub fn js_strict_eq(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
-/// 厳密不等価 (!==)
+// / (!==)
 pub fn js_strict_ne(left : JSValue, right : JSValue) -> JSValue {
   Bool(
     not(
@@ -437,11 +437,11 @@ pub fn js_strict_ne(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
-/// 抽象等価 (==) - 型変換あり
+// / (==) - typeconversion
 pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
   Bool(
     match (left, right) {
-      // 同じ型
+      // type
       (Undefined, Undefined) => true
       (Null, Null) => true
       (Undefined, Null) | (Null, Undefined) => true
@@ -453,7 +453,7 @@ pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
           Bool(b) => b
           _ => false
         }
-      // 型が違う場合は数値に変換して比較
+      // typeconversioncomparison
       (Number(_), _) | (_, Number(_)) => left.to_number() == right.to_number()
       (Bool(_), _) | (_, Bool(_)) => left.to_number() == right.to_number()
       (String(_), _) | (_, String(_)) => left.to_number() == right.to_number()
@@ -463,7 +463,7 @@ pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
-/// 抽象不等価 (!=)
+// / (!=)
 pub fn js_ne(left : JSValue, right : JSValue) -> JSValue {
   Bool(
     not(
@@ -476,51 +476,51 @@ pub fn js_ne(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
-/// 小なり (<)
+// / (<)
 pub fn js_lt(left : JSValue, right : JSValue) -> JSValue {
   Bool(left.to_number() < right.to_number())
 }
 
 ///|
-/// 小なりイコール (<=)
+// / (<=)
 pub fn js_le(left : JSValue, right : JSValue) -> JSValue {
   Bool(left.to_number() <= right.to_number())
 }
 
 ///|
-/// 大なり (>)
+// / (>)
 pub fn js_gt(left : JSValue, right : JSValue) -> JSValue {
   Bool(left.to_number() > right.to_number())
 }
 
 ///|
-/// 大なりイコール (>=)
+// / (>=)
 pub fn js_ge(left : JSValue, right : JSValue) -> JSValue {
   Bool(left.to_number() >= right.to_number())
 }
 
-// === オブジェクト操作 ===
+// === object ===
 
 ///|
-/// 空オブジェクトを作成
+// / objectcreate
 pub fn js_new_object() -> JSValue {
   js_new_object_with_proto(None)
 }
 
 ///|
-/// プロトタイプ付きオブジェクトを作成
+// / objectcreate
 pub fn js_new_object_with_proto(proto : JSValue?) -> JSValue {
   Object({ id: fresh_object_id(), props: [], prototype: proto })
 }
 
 ///|
-/// プロパティ付きオブジェクトを作成
+// / propertyobjectcreate
 pub fn js_object_with_props(props : Array[JSProp], proto : JSValue?) -> JSValue {
   Object({ id: fresh_object_id(), props, prototype: proto })
 }
 
 ///|
-/// プロパティを取得
+// / propertyget
 pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
   match obj {
     Function(closure) => {
@@ -547,13 +547,13 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
           None => return Undefined
         }
       }
-      // 自身のプロパティを検索
+      // propertylookup
       for prop in map.props {
         if prop.key == key {
           return prop.value
         }
       }
-      // プロトタイプチェーンを辿る
+
       match map.prototype {
         Some(proto) => js_get_prop(proto, key)
         None => Undefined
@@ -568,7 +568,7 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
           None => Undefined
         }
       } else {
-        // インデックスアクセス
+
         let idx = @strconv.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < arr.items.length() {
           arr.items[idx]
@@ -590,7 +590,7 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
       } else {
         let idx = @strconv.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < s.length() {
-          // TODO: charAt相当
+          // TODO: charAt
           Undefined
         } else {
           Undefined
@@ -601,7 +601,7 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
 }
 
 ///|
-/// プロパティの存在確認
+// / propertyexistencecheck
 pub fn js_has_prop(obj : JSValue, key : String) -> Bool {
   match obj {
     Function(closure) => {
@@ -663,7 +663,7 @@ pub fn js_has_prop(obj : JSValue, key : String) -> Bool {
 }
 
 ///|
-/// プロパティを設定
+// / propertyset
 pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
   match obj {
     Function(closure) => {
@@ -717,7 +717,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
           }
         return value
       }
-      // 既存プロパティを更新
+      // propertyupdate
       for i, prop in map.props {
         if prop.key == key {
           if prop.get is Some(_) || prop.set is Some(_) {
@@ -738,7 +738,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
           return value
         }
       }
-      // 新規プロパティを追加
+      // propertyadd
       map.props.push({
         key,
         value,
@@ -779,7 +779,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
       let idx = @strconv.parse_int(key) catch { _ => -1 }
       if idx >= 0 {
         if idx < MAX_DENSE_ARRAY_LENGTH {
-          // 配列を拡張
+          // array
           while arr.items.length() <= idx {
             arr.items.push(Undefined)
           }
@@ -861,7 +861,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
 }
 
 ///|
-/// プロパティを削除
+// / propertydelete
 pub fn js_delete_prop(obj : JSValue, key : String) -> Bool {
   match obj {
     Function(closure) => {
@@ -919,7 +919,7 @@ pub fn js_delete_prop(obj : JSValue, key : String) -> Bool {
 }
 
 ///|
-/// データプロパティを定義
+// / datapropertydefine
 pub fn js_define_data_prop(
   obj : JSValue,
   key : String,
@@ -1070,7 +1070,7 @@ pub fn js_define_data_prop(
 }
 
 ///|
-/// アクセサプロパティを定義
+// / propertydefine
 pub fn js_define_accessor_prop(
   obj : JSValue,
   key : String,
@@ -1207,10 +1207,10 @@ pub fn js_define_accessor_prop(
   }
 }
 
-// === 配列操作 ===
+// === array ===
 
 ///|
-/// 空配列を作成
+// / arraycreate
 pub fn js_new_array() -> JSValue {
   Array({
     id: fresh_array_id(),
@@ -1222,7 +1222,7 @@ pub fn js_new_array() -> JSValue {
 }
 
 ///|
-/// 配列リテラルから作成
+// / arrayliteralcreate
 pub fn js_array_from(items : Array[JSValue]) -> JSValue {
   Array({
     id: fresh_array_id(),
@@ -1234,7 +1234,7 @@ pub fn js_array_from(items : Array[JSValue]) -> JSValue {
 }
 
 ///|
-/// 配列に要素を追加 (push)
+// / arrayelementadd (push)
 pub fn js_array_push(arr : JSValue, value : JSValue) -> JSValue {
   match arr {
     Array(arr_map) => {
@@ -1250,7 +1250,7 @@ pub fn js_array_push(arr : JSValue, value : JSValue) -> JSValue {
 }
 
 ///|
-/// 配列の長さを取得
+// / arraylengthget
 pub fn js_array_length(arr : JSValue) -> JSValue {
   match arr {
     Array(arr_map) => Number(arr_map.length.to_double())
@@ -1258,24 +1258,24 @@ pub fn js_array_length(arr : JSValue) -> JSValue {
   }
 }
 
-// === 環境操作 ===
+// === ===
 
 ///|
-/// 新しい環境を作成
+// / create
 pub fn js_new_env(parent : JSEnv?) -> JSEnv {
   { parent, bindings: [] }
 }
 
 ///|
-/// 環境に変数を定義
+// / variabledefine
 pub fn JSEnv::define_var(self : JSEnv, name : String, value : JSValue) -> Unit {
   self.bindings.push((name, value))
 }
 
 ///|
-/// 環境から変数を取得（最新のバインディングを優先）
+// / variableget(prefer)
 pub fn JSEnv::get(self : JSEnv, name : String) -> JSValue {
-  // 現在の環境を後ろから検索（最新のバインディングを優先）
+  // currentlookup(prefer)
   let len = self.bindings.length()
   let mut i = len - 1
   while i >= 0 {
@@ -1285,7 +1285,7 @@ pub fn JSEnv::get(self : JSEnv, name : String) -> JSValue {
     }
     i -= 1
   }
-  // 親環境を検索
+  // lookup
   match self.parent {
     Some(parent) => parent.get(name)
     None => Undefined
@@ -1293,7 +1293,7 @@ pub fn JSEnv::get(self : JSEnv, name : String) -> JSValue {
 }
 
 ///|
-/// 環境に変数があるか確認
+// / variablecheck
 pub fn JSEnv::has(self : JSEnv, name : String) -> Bool {
   let len = self.bindings.length()
   let mut i = len - 1
@@ -1311,9 +1311,9 @@ pub fn JSEnv::has(self : JSEnv, name : String) -> Bool {
 }
 
 ///|
-/// 環境の変数を更新
+// / variableupdate
 pub fn JSEnv::set(self : JSEnv, name : String, value : JSValue) -> Bool {
-  // 現在の環境を検索（最新のバインディングを優先）
+  // currentlookup(prefer)
   let len = self.bindings.length()
   let mut i = len - 1
   while i >= 0 {
@@ -1324,7 +1324,7 @@ pub fn JSEnv::set(self : JSEnv, name : String, value : JSValue) -> Bool {
     }
     i -= 1
   }
-  // 親環境を検索
+  // lookup
   match self.parent {
     Some(parent) => parent.set(name, value)
     None => false
