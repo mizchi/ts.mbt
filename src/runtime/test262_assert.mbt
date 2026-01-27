@@ -127,20 +127,20 @@ pub fn compare_array(
   }
   match (actual, expected) {
     (JSValue::Array(arr1), JSValue::Array(arr2)) =>
-      if arr1.length() != arr2.length() {
+      if arr1.items.length() != arr2.items.length() {
         Failure(
           prefix +
           "Array lengths differ: " +
-          arr1.length().to_string() +
+          arr1.items.length().to_string() +
           " vs " +
-          arr2.length().to_string(),
+          arr2.items.length().to_string(),
         )
       } else {
         let mut i = 0
-        while i < arr1.length() {
-          if !is_same_value(arr1[i], arr2[i]) {
-            let actual_elem = arr1[i].to_js_string()
-            let expected_elem = arr2[i].to_js_string()
+        while i < arr1.items.length() {
+          if !is_same_value(arr1.items[i], arr2.items[i]) {
+            let actual_elem = arr1.items[i].to_js_string()
+            let expected_elem = arr2.items[i].to_js_string()
             return Failure(
               prefix +
               "Arrays differ at index " +

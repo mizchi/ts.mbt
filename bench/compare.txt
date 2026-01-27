@@ -1,0 +1,109 @@
+Warning: [0006]
+    ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/parser/lexer.mbt:33:3 ]
+    │
+ 33 │   True
+    │   ──┬─  
+    │     ╰─── Warning (unused_constructor): Variant 'True' is never constructed
+────╯
+Warning: [0006]
+    ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/parser/lexer.mbt:34:3 ]
+    │
+ 34 │   False
+    │   ──┬──  
+    │     ╰──── Warning (unused_constructor): Variant 'False' is never constructed
+────╯
+Warning: [0002]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/interpreter.mbt:162:3 ]
+     │
+ 162 │   self : JSInterpreter,
+     │   ──┬─  
+     │     ╰─── Warning (unused_value): Unused variable 'self'
+─────╯
+Warning: [0001]
+      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/interpreter.mbt:1256:19 ]
+      │
+ 1256 │ fn JSInterpreter::normalize_this(self : JSInterpreter, value : JSValue) -> JSValue {
+      │                   ───────┬──────  
+      │                          ╰──────── Warning (unused_value): Unused function 'normalize_this'
+──────╯
+Warning: [0002]
+      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/interpreter.mbt:1270:29 ]
+      │
+ 1270 │ fn JSInterpreter::get_proto(self : JSInterpreter, value : JSValue) -> JSValue? {
+      │                             ──┬─  
+      │                               ╰─── Warning (unused_value): Unused variable 'self'
+──────╯
+Warning: [0002]
+      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/interpreter.mbt:1365:32 ]
+      │
+ 1365 │ fn JSInterpreter::has_own_prop(self : JSInterpreter, obj : JSValue, key : String) -> Bool {
+      │                                ──┬─  
+      │                                  ╰─── Warning (unused_value): Unused variable 'self'
+──────╯
+Warning: [0002]
+      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/interpreter.mbt:1414:33 ]
+      │
+ 1414 │ fn JSInterpreter::is_enumerable(self : JSInterpreter, obj : JSValue, key : String) -> Bool {
+      │                                 ──┬─  
+      │                                   ╰─── Warning (unused_value): Unused variable 'self'
+──────╯
+Warning: [0002]
+      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/interpreter.mbt:1683:31 ]
+      │
+ 1683 │ fn JSInterpreter::is_callable(self : JSInterpreter, value : JSValue) -> Bool {
+      │                               ──┬─  
+      │                                 ╰─── Warning (unused_value): Unused variable 'self'
+──────╯
+Warning: [0012]
+      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/interpreter.mbt:2761:11 ]
+      │
+ 2761 │ ╭─▶           let _ = self.set_error_kind("SyntaxError", "Function parse error")
+ 2762 │ ├─▶           JSValue::Undefined
+      │ │                                  
+      │ ╰────────────────────────────────── Warning (unreachable_code): Unreachable code
+──────╯
+Warning: [0012]
+      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/interpreter.mbt:3022:11 ]
+      │
+ 3022 │ ╭─▶           let _ = self.set_error_kind("SyntaxError", "eval parse error")
+ 3023 │ ├─▶           Undefined
+      │ │                         
+      │ ╰───────────────────────── Warning (unreachable_code): Unreachable code
+──────╯
+Warning: [0006]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/jsvalue.mbt:121:3 ]
+     │
+ 121 │   Compiled(Int) // コンパイル済み関数インデックス
+     │   ────┬───  
+     │       ╰───── Warning (unused_constructor): Variant 'Compiled' is never constructed
+─────╯
+Warning: [0035]
+      ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/jsvalue.mbt:1192:15 ]
+      │
+ 1192 │ pub fn JSEnv::define(self : JSEnv, name : String, value : JSValue) -> Unit {
+      │               ───┬──  
+      │                  ╰──── Warning (reserved_keyword): The word `define` is reserved for possible future use. Please consider using another name.
+──────╯
+Warning: [0035]
+    ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/runtime/test262_assert.mbt:12:8 ]
+    │
+ 12 │ pub fn assert(must_be_true : Bool, message : String?) -> AssertResult {
+    │        ───┬──  
+    │           ╰──── Warning (reserved_keyword): The word `assert` is reserved for possible future use. Please consider using another name.
+────╯
+[moonbitlang/typescript] bench bench_test.mbt:61 ("bench parser tokenize small") ok
+name                  time (mean ± σ)         range (min … max) 
+parser.tokenize.small    3.40 µs ±   0.06 µs     3.33 µs …   3.52 µs  in 10 ×  29768 runs
+[moonbitlang/typescript] bench bench_test.mbt:73 ("bench parser module small") ok
+name                time (mean ± σ)         range (min … max) 
+parser.module.small   10.28 µs ±   0.17 µs    10.09 µs …  10.46 µs  in 5 ×  10234 runs
+[moonbitlang/typescript] bench bench_test.mbt:85 ("bench parser module large") ok
+name                time (mean ± σ)         range (min … max) 
+parser.module.large  527.28 µs ±   0.00 µs   527.28 µs … 527.28 µs  in 1 ×    187 runs
+[moonbitlang/typescript] bench bench_test.mbt:97 ("bench runtime run small") ok
+name              time (mean ± σ)         range (min … max) 
+runtime.run.small    5.04 ms ±   0.00 µs     5.04 ms …   5.04 ms  in 1 ×     20 runs
+[moonbitlang/typescript] bench bench_test.mbt:109 ("bench runtime run large") ok
+name              time (mean ± σ)         range (min … max) 
+runtime.run.large  659.40 µs ±   0.00 µs   659.40 µs … 659.40 µs  in 1 ×    152 runs
+Total tests: 5, passed: 5, failed: 0.

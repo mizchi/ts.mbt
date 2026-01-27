@@ -135,6 +135,8 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
     | For
     | Break
     | Continue
+    | Try
+    | Throw
     | Function
     | LBrace
     | Semicolon
@@ -243,11 +245,24 @@ fn Parser::parse_comma(self : Parser) -> TsExpr raise ParseError {
 /// 代入式
 fn Parser::parse_assignment(self : Parser) -> TsExpr raise ParseError {
   let left = self.parse_ternary()
-  if self.match_(Eq) {
-    let right = self.parse_assignment()
+  if self.check(Eq) {
     match left {
-      Var(name) => AssignExpr(name, right)
-      _ => right
+      Var(name) => {
+        let _ = self.advance()
+        let right = self.parse_assignment()
+        AssignExpr(name, right)
+      }
+      PropAccess(obj, prop) => {
+        let _ = self.advance()
+        let right = self.parse_assignment()
+        PropAssignExpr(obj, prop, right)
+      }
+      IndexAccess(obj, index) => {
+        let _ = self.advance()
+        let right = self.parse_assignment()
+        IndexAssignExpr(obj, index, right)
+      }
+      _ => left
     }
   } else if self.match_(PlusEq) {
     let right = self.parse_assignment()
@@ -533,6 +548,9 @@ fn Parser::parse_unary(self : Parser) -> TsExpr raise ParseError {
   } else if self.match_(Typeof) {
     let operand = self.parse_unary()
     UnaryOp(Typeof, operand)
+  } else if self.match_(Delete) {
+    let operand = self.parse_unary()
+    UnaryOp(Delete, operand)
   } else if self.match_(VoidType) {
     let operand = self.parse_unary()
     UnaryOp(Void, operand)
@@ -588,7 +606,7 @@ fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
           expr = MethodCall(receiver, method_name, args)
         }
         _ => {
-          expr = Call("<call>", args)
+          expr = CallExpr(expr, args)
         }
       }
     } else if self.match_(LBracket) {
@@ -609,6 +627,11 @@ fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
         Break => "break"
         Continue => "continue"
         Function => "function"
+        Try => "try"
+        Catch => "catch"
+        Finally => "finally"
+        Throw => "throw"
+        Delete => "delete"
         Let => "let"
         Const => "const"
         Var => "var"
@@ -824,10 +847,12 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
       let mut callee_expr : TsExpr? = None
       match self.peek().kind {
         Ident(_) => {
-          type_name = match self.advance().kind {
+          let first = match self.advance().kind {
             Ident(n) => n
             _ => "<call>"
           }
+          type_name = first
+          let mut expr : TsExpr = Var(first)
           // allow dotted constructor name: new obj.Type()
           while self.match_(Dot) {
             let part = match self.advance().kind {
@@ -835,7 +860,9 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
               k => raise ParseError("Expected identifier after '.', got \{k}")
             }
             type_name = type_name + "." + part
+            expr = PropAccess(expr, part)
           }
+          callee_expr = Some(expr)
           // ジェネリクス型パラメータをスキップ (簡易実装)
           if self.match_(Lt) {
             let _ = self.parse_type()
@@ -914,7 +941,14 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
         } else {
           []
         }
-      New(type_name, args)
+      match callee_expr {
+        Some(expr) =>
+          match expr {
+            Var(_) => New(type_name, args)
+            _ => NewExpr(expr, args)
+          }
+        None => New(type_name, args)
+      }
     }
     LBrace => {
       // オブジェクトリテラル: { key: value, ... }
@@ -1224,11 +1258,13 @@ pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
     Let => self.parse_let()
     Const => self.parse_const()
     Return => self.parse_return()
+    Throw => self.parse_throw()
     Class => self.parse_class_decl()
     If => self.parse_if()
     Do => self.parse_do_while()
     While => self.parse_while()
     For => self.parse_for()
+    Try => self.parse_try()
     Function => {
       // 内部関数定義: function name() { ... }
       // Let(name, Any, FuncExpr(func)) として扱う
@@ -1371,6 +1407,46 @@ fn Parser::parse_return(self : Parser) -> TsStmt raise ParseError {
     self.consume_semicolon()
     Return(Some(expr))
   }
+}
+
+///|
+/// throw 文
+fn Parser::parse_throw(self : Parser) -> TsStmt raise ParseError {
+  let _ = self.expect(Throw)
+  let expr = self.parse_expr()
+  self.consume_semicolon()
+  Throw(expr)
+}
+
+///|
+/// try/catch/finally 文
+fn Parser::parse_try(self : Parser) -> TsStmt raise ParseError {
+  let _ = self.expect(Try)
+  let try_block = self.parse_block()
+  let mut catch_name : String? = None
+  let mut catch_block : TsBlock? = None
+  if self.match_(Catch) {
+    if self.match_(LParen) {
+      let name = match self.advance().kind {
+        Ident(n) => n
+        k => raise ParseError("Expected catch identifier, got \{k}")
+      }
+      let _ = self.expect(RParen)
+      catch_name = Some(name)
+    } else {
+      catch_name = Some("error")
+    }
+    catch_block = Some(self.parse_block())
+  }
+  let mut finally_block : TsBlock? = None
+  if self.match_(Finally) {
+    finally_block = Some(self.parse_block())
+  }
+  match (catch_block, finally_block) {
+    (None, None) => raise ParseError("try must have catch or finally")
+    _ => ()
+  }
+  Try(try_block, catch_name, catch_block, finally_block)
 }
 
 ///|

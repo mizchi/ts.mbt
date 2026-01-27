@@ -26,9 +26,14 @@ pub enum TokenKind {
   For
   Break
   Continue
+  Try
+  Catch
+  Finally
+  Throw
   True
   False
   Typeof
+  Delete
 
   // 型キーワード
   NumberType // number
@@ -120,6 +125,27 @@ pub struct Lexer {
   mut pos : Int
   mut allow_regex : Bool
 } derive(Show)
+
+///|
+/// 16進数1桁を読む（読めたら advance 済み）
+fn Lexer::read_hex_digit(self : Lexer) -> Int? {
+  match self.peek() {
+    Some(c) =>
+      if c >= '0' && c <= '9' {
+        let _ = self.advance()
+        Some(c.to_int() - '0'.to_int())
+      } else if c >= 'a' && c <= 'f' {
+        let _ = self.advance()
+        Some(10 + (c.to_int() - 'a'.to_int()))
+      } else if c >= 'A' && c <= 'F' {
+        let _ = self.advance()
+        Some(10 + (c.to_int() - 'A'.to_int()))
+      } else {
+        None
+      }
+    None => None
+  }
+}
 
 ///|
 /// レキサー作成
@@ -457,6 +483,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
   let mut has_dot = false
   let mut has_exp = false
   let mut is_bigint = false
+  let mut has_sep = false
   while true {
     match self.peek() {
       Some(c) =>
@@ -464,6 +491,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           let _ = self.advance()
 
         } else if c == '_' {
+          has_sep = true
           let _ = self.advance()
         } else if c == '.' && not(has_dot) && not(has_exp) {
           has_dot = true
@@ -489,22 +517,30 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
     is_bigint = true
     let _ = self.advance()
   }
-  let s = try { self.src[start:self.pos].to_string() } catch { _ => "" }
-  let cleaned = StringBuilder::new()
-  for ch in s {
-    if ch == '_' {
-      continue
+  let raw =
+    if is_bigint {
+      let end = if self.pos > start { self.pos - 1 } else { self.pos }
+      try { self.src[start:end].to_string() } catch { _ => "" }
+    } else {
+      try { self.src[start:self.pos].to_string() } catch { _ => "" }
     }
-    if is_bigint && ch == 'n' {
-      continue
+  let s =
+    if has_sep {
+      let cleaned = StringBuilder::new()
+      for ch in raw {
+        if ch == '_' {
+          continue
+        }
+        cleaned.write_char(ch)
+      }
+      cleaned.to_string()
+    } else {
+      raw
     }
-    cleaned.write_char(ch)
-  }
-  let cleaned_s = cleaned.to_string()
   if has_dot || has_exp || is_bigint {
     // Double としてパース
     try {
-      let d = @strconv.parse_double(cleaned_s)
+      let d = @strconv.parse_double(s)
       Number(d)
     } catch {
       _ => Number(0.0)
@@ -512,7 +548,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
   } else {
     // Int としてパース
     try {
-      let i = @strconv.parse_int(cleaned_s)
+      let i = @strconv.parse_int(s)
       Int(i)
     } catch {
       _ => Int(0)
@@ -541,40 +577,78 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
     }
   }
   let s = try { self.src[start:self.pos].to_string() } catch { _ => "" }
-
-  // キーワードチェック
-  match s {
-    "function" => Function
-    "class" => Class
-    "extends" => Extends
-    "var" => Var
-    "let" => Let
-    "const" => Const
-    "return" => Return
-    "if" => If
-    "else" => Else
-    "while" => While
-    "do" => Do
-    "for" => For
-    "break" => Break
-    "continue" => Continue
-    "true" => Bool(true)
-    "false" => Bool(false)
-    "typeof" => Typeof
-    "null" => Null
-    "number" => NumberType
-    "boolean" => BooleanType
-    "void" => VoidType
-    "int" => IntType
-    "string" => StringType
-    "new" => New
-    "interface" => Interface
-    "type" => Type
-    "of" => Of
-    "in" => In
-    "declare" => Declare
-    "instanceof" => Instanceof
-    _ => Ident(s)
+  if s == "function" {
+    Function
+  } else if s == "class" {
+    Class
+  } else if s == "extends" {
+    Extends
+  } else if s == "var" {
+    Var
+  } else if s == "let" {
+    Let
+  } else if s == "const" {
+    Const
+  } else if s == "return" {
+    Return
+  } else if s == "if" {
+    If
+  } else if s == "else" {
+    Else
+  } else if s == "while" {
+    While
+  } else if s == "do" {
+    Do
+  } else if s == "for" {
+    For
+  } else if s == "break" {
+    Break
+  } else if s == "continue" {
+    Continue
+  } else if s == "try" {
+    Try
+  } else if s == "catch" {
+    Catch
+  } else if s == "finally" {
+    Finally
+  } else if s == "throw" {
+    Throw
+  } else if s == "true" {
+    Bool(true)
+  } else if s == "false" {
+    Bool(false)
+  } else if s == "typeof" {
+    Typeof
+  } else if s == "delete" {
+    Delete
+  } else if s == "null" {
+    Null
+  } else if s == "number" {
+    NumberType
+  } else if s == "boolean" {
+    BooleanType
+  } else if s == "void" {
+    VoidType
+  } else if s == "int" {
+    IntType
+  } else if s == "string" {
+    StringType
+  } else if s == "new" {
+    New
+  } else if s == "interface" {
+    Interface
+  } else if s == "type" {
+    Type
+  } else if s == "of" {
+    Of
+  } else if s == "in" {
+    In
+  } else if s == "declare" {
+    Declare
+  } else if s == "instanceof" {
+    Instanceof
+  } else {
+    Ident(s)
   }
 }
 
@@ -604,6 +678,60 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
             Some('r') => {
               let _ = self.advance()
               buf.write_char('\r')
+            }
+            Some('b') => {
+              let _ = self.advance()
+              buf.write_char('\u0008'.to_int().unsafe_to_char())
+            }
+            Some('f') => {
+              let _ = self.advance()
+              buf.write_char('\u000c'.to_int().unsafe_to_char())
+            }
+            Some('v') => {
+              let _ = self.advance()
+              buf.write_char('\u000b'.to_int().unsafe_to_char())
+            }
+            Some('0') => {
+              let _ = self.advance()
+              buf.write_char('\u0000'.to_int().unsafe_to_char())
+            }
+            Some('x') => {
+              let _ = self.advance()
+              let mut code = 0
+              let mut ok = true
+              for _ in 0..<2 {
+                match self.read_hex_digit() {
+                  Some(d) => code = code * 16 + d
+                  None => {
+                    ok = false
+                    break
+                  }
+                }
+              }
+              if ok {
+                buf.write_char(code.unsafe_to_char())
+              } else {
+                buf.write_char('x')
+              }
+            }
+            Some('u') => {
+              let _ = self.advance()
+              let mut code = 0
+              let mut ok = true
+              for _ in 0..<4 {
+                match self.read_hex_digit() {
+                  Some(d) => code = code * 16 + d
+                  None => {
+                    ok = false
+                    break
+                  }
+                }
+              }
+              if ok {
+                buf.write_char(code.unsafe_to_char())
+              } else {
+                buf.write_char('u')
+              }
             }
             Some('\\') => {
               let _ = self.advance()
@@ -661,6 +789,60 @@ fn Lexer::scan_template(self : Lexer) -> TokenKind {
             Some('r') => {
               let _ = self.advance()
               buf.write_char('\r')
+            }
+            Some('b') => {
+              let _ = self.advance()
+              buf.write_char('\u0008'.to_int().unsafe_to_char())
+            }
+            Some('f') => {
+              let _ = self.advance()
+              buf.write_char('\u000c'.to_int().unsafe_to_char())
+            }
+            Some('v') => {
+              let _ = self.advance()
+              buf.write_char('\u000b'.to_int().unsafe_to_char())
+            }
+            Some('0') => {
+              let _ = self.advance()
+              buf.write_char('\u0000'.to_int().unsafe_to_char())
+            }
+            Some('x') => {
+              let _ = self.advance()
+              let mut code = 0
+              let mut ok = true
+              for _ in 0..<2 {
+                match self.read_hex_digit() {
+                  Some(d) => code = code * 16 + d
+                  None => {
+                    ok = false
+                    break
+                  }
+                }
+              }
+              if ok {
+                buf.write_char(code.unsafe_to_char())
+              } else {
+                buf.write_char('x')
+              }
+            }
+            Some('u') => {
+              let _ = self.advance()
+              let mut code = 0
+              let mut ok = true
+              for _ in 0..<4 {
+                match self.read_hex_digit() {
+                  Some(d) => code = code * 16 + d
+                  None => {
+                    ok = false
+                    break
+                  }
+                }
+              }
+              if ok {
+                buf.write_char(code.unsafe_to_char())
+              } else {
+                buf.write_char('u')
+              }
             }
             Some('\\') => {
               let _ = self.advance()
@@ -1094,7 +1276,14 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
 ///|
 /// すべてのトークンを取得
 pub fn Lexer::tokenize(self : Lexer) -> Array[Token] {
-  let tokens : Array[Token] = []
+  let len = self.src.length()
+  let tokens : Array[Token] =
+    if len >= 1024 {
+      let cap = (len / 2) + 4
+      Array::new(capacity=cap)
+    } else {
+      []
+    }
   while true {
     let tok = self.next_token()
     tokens.push(tok)

@@ -1,0 +1,52 @@
+{
+  "benches": {
+    "parser.module.large": {
+      "max_ns": 558690.0,
+      "mean_ns": 558690.0,
+      "min_ns": 558690.0,
+      "raw": "parser.module.large  558.69 \u00b5s \u00b1   0.00 \u00b5s   558.69 \u00b5s \u2026 558.69 \u00b5s  in 1 \u00d7    180 runs",
+      "runs": 180,
+      "samples": 1,
+      "std_ns": 0.0
+    },
+    "parser.module.small": {
+      "max_ns": 11630.0,
+      "mean_ns": 10440.0,
+      "min_ns": 10070.0,
+      "raw": "parser.module.small   10.44 \u00b5s \u00b1   0.67 \u00b5s    10.07 \u00b5s \u2026  11.63 \u00b5s  in 5 \u00d7   9917 runs",
+      "runs": 9917,
+      "samples": 5,
+      "std_ns": 670.0
+    },
+    "parser.tokenize.small": {
+      "max_ns": 4059.9999999999995,
+      "mean_ns": 3640.0,
+      "min_ns": 3540.0,
+      "raw": "parser.tokenize.small    3.64 \u00b5s \u00b1   0.15 \u00b5s     3.54 \u00b5s \u2026   4.06 \u00b5s  in 10 \u00d7  27897 runs",
+      "runs": 27897,
+      "samples": 10,
+      "std_ns": 150.0
+    },
+    "runtime.run.large": {
+      "max_ns": 702460.0,
+      "mean_ns": 702460.0,
+      "min_ns": 702460.0,
+      "raw": "runtime.run.large  702.46 \u00b5s \u00b1   0.00 \u00b5s   702.46 \u00b5s \u2026 702.46 \u00b5s  in 1 \u00d7    142 runs",
+      "runs": 142,
+      "samples": 1,
+      "std_ns": 0.0
+    },
+    "runtime.run.small": {
+      "max_ns": 5100000.0,
+      "mean_ns": 5100000.0,
+      "min_ns": 5100000.0,
+      "raw": "runtime.run.small    5.10 ms \u00b1   0.00 \u00b5s     5.10 ms \u2026   5.10 ms  in 1 \u00d7     20 runs",
+      "runs": 20,
+      "samples": 1,
+      "std_ns": 0.0
+    }
+  },
+  "command": "moon bench --target native",
+  "created_at": "2026-01-27T06:04:01.104662+00:00",
+  "target": "native"
+}

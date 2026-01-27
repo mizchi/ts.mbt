@@ -41,6 +41,9 @@ pub(all) enum TsExpr {
   // 関数呼び出し
   Call(String, Array[TsExpr])
 
+  // 関数呼び出し (式)
+  CallExpr(TsExpr, Array[TsExpr])
+
   // 条件式 (三項演算子)
   Cond(TsExpr, TsExpr, TsExpr)
 
@@ -59,11 +62,20 @@ pub(all) enum TsExpr {
   // new 式 (配列等)
   New(String, Array[TsExpr])
 
+  // new 式 (式)
+  NewExpr(TsExpr, Array[TsExpr])
+
   // メソッド呼び出し (receiver.method(args))
   MethodCall(TsExpr, String, Array[TsExpr])
 
   // 代入式 (式として)
   AssignExpr(String, TsExpr)
+
+  // プロパティ代入式
+  PropAssignExpr(TsExpr, String, TsExpr)
+
+  // 添字代入式
+  IndexAssignExpr(TsExpr, TsExpr, TsExpr)
 
   // カンマ演算子
   Seq(TsExpr, TsExpr)
@@ -125,6 +137,7 @@ pub(all) enum TsUnaryOp {
   Plus // + (単項プラス)
   Typeof // typeof
   Void // void
+  Delete // delete
   PreInc // ++x
   PreDec // --x
   PostInc // x++
@@ -173,6 +186,12 @@ pub(all) enum TsStmt {
 
   // return
   Return(TsExpr?)
+
+  // throw
+  Throw(TsExpr)
+
+  // try/catch/finally
+  Try(TsBlock, String?, TsBlock?, TsBlock?)
 
   // 制御フロー
   If(TsExpr, TsBlock, TsBlock?)

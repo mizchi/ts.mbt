@@ -31,8 +31,8 @@ test "jsvalue: to_boolean" {
   assert_eq(JSValue::Number(1.0).to_boolean(), true)
   assert_eq(JSValue::Number(-1.0).to_boolean(), true)
   assert_eq(JSValue::String("hello").to_boolean(), true)
-  assert_eq(JSValue::Object({ props: [], prototype: None }).to_boolean(), true)
-  assert_eq(JSValue::Array([]).to_boolean(), true)
+  assert_eq(js_new_object().to_boolean(), true)
+  assert_eq(js_new_array().to_boolean(), true)
 }
 
 ///|

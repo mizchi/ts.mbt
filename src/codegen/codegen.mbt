@@ -187,6 +187,8 @@ fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
     @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // オブジェクトリテラルは @parser.TsType::Any
     @parser.TsExpr::Var(_) => @parser.TsType::Any // 変数は文脈から推論する必要あり
     @parser.TsExpr::Seq(_, right) => infer_literal_type(right)
+    @parser.TsExpr::PropAssignExpr(_, _, value) => infer_literal_type(value)
+    @parser.TsExpr::IndexAssignExpr(_, _, value) => infer_literal_type(value)
     @parser.TsExpr::BinOp(op, lhs, _) =>
       // 比較演算子は @parser.TsType::Boolean を返す
       match op {
@@ -212,9 +214,11 @@ fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
         @parser.TsUnaryOp::Not => @parser.TsType::Boolean
         @parser.TsUnaryOp::Typeof => @parser.TsType::String_
         @parser.TsUnaryOp::Void => @parser.TsType::Any
+        @parser.TsUnaryOp::Delete => @parser.TsType::Boolean
         @parser.TsUnaryOp::PreInc | @parser.TsUnaryOp::PreDec | @parser.TsUnaryOp::PostInc | @parser.TsUnaryOp::PostDec => infer_literal_type(e)
       }
     @parser.TsExpr::Call(_, _) => @parser.TsType::Any // 関数の戻り値型は文脈が必要
+    @parser.TsExpr::CallExpr(_, _) => @parser.TsType::Any
     @parser.TsExpr::Cond(_, then_, _) => infer_literal_type(then_) // then 節の型
     @parser.TsExpr::IndexAccess(_, _) => @parser.TsType::Any // 配列要素型
     @parser.TsExpr::PropAccess(_, prop) =>
@@ -224,6 +228,7 @@ fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
         @parser.TsType::Any
       }
     @parser.TsExpr::New(_, _) => @parser.TsType::Any // コンストラクタの型
+    @parser.TsExpr::NewExpr(_, _) => @parser.TsType::Any
     @parser.TsExpr::MethodCall(_, _, _) => @parser.TsType::Any // メソッドの戻り値型
     @parser.TsExpr::AssignExpr(_, e) => infer_literal_type(e) // 代入式の型は右辺の型
     @parser.TsExpr::ArrowFunc(_, _) => @parser.TsType::Any // アロー関数は @parser.TsType::Any
@@ -358,6 +363,8 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
     @parser.TsExpr::NullLit => @parser.TsType::Any // null は @parser.TsType::Any
     @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // オブジェクトリテラルは @parser.TsType::Any
     @parser.TsExpr::Seq(_, right) => infer_type(ctx, right)
+    @parser.TsExpr::PropAssignExpr(_, _, value) => infer_type(ctx, value)
+    @parser.TsExpr::IndexAssignExpr(_, _, value) => infer_type(ctx, value)
     @parser.TsExpr::Var(name) =>
       match ctx.get_local(name) {
         Some(local_var) => local_var.type_
@@ -397,9 +404,11 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
         @parser.TsUnaryOp::Not => @parser.TsType::Boolean
         @parser.TsUnaryOp::Typeof => @parser.TsType::String_
         @parser.TsUnaryOp::Void => @parser.TsType::Any
+        @parser.TsUnaryOp::Delete => @parser.TsType::Boolean
         @parser.TsUnaryOp::PreInc | @parser.TsUnaryOp::PreDec | @parser.TsUnaryOp::PostInc | @parser.TsUnaryOp::PostDec => infer_type(ctx, operand)
       }
     @parser.TsExpr::Call(_, _) => @parser.TsType::Number // 関数の戻り値型は後で取得
+    @parser.TsExpr::CallExpr(_, _) => @parser.TsType::Number
     @parser.TsExpr::Cond(_, then_expr, _) => infer_type(ctx, then_expr)
     @parser.TsExpr::ArrayLit(elements) =>
       if elements.length() > 0 {
@@ -419,6 +428,7 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
         @parser.TsType::Number
       }
     @parser.TsExpr::New(_, _) => @parser.TsType::Array(@parser.TsType::Number) // new Array<T>() → @parser.TsType::Array(T)
+    @parser.TsExpr::NewExpr(_, _) => @parser.TsType::Any
     @parser.TsExpr::MethodCall(receiver, method_name, _) => {
       let recv_type = infer_type(ctx, receiver)
       match recv_type {
@@ -538,9 +548,19 @@ fn compile_expr(
       raise CodeGenError(
         "comma operator is not supported in Wasm compiler (use interpreter)",
       )
+    @parser.TsExpr::PropAssignExpr(_, _, _) =>
+      raise CodeGenError(
+        "property assignment expression is not supported in Wasm compiler",
+      )
+    @parser.TsExpr::IndexAssignExpr(_, _, _) =>
+      raise CodeGenError(
+        "index assignment expression is not supported in Wasm compiler",
+      )
     @parser.TsExpr::BinOp(op, left, right) => compile_binop(ctx, op, left, right, expected_type)
     @parser.TsExpr::UnaryOp(op, operand) => compile_unaryop(ctx, op, operand, expected_type)
     @parser.TsExpr::Call(name, args) => compile_call(ctx, name, args, expected_type)
+    @parser.TsExpr::CallExpr(_, _) =>
+      raise CodeGenError("call expression is not supported in Wasm compiler")
     @parser.TsExpr::Cond(cond, then_expr, else_expr) => {
       // 条件をコンパイル
       compile_expr(ctx, cond, @parser.TsType::Boolean)
@@ -582,6 +602,8 @@ fn compile_expr(
     @parser.TsExpr::PropAccess(obj, prop) => compile_prop_access(ctx, obj, prop, expected_type)
     @parser.TsExpr::New(type_name, args) =>
       compile_new_expr(ctx, type_name, args, expected_type)
+    @parser.TsExpr::NewExpr(_, _) =>
+      raise CodeGenError("new expression is not supported in Wasm compiler")
     @parser.TsExpr::MethodCall(receiver, method_name, args) =>
       compile_method_call(ctx, receiver, method_name, args, expected_type)
     // 以下は静的Wasmコンパイラでは未サポート（インタプリタのみ）
@@ -1463,6 +1485,10 @@ fn compile_unaryop(
       raise CodeGenError(
         "void is not supported in Wasm compiler (use interpreter)",
       )
+    @parser.TsUnaryOp::Delete =>
+      raise CodeGenError(
+        "delete is not supported in Wasm compiler (use interpreter)",
+      )
   }
 }
 
@@ -1600,6 +1626,10 @@ fn compile_stmt(
       ctx.emit(Return)
     }
     @parser.TsStmt::Return(None) => ctx.emit(Return)
+    @parser.TsStmt::Throw(_) =>
+      raise CodeGenError("throw is not supported in Wasm compiler")
+    @parser.TsStmt::Try(_, _, _, _) =>
+      raise CodeGenError("try/catch/finally is not supported in Wasm compiler")
     @parser.TsStmt::If(cond, then_block, else_block) =>
       compile_if(ctx, cond, then_block, else_block, return_type)
     @parser.TsStmt::While(cond, body) => compile_while(ctx, cond, body, return_type)

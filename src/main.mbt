@@ -487,7 +487,11 @@ async fn run_test262(test_path : String) -> Unit {
     }
 
     let interp = @runtime.JSInterpreter::new()
-    let wrapped = wrap_test_source(include_src + content)
+    let mut source = include_src + content
+    if contains(meta.flags, "onlyStrict") {
+      source = "\"use strict\";\n" + source
+    }
+    let wrapped = wrap_test_source(source)
     let result = interp.run(wrapped) catch {
       e => {
         failed += 1

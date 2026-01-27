@@ -1,0 +1,54 @@
+{
+  "baseline": "bench/baseline.json",
+  "command": "moon bench --target native",
+  "comparisons": {
+    "parser.module.large": {
+      "baseline_mean_ns": 558690.0,
+      "baseline_raw": "parser.module.large  558.69 \u00b5s \u00b1   0.00 \u00b5s   558.69 \u00b5s \u2026 558.69 \u00b5s  in 1 \u00d7    180 runs",
+      "current_mean_ns": 527280.0,
+      "current_raw": "parser.module.large  527.28 \u00b5s \u00b1   0.00 \u00b5s   527.28 \u00b5s \u2026 527.28 \u00b5s  in 1 \u00d7    187 runs",
+      "delta_ns": -31410.0,
+      "delta_pct": -5.622080223379692,
+      "status": "ok"
+    },
+    "parser.module.small": {
+      "baseline_mean_ns": 10440.0,
+      "baseline_raw": "parser.module.small   10.44 \u00b5s \u00b1   0.67 \u00b5s    10.07 \u00b5s \u2026  11.63 \u00b5s  in 5 \u00d7   9917 runs",
+      "current_mean_ns": 10280.0,
+      "current_raw": "parser.module.small   10.28 \u00b5s \u00b1   0.17 \u00b5s    10.09 \u00b5s \u2026  10.46 \u00b5s  in 5 \u00d7  10234 runs",
+      "delta_ns": -160.0,
+      "delta_pct": -1.532567049808429,
+      "status": "ok"
+    },
+    "parser.tokenize.small": {
+      "baseline_mean_ns": 3640.0,
+      "baseline_raw": "parser.tokenize.small    3.64 \u00b5s \u00b1   0.15 \u00b5s     3.54 \u00b5s \u2026   4.06 \u00b5s  in 10 \u00d7  27897 runs",
+      "current_mean_ns": 3400.0,
+      "current_raw": "parser.tokenize.small    3.40 \u00b5s \u00b1   0.06 \u00b5s     3.33 \u00b5s \u2026   3.52 \u00b5s  in 10 \u00d7  29768 runs",
+      "delta_ns": -240.0,
+      "delta_pct": -6.593406593406594,
+      "status": "ok"
+    },
+    "runtime.run.large": {
+      "baseline_mean_ns": 702460.0,
+      "baseline_raw": "runtime.run.large  702.46 \u00b5s \u00b1   0.00 \u00b5s   702.46 \u00b5s \u2026 702.46 \u00b5s  in 1 \u00d7    142 runs",
+      "current_mean_ns": 659400.0,
+      "current_raw": "runtime.run.large  659.40 \u00b5s \u00b1   0.00 \u00b5s   659.40 \u00b5s \u2026 659.40 \u00b5s  in 1 \u00d7    152 runs",
+      "delta_ns": -43060.0,
+      "delta_pct": -6.129886399225579,
+      "status": "ok"
+    },
+    "runtime.run.small": {
+      "baseline_mean_ns": 5100000.0,
+      "baseline_raw": "runtime.run.small    5.10 ms \u00b1   0.00 \u00b5s     5.10 ms \u2026   5.10 ms  in 1 \u00d7     20 runs",
+      "current_mean_ns": 5040000.0,
+      "current_raw": "runtime.run.small    5.04 ms \u00b1   0.00 \u00b5s     5.04 ms \u2026   5.04 ms  in 1 \u00d7     20 runs",
+      "delta_ns": -60000.0,
+      "delta_pct": -1.1764705882352942,
+      "status": "ok"
+    }
+  },
+  "created_at": "2026-01-27T06:52:23.910422+00:00",
+  "extras": [],
+  "target": "native"
+}

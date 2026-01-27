@@ -1,0 +1,114 @@
+Warning: [0020]
+    ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:75:11 ]
+    │
+ 75 │   if base.ends_with("/") {
+    │           ────┬────  
+    │               ╰────── Warning (deprecated): `ends_with` is deprecated, use `has_suffix` instead
+────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:109:43 ]
+     │
+ 109 │       if trimmed.length() >= 2 && trimmed.starts_with("\"") && trimmed.ends_with("\"") {
+     │                                           ─────┬─────  
+     │                                                ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:109:72 ]
+     │
+ 109 │       if trimmed.length() >= 2 && trimmed.starts_with("\"") && trimmed.ends_with("\"") {
+     │                                                                        ────┬────  
+     │                                                                            ╰────── Warning (deprecated): `ends_with` is deprecated, use `has_suffix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:148:22 ]
+     │
+ 148 │       if not(trimmed.starts_with("//")) {
+     │                      ─────┬─────  
+     │                           ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:158:15 ]
+     │
+ 158 │       if line.starts_with("*") {
+     │               ─────┬─────  
+     │                    ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:163:13 ]
+     │
+ 163 │     if body.starts_with("includes:") {
+     │             ─────┬─────  
+     │                  ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:167:20 ]
+     │
+ 167 │     } else if body.starts_with("flags:") {
+     │                    ─────┬─────  
+     │                         ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:171:20 ]
+     │
+ 171 │     } else if body.starts_with("negative:") {
+     │                    ─────┬─────  
+     │                         ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:234:16 ]
+     │
+ 234 │     if trimmed.starts_with("import ") || trimmed.starts_with("export ") {
+     │                ─────┬─────  
+     │                     ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:234:50 ]
+     │
+ 234 │     if trimmed.starts_with("import ") || trimmed.starts_with("export ") {
+     │                                                  ─────┬─────  
+     │                                                       ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:261:15 ]
+     │
+ 261 │       if path.ends_with(".js") {
+     │               ────┬────  
+     │                   ╰────── Warning (deprecated): `ends_with` is deprecated, use `has_suffix` instead
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:281:16 ]
+     │
+ 281 │     if trimmed.starts_with("#") {
+     │                ─────┬─────  
+     │                     ╰─────── Warning (deprecated): `starts_with` is deprecated, use `has_prefix` instead
+─────╯
+Warning: [0023]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:359:13 ]
+     │
+ 359 │     let s = try { part.to_string() } catch { _ => "" }
+     │             ─┬─  
+     │              ╰─── Warning (unused_try): The body of this try expression never raises any error.
+─────╯
+Warning: [0020]
+     ╭─[ /Users/mz/ghq/github.com/mizchi/typescript.mbt/src/main.mbt:419:20 ]
+     │
+ 419 │       if test_path.ends_with(".txt") {
+     │                    ────┬────  
+     │                        ╰────── Warning (deprecated): `ends_with` is deprecated, use `has_suffix` instead
+─────╯
+[moonbitlang/typescript] bench bench_test.mbt:61 ("bench parser tokenize small") ok
+name                  time (mean ± σ)         range (min … max) 
+parser.tokenize.small    3.64 µs ±   0.15 µs     3.54 µs …   4.06 µs  in 10 ×  27897 runs
+[moonbitlang/typescript] bench bench_test.mbt:73 ("bench parser module small") ok
+name                time (mean ± σ)         range (min … max) 
+parser.module.small   10.44 µs ±   0.67 µs    10.07 µs …  11.63 µs  in 5 ×   9917 runs
+[moonbitlang/typescript] bench bench_test.mbt:85 ("bench parser module large") ok
+name                time (mean ± σ)         range (min … max) 
+parser.module.large  558.69 µs ±   0.00 µs   558.69 µs … 558.69 µs  in 1 ×    180 runs
+[moonbitlang/typescript] bench bench_test.mbt:97 ("bench runtime run small") ok
+name              time (mean ± σ)         range (min … max) 
+runtime.run.small    5.10 ms ±   0.00 µs     5.10 ms …   5.10 ms  in 1 ×     20 runs
+[moonbitlang/typescript] bench bench_test.mbt:109 ("bench runtime run large") ok
+name              time (mean ± σ)         range (min … max) 
+runtime.run.large  702.46 µs ±   0.00 µs   702.46 µs … 702.46 µs  in 1 ×    142 runs
+Total tests: 5, passed: 5, failed: 0.

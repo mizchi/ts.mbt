@@ -50,14 +50,31 @@ pub fn JSTag::from_i32(n : Int) -> JSTag {
 pub struct JSProp {
   key : String
   value : JSValue
+  writable : Bool
+  enumerable : Bool
+  configurable : Bool
+  get : JSValue?
+  set : JSValue?
 } derive(Show)
 
 ///|
 /// オブジェクトのプロパティマップ
 pub struct JSPropMap {
+  id : Int
   props : Array[JSProp]
   prototype : JSValue? // プロトタイプチェーン
 } derive(Show)
+
+///|
+/// 配列
+pub struct JSArray {
+  id : Int
+  items : Array[JSValue]
+  props : Array[JSProp]
+  mut length : Int
+} derive(Show)
+
+const MAX_DENSE_ARRAY_LENGTH : Int = 1000000
 
 ///|
 /// クロージャ環境
@@ -75,7 +92,7 @@ pub enum JSValue {
   Number(Double)
   String(String)
   Object(JSPropMap)
-  Array(Array[JSValue])
+  Array(JSArray)
   Function(JSClosure)
   // 内部制御フロー信号
   BreakSignal
@@ -85,9 +102,14 @@ pub enum JSValue {
 ///|
 /// クロージャ
 pub struct JSClosure {
+  id : Int
   params : Array[String]
   body : JSFuncBody
   env : JSEnv
+  is_arrow : Bool
+  is_strict : Bool
+  props : Array[JSProp]
+  object_proto : JSValue?
 } derive(Show)
 
 ///|
@@ -95,8 +117,37 @@ pub struct JSClosure {
 pub enum JSFuncBody {
   Ast(@parser.TsFunc) // 解釈実行用
   Native(String) // ネイティブ関数名
+  Bound(JSValue, JSValue, Array[JSValue]) // target, thisArg, bound args
   Compiled(Int) // コンパイル済み関数インデックス
 } derive(Show)
+
+// === ID generator (object/function/array identity) ===
+
+priv struct IdGen {
+  mut object_id : Int
+  mut function_id : Int
+  mut array_id : Int
+}
+
+let id_gen : IdGen = { object_id: 1, function_id: 1, array_id: 1 }
+
+fn fresh_object_id() -> Int {
+  let id = id_gen.object_id
+  id_gen.object_id = id + 1
+  id
+}
+
+fn fresh_function_id() -> Int {
+  let id = id_gen.function_id
+  id_gen.function_id = id + 1
+  id
+}
+
+fn fresh_array_id() -> Int {
+  let id = id_gen.array_id
+  id_gen.array_id = id + 1
+  id
+}
 
 // === 型判定 ===
 
@@ -228,9 +279,13 @@ pub fn JSValue::to_number(self : JSValue) -> Double {
           _ => js_nan
         }
       }
-    Object(_) => js_nan // TODO: valueOf/toString
-    Array(_) => js_nan // TODO: 配列の変換
-    Function(_) => js_nan
+    Object(_) | Array(_) | Function(_) => {
+      let prim = js_get_prop(self, "value")
+      match prim {
+        Undefined => js_nan
+        _ => prim.to_number()
+      }
+    }
     BreakSignal | ContinueSignal => js_nan // 内部信号
   }
 }
@@ -248,7 +303,7 @@ pub fn JSValue::to_js_string(self : JSValue) -> String {
     Object(_) => "[object Object]"
     Array(arr) => {
       let parts : Array[String] = []
-      for item in arr {
+      for item in arr.items {
         parts.push(item.to_js_string())
       }
       parts.join(",")
@@ -329,9 +384,9 @@ pub fn js_typeof(val : JSValue) -> JSValue {
       String(_) => "string"
       Object(_) => "object"
       Array(_) => "object"
-      Function(_) => "function"
-      BreakSignal | ContinueSignal => "undefined" // 内部信号
-    },
+    Function(_) => "function"
+    BreakSignal | ContinueSignal => "undefined" // 内部信号
+  },
   )
 }
 
@@ -347,7 +402,9 @@ pub fn js_strict_eq(left : JSValue, right : JSValue) -> JSValue {
       (Bool(a), Bool(b)) => a == b
       (Number(a), Number(b)) => a == b
       (String(a), String(b)) => a == b
-      // オブジェクト、配列、関数は参照比較（ここでは常にfalse）
+      (Object(a), Object(b)) => a.id == b.id
+      (Array(a), Array(b)) => a.id == b.id
+      (Function(a), Function(b)) => a.id == b.id
       _ => false
     },
   )
@@ -378,6 +435,11 @@ pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
       (Bool(a), Bool(b)) => a == b
       (Number(a), Number(b)) => a == b
       (String(a), String(b)) => a == b
+      (Object(_), Object(_)) | (Array(_), Array(_)) | (Function(_), Function(_)) =>
+        match js_strict_eq(left, right) {
+          Bool(b) => b
+          _ => false
+        }
       // 型が違う場合は数値に変換して比較
       (Number(_), _) | (_, Number(_)) => left.to_number() == right.to_number()
       (Bool(_), _) | (_, Bool(_)) => left.to_number() == right.to_number()
@@ -429,13 +491,36 @@ pub fn js_ge(left : JSValue, right : JSValue) -> JSValue {
 ///|
 /// 空オブジェクトを作成
 pub fn js_new_object() -> JSValue {
-  Object({ props: [], prototype: None })
+  js_new_object_with_proto(None)
+}
+
+///|
+/// プロトタイプ付きオブジェクトを作成
+pub fn js_new_object_with_proto(proto : JSValue?) -> JSValue {
+  Object({ id: fresh_object_id(), props: [], prototype: proto })
+}
+
+///|
+/// プロパティ付きオブジェクトを作成
+pub fn js_object_with_props(props : Array[JSProp], proto : JSValue?) -> JSValue {
+  Object({ id: fresh_object_id(), props, prototype: proto })
 }
 
 ///|
 /// プロパティを取得
 pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
   match obj {
+    Function(closure) => {
+      for prop in closure.props {
+        if prop.key == key {
+          return prop.value
+        }
+      }
+      match closure.object_proto {
+        Some(proto) => js_get_prop(proto, key)
+        None => Undefined
+      }
+    }
     Object(map) => {
       // 自身のプロパティを検索
       for prop in map.props {
@@ -451,13 +536,18 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
     }
     Array(arr) =>
       if key == "length" {
-        Number(arr.length().to_double())
+        Number(arr.length.to_double())
       } else {
         // インデックスアクセス
         let idx = @strconv.parse_int(key) catch { _ => -1 }
-        if idx >= 0 && idx < arr.length() {
-          arr[idx]
+        if idx >= 0 && idx < arr.items.length() {
+          arr.items[idx]
         } else {
+          for prop in arr.props {
+            if prop.key == key {
+              return prop.value
+            }
+          }
           Undefined
         }
       }
@@ -481,6 +571,17 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
 /// プロパティの存在確認
 pub fn js_has_prop(obj : JSValue, key : String) -> Bool {
   match obj {
+    Function(closure) => {
+      for prop in closure.props {
+        if prop.key == key {
+          return true
+        }
+      }
+      match closure.object_proto {
+        Some(proto) => js_has_prop(proto, key)
+        None => false
+      }
+    }
     Object(map) => {
       for prop in map.props {
         if prop.key == key {
@@ -497,7 +598,18 @@ pub fn js_has_prop(obj : JSValue, key : String) -> Bool {
         true
       } else {
         let idx = @strconv.parse_int(key) catch { _ => -1 }
-        idx >= 0 && idx < arr.length()
+        if idx >= 0 && idx < arr.items.length() {
+          true
+        } else {
+          let mut found = false
+          for prop in arr.props {
+            if prop.key == key {
+              found = true
+              break
+            }
+          }
+          found
+        }
       }
     String(s) =>
       if key == "length" {
@@ -514,30 +626,517 @@ pub fn js_has_prop(obj : JSValue, key : String) -> Bool {
 /// プロパティを設定
 pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
   match obj {
+    Function(closure) => {
+      for i, prop in closure.props {
+        if prop.key == key {
+          if prop.get is Some(_) || prop.set is Some(_) {
+            return value
+          }
+          if not(prop.writable) {
+            return prop.value
+          }
+          closure.props[i] = {
+            key,
+            value,
+            writable: prop.writable,
+            enumerable: prop.enumerable,
+            configurable: prop.configurable,
+            get: prop.get,
+            set: prop.set,
+          }
+          return value
+        }
+      }
+      closure.props.push({
+        key,
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+        get: None,
+        set: None,
+      })
+      value
+    }
     Object(map) => {
       // 既存プロパティを更新
       for i, prop in map.props {
         if prop.key == key {
-          map.props[i] = { key, value }
+          if prop.get is Some(_) || prop.set is Some(_) {
+            return value
+          }
+          if not(prop.writable) {
+            return prop.value
+          }
+          map.props[i] = {
+            key,
+            value,
+            writable: prop.writable,
+            enumerable: prop.enumerable,
+            configurable: prop.configurable,
+            get: prop.get,
+            set: prop.set,
+          }
           return value
         }
       }
       // 新規プロパティを追加
-      map.props.push({ key, value })
+      map.props.push({
+        key,
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+        get: None,
+        set: None,
+      })
       value
     }
     Array(arr) => {
+      if key == "length" {
+        let new_len = value.to_number().to_int()
+        if new_len >= 0 {
+          if new_len < arr.items.length() {
+            while arr.items.length() > new_len {
+              let _ = arr.items.pop()
+            }
+          } else if new_len <= MAX_DENSE_ARRAY_LENGTH {
+            while arr.items.length() < new_len {
+              arr.items.push(Undefined)
+            }
+          }
+          arr.length = new_len
+        }
+        return value
+      }
       let idx = @strconv.parse_int(key) catch { _ => -1 }
       if idx >= 0 {
-        // 配列を拡張
-        while arr.length() <= idx {
-          arr.push(Undefined)
+        if idx < MAX_DENSE_ARRAY_LENGTH {
+          // 配列を拡張
+          while arr.items.length() <= idx {
+            arr.items.push(Undefined)
+          }
+          arr.items[idx] = value
+        } else {
+          let mut replaced = false
+          for i, prop in arr.props {
+            if prop.key == key {
+              if prop.get is Some(_) || prop.set is Some(_) {
+                return value
+              }
+              if not(prop.writable) {
+                return prop.value
+              }
+              arr.props[i] = {
+                key,
+                value,
+                writable: prop.writable,
+                enumerable: prop.enumerable,
+                configurable: prop.configurable,
+                get: prop.get,
+                set: prop.set,
+              }
+              replaced = true
+              break
+            }
+          }
+          if not(replaced) {
+            arr.props.push({
+              key,
+              value,
+              writable: true,
+              enumerable: true,
+              configurable: true,
+              get: None,
+              set: None,
+            })
+          }
         }
-        arr[idx] = value
+        let new_len = idx + 1
+        if new_len > arr.length {
+          arr.length = new_len
+        }
+      } else {
+        for i, prop in arr.props {
+          if prop.key == key {
+            if prop.get is Some(_) || prop.set is Some(_) {
+              return value
+            }
+            if not(prop.writable) {
+              return prop.value
+            }
+            arr.props[i] = {
+              key,
+              value,
+              writable: prop.writable,
+              enumerable: prop.enumerable,
+              configurable: prop.configurable,
+              get: prop.get,
+              set: prop.set,
+            }
+            return value
+          }
+        }
+        arr.props.push({
+          key,
+          value,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+          get: None,
+          set: None,
+        })
       }
       value
     }
     _ => value
+  }
+}
+
+///|
+/// プロパティを削除
+pub fn js_delete_prop(obj : JSValue, key : String) -> Bool {
+  match obj {
+    Function(closure) => {
+      let mut i = 0
+      while i < closure.props.length() {
+        if closure.props[i].key == key {
+          if not(closure.props[i].configurable) {
+            return false
+          }
+          let _ = closure.props.remove(i)
+          return true
+        }
+        i += 1
+      }
+      true
+    }
+    Object(map) => {
+      let mut i = 0
+      while i < map.props.length() {
+        if map.props[i].key == key {
+          if not(map.props[i].configurable) {
+            return false
+          }
+          let _ = map.props.remove(i)
+          return true
+        }
+        i += 1
+      }
+      true
+    }
+    Array(arr) =>
+      if key == "length" {
+        false
+      } else {
+        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        if idx >= 0 && idx < arr.items.length() {
+          arr.items[idx] = Undefined
+        } else {
+          let mut i = 0
+          while i < arr.props.length() {
+            if arr.props[i].key == key {
+              if not(arr.props[i].configurable) {
+                return false
+              }
+              let _ = arr.props.remove(i)
+              return true
+            }
+            i += 1
+          }
+        }
+        true
+      }
+    _ => true
+  }
+}
+
+///|
+/// データプロパティを定義
+pub fn js_define_data_prop(
+  obj : JSValue,
+  key : String,
+  value : JSValue,
+  writable : Bool,
+  enumerable : Bool,
+  configurable : Bool,
+) -> JSValue {
+  match obj {
+    Function(closure) => {
+      for i, prop in closure.props {
+        if prop.key == key {
+          closure.props[i] = {
+            key,
+            value,
+            writable,
+            enumerable,
+            configurable,
+            get: None,
+            set: None,
+          }
+          return value
+        }
+      }
+      closure.props.push({
+        key,
+        value,
+        writable,
+        enumerable,
+        configurable,
+        get: None,
+        set: None,
+      })
+      value
+    }
+    Object(map) => {
+      for i, prop in map.props {
+        if prop.key == key {
+          map.props[i] = {
+            key,
+            value,
+            writable,
+            enumerable,
+            configurable,
+            get: None,
+            set: None,
+          }
+          return value
+        }
+      }
+      map.props.push({
+        key,
+        value,
+        writable,
+        enumerable,
+        configurable,
+        get: None,
+        set: None,
+      })
+      value
+    }
+    Array(arr) => {
+      if key == "length" {
+        let new_len = value.to_number().to_int()
+        if new_len >= 0 {
+          if new_len < arr.items.length() {
+            while arr.items.length() > new_len {
+              let _ = arr.items.pop()
+            }
+          } else if new_len <= MAX_DENSE_ARRAY_LENGTH {
+            while arr.items.length() < new_len {
+              arr.items.push(Undefined)
+            }
+          }
+          arr.length = new_len
+        }
+        return value
+      }
+      let idx = @strconv.parse_int(key) catch { _ => -1 }
+      if idx >= 0 {
+        if idx < MAX_DENSE_ARRAY_LENGTH {
+          while arr.items.length() <= idx {
+            arr.items.push(Undefined)
+          }
+          arr.items[idx] = value
+        } else {
+          let mut replaced = false
+          for i, prop in arr.props {
+            if prop.key == key {
+              arr.props[i] = {
+                key,
+                value,
+                writable,
+                enumerable,
+                configurable,
+                get: None,
+                set: None,
+              }
+              replaced = true
+              break
+            }
+          }
+          if not(replaced) {
+            arr.props.push({
+              key,
+              value,
+              writable,
+              enumerable,
+              configurable,
+              get: None,
+              set: None,
+            })
+          }
+        }
+        let new_len = idx + 1
+        if new_len > arr.length {
+          arr.length = new_len
+        }
+        return value
+      }
+      for i, prop in arr.props {
+        if prop.key == key {
+          arr.props[i] = {
+            key,
+            value,
+            writable,
+            enumerable,
+            configurable,
+            get: None,
+            set: None,
+          }
+          return value
+        }
+      }
+      arr.props.push({
+        key,
+        value,
+        writable,
+        enumerable,
+        configurable,
+        get: None,
+        set: None,
+      })
+      value
+    }
+    _ => value
+  }
+}
+
+///|
+/// アクセサプロパティを定義
+pub fn js_define_accessor_prop(
+  obj : JSValue,
+  key : String,
+  get : JSValue?,
+  set : JSValue?,
+  enumerable : Bool,
+  configurable : Bool,
+) -> JSValue {
+  match obj {
+    Function(closure) => {
+      for i, prop in closure.props {
+        if prop.key == key {
+          closure.props[i] = {
+            key,
+            value: Undefined,
+            writable: false,
+            enumerable,
+            configurable,
+            get,
+            set,
+          }
+          return Undefined
+        }
+      }
+      closure.props.push({
+        key,
+        value: Undefined,
+        writable: false,
+        enumerable,
+        configurable,
+        get,
+        set,
+      })
+      Undefined
+    }
+    Object(map) => {
+      for i, prop in map.props {
+        if prop.key == key {
+          map.props[i] = {
+            key,
+            value: Undefined,
+            writable: false,
+            enumerable,
+            configurable,
+            get,
+            set,
+          }
+          return Undefined
+        }
+      }
+      map.props.push({
+        key,
+        value: Undefined,
+        writable: false,
+        enumerable,
+        configurable,
+        get,
+        set,
+      })
+      Undefined
+    }
+    Array(arr) => {
+      if key == "length" {
+        return Undefined
+      }
+      let idx = @strconv.parse_int(key) catch { _ => -1 }
+      if idx >= 0 {
+        if idx < MAX_DENSE_ARRAY_LENGTH {
+          while arr.items.length() <= idx {
+            arr.items.push(Undefined)
+          }
+          arr.items[idx] = Undefined
+        } else {
+          let mut replaced = false
+          for i, prop in arr.props {
+            if prop.key == key {
+              arr.props[i] = {
+                key,
+                value: Undefined,
+                writable: false,
+                enumerable,
+                configurable,
+                get,
+                set,
+              }
+              replaced = true
+              break
+            }
+          }
+          if not(replaced) {
+            arr.props.push({
+              key,
+              value: Undefined,
+              writable: false,
+              enumerable,
+              configurable,
+              get,
+              set,
+            })
+          }
+        }
+        let new_len = idx + 1
+        if new_len > arr.length {
+          arr.length = new_len
+        }
+        return Undefined
+      }
+      for i, prop in arr.props {
+        if prop.key == key {
+          arr.props[i] = {
+            key,
+            value: Undefined,
+            writable: false,
+            enumerable,
+            configurable,
+            get,
+            set,
+          }
+          return Undefined
+        }
+      }
+      arr.props.push({
+        key,
+        value: Undefined,
+        writable: false,
+        enumerable,
+        configurable,
+        get,
+        set,
+      })
+      Undefined
+    }
+    _ => Undefined
   }
 }
 
@@ -546,22 +1145,26 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
 ///|
 /// 空配列を作成
 pub fn js_new_array() -> JSValue {
-  Array([])
+  Array({ id: fresh_array_id(), items: [], props: [], length: 0 })
 }
 
 ///|
 /// 配列リテラルから作成
 pub fn js_array_from(items : Array[JSValue]) -> JSValue {
-  Array(items)
+  Array({ id: fresh_array_id(), items, props: [], length: items.length() })
 }
 
 ///|
 /// 配列に要素を追加 (push)
 pub fn js_array_push(arr : JSValue, value : JSValue) -> JSValue {
   match arr {
-    Array(items) => {
-      items.push(value)
-      Number(items.length().to_double())
+    Array(arr_map) => {
+      arr_map.items.push(value)
+      let new_len = arr_map.items.length()
+      if new_len > arr_map.length {
+        arr_map.length = new_len
+      }
+      Number(arr_map.length.to_double())
     }
     _ => Undefined
   }
@@ -571,7 +1174,7 @@ pub fn js_array_push(arr : JSValue, value : JSValue) -> JSValue {
 /// 配列の長さを取得
 pub fn js_array_length(arr : JSValue) -> JSValue {
   match arr {
-    Array(items) => Number(items.length().to_double())
+    Array(arr_map) => Number(arr_map.length.to_double())
     _ => Undefined
   }
 }
@@ -611,15 +1214,36 @@ pub fn JSEnv::get(self : JSEnv, name : String) -> JSValue {
 }
 
 ///|
+/// 環境に変数があるか確認
+pub fn JSEnv::has(self : JSEnv, name : String) -> Bool {
+  let len = self.bindings.length()
+  let mut i = len - 1
+  while i >= 0 {
+    let (n, _) = self.bindings[i]
+    if n == name {
+      return true
+    }
+    i -= 1
+  }
+  match self.parent {
+    Some(parent) => parent.has(name)
+    None => false
+  }
+}
+
+///|
 /// 環境の変数を更新
 pub fn JSEnv::set(self : JSEnv, name : String, value : JSValue) -> Bool {
-  // 現在の環境を検索
-  for i, binding in self.bindings {
-    let (n, _) = binding
+  // 現在の環境を検索（最新のバインディングを優先）
+  let len = self.bindings.length()
+  let mut i = len - 1
+  while i >= 0 {
+    let (n, _) = self.bindings[i]
     if n == name {
       self.bindings[i] = (name, value)
       return true
     }
+    i -= 1
   }
   // 親環境を検索
   match self.parent {
