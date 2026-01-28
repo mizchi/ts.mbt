@@ -1,1 +1,1 @@
-test262/test/built-ins/Function/StrictFunction_restricted-properties.js
+test262/test/staging/sm/Iterator/constructor-throw-when-called-directly.js

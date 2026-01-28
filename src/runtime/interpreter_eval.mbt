@@ -14,6 +14,7 @@ pub fn JSInterpreter::eval_expr(
     @parser.TsExpr::NullLit => Null
     @parser.TsExpr::ArrayHole => Undefined
     @parser.TsExpr::Yield(_) => Undefined
+    @parser.TsExpr::YieldStar(_) => Undefined
     @parser.TsExpr::Var(name) =>
       if name == "super" && env.has("__super_proto") {
         env.get("__super_proto")
@@ -245,10 +246,44 @@ pub fn JSInterpreter::eval_expr(
         }
         let _ = env.set("__super_called", Bool(true))
         let arg_values : Array[JSValue] = []
-        for arg in args {
-          arg_values.push(self.eval_expr(arg, env))
+        if args.length() == 1 {
+          match args[0] {
+            @parser.TsExpr::Var(rest_name) if rest_name == "__super_args__" => {
+              let rest_val = self.eval_expr(args[0], env)
+              match rest_val {
+                Array(arr) => {
+                  let mut i = 0
+                  while i < arr.items.length() {
+                    if i < arr.present.length() && arr.present[i] {
+                      arg_values.push(arr.items[i])
+                    }
+                    i = i + 1
+                  }
+                }
+                _ => arg_values.push(rest_val)
+              }
+            }
+            _ =>
+              for arg in args {
+                arg_values.push(self.eval_expr(arg, env))
+              }
+          }
+        } else {
+          for arg in args {
+            arg_values.push(self.eval_expr(arg, env))
+          }
         }
-        let _ = self.call_function(super_ctor, env.get("this"), arg_values)
+        let new_target =
+          match env.get("new") {
+            Object(_) | Function(_) | Array(_) => js_get_prop(env.get("new"), "target")
+            _ => Undefined
+          }
+        let _ = self.call_function(
+          super_ctor,
+          env.get("this"),
+          arg_values,
+          new_target=new_target,
+        )
         if already_called {
           let _ = self.set_error_kind("ReferenceError", "super already called")
           return Undefined
@@ -467,7 +502,7 @@ pub fn JSInterpreter::eval_expr(
       let idx = self.eval_expr(idx_expr, env)
       let val = self.eval_expr(val_expr, env)
       match obj {
-        Array(_) | Object(_) => {
+        Array(_) | Object(_) | Function(_) => {
           let key = idx.to_js_string()
           self.set_prop_value(obj, key, val)
         }
@@ -588,6 +623,7 @@ fn JSInterpreter::eval_expr_gen(
           )
         None => GenValue::Yield(JSValue::Undefined, (sent) => GenValue::Value(sent))
       }
+    @parser.TsExpr::YieldStar(inner) => self.eval_yield_star(inner, env)
     @parser.TsExpr::Seq(left, right) =>
       gen_bind(self.eval_expr_gen(left, env), (_unused) =>
         self.eval_expr_gen(right, env)
@@ -1508,7 +1544,7 @@ pub fn JSInterpreter::exec_stmt(
         None => ()
       }
       match arr {
-        Array(_) | Object(_) => {
+        Array(_) | Object(_) | Function(_) => {
           let key = idx.to_js_string()
           self.set_prop_value(arr, key, val)
         }
@@ -1523,7 +1559,40 @@ pub fn JSInterpreter::exec_stmt(
         Some(err) => return Some(err)
         None => ()
       }
-      self.set_prop_value(obj, prop, val)
+      if prop.has_prefix("@@get:") || prop.has_prefix("@@set:") {
+        fn find_accessor(obj : JSValue, key : String) -> (JSValue?, JSValue?) {
+          match obj {
+            Function(closure) =>
+              for prop in closure.props {
+                if prop.key == key {
+                  return (prop.get, prop.set)
+                }
+              }
+            Object(map) =>
+              for prop in map.props {
+                if prop.key == key {
+                  return (prop.get, prop.set)
+                }
+              }
+            Array(arr) =>
+              for prop in arr.props {
+                if prop.key == key {
+                  return (prop.get, prop.set)
+                }
+              }
+            _ => ()
+          }
+          (None, None)
+        }
+        let is_get = prop.has_prefix("@@get:")
+        let real_key = (try { prop[6:] } catch { _ => "" }).to_string()
+        let (prev_get, prev_set) = find_accessor(obj, real_key)
+        let getter = if is_get { Some(val) } else { prev_get }
+        let setter = if is_get { prev_set } else { Some(val) }
+        let _ = js_define_accessor_prop(obj, real_key, getter, setter, false, true)
+      } else {
+        self.set_prop_value(obj, prop, val)
+      }
       None
     }
     @parser.TsStmt::ForOf(kind, binding, _, iterable, body) =>
@@ -1710,6 +1779,7 @@ fn JSInterpreter::is_constructor(self : JSInterpreter, value : JSValue) -> Bool 
   match value {
     Function(closure) =>
       match closure.body {
+        Native(name) if name == "Symbol" => false
         Bound(target, _, _) => self.is_constructor(target)
         _ => self.has_own_prop(value, "prototype")
       }
@@ -1775,6 +1845,7 @@ fn JSInterpreter::make_generator(
       let _ = js_set_prop(obj, "next", self.make_native("Generator.prototype.next"))
       let _ = js_set_prop(obj, "return", self.make_native("Generator.prototype.return"))
       let _ = js_set_prop(obj, "throw", self.make_native("Generator.prototype.throw"))
+      let _ = js_set_prop(obj, "@@iterator", self.make_native("Iterator.prototype[@@iterator]"))
       obj
     }
     _ => Undefined
@@ -2019,9 +2090,77 @@ fn gen_to_signal(value : GenValue, cont : (JSValue) -> GenSignal) -> GenSignal {
 }
 
 ///|
+fn JSInterpreter::yield_star_next(
+  self : JSInterpreter,
+  iterator : JSValue,
+  sent : JSValue?,
+  has_sent : Bool,
+) -> GenValue {
+  let args : Array[JSValue] = []
+  if has_sent {
+    match sent {
+      Some(val) => args.push(val)
+      None => args.push(Undefined)
+    }
+  }
+  let result = self.call_method(iterator, "next", args)
+  match self.peek_error() {
+    Some(err) => {
+      self.iterator_close_on_error(iterator)
+      self.pop_active_iterator()
+      return GenValue::Value(err)
+    }
+    None => ()
+  }
+  match result {
+    Object(_) | Function(_) | Array(_) => ()
+    _ => {
+      let err = self.set_error_kind("TypeError", "Iterator result is not an object")
+      self.pop_active_iterator()
+      return GenValue::Value(err)
+    }
+  }
+  let done = self.get_prop_value(result, "done").to_boolean()
+  let value = self.get_prop_value(result, "value")
+  if done {
+    self.pop_active_iterator()
+    return GenValue::Value(value)
+  }
+  GenValue::Yield(
+    value,
+    (sent_val) => self.yield_star_next(iterator, Some(sent_val), true),
+  )
+}
+
+///|
+fn JSInterpreter::eval_yield_star(
+  self : JSInterpreter,
+  expr : @parser.TsExpr,
+  env : JSEnv,
+) -> GenValue {
+  gen_bind(self.eval_expr_gen(expr, env), (iter_val) => {
+    let iterator =
+      match self.get_iterator(iter_val) {
+        Some(it) => it
+        None => {
+          let err =
+            match self.peek_error() {
+              Some(e) => e
+              None => self.set_error_kind("TypeError", "yield* value is not iterable")
+            }
+          return GenValue::Value(err)
+        }
+      }
+    self.push_active_iterator(iterator)
+    self.yield_star_next(iterator, None, false)
+  })
+}
+
+///|
 fn expr_has_yield(expr : @parser.TsExpr) -> Bool {
   match expr {
     @parser.TsExpr::Yield(_) => true
+    @parser.TsExpr::YieldStar(_) => true
     @parser.TsExpr::AssignExpr(_, value) => expr_has_yield(value)
     @parser.TsExpr::AssignPattern(binding, value) =>
       binding_has_yield(binding) || expr_has_yield(value)
@@ -4380,7 +4519,23 @@ pub fn JSInterpreter::call_function(
             None => Undefined
           }
         Native(name) =>
-          if name == "__export_get__" {
+          if name == "Promise" {
+            if not(new_target.is_undefined()) {
+              self.promise_construct_with_instance(this_arg, args)
+            } else {
+              self.call_native(name, this_arg, args)
+            }
+          } else if name == "Iterator" {
+            if new_target.is_undefined() {
+              self.set_error_kind("TypeError", "Iterator constructor must be called with new")
+            } else {
+              match js_strict_eq(new_target, func) {
+                Bool(true) =>
+                  self.set_error_kind("TypeError", "Iterator is not directly constructible")
+                _ => this_arg
+              }
+            }
+          } else if name == "__export_get__" {
             let name_val = js_get_prop(func, "__export_name")
             let module_val = js_get_prop(func, "__export_module")
             match (module_val, name_val) {
@@ -4411,9 +4566,9 @@ pub fn JSInterpreter::call_function(
       let callee = js_get_prop(Object(map), "$call")
       match callee {
         Function(_) => self.call_function(callee, this_arg, args)
-        _ => Undefined
+        _ => self.set_error_kind("TypeError", "object is not callable")
       }
     }
-    _ => Undefined
+    _ => self.set_error_kind("TypeError", "value is not callable")
   }
 }

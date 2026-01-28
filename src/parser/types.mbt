@@ -95,6 +95,7 @@ pub(all) enum TsExpr {
 
   // yield expression (generator)
   Yield(TsExpr?)
+  YieldStar(TsExpr)
 } derive(Show)
 
 ///|

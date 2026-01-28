@@ -318,6 +318,19 @@ fn JSInterpreter::construct_with(
   match ctor {
     Function(closure) =>
       match closure.body {
+        Native(name) if name == "Promise" => {
+          let executor = if args.length() > 0 { args[0] } else { Undefined }
+          if not(self.is_callable(executor)) {
+            return self.set_error_kind("TypeError", "Promise resolver is not a function")
+          }
+        }
+        _ => ()
+      }
+    _ => ()
+  }
+  match ctor {
+    Function(closure) =>
+      match closure.body {
         Bound(bound_target, _bound_this, bound_args) => {
           let merged : Array[JSValue] = []
           for item in bound_args {
@@ -336,7 +349,28 @@ fn JSInterpreter::construct_with(
       }
     _ => ()
   }
-  let proto = js_get_prop(new_target, "prototype")
+  let proto_val = self.get_prop_value(new_target, "prototype")
+  match self.peek_error() {
+    Some(err) => return err
+    None => ()
+  }
+  let mut proto = proto_val
+  match proto {
+    Object(_) | Function(_) => ()
+    _ => {
+      let fallback = js_get_prop(new_target, "__default_proto__")
+      match fallback {
+        Object(_) | Function(_) => proto = fallback
+        _ => {
+          let fallback_ctor = js_get_prop(ctor, "__default_proto__")
+          match fallback_ctor {
+            Object(_) | Function(_) => proto = fallback_ctor
+            _ => ()
+          }
+        }
+      }
+    }
+  }
   let instance = match proto {
     Object(_) | Function(_) => js_new_object_with_proto(Some(proto))
     _ => self.new_object()

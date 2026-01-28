@@ -11,6 +11,7 @@ pub struct JSInterpreter {
   function_proto : JSValue
   generators : Array[JSGeneratorState]
   mut current_gen_id : Int?
+  mut microtasks : Array[MicrotaskJob]
 }
 
 ///|
@@ -29,4 +30,12 @@ pub(all) enum GenSignal {
   Yield(JSValue)
   Suspend(JSValue, (JSValue) -> GenSignal)
   Return(JSValue)
+}
+
+///|
+pub(all) struct MicrotaskJob {
+  handler : JSValue
+  argument : JSValue
+  promise : JSValue?
+  is_reject : Bool
 }

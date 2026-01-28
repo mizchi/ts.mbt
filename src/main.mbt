@@ -80,6 +80,54 @@ fn join_path(base : String, name : String) -> String {
 }
 
 ///|
+fn normalize_path(path : String) -> String {
+  let is_abs = path.has_prefix("/")
+  let parts : Array[String] = []
+  for part_view in path.split("/") {
+    let part = part_view.to_string()
+    if part == "" {
+      if is_abs && parts.length() == 0 {
+        parts.push("")
+      }
+      continue
+    }
+    if part == "." {
+      continue
+    }
+    if part == ".." {
+      if parts.length() > 0 {
+        let last = parts[parts.length() - 1]
+        if last != "" && last != ".." {
+          let _ = parts.pop()
+          continue
+        }
+      }
+      parts.push("..")
+    } else {
+      parts.push(part)
+    }
+  }
+  if parts.length() == 0 {
+    return if is_abs { "/" } else { "." }
+  }
+  if parts.length() == 1 && parts[0] == "" {
+    return "/"
+  }
+  let mut result = parts[0]
+  if result == "" {
+    result = "/"
+  }
+  for i in 1..<parts.length() {
+    if result == "/" {
+      result = result + parts[i]
+    } else {
+      result = result + "/" + parts[i]
+    }
+  }
+  result
+}
+
+///|
 fn dirname(path : String) -> String {
   match path.rev_find("/") {
     Some(idx) => try { path[:idx].to_string() } catch { _ => "." }
@@ -136,10 +184,11 @@ fn resolve_module_path(base_path : String, spec : String) -> String {
     } else {
       spec
     }
-  if candidate.has_suffix(".js") || candidate.has_suffix(".mjs") {
-    return candidate
+  let normalized = normalize_path(candidate)
+  if normalized.has_suffix(".js") || normalized.has_suffix(".mjs") {
+    return normalized
   }
-  candidate + ".js"
+  normalized + ".js"
 }
 
 ///|
@@ -410,7 +459,7 @@ async fn eval_module(
       None => ()
     }
   }
-
+  interp.drain_microtasks()
   exports
 }
 

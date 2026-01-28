@@ -734,6 +734,7 @@ fn JSInterpreter::array_method(
       }
       JSValue::String(parts.join(","))
     }
+    "values" => self.new_array_iterator(arr_val)
     "indexOf" => {
       let target = if args.length() > 0 { args[0] } else { Undefined }
       let mut start_idx = if args.length() > 1 {

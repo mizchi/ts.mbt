@@ -39,12 +39,19 @@ pub fn JSInterpreter::run_module(
             self.global_env.define_var("__strict__", Bool(true))
           }
           self.hoist_block(func_def.body, self.global_env)
-          match self.exec_block(func_def.body, self.global_env) {
-            Some(val) => val
-            None => Undefined
-          }
+          let result =
+            match self.exec_block(func_def.body, self.global_env) {
+              Some(val) => val
+              None => Undefined
+            }
+          self.drain_microtasks()
+          result
         }
-        _ => self.call_function(main_func, self.global_env.get("globalThis"), [])
+        _ => {
+          let result = self.call_function(main_func, self.global_env.get("globalThis"), [])
+          self.drain_microtasks()
+          result
+        }
       }
     _ => Undefined
   }

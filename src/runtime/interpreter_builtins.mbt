@@ -40,6 +40,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let obj_define_prop = self.make_native("Object.defineProperty")
   self.set_function_length(obj_define_prop, 3.0)
   let _ = js_set_prop(object_ctor, "defineProperty", obj_define_prop)
+  let obj_set_proto = self.make_native("Object.setPrototypeOf")
+  self.set_function_length(obj_set_proto, 2.0)
+  let _ = js_define_data_prop(object_ctor, "setPrototypeOf", obj_set_proto, true, false, true)
   let obj_is_ext = self.make_native("Object.isExtensible")
   self.set_function_length(obj_is_ext, 1.0)
   let _ = js_set_prop(object_ctor, "isExtensible", obj_is_ext)
@@ -408,9 +411,172 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let _ = js_define_data_prop(range_ctor, "prototype", self.new_object(), true, false, true)
   self.global_env.define_var("RangeError", range_ctor)
   let _ = js_set_prop(global_obj, "RangeError", range_ctor)
+  let aggregate_ctor = self.make_native("AggregateError")
+  self.set_function_name(aggregate_ctor, "AggregateError")
+  let _ = js_define_data_prop(aggregate_ctor, "prototype", self.new_object(), true, false, true)
+  self.global_env.define_var("AggregateError", aggregate_ctor)
+  let _ = js_set_prop(global_obj, "AggregateError", aggregate_ctor)
+
+  // Promise (minimal)
+  let promise_proto = self.new_object()
+  let promise_ctor = self.make_native("Promise")
+  self.set_function_length(promise_ctor, 1.0)
+  self.set_function_name(promise_ctor, "Promise")
+  let _ = js_define_data_prop(promise_ctor, "prototype", promise_proto, true, false, true)
+  let _ = js_set_prop(promise_ctor, "__default_proto__", promise_proto)
+  let _ = js_set_prop(promise_proto, "constructor", promise_ctor)
+  let promise_then = self.make_native("Promise.prototype.then")
+  self.set_function_length(promise_then, 2.0)
+  self.set_function_name(promise_then, "then")
+  let _ = js_set_prop(promise_proto, "then", promise_then)
+  let _ = js_set_prop(promise_ctor, "then", promise_then)
+  let promise_catch = self.make_native("Promise.prototype.catch")
+  self.set_function_length(promise_catch, 1.0)
+  self.set_function_name(promise_catch, "catch")
+  let _ = js_set_prop(promise_proto, "catch", promise_catch)
+  let promise_finally = self.make_native("Promise.prototype.finally")
+  self.set_function_length(promise_finally, 1.0)
+  self.set_function_name(promise_finally, "finally")
+  let _ = js_set_prop(promise_proto, "finally", promise_finally)
+  let promise_resolve = self.make_native("Promise.resolve")
+  self.set_function_length(promise_resolve, 1.0)
+  self.set_function_name(promise_resolve, "resolve")
+  let _ = js_set_prop(promise_ctor, "resolve", promise_resolve)
+  let promise_reject = self.make_native("Promise.reject")
+  self.set_function_length(promise_reject, 1.0)
+  self.set_function_name(promise_reject, "reject")
+  let _ = js_set_prop(promise_ctor, "reject", promise_reject)
+  let promise_all = self.make_native("Promise.all")
+  self.set_function_length(promise_all, 1.0)
+  self.set_function_name(promise_all, "all")
+  let _ = js_set_prop(promise_ctor, "all", promise_all)
+  let promise_race = self.make_native("Promise.race")
+  self.set_function_length(promise_race, 1.0)
+  self.set_function_name(promise_race, "race")
+  let _ = js_set_prop(promise_ctor, "race", promise_race)
+  let promise_all_settled = self.make_native("Promise.allSettled")
+  self.set_function_length(promise_all_settled, 1.0)
+  self.set_function_name(promise_all_settled, "allSettled")
+  let _ = js_set_prop(promise_ctor, "allSettled", promise_all_settled)
+  let promise_any = self.make_native("Promise.any")
+  self.set_function_length(promise_any, 1.0)
+  self.set_function_name(promise_any, "any")
+  let _ = js_set_prop(promise_ctor, "any", promise_any)
+  let promise_with_resolvers = self.make_native("Promise.withResolvers")
+  self.set_function_length(promise_with_resolvers, 0.0)
+  self.set_function_name(promise_with_resolvers, "withResolvers")
+  let _ = js_set_prop(promise_ctor, "withResolvers", promise_with_resolvers)
+  let promise_try = self.make_native("Promise.try")
+  self.set_function_length(promise_try, 1.0)
+  self.set_function_name(promise_try, "try")
+  let _ = js_set_prop(promise_ctor, "try", promise_try)
+  let promise_species_get = self.make_native("Promise[@@species]")
+  self.set_function_length(promise_species_get, 0.0)
+  self.set_function_name(promise_species_get, "get [Symbol.species]")
+  let _ = js_define_accessor_prop(
+    promise_ctor,
+    "@@species",
+    Some(promise_species_get),
+    None,
+    false,
+    true,
+  )
+  self.global_env.define_var("Promise", promise_ctor)
+  let _ = js_set_prop(global_obj, "Promise", promise_ctor)
+
+  // Iterator helpers (minimal)
+  let iterator_proto = self.new_object()
+  let iterator_ctor = self.make_native("Iterator")
+  self.set_function_length(iterator_ctor, 0.0)
+  self.set_function_name(iterator_ctor, "Iterator")
+  let _ = js_define_data_prop(iterator_ctor, "prototype", iterator_proto, false, false, false)
+  let _ = js_set_prop(iterator_proto, "constructor", iterator_ctor)
+
+  let iterator_iter = self.make_native("Iterator.prototype[@@iterator]")
+  self.set_function_length(iterator_iter, 0.0)
+  let _ = js_define_data_prop(iterator_proto, "@@iterator", iterator_iter, true, false, true)
+
+  let iterator_from = self.make_native("Iterator.from")
+  self.set_function_length(iterator_from, 1.0)
+  self.set_function_name(iterator_from, "from")
+  let _ = js_define_data_prop(iterator_ctor, "from", iterator_from, true, false, true)
+
+  let iter_map = self.make_native("Iterator.prototype.map")
+  self.set_function_length(iter_map, 1.0)
+  self.set_function_name(iter_map, "map")
+  let _ = js_define_data_prop(iterator_proto, "map", iter_map, true, false, true)
+
+  let iter_filter = self.make_native("Iterator.prototype.filter")
+  self.set_function_length(iter_filter, 1.0)
+  self.set_function_name(iter_filter, "filter")
+  let _ = js_define_data_prop(iterator_proto, "filter", iter_filter, true, false, true)
+
+  let iter_take = self.make_native("Iterator.prototype.take")
+  self.set_function_length(iter_take, 1.0)
+  self.set_function_name(iter_take, "take")
+  let _ = js_define_data_prop(iterator_proto, "take", iter_take, true, false, true)
+
+  let iter_drop = self.make_native("Iterator.prototype.drop")
+  self.set_function_length(iter_drop, 1.0)
+  self.set_function_name(iter_drop, "drop")
+  let _ = js_define_data_prop(iterator_proto, "drop", iter_drop, true, false, true)
+
+  let iter_flat_map = self.make_native("Iterator.prototype.flatMap")
+  self.set_function_length(iter_flat_map, 1.0)
+  self.set_function_name(iter_flat_map, "flatMap")
+  let _ = js_define_data_prop(iterator_proto, "flatMap", iter_flat_map, true, false, true)
+
+  let iter_for_each = self.make_native("Iterator.prototype.forEach")
+  self.set_function_length(iter_for_each, 1.0)
+  self.set_function_name(iter_for_each, "forEach")
+  let _ = js_define_data_prop(iterator_proto, "forEach", iter_for_each, true, false, true)
+
+  let iter_to_array = self.make_native("Iterator.prototype.toArray")
+  self.set_function_length(iter_to_array, 0.0)
+  self.set_function_name(iter_to_array, "toArray")
+  let _ = js_define_data_prop(iterator_proto, "toArray", iter_to_array, true, false, true)
+
+  let iter_reduce = self.make_native("Iterator.prototype.reduce")
+  self.set_function_length(iter_reduce, 1.0)
+  self.set_function_name(iter_reduce, "reduce")
+  let _ = js_define_data_prop(iterator_proto, "reduce", iter_reduce, true, false, true)
+
+  let iter_every = self.make_native("Iterator.prototype.every")
+  self.set_function_length(iter_every, 1.0)
+  self.set_function_name(iter_every, "every")
+  let _ = js_define_data_prop(iterator_proto, "every", iter_every, true, false, true)
+
+  let iter_some = self.make_native("Iterator.prototype.some")
+  self.set_function_length(iter_some, 1.0)
+  self.set_function_name(iter_some, "some")
+  let _ = js_define_data_prop(iterator_proto, "some", iter_some, true, false, true)
+
+  let iter_find = self.make_native("Iterator.prototype.find")
+  self.set_function_length(iter_find, 1.0)
+  self.set_function_name(iter_find, "find")
+  let _ = js_define_data_prop(iterator_proto, "find", iter_find, true, false, true)
+
+  let helper_proto = self.new_object()
+  let helper_next = self.make_native("IteratorHelper.prototype.next")
+  self.set_function_length(helper_next, 0.0)
+  self.set_function_name(helper_next, "next")
+  let _ = js_define_data_prop(helper_proto, "next", helper_next, true, false, true)
+  let helper_return = self.make_native("IteratorHelper.prototype.return")
+  self.set_function_length(helper_return, 0.0)
+  self.set_function_name(helper_return, "return")
+  let _ = js_define_data_prop(helper_proto, "return", helper_return, true, false, true)
+  let _ = js_set_prop(helper_proto, "__proto__", iterator_proto)
+  let _ = js_set_prop(iterator_ctor, "__helper_proto", helper_proto)
+
+  self.global_env.define_var("Iterator", iterator_ctor)
+  let _ = js_define_data_prop(global_obj, "Iterator", iterator_ctor, true, false, true)
+
   let test262_ctor = self.make_native("Test262Error")
   self.set_function_name(test262_ctor, "Test262Error")
   let _ = js_define_data_prop(test262_ctor, "prototype", self.new_object(), true, false, true)
+  let test262_thrower = self.make_native("Test262Error.thrower")
+  self.set_function_length(test262_thrower, 0.0)
+  let _ = js_set_prop(test262_ctor, "thrower", test262_thrower)
   self.global_env.define_var("Test262Error", test262_ctor)
   let _ = js_set_prop(global_obj, "Test262Error", test262_ctor)
 
@@ -450,6 +616,12 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.set_function_length(eval_fn, 1.0)
   self.global_env.define_var("eval", eval_fn)
   let _ = js_set_prop(global_obj, "eval", eval_fn)
+
+  // queueMicrotask
+  let queue_microtask_fn = self.make_native("queueMicrotask")
+  self.set_function_length(queue_microtask_fn, 1.0)
+  self.global_env.define_var("queueMicrotask", queue_microtask_fn)
+  let _ = js_set_prop(global_obj, "queueMicrotask", queue_microtask_fn)
 
   // $DONOTEVALUATE
   let donotevaluate_fn = self.make_native("$DONOTEVALUATE")
@@ -492,14 +664,30 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   // Symbol
   let symbol_fn = self.make_native("Symbol")
   self.set_function_length(symbol_fn, 0.0)
+  let string_ctor = self.global_env.get("String")
+  let string_proto = js_get_prop(string_ctor, "prototype")
+  let _ = js_define_data_prop(symbol_fn, "prototype", string_proto, true, false, true)
   let _ = js_set_prop(symbol_fn, "hasInstance", String("@@hasInstance"))
   let _ = js_set_prop(symbol_fn, "iterator", String("@@iterator"))
+  let _ = js_set_prop(symbol_fn, "species", String("@@species"))
   self.global_env.define_var("Symbol", symbol_fn)
   let _ = js_set_prop(global_obj, "Symbol", symbol_fn)
+
+  // Proxy (minimal)
+  let proxy_ctor = self.make_native("Proxy")
+  self.set_function_length(proxy_ctor, 2.0)
+  self.set_function_name(proxy_ctor, "Proxy")
+  let _ = js_define_data_prop(proxy_ctor, "prototype", self.new_object(), true, false, true)
+  self.global_env.define_var("Proxy", proxy_ctor)
+  let _ = js_set_prop(global_obj, "Proxy", proxy_ctor)
 
   // Reflect
   let reflect = self.new_object()
   let _ = js_set_prop(reflect, "construct", self.make_native("Reflect.construct"))
+  let reflect_get_desc = self.make_native("Reflect.getOwnPropertyDescriptor")
+  self.set_function_length(reflect_get_desc, 2.0)
+  self.set_function_name(reflect_get_desc, "getOwnPropertyDescriptor")
+  let _ = js_set_prop(reflect, "getOwnPropertyDescriptor", reflect_get_desc)
   self.global_env.define_var("Reflect", reflect)
   let _ = js_set_prop(global_obj, "Reflect", reflect)
 }
@@ -1576,16 +1764,27 @@ fn JSInterpreter::eval_script_source(self : JSInterpreter, source : String) -> J
     }
   }
   self.hoist_block(block, self.global_env)
-  match self.exec_block(block, self.global_env) {
-    Some(val) => val
-    None => Undefined
-  }
+  let result =
+    match self.exec_block(block, self.global_env) {
+      Some(val) => val
+      None => Undefined
+    }
+  self.drain_microtasks()
+  result
 }
 
 ///|
 ///|
 fn JSInterpreter::new_array_iterator(self : JSInterpreter, receiver : JSValue) -> JSValue {
   let iter = self.new_object()
+  let iterator_ctor = self.global_env.get("Iterator")
+  let iterator_proto = js_get_prop(iterator_ctor, "prototype")
+  match iterator_proto {
+    Object(_) | Function(_) | Array(_) => {
+      let _ = js_set_prop(iter, "__proto__", iterator_proto)
+    }
+    _ => ()
+  }
   let _ = js_set_prop(iter, "__iter_target", receiver)
   let _ = js_set_prop(iter, "__iter_index", Number(0.0))
   let next_fn = self.make_native("ArrayIterator.prototype.next")
@@ -1600,6 +1799,14 @@ fn JSInterpreter::new_array_iterator(self : JSInterpreter, receiver : JSValue) -
 ///|
 fn JSInterpreter::new_string_iterator(self : JSInterpreter, value : String) -> JSValue {
   let iter = self.new_object()
+  let iterator_ctor = self.global_env.get("Iterator")
+  let iterator_proto = js_get_prop(iterator_ctor, "prototype")
+  match iterator_proto {
+    Object(_) | Function(_) | Array(_) => {
+      let _ = js_set_prop(iter, "__proto__", iterator_proto)
+    }
+    _ => ()
+  }
   let _ = js_set_prop(iter, "__iter_string", JSValue::String(value))
   let _ = js_set_prop(iter, "__iter_index", Number(0.0))
   let next_fn = self.make_native("StringIterator.prototype.next")
@@ -1921,6 +2128,507 @@ fn JSInterpreter::call_native(
     }
   }
   match name {
+    "Promise" =>
+      self.set_error_kind(
+        "TypeError",
+        "Promise constructor must be called with new",
+      )
+    "Promise.resolve" => {
+      let value = if args.length() > 0 { args[0] } else { Undefined }
+      match this_arg {
+        Object(_) | Function(_) => self.promise_static_resolve_with_ctor(this_arg, value)
+        _ =>
+          self.set_error_kind(
+            "TypeError",
+            "Promise.resolve called on non-object",
+          )
+      }
+    }
+    "Promise.reject" => {
+      let reason = if args.length() > 0 { args[0] } else { Undefined }
+      match this_arg {
+        Object(_) | Function(_) => self.promise_static_reject_with_ctor(this_arg, reason)
+        _ =>
+          self.set_error_kind(
+            "TypeError",
+            "Promise.reject called on non-object",
+          )
+      }
+    }
+    "Promise.prototype.then" => {
+      if not(self.is_promise(this_arg)) {
+        return self.set_error_kind(
+          "TypeError",
+          "Promise.prototype.then called on non-Promise",
+        )
+      }
+      let on_fulfilled = if args.length() > 0 { args[0] } else { Undefined }
+      let on_rejected = if args.length() > 1 { args[1] } else { Undefined }
+      let ctor = self.promise_species_constructor(this_arg)
+      match self.peek_error() {
+        Some(err) => return err
+        None => ()
+      }
+      let (result_promise, _resolve, _reject) = self.promise_new_capability(ctor)
+      match self.peek_error() {
+        Some(err) => return err
+        None => ()
+      }
+      self.perform_promise_then(this_arg, on_fulfilled, on_rejected, result_promise)
+    }
+    "Promise.prototype.catch" => {
+      let on_rejected = if args.length() > 0 { args[0] } else { Undefined }
+      let target = match this_arg {
+        Undefined | Null =>
+          return self.set_error_kind(
+            "TypeError",
+            "Promise.prototype.catch called on null or undefined",
+          )
+        Bool(_) | Number(_) | String(_) => self.wrap_primitive(self.global_env, this_arg)
+        _ => this_arg
+      }
+      let then_method = self.get_prop_value(target, "then")
+      match self.peek_error() {
+        Some(err) => return err
+        None => ()
+      }
+      if not(self.is_callable(then_method)) {
+        return self.set_error_kind("TypeError", "Promise.prototype.catch called on non-callable then")
+      }
+      self.call_function(then_method, this_arg, [Undefined, on_rejected])
+    }
+    "Promise.prototype.finally" => {
+      let on_finally = if args.length() > 0 { args[0] } else { Undefined }
+      let target = match this_arg {
+        Undefined | Null =>
+          return self.set_error_kind(
+            "TypeError",
+            "Promise.prototype.finally called on null or undefined",
+          )
+        Bool(_) | Number(_) | String(_) => self.wrap_primitive(self.global_env, this_arg)
+        _ => this_arg
+      }
+      let then_method = self.get_prop_value(target, "then")
+      match self.peek_error() {
+        Some(err) => return err
+        None => ()
+      }
+      if not(self.is_callable(then_method)) {
+        return self.set_error_kind("TypeError", "Promise.prototype.finally called on non-callable then")
+      }
+      if not(self.is_callable(on_finally)) {
+        return self.call_function(then_method, this_arg, [on_finally, on_finally])
+      }
+      let ctor = self.promise_species_constructor(this_arg)
+      match self.peek_error() {
+        Some(err) => return err
+        None => ()
+      }
+      let fulfill_handler = self.make_bound_native(
+        "Promise.__finally_fulfill__",
+        [on_finally, ctor],
+      )
+      let reject_handler = self.make_bound_native(
+        "Promise.__finally_reject__",
+        [on_finally, ctor],
+      )
+      self.call_function(then_method, this_arg, [fulfill_handler, reject_handler])
+    }
+    "Promise.withResolvers" => {
+      match this_arg {
+        Object(_) | Function(_) => self.promise_with_resolvers(this_arg)
+        _ =>
+          self.set_error_kind(
+            "TypeError",
+            "Promise.withResolvers called on non-object",
+          )
+      }
+    }
+    "Promise.try" => {
+      let callback = if args.length() > 0 { args[0] } else { Undefined }
+      let rest_args : Array[JSValue] = []
+      if args.length() > 1 {
+        let mut i = 1
+        while i < args.length() {
+          rest_args.push(args[i])
+          i = i + 1
+        }
+      }
+      match this_arg {
+        Object(_) | Function(_) =>
+          if not(self.is_constructor(this_arg)) {
+            self.set_error_kind("TypeError", "Promise.try called on non-constructor")
+          } else {
+            self.promise_try(this_arg, callback, rest_args)
+          }
+        _ => self.set_error_kind("TypeError", "Promise.try called on non-object")
+      }
+    }
+    "Promise[@@species]" => this_arg
+    "Proxy" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      match target {
+        Object(_) | Function(_) | Array(_) => target
+        _ => self.set_error_kind("TypeError", "Proxy target is not an object")
+      }
+    }
+    "Promise.__resolve__" => {
+      let promise = if args.length() > 0 { args[0] } else { Undefined }
+      let value = if args.length() > 1 { args[1] } else { Undefined }
+      if self.is_promise(promise) {
+        self.promise_resolve_value(promise, value)
+      }
+      Undefined
+    }
+    "Promise.__reject__" => {
+      let promise = if args.length() > 0 { args[0] } else { Undefined }
+      let reason = if args.length() > 1 { args[1] } else { Undefined }
+      if self.is_promise(promise) {
+        self.promise_reject(promise, reason)
+      }
+      Undefined
+    }
+    "Promise.__resolve_once__" => {
+      let token = if args.length() > 0 { args[0] } else { Undefined }
+      let promise = if args.length() > 1 { args[1] } else { Undefined }
+      let value = if args.length() > 2 { args[2] } else { Undefined }
+      match token {
+        Object(_) | Function(_) | Array(_) =>
+          match js_get_prop(token, "__promise_once") {
+            Bool(true) => ()
+            _ => {
+              let _ = js_set_prop(token, "__promise_once", Bool(true))
+              if self.is_promise(promise) {
+                self.promise_resolve_value(promise, value)
+              }
+            }
+          }
+        _ => ()
+      }
+      Undefined
+    }
+    "Promise.__reject_once__" => {
+      let token = if args.length() > 0 { args[0] } else { Undefined }
+      let promise = if args.length() > 1 { args[1] } else { Undefined }
+      let reason = if args.length() > 2 { args[2] } else { Undefined }
+      match token {
+        Object(_) | Function(_) | Array(_) =>
+          match js_get_prop(token, "__promise_once") {
+            Bool(true) => ()
+            _ => {
+              let _ = js_set_prop(token, "__promise_once", Bool(true))
+              if self.is_promise(promise) {
+                self.promise_reject(promise, reason)
+              }
+            }
+          }
+        _ => ()
+      }
+      Undefined
+    }
+    "Promise.__cap_executor__" => {
+      let cap = if args.length() > 0 { args[0] } else { Undefined }
+      let resolve = if args.length() > 1 { args[1] } else { Undefined }
+      let reject = if args.length() > 2 { args[2] } else { Undefined }
+      match cap {
+        Object(_) | Function(_) | Array(_) => {
+          let cur_resolve = js_get_prop(cap, "resolve")
+          let cur_reject = js_get_prop(cap, "reject")
+          if not(cur_resolve.is_undefined()) || not(cur_reject.is_undefined()) {
+            return self.set_error_kind("TypeError", "Promise capability already initialized")
+          }
+          let _ = js_set_prop(cap, "resolve", resolve)
+          let _ = js_set_prop(cap, "reject", reject)
+        }
+        _ => ()
+      }
+      Undefined
+    }
+    "Promise.__return_value__" => {
+      if args.length() > 0 { args[0] } else { Undefined }
+    }
+    "Promise.__throw_reason__" => {
+      let reason = if args.length() > 0 { args[0] } else { Undefined }
+      self.last_error = Some(reason)
+      reason
+    }
+    "Promise.__finally_fulfill__" => {
+      let on_finally = if args.length() > 0 { args[0] } else { Undefined }
+      let ctor = if args.length() > 1 { args[1] } else { self.global_env.get("Promise") }
+      let value = if args.length() > 2 { args[2] } else { Undefined }
+      if self.is_callable(on_finally) {
+        let result = self.call_function(on_finally, Undefined, [])
+        match self.peek_error() {
+          Some(err) => {
+            self.last_error = None
+            self.last_error = Some(err)
+            return err
+          }
+          None => {
+            let result_promise = self.promise_static_resolve_with_ctor(ctor, result)
+            let returner = self.make_bound_native("Promise.__return_value__", [value])
+            return self.promise_then(result_promise, returner, Undefined)
+          }
+        }
+      }
+      value
+    }
+    "Promise.__finally_reject__" => {
+      let on_finally = if args.length() > 0 { args[0] } else { Undefined }
+      let ctor = if args.length() > 1 { args[1] } else { self.global_env.get("Promise") }
+      let reason = if args.length() > 2 { args[2] } else { Undefined }
+      if self.is_callable(on_finally) {
+        let result = self.call_function(on_finally, Undefined, [])
+        match self.peek_error() {
+          Some(err) => {
+            self.last_error = None
+            self.last_error = Some(err)
+            return err
+          }
+          None => {
+            let result_promise = self.promise_static_resolve_with_ctor(ctor, result)
+            let thrower = self.make_bound_native("Promise.__throw_reason__", [reason])
+            return self.promise_then(result_promise, thrower, Undefined)
+          }
+        }
+      }
+      self.last_error = Some(reason)
+      reason
+    }
+    "Promise.__all_fulfill__" => {
+      let state = if args.length() > 0 { args[0] } else { Undefined }
+      let index = if args.length() > 1 { args[1].to_number().to_int() } else { 0 }
+      let already = if args.length() > 2 { args[2] } else { Undefined }
+      let value = if args.length() > 3 { args[3] } else { Undefined }
+      match already {
+        Object(_) | Function(_) | Array(_) =>
+          match js_get_prop(already, "__promise_once") {
+            Bool(true) => return Undefined
+            _ => {
+              let _ = js_set_prop(already, "__promise_once", Bool(true))
+            }
+          }
+        _ => ()
+      }
+      let remaining = match js_get_prop(state, "__all_remaining") {
+        Number(n) => n.to_int()
+        _ => 0
+      }
+      if remaining <= 0 {
+        return Undefined
+      }
+      let results = js_get_prop(state, "__all_results")
+      let _ = self.set_prop_value(results, index.to_string(), value)
+      let next = remaining - 1
+      let _ = js_set_prop(state, "__all_remaining", Number(next.to_double()))
+      if next == 0 {
+        let resolve = js_get_prop(state, "__all_resolve")
+        let _ = self.call_function(resolve, Undefined, [results])
+      }
+      Undefined
+    }
+    "Promise.__all_reject__" => {
+      let state = if args.length() > 0 { args[0] } else { Undefined }
+      let already = if args.length() > 2 { args[2] } else { Undefined }
+      let reason = if args.length() > 3 { args[3] } else { Undefined }
+      match already {
+        Object(_) | Function(_) | Array(_) =>
+          match js_get_prop(already, "__promise_once") {
+            Bool(true) => return Undefined
+            _ => {
+              let _ = js_set_prop(already, "__promise_once", Bool(true))
+            }
+          }
+        _ => ()
+      }
+      let remaining = match js_get_prop(state, "__all_remaining") {
+        Number(n) => n.to_int()
+        _ => 0
+      }
+      if remaining <= 0 {
+        return Undefined
+      }
+      let _ = js_set_prop(state, "__all_remaining", Number(0.0))
+      let reject = js_get_prop(state, "__all_reject")
+      let _ = self.call_function(reject, Undefined, [reason])
+      Undefined
+    }
+    "Promise.__all_settled_fulfill__" => {
+      let state = if args.length() > 0 { args[0] } else { Undefined }
+      let index = if args.length() > 1 { args[1].to_number().to_int() } else { 0 }
+      let already = if args.length() > 2 { args[2] } else { Undefined }
+      let value = if args.length() > 3 { args[3] } else { Undefined }
+      match already {
+        Object(_) | Function(_) | Array(_) =>
+          match js_get_prop(already, "__promise_once") {
+            Bool(true) => return Undefined
+            _ => {
+              let _ = js_set_prop(already, "__promise_once", Bool(true))
+            }
+          }
+        _ => ()
+      }
+      let remaining = match js_get_prop(state, "__all_remaining") {
+        Number(n) => n.to_int()
+        _ => 0
+      }
+      if remaining <= 0 {
+        return Undefined
+      }
+      let entry = self.new_object()
+      let _ = js_set_prop(entry, "status", String("fulfilled"))
+      let _ = js_set_prop(entry, "value", value)
+      let results = js_get_prop(state, "__all_results")
+      let _ = self.set_prop_value(results, index.to_string(), entry)
+      let next = remaining - 1
+      let _ = js_set_prop(state, "__all_remaining", Number(next.to_double()))
+      if next == 0 {
+        let resolve = js_get_prop(state, "__all_resolve")
+        let _ = self.call_function(resolve, Undefined, [results])
+      }
+      Undefined
+    }
+    "Promise.__all_settled_reject__" => {
+      let state = if args.length() > 0 { args[0] } else { Undefined }
+      let index = if args.length() > 1 { args[1].to_number().to_int() } else { 0 }
+      let already = if args.length() > 2 { args[2] } else { Undefined }
+      let reason = if args.length() > 3 { args[3] } else { Undefined }
+      match already {
+        Object(_) | Function(_) | Array(_) =>
+          match js_get_prop(already, "__promise_once") {
+            Bool(true) => return Undefined
+            _ => {
+              let _ = js_set_prop(already, "__promise_once", Bool(true))
+            }
+          }
+        _ => ()
+      }
+      let remaining = match js_get_prop(state, "__all_remaining") {
+        Number(n) => n.to_int()
+        _ => 0
+      }
+      if remaining <= 0 {
+        return Undefined
+      }
+      let entry = self.new_object()
+      let _ = js_set_prop(entry, "status", String("rejected"))
+      let _ = js_set_prop(entry, "reason", reason)
+      let results = js_get_prop(state, "__all_results")
+      let _ = self.set_prop_value(results, index.to_string(), entry)
+      let next = remaining - 1
+      let _ = js_set_prop(state, "__all_remaining", Number(next.to_double()))
+      if next == 0 {
+        let resolve = js_get_prop(state, "__all_resolve")
+        let _ = self.call_function(resolve, Undefined, [results])
+      }
+      Undefined
+    }
+    "Promise.__any_reject__" => {
+      let state = if args.length() > 0 { args[0] } else { Undefined }
+      let index = if args.length() > 1 { args[1].to_number().to_int() } else { 0 }
+      let already = if args.length() > 2 { args[2] } else { Undefined }
+      let reason = if args.length() > 3 { args[3] } else { Undefined }
+      match already {
+        Object(_) | Function(_) | Array(_) =>
+          match js_get_prop(already, "__promise_once") {
+            Bool(true) => return Undefined
+            _ => {
+              let _ = js_set_prop(already, "__promise_once", Bool(true))
+            }
+          }
+        _ => ()
+      }
+      let remaining = match js_get_prop(state, "__any_remaining") {
+        Number(n) => n.to_int()
+        _ => 0
+      }
+      if remaining <= 0 {
+        return Undefined
+      }
+      let errors = js_get_prop(state, "__any_errors")
+      let _ = self.set_prop_value(errors, index.to_string(), reason)
+      let next = remaining - 1
+      let _ = js_set_prop(state, "__any_remaining", Number(next.to_double()))
+      if next == 0 {
+        let reject = js_get_prop(state, "__any_reject")
+        let err = self.make_aggregate_error(errors)
+        let _ = self.call_function(reject, Undefined, [err])
+      }
+      Undefined
+    }
+    "Promise.__race_resolve__" => {
+      let promise = if args.length() > 0 { args[0] } else { Undefined }
+      let value = if args.length() > 1 { args[1] } else { Undefined }
+      if self.is_promise(promise) && self.promise_state(promise) == "pending" {
+        self.promise_resolve_value(promise, value)
+      }
+      Undefined
+    }
+    "Promise.__race_reject__" => {
+      let promise = if args.length() > 0 { args[0] } else { Undefined }
+      let reason = if args.length() > 1 { args[1] } else { Undefined }
+      if self.is_promise(promise) && self.promise_state(promise) == "pending" {
+        self.promise_reject(promise, reason)
+      }
+      Undefined
+    }
+    "Promise.all" => {
+      let iter = if args.length() > 0 { args[0] } else { Undefined }
+      match this_arg {
+        Object(_) | Function(_) => self.promise_all_with_ctor(this_arg, iter, false)
+        _ =>
+          self.set_error_kind(
+            "TypeError",
+            "Promise.all called on non-object",
+          )
+      }
+    }
+    "Promise.race" => {
+      let iter = if args.length() > 0 { args[0] } else { Undefined }
+      match this_arg {
+        Object(_) | Function(_) => self.promise_race_with_ctor(this_arg, iter)
+        _ =>
+          self.set_error_kind(
+            "TypeError",
+            "Promise.race called on non-object",
+          )
+      }
+    }
+    "Promise.allSettled" => {
+      let iter = if args.length() > 0 { args[0] } else { Undefined }
+      match this_arg {
+        Object(_) | Function(_) => self.promise_all_with_ctor(this_arg, iter, true)
+        _ =>
+          self.set_error_kind(
+            "TypeError",
+            "Promise.allSettled called on non-object",
+          )
+      }
+    }
+    "Promise.any" => {
+      let iter = if args.length() > 0 { args[0] } else { Undefined }
+      match this_arg {
+        Object(_) | Function(_) => self.promise_any_with_ctor(this_arg, iter)
+        _ =>
+          self.set_error_kind(
+            "TypeError",
+            "Promise.any called on non-object",
+          )
+      }
+    }
+    "queueMicrotask" => {
+      let callback = if args.length() > 0 { args[0] } else { Undefined }
+      if not(self.is_callable(callback)) {
+        return self.set_error_kind("TypeError", "queueMicrotask callback is not callable")
+      }
+      self.microtasks.push({
+        handler: callback,
+        argument: Undefined,
+        promise: None,
+        is_reject: false,
+      })
+      Undefined
+    }
     "Object" =>
       if args.length() == 0 {
         self.new_object()
@@ -2123,7 +2831,43 @@ fn JSInterpreter::call_native(
         None => receiver
       }
     }
+    "Object.setPrototypeOf" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let proto = if args.length() > 1 { args[1] } else { Undefined }
+      match target {
+        Object(_) | Function(_) | Array(_) => ()
+        _ =>
+          return self.set_error_kind(
+            "TypeError",
+            "Object.setPrototypeOf called on non-object",
+          )
+      }
+      match proto {
+        Object(_) | Function(_) | Array(_) | Null => ()
+        _ =>
+          return self.set_error_kind(
+            "TypeError",
+            "Object.setPrototypeOf called with invalid prototype",
+          )
+      }
+      let _ = js_set_prop(target, "__proto__", proto)
+      target
+    }
     "Iterator.prototype[@@iterator]" => this_arg
+    "Iterator.from" => self.iterator_from(this_arg, args)
+    "Iterator.prototype.map" => self.iterator_map(this_arg, args)
+    "Iterator.prototype.filter" => self.iterator_filter(this_arg, args)
+    "Iterator.prototype.take" => self.iterator_take(this_arg, args)
+    "Iterator.prototype.drop" => self.iterator_drop(this_arg, args)
+    "Iterator.prototype.flatMap" => self.iterator_flat_map(this_arg, args)
+    "Iterator.prototype.forEach" => self.iterator_for_each(this_arg, args)
+    "Iterator.prototype.toArray" => self.iterator_to_array(this_arg, args)
+    "Iterator.prototype.reduce" => self.iterator_reduce(this_arg, args)
+    "Iterator.prototype.every" => self.iterator_every(this_arg, args)
+    "Iterator.prototype.some" => self.iterator_some(this_arg, args)
+    "Iterator.prototype.find" => self.iterator_find(this_arg, args)
+    "IteratorHelper.prototype.next" => self.iterator_helper_next(this_arg, args)
+    "IteratorHelper.prototype.return" => self.iterator_helper_return(this_arg, args)
     "ArrayIterator.prototype.next" => {
       let target = js_get_prop(this_arg, "__iter_target")
       let idx_val = js_get_prop(this_arg, "__iter_index")
@@ -2864,6 +3608,14 @@ fn JSInterpreter::call_native(
         }
       }
     }
+    "Reflect.getOwnPropertyDescriptor" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let key_val = if args.length() > 1 { args[1] } else { Undefined }
+      let call_args : Array[JSValue] = []
+      call_args.push(target)
+      call_args.push(key_val)
+      self.call_native("Object.getOwnPropertyDescriptor", Undefined, call_args)
+    }
     "Math.floor" =>
       if args.length() > 0 {
         Number(args[0].to_number().floor())
@@ -3094,6 +3846,10 @@ fn JSInterpreter::call_native(
       } else {
         Undefined
       }
+    "Test262Error.thrower" => {
+      let msg = if args.length() > 0 { args[0].to_js_string() } else { "Test262Error" }
+      self.set_error_kind("Test262Error", msg)
+    }
     "$262.evalScript" =>
       if args.length() > 0 {
         let code = args[0].to_js_string()
@@ -3196,6 +3952,7 @@ fn JSInterpreter::new_instance(
       } else {
         js_array_from(args.copy())
       }
+    "Promise" => self.promise_construct(args)
     "RegExp" => {
       let pattern_val = if args.length() > 0 { args[0] } else { String("") }
       let flags = if args.length() > 1 { args[1].to_js_string() } else { "" }

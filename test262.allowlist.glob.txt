@@ -9,6 +9,7 @@ test262/test/annexB/built-ins/**
 test262/test/built-ins/Array/**
 test262/test/built-ins/String/**
 test262/test/built-ins/Function/**
+test262/test/built-ins/Promise/**
 test262/test/built-ins/JSON/**
 test262/test/built-ins/Math/**
 

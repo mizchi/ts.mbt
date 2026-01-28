@@ -1,0 +1,1229 @@
+// ============================================
+// expression
+// ============================================
+
+///|
+// / expression (prefer)
+pub fn Parser::parse_expr(self : Parser) -> TsExpr raise ParseError {
+  self.parse_comma()
+}
+
+///|
+// / operator
+fn Parser::parse_comma(self : Parser) -> TsExpr raise ParseError {
+  let mut expr = self.parse_assignment()
+  while self.match_(Comma) {
+    let right = self.parse_assignment()
+    expr = Seq(expr, right)
+  }
+  expr
+}
+
+///|
+// / assignmentexpression
+fn Parser::parse_assignment(self : Parser) -> TsExpr raise ParseError {
+  if (self.check(LBracket) || self.check(LBrace)) &&
+    self.is_destructuring_assignment_start() {
+    let pattern = self.parse_assignment_binding_pattern()
+    let _ = self.expect(Eq)
+    let right = self.parse_assignment()
+    return AssignPattern(pattern, right)
+  }
+  let left = self.parse_ternary()
+  if self.check(Eq) {
+    match left {
+      Var(name) => {
+        let _ = self.advance()
+        let right = self.parse_assignment()
+        AssignExpr(name, right)
+      }
+      PropAccess(obj, prop) => {
+        let _ = self.advance()
+        let right = self.parse_assignment()
+        PropAssignExpr(obj, prop, right)
+      }
+      IndexAccess(obj, index) => {
+        let _ = self.advance()
+        let right = self.parse_assignment()
+        IndexAssignExpr(obj, index, right)
+      }
+      _ => left
+    }
+  } else if self.match_(PlusEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), AddAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), AddAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), AddAssign, right)
+      _ => right
+    }
+  } else if self.match_(MinusEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), SubAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), SubAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), SubAssign, right)
+      _ => right
+    }
+  } else if self.match_(StarEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), MulAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), MulAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), MulAssign, right)
+      _ => right
+    }
+  } else if self.match_(SlashEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), DivAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), DivAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), DivAssign, right)
+      _ => right
+    }
+  } else if self.match_(PercentEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), ModAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), ModAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), ModAssign, right)
+      _ => right
+    }
+  } else if self.match_(AmpEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), BitAndAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), BitAndAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), BitAndAssign, right)
+      _ => right
+    }
+  } else if self.match_(PipeEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), BitOrAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), BitOrAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), BitOrAssign, right)
+      _ => right
+    }
+  } else if self.match_(CaretEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), BitXorAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), BitXorAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), BitXorAssign, right)
+      _ => right
+    }
+  } else if self.match_(LtLtEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), ShlAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), ShlAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), ShlAssign, right)
+      _ => right
+    }
+  } else if self.match_(GtGtEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), ShrAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), ShrAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), ShrAssign, right)
+      _ => right
+    }
+  } else if self.match_(GtGtGtEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), UShrAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), UShrAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), UShrAssign, right)
+      _ => right
+    }
+  } else if self.match_(StarStarEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), PowAssign, right)
+      PropAccess(obj, prop) => CompoundAssignExpr(PropAccess(obj, prop), PowAssign, right)
+      IndexAccess(obj, index) => CompoundAssignExpr(IndexAccess(obj, index), PowAssign, right)
+      _ => right
+    }
+  } else {
+    left
+  }
+}
+
+///|
+fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
+  let saved_pos = self.pos
+  let saved_gen = self.in_generator
+  let mut ok = false
+  try {
+    let _ = self.parse_assignment_binding_pattern()
+    ok = self.check(Eq)
+  } catch {
+    _ => ok = false
+  }
+  self.pos = saved_pos
+  self.in_generator = saved_gen
+  ok
+}
+
+///|
+// / operator: cond ? then : else
+fn Parser::parse_ternary(self : Parser) -> TsExpr raise ParseError {
+  let cond = self.parse_or()
+  if self.match_(Question) {
+    let then_expr = self.parse_expr()
+    let _ = self.expect(Colon)
+    let else_expr = self.parse_expr()
+    Cond(cond, then_expr, else_expr)
+  } else {
+    cond
+  }
+}
+
+///|
+// / || (OR)
+fn Parser::parse_or(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_and()
+  while self.match_(PipePipe) {
+    let right = self.parse_and()
+    left = BinOp(Or, left, right)
+  }
+  left
+}
+
+///|
+// / && (AND)
+fn Parser::parse_and(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_bit_or()
+  while self.match_(AmpAmp) {
+    let right = self.parse_bit_or()
+    left = BinOp(And, left, right)
+  }
+  left
+}
+
+///|
+// / | (OR)
+fn Parser::parse_bit_or(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_bit_xor()
+  while self.match_(Pipe) {
+    let right = self.parse_bit_xor()
+    left = BinOp(BitOr, left, right)
+  }
+  left
+}
+
+///|
+// / ^ (XOR)
+fn Parser::parse_bit_xor(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_bit_and()
+  while self.match_(Caret) {
+    let right = self.parse_bit_and()
+    left = BinOp(BitXor, left, right)
+  }
+  left
+}
+
+///|
+// / & (AND)
+fn Parser::parse_bit_and(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_equality()
+  while self.match_(Amp) {
+    let right = self.parse_equality()
+    left = BinOp(BitAnd, left, right)
+  }
+  left
+}
+
+///|
+// / === !== == != (comparison)
+fn Parser::parse_equality(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_comparison()
+  while true {
+    if self.match_(EqEqEq) {
+      let right = self.parse_comparison()
+      left = BinOp(BinEq, left, right)
+    } else if self.match_(BangEqEq) {
+      let right = self.parse_comparison()
+      left = BinOp(BinNe, left, right)
+    } else if self.match_(EqEq) {
+      let right = self.parse_comparison()
+      left = BinOp(AbstractEq, left, right)
+    } else if self.match_(BangEq) {
+      let right = self.parse_comparison()
+      left = BinOp(AbstractNe, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+// / < <= > >= (comparison)
+fn Parser::parse_comparison(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_shift()
+  while true {
+    if self.match_(Lt) {
+      let right = self.parse_shift()
+      left = BinOp(BinLt, left, right)
+    } else if self.match_(Le) {
+      let right = self.parse_shift()
+      left = BinOp(BinLe, left, right)
+    } else if self.match_(Gt) {
+      let right = self.parse_shift()
+      left = BinOp(BinGt, left, right)
+    } else if self.match_(Ge) {
+      let right = self.parse_shift()
+      left = BinOp(BinGe, left, right)
+    } else if self.match_(Instanceof) {
+      let right = self.parse_shift()
+      left = BinOp(Instanceof, left, right)
+    } else if self.match_(In) {
+      let right = self.parse_shift()
+      left = BinOp(In, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+// / << >> >>> ()
+fn Parser::parse_shift(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_additive()
+  while true {
+    if self.match_(LtLt) {
+      let right = self.parse_additive()
+      left = BinOp(Shl, left, right)
+    } else if self.match_(GtGt) {
+      let right = self.parse_additive()
+      left = BinOp(Shr, left, right)
+    } else if self.match_(GtGtGt) {
+      let right = self.parse_additive()
+      left = BinOp(UShr, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+// / + - ()
+fn Parser::parse_additive(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_multiplicative()
+  while true {
+    if self.match_(Plus) {
+      let right = self.parse_multiplicative()
+      left = BinOp(Add, left, right)
+    } else if self.match_(Minus) {
+      let right = self.parse_multiplicative()
+      left = BinOp(Sub, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+// / * / % ()
+fn Parser::parse_multiplicative(self : Parser) -> TsExpr raise ParseError {
+  let mut left = self.parse_exponent()
+  while true {
+    if self.match_(Star) {
+      let right = self.parse_exponent()
+      left = BinOp(Mul, left, right)
+    } else if self.match_(Slash) {
+      let right = self.parse_exponent()
+      left = BinOp(Div, left, right)
+    } else if self.match_(Percent) {
+      let right = self.parse_exponent()
+      left = BinOp(Mod, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+// / ** ()
+fn Parser::parse_exponent(self : Parser) -> TsExpr raise ParseError {
+  let left = self.parse_unary()
+  if self.match_(StarStar) {
+    let right = self.parse_exponent()
+    BinOp(Pow, left, right)
+  } else {
+    left
+  }
+}
+
+///|
+// / unaryoperator
+fn Parser::parse_unary(self : Parser) -> TsExpr raise ParseError {
+  if self.match_(Minus) {
+    let operand = self.parse_unary()
+    UnaryOp(Neg, operand)
+  } else if self.match_(Plus) {
+    let operand = self.parse_unary()
+    UnaryOp(Plus, operand)
+  } else if self.match_(Typeof) {
+    let operand = self.parse_unary()
+    UnaryOp(Typeof, operand)
+  } else if self.match_(Delete) {
+    let operand = self.parse_unary()
+    UnaryOp(Delete, operand)
+  } else if self.match_(VoidType) {
+    let operand = self.parse_unary()
+    UnaryOp(Void, operand)
+  } else if self.match_(Bang) {
+    let operand = self.parse_unary()
+    UnaryOp(Not, operand)
+  } else if self.match_(PlusPlus) {
+    // ++x ()
+    let operand = self.parse_unary()
+    UnaryOp(PreInc, operand)
+  } else if self.match_(MinusMinus) {
+    // --x ()
+    let operand = self.parse_unary()
+    UnaryOp(PreDec, operand)
+  } else if self.match_(Yield) {
+    if self.in_generator {
+      if self.match_(Star) {
+        let expr = self.parse_assignment()
+        YieldStar(expr)
+      } else {
+        let expr =
+          if self.check(Semicolon) ||
+            self.check(Comma) ||
+            self.check(RParen) ||
+            self.check(RBracket) ||
+            self.check(RBrace) {
+            None
+          } else {
+            Some(self.parse_unary())
+          }
+        Yield(expr)
+      }
+    } else {
+      Var("yield")
+    }
+  } else {
+    self.parse_postfix()
+  }
+}
+
+///|
+// / operator (x++, x--)
+fn Parser::parse_postfix(self : Parser) -> TsExpr raise ParseError {
+  let mut expr = self.parse_call()
+  while true {
+    if self.match_(PlusPlus) {
+      expr = UnaryOp(PostInc, expr)
+    } else if self.match_(MinusMinus) {
+      expr = UnaryOp(PostDec, expr)
+    } else {
+      break
+    }
+  }
+  expr
+}
+
+///|
+// / function, array, property, method
+fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
+  let mut expr = self.parse_primary()
+
+  // operatorcheck
+  while true {
+    if self.match_(LParen) {
+      // function or method
+      let args = self.parse_args()
+      let _ = self.expect(RParen)
+      match expr {
+        Var(name) => {
+          expr = Call(name, args)
+        }
+        PropAccess(receiver, method_name) => {
+          // method: receiver.method(args)
+          expr = MethodCall(receiver, method_name, args)
+        }
+        _ => {
+          expr = CallExpr(expr, args)
+        }
+      }
+    } else if self.match_(LBracket) {
+      // array
+      let index = self.parse_expr()
+      let _ = self.expect(RBracket)
+      expr = IndexAccess(expr, index)
+    } else if self.check(Dot) {
+      // property
+      let _ = self.advance()
+      let prop = match self.advance().kind {
+        Ident(name) => name
+        Return => "return"
+        If => "if"
+        Else => "else"
+        For => "for"
+        While => "while"
+        Switch => "switch"
+        Case => "case"
+        Default => "default"
+        With => "with"
+        Debugger => "debugger"
+        Import => "import"
+        Export => "export"
+        From => "from"
+        As => "as"
+        Break => "break"
+        Continue => "continue"
+        Function => "function"
+        Do => "do"
+        Try => "try"
+        Catch => "catch"
+        Finally => "finally"
+        Throw => "throw"
+        Delete => "delete"
+        Yield => "yield"
+        Let => "let"
+        Const => "const"
+        Var => "var"
+        New => "new"
+        Typeof => "typeof"
+        Of => "of"
+        In => "in"
+        Class => "class"
+        Declare => "declare"
+        Interface => "interface"
+        Instanceof => "instanceof"
+        NumberType => "number"
+        BooleanType => "boolean"
+        StringType => "string"
+        VoidType => "void"
+        IntType => "int"
+        Type => "type"
+        Extends => "extends"
+        k => raise ParseError("Expected property name, got \{k}")
+      }
+      expr = PropAccess(expr, prop)
+    } else {
+      break
+    }
+  }
+  expr
+}
+
+///|
+// / argument
+fn Parser::parse_args(self : Parser) -> Array[TsExpr] raise ParseError {
+  let args : Array[TsExpr] = []
+  if not(self.check(RParen)) {
+    if self.match_ellipsis() {
+      args.push(self.parse_assignment())
+    } else {
+      args.push(self.parse_assignment())
+    }
+    while self.match_(Comma) {
+      if self.check(RParen) {
+        break
+      }
+      if self.match_ellipsis() {
+        args.push(self.parse_assignment())
+      } else {
+        args.push(self.parse_assignment())
+      }
+    }
+  }
+  args
+}
+
+///|
+// / expression (literal, variable, , array, new)
+fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
+  let tok = self.peek()
+  match tok.kind {
+    Class => self.parse_class_stub()
+    Number(n) => {
+      let _ = self.advance()
+      NumberLit(n)
+    }
+    Int(i) => {
+      let _ = self.advance()
+      IntLit(i)
+    }
+    Bool(b) => {
+      let _ = self.advance()
+      BoolLit(b)
+    }
+    NumberType => {
+      let _ = self.advance()
+      Var("number")
+    }
+    BooleanType => {
+      let _ = self.advance()
+      Var("boolean")
+    }
+    StringType => {
+      let _ = self.advance()
+      Var("string")
+    }
+    VoidType => {
+      let _ = self.advance()
+      Var("void")
+    }
+    IntType => {
+      let _ = self.advance()
+      Var("int")
+    }
+    Type => {
+      let _ = self.advance()
+      Var("type")
+    }
+    Str(s) => {
+      let _ = self.advance()
+      StringLit(s)
+    }
+    Regex(pattern, flags) => {
+      let _ = self.advance()
+      let args : Array[TsExpr] = []
+      args.push(StringLit(pattern))
+      if flags != "" {
+        args.push(StringLit(flags))
+      }
+      New("RegExp", args)
+    }
+    Ident(name) => {
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        let _ = self.expect(Arrow)
+        let body = if self.check(LBrace) {
+          let block = self.parse_block()
+          ArrowBlock(block)
+        } else {
+          let expr = self.parse_assignment()
+          ArrowExpr(expr)
+        }
+        ArrowFunc(
+          [{
+            name,
+            binding: Some(TsBinding::Ident(name)),
+            is_rest: false,
+            type_: Any,
+            default: None,
+          }],
+          body,
+        )
+      } else {
+        let _ = self.advance()
+        Var(name)
+      }
+    }
+    LParen =>
+      // functioncheck
+      if self.is_arrow_function() {
+        // function: (params) => body
+        let _ = self.advance() // (
+        let params = self.parse_params()
+        let _ = self.expect(RParen)
+        let _ = self.expect(Arrow)
+        // : blockexpression
+        let body = if self.check(LBrace) {
+          let block = self.parse_block()
+          ArrowBlock(block)
+        } else {
+          let expr = self.parse_assignment()
+          ArrowExpr(expr)
+        }
+        ArrowFunc(params, body)
+      } else {
+        // regularexpression
+        let _ = self.advance()
+        let expr = self.parse_expr()
+        let _ = self.expect(RParen)
+        expr
+      }
+    LBracket => {
+      // arrayliteral: [1, 2, 3]
+      let _ = self.advance()
+      let elements : Array[TsExpr] = []
+      while not(self.check(RBracket)) {
+        if self.match_ellipsis() {
+          elements.push(self.parse_assignment())
+          if self.match_(Comma) {
+            if self.check(RBracket) {
+              break
+            }
+            continue
+          }
+          break
+        }
+        if self.check(Comma) {
+          let _ = self.advance()
+          elements.push(ArrayHole)
+          continue
+        }
+        elements.push(self.parse_assignment())
+        if self.match_(Comma) {
+          if self.check(RBracket) {
+            break
+          }
+          continue
+        } else {
+          break
+        }
+      }
+      let _ = self.expect(RBracket)
+      ArrayLit(elements)
+    }
+    New => {
+      // new expression: new Array<number>(10)
+      let _ = self.advance()
+      if self.match_(Dot) {
+        let prop = match self.advance().kind {
+          Ident(n) => n
+          Return => "return"
+          If => "if"
+          Else => "else"
+          For => "for"
+          While => "while"
+          Switch => "switch"
+          Case => "case"
+          Default => "default"
+          With => "with"
+          Debugger => "debugger"
+          Import => "import"
+          Export => "export"
+          From => "from"
+          As => "as"
+          Break => "break"
+          Continue => "continue"
+          Function => "function"
+          Do => "do"
+          Try => "try"
+          Catch => "catch"
+          Finally => "finally"
+          Throw => "throw"
+          Delete => "delete"
+          Yield => "yield"
+          Let => "let"
+          Const => "const"
+          Var => "var"
+          New => "new"
+          Typeof => "typeof"
+          Of => "of"
+          In => "in"
+          Class => "class"
+          Declare => "declare"
+          Interface => "interface"
+          Instanceof => "instanceof"
+          NumberType => "number"
+          BooleanType => "boolean"
+          StringType => "string"
+          VoidType => "void"
+          IntType => "int"
+          Type => "type"
+          Extends => "extends"
+          k => raise ParseError("Expected property name, got \{k}")
+        }
+        return PropAccess(Var("new"), prop)
+      }
+      let mut type_name = ""
+      let mut callee_expr : TsExpr? = None
+      match self.peek().kind {
+        Ident(_) => {
+          let first = match self.advance().kind {
+            Ident(n) => n
+            _ => "<call>"
+          }
+          type_name = first
+          let mut expr : TsExpr = Var(first)
+          // allow dotted constructor name: new obj.Type()
+          while self.match_(Dot) {
+            let part = match self.advance().kind {
+              Ident(n) => n
+              k => raise ParseError("Expected identifier after '.', got \{k}")
+            }
+            type_name = type_name + "." + part
+            expr = PropAccess(expr, part)
+          }
+          callee_expr = Some(expr)
+          // typeparameter (simpleimplementation)
+          if self.match_(Lt) {
+            let _ = self.parse_type()
+            let _ = self.expect(Gt)
+          }
+        }
+        NumberType => {
+          let _ = self.advance()
+          type_name = "number"
+        }
+        BooleanType => {
+          let _ = self.advance()
+          type_name = "boolean"
+        }
+        StringType => {
+          let _ = self.advance()
+          type_name = "string"
+        }
+        VoidType => {
+          let _ = self.advance()
+          type_name = "void"
+        }
+        IntType => {
+          let _ = self.advance()
+          type_name = "int"
+        }
+        Type => {
+          let _ = self.advance()
+          type_name = "type"
+        }
+        LParen => {
+          let _ = self.advance()
+          let expr = self.parse_expr()
+          let _ = self.expect(RParen)
+          callee_expr = Some(expr)
+          type_name = "<call>"
+        }
+        Number(_) | Int(_) | Str(_) | Bool(_) | Null => {
+          let expr = self.parse_primary()
+          callee_expr = Some(expr)
+          type_name = "<call>"
+        }
+        Function => {
+          let func = self.parse_function_expr()
+          callee_expr = Some(FuncExpr(func))
+          type_name = "<call>"
+        }
+        Class => {
+          let expr = self.parse_class_stub()
+          callee_expr = Some(expr)
+          type_name = "<class>"
+        }
+        New => {
+          let expr = self.parse_primary()
+          callee_expr = Some(expr)
+          type_name = "<call>"
+        }
+        k => raise ParseError("Expected type name after new, got \{k}")
+      }
+      // If we can derive a dotted name from the callee expression, prefer it.
+      match callee_expr {
+        Some(expr) =>
+          match expr {
+            Var(n) => type_name = n
+            PropAccess(Var(obj), prop) => type_name = obj + "." + prop
+            _ => ()
+          }
+        None => ()
+      }
+      let args =
+        if self.check(LParen) {
+          let _ = self.expect(LParen)
+          let args = self.parse_args()
+          let _ = self.expect(RParen)
+          args
+        } else {
+          []
+        }
+      match callee_expr {
+        Some(expr) =>
+          match expr {
+            Var(_) => New(type_name, args)
+            _ => NewExpr(expr, args)
+          }
+        None => New(type_name, args)
+      }
+    }
+    LBrace => {
+      // objectliteral: { key: value, ... }
+      let _ = self.advance()
+      let fields : Array[(String, TsExpr)] = []
+      if not(self.check(RBrace)) {
+        if self.match_ellipsis() {
+          let _ = self.parse_assignment()
+        } else {
+        // field
+        let mut is_ident_key = false
+        let _ = self.match_(Star)
+        let key = if self.match_(LBracket) {
+          let key_expr = self.parse_assignment()
+          let _ = self.expect(RBracket)
+          self.computed_key_name(key_expr)
+        } else {
+          match self.advance().kind {
+            Ident(n) => {
+              is_ident_key = true
+              n
+            }
+            Str(s) => s
+            Int(i) => i.to_string()
+            Number(n) => n.to_string()
+            Yield => "yield"
+            Return => "return"
+            If => "if"
+            Else => "else"
+            For => "for"
+            While => "while"
+            Switch => "switch"
+            Case => "case"
+            Default => "default"
+            With => "with"
+            Debugger => "debugger"
+            Import => "import"
+            Export => "export"
+            From => "from"
+            As => "as"
+            Break => "break"
+            Continue => "continue"
+            Function => "function"
+            Do => "do"
+            Try => "try"
+            Catch => "catch"
+            Finally => "finally"
+            Throw => "throw"
+            Delete => "delete"
+            Let => "let"
+            Const => "const"
+            Var => "var"
+            New => "new"
+            Typeof => "typeof"
+            Of => "of"
+            In => "in"
+            Declare => "declare"
+            Interface => "interface"
+            Class => "class"
+            Instanceof => "instanceof"
+            NumberType => "number"
+            BooleanType => "boolean"
+            StringType => "string"
+            VoidType => "void"
+            IntType => "int"
+            Type => "type"
+            Extends => "extends"
+            k => raise ParseError("Expected property name, got \{k}")
+          }
+        }
+        let mut prop_key = key
+        let value =
+          if is_ident_key &&
+            (prop_key == "get" || prop_key == "set") &&
+            not(self.check(Colon)) &&
+            not(self.check(LParen)) &&
+            not(self.check(Comma)) &&
+            not(self.check(RBrace)) {
+            let acc_key = if self.match_(LBracket) {
+              let key_expr = self.parse_assignment()
+              let _ = self.expect(RBracket)
+              self.computed_key_name(key_expr)
+            } else {
+              match self.advance().kind {
+                Ident(n) => n
+                Str(s) => s
+                Int(i) => i.to_string()
+                Number(n) => n.to_string()
+                Yield => "yield"
+                Return => "return"
+                If => "if"
+                Else => "else"
+                For => "for"
+                While => "while"
+                Switch => "switch"
+                Case => "case"
+                Default => "default"
+                With => "with"
+                Debugger => "debugger"
+                Import => "import"
+                Export => "export"
+                From => "from"
+                As => "as"
+                Break => "break"
+                Continue => "continue"
+                Function => "function"
+                Do => "do"
+                Try => "try"
+                Catch => "catch"
+                Finally => "finally"
+                Throw => "throw"
+                Delete => "delete"
+                Let => "let"
+                Const => "const"
+                Var => "var"
+                New => "new"
+                Typeof => "typeof"
+                Of => "of"
+                In => "in"
+                Declare => "declare"
+                Interface => "interface"
+                Class => "class"
+                Instanceof => "instanceof"
+                NumberType => "number"
+                BooleanType => "boolean"
+                StringType => "string"
+                VoidType => "void"
+                IntType => "int"
+                Type => "type"
+                Extends => "extends"
+                k => raise ParseError("Expected property name, got \{k}")
+              }
+            }
+            let is_getter = prop_key == "get"
+            let func_name = acc_key
+            prop_key =
+              if is_getter {
+                "@@get:" + acc_key
+              } else {
+                "@@set:" + acc_key
+              }
+            let _ = self.expect(LParen)
+            let params = self.parse_params()
+            let _ = self.expect(RParen)
+            let return_type = if self.check(Colon) {
+              let _ = self.advance()
+              self.parse_type()
+            } else {
+              Any
+            }
+            let body = self.parse_block()
+            FuncExpr({
+              name: func_name,
+              params,
+              return_type,
+              body,
+              is_generator: false,
+            })
+          } else if self.match_(Colon) {
+            self.parse_assignment()
+          } else if is_ident_key && self.match_(Eq) {
+            self.parse_assignment()
+          } else if self.check(LParen) {
+            let _ = self.expect(LParen)
+            let params = self.parse_params()
+            let _ = self.expect(RParen)
+            let return_type = if self.check(Colon) {
+              let _ = self.advance()
+              self.parse_type()
+            } else {
+              Any
+            }
+            let body = self.parse_block()
+            FuncExpr({
+              name: prop_key,
+              params,
+              return_type,
+              body,
+              is_generator: false,
+            })
+          } else if is_ident_key && (self.check(Comma) || self.check(RBrace)) {
+            Var(prop_key)
+          } else {
+            raise ParseError("Expected Colon, got \{self.peek().kind}")
+          }
+        fields.push((prop_key, value))
+        }
+        // field
+        while self.match_(Comma) {
+          if self.check(RBrace) {
+            break // trailing comma
+          }
+          if self.match_ellipsis() {
+            let _ = self.parse_assignment()
+            continue
+          }
+          let mut is_ident_key = false
+          let _ = self.match_(Star)
+          let key = if self.match_(LBracket) {
+            let key_expr = self.parse_assignment()
+            let _ = self.expect(RBracket)
+            self.computed_key_name(key_expr)
+          } else {
+            match self.advance().kind {
+              Ident(n) => {
+                is_ident_key = true
+                n
+              }
+              Str(s) => s
+              Int(i) => i.to_string()
+              Number(n) => n.to_string()
+              Return => "return"
+              If => "if"
+              Else => "else"
+              For => "for"
+              While => "while"
+              Switch => "switch"
+              Case => "case"
+              Default => "default"
+              With => "with"
+              Debugger => "debugger"
+              Import => "import"
+              Export => "export"
+              From => "from"
+              As => "as"
+              Break => "break"
+              Continue => "continue"
+              Function => "function"
+              Do => "do"
+              Try => "try"
+              Catch => "catch"
+              Finally => "finally"
+              Throw => "throw"
+              Delete => "delete"
+              Yield => "yield"
+              Let => "let"
+              Const => "const"
+              Var => "var"
+              New => "new"
+              Typeof => "typeof"
+              Of => "of"
+              In => "in"
+              Declare => "declare"
+              Interface => "interface"
+              Class => "class"
+              Instanceof => "instanceof"
+              NumberType => "number"
+              BooleanType => "boolean"
+              StringType => "string"
+              VoidType => "void"
+              IntType => "int"
+              Type => "type"
+              Extends => "extends"
+              k => raise ParseError("Expected property name, got \{k}")
+            }
+          }
+          let mut prop_key = key
+          let value =
+            if is_ident_key &&
+              (prop_key == "get" || prop_key == "set") &&
+              not(self.check(Colon)) &&
+              not(self.check(LParen)) &&
+              not(self.check(Comma)) &&
+              not(self.check(RBrace)) {
+              let acc_key = if self.match_(LBracket) {
+                let key_expr = self.parse_assignment()
+                let _ = self.expect(RBracket)
+                self.computed_key_name(key_expr)
+              } else {
+                match self.advance().kind {
+                  Ident(n) => n
+                  Str(s) => s
+                  Int(i) => i.to_string()
+                  Number(n) => n.to_string()
+                  Return => "return"
+                  If => "if"
+                  Else => "else"
+                  For => "for"
+                  While => "while"
+                  Switch => "switch"
+                  Case => "case"
+                  Default => "default"
+                  With => "with"
+                  Debugger => "debugger"
+                  Import => "import"
+                  Export => "export"
+                  From => "from"
+                  As => "as"
+                  Break => "break"
+                  Continue => "continue"
+                  Function => "function"
+                  Do => "do"
+                  Try => "try"
+                  Catch => "catch"
+                  Finally => "finally"
+                  Throw => "throw"
+                  Delete => "delete"
+                  Yield => "yield"
+                  Let => "let"
+                  Const => "const"
+                  Var => "var"
+                  New => "new"
+                  Typeof => "typeof"
+                  Of => "of"
+                  In => "in"
+                  Declare => "declare"
+                  Interface => "interface"
+                  Class => "class"
+                  Instanceof => "instanceof"
+                  NumberType => "number"
+                  BooleanType => "boolean"
+                  StringType => "string"
+                  VoidType => "void"
+                  IntType => "int"
+                  Type => "type"
+                  Extends => "extends"
+                  k => raise ParseError("Expected property name, got \{k}")
+                }
+              }
+            let is_getter = prop_key == "get"
+            let func_name = acc_key
+            prop_key =
+              if is_getter {
+                "@@get:" + acc_key
+              } else {
+                "@@set:" + acc_key
+              }
+            let _ = self.expect(LParen)
+            let params = self.parse_params()
+            let _ = self.expect(RParen)
+              let return_type = if self.check(Colon) {
+                let _ = self.advance()
+                self.parse_type()
+              } else {
+                Any
+              }
+            let body = self.parse_block()
+            FuncExpr({
+              name: func_name,
+              params,
+              return_type,
+              body,
+              is_generator: false,
+            })
+            } else if self.match_(Colon) {
+              self.parse_assignment()
+            } else if is_ident_key && self.match_(Eq) {
+              self.parse_assignment()
+            } else if self.check(LParen) {
+              let _ = self.expect(LParen)
+              let params = self.parse_params()
+              let _ = self.expect(RParen)
+              let return_type = if self.check(Colon) {
+                let _ = self.advance()
+                self.parse_type()
+              } else {
+                Any
+              }
+              let body = self.parse_block()
+              FuncExpr({
+                name: prop_key,
+                params,
+                return_type,
+                body,
+                is_generator: false,
+              })
+            } else if is_ident_key && (self.check(Comma) || self.check(RBrace)) {
+              Var(prop_key)
+            } else {
+              raise ParseError("Expected Colon, got \{self.peek().kind}")
+            }
+          fields.push((prop_key, value))
+        }
+      }
+      let _ = self.expect(RBrace)
+      ObjectLit(fields)
+    }
+    Function => {
+      let func = self.parse_function_expr()
+      FuncExpr(func)
+    }
+    Null => {
+      // null literal
+      let _ = self.advance()
+      NullLit
+    }
+    _ => raise ParseError("Unexpected token: \{tok.kind}")
+  }
+}
+

@@ -188,6 +188,7 @@ fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
     @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // objectliteral @parser.TsType::Any
     @parser.TsExpr::Var(_) => @parser.TsType::Any // variablestatement
     @parser.TsExpr::Yield(_) => @parser.TsType::Any
+    @parser.TsExpr::YieldStar(_) => @parser.TsType::Any
     @parser.TsExpr::Seq(_, right) => infer_literal_type(right)
     @parser.TsExpr::PropAssignExpr(_, _, value) => infer_literal_type(value)
     @parser.TsExpr::IndexAssignExpr(_, _, value) => infer_literal_type(value)
@@ -383,6 +384,7 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
     @parser.TsExpr::IndexAssignExpr(_, _, value) => infer_type(ctx, value)
     @parser.TsExpr::CompoundAssignExpr(left, _, _) => infer_type(ctx, left)
     @parser.TsExpr::Yield(_) => @parser.TsType::Any
+    @parser.TsExpr::YieldStar(_) => @parser.TsType::Any
     @parser.TsExpr::Var(name) =>
       match ctx.get_local(name) {
         Some(local_var) => local_var.type_
@@ -565,6 +567,8 @@ fn compile_expr(
       }
     @parser.TsExpr::Yield(_) =>
       raise CodeGenError("yield is not supported in Wasm compiler (use interpreter)")
+    @parser.TsExpr::YieldStar(_) =>
+      raise CodeGenError("yield* is not supported in Wasm compiler (use interpreter)")
     @parser.TsExpr::Seq(_, _) =>
       raise CodeGenError(
         "comma operator is not supported in Wasm compiler (use interpreter)",

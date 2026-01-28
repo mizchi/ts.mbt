@@ -25,6 +25,7 @@ pub fn JSInterpreter::new() -> JSInterpreter {
     function_proto,
     generators: [],
     current_gen_id: None,
+    microtasks: [],
   }
   interp.install_builtins()
   interp
