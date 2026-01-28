@@ -11,7 +11,7 @@ fn JSInterpreter::get_proto(_self : JSInterpreter, value : JSValue) -> JSValue? 
 
 ///|
 // / propertyget()
-fn JSInterpreter::get_prop_value(self : JSInterpreter, obj : JSValue, key : String) -> JSValue {
+pub fn JSInterpreter::get_prop_value(self : JSInterpreter, obj : JSValue, key : String) -> JSValue {
   self.get_prop_value_with_receiver(obj, obj, key)
 }
 

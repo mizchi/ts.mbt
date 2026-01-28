@@ -320,6 +320,48 @@ pub(all) struct TsModule {
   imports : Array[TsImport] // externalimport
 } derive(Show)
 
+///|
+// / module import declaration
+pub(all) struct TsImportDecl {
+  module_spec : String
+  default_binding : String?
+  namespace_binding : String?
+  named_bindings : Array[(String, String)] // imported, local
+  side_effect_only : Bool
+  type_only : Bool
+} derive(Show)
+
+///|
+// / module export specifier
+pub(all) struct TsExportSpec {
+  local_name : String
+  export_name : String
+} derive(Show)
+
+///|
+// / module re-export kind
+pub(all) enum TsReExportKind {
+  Named(Array[(String, String)]) // imported, exported
+  All
+  Namespace(String) // export * as name from "mod"
+} derive(Show)
+
+///|
+// / module re-export specifier
+pub(all) struct TsReExportSpec {
+  module_spec : String
+  kind : TsReExportKind
+} derive(Show)
+
+///|
+// / module block with import/export metadata
+pub(all) struct TsModuleBlock {
+  block : TsBlock
+  imports : Array[TsImportDecl]
+  exports : Array[TsExportSpec]
+  reexports : Array[TsReExportSpec]
+} derive(Show)
+
 // ============================================
 // Typed AST (type-resolved)
 // ============================================

@@ -534,9 +534,35 @@ pub fn js_new_object() -> JSValue {
 }
 
 ///|
+// / stringcreate
+pub fn js_string(value : String) -> JSValue {
+  String(value)
+}
+
+///|
 // / objectcreate
 pub fn js_new_object_with_proto(proto : JSValue?) -> JSValue {
   Object({ id: fresh_object_id(), props: [], prototype: proto })
+}
+
+///|
+// / nativefunctioncreate
+pub fn js_new_native_function_with_env(
+  name : String,
+  env : JSEnv,
+  object_proto : JSValue?,
+) -> JSValue {
+  JSValue::Function({
+    id: fresh_function_id(),
+    params: [],
+    body: Native(name),
+    env,
+    is_arrow: false,
+    is_strict: false,
+    is_generator: false,
+    props: [],
+    object_proto,
+  })
 }
 
 ///|
@@ -558,6 +584,31 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
       }
       for prop in closure.props {
         if prop.key == key {
+          match prop.get {
+            Some(getter) =>
+              match getter {
+                Function(getter_closure) =>
+                  match getter_closure.body {
+                    Native(name) =>
+                      if name == "__export_get__" {
+                        let name_val = js_get_prop(getter, "__export_name")
+                        let module_val = js_get_prop(getter, "__export_module")
+                        match (module_val, name_val) {
+                          (Object(_) | Function(_) | Array(_), String(n)) =>
+                            return js_get_prop(module_val, n)
+                          _ => ()
+                        }
+                        match name_val {
+                          String(n) => return getter_closure.env.get(n)
+                          _ => ()
+                        }
+                      }
+                    _ => ()
+                  }
+                _ => ()
+              }
+            None => ()
+          }
           return prop.value
         }
       }
@@ -576,6 +627,31 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
       // propertylookup
       for prop in map.props {
         if prop.key == key {
+          match prop.get {
+            Some(getter) =>
+              match getter {
+                Function(getter_closure) =>
+                  match getter_closure.body {
+                    Native(name) =>
+                      if name == "__export_get__" {
+                        let name_val = js_get_prop(getter, "__export_name")
+                        let module_val = js_get_prop(getter, "__export_module")
+                        match (module_val, name_val) {
+                          (Object(_) | Function(_) | Array(_), String(n)) =>
+                            return js_get_prop(module_val, n)
+                          _ => ()
+                        }
+                        match name_val {
+                          String(n) => return getter_closure.env.get(n)
+                          _ => ()
+                        }
+                      }
+                    _ => ()
+                  }
+                _ => ()
+              }
+            None => ()
+          }
           return prop.value
         }
       }
@@ -601,6 +677,31 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
         } else {
           for prop in arr.props {
             if prop.key == key {
+              match prop.get {
+                Some(getter) =>
+                  match getter {
+                    Function(getter_closure) =>
+                      match getter_closure.body {
+                        Native(name) =>
+                          if name == "__export_get__" {
+                            let name_val = js_get_prop(getter, "__export_name")
+                            let module_val = js_get_prop(getter, "__export_module")
+                            match (module_val, name_val) {
+                              (Object(_) | Function(_) | Array(_), String(n)) =>
+                                return js_get_prop(module_val, n)
+                              _ => ()
+                            }
+                            match name_val {
+                              String(n) => return getter_closure.env.get(n)
+                              _ => ()
+                            }
+                          }
+                        _ => ()
+                      }
+                    _ => ()
+                  }
+                None => ()
+              }
               return prop.value
             }
           }
@@ -1455,6 +1556,23 @@ pub fn JSEnv::set(self : JSEnv, name : String, value : JSValue) -> Bool {
     Some(parent) => parent.set(name, value)
     None => false
   }
+}
+
+///|
+// / variableforceupdate
+pub fn JSEnv::force_set(self : JSEnv, name : String, value : JSValue) -> Bool {
+  let len = self.bindings.length()
+  let mut i = len - 1
+  while i >= 0 {
+    if self.bindings[i].name == name {
+      self.bindings[i].value = value
+      self.bindings[i].is_uninitialized = false
+      return true
+    }
+    i -= 1
+  }
+  self.define_var(name, value)
+  true
 }
 
 ///|

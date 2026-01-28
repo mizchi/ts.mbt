@@ -9,6 +9,10 @@
       "path": "moonbitlang/typescript/runtime",
       "alias": "runtime"
     },
+    {
+      "path": "moonbitlang/typescript/parser",
+      "alias": "parser"
+    },
   ],
   "test-import": [
     "moonbitlang/core/bench",

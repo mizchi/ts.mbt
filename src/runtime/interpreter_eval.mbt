@@ -1684,7 +1684,7 @@ fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @parser.TsStmt, env : 
 }
 
 ///|
-fn JSInterpreter::hoist_block(self : JSInterpreter, block : @parser.TsBlock, env : JSEnv) -> Unit {
+pub fn JSInterpreter::hoist_block(self : JSInterpreter, block : @parser.TsBlock, env : JSEnv) -> Unit {
   for stmt in block.stmts {
     self.hoist_stmt(stmt, env)
   }
@@ -4379,7 +4379,22 @@ pub fn JSInterpreter::call_function(
             Some(val) => val
             None => Undefined
           }
-        Native(name) => self.call_native(name, this_arg, args)
+        Native(name) =>
+          if name == "__export_get__" {
+            let name_val = js_get_prop(func, "__export_name")
+            let module_val = js_get_prop(func, "__export_module")
+            match (module_val, name_val) {
+              (Object(_) | Function(_) | Array(_), String(n)) =>
+                js_get_prop(module_val, n)
+              _ =>
+                match name_val {
+                  String(n) => closure.env.get(n)
+                  _ => Undefined
+                }
+            }
+          } else {
+            self.call_native(name, this_arg, args)
+          }
         Bound(target, bound_this, bound_args) => {
           let merged : Array[JSValue] = []
           for item in bound_args {
