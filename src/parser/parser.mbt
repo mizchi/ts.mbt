@@ -139,6 +139,8 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
     | Continue
     | Case
     | Default
+    | With
+    | Debugger
     | Try
     | Throw
     | Function
@@ -243,6 +245,14 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
     Default => {
       let _ = self.advance()
       "default"
+    }
+    With => {
+      let _ = self.advance()
+      "with"
+    }
+    Debugger => {
+      let _ = self.advance()
+      "debugger"
     }
     k => raise ParseError("Expected identifier, got \{k}")
   }
@@ -356,6 +366,8 @@ fn Parser::parse_object_binding_key(self : Parser) -> String raise ParseError {
     Switch => "switch"
     Case => "case"
     Default => "default"
+    With => "with"
+    Debugger => "debugger"
     Catch => "catch"
     Finally => "finally"
     Throw => "throw"
@@ -1779,6 +1791,8 @@ pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
     Class => self.parse_class_decl()
     If => self.parse_if()
     Switch => self.parse_switch()
+    With => self.parse_with()
+    Debugger => self.parse_debugger()
     Do => self.parse_do_while()
     While => self.parse_while()
     For => self.parse_for()
@@ -2064,6 +2078,23 @@ fn Parser::parse_switch(self : Parser) -> TsStmt raise ParseError {
   }
   let _ = self.expect(RBrace)
   Switch(expr, cases)
+}
+
+///|
+fn Parser::parse_with(self : Parser) -> TsStmt raise ParseError {
+  let _ = self.expect(With)
+  let _ = self.expect(LParen)
+  let obj_expr = self.parse_expr()
+  let _ = self.expect(RParen)
+  let body = self.parse_block_or_stmt()
+  With(obj_expr, body)
+}
+
+///|
+fn Parser::parse_debugger(self : Parser) -> TsStmt raise ParseError {
+  let _ = self.expect(Debugger)
+  self.consume_semicolon()
+  Debugger
 }
 
 ///|

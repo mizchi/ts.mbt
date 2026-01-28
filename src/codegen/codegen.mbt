@@ -1959,6 +1959,9 @@ fn compile_stmt(
     @parser.TsStmt::While(cond, body) => compile_while(ctx, cond, body, return_type)
     @parser.TsStmt::Switch(_, _) =>
       raise CodeGenError("switch is not supported in Wasm compiler")
+    @parser.TsStmt::With(_, _) =>
+      raise CodeGenError("with is not supported in Wasm compiler")
+    @parser.TsStmt::Debugger => ()
     @parser.TsStmt::For(init, cond, update, body) =>
       compile_for(ctx, init, cond, update, body, return_type)
     @parser.TsStmt::ForOf(kind, binding, var_type, iterable, body) =>

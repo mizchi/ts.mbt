@@ -752,6 +752,10 @@ fn collect_decl_names_from_stmt(
         collect_decl_names_from_stmt(inner, names)
       }
     }
+    @parser.TsStmt::With(_, body) =>
+      for inner in body.stmts {
+        collect_decl_names_from_stmt(inner, names)
+      }
     @parser.TsStmt::Try(try_block, _, catch_block, finally_block) => {
       for inner in try_block.stmts {
         collect_decl_names_from_stmt(inner, names)
@@ -1526,6 +1530,34 @@ pub fn JSInterpreter::exec_stmt(
       self.exec_for_of_loop(kind, binding, iterable, body, env, None)
     @parser.TsStmt::ForIn(kind, binding, _, iterable, body) =>
       self.exec_for_in_loop(kind, binding, iterable, body, env, None)
+    @parser.TsStmt::With(obj_expr, body) => {
+      if env.has("__strict__") {
+        return Some(self.set_error_kind("SyntaxError", "Strict mode code may not include a with statement"))
+      }
+      let obj_val = self.eval_expr(obj_expr, env)
+      match self.peek_error() {
+        Some(err) => return Some(err)
+        None => ()
+      }
+      let target = match obj_val {
+        Undefined | Null => {
+          let err = self.set_error_kind(
+            "TypeError",
+            "Cannot convert undefined or null to object",
+          )
+          return Some(err)
+        }
+        Bool(_) | Number(_) | String(_) => self.wrap_primitive(env, obj_val)
+        _ => obj_val
+      }
+      let with_env = js_new_env(Some(env))
+      with_env.define_var("__with_obj__", target)
+      match self.exec_block(body, with_env) {
+        Some(val) => Some(val)
+        None => None
+      }
+    }
+    @parser.TsStmt::Debugger => None
   }
 }
 
@@ -1610,6 +1642,7 @@ fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @parser.TsStmt, env : 
       }
       self.hoist_block(body, env)
     }
+    @parser.TsStmt::With(_, body) => self.hoist_block(body, env)
     @parser.TsStmt::ForOf(kind, binding, _, _, body) => {
       if kind != @parser.TsForOfKind::Assign {
         let names : Array[String] = []

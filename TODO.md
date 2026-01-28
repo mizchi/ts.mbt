@@ -20,10 +20,10 @@
 
 ## Statements coverage gaps (parser/runtime)
 
-- Missing statements: `with`, `debugger`, `import/export`.
+- Missing statements: `import/export`.
 - Labeled statements implemented; validate semantics against test262.
 - `for await...of` is unsupported (no `await` keyword).
 
 ## Statements implementation order (suggested)
 
-1. Add `debugger` (no-op) and decide `with` (likely unsupported).
+1. Decide `import/export` approach (skip or minimal parser stubs).

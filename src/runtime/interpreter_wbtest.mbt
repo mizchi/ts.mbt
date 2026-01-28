@@ -768,3 +768,42 @@ test "interpreter: labeled continue in nested loops" {
     _ => fail("expected Number")
   }
 }
+
+///|
+test "interpreter: with statement resolves object properties" {
+  let interp = JSInterpreter::new()
+  let result = interp.run(
+    (
+      #|function main() {
+      #|  let obj = { a: 1, b: 2 };
+      #|  let sum = 0;
+      #|  with (obj) {
+      #|    sum = a + b;
+      #|    b = 3;
+      #|  }
+      #|  return sum + obj.b;
+      #|}
+    ),
+  )
+  match result {
+    Number(n) => assert_eq(n, 6.0)
+    _ => fail("expected Number")
+  }
+}
+
+///|
+test "interpreter: debugger is no-op" {
+  let interp = JSInterpreter::new()
+  let result = interp.run(
+    (
+      #|function main() {
+      #|  debugger;
+      #|  return 1;
+      #|}
+    ),
+  )
+  match result {
+    Number(n) => assert_eq(n, 1.0)
+    _ => fail("expected Number")
+  }
+}

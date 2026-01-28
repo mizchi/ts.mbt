@@ -219,6 +219,8 @@ pub(all) enum TsStmt {
   ForOf(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock) // kind, binding, varType, iterable, body
   ForIn(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock) // kind, binding, varType, iterable, body
   Switch(TsExpr, Array[TsSwitchCase])
+  With(TsExpr, TsBlock)
+  Debugger
   Label(String, TsStmt)
   Block(TsBlock)
 

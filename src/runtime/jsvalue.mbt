@@ -84,6 +84,8 @@ priv struct ArrayProtoHolder {
 
 let array_proto_holder : ArrayProtoHolder = { proto: None }
 
+const WITH_BINDING_NAME : String = "__with_obj__"
+
 ///|
 // / array prototype set
 pub fn js_set_default_array_proto(proto : JSValue) -> Unit {
@@ -1365,12 +1367,23 @@ pub fn JSEnv::get(self : JSEnv, name : String) -> JSValue {
   // currentlookup(prefer)
   let len = self.bindings.length()
   let mut i = len - 1
+  let mut with_target : JSValue? = None
   while i >= 0 {
     let binding = self.bindings[i]
     if binding.name == name {
       return binding.value
     }
+    if binding.name == WITH_BINDING_NAME {
+      with_target = Some(binding.value)
+    }
     i -= 1
+  }
+  match with_target {
+    Some(obj) =>
+      if js_has_prop(obj, name) {
+        return js_get_prop(obj, name)
+      }
+    None => ()
   }
   // lookup
   match self.parent {
@@ -1384,11 +1397,23 @@ pub fn JSEnv::get(self : JSEnv, name : String) -> JSValue {
 pub fn JSEnv::has(self : JSEnv, name : String) -> Bool {
   let len = self.bindings.length()
   let mut i = len - 1
+  let mut with_target : JSValue? = None
   while i >= 0 {
     if self.bindings[i].name == name {
       return true
     }
+    if self.bindings[i].name == WITH_BINDING_NAME {
+      with_target = Some(self.bindings[i].value)
+    }
     i -= 1
+  }
+  match with_target {
+    Some(obj) => {
+      if js_has_prop(obj, name) {
+        return true
+      }
+    }
+    None => ()
   }
   match self.parent {
     Some(parent) => parent.has(name)
@@ -1402,6 +1427,7 @@ pub fn JSEnv::set(self : JSEnv, name : String, value : JSValue) -> Bool {
   // currentlookup(prefer)
   let len = self.bindings.length()
   let mut i = len - 1
+  let mut with_target : JSValue? = None
   while i >= 0 {
     if self.bindings[i].name == name {
       if self.bindings[i].is_const {
@@ -1411,7 +1437,18 @@ pub fn JSEnv::set(self : JSEnv, name : String, value : JSValue) -> Bool {
       self.bindings[i].is_uninitialized = false
       return true
     }
+    if self.bindings[i].name == WITH_BINDING_NAME {
+      with_target = Some(self.bindings[i].value)
+    }
     i -= 1
+  }
+  match with_target {
+    Some(obj) =>
+      if js_has_prop(obj, name) {
+        let _ = js_set_prop(obj, name, value)
+        return true
+      }
+    None => ()
   }
   // lookup
   match self.parent {

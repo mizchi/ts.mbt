@@ -24,6 +24,8 @@ pub enum TokenKind {
   Switch
   Case
   Default
+  With
+  Debugger
   While
   Do
   For
@@ -706,6 +708,10 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
     Case
   } else if s == "default" {
     Default
+  } else if s == "with" {
+    With
+  } else if s == "debugger" {
+    Debugger
   } else if s == "while" {
     While
   } else if s == "do" {
