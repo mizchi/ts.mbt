@@ -42,6 +42,16 @@ Built-ins (partial/minimal):
   `Date` (minimal), `RegExp` (minimal), `Reflect` (partial), `console.log`.
 - test262 harness: `assert.*`, `$262.*`, `$DONE`, `$ERROR`, `$DONOTEVALUATE`.
 
+## test262 status (allowlist)
+
+Last measured: 2026-01-28 (test262.allowlist.glob.txt)
+
+- total: 14,444
+- passed: 6,914
+- failed: 3,557
+- skipped: 3,973
+- pass rate: 47.9% of total, 66.0% of executed
+
 ## Wasm codegen scope (current)
 
 The Wasm codegen intentionally supports a strict subset and errors on
