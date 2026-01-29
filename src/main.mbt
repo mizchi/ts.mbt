@@ -843,7 +843,7 @@ async fn run_test262(test_path : String) -> Unit {
 
   let total_files = files.length()
   let progress_interval = 200
-  let per_test_step_limit = 200_000
+  let per_test_step_limit = 10_000_000
   let mut passed = 0
   let mut failed = 0
   let mut skipped = 0

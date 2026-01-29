@@ -60,6 +60,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
 
   // Math
   let math = self.new_object()
+  let _ = js_set_prop(math, "__class", String("Math"))
   let _ = js_set_prop(math, "floor", self.make_native("Math.floor"))
   let _ = js_set_prop(math, "ceil", self.make_native("Math.ceil"))
   let _ = js_set_prop(math, "abs", self.make_native("Math.abs"))
@@ -73,6 +74,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let _ = js_set_prop(math, "tan", self.make_native("Math.tan"))
   let _ = js_set_prop(math, "exp", self.make_native("Math.exp"))
   let _ = js_set_prop(math, "log", self.make_native("Math.log"))
+  let _ = js_set_prop(math, "trunc", self.make_native("Math.trunc"))
   let _ = js_define_data_prop(math, "PI", Number(@math.PI), false, false, false)
   let _ = js_define_data_prop(math, "E", Number(@math.exp(1.0)), false, false, false)
   let _ = js_define_data_prop(math, "LN2", Number(@math.ln(2.0)), false, false, false)
@@ -144,6 +146,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let num_to_string = self.make_native("Number.prototype.toString")
   self.set_function_length(num_to_string, 0.0)
   let _ = js_set_prop(number_proto, "toString", num_to_string)
+  let num_is_nan = self.make_native("Number.isNaN")
+  self.set_function_length(num_is_nan, 1.0)
+  let _ = js_set_prop(number_ctor, "isNaN", num_is_nan)
   let max_safe = JSValue::Number(9007199254740991.0)
   let _ = js_define_data_prop(number_ctor, "MAX_SAFE_INTEGER", max_safe, false, false, false)
   self.global_env.define_var("Number", number_ctor)
@@ -210,6 +215,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let str_slice = self.make_native("String.prototype.slice")
   self.set_function_length(str_slice, 2.0)
   let _ = js_set_prop(string_proto, "slice", str_slice)
+  let str_substr = self.make_native("String.prototype.substr")
+  self.set_function_length(str_substr, 2.0)
+  let _ = js_set_prop(string_proto, "substr", str_substr)
   let str_substring = self.make_native("String.prototype.substring")
   self.set_function_length(str_substring, 2.0)
   let _ = js_set_prop(string_proto, "substring", str_substring)
@@ -3175,6 +3183,15 @@ fn JSInterpreter::call_native(
       }
       String(prim.to_js_string())
     }
+    "Number.isNaN" =>
+      if args.length() > 0 {
+        match args[0] {
+          Number(n) => Bool(n.is_nan())
+          _ => Bool(false)
+        }
+      } else {
+        Bool(false)
+      }
     "String.prototype.valueOf" => js_get_prop(this_arg, "value")
     "Error" => {
       let msg = if args.length() > 0 { args[0].to_js_string() } else { "" }
@@ -3518,7 +3535,7 @@ fn JSInterpreter::call_native(
       }
     "String" =>
       if args.length() > 0 {
-        let prim = JSValue::String(args[0].to_js_string())
+        let prim = JSValue::String(self.to_string_value(args[0]))
         let str_ctor = self.global_env.get("String")
         let str_proto = js_get_prop(str_ctor, "prototype")
         let is_ctor = match self.get_proto(this_arg) {
@@ -3886,6 +3903,19 @@ fn JSInterpreter::call_native(
     "Math.log" =>
       if args.length() > 0 {
         Number(@math.ln(args[0].to_number()))
+      } else {
+        Number(js_nan)
+      }
+    "Math.trunc" =>
+      if args.length() > 0 {
+        let n = args[0].to_number()
+        if n.is_nan() || n.is_inf() {
+          Number(n)
+        } else if n >= 0.0 {
+          Number(n.floor())
+        } else {
+          Number(n.ceil())
+        }
       } else {
         Number(js_nan)
       }

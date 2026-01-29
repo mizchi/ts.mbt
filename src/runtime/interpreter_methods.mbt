@@ -32,6 +32,105 @@ pub fn JSInterpreter::call_method(
 }
 
 ///|
+fn escape_html_attr(value : String) -> String {
+  let sb = StringBuilder::new()
+  for ch in value {
+    match ch {
+      '\"' => sb.write_string("&quot;")
+      _ => sb.write_char(ch)
+    }
+  }
+  sb.to_string()
+}
+
+///|
+fn JSInterpreter::compare_sort_items(
+  self : JSInterpreter,
+  a : (JSValue, Int),
+  b : (JSValue, Int),
+  compare_fn : JSValue,
+  use_compare : Bool,
+) -> Int {
+  let (av, ai) = a
+  let (bv, bi) = b
+  let order =
+    match (av, bv) {
+      (Undefined, Undefined) => 0
+      (Undefined, _) => 1
+      (_, Undefined) => -1
+      _ =>
+        if use_compare {
+          let res = self.call_function(compare_fn, Undefined, [av, bv])
+          let n = res.to_number()
+          if n.is_nan() {
+            0
+          } else if n < 0.0 {
+            -1
+          } else if n > 0.0 {
+            1
+          } else {
+            0
+          }
+        } else {
+          let a_str = av.to_js_string()
+          let b_str = bv.to_js_string()
+          a_str.compare(b_str)
+        }
+    }
+  if order == 0 {
+    if ai < bi {
+      -1
+    } else if ai > bi {
+      1
+    } else {
+      0
+    }
+  } else {
+    order
+  }
+}
+
+///|
+fn JSInterpreter::quicksort_values(
+  self : JSInterpreter,
+  values : Array[(JSValue, Int)],
+  lo : Int,
+  hi : Int,
+  compare_fn : JSValue,
+  use_compare : Bool,
+) -> Unit {
+  if lo >= hi {
+    return
+  }
+  let pivot = values[(lo + hi) / 2]
+  let mut i = lo
+  let mut j = hi
+  while i <= j {
+    while i <= hi &&
+      self.compare_sort_items(values[i], pivot, compare_fn, use_compare) < 0 {
+      i += 1
+    }
+    while j >= lo &&
+      self.compare_sort_items(values[j], pivot, compare_fn, use_compare) > 0 {
+      j -= 1
+    }
+    if i <= j {
+      let tmp = values[i]
+      values[i] = values[j]
+      values[j] = tmp
+      i += 1
+      j -= 1
+    }
+  }
+  if lo < j {
+    self.quicksort_values(values, lo, j, compare_fn, use_compare)
+  }
+  if i < hi {
+    self.quicksort_values(values, i, hi, compare_fn, use_compare)
+  }
+}
+
+///|
 // / functionmethod (call/apply/bind)
 fn JSInterpreter::function_method(
   self : JSInterpreter,
@@ -149,12 +248,12 @@ fn JSInterpreter::string_method(
     }
     "indexOf" => {
       let search_str = if args.length() > 0 {
-        args[0].to_js_string()
+        self.to_string_value(args[0])
       } else {
         ""
       }
       let mut start_idx = if args.length() > 1 {
-        args[1].to_number().to_int()
+        self.to_number_value(args[1]).to_int()
       } else {
         0
       }
@@ -180,12 +279,12 @@ fn JSInterpreter::string_method(
     }
     "lastIndexOf" => {
       let search_str = if args.length() > 0 {
-        args[0].to_js_string()
+        self.to_string_value(args[0])
       } else {
         ""
       }
       let mut pos = if args.length() > 1 {
-        args[1].to_number().to_int()
+        self.to_number_value(args[1]).to_int()
       } else {
         s.length()
       }
@@ -217,8 +316,19 @@ fn JSInterpreter::string_method(
       Number(idx.to_double())
     }
     "includes" => {
-      let search_str = if args.length() > 0 { args[0].to_js_string() } else { "" }
-      let mut start_idx = if args.length() > 1 { args[1].to_number().to_int() } else { 0 }
+      if args.length() > 0 && is_regexp(args[0]) {
+        return self.set_error_kind("TypeError", "String.prototype.includes does not accept a RegExp")
+      }
+      let search_str = if args.length() > 0 {
+        self.to_string_value(args[0])
+      } else {
+        ""
+      }
+      let mut start_idx = if args.length() > 1 {
+        self.to_number_value(args[1]).to_int()
+      } else {
+        0
+      }
       if start_idx < 0 {
         start_idx = 0
       }
@@ -241,8 +351,19 @@ fn JSInterpreter::string_method(
       }
     }
     "startsWith" => {
-      let search_str = if args.length() > 0 { args[0].to_js_string() } else { "" }
-      let mut pos = if args.length() > 1 { args[1].to_number().to_int() } else { 0 }
+      if args.length() > 0 && is_regexp(args[0]) {
+        return self.set_error_kind("TypeError", "String.prototype.startsWith does not accept a RegExp")
+      }
+      let search_str = if args.length() > 0 {
+        self.to_string_value(args[0])
+      } else {
+        ""
+      }
+      let mut pos = if args.length() > 1 {
+        self.to_number_value(args[1]).to_int()
+      } else {
+        0
+      }
       if pos < 0 {
         pos = 0
       }
@@ -258,8 +379,19 @@ fn JSInterpreter::string_method(
       }
     }
     "endsWith" => {
-      let search_str = if args.length() > 0 { args[0].to_js_string() } else { "" }
-      let mut end_pos = if args.length() > 1 { args[1].to_number().to_int() } else { s.length() }
+      if args.length() > 0 && is_regexp(args[0]) {
+        return self.set_error_kind("TypeError", "String.prototype.endsWith does not accept a RegExp")
+      }
+      let search_str = if args.length() > 0 {
+        self.to_string_value(args[0])
+      } else {
+        ""
+      }
+      let mut end_pos = if args.length() > 1 {
+        self.to_number_value(args[1]).to_int()
+      } else {
+        s.length()
+      }
       if end_pos > s.length() {
         end_pos = s.length()
       }
@@ -344,7 +476,7 @@ fn JSInterpreter::string_method(
       let result : Array[JSValue] = []
       if sep.length() == 0 {
         if s.length() == 0 {
-          result.push(String(""))
+          return js_new_array()
         } else {
           for i in 0..<s.length() {
             if limit >= 0 && result.length() >= limit {
@@ -438,7 +570,18 @@ fn JSInterpreter::string_method(
       } else {
         0.0
       }
-      let mut start = if start_num.is_nan() { 0 } else { start_num.to_int() }
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
+      }
+      let mut start =
+        if start_num.is_nan() {
+          0
+        } else if start_num.is_inf() {
+          if start_num < 0.0 { 0 } else { len }
+        } else {
+          start_num.to_int()
+        }
       let end_num = if args.length() > 1 {
         self.to_number_value(args[1])
       } else {
@@ -465,6 +608,52 @@ fn JSInterpreter::string_method(
       }
       if end < start {
         end = start
+      }
+      String(try { s[start:end].to_string() } catch { _ => "" })
+    }
+    "substr" => {
+      let len = s.length()
+      let start_num = if args.length() > 0 {
+        self.to_number_value(args[0])
+      } else {
+        0.0
+      }
+      let mut start = if start_num.is_nan() { 0 } else { start_num.to_int() }
+      if start < 0 {
+        start = len + start
+      }
+      if start < 0 {
+        start = 0
+      }
+      if start > len {
+        start = len
+      }
+      let length_num = if args.length() > 1 {
+        match args[1] {
+          Undefined => (len - start).to_double()
+          _ => self.to_number_value(args[1])
+        }
+      } else {
+        (len - start).to_double()
+      }
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
+      }
+      let mut count =
+        if length_num.is_nan() {
+          0
+        } else if length_num.is_inf() {
+          if length_num < 0.0 { 0 } else { len }
+        } else {
+          length_num.to_int()
+        }
+      if count < 0 {
+        count = 0
+      }
+      let mut end = start + count
+      if end > len {
+        end = len
       }
       String(try { s[start:end].to_string() } catch { _ => "" })
     }
@@ -512,15 +701,18 @@ fn JSInterpreter::string_method(
     "fixed" => String("<tt>" + s + "</tt>")
     "blink" => String("<blink>" + s + "</blink>")
     "fontcolor" => {
-      let color = if args.length() > 0 { self.to_string_value(args[0]) } else { "" }
+      let color =
+        if args.length() > 0 { escape_html_attr(self.to_string_value(args[0])) } else { "" }
       String("<font color=\"" + color + "\">" + s + "</font>")
     }
     "fontsize" => {
-      let size = if args.length() > 0 { self.to_string_value(args[0]) } else { "" }
+      let size =
+        if args.length() > 0 { escape_html_attr(self.to_string_value(args[0])) } else { "" }
       String("<font size=\"" + size + "\">" + s + "</font>")
     }
     "link" => {
-      let url = if args.length() > 0 { self.to_string_value(args[0]) } else { "" }
+      let url =
+        if args.length() > 0 { escape_html_attr(self.to_string_value(args[0])) } else { "" }
       String("<a href=\"" + url + "\">" + s + "</a>")
     }
     "repeat" => {
@@ -1578,46 +1770,40 @@ fn JSInterpreter::array_method(
     }
     "sort" => {
       let compare_fn = if args.length() > 0 { args[0] } else { Undefined }
+      let use_compare =
+        if compare_fn is Undefined {
+          false
+        } else if self.is_callable(compare_fn) {
+          true
+        } else {
+          return self.set_error_kind("TypeError", "Array.prototype.sort requires a callable")
+        }
+      let values : Array[(JSValue, Int)] = []
+      let mut holes = 0
       let mut i = 0
       while i < len {
-        let mut j = i + 1
-        while j < len {
-          let order = match compare_fn {
-            Function(closure) => {
-              let res = self.call_function(
-                JSValue::Function(closure),
-                Undefined,
-                [arr.items[i], arr.items[j]],
-              )
-              let n = res.to_number()
-              if n.is_nan() {
-                0
-              } else if n < 0.0 {
-                -1
-              } else if n > 0.0 {
-                1
-              } else {
-                0
-              }
-            }
-            _ => {
-              let a = arr.items[i].to_js_string()
-              let b = arr.items[j].to_js_string()
-              a.compare(b)
-            }
-          }
-          if order > 0 {
-            let tmp = arr.items[i]
-            arr.items[i] = arr.items[j]
-            arr.items[j] = tmp
-            let tmp_present = arr.present[i]
-            arr.present[i] = arr.present[j]
-            arr.present[j] = tmp_present
-          }
-          j += 1
+        if i < arr.items.length() && arr.present[i] {
+          values.push((arr.items[i], i))
+        } else {
+          holes += 1
         }
         i += 1
       }
+      if values.length() > 1 {
+        self.quicksort_values(values, 0, values.length() - 1, compare_fn, use_compare)
+      }
+      arr.items.clear()
+      arr.present.clear()
+      for item in values {
+        let (val, _) = item
+        arr.items.push(val)
+        arr.present.push(true)
+      }
+      for _ in 0..<holes {
+        arr.items.push(Undefined)
+        arr.present.push(false)
+      }
+      arr.length = len
       JSValue::Array(arr)
     }
     "toSorted" => {
