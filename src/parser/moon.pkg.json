@@ -5,5 +5,9 @@
       "path": "moonbitlang/typescript/ast",
       "alias": "ast"
     }
+  ],
+  "wbtest-import": [
+    "moonbitlang/async",
+    "moonbitlang/async/fs"
   ]
 }

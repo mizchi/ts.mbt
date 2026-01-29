@@ -1,3 +1,7 @@
 [submodule "test262"]
 	path = test262
 	url = https://github.com/tc39/test262
+[submodule "typescript"]
+	path = typescript
+	url = https://github.com/microsoft/TypeScript
+	branch = main

@@ -638,7 +638,9 @@ test "parser: parse declare function" {
   let src =
     #|declare function console_log(msg: string): void;
   let parser = Parser::from_source(src)
-  let imp = parser.parse_import()
+  let _ = parser.expect(Declare)
+  let _ = parser.expect(Function)
+  let imp = parser.parse_declare_function()
   assert_eq(imp.name, "console_log")
   assert_eq(imp.module_, "env")
   assert_eq(imp.params.length(), 1)

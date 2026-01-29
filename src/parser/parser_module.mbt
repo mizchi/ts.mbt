@@ -376,7 +376,33 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.check(Declare) {
-    imports.push(self.parse_import())
+    let _ = self.advance() // consume 'declare'
+    match self.peek().kind {
+      Function => {
+        let _ = self.advance() // consume 'function'
+        imports.push(self.parse_declare_function())
+      }
+      Var | Let | Const => {
+        self.skip_until_semicolon()
+      }
+      Interface => {
+        interfaces.push(self.parse_interface())
+      }
+      Type => {
+        self.skip_type_alias()
+      }
+      Ident(name) => {
+        if name == "namespace" || name == "module" || name == "global" || name == "abstract" || name == "enum" || name == "class" {
+          self.skip_declaration_block()
+        } else {
+          ()
+        }
+      }
+      Class => {
+        self.skip_declaration_block()
+      }
+      _ => ()
+    }
     return
   }
   if self.match_(Star) {
@@ -421,11 +447,47 @@ pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
     } else if self.check(Interface) {
       interfaces.push(self.parse_interface())
     } else if self.check(Declare) {
-      imports.push(self.parse_import())
+      let _ = self.advance() // consume 'declare'
+      match self.peek().kind {
+        Function => {
+          let _ = self.advance() // consume 'function'
+          imports.push(self.parse_declare_function())
+        }
+        Var | Let | Const => {
+          // Skip declare var/let/const: just consume until semicolon
+          self.skip_until_semicolon()
+        }
+        Interface => {
+          interfaces.push(self.parse_interface())
+        }
+        Type => {
+          // Skip type alias: consume until semicolon or end of type
+          self.skip_type_alias()
+        }
+        Ident(name) => {
+          if name == "namespace" || name == "module" || name == "global" || name == "abstract" || name == "enum" || name == "class" {
+            // Skip namespace/module/global/abstract/enum/class declaration
+            self.skip_declaration_block()
+          } else {
+            raise ParseError("Unexpected identifier after declare: \{name}")
+          }
+        }
+        Class => {
+          // Skip declare class
+          self.skip_declaration_block()
+        }
+        k => raise ParseError("Expected Function, got \{k}")
+      }
     } else if self.check(Import) {
       self.parse_import_stmt()
     } else if self.check(Export) {
       self.parse_export_stmt(funcs, interfaces, imports)
+    } else if self.check(Type) {
+      // Skip type alias at top level
+      self.skip_type_alias()
+    } else if self.check(Const) {
+      // Skip const declarations at top level (e.g., const enum)
+      self.skip_until_semicolon()
     } else {
       raise ParseError("Expected function, interface, declare, import, or export declaration")
     }

@@ -99,6 +99,61 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
 }
 
 ///|
+/// Skip generic type parameters <T, U extends Foo, V = Default>
+fn Parser::skip_type_params(self : Parser) -> Unit {
+  if not(self.check(Lt)) {
+    return
+  }
+  let _ = self.advance() // consume <
+  let mut depth = 1
+  while depth > 0 && not(self.check(Eof)) {
+    match self.peek().kind {
+      Lt => {
+        depth += 1
+        let _ = self.advance()
+      }
+      Gt => {
+        depth -= 1
+        let _ = self.advance()
+      }
+      GtGt => {
+        // >> counts as two >
+        depth -= 2
+        let _ = self.advance()
+      }
+      GtGtGt => {
+        // >>> counts as three >
+        depth -= 3
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
+/// Skip extends clause: extends Foo, Bar<T>
+fn Parser::skip_extends_clause(self : Parser) -> Unit {
+  if not(self.check(Extends)) {
+    return
+  }
+  let _ = self.advance() // consume extends
+  // Parse comma-separated type references until { or EOF
+  while not(self.check(LBrace)) && not(self.check(Eof)) {
+    match self.peek().kind {
+      Comma => {
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
 // / interface
 pub fn Parser::parse_interface(self : Parser) -> @ast.TsInterface raise ParseError {
   let _ = self.expect(Interface)
@@ -106,29 +161,247 @@ pub fn Parser::parse_interface(self : Parser) -> @ast.TsInterface raise ParseErr
     Ident(n) => n
     k => raise ParseError("Expected interface name, got \{k}")
   }
+  // Skip generic type parameters <T, U>
+  self.skip_type_params()
+  // Skip extends clause
+  self.skip_extends_clause()
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
   while not(self.check(RBrace)) && not(self.check(Eof)) {
-    // field: type;
-    let field_name = match self.advance().kind {
-      Ident(n) => n
+    // Skip readonly modifier
+    if self.check(Ident("readonly")) {
+      let _ = self.advance()
+    }
+    // Parse field/method name
+    let field_name : String = match self.peek().kind {
+      // Call signature: (...): T
+      LParen => "<call>"
+      // Generic call signature: <T>(...): U
+      Lt => {
+        self.skip_type_params()
+        "<call>"
+      }
+      // Constructor signature: new(...): T
+      New => {
+        let _ = self.advance()
+        "<new>"
+      }
+      // Computed property / index signature: [key: T]: U or [Symbol.xxx]: T
+      LBracket => {
+        let _ = self.advance()
+        // Skip until ]
+        while not(self.check(RBracket)) && not(self.check(Eof)) {
+          let _ = self.advance()
+        }
+        let _ = self.expect(RBracket)
+        "<computed>"
+      }
+      // Regular identifier
+      Ident(n) => {
+        let _ = self.advance()
+        n
+      }
+      // String literal as field name: "fieldName"
+      Str(s) => {
+        let _ = self.advance()
+        s
+      }
+      // Number literal as field name: 0, 1, etc.
+      Int(n) => {
+        let _ = self.advance()
+        n.to_string()
+      }
+      // Keywords as field names (TypeScript allows this)
+      Finally => { let _ = self.advance(); "finally" }
+      Try => { let _ = self.advance(); "try" }
+      Catch => { let _ = self.advance(); "catch" }
+      Throw => { let _ = self.advance(); "throw" }
+      Delete => { let _ = self.advance(); "delete" }
+      Type => { let _ = self.advance(); "type" }
+      In => { let _ = self.advance(); "in" }
+      Of => { let _ = self.advance(); "of" }
+      For => { let _ = self.advance(); "for" }
+      From => { let _ = self.advance(); "from" }
+      With => { let _ = self.advance(); "with" }
+      Typeof => { let _ = self.advance(); "typeof" }
+      Return => { let _ = self.advance(); "return" }
+      If => { let _ = self.advance(); "if" }
+      Else => { let _ = self.advance(); "else" }
+      While => { let _ = self.advance(); "while" }
+      Do => { let _ = self.advance(); "do" }
+      Switch => { let _ = self.advance(); "switch" }
+      Case => { let _ = self.advance(); "case" }
+      Default => { let _ = self.advance(); "default" }
+      Break => { let _ = self.advance(); "break" }
+      Continue => { let _ = self.advance(); "continue" }
+      Extends => { let _ = self.advance(); "extends" }
+      Class => { let _ = self.advance(); "class" }
+      Function => { let _ = self.advance(); "function" }
+      Var => { let _ = self.advance(); "var" }
+      Let => { let _ = self.advance(); "let" }
+      Const => { let _ = self.advance(); "const" }
+      Import => { let _ = self.advance(); "import" }
+      Export => { let _ = self.advance(); "export" }
+      As => { let _ = self.advance(); "as" }
+      Yield => { let _ = self.advance(); "yield" }
+      Instanceof => { let _ = self.advance(); "instanceof" }
+      Declare => { let _ = self.advance(); "declare" }
       k => raise ParseError("Expected field name, got \{k}")
     }
-    let _ = self.expect(Colon)
-    let field_type = self.parse_type()
-    let _ = self.expect(Semicolon)
-    fields.push((field_name, field_type))
+    // Skip method type parameters <T>
+    self.skip_type_params()
+    // Check for optional marker ?
+    let _ = self.match_(Question)
+    // Method signature: name(...): T or name<T>(...): U
+    if self.check(LParen) {
+      let _ = self.advance()
+      // Skip parameters
+      let mut paren_depth = 1
+      while paren_depth > 0 && not(self.check(Eof)) {
+        match self.peek().kind {
+          LParen => {
+            paren_depth += 1
+            let _ = self.advance()
+          }
+          RParen => {
+            paren_depth -= 1
+            let _ = self.advance()
+          }
+          _ => {
+            let _ = self.advance()
+          }
+        }
+      }
+      // Return type
+      if self.check(Colon) {
+        let _ = self.advance()
+        let field_type = self.parse_type()
+        fields.push((field_name, field_type))
+      } else {
+        fields.push((field_name, @ast.TsType::Void))
+      }
+    } else if self.check(Colon) {
+      // Property: name: T
+      let _ = self.advance()
+      let field_type = self.parse_type()
+      fields.push((field_name, field_type))
+    } else {
+      // No type annotation - use Any
+      fields.push((field_name, @ast.TsType::Any))
+    }
+    // Skip trailing semicolon or comma (both optional)
+    if self.check(Semicolon) || self.check(Comma) {
+      let _ = self.advance()
+    }
   }
   let _ = self.expect(RBrace)
   { name, fields }
 }
 
 ///|
-// / declare function
-/// declare function name(params): returnType;
-pub fn Parser::parse_import(self : Parser) -> @ast.TsImport raise ParseError {
-  let _ = self.expect(Declare)
-  let _ = self.expect(Function)
+/// Skip until semicolon or end of file, respecting brace/bracket/paren nesting
+fn Parser::skip_until_semicolon(self : Parser) -> Unit {
+  let mut brace_depth = 0
+  let mut bracket_depth = 0
+  let mut paren_depth = 0
+  while not(self.check(Eof)) {
+    match self.peek().kind {
+      Semicolon => {
+        if brace_depth == 0 && bracket_depth == 0 && paren_depth == 0 {
+          let _ = self.advance()
+          return
+        }
+        let _ = self.advance()
+      }
+      LBrace => { brace_depth += 1; let _ = self.advance() }
+      RBrace => { brace_depth -= 1; let _ = self.advance() }
+      LBracket => { bracket_depth += 1; let _ = self.advance() }
+      RBracket => { bracket_depth -= 1; let _ = self.advance() }
+      LParen => { paren_depth += 1; let _ = self.advance() }
+      RParen => { paren_depth -= 1; let _ = self.advance() }
+      _ => { let _ = self.advance() }
+    }
+  }
+}
+
+///|
+/// Skip type alias: type Name<T> = ...;
+fn Parser::skip_type_alias(self : Parser) -> Unit {
+  let _ = self.advance() // consume 'type'
+  // Skip until semicolon, handling nested braces and angle brackets
+  let mut brace_depth = 0
+  let mut angle_depth = 0
+  while not(self.check(Eof)) {
+    match self.peek().kind {
+      LBrace => {
+        brace_depth += 1
+        let _ = self.advance()
+      }
+      RBrace => {
+        brace_depth -= 1
+        let _ = self.advance()
+        if brace_depth < 0 {
+          break
+        }
+      }
+      Lt => {
+        angle_depth += 1
+        let _ = self.advance()
+      }
+      Gt => {
+        angle_depth -= 1
+        let _ = self.advance()
+      }
+      Semicolon => {
+        if brace_depth == 0 && angle_depth <= 0 {
+          let _ = self.advance()
+          break
+        }
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
+/// Skip declaration block (namespace, module, class, enum, etc.)
+fn Parser::skip_declaration_block(self : Parser) -> Unit {
+  // Skip until we find { or ;
+  while not(self.check(LBrace)) && not(self.check(Semicolon)) && not(self.check(Eof)) {
+    let _ = self.advance()
+  }
+  if self.check(Semicolon) {
+    let _ = self.advance()
+    return
+  }
+  if self.check(LBrace) {
+    let _ = self.advance()
+    let mut depth = 1
+    while depth > 0 && not(self.check(Eof)) {
+      match self.peek().kind {
+        LBrace => {
+          depth += 1
+          let _ = self.advance()
+        }
+        RBrace => {
+          depth -= 1
+          let _ = self.advance()
+        }
+        _ => {
+          let _ = self.advance()
+        }
+      }
+    }
+  }
+}
+
+///|
+// / declare function (without 'declare function' prefix - already consumed)
+/// name(params): returnType;
+pub fn Parser::parse_declare_function(self : Parser) -> @ast.TsImport raise ParseError {
 
   // function
   let name = match self.advance().kind {
@@ -136,20 +409,64 @@ pub fn Parser::parse_import(self : Parser) -> @ast.TsImport raise ParseError {
     _ => raise ParseError("Expected function name after 'declare function'")
   }
 
+  // Skip type parameters if present
+  self.skip_type_params()
   // parameter
   let _ = self.expect(LParen)
   let params : Array[(String, @ast.TsType)] = []
-  while not(self.check(RParen)) {
-    let param_name = match self.advance().kind {
-      Ident(n) => n
-      _ => raise ParseError("Expected parameter name")
+  while not(self.check(RParen)) && not(self.check(Eof)) {
+    // Handle rest parameter: ...name
+    let _ = self.match_ellipsis()
+    // Handle parameter name (can be identifier, keyword, or destructuring pattern)
+    let param_name = match self.peek().kind {
+      Ident(n) => { let _ = self.advance(); n }
+      // Type keywords can be used as parameter names
+      StringType => { let _ = self.advance(); "string" }
+      NumberType => { let _ = self.advance(); "number" }
+      BooleanType => { let _ = self.advance(); "boolean" }
+      VoidType => { let _ = self.advance(); "void" }
+      // Other keywords that can be parameter names
+      Type => { let _ = self.advance(); "type" }
+      New => { let _ = self.advance(); "new" }
+      Delete => { let _ = self.advance(); "delete" }
+      Typeof => { let _ = self.advance(); "typeof" }
+      In => { let _ = self.advance(); "in" }
+      Of => { let _ = self.advance(); "of" }
+      From => { let _ = self.advance(); "from" }
+      As => { let _ = self.advance(); "as" }
+      LBrace | LBracket => {
+        // Destructuring: { a, b } or [ a, b ]
+        let open_tok = self.peek().kind
+        let close_tok : TokenKind = match open_tok {
+          LBrace => RBrace
+          _ => RBracket
+        }
+        let _ = self.advance()
+        let mut depth = 1
+        while depth > 0 && not(self.check(Eof)) {
+          if self.peek().kind == open_tok {
+            depth += 1
+          } else if self.peek().kind == close_tok {
+            depth -= 1
+          }
+          let _ = self.advance()
+        }
+        "<destructured>"
+      }
+      k => raise ParseError("Expected parameter name, got \{k}")
     }
-    let _ = self.expect(Colon)
-    let param_type = self.parse_type()
-    params.push((param_name, param_type))
+    // Handle optional parameter: name?
+    let _ = self.match_(Question)
+    // Type annotation is optional
+    if self.check(Colon) {
+      let _ = self.advance()
+      let param_type = self.parse_type()
+      params.push((param_name, param_type))
+    } else {
+      params.push((param_name, @ast.TsType::Any))
+    }
     if self.check(Comma) {
       let _ = self.advance()
-
     }
   }
   let _ = self.expect(RParen)
