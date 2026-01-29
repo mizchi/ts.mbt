@@ -1111,6 +1111,8 @@ fn JSInterpreter::exec_stmt_for_eval(
         finally_block,
         env,
       )
+    @ast.TsStmt::Switch(expr, cases) =>
+      self.exec_switch_for_eval(expr, cases, env)
     _ => {
       // For other statements, fall back to regular exec_stmt
       match self.exec_stmt(stmt, env) {
@@ -1197,6 +1199,78 @@ fn JSInterpreter::exec_try_for_eval(
     Undefined
   }
   (result_control, final_completion)
+}
+
+///|
+fn JSInterpreter::exec_switch_for_eval(
+  self : JSInterpreter,
+  expr : @ast.TsExpr,
+  cases : Array[@ast.TsSwitchCase],
+  env : JSEnv,
+) -> (JSValue?, JSValue) {
+  let discr = self.eval_expr(expr, env)
+  match self.peek_error() {
+    Some(err) => return (Some(err), Undefined)
+    None => ()
+  }
+
+  let mut v = JSValue::Undefined // V starts as undefined
+  let mut matched = false
+
+  for case_ in cases {
+    if not(matched) {
+      match case_.test_expr {
+        None => matched = true // default case
+        Some(test_expr) => {
+          let test_val = self.eval_expr(test_expr, env)
+          match self.peek_error() {
+            Some(err) => return (Some(err), Undefined)
+            None => ()
+          }
+          match js_strict_eq(discr, test_val) {
+            Bool(true) => matched = true
+            _ => ()
+          }
+        }
+      }
+    }
+    if matched {
+      match self.exec_block_for_eval(case_.body, env) {
+        (Some(BreakSignal(None)), completion) => {
+          // Break without label ends the switch
+          if is_not_empty(completion) {
+            v = completion
+          }
+          // ES spec: switch returns UpdateEmpty(result, undefined)
+          return (None, v)
+        }
+        (Some(BreakSignal(Some(_))), completion) => {
+          // Break with label propagates
+          if is_not_empty(completion) {
+            v = completion
+          }
+          return (Some(BreakSignal(None)), v)
+        }
+        (Some(control), completion) => {
+          // Other abrupt completion (return, throw, continue)
+          if is_not_empty(completion) {
+            v = completion
+          }
+          return (Some(control), v)
+        }
+        (None, completion) => {
+          // Normal completion - update v
+          if is_not_empty(completion) {
+            v = completion
+          }
+          // Fall through to next case
+        }
+      }
+    }
+  }
+  // ES spec: switch returns UpdateEmpty(result, undefined)
+  // v is either undefined (no match) or the last completion value
+  (None, v)
 }
 
 ///|
