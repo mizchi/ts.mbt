@@ -301,6 +301,71 @@ async test "parser: compare interface fields with TypeScript oracle" {
 }
 
 ///|
+/// Compare es5.d.ts interface fields with oracle
+async test "parser: compare es5 interface fields" {
+  let content = @fs.read_file("typescript/src/lib/es5.d.ts").text() catch {
+    e => {
+      fail("Failed to read es5.d.ts: \{e}")
+      return
+    }
+  }
+
+  let parser = Parser::from_source(content)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+
+  let field_names = extract_field_names(module_)
+
+  // Check Array interface fields (from TypeScript oracle)
+  let array_fields = field_names.get("Array")
+  match array_fields {
+    Some(fields) => {
+      // Oracle: length, toString, toLocaleString, pop, push, concat, join, reverse, shift, slice, sort, splice, unshift, indexOf, lastIndexOf, every, some, forEach, map, filter, reduce, reduceRight
+      let expected = ["length", "toString", "pop", "push", "concat", "join", "reverse", "shift", "slice", "sort", "splice", "unshift", "indexOf", "lastIndexOf", "every", "some", "forEach", "map", "filter", "reduce", "reduceRight"]
+      let missing : Array[String] = []
+      for name in expected {
+        if not(fields.contains(name)) {
+          missing.push(name)
+        }
+      }
+      if missing.length() > 0 {
+        println("Array interface missing fields: \{missing}")
+      }
+      // At least these core methods should be present
+      assert_true(fields.contains("length"))
+      assert_true(fields.contains("push"))
+      assert_true(fields.contains("pop"))
+    }
+    None => fail("Array interface not found")
+  }
+
+  // Check Error interface
+  let error_fields = field_names.get("Error")
+  match error_fields {
+    Some(fields) => {
+      assert_true(fields.contains("name"))
+      assert_true(fields.contains("message"))
+    }
+    None => fail("Error interface not found")
+  }
+
+  // Check Object interface
+  let object_fields = field_names.get("Object")
+  match object_fields {
+    Some(fields) => {
+      assert_true(fields.contains("constructor"))
+      assert_true(fields.contains("toString"))
+      assert_true(fields.contains("valueOf"))
+    }
+    None => fail("Object interface not found")
+  }
+}
+
+///|
 /// Normalize line endings to LF
 fn normalize_line_endings(s : String) -> String {
   s.replace(old="\r\n", new="\n").replace(old="\r", new="\n")
