@@ -470,6 +470,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
         _ => {
           let prop = match self.advance().kind {
             Ident(name) => name
+            PrivateIdent(name) => "#" + name
             Return => "return"
             If => "if"
             Else => "else"
@@ -545,6 +546,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       let _ = self.advance()
       let prop = match self.advance().kind {
         Ident(name) => name
+        PrivateIdent(name) => "#" + name
         Return => "return"
         If => "if"
         Else => "else"
@@ -681,7 +683,12 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       New("RegExp", args)
     }
     Ident(name) => {
-      if self.peek_at(1).kind == Arrow {
+      if name == "async" && self.peek_at(1).kind == Function &&
+        not(self.has_line_terminator_after()) {
+        let _ = self.advance()
+        let func = self.parse_function_expr()
+        @ast.TsExpr::FuncExpr(func)
+      } else if self.peek_at(1).kind == Arrow {
         let _ = self.advance()
         let _ = self.expect(Arrow)
         let body = if self.check(LBrace) {
@@ -705,6 +712,17 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         let _ = self.advance()
         Var(name)
       }
+    }
+    Let =>
+      if self.in_strict {
+        raise ParseError("Unexpected token: Let")
+      } else {
+        let _ = self.advance()
+        Var("let")
+      }
+    PrivateIdent(name) => {
+      let _ = self.advance()
+      Var("#" + name)
     }
     LParen =>
       // functioncheck

@@ -47,9 +47,42 @@ fn regexp_has_global(flags : String) -> Bool {
 }
 
 ///|
+fn sanitize_utf16(input : String) -> String {
+  let len = input.length()
+  let buf = StringBuilder::new(size_hint=len)
+  let mut i = 0
+  while i < len {
+    let c1 = input.unsafe_get(i)
+    if c1.is_leading_surrogate() {
+      if i + 1 < len {
+        let c2 = input.unsafe_get(i + 1)
+        if c2.is_trailing_surrogate() {
+          buf.write_char(c1.to_int().unsafe_to_char())
+          buf.write_char(c2.to_int().unsafe_to_char())
+          i += 2
+          continue
+        }
+      }
+      buf.write_char('\ufffd')
+      i += 1
+      continue
+    }
+    if c1.is_trailing_surrogate() {
+      buf.write_char('\ufffd')
+      i += 1
+      continue
+    }
+    buf.write_char(c1.to_int().unsafe_to_char())
+    i += 1
+  }
+  buf.to_string()
+}
+
+///|
 fn regexp_compile(pattern : String, flags : String) -> @regexp.Regexp? {
+  let safe_pattern = sanitize_utf16(pattern)
   try {
-    Some(@regexp.compile(pattern[:], flags=flags[:]))
+    Some(@regexp.compile(safe_pattern[:], flags=flags[:]))
   } catch {
     _ => None
   }
@@ -61,13 +94,20 @@ fn regexp_exec_with_re(
   input : String,
   last_index : Int,
 ) -> (@regexp.MatchResult, Int, Int)? {
-  if last_index < 0 || last_index > input.length() {
+  let safe_input = sanitize_utf16(input)
+  if last_index < 0 || last_index > safe_input.length() {
     return None
   }
   let view = if last_index == 0 {
-    input[:]
+    safe_input[:]
   } else {
-    input.view(start_offset=last_index)
+    let tail =
+      String::unsafe_substring(
+        safe_input,
+        start=last_index,
+        end=safe_input.length(),
+      )
+    tail[:]
   }
   match re.match_(view) {
     None => None

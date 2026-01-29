@@ -11,6 +11,7 @@ pub enum TokenKind {
   Str(String) // stringliteral
   Regex(String, String) // /pattern/flags
   Ident(String)
+  PrivateIdent(String)
 
 
   Function
@@ -129,7 +130,7 @@ pub struct Token {
 
 ///|
 fn write_codepoint(buf : StringBuilder, code : Int) -> Unit {
-  if code < 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) {
+  if code < 0 || code > 0x10ffff {
     buf.write_char('\ufffd')
   } else {
     buf.write_char(code.unsafe_to_char())
@@ -789,6 +790,84 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
 }
 
 ///|
+fn Lexer::scan_private_ident(self : Lexer) -> TokenKind {
+  let buf = StringBuilder::new()
+  while true {
+    match self.peek() {
+      Some(c) =>
+        if (c >= 'a' && c <= 'z') ||
+          (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') ||
+          c == '_' ||
+          c == '$' {
+          let _ = self.advance()
+          buf.write_char(c)
+        } else if c == '\\' {
+          let _ = self.advance()
+          match self.peek() {
+            Some('u') => {
+              let _ = self.advance()
+              let mut code = 0
+              let mut ok = true
+              let mut digits = 0
+              if self.peek() == Some('{') {
+                let _ = self.advance()
+                while true {
+                  match self.peek() {
+                    Some('}') => {
+                      let _ = self.advance()
+                      break
+                    }
+                    Some(_) =>
+                      match self.read_hex_digit() {
+                        Some(d) => {
+                          code = code * 16 + d
+                          digits = digits + 1
+                        }
+                        None => {
+                          ok = false
+                          break
+                        }
+                      }
+                    None => {
+                      ok = false
+                      break
+                    }
+                  }
+                }
+              } else {
+                for _ in 0..<4 {
+                  match self.read_hex_digit() {
+                    Some(d) => {
+                      code = code * 16 + d
+                      digits = digits + 1
+                    }
+                    None => {
+                      ok = false
+                      break
+                    }
+                  }
+                }
+              }
+              if ok && digits > 0 {
+                write_codepoint(buf, code)
+              } else {
+                buf.write_char('u')
+              }
+            }
+            _ => break
+          }
+        } else {
+          break
+        }
+      None => break
+    }
+  }
+  let s = buf.to_string()
+  PrivateIdent(s)
+}
+
+///|
 // / stringliteral
 fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
   let buf = StringBuilder::new()
@@ -854,16 +933,47 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
               let _ = self.advance()
               let mut code = 0
               let mut ok = true
-              for _ in 0..<4 {
-                match self.read_hex_digit() {
-                  Some(d) => code = code * 16 + d
-                  None => {
-                    ok = false
-                    break
+              let mut digits = 0
+              if self.peek() == Some('{') {
+                let _ = self.advance()
+                while true {
+                  match self.peek() {
+                    Some('}') => {
+                      let _ = self.advance()
+                      break
+                    }
+                    Some(_) =>
+                      match self.read_hex_digit() {
+                        Some(d) => {
+                          code = code * 16 + d
+                          digits = digits + 1
+                        }
+                        None => {
+                          ok = false
+                          break
+                        }
+                      }
+                    None => {
+                      ok = false
+                      break
+                    }
+                  }
+                }
+              } else {
+                for _ in 0..<4 {
+                  match self.read_hex_digit() {
+                    Some(d) => {
+                      code = code * 16 + d
+                      digits = digits + 1
+                    }
+                    None => {
+                      ok = false
+                      break
+                    }
                   }
                 }
               }
-              if ok {
+              if ok && digits > 0 {
                 write_codepoint(buf, code)
               } else {
                 buf.write_char('u')
@@ -999,16 +1109,47 @@ fn Lexer::scan_template_parts(self : Lexer) -> (Array[String], Array[String]) {
               let _ = self.advance()
               let mut code = 0
               let mut ok = true
-              for _ in 0..<4 {
-                match self.read_hex_digit() {
-                  Some(d) => code = code * 16 + d
-                  None => {
-                    ok = false
-                    break
+              let mut digits = 0
+              if self.peek() == Some('{') {
+                let _ = self.advance()
+                while true {
+                  match self.peek() {
+                    Some('}') => {
+                      let _ = self.advance()
+                      break
+                    }
+                    Some(_) =>
+                      match self.read_hex_digit() {
+                        Some(d) => {
+                          code = code * 16 + d
+                          digits = digits + 1
+                        }
+                        None => {
+                          ok = false
+                          break
+                        }
+                      }
+                    None => {
+                      ok = false
+                      break
+                    }
+                  }
+                }
+              } else {
+                for _ in 0..<4 {
+                  match self.read_hex_digit() {
+                    Some(d) => {
+                      code = code * 16 + d
+                      digits = digits + 1
+                    }
+                    None => {
+                      ok = false
+                      break
+                    }
                   }
                 }
               }
-              if ok {
+              if ok && digits > 0 {
                 write_codepoint(buf, code)
               } else {
                 buf.write_char('u')
@@ -1154,16 +1295,47 @@ fn Lexer::scan_template(self : Lexer) -> TokenKind {
               let _ = self.advance()
               let mut code = 0
               let mut ok = true
-              for _ in 0..<4 {
-                match self.read_hex_digit() {
-                  Some(d) => code = code * 16 + d
-                  None => {
-                    ok = false
-                    break
+              let mut digits = 0
+              if self.peek() == Some('{') {
+                let _ = self.advance()
+                while true {
+                  match self.peek() {
+                    Some('}') => {
+                      let _ = self.advance()
+                      break
+                    }
+                    Some(_) =>
+                      match self.read_hex_digit() {
+                        Some(d) => {
+                          code = code * 16 + d
+                          digits = digits + 1
+                        }
+                        None => {
+                          ok = false
+                          break
+                        }
+                      }
+                    None => {
+                      ok = false
+                      break
+                    }
+                  }
+                }
+              } else {
+                for _ in 0..<4 {
+                  match self.read_hex_digit() {
+                    Some(d) => {
+                      code = code * 16 + d
+                      digits = digits + 1
+                    }
+                    None => {
+                      ok = false
+                      break
+                    }
                   }
                 }
               }
-              if ok {
+              if ok && digits > 0 {
                 write_codepoint(buf, code)
               } else {
                 buf.write_char('u')
@@ -1294,6 +1466,7 @@ fn token_can_end_expr(kind : TokenKind) -> Bool {
     | Str(_)
     | Regex(_, _)
     | Ident(_)
+    | PrivateIdent(_)
     | Null
     | RParen
     | RBracket
@@ -1328,6 +1501,20 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
           self.pos -= 1
           self.scan_number()
         }
+        '#' =>
+          match self.peek() {
+            Some(c2) =>
+              if (c2 >= 'a' && c2 <= 'z') ||
+                (c2 >= 'A' && c2 <= 'Z') ||
+                c2 == '_' ||
+                c2 == '$' ||
+                c2 == '\\' {
+                self.scan_private_ident()
+              } else {
+                Ident("#")
+              }
+            None => Ident("#")
+          }
         // /
         'a'
         | 'b'

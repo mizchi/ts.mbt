@@ -1,0 +1,8 @@
+# Statements-focused subset
+# Use for quick statement parser iteration.
+
+test262/test/language/statements/**
+
+# Exclusions (heavy/unsupported)
+!**/async/**
+!**/module-code/**

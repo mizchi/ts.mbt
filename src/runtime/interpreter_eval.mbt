@@ -1431,13 +1431,7 @@ fn JSInterpreter::exec_for_in_loop(
     None => ()
   }
   let target = match iter_val {
-    Undefined | Null => {
-      let err = self.set_error_kind(
-        "TypeError",
-        "Cannot convert undefined or null to object",
-      )
-      return Some(err)
-    }
+    Undefined | Null => return None
     Bool(_) | Number(_) | String(_) => self.wrap_primitive(env, iter_val)
     _ => iter_val
   }
@@ -1573,7 +1567,7 @@ pub fn JSInterpreter::exec_stmt(
       self.last_error = Some(val)
       Some(val)
     }
-    @ast.TsStmt::Try(try_block, catch_name, catch_block, finally_block) => {
+    @ast.TsStmt::Try(try_block, catch_binding, catch_block, finally_block) => {
       let mut result = self.exec_block(try_block, env)
       let mut pending_error : JSValue? = None
       match self.peek_error() {
@@ -1582,12 +1576,11 @@ pub fn JSInterpreter::exec_stmt(
             Some(err) => {
               match catch_block {
                 Some(block) => {
-                  let name = match catch_name {
-                    Some(n) => n
-                    None => "error"
-                  }
                   let catch_env = js_new_env(Some(env))
-                  catch_env.define_var(name, err)
+                  match catch_binding {
+                    Some(binding) => self.init_pattern(binding, err, catch_env, false)
+                    None => ()
+                  }
                   result = self.exec_block(block, catch_env)
                 }
                 None => pending_error = Some(err)
@@ -1717,7 +1710,10 @@ pub fn JSInterpreter::exec_stmt(
         Some(err) => return Some(err)
         None => ()
       }
-      if prop.has_prefix("@@get:") || prop.has_prefix("@@set:") {
+      if prop.has_prefix("@@define:") {
+        let real_key = (try { prop[9:] } catch { _ => "" }).to_string()
+        let _ = js_define_data_prop(obj, real_key, val, true, false, true)
+      } else if prop.has_prefix("@@get:") || prop.has_prefix("@@set:") {
         fn find_accessor(obj : JSValue, key : String) -> (JSValue?, JSValue?) {
           match obj {
             Function(closure) =>

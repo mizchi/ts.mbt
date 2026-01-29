@@ -1,1 +1,1 @@
-test262/test/built-ins/Function/StrictFunction_restricted-properties.js
+test262/test/language/statements/for-await-of/let-identifier-with-newline.js

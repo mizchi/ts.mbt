@@ -68,6 +68,8 @@ priv struct Test262Meta {
   includes : Array[String]
   flags : Array[String]
   negative : Bool
+  negative_phase : String?
+  negative_type : String?
 }
 
 ///|
@@ -505,6 +507,8 @@ fn parse_test262_meta(content : String) -> Test262Meta {
   let includes : Array[String] = []
   let flags : Array[String] = []
   let mut negative = false
+  let mut negative_phase : String? = None
+  let mut negative_type : String? = None
   let mut meta_block = ""
   match content.find("/*---") {
     Some(start) => {
@@ -554,9 +558,19 @@ fn parse_test262_meta(content : String) -> Test262Meta {
       }
     } else if body.has_prefix("negative:") {
       negative = true
+    } else if body.has_prefix("phase:") {
+      let value = try { body[6:].trim().to_string() } catch { _ => "" }
+      if value.length() > 0 {
+        negative_phase = Some(value)
+      }
+    } else if body.has_prefix("type:") {
+      let value = try { body[5:].trim().to_string() } catch { _ => "" }
+      if value.length() > 0 {
+        negative_type = Some(value)
+      }
     }
   }
-  { includes, flags, negative }
+  { includes, flags, negative, negative_phase, negative_type }
 }
 
 ///|
@@ -604,9 +618,6 @@ fn build_includes(includes : Array[String]) -> (String, Array[String]) {
 
 ///|
 fn should_skip_test(meta : Test262Meta, content : String) -> String? {
-  if meta.negative {
-    return Some("negative test")
-  }
   if contains(meta.flags, "async") {
     return Some("async flag")
   }
@@ -622,6 +633,78 @@ fn should_skip_test(meta : Test262Meta, content : String) -> String? {
     }
   }
   None
+}
+
+///|
+fn normalize_negative_phase(phase : String?) -> String? {
+  match phase {
+    Some(value) =>
+      if value == "early" {
+        Some("parse")
+      } else {
+        Some(value)
+      }
+    None => None
+  }
+}
+
+///|
+fn negative_phase_matches(expected_phase : String?, actual_phase : String) -> Bool {
+  match normalize_negative_phase(expected_phase) {
+    Some(value) => value == actual_phase
+    None => true
+  }
+}
+
+///|
+fn get_error_name(value : @runtime.JSValue) -> String? {
+  match value {
+    @runtime.JSValue::Object(_) => {
+      match @runtime.js_get_prop(value, "name") {
+        @runtime.JSValue::String(name) => Some(name)
+        _ => None
+      }
+    }
+    @runtime.JSValue::Function(_) => {
+      match @runtime.js_get_prop(value, "name") {
+        @runtime.JSValue::String(name) => Some(name)
+        _ => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+fn option_or_empty(value : String?) -> String {
+  match value {
+    Some(v) => v
+    None => ""
+  }
+}
+
+///|
+fn negative_type_matches(
+  expected_type : String?,
+  actual_phase : String,
+  error_value : @runtime.JSValue?,
+) -> Bool {
+  match expected_type {
+    None => true
+    Some(kind) =>
+      if actual_phase == "parse" {
+        kind == "SyntaxError"
+      } else {
+        match error_value {
+          Some(value) =>
+            match get_error_name(value) {
+              Some(name) => name == kind
+              None => false
+            }
+          None => false
+        }
+      }
+  }
 }
 
 ///|
@@ -892,14 +975,16 @@ async fn run_test262(test_path : String) -> Unit {
     let is_module = contains(meta.flags, "module") || has_module_syntax(content)
     let mut result = undefined_value
     let mut has_error = false
+    let mut error_phase = ""
+    let mut error_message = ""
     if is_module {
       if include_src.length() > 0 {
         let wrapped_inc = wrap_test_source(include_src)
         let _ = interp.run(wrapped_inc) catch {
           e => {
-            failed += 1
-            println("ERROR: \{path} - \{e}")
             has_error = true
+            error_phase = "parse"
+            error_message = "\{e}"
             undefined_value
           }
         }
@@ -908,9 +993,9 @@ async fn run_test262(test_path : String) -> Unit {
         let module_cache : Array[(String, @runtime.JSValue)] = []
         result = eval_module(interp, path, module_cache, source=content) catch {
           e => {
-            failed += 1
-            println("ERROR: \{path} - \{e}")
             has_error = true
+            error_phase = "parse"
+            error_message = "\{e}"
             undefined_value
           }
         }
@@ -923,29 +1008,77 @@ async fn run_test262(test_path : String) -> Unit {
       let wrapped = wrap_test_source(source)
       result = interp.run(wrapped) catch {
         e => {
-          failed += 1
-          println("ERROR: \{path} - \{e}")
           has_error = true
+          error_phase = "parse"
+          error_message = "\{e}"
           undefined_value
         }
       }
     }
     if has_error {
+      if meta.negative {
+        let phase_ok = negative_phase_matches(meta.negative_phase, error_phase)
+        let type_ok =
+          negative_type_matches(meta.negative_type, error_phase, None)
+        if phase_ok && type_ok {
+          passed += 1
+        } else {
+          failed += 1
+          let expected_phase = option_or_empty(meta.negative_phase)
+          let expected_type = option_or_empty(meta.negative_type)
+          println(
+            "FAIL: \{path} - negative mismatch (phase=\{expected_phase}, type=\{expected_type}, got=\{error_phase})",
+          )
+        }
+      } else {
+        failed += 1
+        println("ERROR: \{path} - \{error_message}")
+      }
       continue
     }
 
-    match result {
-      Object(_) => {
-        let err = @runtime.js_get_prop(result, "error")
-        match err {
-          @runtime.JSValue::String(msg) => {
+    let mut runtime_error : @runtime.JSValue? = None
+    if is_error_value(result) {
+      runtime_error = Some(result)
+    }
+
+    if meta.negative {
+      match runtime_error {
+        Some(err_value) => {
+          let phase_ok = negative_phase_matches(meta.negative_phase, "runtime")
+          let type_ok = negative_type_matches(meta.negative_type, "runtime", Some(err_value))
+          if phase_ok && type_ok {
+            passed += 1
+          } else {
             failed += 1
-            println("FAIL: \{path} - \{msg}")
+            let expected_phase = option_or_empty(meta.negative_phase)
+            let expected_type = option_or_empty(meta.negative_type)
+            let actual_name = option_or_empty(get_error_name(err_value))
+            println(
+              "FAIL: \{path} - negative mismatch (phase=\{expected_phase}, type=\{expected_type}, got=runtime/\{actual_name})",
+            )
           }
-          _ => passed += 1
+        }
+        None => {
+          failed += 1
+          println("FAIL: \{path} - negative test did not throw")
         }
       }
-      _ => passed += 1
+    } else {
+      match runtime_error {
+        Some(err_value) =>
+          match @runtime.js_get_prop(err_value, "error") {
+            @runtime.JSValue::String(msg) => {
+              failed += 1
+              println("FAIL: \{path} - \{msg}")
+            }
+            _ => {
+              failed += 1
+              println("FAIL: \{path} - runtime error")
+            }
+          }
+        None => passed += 1
+      }
     }
     let _ =
       @fs.write_file(

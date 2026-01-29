@@ -169,6 +169,64 @@ test "parser: parse for stmt" {
 }
 
 ///|
+test "parser: parse for stmt with uninitialized let" {
+  let parser =
+    Parser::from_source("for (let i; i < 10; i = i + 1) { i = i + 1; }")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    For(
+      Some(Let(@ast.TsBinding::Ident("i"), Any, Var("undefined"))),
+      Some(BinOp(BinLt, Var("i"), IntLit(10))),
+      _,
+      body,
+    ) => assert_eq(body.stmts.length(), 1)
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse for stmt with multi-let" {
+  let parser = Parser::from_source(
+    "for (let i = 0, j; i < 10; i = i + 1) { i = i + 1; }",
+  )
+  let stmt = parser.parse_stmt()
+  match stmt {
+    For(Some(Block(init_block)), Some(BinOp(BinLt, Var("i"), IntLit(10))), _, _) => {
+      assert_eq(init_block.stmts.length(), 2)
+      match init_block.stmts[0] {
+        Let(@ast.TsBinding::Ident("i"), Any, IntLit(0)) => ()
+        _ => fail("unexpected init[0]: \{init_block.stmts[0]}")
+      }
+      match init_block.stmts[1] {
+        Let(@ast.TsBinding::Ident("j"), Any, Var("undefined")) => ()
+        _ => fail("unexpected init[1]: \{init_block.stmts[1]}")
+      }
+    }
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse let with multiple declarators" {
+  let parser = Parser::from_source("let a, b = 1;")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    Block(block) => {
+      assert_eq(block.stmts.length(), 2)
+      match block.stmts[0] {
+        Let(@ast.TsBinding::Ident("a"), Any, Var("undefined")) => ()
+        _ => fail("unexpected decl[0]: \{block.stmts[0]}")
+      }
+      match block.stmts[1] {
+        Let(@ast.TsBinding::Ident("b"), Any, IntLit(1)) => ()
+        _ => fail("unexpected decl[1]: \{block.stmts[1]}")
+      }
+    }
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
 test "parser: parse for-of stmt" {
   let parser = Parser::from_source("for (let x of arr) { x; }")
   let stmt = parser.parse_stmt()
@@ -180,12 +238,57 @@ test "parser: parse for-of stmt" {
 }
 
 ///|
+test "parser: parse for-await-of stmt" {
+  let parser = Parser::from_source("for await (var x of []) { x; }")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    ForOf(@ast.TsForOfKind::Var, @ast.TsBinding::Ident("x"), Number, ArrayLit(_), body) =>
+      assert_eq(body.stmts.length(), 1)
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: let destructuring requires initializer" {
+  let ok =
+    try {
+      let parser = Parser::from_source("let { a };")
+      let _ = parser.parse_stmt()
+      true
+    } catch {
+      _ => false
+    }
+  assert_eq(ok, false)
+}
+
+///|
+test "parser: parse let expr statement with newline" {
+  let parser = Parser::from_source("let\nx = 1;")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    Expr(Var("let")) => ()
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
 test "parser: parse for-in stmt" {
   let parser = Parser::from_source("for (let k in obj) { k; }")
   let stmt = parser.parse_stmt()
   match stmt {
     ForIn(@ast.TsForOfKind::Let, @ast.TsBinding::Ident("k"), Number, Var("obj"), body) =>
       assert_eq(body.stmts.length(), 1)
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse for-in let identifier" {
+  let parser = Parser::from_source("for (let in obj) { }")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    ForIn(@ast.TsForOfKind::Assign, @ast.TsBinding::Ident("let"), Number, Var("obj"), body) =>
+      assert_eq(body.stmts.length(), 0)
     _ => fail("unexpected result: \{stmt}")
   }
 }
@@ -230,10 +333,23 @@ test "parser: parse try/catch/finally stmt" {
   )
   let stmt = parser.parse_stmt()
   match stmt {
-    Try(try_block, Some("e"), Some(catch_block), Some(finally_block)) => {
+    Try(try_block, Some(@ast.TsBinding::Ident("e")), Some(catch_block), Some(finally_block)) => {
       assert_eq(try_block.stmts.length(), 1)
       assert_eq(catch_block.stmts.length(), 1)
       assert_eq(finally_block.stmts.length(), 1)
+    }
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse try/catch with destructuring" {
+  let parser = Parser::from_source("try { x = 1; } catch ({ e }) { x = e; }")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    Try(_, Some(@ast.TsBinding::Object(obj)), Some(_), None) => {
+      assert_eq(obj.props.length(), 1)
+      assert_eq(obj.props[0].key, "e")
     }
     _ => fail("unexpected result: \{stmt}")
   }
@@ -271,6 +387,19 @@ test "parser: parse throw stmt" {
     Throw(Var("err")) => ()
     _ => fail("unexpected result: \{stmt}")
   }
+}
+
+///|
+test "parser: disallow let in single-statement if" {
+  let ok =
+    try {
+      let parser = Parser::from_source("if (true) let x = 1;")
+      let _ = parser.parse_stmt()
+      true
+    } catch {
+      _ => false
+    }
+  assert_eq(ok, false)
 }
 
 ///|

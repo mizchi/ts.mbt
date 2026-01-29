@@ -733,7 +733,44 @@ fn JSInterpreter::to_primitive_for_add(
 // / JS ToString (Object toString )
 fn JSInterpreter::to_string_value(self : JSInterpreter, value : JSValue) -> String {
   match value {
+    String(s) =>
+      if s.has_prefix("Symbol(") {
+        let _ = self.set_error_kind("TypeError", "Cannot convert Symbol to string")
+        ""
+      } else {
+        s
+      }
     Object(_) | Array(_) | Function(_) => {
+      let to_prim = js_get_prop(value, "@@toPrimitive")
+      if self.is_callable(to_prim) {
+        let res = self.call_function(to_prim, value, [String("string")])
+        match res {
+          Object(_) | Array(_) | Function(_) => {
+            let _ =
+              self.set_error_kind(
+                "TypeError",
+                "Cannot convert object to primitive value",
+              )
+            return ""
+          }
+          _ => return res.to_js_string()
+        }
+      } else if not(to_prim.is_undefined()) {
+        let _ =
+          self.set_error_kind(
+            "TypeError",
+            "Cannot convert object to primitive value",
+          )
+        return ""
+      }
+      match js_get_prop(value, "__class") {
+        String("BigInt") =>
+          match js_get_prop(value, "value") {
+            String(s) => return s
+            _ => ()
+          }
+        _ => ()
+      }
       let to_str = js_get_prop(value, "toString")
       if self.is_callable(to_str) {
         let res = self.call_function(to_str, value, [])
@@ -760,6 +797,13 @@ fn JSInterpreter::to_string_value(self : JSInterpreter, value : JSValue) -> Stri
 // / JS ToNumber (Object valueOf/toString)
 fn JSInterpreter::to_number_value(self : JSInterpreter, value : JSValue) -> Double {
   match value {
+    String(s) =>
+      if s.has_prefix("Symbol(") {
+        let _ = self.set_error_kind("TypeError", "Cannot convert Symbol to number")
+        0.0
+      } else {
+        value.to_number()
+      }
     Object(_) | Array(_) | Function(_) => {
       let value_of = js_get_prop(value, "valueOf")
       if self.is_callable(value_of) {

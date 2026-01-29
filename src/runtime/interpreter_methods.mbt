@@ -618,6 +618,10 @@ fn JSInterpreter::string_method(
       } else {
         0.0
       }
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
+      }
       let mut start = if start_num.is_nan() { 0 } else { start_num.to_int() }
       if start < 0 {
         start = len + start

@@ -213,7 +213,7 @@ pub(all) enum TsStmt {
   Throw(TsExpr)
 
   // try/catch/finally
-  Try(TsBlock, String?, TsBlock?, TsBlock?)
+  Try(TsBlock, TsBinding?, TsBlock?, TsBlock?)
 
 
   If(TsExpr, TsBlock, TsBlock?)

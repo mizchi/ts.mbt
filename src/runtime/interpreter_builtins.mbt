@@ -149,6 +149,25 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let num_is_nan = self.make_native("Number.isNaN")
   self.set_function_length(num_is_nan, 1.0)
   let _ = js_set_prop(number_ctor, "isNaN", num_is_nan)
+  let _ = js_define_data_prop(number_ctor, "NaN", Number(js_nan), false, false, false)
+  let _ =
+    js_define_data_prop(
+      number_ctor,
+      "POSITIVE_INFINITY",
+      Number(1.0 / 0.0),
+      false,
+      false,
+      false,
+    )
+  let _ =
+    js_define_data_prop(
+      number_ctor,
+      "NEGATIVE_INFINITY",
+      Number(-1.0 / 0.0),
+      false,
+      false,
+      false,
+    )
   let max_safe = JSValue::Number(9007199254740991.0)
   let _ = js_define_data_prop(number_ctor, "MAX_SAFE_INTEGER", max_safe, false, false, false)
   self.global_env.define_var("Number", number_ctor)
@@ -435,6 +454,24 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.set_function_name(date_ctor, "Date")
   let _ = js_define_data_prop(date_ctor, "prototype", date_proto, true, false, true)
   let _ = js_set_prop(date_proto, "constructor", date_ctor)
+  let date_get_year = self.make_native("Date.prototype.getYear")
+  self.set_function_length(date_get_year, 0.0)
+  let _ = js_set_prop(date_proto, "getYear", date_get_year)
+  let date_set_year = self.make_native("Date.prototype.setYear")
+  self.set_function_length(date_set_year, 1.0)
+  let _ = js_set_prop(date_proto, "setYear", date_set_year)
+  let date_get_full_year = self.make_native("Date.prototype.getFullYear")
+  self.set_function_length(date_get_full_year, 0.0)
+  let _ = js_set_prop(date_proto, "getFullYear", date_get_full_year)
+  let date_get_time = self.make_native("Date.prototype.getTime")
+  self.set_function_length(date_get_time, 0.0)
+  let _ = js_set_prop(date_proto, "getTime", date_get_time)
+  let date_set_time = self.make_native("Date.prototype.setTime")
+  self.set_function_length(date_set_time, 1.0)
+  let _ = js_set_prop(date_proto, "setTime", date_set_time)
+  let date_value_of = self.make_native("Date.prototype.valueOf")
+  self.set_function_length(date_value_of, 0.0)
+  let _ = js_set_prop(date_proto, "valueOf", date_value_of)
   self.global_env.define_var("Date", date_ctor)
   let _ = js_set_prop(global_obj, "Date", date_ctor)
 
@@ -667,6 +704,14 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let print_fn = self.make_native("print")
   self.global_env.define_var("print", print_fn)
   let _ = js_set_prop(global_obj, "print", print_fn)
+  let escape_fn = self.make_native("escape")
+  self.set_function_length(escape_fn, 1.0)
+  self.global_env.define_var("escape", escape_fn)
+  let _ = js_set_prop(global_obj, "escape", escape_fn)
+  let unescape_fn = self.make_native("unescape")
+  self.set_function_length(unescape_fn, 1.0)
+  self.global_env.define_var("unescape", unescape_fn)
+  let _ = js_set_prop(global_obj, "unescape", unescape_fn)
 
   // eval
   let eval_fn = self.make_native("eval")
@@ -2141,6 +2186,295 @@ fn JSInterpreter::define_property(
 }
 
 ///|
+fn hex_digit(value : Int) -> Char {
+  let hex = "0123456789ABCDEF"
+  let idx = if value < 0 { 0 } else if value > 15 { 15 } else { value }
+  let unit = hex[idx]
+  unit.unsafe_to_char()
+}
+
+///|
+fn append_hex2(sb : StringBuilder, value : Int) -> Unit {
+  let hi = (value >> 4) & 0xf
+  let lo = value & 0xf
+  sb.write_char(hex_digit(hi))
+  sb.write_char(hex_digit(lo))
+}
+
+///|
+fn append_hex4(sb : StringBuilder, value : Int) -> Unit {
+  let a = (value >> 12) & 0xf
+  let b = (value >> 8) & 0xf
+  let c = (value >> 4) & 0xf
+  let d = value & 0xf
+  sb.write_char(hex_digit(a))
+  sb.write_char(hex_digit(b))
+  sb.write_char(hex_digit(c))
+  sb.write_char(hex_digit(d))
+}
+
+///|
+fn is_escape_passthrough(code : Int) -> Bool {
+  if (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) {
+    return true
+  }
+  match code {
+    0x40 | 0x2a | 0x5f | 0x2b | 0x2d | 0x2e | 0x2f => true
+    _ => false
+  }
+}
+
+///|
+fn escape_string_value(value : String) -> String {
+  let sb = StringBuilder::new()
+  let len = value.length()
+  let mut i = 0
+  while i < len {
+    let unit = value[i]
+    let code = unit.to_int()
+    if is_escape_passthrough(code) {
+      sb.write_char(unit.unsafe_to_char())
+    } else if code < 256 {
+      sb.write_char('%')
+      append_hex2(sb, code)
+    } else {
+      sb.write_string("%u")
+      append_hex4(sb, code)
+    }
+    i += 1
+  }
+  sb.to_string()
+}
+
+///|
+fn hex_value(unit : UInt16) -> Int? {
+  let code = unit.to_int()
+  if code >= 0x30 && code <= 0x39 {
+    Some(code - 0x30)
+  } else if code >= 0x41 && code <= 0x46 {
+    Some(code - 0x37)
+  } else if code >= 0x61 && code <= 0x66 {
+    Some(code - 0x57)
+  } else {
+    None
+  }
+}
+
+///|
+fn unescape_string_value(value : String) -> String {
+  let sb = StringBuilder::new()
+  let len = value.length()
+  let percent : UInt16 = '%'
+  let u_char : UInt16 = 'u'
+  let mut k = 0
+  while k < len {
+    let unit = value[k]
+    if unit == percent {
+      if k + 5 < len && value[k + 1] == u_char {
+        match (
+          hex_value(value[k + 2]),
+          hex_value(value[k + 3]),
+          hex_value(value[k + 4]),
+          hex_value(value[k + 5]),
+        ) {
+          (Some(a), Some(b), Some(c), Some(d)) => {
+            let code = (a << 12) | (b << 8) | (c << 4) | d
+            let ch = code.to_uint16().unsafe_to_char()
+            sb.write_char(ch)
+            k += 6
+            continue
+          }
+          _ => ()
+        }
+      }
+      if k + 2 < len {
+        match (hex_value(value[k + 1]), hex_value(value[k + 2])) {
+          (Some(a), Some(b)) => {
+            let code = (a << 4) | b
+            let ch = code.to_uint16().unsafe_to_char()
+            sb.write_char(ch)
+            k += 3
+            continue
+          }
+          _ => ()
+        }
+      }
+      sb.write_char(percent.unsafe_to_char())
+      k += 1
+    } else {
+      sb.write_char(unit.unsafe_to_char())
+      k += 1
+    }
+  }
+  sb.to_string()
+}
+
+///|
+fn is_leap_year(year : Int) -> Bool {
+  (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+///|
+fn days_in_year(year : Int) -> Int {
+  if is_leap_year(year) { 366 } else { 365 }
+}
+
+///|
+fn days_in_month(year : Int, month : Int) -> Int {
+  match month {
+    0 => 31
+    1 => if is_leap_year(year) { 29 } else { 28 }
+    2 => 31
+    3 => 30
+    4 => 31
+    5 => 30
+    6 => 31
+    7 => 31
+    8 => 30
+    9 => 31
+    10 => 30
+    11 => 31
+    _ => 30
+  }
+}
+
+///|
+fn floor_div(a : Int, b : Int) -> Int {
+  if b == 0 {
+    0
+  } else if a >= 0 {
+    a / b
+  } else {
+    -(((-a + b - 1) / b))
+  }
+}
+
+///|
+fn days_before_year(year : Int) -> Int {
+  let mut days = 0
+  if year >= 1970 {
+    let mut y = 1970
+    while y < year {
+      days += days_in_year(y)
+      y += 1
+    }
+  } else {
+    let mut y = year
+    while y < 1970 {
+      days -= days_in_year(y)
+      y += 1
+    }
+  }
+  days
+}
+
+///|
+fn days_before_month(year : Int, month : Int) -> Int {
+  let mut days = 0
+  let mut m = 0
+  while m < month {
+    days += days_in_month(year, m)
+    m += 1
+  }
+  days
+}
+
+///|
+fn make_date_time(
+  year : Int,
+  month : Int,
+  date : Int,
+  hour : Int,
+  minute : Int,
+  second : Int,
+  ms : Int,
+) -> Double {
+  let q = floor_div(month, 12)
+  let mut y = year + q
+  let mut m = month - q * 12
+  if m < 0 {
+    m += 12
+    y -= 1
+  }
+  let day = days_before_year(y) + days_before_month(y, m) + (date - 1)
+  let time_ms =
+    (((hour * 60 + minute) * 60 + second) * 1000 + ms)
+  day.to_double() * 86400000.0 + time_ms.to_double()
+}
+
+///|
+fn break_time(t : Double) -> (Int, Int, Int, Int, Int, Int, Int) {
+  let day = (t / 86400000.0).floor()
+  let mut days = day.to_int()
+  let time_ms = t - day * 86400000.0
+  let time_ms_int = time_ms.to_int()
+  let mut year = 1970
+  if days >= 0 {
+    while days >= days_in_year(year) {
+      days -= days_in_year(year)
+      year += 1
+    }
+  } else {
+    year = 1969
+    while days < 0 {
+      days += days_in_year(year)
+      year -= 1
+    }
+    year += 1
+  }
+  let mut month = 0
+  while days >= days_in_month(year, month) {
+    days -= days_in_month(year, month)
+    month += 1
+  }
+  let day = days + 1
+  let hour = time_ms_int / 3600000
+  let mut rem = time_ms_int - hour * 3600000
+  let minute = rem / 60000
+  rem = rem - minute * 60000
+  let second = rem / 1000
+  let milli = rem - second * 1000
+  (year, month, day, hour, minute, second, milli)
+}
+
+///|
+fn time_clip(t : Double) -> Double {
+  if t.is_nan() || t.is_inf() {
+    return js_nan
+  }
+  let abs = if t < 0.0 { -t } else { t }
+  if abs > 8.64e15 {
+    js_nan
+  } else {
+    t.trunc()
+  }
+}
+
+///|
+fn JSInterpreter::date_time_value(self : JSInterpreter, this_arg : JSValue) -> Double? {
+  match this_arg {
+    Object(_) | Array(_) | Function(_) => ()
+    _ => {
+      let _ = self.set_error_kind("TypeError", "Not a Date object")
+      return None
+    }
+  }
+  match js_get_prop(this_arg, "__class") {
+    String("Date") => ()
+    _ => {
+      let _ = self.set_error_kind("TypeError", "Not a Date object")
+      return None
+    }
+  }
+  match js_get_prop(this_arg, "__date_value") {
+    Number(n) => Some(n)
+    _ => Some(js_nan)
+  }
+}
+
+///|
 fn JSInterpreter::call_native(
   self : JSInterpreter,
   name : String,
@@ -3445,9 +3779,158 @@ fn JSInterpreter::call_native(
       match this_arg {
         Object(_) => {
           let _ = js_set_prop(this_arg, "__class", String("Date"))
+          let time_val =
+            if args.length() == 0 {
+              0.0
+            } else if args.length() == 1 {
+              let t = self.to_number_value(args[0])
+              match self.peek_error() {
+                Some(err) => return err
+                None => time_clip(t)
+              }
+            } else {
+              let y = self.to_number_value(args[0])
+              let m = self.to_number_value(args[1])
+              let dt =
+                if args.length() > 2 {
+                  self.to_number_value(args[2])
+                } else {
+                  1.0
+                }
+              let h =
+                if args.length() > 3 {
+                  self.to_number_value(args[3])
+                } else {
+                  0.0
+                }
+              let min =
+                if args.length() > 4 {
+                  self.to_number_value(args[4])
+                } else {
+                  0.0
+                }
+              let s =
+                if args.length() > 5 {
+                  self.to_number_value(args[5])
+                } else {
+                  0.0
+                }
+              let ms =
+                if args.length() > 6 {
+                  self.to_number_value(args[6])
+                } else {
+                  0.0
+                }
+              match self.peek_error() {
+                Some(err) => return err
+                None => {
+                  if y.is_nan() ||
+                    m.is_nan() ||
+                    dt.is_nan() ||
+                    h.is_nan() ||
+                    min.is_nan() ||
+                    s.is_nan() ||
+                    ms.is_nan() {
+                    js_nan
+                  } else {
+                    let mut year = y.to_int()
+                    if year >= 0 && year <= 99 {
+                      year += 1900
+                    }
+                    let time_val =
+                      make_date_time(
+                        year,
+                        m.to_int(),
+                        dt.to_int(),
+                        h.to_int(),
+                        min.to_int(),
+                        s.to_int(),
+                        ms.to_int(),
+                      )
+                    time_clip(time_val)
+                  }
+                }
+              }
+            }
+          let _ = js_set_prop(this_arg, "__date_value", Number(time_val))
           this_arg
         }
         _ => String("Date")
+      }
+    }
+    "Date.prototype.getTime" =>
+      match self.date_time_value(this_arg) {
+        Some(t) => Number(t)
+        None => self.error_or_undefined()
+      }
+    "Date.prototype.valueOf" =>
+      match self.date_time_value(this_arg) {
+        Some(t) => Number(t)
+        None => self.error_or_undefined()
+      }
+    "Date.prototype.setTime" => {
+      let t = if args.length() > 0 { self.to_number_value(args[0]) } else { js_nan }
+      match self.peek_error() {
+        Some(err) => err
+        None => {
+          let clipped = time_clip(t)
+          let _ = js_set_prop(this_arg, "__class", String("Date"))
+          let _ = js_set_prop(this_arg, "__date_value", Number(clipped))
+          Number(clipped)
+        }
+      }
+    }
+    "Date.prototype.getFullYear" =>
+      match self.date_time_value(this_arg) {
+        Some(t) =>
+          if t.is_nan() {
+            Number(js_nan)
+          } else {
+            let (year, _, _, _, _, _, _) = break_time(t)
+            Number(year.to_double())
+          }
+        None => self.error_or_undefined()
+      }
+    "Date.prototype.getYear" =>
+      match self.date_time_value(this_arg) {
+        Some(t) =>
+          if t.is_nan() {
+            Number(js_nan)
+          } else {
+            let (year, _, _, _, _, _, _) = break_time(t)
+            Number((year - 1900).to_double())
+          }
+        None => self.error_or_undefined()
+      }
+    "Date.prototype.setYear" => {
+      let t_opt = self.date_time_value(this_arg)
+      let t =
+        match t_opt {
+          Some(v) => v
+          None => return self.error_or_undefined()
+        }
+      let y = if args.length() > 0 { self.to_number_value(args[0]) } else { js_nan }
+      match self.peek_error() {
+        Some(err) => err
+        None => {
+          let base_time = if t.is_nan() { 0.0 } else { t }
+          if y.is_nan() {
+            let _ = js_set_prop(this_arg, "__date_value", Number(js_nan))
+            Number(js_nan)
+          } else {
+            let mut year = y.to_int()
+            if year >= 0 && year <= 99 {
+              year += 1900
+            }
+            let (_cur_year, month, day, hour, minute, second, milli) =
+              break_time(base_time)
+            let new_time =
+              make_date_time(year, month, day, hour, minute, second, milli)
+            let clipped = time_clip(new_time)
+            let _ = js_set_prop(this_arg, "__date_value", Number(clipped))
+            Number(clipped)
+          }
+        }
       }
     }
     "Symbol" => {
@@ -3978,6 +4461,30 @@ fn JSInterpreter::call_native(
       }
       println(parts.join(" "))
       Undefined
+    }
+    "escape" => {
+      let input =
+        if args.length() > 0 {
+          self.to_string_value(args[0])
+        } else {
+          "undefined"
+        }
+      match self.peek_error() {
+        Some(err) => err
+        None => String(escape_string_value(input))
+      }
+    }
+    "unescape" => {
+      let input =
+        if args.length() > 0 {
+          self.to_string_value(args[0])
+        } else {
+          "undefined"
+        }
+      match self.peek_error() {
+        Some(err) => err
+        None => String(unescape_string_value(input))
+      }
     }
     "assert" =>
       if args.length() > 0 {

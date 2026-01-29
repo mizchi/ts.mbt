@@ -1,0 +1,7 @@
+# Class-focused subset
+
+test262/test/language/statements/class/**
+test262/test/language/expressions/class/**
+
+# Exclusions
+!**/async/**

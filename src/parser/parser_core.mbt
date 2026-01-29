@@ -13,12 +13,19 @@ pub struct Parser {
   mut pos : Int
   mut in_generator : Bool
   mut temp_index : Int
+  mut in_strict : Bool
+  src : String
 } derive(Show)
 
 ///|
 // / create
 pub fn Parser::new(tokens : Array[Token]) -> Parser {
-  { tokens, pos: 0, in_generator: false, temp_index: 0 }
+  Parser::new_with_strict(tokens, false)
+}
+
+///|
+pub fn Parser::new_with_strict(tokens : Array[Token], in_strict : Bool) -> Parser {
+  { tokens, pos: 0, in_generator: false, temp_index: 0, in_strict, src: "" }
 }
 
 ///|
@@ -26,7 +33,10 @@ pub fn Parser::new(tokens : Array[Token]) -> Parser {
 pub fn Parser::from_source(src : String) -> Parser {
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
-  Parser::new(tokens)
+  let trimmed = src.trim_start()
+  let in_strict =
+    trimmed.has_prefix("\"use strict\";") || trimmed.has_prefix("'use strict';")
+  { tokens, pos: 0, in_generator: false, temp_index: 0, in_strict, src }
 }
 
 ///|
@@ -168,4 +178,41 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
     _ => ()
   }
   raise ParseError("Expected Semicolon, got \{self.peek().kind}")
+}
+
+///|
+fn Parser::has_line_terminator_between_positions(
+  self : Parser,
+  start_pos : Int,
+  end_pos : Int,
+) -> Bool {
+  if self.src == "" {
+    return false
+  }
+  let mut i = start_pos
+  let limit =
+    if end_pos <= self.src.length() {
+      end_pos
+    } else {
+      self.src.length()
+    }
+  while i < limit {
+    let ch = self.src[i]
+    if ch == '\n' || ch == '\r' {
+      return true
+    }
+    i += 1
+  }
+  false
+}
+
+///|
+fn Parser::has_line_terminator_after(self : Parser) -> Bool {
+  let next = self.pos + 1
+  if next >= self.tokens.length() {
+    return false
+  }
+  let start_pos = self.tokens[self.pos].pos
+  let end_pos = self.tokens[next].pos
+  self.has_line_terminator_between_positions(start_pos, end_pos)
 }

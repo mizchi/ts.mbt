@@ -1,0 +1,9 @@
+# Focused language subset (expressions + statements)
+# Use this for tight iteration before full allowlist runs.
+
+test262/test/language/expressions/**
+test262/test/language/statements/**
+
+# Exclusions (heavy/unsupported)
+!**/async/**
+!**/module-code/**

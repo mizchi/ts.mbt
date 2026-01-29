@@ -78,6 +78,8 @@ fn JSInterpreter::is_anonymous_function_definition(
   match expr {
     @ast.TsExpr::FuncExpr(func) => func.name == "<anon>"
     @ast.TsExpr::ArrowFunc(_, _) => true
+    @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(func), _) =>
+      func.name == "<class>"
     @ast.TsExpr::ObjectLit(fields) => {
       for field in fields {
         let (key, value) = field
@@ -1842,4 +1844,3 @@ fn JSInterpreter::bind_params(
     }
   }
 }
-
