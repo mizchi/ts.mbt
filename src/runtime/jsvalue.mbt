@@ -93,6 +93,12 @@ pub fn js_set_default_array_proto(proto : JSValue) -> Unit {
 }
 
 ///|
+// / array prototype get
+pub fn js_get_default_array_proto() -> JSValue? {
+  array_proto_holder.proto
+}
+
+///|
 // /
 pub struct JSBinding {
   name : String
@@ -242,7 +248,29 @@ pub fn JSValue::is_string(self : JSValue) -> Bool {
 ///|
 pub fn JSValue::is_object(self : JSValue) -> Bool {
   match self {
-    Object(_) => true
+    Object(map) => {
+      let mut is_bigint = false
+      let mut bigint_value = ""
+      for prop in map.props {
+        if prop.key == "__class" {
+          match prop.value {
+            String("IsHTMLDDA") => return false
+            String("BigInt") => is_bigint = true
+            _ => ()
+          }
+        }
+        if prop.key == "value" {
+          match prop.value {
+            String(s) => bigint_value = s
+            _ => ()
+          }
+        }
+      }
+      if is_bigint {
+        return bigint_value != "0"
+      }
+      true
+    }
     _ => false
   }
 }
@@ -258,7 +286,17 @@ pub fn JSValue::is_array(self : JSValue) -> Bool {
 ///|
 pub fn JSValue::is_function(self : JSValue) -> Bool {
   match self {
-    Function(_) => true
+    Function(closure) => {
+      for prop in closure.props {
+        if prop.key == "__class" {
+          match prop.value {
+            String("IsHTMLDDA") => return false
+            _ => ()
+          }
+        }
+      }
+      true
+    }
     _ => false
   }
 }
@@ -274,9 +312,44 @@ pub fn JSValue::to_boolean(self : JSValue) -> Bool {
     Bool(b) => b
     Number(n) => n != 0.0 && not(n.is_nan())
     String(s) => s.length() > 0
-    Object(_) => true
+    Object(map) => {
+      let mut class_name : String? = None
+      let mut bigint_value : String? = None
+      for prop in map.props {
+        if prop.key == "__class" {
+          match prop.value {
+            String(name) => class_name = Some(name)
+            _ => ()
+          }
+        } else if prop.key == "value" {
+          match prop.value {
+            String(val) => bigint_value = Some(val)
+            _ => ()
+          }
+        }
+      }
+      match class_name {
+        Some("IsHTMLDDA") => false
+        Some("BigInt") =>
+          match bigint_value {
+            Some("0") => false
+            _ => true
+          }
+        _ => true
+      }
+    }
     Array(_) => true
-    Function(_) => true
+    Function(closure) => {
+      for prop in closure.props {
+        if prop.key == "__class" {
+          match prop.value {
+            String("IsHTMLDDA") => return false
+            _ => ()
+          }
+        }
+      }
+      true
+    }
     BreakSignal(_) | ContinueSignal(_) => false // internal
   }
 }

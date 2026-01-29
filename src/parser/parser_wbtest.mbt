@@ -1,6 +1,26 @@
 // test
 
 ///|
+fn parse_expr_from(src : String) -> TsExpr {
+  try! Parser::from_source(src).parse_expr()
+}
+
+///|
+fn parse_stmt_from(src : String) -> TsStmt {
+  try! Parser::from_source(src).parse_stmt()
+}
+
+///|
+fn parse_binding_from(src : String) -> TsBinding {
+  try! Parser::from_source(src).parse_binding_pattern()
+}
+
+///|
+fn parse_assign_binding_from(src : String) -> TsBinding {
+  try! Parser::from_source(src).parse_assignment_binding_pattern()
+}
+
+///|
 test "lexer: tokenize simple" {
   let lexer = Lexer::new("let x: number = 42;")
   let tokens = lexer.tokenize()
@@ -84,7 +104,7 @@ test "parser: parse let stmt" {
   let parser = Parser::from_source("let x: number = 42;")
   let stmt = parser.parse_stmt()
   match stmt {
-    Let("x", Number, IntLit(42)) => ()
+    Let(TsBinding::Ident("x"), Number, IntLit(42)) => ()
     _ => fail("unexpected result: \{stmt}")
   }
 }
@@ -121,6 +141,134 @@ test "parser: parse while stmt" {
   match stmt {
     While(BinOp(BinLt, Var("i"), Var("n")), body) =>
       assert_eq(body.stmts.length(), 1)
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse for stmt" {
+  let parser =
+    Parser::from_source("for (let i = 0; i < 10; i = i + 1) { i = i + 1; }")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    For(
+      Some(Let(TsBinding::Ident("i"), Any, IntLit(0))),
+      Some(BinOp(BinLt, Var("i"), IntLit(10))),
+      update,
+      body,
+    ) => {
+      match update {
+        Some(Assign("i", BinOp(Add, Var("i"), IntLit(1))))
+        | Some(Expr(AssignExpr("i", BinOp(Add, Var("i"), IntLit(1))))) => ()
+        _ => fail("unexpected update: \{update}")
+      }
+      assert_eq(body.stmts.length(), 1)
+    }
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse for-of stmt" {
+  let parser = Parser::from_source("for (let x of arr) { x; }")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    ForOf(TsForOfKind::Let, TsBinding::Ident("x"), Number, Var("arr"), body) =>
+      assert_eq(body.stmts.length(), 1)
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse for-in stmt" {
+  let parser = Parser::from_source("for (let k in obj) { k; }")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    ForIn(TsForOfKind::Let, TsBinding::Ident("k"), Number, Var("obj"), body) =>
+      assert_eq(body.stmts.length(), 1)
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse do-while stmt" {
+  let parser = Parser::from_source("do { i = i + 1; } while (i < n);")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    While(BinOp(BinLt, Var("i"), Var("n")), body) =>
+      assert_eq(body.stmts.length(), 1)
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse switch stmt" {
+  let parser = Parser::from_source(
+    "switch (x) { case 1: break; default: break; }",
+  )
+  let stmt = parser.parse_stmt()
+  match stmt {
+    Switch(Var("x"), cases) => {
+      assert_eq(cases.length(), 2)
+      match cases[0].test_expr {
+        Some(IntLit(1)) => ()
+        _ => fail("unexpected case[0]: \{cases[0]}")
+      }
+      match cases[1].test_expr {
+        None => ()
+        _ => fail("unexpected case[1]: \{cases[1]}")
+      }
+    }
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse try/catch/finally stmt" {
+  let parser = Parser::from_source(
+    "try { x = 1; } catch (e) { x = 2; } finally { x = 3; }",
+  )
+  let stmt = parser.parse_stmt()
+  match stmt {
+    Try(try_block, Some("e"), Some(catch_block), Some(finally_block)) => {
+      assert_eq(try_block.stmts.length(), 1)
+      assert_eq(catch_block.stmts.length(), 1)
+      assert_eq(finally_block.stmts.length(), 1)
+    }
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse break/continue with label" {
+  let parser = Parser::from_source("loop: while (true) { break loop; }")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    Label("loop", While(BoolLit(true), body)) =>
+      match body.stmts[0] {
+        Break(Some("loop")) => ()
+        _ => fail("unexpected body: \{body}")
+      }
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse debugger stmt" {
+  let parser = Parser::from_source("debugger;")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    Debugger => ()
+    _ => fail("unexpected result: \{stmt}")
+  }
+}
+
+///|
+test "parser: parse throw stmt" {
+  let parser = Parser::from_source("throw err;")
+  let stmt = parser.parse_stmt()
+  match stmt {
+    Throw(Var("err")) => ()
     _ => fail("unexpected result: \{stmt}")
   }
 }
@@ -331,7 +479,7 @@ test "parser: parse let with string" {
   let parser = Parser::from_source("let s: string = \"hello\";")
   let stmt = parser.parse_stmt()
   match stmt {
-    Let("s", String_, StringLit("hello")) => ()
+    Let(TsBinding::Ident("s"), String_, StringLit("hello")) => ()
     _ => fail("unexpected result: \{stmt}")
   }
 }
@@ -434,7 +582,7 @@ test "parser: parse let without type annotation" {
   let parser = Parser::from_source("let x = 42;")
   let stmt = parser.parse_stmt()
   match stmt {
-    Let("x", Any, IntLit(42)) => ()
+    Let(TsBinding::Ident("x"), Any, IntLit(42)) => ()
     _ => fail("unexpected result: \{stmt}")
   }
 }
@@ -453,4 +601,303 @@ test "parser: parse mixed typed and untyped" {
   assert_eq(f.params[0].type_, Number) // type
   assert_eq(f.params[1].type_, Any) // type
   assert_eq(f.return_type, Any) // return valuetype
+}
+
+///|
+test "parser: ast patterns expr literals" {
+  match parse_expr_from("1") {
+    IntLit(1) => ()
+    _ => fail("expected IntLit(1)")
+  }
+  match parse_expr_from("1.5") {
+    NumberLit(_) => ()
+    _ => fail("expected NumberLit")
+  }
+  match parse_expr_from("true") {
+    BoolLit(true) => ()
+    _ => fail("expected BoolLit(true)")
+  }
+  match parse_expr_from("\"a\"") {
+    StringLit("a") => ()
+    _ => fail("expected StringLit(\"a\")")
+  }
+  match parse_expr_from("null") {
+    NullLit => ()
+    _ => fail("expected NullLit")
+  }
+  match parse_expr_from("[, 1]") {
+    ArrayLit(elements) => {
+      assert_eq(elements.length(), 2)
+      match elements[0] {
+        ArrayHole => ()
+        _ => fail("expected ArrayHole")
+      }
+      match elements[1] {
+        IntLit(1) => ()
+        _ => fail("expected IntLit(1)")
+      }
+    }
+    _ => fail("expected ArrayLit")
+  }
+  match parse_expr_from("/ab+/i") {
+    New("RegExp", args) => assert_eq(args.length(), 2)
+    _ => fail("expected RegExp constructor")
+  }
+}
+
+///|
+test "parser: ast patterns expr operators" {
+  match parse_expr_from("1 + 2") {
+    BinOp(Add, IntLit(1), IntLit(2)) => ()
+    _ => fail("expected BinOp(Add)")
+  }
+  match parse_expr_from("a && b") {
+    BinOp(And, Var("a"), Var("b")) => ()
+    _ => fail("expected BinOp(And)")
+  }
+  match parse_expr_from("a ? b : c") {
+    Cond(Var("a"), Var("b"), Var("c")) => ()
+    _ => fail("expected Cond")
+  }
+  match parse_expr_from("a, b") {
+    Seq(Var("a"), Var("b")) => ()
+    _ => fail("expected Seq")
+  }
+  match parse_expr_from("-x") {
+    UnaryOp(Neg, Var("x")) => ()
+    _ => fail("expected UnaryOp(Neg)")
+  }
+  match parse_expr_from("!x") {
+    UnaryOp(Not, Var("x")) => ()
+    _ => fail("expected UnaryOp(Not)")
+  }
+  match parse_expr_from("typeof x") {
+    UnaryOp(Typeof, Var("x")) => ()
+    _ => fail("expected UnaryOp(Typeof)")
+  }
+  match parse_expr_from("void x") {
+    UnaryOp(Void, Var("x")) => ()
+    _ => fail("expected UnaryOp(Void)")
+  }
+  match parse_expr_from("++x") {
+    UnaryOp(PreInc, Var("x")) => ()
+    _ => fail("expected UnaryOp(PreInc)")
+  }
+  match parse_expr_from("x--") {
+    UnaryOp(PostDec, Var("x")) => ()
+    _ => fail("expected UnaryOp(PostDec)")
+  }
+}
+
+///|
+test "parser: ast patterns expr calls and access" {
+  match parse_expr_from("foo(1)") {
+    Call("foo", args) => assert_eq(args.length(), 1)
+    _ => fail("expected Call")
+  }
+  match parse_expr_from("(a ? b : c)(1)") {
+    CallExpr(Cond(_, _, _), args) => assert_eq(args.length(), 1)
+    _ => fail("expected CallExpr")
+  }
+  match parse_expr_from("obj.m(1)") {
+    MethodCall(Var("obj"), "m", args) => assert_eq(args.length(), 1)
+    _ => fail("expected MethodCall")
+  }
+  match parse_expr_from("arr[0]") {
+    IndexAccess(Var("arr"), IntLit(0)) => ()
+    _ => fail("expected IndexAccess")
+  }
+  match parse_expr_from("obj.prop") {
+    PropAccess(Var("obj"), "prop") => ()
+    _ => fail("expected PropAccess")
+  }
+  match parse_expr_from("new Foo(1)") {
+    New("Foo", args) => assert_eq(args.length(), 1)
+    _ => fail("expected New")
+  }
+  match parse_expr_from("new foo.bar(1)") {
+    NewExpr(PropAccess(Var("foo"), "bar"), args) => assert_eq(args.length(), 1)
+    _ => fail("expected NewExpr")
+  }
+}
+
+///|
+test "parser: ast patterns expr composites" {
+  match parse_expr_from("[1, 2]") {
+    ArrayLit(elements) => assert_eq(elements.length(), 2)
+    _ => fail("expected ArrayLit")
+  }
+  match parse_expr_from("{ a: 1, b }") {
+    ObjectLit(fields) => {
+      assert_eq(fields.length(), 2)
+      match fields[0] {
+        ("a", IntLit(1)) => ()
+        _ => fail("expected field a: 1")
+      }
+      match fields[1] {
+        ("b", Var("b")) => ()
+        _ => fail("expected field b")
+      }
+    }
+    _ => fail("expected ObjectLit")
+  }
+}
+
+///|
+test "parser: ast patterns expr assignments" {
+  match parse_expr_from("x = 1") {
+    AssignExpr("x", IntLit(1)) => ()
+    _ => fail("expected AssignExpr")
+  }
+  match parse_expr_from("x += 1") {
+    CompoundAssignExpr(Var("x"), AddAssign, IntLit(1)) => ()
+    _ => fail("expected CompoundAssignExpr")
+  }
+  match parse_expr_from("obj.x = 1") {
+    PropAssignExpr(Var("obj"), "x", IntLit(1)) => ()
+    _ => fail("expected PropAssignExpr")
+  }
+  match parse_expr_from("arr[0] = 1") {
+    IndexAssignExpr(Var("arr"), IntLit(0), IntLit(1)) => ()
+    _ => fail("expected IndexAssignExpr")
+  }
+  match parse_expr_from("[a] = arr") {
+    AssignPattern(binding, Var("arr")) =>
+      match binding {
+        TsBinding::Array(_) => ()
+        _ => fail("expected array binding")
+      }
+    _ => fail("expected AssignPattern")
+  }
+}
+
+///|
+test "parser: ast patterns expr functions" {
+  match parse_expr_from("x => x + 1") {
+    ArrowFunc(params, ArrowExpr(BinOp(Add, Var("x"), IntLit(1)))) =>
+      assert_eq(params.length(), 1)
+    _ => fail("expected ArrowFunc (expr)")
+  }
+  match parse_expr_from("(x) => { return x; }") {
+    ArrowFunc(_, ArrowBlock(block)) => assert_eq(block.stmts.length(), 1)
+    _ => fail("expected ArrowFunc (block)")
+  }
+  match parse_expr_from("function foo(x) { return x; }") {
+    FuncExpr(func) => {
+      assert_eq(func.name, "foo")
+      assert_eq(func.params.length(), 1)
+      assert_eq(func.body.stmts.length(), 1)
+    }
+    _ => fail("expected FuncExpr")
+  }
+  let src =
+    #|function* gen() {
+    #|  yield 1;
+    #|  yield* xs;
+    #|}
+  let gen = try! Parser::from_source(src).parse_function()
+  match gen.body.stmts[0] {
+    Expr(Yield(Some(IntLit(1)))) => ()
+    _ => fail("expected yield")
+  }
+  match gen.body.stmts[1] {
+    Expr(YieldStar(Var("xs"))) => ()
+    _ => fail("expected yield*")
+  }
+}
+
+///|
+test "parser: ast patterns stmt basics" {
+  match parse_stmt_from("const x = 1;") {
+    Const(TsBinding::Ident("x"), Any, IntLit(1)) => ()
+    _ => fail("expected Const")
+  }
+  match parse_stmt_from("x = 1;") {
+    Expr(AssignExpr("x", IntLit(1))) => ()
+    _ => fail("expected AssignExpr statement")
+  }
+  match parse_stmt_from("x += 1;") {
+    Expr(CompoundAssignExpr(Var("x"), AddAssign, IntLit(1))) => ()
+    _ => fail("expected CompoundAssignExpr statement")
+  }
+  match parse_stmt_from("obj.x = 1;") {
+    Expr(PropAssignExpr(Var("obj"), "x", IntLit(1))) => ()
+    _ => fail("expected PropAssignExpr statement")
+  }
+  match parse_stmt_from("arr[0] = 1;") {
+    Expr(IndexAssignExpr(Var("arr"), IntLit(0), IntLit(1))) => ()
+    _ => fail("expected IndexAssignExpr statement")
+  }
+  match parse_stmt_from("x + 1;") {
+    Expr(BinOp(Add, Var("x"), IntLit(1))) => ()
+    _ => fail("expected Expr")
+  }
+  match parse_stmt_from(";") {
+    Empty => ()
+    _ => fail("expected Empty")
+  }
+  match parse_stmt_from("{ x = 1; }") {
+    Block(block) => assert_eq(block.stmts.length(), 1)
+    _ => fail("expected Block")
+  }
+}
+
+///|
+test "parser: ast patterns binding" {
+  match parse_binding_from("x") {
+    TsBinding::Ident("x") => ()
+    _ => fail("expected binding ident")
+  }
+  match parse_binding_from("[a, , b, ...rest]") {
+    TsBinding::Array(arr) => {
+      assert_eq(arr.items.length(), 3)
+      match arr.items[0] {
+        Some(elem) =>
+          match elem.binding {
+            TsBinding::Ident("a") => ()
+            _ => fail("expected binding a")
+          }
+        None => fail("expected binding a")
+      }
+      match arr.items[1] {
+        None => ()
+        _ => fail("expected hole")
+      }
+      match arr.items[2] {
+        Some(elem) =>
+          match elem.binding {
+            TsBinding::Ident("b") => ()
+            _ => fail("expected binding b")
+          }
+        None => fail("expected binding b")
+      }
+      match arr.rest {
+        Some(TsBinding::Ident("rest")) => ()
+        _ => fail("expected rest")
+      }
+    }
+    _ => fail("expected array binding")
+  }
+  match parse_binding_from("{ a, b: c, ...rest }") {
+    TsBinding::Object(obj) => {
+      assert_eq(obj.props.length(), 2)
+      match obj.props[0] {
+        { key: "a", binding: TsBinding::Ident("a"), .. } => ()
+        _ => fail("expected prop a")
+      }
+      match obj.props[1] {
+        { key: "b", binding: TsBinding::Ident("c"), .. } => ()
+        _ => fail("expected prop b: c")
+      }
+      match obj.rest {
+        Some("rest") => ()
+        _ => fail("expected rest")
+      }
+    }
+    _ => fail("expected object binding")
+  }
+  match parse_assign_binding_from("obj.x") {
+    TsBinding::Target(PropAccess(Var("obj"), "x")) => ()
+    _ => fail("expected target binding")
+  }
 }

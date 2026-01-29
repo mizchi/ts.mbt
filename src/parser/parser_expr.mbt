@@ -439,6 +439,86 @@ fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
 
   // operatorcheck
   while true {
+    if self.check(Question) && self.peek_at(1).kind == Dot {
+      let _ = self.advance()
+      let _ = self.advance()
+      match self.peek().kind {
+        LBracket => {
+          let _ = self.advance()
+          let index = self.parse_expr()
+          let _ = self.expect(RBracket)
+          expr = IndexAccess(expr, index)
+          continue
+        }
+        LParen => {
+          let _ = self.advance()
+          let args = self.parse_args()
+          let _ = self.expect(RParen)
+          match expr {
+            Var(name) => {
+              expr = Call(name, args)
+            }
+            PropAccess(receiver, method_name) => {
+              expr = MethodCall(receiver, method_name, args)
+            }
+            _ => {
+              expr = CallExpr(expr, args)
+            }
+          }
+          continue
+        }
+        _ => {
+          let prop = match self.advance().kind {
+            Ident(name) => name
+            Return => "return"
+            If => "if"
+            Else => "else"
+            For => "for"
+            While => "while"
+            Switch => "switch"
+            Case => "case"
+            Default => "default"
+            With => "with"
+            Debugger => "debugger"
+            Import => "import"
+            Export => "export"
+            From => "from"
+            As => "as"
+            Break => "break"
+            Continue => "continue"
+            Function => "function"
+            Do => "do"
+            Try => "try"
+            Catch => "catch"
+            Finally => "finally"
+            Throw => "throw"
+            Delete => "delete"
+            Yield => "yield"
+            Let => "let"
+            Const => "const"
+            Var => "var"
+            New => "new"
+            Typeof => "typeof"
+            Of => "of"
+            In => "in"
+            Class => "class"
+            Declare => "declare"
+            Interface => "interface"
+            Instanceof => "instanceof"
+            NumberType => "number"
+            BooleanType => "boolean"
+            StringType => "string"
+            VoidType => "void"
+            IntType => "int"
+            Type => "type"
+            Extends => "extends"
+            k => raise ParseError("Expected property name, got \{k}")
+          }
+          expr = PropAccess(expr, prop)
+          continue
+        }
+      }
+    }
     if self.match_(LParen) {
       // function or method
       let args = self.parse_args()
@@ -523,7 +603,7 @@ fn Parser::parse_args(self : Parser) -> Array[TsExpr] raise ParseError {
   let args : Array[TsExpr] = []
   if not(self.check(RParen)) {
     if self.match_ellipsis() {
-      args.push(self.parse_assignment())
+      args.push(Spread(self.parse_assignment()))
     } else {
       args.push(self.parse_assignment())
     }
@@ -532,7 +612,7 @@ fn Parser::parse_args(self : Parser) -> Array[TsExpr] raise ParseError {
         break
       }
       if self.match_ellipsis() {
-        args.push(self.parse_assignment())
+        args.push(Spread(self.parse_assignment()))
       } else {
         args.push(self.parse_assignment())
       }
@@ -554,6 +634,10 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
     Int(i) => {
       let _ = self.advance()
       IntLit(i)
+    }
+    BigInt(s) => {
+      let _ = self.advance()
+      BigIntLit(s)
     }
     Bool(b) => {
       let _ = self.advance()
@@ -652,7 +736,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
       let elements : Array[TsExpr] = []
       while not(self.check(RBracket)) {
         if self.match_ellipsis() {
-          elements.push(self.parse_assignment())
+          elements.push(Spread(self.parse_assignment()))
           if self.match_(Comma) {
             if self.check(RBracket) {
               break
@@ -1226,4 +1310,3 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
     _ => raise ParseError("Unexpected token: \{tok.kind}")
   }
 }
-

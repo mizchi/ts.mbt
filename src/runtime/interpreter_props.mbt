@@ -2,10 +2,292 @@
 // / get
 fn JSInterpreter::get_proto(_self : JSInterpreter, value : JSValue) -> JSValue? {
   match value {
-    Object(map) => map.prototype
-    Function(closure) => closure.object_proto
-    Array(arr) => arr.prototype
+    Object(_) | Function(_) | Array(_) =>
+      if _self.is_proxy(value) {
+        let proto_val = _self.proxy_get_prototype_of(value)
+        match _self.peek_error() {
+          Some(_) => None
+          None =>
+            match proto_val {
+              Object(_) | Function(_) | Array(_) | Null => Some(proto_val)
+              _ => None
+            }
+        }
+      } else {
+        match value {
+          Object(map) => map.prototype
+          Function(closure) => closure.object_proto
+          Array(arr) => arr.prototype
+          _ => None
+        }
+      }
     _ => None
+  }
+}
+
+///|
+fn JSInterpreter::normalize_prop_key(_self : JSInterpreter, key : String) -> String {
+  if key == "Symbol(Symbol.iterator)" {
+    "@@iterator"
+  } else {
+    key
+  }
+}
+
+///|
+fn JSInterpreter::proxy_key_value(_self : JSInterpreter, key : String) -> JSValue {
+  if key == "@@iterator" {
+    String("Symbol(Symbol.iterator)")
+  } else {
+    String(key)
+  }
+}
+
+///|
+fn JSInterpreter::is_proxy(_self : JSInterpreter, value : JSValue) -> Bool {
+  match value {
+    Object(_) | Function(_) | Array(_) =>
+      js_has_prop(value, "__proxy_target") && js_has_prop(value, "__proxy_handler")
+    _ => false
+  }
+}
+
+///|
+fn JSInterpreter::proxy_target(_self : JSInterpreter, proxy : JSValue) -> JSValue {
+  js_get_prop(proxy, "__proxy_target")
+}
+
+///|
+fn JSInterpreter::proxy_handler(_self : JSInterpreter, proxy : JSValue) -> JSValue {
+  js_get_prop(proxy, "__proxy_handler")
+}
+
+///|
+fn JSInterpreter::new_proxy(
+  self : JSInterpreter,
+  target : JSValue,
+  handler : JSValue,
+) -> JSValue {
+  match target {
+    Object(_) | Function(_) | Array(_) => ()
+    _ => {
+      let _ = self.set_error_kind("TypeError", "Proxy target is not an object")
+      return Undefined
+    }
+  }
+  match handler {
+    Object(_) | Function(_) | Array(_) => ()
+    _ => {
+      let _ = self.set_error_kind("TypeError", "Proxy handler is not an object")
+      return Undefined
+    }
+  }
+  let proxy = self.new_object()
+  let _ = js_set_prop(proxy, "__proxy_target", target)
+  let _ = js_set_prop(proxy, "__proxy_handler", handler)
+  proxy
+}
+
+///|
+fn JSInterpreter::get_proxy_trap(
+  self : JSInterpreter,
+  handler : JSValue,
+  name : String,
+) -> JSValue? {
+  let trap = self.get_prop_value(handler, name)
+  match self.peek_error() {
+    Some(_) => return None
+    None => ()
+  }
+  match trap {
+    Undefined | Null => None
+    _ =>
+      if not(self.is_callable(trap)) {
+        let _ = self.set_error_kind("TypeError", "Proxy trap is not callable")
+        None
+      } else {
+        Some(trap)
+      }
+  }
+}
+
+///|
+fn JSInterpreter::proxy_get(
+  self : JSInterpreter,
+  proxy : JSValue,
+  key : String,
+  receiver : JSValue,
+) -> JSValue {
+  let handler = self.proxy_handler(proxy)
+  match handler {
+    Null | Undefined =>
+      return self.set_error_kind("TypeError", "Cannot perform operation on a revoked Proxy")
+    _ => ()
+  }
+  let target = self.proxy_target(proxy)
+  let norm_key = self.normalize_prop_key(key)
+  let key_val = self.proxy_key_value(norm_key)
+  match self.get_proxy_trap(handler, "get") {
+    Some(trap) => self.call_function(trap, handler, [target, key_val, receiver])
+    None => self.get_prop_value_with_receiver(target, receiver, norm_key)
+  }
+}
+
+///|
+fn JSInterpreter::proxy_set(
+  self : JSInterpreter,
+  proxy : JSValue,
+  key : String,
+  value : JSValue,
+  receiver : JSValue,
+) -> Bool {
+  let handler = self.proxy_handler(proxy)
+  match handler {
+    Null | Undefined => {
+      let _ =
+        self.set_error_kind("TypeError", "Cannot perform operation on a revoked Proxy")
+      return false
+    }
+    _ => ()
+  }
+  let target = self.proxy_target(proxy)
+  let norm_key = self.normalize_prop_key(key)
+  let key_val = self.proxy_key_value(norm_key)
+  match self.get_proxy_trap(handler, "set") {
+    Some(trap) => {
+      let result = self.call_function(trap, handler, [target, key_val, value, receiver])
+      match self.peek_error() {
+        Some(_) => false
+        None => result.to_boolean()
+      }
+    }
+    None => {
+      self.set_prop_value(target, norm_key, value)
+      match self.peek_error() {
+        Some(_) => false
+        None => true
+      }
+    }
+  }
+}
+
+///|
+fn JSInterpreter::proxy_has(
+  self : JSInterpreter,
+  proxy : JSValue,
+  key : String,
+) -> Bool {
+  let handler = self.proxy_handler(proxy)
+  match handler {
+    Null | Undefined => {
+      let _ =
+        self.set_error_kind("TypeError", "Cannot perform operation on a revoked Proxy")
+      return false
+    }
+    _ => ()
+  }
+  let target = self.proxy_target(proxy)
+  let norm_key = self.normalize_prop_key(key)
+  let key_val = self.proxy_key_value(norm_key)
+  match self.get_proxy_trap(handler, "has") {
+    Some(trap) => {
+      let result = self.call_function(trap, handler, [target, key_val])
+      match self.peek_error() {
+        Some(_) => false
+        None => result.to_boolean()
+      }
+    }
+    None => js_has_prop(target, norm_key)
+  }
+}
+
+///|
+fn JSInterpreter::proxy_get_own_property_descriptor(
+  self : JSInterpreter,
+  proxy : JSValue,
+  key : String,
+) -> JSValue {
+  let handler = self.proxy_handler(proxy)
+  match handler {
+    Null | Undefined =>
+      return self.set_error_kind("TypeError", "Cannot perform operation on a revoked Proxy")
+    _ => ()
+  }
+  let target = self.proxy_target(proxy)
+  let norm_key = self.normalize_prop_key(key)
+  let key_val = self.proxy_key_value(norm_key)
+  match self.get_proxy_trap(handler, "getOwnPropertyDescriptor") {
+    Some(trap) => self.call_function(trap, handler, [target, key_val])
+    None =>
+      self.call_native(
+        "Object.getOwnPropertyDescriptor",
+        Undefined,
+        [target, String(norm_key)],
+      )
+  }
+}
+
+///|
+fn JSInterpreter::proxy_define_property(
+  self : JSInterpreter,
+  proxy : JSValue,
+  key : String,
+  desc : JSValue,
+) -> JSValue {
+  let handler = self.proxy_handler(proxy)
+  match handler {
+    Null | Undefined =>
+      return self.set_error_kind("TypeError", "Cannot perform operation on a revoked Proxy")
+    _ => ()
+  }
+  let target = self.proxy_target(proxy)
+  let norm_key = self.normalize_prop_key(key)
+  let key_val = self.proxy_key_value(norm_key)
+  match self.get_proxy_trap(handler, "defineProperty") {
+    Some(trap) => {
+      let result = self.call_function(trap, handler, [target, key_val, desc])
+      match self.peek_error() {
+        Some(err) => err
+        None => result
+      }
+    }
+    None => self.define_property(target, norm_key, desc)
+  }
+}
+
+///|
+fn JSInterpreter::proxy_get_prototype_of(
+  self : JSInterpreter,
+  proxy : JSValue,
+) -> JSValue {
+  let handler = self.proxy_handler(proxy)
+  match handler {
+    Null | Undefined =>
+      return self.set_error_kind("TypeError", "Cannot perform operation on a revoked Proxy")
+    _ => ()
+  }
+  let target = self.proxy_target(proxy)
+  match self.get_proxy_trap(handler, "getPrototypeOf") {
+    Some(trap) => self.call_function(trap, handler, [target])
+    None => {
+      let proto =
+        match target {
+          Object(map) => match map.prototype {
+            Some(p) => p
+            None => Null
+          }
+          Function(closure) => match closure.object_proto {
+            Some(p) => p
+            None => Null
+          }
+          Array(arr) => match arr.prototype {
+            Some(p) => p
+            None => Null
+          }
+          _ => Null
+        }
+      proto
+    }
   }
 }
 
@@ -22,6 +304,11 @@ fn JSInterpreter::set_prop_value(
   key : String,
   value : JSValue,
 ) -> Unit {
+  let key = self.normalize_prop_key(key)
+  if self.is_proxy(obj) {
+    let _ = self.proxy_set(obj, key, value, obj)
+    return
+  }
   match obj {
     Function(closure) => {
       for prop in closure.props {
@@ -84,6 +371,10 @@ fn JSInterpreter::get_prop_value_with_receiver(
   receiver : JSValue,
   key : String,
 ) -> JSValue {
+  let key = self.normalize_prop_key(key)
+  if self.is_proxy(target) {
+    return self.proxy_get(target, key, receiver)
+  }
   match target {
     Undefined | Null => {
       let _ = self.set_error_kind(
@@ -171,6 +462,10 @@ fn JSInterpreter::eval_prop_value(
 ///|
 // / own property check
 fn JSInterpreter::has_own_prop(_self : JSInterpreter, obj : JSValue, key : String) -> Bool {
+  let key = _self.normalize_prop_key(key)
+  if _self.is_proxy(obj) {
+    return _self.proxy_has(obj, key)
+  }
   match obj {
     Function(closure) => {
       for prop in closure.props {

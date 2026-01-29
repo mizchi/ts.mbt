@@ -269,7 +269,7 @@ fn Parser::parse_class_stub(self : Parser) -> TsExpr raise ParseError {
     }
   }
   let ctor_func = self.inject_instance_fields(ctor_func, fields, base)
-  stmts.push(Let(tmp_name, Any, FuncExpr(ctor_func)))
+  stmts.push(Let(TsBinding::Ident(tmp_name), Any, FuncExpr(ctor_func)))
 
   let proto_expr = PropAccess(Var(tmp_name), "prototype")
   match base {
@@ -375,7 +375,7 @@ fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
     }
   }
   let ctor_func = self.inject_instance_fields(ctor_func, fields, base)
-  stmts.push(Let(name, Any, FuncExpr(ctor_func)))
+  stmts.push(Let(TsBinding::Ident(name), Any, FuncExpr(ctor_func)))
 
   let proto_expr = PropAccess(Var(name), "prototype")
   match base {

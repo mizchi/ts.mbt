@@ -25,6 +25,7 @@ pub(all) enum TsExpr {
   // literal
   NumberLit(Double)
   IntLit(Int)
+  BigIntLit(String)
   BoolLit(Bool)
   StringLit(String)
   NullLit // null literal
@@ -50,6 +51,7 @@ pub(all) enum TsExpr {
 
   // arrayliteral
   ArrayLit(Array[TsExpr])
+  Spread(TsExpr)
 
   // objectliteral
   ObjectLit(Array[(String, TsExpr)]) // [(key, value)]
@@ -185,8 +187,8 @@ pub(all) enum TsForOfKind {
 // / statement
 pub(all) enum TsStmt {
   // variable
-  Let(String, TsType, TsExpr)
-  Const(String, TsType, TsExpr)
+  Let(TsBinding, TsType, TsExpr)
+  Const(TsBinding, TsType, TsExpr)
 
   // assignment
   Assign(String, TsExpr)

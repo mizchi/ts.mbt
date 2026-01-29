@@ -25,7 +25,7 @@ pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
       // internalfunctiondefine: function name() { ... }
       // Let(name, Any, FuncExpr(func))
       let func = self.parse_function()
-      Let(func.name, Any, FuncExpr(func))
+      Let(TsBinding::Ident(func.name), Any, FuncExpr(func))
     }
     Break => {
       let _ = self.advance()
@@ -99,47 +99,7 @@ fn Parser::parse_var(self : Parser) -> TsStmt raise ParseError {
 fn Parser::parse_let_like(self : Parser, is_const : Bool) -> TsStmt raise ParseError {
   let stmts : Array[TsStmt] = []
   while true {
-    let name =
-      match self.peek().kind {
-        Ident(_) => match self.advance().kind {
-          Ident(n) => n
-          _ => "<destruct>"
-        }
-        Yield => {
-          let _ = self.advance()
-          "yield"
-        }
-        NumberType => {
-          let _ = self.advance()
-          "number"
-        }
-        BooleanType => {
-          let _ = self.advance()
-          "boolean"
-        }
-        StringType => {
-          let _ = self.advance()
-          "string"
-        }
-        VoidType => {
-          let _ = self.advance()
-          "void"
-        }
-        IntType => {
-          let _ = self.advance()
-          "int"
-        }
-        Type => {
-          let _ = self.advance()
-          "type"
-        }
-        Let => {
-          let _ = self.advance()
-          "let"
-        }
-        LBracket | LBrace => self.consume_binding_name()
-        k => raise ParseError("Expected identifier, got \{k}")
-      }
+    let binding = self.parse_binding_pattern()
     // type ()
     let type_ = if self.check(Colon) {
       let _ = self.advance()
@@ -159,9 +119,9 @@ fn Parser::parse_let_like(self : Parser, is_const : Bool) -> TsStmt raise ParseE
       }
     let stmt =
       if is_const {
-        TsStmt::Const(name, type_, init)
+        TsStmt::Const(binding, type_, init)
       } else {
-        TsStmt::Let(name, type_, init)
+        TsStmt::Let(binding, type_, init)
       }
     stmts.push(stmt)
     if self.match_(Comma) {
@@ -385,7 +345,6 @@ fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
       return ForOf(kind, binding, Number, iterable, body)
     }
     // regular for (let x: type = init; ...) or for (let x = init; ...)
-    let var_name = self.binding_first_name(binding)
     let var_type = if self.check(Colon) {
       let _ = self.advance()
       self.parse_type()
@@ -397,8 +356,8 @@ fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
     let _ = self.expect(Semicolon)
     let init : TsStmt? = Some(
       match kind {
-        TsForOfKind::Const => TsStmt::Const(var_name, var_type, init_expr)
-        _ => TsStmt::Let(var_name, var_type, init_expr)
+        TsForOfKind::Const => TsStmt::Const(binding, var_type, init_expr)
+        _ => TsStmt::Let(binding, var_type, init_expr)
       },
     )
     return self.parse_for_rest(init)

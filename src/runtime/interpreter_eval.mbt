@@ -9,10 +9,20 @@ pub fn JSInterpreter::eval_expr(
   match expr {
     @parser.TsExpr::IntLit(n) => Number(n.to_double())
     @parser.TsExpr::NumberLit(n) => Number(n)
+    @parser.TsExpr::BigIntLit(s) => {
+      let obj = self.new_object()
+      let _ = js_set_prop(obj, "__class", String("BigInt"))
+      let _ = js_set_prop(obj, "value", String(s))
+      obj
+    }
     @parser.TsExpr::BoolLit(b) => Bool(b)
     @parser.TsExpr::StringLit(s) => String(s)
     @parser.TsExpr::NullLit => Null
     @parser.TsExpr::ArrayHole => Undefined
+    @parser.TsExpr::Spread(_) => {
+      let _ = self.set_error_kind("TypeError", "Unexpected spread expression")
+      Undefined
+    }
     @parser.TsExpr::Yield(_) => Undefined
     @parser.TsExpr::YieldStar(_) => Undefined
     @parser.TsExpr::Var(name) =>
@@ -138,6 +148,22 @@ pub fn JSInterpreter::eval_expr(
               self.assign_ident(name, new_val, env)
               new_val
             }
+            @parser.TsExpr::PropAccess(obj_expr, prop) => {
+              let obj = self.eval_expr(obj_expr, env)
+              let old_val = self.get_prop_value(obj, prop)
+              let new_val = js_add(old_val, Number(1.0))
+              self.set_prop_value(obj, prop, new_val)
+              new_val
+            }
+            @parser.TsExpr::IndexAccess(obj_expr, idx_expr) => {
+              let obj = self.eval_expr(obj_expr, env)
+              let idx = self.eval_expr(idx_expr, env)
+              let key = idx.to_js_string()
+              let old_val = self.get_prop_value(obj, key)
+              let new_val = js_add(old_val, Number(1.0))
+              self.set_prop_value(obj, key, new_val)
+              new_val
+            }
             _ => {
               let val = self.eval_expr(operand, env)
               js_add(val, Number(1.0))
@@ -150,6 +176,22 @@ pub fn JSInterpreter::eval_expr(
               let old_val = env.get(name)
               let new_val = js_sub(old_val, Number(1.0))
               self.assign_ident(name, new_val, env)
+              new_val
+            }
+            @parser.TsExpr::PropAccess(obj_expr, prop) => {
+              let obj = self.eval_expr(obj_expr, env)
+              let old_val = self.get_prop_value(obj, prop)
+              let new_val = js_sub(old_val, Number(1.0))
+              self.set_prop_value(obj, prop, new_val)
+              new_val
+            }
+            @parser.TsExpr::IndexAccess(obj_expr, idx_expr) => {
+              let obj = self.eval_expr(obj_expr, env)
+              let idx = self.eval_expr(idx_expr, env)
+              let key = idx.to_js_string()
+              let old_val = self.get_prop_value(obj, key)
+              let new_val = js_sub(old_val, Number(1.0))
+              self.set_prop_value(obj, key, new_val)
               new_val
             }
             _ => {
@@ -166,6 +208,22 @@ pub fn JSInterpreter::eval_expr(
               self.assign_ident(name, new_val, env)
               old_val
             }
+            @parser.TsExpr::PropAccess(obj_expr, prop) => {
+              let obj = self.eval_expr(obj_expr, env)
+              let old_val = self.get_prop_value(obj, prop)
+              let new_val = js_add(old_val, Number(1.0))
+              self.set_prop_value(obj, prop, new_val)
+              old_val
+            }
+            @parser.TsExpr::IndexAccess(obj_expr, idx_expr) => {
+              let obj = self.eval_expr(obj_expr, env)
+              let idx = self.eval_expr(idx_expr, env)
+              let key = idx.to_js_string()
+              let old_val = self.get_prop_value(obj, key)
+              let new_val = js_add(old_val, Number(1.0))
+              self.set_prop_value(obj, key, new_val)
+              old_val
+            }
             _ => {
               let val = self.eval_expr(operand, env)
               val
@@ -178,6 +236,22 @@ pub fn JSInterpreter::eval_expr(
               let old_val = env.get(name)
               let new_val = js_sub(old_val, Number(1.0))
               self.assign_ident(name, new_val, env)
+              old_val
+            }
+            @parser.TsExpr::PropAccess(obj_expr, prop) => {
+              let obj = self.eval_expr(obj_expr, env)
+              let old_val = self.get_prop_value(obj, prop)
+              let new_val = js_sub(old_val, Number(1.0))
+              self.set_prop_value(obj, prop, new_val)
+              old_val
+            }
+            @parser.TsExpr::IndexAccess(obj_expr, idx_expr) => {
+              let obj = self.eval_expr(obj_expr, env)
+              let idx = self.eval_expr(idx_expr, env)
+              let key = idx.to_js_string()
+              let old_val = self.get_prop_value(obj, key)
+              let new_val = js_sub(old_val, Number(1.0))
+              self.set_prop_value(obj, key, new_val)
               old_val
             }
             _ => {
@@ -230,11 +304,17 @@ pub fn JSInterpreter::eval_expr(
     }
     @parser.TsExpr::Call(name, args) => {
       if name == "eval" {
-        let src = if args.length() > 0 {
-          self.eval_expr(args[0], env).to_js_string()
-        } else {
-          ""
+        let arg_values = self.eval_args(args, env)
+        match self.peek_error() {
+          Some(_) => return self.error_or_undefined()
+          None => ()
         }
+        let src =
+          if arg_values.length() > 0 {
+            arg_values[0].to_js_string()
+          } else {
+            ""
+          }
         return self.direct_eval(src, env)
       }
       if name == "super" && env.has("__super_ctor") {
@@ -263,15 +343,22 @@ pub fn JSInterpreter::eval_expr(
                 _ => arg_values.push(rest_val)
               }
             }
-            _ =>
-              for arg in args {
-                arg_values.push(self.eval_expr(arg, env))
+            _ => {
+              let values = self.eval_args(args, env)
+              for value in values {
+                arg_values.push(value)
               }
+            }
           }
         } else {
-          for arg in args {
-            arg_values.push(self.eval_expr(arg, env))
+          let values = self.eval_args(args, env)
+          for value in values {
+            arg_values.push(value)
           }
+        }
+        match self.peek_error() {
+          Some(_) => return self.error_or_undefined()
+          None => ()
         }
         let new_target =
           match env.get("new") {
@@ -292,16 +379,18 @@ pub fn JSInterpreter::eval_expr(
       }
       // functionget
       let func = env.get(name)
-      let arg_values : Array[JSValue] = []
-      for arg in args {
-        arg_values.push(self.eval_expr(arg, env))
+      let arg_values = self.eval_args(args, env)
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
       }
       self.call_function(func, Undefined, arg_values)
     }
     @parser.TsExpr::CallExpr(callee, args) => {
-      let arg_values : Array[JSValue] = []
-      for arg in args {
-        arg_values.push(self.eval_expr(arg, env))
+      let arg_values = self.eval_args(args, env)
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
       }
       match callee {
         @parser.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -327,9 +416,10 @@ pub fn JSInterpreter::eval_expr(
         @parser.TsExpr::Var(name) if name == "super" && env.has("__super_proto") => {
           let super_proto = env.get("__super_proto")
           let super_this = if env.has("__super_this") { env.get("__super_this") } else { env.get("this") }
-          let arg_values : Array[JSValue] = []
-          for arg in args {
-            arg_values.push(self.eval_expr(arg, env))
+          let arg_values = self.eval_args(args, env)
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
           }
           let func = self.get_prop_value(super_proto, method_name)
           return self.call_function(func, super_this, arg_values)
@@ -337,24 +427,47 @@ pub fn JSInterpreter::eval_expr(
         _ => ()
       }
       let obj = self.eval_expr(obj_expr, env)
-      let arg_values : Array[JSValue] = []
-      for arg in args {
-        arg_values.push(self.eval_expr(arg, env))
+      let arg_values = self.eval_args(args, env)
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
       }
       self.call_method(obj, method_name, arg_values)
     }
     @parser.TsExpr::ArrayLit(elements) => {
       let arr = js_new_array()
-      let _ = js_set_prop(arr, "length", Number(elements.length().to_double()))
-      for i, elem in elements {
+      let mut idx = 0
+      for elem in elements {
         match elem {
-          @parser.TsExpr::ArrayHole => ()
+          @parser.TsExpr::ArrayHole => idx += 1
+          @parser.TsExpr::Spread(spread_expr) => {
+            let spread_val = self.eval_expr(spread_expr, env)
+            match self.peek_error() {
+              Some(_) => return self.error_or_undefined()
+              None => ()
+            }
+            let values =
+              match self.collect_spread_values(spread_val) {
+                Some(list) => list
+                None => return self.error_or_undefined()
+              }
+            for value in values {
+              let _ = js_set_prop(arr, idx.to_string(), value)
+              idx += 1
+            }
+          }
           _ => {
             let value = self.eval_expr(elem, env)
-            let _ = js_set_prop(arr, i.to_string(), value)
+            match self.peek_error() {
+              Some(_) => return self.error_or_undefined()
+              None => ()
+            }
+            let _ = js_set_prop(arr, idx.to_string(), value)
+            idx += 1
           }
         }
       }
+      let _ = js_set_prop(arr, "length", Number(idx.to_double()))
       arr
     }
     @parser.TsExpr::ObjectLit(fields) => {
@@ -519,17 +632,19 @@ pub fn JSInterpreter::eval_expr(
       }
     }
     @parser.TsExpr::New(class_name, args) => {
-      let arg_values : Array[JSValue] = []
-      for arg in args {
-        arg_values.push(self.eval_expr(arg, env))
+      let arg_values = self.eval_args(args, env)
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
       }
       self.new_instance(class_name, arg_values, env)
     }
     @parser.TsExpr::NewExpr(callee_expr, args) => {
       let ctor = self.eval_expr(callee_expr, env)
-      let arg_values : Array[JSValue] = []
-      for arg in args {
-        arg_values.push(self.eval_expr(arg, env))
+      let arg_values = self.eval_args(args, env)
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
       }
       match ctor {
         Function(_) => self.construct_with(ctor, ctor, arg_values)
@@ -603,6 +718,43 @@ pub fn JSInterpreter::eval_expr(
       closure
     }
   }
+}
+
+///|
+fn JSInterpreter::eval_args(
+  self : JSInterpreter,
+  args : Array[@parser.TsExpr],
+  env : JSEnv,
+) -> Array[JSValue] {
+  let arg_values : Array[JSValue] = []
+  for arg in args {
+    match arg {
+      @parser.TsExpr::Spread(spread_expr) => {
+        let spread_val = self.eval_expr(spread_expr, env)
+        match self.peek_error() {
+          Some(_) => return arg_values
+          None => ()
+        }
+        let values =
+          match self.collect_spread_values(spread_val) {
+            Some(list) => list
+            None => return arg_values
+          }
+        for value in values {
+          arg_values.push(value)
+        }
+      }
+      _ => {
+        let value = self.eval_expr(arg, env)
+        match self.peek_error() {
+          Some(_) => return arg_values
+          None => ()
+        }
+        arg_values.push(value)
+      }
+    }
+  }
+  arg_values
 }
 
 ///|
@@ -733,8 +885,8 @@ fn collect_decl_names_from_stmt(
   names : Array[String],
 ) -> Unit {
   match stmt {
-    @parser.TsStmt::Let(name, _, _) | @parser.TsStmt::Const(name, _, _) =>
-      names.push(name)
+    @parser.TsStmt::Let(binding, _, _) | @parser.TsStmt::Const(binding, _, _) =>
+      collect_binding_names(binding, names)
     @parser.TsStmt::Block(block) =>
       for inner in block.stmts {
         collect_decl_names_from_stmt(inner, names)
@@ -1334,22 +1486,28 @@ pub fn JSInterpreter::exec_stmt(
     None => ()
   }
   match stmt {
-    @parser.TsStmt::Let(name, _, init) | @parser.TsStmt::Const(name, _, init) => {
+    @parser.TsStmt::Let(binding, _, init)
+    | @parser.TsStmt::Const(binding, _, init) => {
       let val = self.eval_expr(init, env)
       match self.peek_error() {
         Some(err) => return Some(err)
         None => ()
       }
-      self.maybe_set_default_name(val, name, Some(init))
+      self.maybe_set_default_name_for_binding(binding, val, Some(init))
       let is_const = match stmt {
         @parser.TsStmt::Const(_, _, _) => true
         _ => false
       }
-      env.initialize(name, val, is_const)
+      self.init_pattern(binding, val, env, is_const)
       match env.parent {
         None => {
           let global_obj = self.global_env.get("globalThis")
-          let _ = js_set_prop(global_obj, name, val)
+          let names : Array[String] = []
+          collect_binding_names(binding, names)
+          for name in names {
+            let v = env.get(name)
+            let _ = js_set_prop(global_obj, name, v)
+          }
         }
         Some(_) => ()
       }
@@ -1650,21 +1808,26 @@ pub fn JSInterpreter::exec_block(
 // / variablesimple
 fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @parser.TsStmt, env : JSEnv) -> Unit {
   match stmt {
-    @parser.TsStmt::Let(name, _, _) | @parser.TsStmt::Const(name, _, _) =>
-      if not(env.has(name)) {
-        let is_const = match stmt {
-          @parser.TsStmt::Const(_, _, _) => true
-          _ => false
-        }
-        env.define_uninitialized(name, is_const)
-        match env.parent {
-          None => {
-            let global_obj = self.global_env.get("globalThis")
-            let _ = js_set_prop(global_obj, name, Undefined)
+    @parser.TsStmt::Let(binding, _, _) | @parser.TsStmt::Const(binding, _, _) => {
+      let names : Array[String] = []
+      collect_binding_names(binding, names)
+      let is_const = match stmt {
+        @parser.TsStmt::Const(_, _, _) => true
+        _ => false
+      }
+      for name in names {
+        if not(env.has(name)) {
+          env.define_uninitialized(name, is_const)
+          match env.parent {
+            None => {
+              let global_obj = self.global_env.get("globalThis")
+              let _ = js_set_prop(global_obj, name, Undefined)
+            }
+            Some(_) => ()
           }
-          Some(_) => ()
         }
       }
+    }
     @parser.TsStmt::Block(block) => self.hoist_block(block, env)
     @parser.TsStmt::Label(_, inner) => self.hoist_stmt(inner, env)
     @parser.TsStmt::If(_, then_block, else_block) => {
@@ -1979,7 +2142,18 @@ fn JSInterpreter::array_like_get(self : JSInterpreter, value : JSValue, index : 
 
 ///|
 fn JSInterpreter::get_iterator(self : JSInterpreter, value : JSValue) -> JSValue? {
-  let iter_method = self.get_prop_value(value, "@@iterator")
+  match value {
+    String(s) if s.has_prefix("Symbol(") => {
+      let _ = self.set_error_kind("TypeError", "Symbol is not iterable")
+      return None
+    }
+    _ => ()
+  }
+  let target = match value {
+    Bool(_) | Number(_) | String(_) => self.wrap_primitive(self.global_env, value)
+    _ => value
+  }
+  let iter_method = self.get_prop_value(target, "@@iterator")
   match self.peek_error() {
     Some(_) => return None
     None => ()
@@ -1987,13 +2161,79 @@ fn JSInterpreter::get_iterator(self : JSInterpreter, value : JSValue) -> JSValue
   match iter_method {
     Undefined | Null => None
     _ => {
-      let iterator = self.call_function(iter_method, value, [])
+      let iterator = self.call_function(iter_method, target, [])
       match self.peek_error() {
         Some(_) => None
-        None => Some(iterator)
+        None => {
+          match iterator {
+            Object(_) | Function(_) | Array(_) => ()
+            _ => {
+              let _ = self.set_error_kind("TypeError", "Iterator result is not an object")
+              return None
+            }
+          }
+          let next_method = self.get_prop_value(iterator, "next")
+          match self.peek_error() {
+            Some(_) => None
+            None =>
+              if not(self.is_callable(next_method)) {
+                let _ = self.set_error_kind("TypeError", "Iterator next is not callable")
+                None
+              } else {
+                Some(iterator)
+              }
+          }
+        }
       }
     }
   }
+}
+
+///|
+fn JSInterpreter::collect_spread_values(
+  self : JSInterpreter,
+  value : JSValue,
+) -> Array[JSValue]? {
+  let iterator =
+    match self.get_iterator(value) {
+      Some(iter) => iter
+      None => {
+        let _ = self.set_error_kind("TypeError", "Spread value is not iterable")
+        return None
+      }
+    }
+  let values : Array[JSValue] = []
+  while true {
+    let result =
+      match self.iterator_next_object(iterator) {
+        Some(res) => res
+        None => {
+          self.iterator_close_on_error(iterator)
+          return None
+        }
+      }
+    let done = self.get_prop_value(result, "done").to_boolean()
+    match self.peek_error() {
+      Some(_) => {
+        self.iterator_close_on_error(iterator)
+        return None
+      }
+      None => ()
+    }
+    if done {
+      break
+    }
+    let value = self.get_prop_value(result, "value")
+    match self.peek_error() {
+      Some(_) => {
+        self.iterator_close_on_error(iterator)
+        return None
+      }
+      None => ()
+    }
+    values.push(value)
+  }
+  Some(values)
 }
 
 ///|
@@ -2161,6 +2401,7 @@ fn expr_has_yield(expr : @parser.TsExpr) -> Bool {
   match expr {
     @parser.TsExpr::Yield(_) => true
     @parser.TsExpr::YieldStar(_) => true
+    @parser.TsExpr::Spread(inner) => expr_has_yield(inner)
     @parser.TsExpr::AssignExpr(_, value) => expr_has_yield(value)
     @parser.TsExpr::AssignPattern(binding, value) =>
       binding_has_yield(binding) || expr_has_yield(value)
@@ -2182,8 +2423,15 @@ fn expr_has_yield(expr : @parser.TsExpr) -> Bool {
         true
       } else {
         for arg in args {
-          if expr_has_yield(arg) {
-            return true
+          match arg {
+            @parser.TsExpr::Spread(inner) =>
+              if expr_has_yield(inner) {
+                return true
+              }
+            _ =>
+              if expr_has_yield(arg) {
+                return true
+              }
           }
         }
         false
@@ -2191,8 +2439,15 @@ fn expr_has_yield(expr : @parser.TsExpr) -> Bool {
     }
     @parser.TsExpr::Call(_, args) => {
       for arg in args {
-        if expr_has_yield(arg) {
-          return true
+        match arg {
+          @parser.TsExpr::Spread(inner) =>
+            if expr_has_yield(inner) {
+              return true
+            }
+          _ =>
+            if expr_has_yield(arg) {
+              return true
+            }
         }
       }
       false
@@ -2202,8 +2457,15 @@ fn expr_has_yield(expr : @parser.TsExpr) -> Bool {
         true
       } else {
         for arg in args {
-          if expr_has_yield(arg) {
-            return true
+          match arg {
+            @parser.TsExpr::Spread(inner) =>
+              if expr_has_yield(inner) {
+                return true
+              }
+            _ =>
+              if expr_has_yield(arg) {
+                return true
+              }
           }
         }
         false
@@ -2214,8 +2476,15 @@ fn expr_has_yield(expr : @parser.TsExpr) -> Bool {
     @parser.TsExpr::PropAccess(obj, _) => expr_has_yield(obj)
     @parser.TsExpr::New(_, args) => {
       for arg in args {
-        if expr_has_yield(arg) {
-          return true
+        match arg {
+          @parser.TsExpr::Spread(inner) =>
+            if expr_has_yield(inner) {
+              return true
+            }
+          _ =>
+            if expr_has_yield(arg) {
+              return true
+            }
         }
       }
       false
@@ -2225,8 +2494,15 @@ fn expr_has_yield(expr : @parser.TsExpr) -> Bool {
         true
       } else {
         for arg in args {
-          if expr_has_yield(arg) {
-            return true
+          match arg {
+            @parser.TsExpr::Spread(inner) =>
+              if expr_has_yield(inner) {
+                return true
+              }
+            _ =>
+              if expr_has_yield(arg) {
+                return true
+              }
           }
         }
         false
@@ -2234,8 +2510,15 @@ fn expr_has_yield(expr : @parser.TsExpr) -> Bool {
     }
     @parser.TsExpr::ArrayLit(elements) => {
       for elem in elements {
-        if expr_has_yield(elem) {
-          return true
+        match elem {
+          @parser.TsExpr::Spread(inner) =>
+            if expr_has_yield(inner) {
+              return true
+            }
+          _ =>
+            if expr_has_yield(elem) {
+              return true
+            }
         }
       }
       false
@@ -4518,38 +4801,62 @@ pub fn JSInterpreter::call_function(
             Some(val) => val
             None => Undefined
           }
-        Native(name) =>
-          if name == "Promise" {
-            if not(new_target.is_undefined()) {
-              self.promise_construct_with_instance(this_arg, args)
+        Native(name) => {
+          let prev_array_proto = js_get_default_array_proto()
+          let mut switched = false
+          let realm_array_proto =
+            match closure.env.get("Array") {
+              Function(_) | Object(_) | Array(_) =>
+                js_get_prop(closure.env.get("Array"), "prototype")
+              _ => Undefined
+            }
+          match realm_array_proto {
+            Object(_) | Function(_) | Array(_) => {
+              js_set_default_array_proto(realm_array_proto)
+              switched = true
+            }
+            _ => ()
+          }
+          let result =
+            if name == "Promise" {
+              if not(new_target.is_undefined()) {
+                self.promise_construct_with_instance(this_arg, args)
+              } else {
+                self.call_native(name, this_arg, args)
+              }
+            } else if name == "Iterator" {
+              if new_target.is_undefined() {
+                self.set_error_kind("TypeError", "Iterator constructor must be called with new")
+              } else {
+                match js_strict_eq(new_target, func) {
+                  Bool(true) =>
+                    self.set_error_kind("TypeError", "Iterator is not directly constructible")
+                  _ => this_arg
+                }
+              }
+            } else if name == "__export_get__" {
+              let name_val = js_get_prop(func, "__export_name")
+              let module_val = js_get_prop(func, "__export_module")
+              match (module_val, name_val) {
+                (Object(_) | Function(_) | Array(_), String(n)) =>
+                  js_get_prop(module_val, n)
+                _ =>
+                  match name_val {
+                    String(n) => closure.env.get(n)
+                    _ => Undefined
+                  }
+              }
             } else {
               self.call_native(name, this_arg, args)
             }
-          } else if name == "Iterator" {
-            if new_target.is_undefined() {
-              self.set_error_kind("TypeError", "Iterator constructor must be called with new")
-            } else {
-              match js_strict_eq(new_target, func) {
-                Bool(true) =>
-                  self.set_error_kind("TypeError", "Iterator is not directly constructible")
-                _ => this_arg
-              }
+          if switched {
+            match prev_array_proto {
+              Some(proto) => js_set_default_array_proto(proto)
+              None => ()
             }
-          } else if name == "__export_get__" {
-            let name_val = js_get_prop(func, "__export_name")
-            let module_val = js_get_prop(func, "__export_module")
-            match (module_val, name_val) {
-              (Object(_) | Function(_) | Array(_), String(n)) =>
-                js_get_prop(module_val, n)
-              _ =>
-                match name_val {
-                  String(n) => closure.env.get(n)
-                  _ => Undefined
-                }
-            }
-          } else {
-            self.call_native(name, this_arg, args)
           }
+          result
+        }
         Bound(target, bound_this, bound_args) => {
           let merged : Array[JSValue] = []
           for item in bound_args {

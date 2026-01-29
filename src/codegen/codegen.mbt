@@ -180,11 +180,13 @@ fn infer_literal_type(expr : @parser.TsExpr) -> @parser.TsType {
   match expr {
     @parser.TsExpr::IntLit(_) => @parser.TsType::Int
     @parser.TsExpr::NumberLit(_) => @parser.TsType::Number
+    @parser.TsExpr::BigIntLit(_) => @parser.TsType::Any
     @parser.TsExpr::BoolLit(_) => @parser.TsType::Boolean
     @parser.TsExpr::StringLit(_) => @parser.TsType::String_
     @parser.TsExpr::NullLit => @parser.TsType::Any // null @parser.TsType::Any
     @parser.TsExpr::ArrayHole => @parser.TsType::Any
     @parser.TsExpr::ArrayLit(_) => @parser.TsType::Any // elementtype @parser.TsType::Any
+    @parser.TsExpr::Spread(_) => @parser.TsType::Any
     @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // objectliteral @parser.TsType::Any
     @parser.TsExpr::Var(_) => @parser.TsType::Any // variablestatement
     @parser.TsExpr::Yield(_) => @parser.TsType::Any
@@ -374,10 +376,12 @@ fn infer_type(ctx : CodeGenCtx, expr : @parser.TsExpr) -> @parser.TsType {
   match expr {
     @parser.TsExpr::NumberLit(_) => @parser.TsType::Number
     @parser.TsExpr::IntLit(_) => @parser.TsType::Int
+    @parser.TsExpr::BigIntLit(_) => @parser.TsType::Any
     @parser.TsExpr::BoolLit(_) => @parser.TsType::Boolean
     @parser.TsExpr::StringLit(_) => @parser.TsType::String_
     @parser.TsExpr::NullLit => @parser.TsType::Any // null @parser.TsType::Any
     @parser.TsExpr::ArrayHole => @parser.TsType::Any
+    @parser.TsExpr::Spread(_) => @parser.TsType::Any
     @parser.TsExpr::ObjectLit(_) => @parser.TsType::Any // objectliteral @parser.TsType::Any
     @parser.TsExpr::Seq(_, right) => infer_type(ctx, right)
     @parser.TsExpr::PropAssignExpr(_, _, value) => infer_type(ctx, value)
@@ -553,6 +557,8 @@ fn compile_expr(
       } else {
         ctx.emit(I32Const(i.reinterpret_as_uint()))
       }
+    @parser.TsExpr::BigIntLit(_) =>
+      raise CodeGenError("BigInt is not supported in Wasm compiler (use interpreter)")
     @parser.TsExpr::BoolLit(b) => ctx.emit(I32Const(if b { 1U } else { 0U }))
     @parser.TsExpr::StringLit(s) => {
       // stringaddget (snapshotexpression)
@@ -619,6 +625,8 @@ fn compile_expr(
       let result_type = ts_type_to_valtype(expected_type)
       ctx.emit(If(Value(result_type), then_ctx.instrs, else_ctx.instrs))
     }
+    @parser.TsExpr::Spread(_) =>
+      raise CodeGenError("Spread is not supported in Wasm compiler (use interpreter)")
     @parser.TsExpr::ArrayLit(elements) => compile_array_lit(ctx, elements, expected_type)
     @parser.TsExpr::IndexAccess(arr, index) =>
       compile_index_access(ctx, arr, index, expected_type)
@@ -684,6 +692,11 @@ fn compile_array_lit(
 
   // element
   for i, elem in elements {
+    match elem {
+      @parser.TsExpr::Spread(_) =>
+        raise CodeGenError("Spread is not supported in Wasm compiler (use interpreter)")
+      _ => ()
+    }
     ctx.emit(GlobalGet(0U))
     ctx.emit(I32Const((4 + i * elem_sz).reinterpret_as_uint()))
     ctx.emit(I32Add)
@@ -1835,6 +1848,11 @@ fn compile_call(
         Some((param_types, _)) =>
           // importfunction: parametertypereference
           for i, arg in args {
+            match arg {
+              @parser.TsExpr::Spread(_) =>
+                raise CodeGenError("Spread is not supported in Wasm compiler (use interpreter)")
+              _ => ()
+            }
             let param_type = if i < param_types.length() {
               param_types[i]
             } else {
@@ -1845,6 +1863,11 @@ fn compile_call(
         None =>
           // definefunction: expected_type
           for arg in args {
+            match arg {
+              @parser.TsExpr::Spread(_) =>
+                raise CodeGenError("Spread is not supported in Wasm compiler (use interpreter)")
+              _ => ()
+            }
             compile_expr(ctx, arg, expected_type)
           }
       }
@@ -1866,20 +1889,28 @@ fn compile_stmt(
   return_type : @parser.TsType,
 ) -> Unit raise CodeGenError {
   match stmt {
-    @parser.TsStmt::Let(name, type_, init) => {
-      // @parser.TsType::Any typeliteral
-      let resolved_type = resolve_any(type_, init)
-      let idx = ctx.add_local(name, resolved_type)
-      compile_expr(ctx, init, resolved_type)
-      ctx.emit(LocalSet(idx))
-    }
-    @parser.TsStmt::Const(name, type_, init) => {
-      // const let , @parser.TsType::Any typeliteral
-      let resolved_type = resolve_any(type_, init)
-      let idx = ctx.add_local(name, resolved_type)
-      compile_expr(ctx, init, resolved_type)
-      ctx.emit(LocalSet(idx))
-    }
+    @parser.TsStmt::Let(binding, type_, init) =>
+      match binding {
+        @parser.TsBinding::Ident(name) => {
+          // @parser.TsType::Any typeliteral
+          let resolved_type = resolve_any(type_, init)
+          let idx = ctx.add_local(name, resolved_type)
+          compile_expr(ctx, init, resolved_type)
+          ctx.emit(LocalSet(idx))
+        }
+        _ => raise CodeGenError("Unsupported let binding pattern")
+      }
+    @parser.TsStmt::Const(binding, type_, init) =>
+      match binding {
+        @parser.TsBinding::Ident(name) => {
+          // const let , @parser.TsType::Any typeliteral
+          let resolved_type = resolve_any(type_, init)
+          let idx = ctx.add_local(name, resolved_type)
+          compile_expr(ctx, init, resolved_type)
+          ctx.emit(LocalSet(idx))
+        }
+        _ => raise CodeGenError("Unsupported const binding pattern")
+      }
     @parser.TsStmt::Assign(name, expr) =>
       match ctx.get_local(name) {
         Some(lvar) => {

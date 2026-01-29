@@ -6,6 +6,42 @@
   - `test262.arrow.run.log`: total=343, passed=160, failed=49, skipped=134.
   - `test262.compound.run.log`: total=454, passed=241, failed=127, skipped=86.
 
+## test262 gaps from allowlist run (test262.run.log)
+
+- Biggest failing areas by path:
+  - `language/statements/for-of` (iterator protocol + destructuring)
+  - `language/statements/for` (destructuring in init/update, scoping)
+  - `staging/sm/Iterator` (Iterator constructor + helpers)
+  - `language/statements/{let,const,variable}` (binding/TDZ and destructuring)
+  - `language/expressions/{function,arrow-function}` (destructuring + defaults)
+  - `language/expressions/call`, `language/expressions/new` (call/construct semantics)
+  - `language/expressions/array` (elision + spread semantics)
+  - `annexB/built-ins/RegExp` (legacy flags/props)
+  - `annexB/built-ins/String` (legacy methods)
+
+## Priority backlog (updated)
+
+1. Implement iterator protocol properly:
+   - `Iterator` global, `Iterator.prototype`, `%IteratorPrototype%`
+   - `@@iterator` on Array/String/Map/Set basics (as required by tests)
+   - IteratorClose / abrupt completion handling.
+2. Fix `for-of` semantics:
+   - Iterator acquisition, per-iteration binding, destructuring assignment.
+   - IteratorClose on `break`, `throw`, and errors in destructuring.
+3. Destructuring binding semantics for `let/const/var` and parameters:
+   - Array/object patterns, elisions, defaults, rest, computed keys.
+   - Correct timing of default evaluation and binding initialization.
+4. TDZ and lexical environment correctness:
+   - `let/const` block scoping, temporal dead zone, redeclaration rules.
+5. Function/arrow parameter initialization:
+   - Default parameter evaluation order.
+   - Destructuring in parameters with iterator errors.
+6. Call/construct semantics:
+   - `new` target handling, `this` binding, callable checks.
+7. Array literal semantics:
+   - Elision (`[,,]`) and spread (`[...iter]`) interaction.
+8. AnnexB legacy RegExp/String behaviors needed by allowlist.
+
 ## Priority backlog (ordered)
 
 1. Add per-test step limit or timeout in the interpreter so the allowlist run always finishes.

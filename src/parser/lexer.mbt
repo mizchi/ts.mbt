@@ -6,6 +6,7 @@ pub enum TokenKind {
   // literal
   Number(Double)
   Int(Int)
+  BigInt(String)
   Bool(Bool)
   Str(String) // stringliteral
   Regex(String, String) // /pattern/flags
@@ -141,6 +142,8 @@ pub struct Lexer {
   src : String
   mut pos : Int
   mut allow_regex : Bool
+  mut pending : Array[Token]
+  mut pending_index : Int
 } derive(Show)
 
 ///|
@@ -167,7 +170,7 @@ fn Lexer::read_hex_digit(self : Lexer) -> Int? {
 ///|
 // / create
 pub fn Lexer::new(src : String) -> Lexer {
-  { src, pos: 0, allow_regex: true }
+  { src, pos: 0, allow_regex: true, pending: [], pending_index: 0 }
 }
 
 ///|
@@ -424,7 +427,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           let _ = self.advance()
         }
         if is_bigint {
-          return Number(value.to_double())
+          return BigInt(value.to_string())
         } else {
           return Int(value)
         }
@@ -461,7 +464,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           let _ = self.advance()
         }
         if is_bigint {
-          return Number(value.to_double())
+          return BigInt(value.to_string())
         } else {
           return Int(value)
         }
@@ -528,7 +531,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           let _ = self.advance()
         }
         if is_bigint {
-          return Number(value.to_double())
+          return BigInt(value.to_string())
         } else {
           return Int(value)
         }
@@ -593,7 +596,9 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
     } else {
       raw
     }
-  if has_dot || has_exp || is_bigint {
+  if is_bigint {
+    BigInt(s)
+  } else if has_dot || has_exp {
     // Double
     try {
       let d = @strconv.parse_double(s)
@@ -892,6 +897,195 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
 }
 
 ///|
+fn Lexer::scan_template_expr_source(self : Lexer) -> String {
+  let start = self.pos
+  let mut depth = 1
+  while depth > 0 {
+    match self.peek() {
+      None => break
+      Some(c) => {
+        let _ = self.advance()
+        match c {
+          '{' => depth += 1
+          '}' => depth -= 1
+          '\'' | '"' => self.skip_string_body(c)
+          '`' => {
+            let _ = self.scan_template()
+          }
+          _ => ()
+        }
+      }
+    }
+  }
+  let end =
+    if self.pos > 0 {
+      self.pos - 1
+    } else {
+      0
+    }
+  (try { self.src[start:end].to_string() } catch { _ => "" })
+}
+
+///|
+fn Lexer::scan_template_parts(self : Lexer) -> (Array[String], Array[String]) {
+  let parts : Array[String] = []
+  let exprs : Array[String] = []
+  let mut buf = StringBuilder::new()
+  while true {
+    match self.peek() {
+      None => break
+      Some(c) =>
+        if c == '`' {
+          let _ = self.advance()
+          break
+        } else if c == '$' && self.peek_next() == Some('{') {
+          let _ = self.advance()
+          let _ = self.advance()
+          parts.push(buf.to_string())
+          buf = StringBuilder::new()
+          let expr_src = self.scan_template_expr_source()
+          exprs.push(expr_src)
+        } else if c == '\\' {
+          let _ = self.advance()
+          match self.peek() {
+            Some('n') => {
+              let _ = self.advance()
+              buf.write_char('\n')
+            }
+            Some('t') => {
+              let _ = self.advance()
+              buf.write_char('\t')
+            }
+            Some('r') => {
+              let _ = self.advance()
+              buf.write_char('\r')
+            }
+            Some('b') => {
+              let _ = self.advance()
+              buf.write_char('\u0008'.to_int().unsafe_to_char())
+            }
+            Some('f') => {
+              let _ = self.advance()
+              buf.write_char('\u000c'.to_int().unsafe_to_char())
+            }
+            Some('v') => {
+              let _ = self.advance()
+              buf.write_char('\u000b'.to_int().unsafe_to_char())
+            }
+            Some('0') => {
+              let _ = self.advance()
+              buf.write_char('\u0000'.to_int().unsafe_to_char())
+            }
+            Some('x') => {
+              let _ = self.advance()
+              let mut code = 0
+              let mut ok = true
+              for _ in 0..<2 {
+                match self.read_hex_digit() {
+                  Some(d) => code = code * 16 + d
+                  None => {
+                    ok = false
+                    break
+                  }
+                }
+              }
+              if ok {
+                write_codepoint(buf, code)
+              } else {
+                buf.write_char('x')
+              }
+            }
+            Some('u') => {
+              let _ = self.advance()
+              let mut code = 0
+              let mut ok = true
+              for _ in 0..<4 {
+                match self.read_hex_digit() {
+                  Some(d) => code = code * 16 + d
+                  None => {
+                    ok = false
+                    break
+                  }
+                }
+              }
+              if ok {
+                write_codepoint(buf, code)
+              } else {
+                buf.write_char('u')
+              }
+            }
+            Some('\\') => {
+              let _ = self.advance()
+              buf.write_char('\\')
+            }
+            Some('`') => {
+              let _ = self.advance()
+              buf.write_char('`')
+            }
+            Some(other) => {
+              let _ = self.advance()
+              buf.write_char(other)
+            }
+            None => break
+          }
+        } else {
+          let _ = self.advance()
+          buf.write_char(c)
+        }
+    }
+  }
+  parts.push(buf.to_string())
+  (parts, exprs)
+}
+
+///|
+fn Lexer::tokenize_fragment(_self : Lexer, src : String, pos : Int) -> Array[Token] {
+  let sub = Lexer::new(src)
+  let tokens : Array[Token] = []
+  while true {
+    let tok = sub.next_token()
+    match tok.kind {
+      Eof => break
+      _ => tokens.push({ kind: tok.kind, pos })
+    }
+  }
+  tokens
+}
+
+///|
+fn Lexer::enqueue_template_tokens(self : Lexer, pos : Int) -> Unit {
+  let (parts, exprs) = self.scan_template_parts()
+  let tokens : Array[Token] = []
+  if exprs.length() == 0 {
+    tokens.push({ kind: Str(parts[0]), pos })
+  } else {
+    tokens.push({ kind: LParen, pos })
+    let last_index = parts.length() - 1
+    for i in 0..<exprs.length() {
+      let part = if i < parts.length() { parts[i] } else { "" }
+      tokens.push({ kind: Str(part), pos })
+      tokens.push({ kind: Plus, pos })
+      let expr_tokens = self.tokenize_fragment(exprs[i], pos)
+      for tok in expr_tokens {
+        tokens.push(tok)
+      }
+      tokens.push({ kind: Plus, pos })
+    }
+    let tail = if last_index >= 0 { parts[last_index] } else { "" }
+    tokens.push({ kind: Str(tail), pos })
+    tokens.push({ kind: RParen, pos })
+  }
+  if self.pending_index >= self.pending.length() {
+    self.pending = tokens
+    self.pending_index = 0
+  } else {
+    for tok in tokens {
+      self.pending.push(tok)
+    }
+  }
+}
+
+///|
 // / literal (`...`)
 fn Lexer::scan_template(self : Lexer) -> TokenKind {
   let buf = StringBuilder::new()
@@ -1095,6 +1289,7 @@ fn token_can_end_expr(kind : TokenKind) -> Bool {
   match kind {
     Number(_)
     | Int(_)
+    | BigInt(_)
     | Bool(_)
     | Str(_)
     | Regex(_, _)
@@ -1112,6 +1307,16 @@ fn token_can_end_expr(kind : TokenKind) -> Bool {
 ///|
 // / get
 pub fn Lexer::next_token(self : Lexer) -> Token {
+  if self.pending_index < self.pending.length() {
+    let tok = self.pending[self.pending_index]
+    self.pending_index += 1
+    if self.pending_index >= self.pending.length() {
+      self.pending = []
+      self.pending_index = 0
+    }
+    self.allow_regex = not(token_can_end_expr(tok.kind))
+    return tok
+  }
   self.skip_whitespace()
   let pos = self.pos
   match self.advance() {
@@ -1406,7 +1611,8 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
         }
         '`' => {
           // literal
-          self.scan_template()
+          self.enqueue_template_tokens(pos)
+          return self.next_token()
         }
         _ => Eof // statement
       }

@@ -125,6 +125,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let bool_value_of = self.make_native("Boolean.prototype.valueOf")
   self.set_function_length(bool_value_of, 0.0)
   let _ = js_set_prop(boolean_proto, "valueOf", bool_value_of)
+  let bool_to_string = self.make_native("Boolean.prototype.toString")
+  self.set_function_length(bool_to_string, 0.0)
+  let _ = js_set_prop(boolean_proto, "toString", bool_to_string)
   self.global_env.define_var("Boolean", boolean_ctor)
   let _ = js_set_prop(global_obj, "Boolean", boolean_ctor)
 
@@ -138,6 +141,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let num_value_of = self.make_native("Number.prototype.valueOf")
   self.set_function_length(num_value_of, 0.0)
   let _ = js_set_prop(number_proto, "valueOf", num_value_of)
+  let num_to_string = self.make_native("Number.prototype.toString")
+  self.set_function_length(num_to_string, 0.0)
+  let _ = js_set_prop(number_proto, "toString", num_to_string)
   let max_safe = JSValue::Number(9007199254740991.0)
   let _ = js_define_data_prop(number_ctor, "MAX_SAFE_INTEGER", max_safe, false, false, false)
   self.global_env.define_var("Number", number_ctor)
@@ -565,6 +571,10 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.set_function_length(helper_return, 0.0)
   self.set_function_name(helper_return, "return")
   let _ = js_define_data_prop(helper_proto, "return", helper_return, true, false, true)
+  let helper_throw = self.make_native("IteratorHelper.prototype.throw")
+  self.set_function_length(helper_throw, 0.0)
+  self.set_function_name(helper_throw, "throw")
+  let _ = js_define_data_prop(helper_proto, "throw", helper_throw, true, false, true)
   let _ = js_set_prop(helper_proto, "__proto__", iterator_proto)
   let _ = js_set_prop(iterator_ctor, "__helper_proto", helper_proto)
 
@@ -684,6 +694,26 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   // Reflect
   let reflect = self.new_object()
   let _ = js_set_prop(reflect, "construct", self.make_native("Reflect.construct"))
+  let reflect_get = self.make_native("Reflect.get")
+  self.set_function_length(reflect_get, 2.0)
+  self.set_function_name(reflect_get, "get")
+  let _ = js_set_prop(reflect, "get", reflect_get)
+  let reflect_set = self.make_native("Reflect.set")
+  self.set_function_length(reflect_set, 3.0)
+  self.set_function_name(reflect_set, "set")
+  let _ = js_set_prop(reflect, "set", reflect_set)
+  let reflect_has = self.make_native("Reflect.has")
+  self.set_function_length(reflect_has, 2.0)
+  self.set_function_name(reflect_has, "has")
+  let _ = js_set_prop(reflect, "has", reflect_has)
+  let reflect_define = self.make_native("Reflect.defineProperty")
+  self.set_function_length(reflect_define, 3.0)
+  self.set_function_name(reflect_define, "defineProperty")
+  let _ = js_set_prop(reflect, "defineProperty", reflect_define)
+  let reflect_get_proto = self.make_native("Reflect.getPrototypeOf")
+  self.set_function_length(reflect_get_proto, 1.0)
+  self.set_function_name(reflect_get_proto, "getPrototypeOf")
+  let _ = js_set_prop(reflect, "getPrototypeOf", reflect_get_proto)
   let reflect_get_desc = self.make_native("Reflect.getOwnPropertyDescriptor")
   self.set_function_length(reflect_get_desc, 2.0)
   self.set_function_name(reflect_get_desc, "getOwnPropertyDescriptor")
@@ -1950,6 +1980,9 @@ fn JSInterpreter::define_property(
   key : String,
   desc : JSValue,
 ) -> JSValue {
+  if self.is_proxy(target) {
+    return self.proxy_define_property(target, key, desc)
+  }
   let is_obj = match desc {
     Object(_) | Function(_) => true
     _ => false
@@ -2266,11 +2299,8 @@ fn JSInterpreter::call_native(
     }
     "Promise[@@species]" => this_arg
     "Proxy" => {
-      let target = if args.length() > 0 { args[0] } else { Undefined }
-      match target {
-        Object(_) | Function(_) | Array(_) => target
-        _ => self.set_error_kind("TypeError", "Proxy target is not an object")
-      }
+      let _ = self.set_error_kind("TypeError", "Proxy must be called with new")
+      Undefined
     }
     "Promise.__resolve__" => {
       let promise = if args.length() > 0 { args[0] } else { Undefined }
@@ -2653,6 +2683,9 @@ fn JSInterpreter::call_native(
     }
     "Object.getPrototypeOf" => {
       let target = if args.length() > 0 { args[0] } else { Undefined }
+      if self.is_proxy(target) {
+        return self.proxy_get_prototype_of(target)
+      }
       match target {
         Object(map) => match map.prototype {
           Some(p) => p
@@ -2671,7 +2704,11 @@ fn JSInterpreter::call_native(
     }
     "Object.getOwnPropertyDescriptor" => {
       let target = if args.length() > 0 { args[0] } else { Undefined }
-      let key = if args.length() > 1 { args[1].to_js_string() } else { "" }
+      let raw_key = if args.length() > 1 { args[1].to_js_string() } else { "" }
+      let key = self.normalize_prop_key(raw_key)
+      if self.is_proxy(target) {
+        return self.proxy_get_own_property_descriptor(target, key)
+      }
       match target {
         Function(closure) => {
           for prop in closure.props {
@@ -2810,7 +2847,8 @@ fn JSInterpreter::call_native(
     }
     "Object.defineProperty" => {
       let target = if args.length() > 0 { args[0] } else { Undefined }
-      let key = if args.length() > 1 { args[1].to_js_string() } else { "" }
+      let raw_key = if args.length() > 1 { args[1].to_js_string() } else { "" }
+      let key = self.normalize_prop_key(raw_key)
       let desc = if args.length() > 2 { args[2] } else { Undefined }
       let receiver = match target {
         Undefined | Null =>
@@ -2868,6 +2906,7 @@ fn JSInterpreter::call_native(
     "Iterator.prototype.find" => self.iterator_find(this_arg, args)
     "IteratorHelper.prototype.next" => self.iterator_helper_next(this_arg, args)
     "IteratorHelper.prototype.return" => self.iterator_helper_return(this_arg, args)
+    "IteratorHelper.prototype.throw" => self.iterator_helper_throw(this_arg, args)
     "ArrayIterator.prototype.next" => {
       let target = js_get_prop(this_arg, "__iter_target")
       let idx_val = js_get_prop(this_arg, "__iter_index")
@@ -3080,7 +3119,23 @@ fn JSInterpreter::call_native(
     }
     "Object.prototype.valueOf" => this_arg
     "Boolean.prototype.valueOf" => js_get_prop(this_arg, "value")
+    "Boolean.prototype.toString" => {
+      let prim = match this_arg {
+        Bool(_) => this_arg
+        Object(_) | Function(_) | Array(_) => js_get_prop(this_arg, "value")
+        _ => this_arg
+      }
+      String(prim.to_js_string())
+    }
     "Number.prototype.valueOf" => js_get_prop(this_arg, "value")
+    "Number.prototype.toString" => {
+      let prim = match this_arg {
+        Number(_) => this_arg
+        Object(_) | Function(_) | Array(_) => js_get_prop(this_arg, "value")
+        _ => this_arg
+      }
+      String(prim.to_js_string())
+    }
     "String.prototype.valueOf" => js_get_prop(this_arg, "value")
     "Error" => {
       let msg = if args.length() > 0 { args[0].to_js_string() } else { "" }
@@ -3608,6 +3663,131 @@ fn JSInterpreter::call_native(
         }
       }
     }
+    "Reflect.get" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let key_val = if args.length() > 1 { args[1] } else { Undefined }
+      let receiver = if args.length() > 2 { args[2] } else { target }
+      let key = self.normalize_prop_key(key_val.to_js_string())
+      if self.is_proxy(target) {
+        self.proxy_get(target, key, receiver)
+      } else {
+        self.get_prop_value_with_receiver(target, receiver, key)
+      }
+    }
+    "Reflect.set" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let key_val = if args.length() > 1 { args[1] } else { Undefined }
+      let value = if args.length() > 2 { args[2] } else { Undefined }
+      let receiver = if args.length() > 3 { args[3] } else { target }
+      let key = self.normalize_prop_key(key_val.to_js_string())
+      if self.is_proxy(target) {
+        Bool(self.proxy_set(target, key, value, receiver))
+      } else {
+        if self.is_proxy(receiver) {
+          let desc = self.proxy_get_own_property_descriptor(receiver, key)
+          match self.peek_error() {
+            Some(_) => return Bool(false)
+            None => ()
+          }
+          let new_desc =
+            match desc {
+              Undefined => self.make_data_descriptor(value, true, true, true)
+              _ => {
+                let has_enum = self.has_own_prop(desc, "enumerable")
+                let enumerable =
+                  if has_enum {
+                    self.get_prop_value(desc, "enumerable").to_boolean()
+                  } else {
+                    true
+                  }
+                let has_config = self.has_own_prop(desc, "configurable")
+                let configurable =
+                  if has_config {
+                    self.get_prop_value(desc, "configurable").to_boolean()
+                  } else {
+                    true
+                  }
+                let has_value = self.has_own_prop(desc, "value")
+                if has_value {
+                  let _ = self.get_prop_value(desc, "value")
+                }
+                let has_writable = self.has_own_prop(desc, "writable")
+                let writable =
+                  if has_writable {
+                    self.get_prop_value(desc, "writable").to_boolean()
+                  } else {
+                    true
+                  }
+                let _ = self.has_own_prop(desc, "get")
+                let _ = self.has_own_prop(desc, "set")
+                self.make_data_descriptor(value, writable, enumerable, configurable)
+              }
+            }
+          let _ = self.proxy_define_property(receiver, key, new_desc)
+          match self.peek_error() {
+            Some(_) => Bool(false)
+            None => Bool(true)
+          }
+        } else {
+          self.set_prop_value(target, key, value)
+          match self.peek_error() {
+            Some(_) => Bool(false)
+            None => Bool(true)
+          }
+        }
+      }
+    }
+    "Reflect.has" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let key_val = if args.length() > 1 { args[1] } else { Undefined }
+      let key = self.normalize_prop_key(key_val.to_js_string())
+      if self.is_proxy(target) {
+        Bool(self.proxy_has(target, key))
+      } else {
+        Bool(js_has_prop(target, key))
+      }
+    }
+    "Reflect.defineProperty" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let key_val = if args.length() > 1 { args[1] } else { Undefined }
+      let desc = if args.length() > 2 { args[2] } else { Undefined }
+      let key = self.normalize_prop_key(key_val.to_js_string())
+      if self.is_proxy(target) {
+        let result = self.proxy_define_property(target, key, desc)
+        match self.peek_error() {
+          Some(_) => Bool(false)
+          None => Bool(result.to_boolean())
+        }
+      } else {
+        let _ = self.define_property(target, key, desc)
+        match self.peek_error() {
+          Some(_) => Bool(false)
+          None => Bool(true)
+        }
+      }
+    }
+    "Reflect.getPrototypeOf" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      if self.is_proxy(target) {
+        self.proxy_get_prototype_of(target)
+      } else {
+        match target {
+          Object(map) => match map.prototype {
+            Some(p) => p
+            None => Null
+          }
+          Function(closure) => match closure.object_proto {
+            Some(p) => p
+            None => Null
+          }
+          Array(arr) => match arr.prototype {
+            Some(p) => p
+            None => Null
+          }
+          _ => Undefined
+        }
+      }
+    }
     "Reflect.getOwnPropertyDescriptor" => {
       let target = if args.length() > 0 { args[0] } else { Undefined }
       let key_val = if args.length() > 1 { args[1] } else { Undefined }
@@ -3859,8 +4039,14 @@ fn JSInterpreter::call_native(
       }
     "$262.createRealm" => {
       let realm = self.new_object()
-      let global_obj = self.global_env.get("globalThis")
-      let _ = js_set_prop(realm, "global", global_obj)
+      let other = JSInterpreter::new()
+      let other_global = other.global_env.get("globalThis")
+      let _ = js_set_prop(realm, "global", other_global)
+      let current_array_proto = js_get_prop(self.global_env.get("Array"), "prototype")
+      match current_array_proto {
+        Object(_) | Function(_) | Array(_) => js_set_default_array_proto(current_array_proto)
+        _ => ()
+      }
       realm
     }
     _ => Undefined
@@ -3953,6 +4139,11 @@ fn JSInterpreter::new_instance(
         js_array_from(args.copy())
       }
     "Promise" => self.promise_construct(args)
+    "Proxy" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let handler = if args.length() > 1 { args[1] } else { Undefined }
+      self.new_proxy(target, handler)
+    }
     "RegExp" => {
       let pattern_val = if args.length() > 0 { args[0] } else { String("") }
       let flags = if args.length() > 1 { args[1].to_js_string() } else { "" }

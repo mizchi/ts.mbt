@@ -9,6 +9,11 @@ pub fn JSInterpreter::call_method(
   match obj {
     String(s) => self.string_method(s, method_name, args)
     Array(arr) => self.array_method(arr, method_name, args)
+    Bool(_) | Number(_) => {
+      let boxed = self.wrap_primitive(self.global_env, obj)
+      let func = self.get_prop_value(boxed, method_name)
+      self.call_function(func, boxed, args)
+    }
     Function(_) =>
       match method_name {
         "call" | "apply" | "bind" => self.function_method(obj, method_name, args)

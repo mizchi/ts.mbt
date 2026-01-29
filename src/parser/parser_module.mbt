@@ -90,9 +90,10 @@ fn Parser::parse_named_exports(self : Parser) -> Array[(String, String)] raise P
 ///|
 fn collect_decl_names_from_stmt(stmt : TsStmt, names : Array[String]) -> Unit {
   match stmt {
-    Let(name, _, _) | Const(name, _, _) =>
-      if name != "<destruct>" {
-        names.push(name)
+    Let(binding, _, _) | Const(binding, _, _) =>
+      match binding {
+        TsBinding::Ident(name) => names.push(name)
+        _ => ()
       }
     Block(block) =>
       for inner in block.stmts {
@@ -182,11 +183,11 @@ fn Parser::parse_export_decl_for_module(
     if self.check(Function) {
       let func = self.parse_function_expr()
       if func.name != "<anon>" {
-        stmts.push(Let(func.name, Any, FuncExpr(func)))
+        stmts.push(Let(TsBinding::Ident(func.name), Any, FuncExpr(func)))
         exports.push({ local_name: func.name, export_name: "default" })
       } else {
         let temp = self.next_temp("__export_default__")
-        stmts.push(Const(temp, Any, FuncExpr(func)))
+        stmts.push(Const(TsBinding::Ident(temp), Any, FuncExpr(func)))
         exports.push({ local_name: temp, export_name: "default" })
       }
       self.consume_semicolon()
@@ -206,7 +207,7 @@ fn Parser::parse_export_decl_for_module(
         None => {
           let temp = self.next_temp("__export_default__")
           let expr = self.parse_class_stub()
-          stmts.push(Const(temp, Any, expr))
+          stmts.push(Const(TsBinding::Ident(temp), Any, expr))
           exports.push({ local_name: temp, export_name: "default" })
         }
       }
@@ -215,7 +216,7 @@ fn Parser::parse_export_decl_for_module(
     }
     let temp = self.next_temp("__export_default__")
     let expr = self.parse_expr()
-    stmts.push(Const(temp, Any, expr))
+    stmts.push(Const(TsBinding::Ident(temp), Any, expr))
     exports.push({ local_name: temp, export_name: "default" })
     self.consume_semicolon()
     return (stmts, exports, reexports)
@@ -261,7 +262,7 @@ fn Parser::parse_export_decl_for_module(
   }
   if self.check(Function) {
     let func = self.parse_function()
-    stmts.push(Let(func.name, Any, FuncExpr(func)))
+    stmts.push(Let(TsBinding::Ident(func.name), Any, FuncExpr(func)))
     exports.push({ local_name: func.name, export_name: func.name })
     return (stmts, exports, reexports)
   }

@@ -1,32 +1,5 @@
 ///|
 // /
-fn Parser::consume_binding_name(self : Parser) -> String raise ParseError {
-  let _ = self.advance()
-  let mut depth = 1
-  let mut name = "<destruct>"
-  while depth > 0 {
-    let tok = self.advance()
-    match tok.kind {
-      LBracket | LBrace => depth += 1
-      RBracket | RBrace => {
-        depth -= 1
-        if depth == 0 {
-          break
-        }
-      }
-      Ident(n) =>
-        if name == "<destruct>" {
-          name = n
-        }
-      Eof => raise ParseError("Unexpected EOF in binding pattern")
-      _ => ()
-    }
-  }
-  name
-}
-
-///|
-// /
 fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
   match self.peek().kind {
     Ident(_) => match self.advance().kind {
