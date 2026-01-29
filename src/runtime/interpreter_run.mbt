@@ -2,7 +2,7 @@
 // / run
 pub fn JSInterpreter::run_module(
   self : JSInterpreter,
-  module_ : @parser.TsModule,
+  module_ : @ast.TsModule,
 ) -> JSValue {
   // function
   for func in module_.funcs {

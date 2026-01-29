@@ -231,7 +231,7 @@ fn define_export_accessors(
   interp : @runtime.JSInterpreter,
   exports : @runtime.JSValue,
   module_env : @runtime.JSEnv,
-  specs : Array[@parser.TsExportSpec],
+  specs : Array[@ast.TsExportSpec],
 ) -> Unit {
   for spec in specs {
     let getter = make_export_getter(interp, module_env, spec.local_name)
@@ -316,7 +316,7 @@ fn export_all_accessors(
 fn define_import_bindings(
   interp : @runtime.JSInterpreter,
   module_env : @runtime.JSEnv,
-  imports : Array[(@parser.TsImportDecl, @runtime.JSValue)],
+  imports : Array[(@ast.TsImportDecl, @runtime.JSValue)],
 ) -> Unit {
   for item in imports {
     let (decl, dep_exports) = item
@@ -346,7 +346,7 @@ fn define_import_bindings(
 fn refresh_import_bindings(
   interp : @runtime.JSInterpreter,
   module_env : @runtime.JSEnv,
-  imports : Array[(@parser.TsImportDecl, @runtime.JSValue)],
+  imports : Array[(@ast.TsImportDecl, @runtime.JSValue)],
 ) -> Unit {
   for item in imports {
     let (decl, dep_exports) = item
@@ -400,7 +400,7 @@ async fn eval_module(
   module_env.define_const("this", undefined_value)
   module_env.define_const("__strict__", undefined_value)
 
-  let resolved_imports : Array[(@parser.TsImportDecl, @runtime.JSValue)] = []
+  let resolved_imports : Array[(@ast.TsImportDecl, @runtime.JSValue)] = []
   for decl in module_block.imports {
     let dep_path = resolve_module_path(path, decl.module_spec)
     let dep_exports = eval_module(interp, dep_path, cache)
@@ -410,7 +410,7 @@ async fn eval_module(
     resolved_imports.push((decl, dep_exports))
   }
 
-  let resolved_reexports : Array[(@parser.TsReExportSpec, @runtime.JSValue)] = []
+  let resolved_reexports : Array[(@ast.TsReExportSpec, @runtime.JSValue)] = []
   for reexport in module_block.reexports {
     let dep_path = resolve_module_path(path, reexport.module_spec)
     let dep_exports = eval_module(interp, dep_path, cache)
@@ -424,7 +424,7 @@ async fn eval_module(
   for item in resolved_reexports {
     let (reexport, dep_exports) = item
     match reexport.kind {
-      @parser.TsReExportKind::Named(items) =>
+      @ast.TsReExportKind::Named(items) =>
         for spec in items {
           let (imported, export_name) = spec
           define_reexport_accessor(
@@ -436,9 +436,9 @@ async fn eval_module(
             export_name,
           )
         }
-      @parser.TsReExportKind::All =>
+      @ast.TsReExportKind::All =>
         export_all_accessors(interp, exports, module_env, dep_exports)
-      @parser.TsReExportKind::Namespace(name) => {
+      @ast.TsReExportKind::Namespace(name) => {
         let _ = @runtime.js_set_prop(exports, name, dep_exports)
       }
     }

@@ -9,6 +9,10 @@
       "alias": "encode"
     },
     {
+      "path": "moonbitlang/typescript/ast",
+      "alias": "ast"
+    },
+    {
       "path": "moonbitlang/typescript/parser",
       "alias": "parser"
     }

@@ -36,23 +36,23 @@ fn Parser::parse_class_method_name(self : Parser) -> String raise ParseError {
 ///|
 fn Parser::computed_key_name(
   _self : Parser,
-  key_expr : TsExpr,
+  key_expr : @ast.TsExpr,
 ) -> String {
   match key_expr {
     StringLit(s) => s
     IntLit(i) => i.to_string()
     NumberLit(n) => n.to_string()
-    Var(name) => name
-    PropAccess(Var("Symbol"), prop) => "@@" + prop
+    @ast.TsExpr::Var(name) => name
+    @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), prop) => "@@" + prop
     _ => "<computed>"
   }
 }
 
 ///|
-fn Parser::is_super_call_stmt(_self : Parser, stmt : TsStmt) -> Bool {
+fn Parser::is_super_call_stmt(_self : Parser, stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Expr(Call("super", _)) => true
-    Expr(CallExpr(Var("super"), _)) => true
+    Expr(CallExpr(@ast.TsExpr::Var("super"), _)) => true
     _ => false
   }
 }
@@ -61,23 +61,23 @@ fn Parser::is_super_call_stmt(_self : Parser, stmt : TsStmt) -> Bool {
 fn Parser::make_field_assign_stmt(
   _self : Parser,
   field_name : String,
-  init_opt : TsExpr?,
-) -> TsStmt {
+  init_opt : @ast.TsExpr?,
+) -> @ast.TsStmt {
   let init = match init_opt {
     Some(expr) => expr
-    None => Var("undefined")
+    None => @ast.TsExpr::Var("undefined")
   }
-  PropAssign(Var("this"), field_name, init)
+  PropAssign(@ast.TsExpr::Var("this"), field_name, init)
 }
 
 ///|
 fn Parser::inject_instance_fields(
   self : Parser,
-  func : TsFunc,
-  fields : Array[(Bool, String, TsExpr?)],
+  func : @ast.TsFunc,
+  fields : Array[(Bool, String, @ast.TsExpr?)],
   base : String?,
-) -> TsFunc {
-  let assigns : Array[TsStmt] = []
+) -> @ast.TsFunc {
+  let assigns : Array[@ast.TsStmt] = []
   for item in fields {
     let (is_static, field_name, init_opt) = item
     if not(is_static) {
@@ -87,7 +87,7 @@ fn Parser::inject_instance_fields(
   if assigns.length() == 0 {
     return func
   }
-  let mut new_stmts : Array[TsStmt] = []
+  let mut new_stmts : Array[@ast.TsStmt] = []
   let mut inserted = false
   if base is Some(_) {
     for stmt in func.body.stmts {
@@ -100,7 +100,7 @@ fn Parser::inject_instance_fields(
       }
     }
     if not(inserted) {
-      let combined : Array[TsStmt] = []
+      let combined : Array[@ast.TsStmt] = []
       for assign in assigns {
         combined.push(assign)
       }
@@ -130,14 +130,14 @@ fn Parser::inject_instance_fields(
 fn Parser::parse_class_body(
   self : Parser,
 ) -> (
-  TsFunc?,
-  Array[(Bool, String, TsFunc)],
-  Array[(Bool, String, TsExpr?)],
+  @ast.TsFunc?,
+  Array[(Bool, String, @ast.TsFunc)],
+  Array[(Bool, String, @ast.TsExpr?)],
 ) raise ParseError {
   let _ = self.expect(LBrace)
-  let mut ctor : TsFunc? = None
-  let methods : Array[(Bool, String, TsFunc)] = []
-  let fields : Array[(Bool, String, TsExpr?)] = []
+  let mut ctor : @ast.TsFunc? = None
+  let methods : Array[(Bool, String, @ast.TsFunc)] = []
+  let fields : Array[(Bool, String, @ast.TsExpr?)] = []
   while not(self.check(RBrace)) && not(self.check(Eof)) {
     if self.match_(Semicolon) {
       continue
@@ -188,7 +188,7 @@ fn Parser::parse_class_body(
         Any
       }
       let body = self.parse_block()
-      let func : TsFunc = { name, params, return_type, body, is_generator }
+      let func : @ast.TsFunc = { name, params, return_type, body, is_generator }
       if method_name == "constructor" && not(is_static) {
         ctor = Some(func)
       } else {
@@ -198,7 +198,7 @@ fn Parser::parse_class_body(
       if self.match_(Colon) {
         let _ = self.parse_type()
       }
-      let init : TsExpr? = if self.match_(Eq) {
+      let init : @ast.TsExpr? = if self.match_(Eq) {
         Some(self.parse_assignment())
       } else {
         None
@@ -212,7 +212,7 @@ fn Parser::parse_class_body(
 }
 
 ///|
-fn Parser::parse_class_stub(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let _ = self.expect(Class)
   let mut class_name = ""
   let _ =
@@ -232,21 +232,21 @@ fn Parser::parse_class_stub(self : Parser) -> TsExpr raise ParseError {
   }
   let (ctor_opt, methods, fields) = self.parse_class_body()
   let tmp_name = if class_name == "" { "__class__" } else { class_name }
-  let stmts : Array[TsStmt] = []
+  let stmts : Array[@ast.TsStmt] = []
   let ctor_func = match ctor_opt {
     Some(func) => func
     None => {
       match base {
         Some(_) => {
           let rest_name = "__super_args__"
-          let rest_param : TsParam = {
+          let rest_param : @ast.TsParam = {
             name: rest_name,
-            binding: Some(TsBinding::Ident(rest_name)),
+            binding: Some(@ast.TsBinding::Ident(rest_name)),
             is_rest: true,
             type_: Any,
             default: None,
           }
-          let empty_body : TsBlock = { stmts: [Expr(Call("super", [Var(rest_name)]))] }
+          let empty_body : @ast.TsBlock = { stmts: [Expr(Call("super", [@ast.TsExpr::Var(rest_name)]))] }
           {
             name: tmp_name,
             params: [rest_param],
@@ -256,7 +256,7 @@ fn Parser::parse_class_stub(self : Parser) -> TsExpr raise ParseError {
           }
         }
         None => {
-          let empty_body : TsBlock = { stmts: [] }
+          let empty_body : @ast.TsBlock = { stmts: [] }
           {
             name: tmp_name,
             params: [],
@@ -269,15 +269,15 @@ fn Parser::parse_class_stub(self : Parser) -> TsExpr raise ParseError {
     }
   }
   let ctor_func = self.inject_instance_fields(ctor_func, fields, base)
-  stmts.push(Let(TsBinding::Ident(tmp_name), Any, FuncExpr(ctor_func)))
+  stmts.push(Let(@ast.TsBinding::Ident(tmp_name), Any, @ast.TsExpr::FuncExpr(ctor_func)))
 
-  let proto_expr = PropAccess(Var(tmp_name), "prototype")
+  let proto_expr = @ast.TsExpr::PropAccess(@ast.TsExpr::Var(tmp_name), "prototype")
   match base {
     Some(base_name) => {
-      let base_proto = PropAccess(Var(base_name), "prototype")
-      stmts.push(PropAssign(Var(tmp_name), "__super_ctor", Var(base_name)))
-      stmts.push(PropAssign(Var(tmp_name), "__super_proto", base_proto))
-      stmts.push(PropAssign(Var(tmp_name), "__proto__", Var(base_name)))
+      let base_proto = @ast.TsExpr::PropAccess(@ast.TsExpr::Var(base_name), "prototype")
+      stmts.push(PropAssign(@ast.TsExpr::Var(tmp_name), "__super_ctor", @ast.TsExpr::Var(base_name)))
+      stmts.push(PropAssign(@ast.TsExpr::Var(tmp_name), "__super_proto", base_proto))
+      stmts.push(PropAssign(@ast.TsExpr::Var(tmp_name), "__proto__", @ast.TsExpr::Var(base_name)))
       stmts.push(PropAssign(proto_expr, "__proto__", base_proto))
     }
     None => ()
@@ -286,13 +286,13 @@ fn Parser::parse_class_stub(self : Parser) -> TsExpr raise ParseError {
   for item in methods {
     let (is_static, method_name, func) = item
     if is_static {
-      stmts.push(PropAssign(Var(tmp_name), method_name, FuncExpr(func)))
+      stmts.push(PropAssign(@ast.TsExpr::Var(tmp_name), method_name, @ast.TsExpr::FuncExpr(func)))
     } else {
-      stmts.push(PropAssign(proto_expr, method_name, FuncExpr(func)))
+      stmts.push(PropAssign(proto_expr, method_name, @ast.TsExpr::FuncExpr(func)))
       match base {
         Some(base_name) => {
-          let base_proto = PropAccess(Var(base_name), "prototype")
-          let method_ref = PropAccess(proto_expr, method_name)
+          let base_proto = @ast.TsExpr::PropAccess(@ast.TsExpr::Var(base_name), "prototype")
+          let method_ref = @ast.TsExpr::PropAccess(proto_expr, method_name)
           stmts.push(PropAssign(method_ref, "__super_proto", base_proto))
         }
         None => ()
@@ -304,18 +304,18 @@ fn Parser::parse_class_stub(self : Parser) -> TsExpr raise ParseError {
     if is_static {
       let init = match init_opt {
         Some(expr) => expr
-        None => Var("undefined")
+        None => @ast.TsExpr::Var("undefined")
       }
-      stmts.push(PropAssign(Var(tmp_name), field_name, init))
+      stmts.push(PropAssign(@ast.TsExpr::Var(tmp_name), field_name, init))
     }
   }
-  stmts.push(Return(Some(Var(tmp_name))))
+  stmts.push(Return(Some(@ast.TsExpr::Var(tmp_name))))
   CallExpr(
-    FuncExpr({
+    @ast.TsExpr::FuncExpr(@ast.TsFunc::{
       name: "<class>",
       params: [],
-      return_type: Any,
-      body: { stmts, },
+      return_type: @ast.TsType::Any,
+      body: @ast.TsBlock::{ stmts, },
       is_generator: false,
     }),
     [],
@@ -323,7 +323,7 @@ fn Parser::parse_class_stub(self : Parser) -> TsExpr raise ParseError {
 }
 
 ///|
-fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Class)
   let name = match self.advance().kind {
     Ident(n) => n
@@ -337,7 +337,7 @@ fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
     }
   }
   let (ctor_opt, methods, fields) = self.parse_class_body()
-  let stmts : Array[TsStmt] = []
+  let stmts : Array[@ast.TsStmt] = []
 
   let ctor_func = match ctor_opt {
     Some(func) => func
@@ -345,14 +345,14 @@ fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
       match base {
         Some(_) => {
           let rest_name = "__super_args__"
-          let rest_param : TsParam = {
+          let rest_param : @ast.TsParam = {
             name: rest_name,
-            binding: Some(TsBinding::Ident(rest_name)),
+            binding: Some(@ast.TsBinding::Ident(rest_name)),
             is_rest: true,
             type_: Any,
             default: None,
           }
-          let empty_body : TsBlock = { stmts: [Expr(Call("super", [Var(rest_name)]))] }
+          let empty_body : @ast.TsBlock = { stmts: [Expr(Call("super", [@ast.TsExpr::Var(rest_name)]))] }
           {
             name,
             params: [rest_param],
@@ -362,7 +362,7 @@ fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
           }
         }
         None => {
-          let empty_body : TsBlock = { stmts: [] }
+          let empty_body : @ast.TsBlock = { stmts: [] }
           {
             name,
             params: [],
@@ -375,15 +375,15 @@ fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
     }
   }
   let ctor_func = self.inject_instance_fields(ctor_func, fields, base)
-  stmts.push(Let(TsBinding::Ident(name), Any, FuncExpr(ctor_func)))
+  stmts.push(Let(@ast.TsBinding::Ident(name), Any, @ast.TsExpr::FuncExpr(ctor_func)))
 
-  let proto_expr = PropAccess(Var(name), "prototype")
+  let proto_expr = @ast.TsExpr::PropAccess(@ast.TsExpr::Var(name), "prototype")
   match base {
     Some(base_name) => {
-      let base_proto = PropAccess(Var(base_name), "prototype")
-      stmts.push(PropAssign(Var(name), "__super_ctor", Var(base_name)))
-      stmts.push(PropAssign(Var(name), "__super_proto", base_proto))
-      stmts.push(PropAssign(Var(name), "__proto__", Var(base_name)))
+      let base_proto = @ast.TsExpr::PropAccess(@ast.TsExpr::Var(base_name), "prototype")
+      stmts.push(PropAssign(@ast.TsExpr::Var(name), "__super_ctor", @ast.TsExpr::Var(base_name)))
+      stmts.push(PropAssign(@ast.TsExpr::Var(name), "__super_proto", base_proto))
+      stmts.push(PropAssign(@ast.TsExpr::Var(name), "__proto__", @ast.TsExpr::Var(base_name)))
       stmts.push(PropAssign(proto_expr, "__proto__", base_proto))
     }
     None => ()
@@ -392,13 +392,13 @@ fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
   for item in methods {
     let (is_static, method_name, func) = item
     if is_static {
-      stmts.push(PropAssign(Var(name), method_name, FuncExpr(func)))
+      stmts.push(PropAssign(@ast.TsExpr::Var(name), method_name, @ast.TsExpr::FuncExpr(func)))
     } else {
-      stmts.push(PropAssign(proto_expr, method_name, FuncExpr(func)))
+      stmts.push(PropAssign(proto_expr, method_name, @ast.TsExpr::FuncExpr(func)))
       match base {
         Some(base_name) => {
-          let base_proto = PropAccess(Var(base_name), "prototype")
-          let method_ref = PropAccess(proto_expr, method_name)
+          let base_proto = @ast.TsExpr::PropAccess(@ast.TsExpr::Var(base_name), "prototype")
+          let method_ref = @ast.TsExpr::PropAccess(proto_expr, method_name)
           stmts.push(PropAssign(method_ref, "__super_proto", base_proto))
         }
         None => ()
@@ -410,9 +410,9 @@ fn Parser::parse_class_decl(self : Parser) -> TsStmt raise ParseError {
     if is_static {
       let init = match init_opt {
         Some(expr) => expr
-        None => Var("undefined")
+        None => @ast.TsExpr::Var("undefined")
       }
-      stmts.push(PropAssign(Var(name), field_name, init))
+      stmts.push(PropAssign(@ast.TsExpr::Var(name), field_name, init))
     }
   }
 

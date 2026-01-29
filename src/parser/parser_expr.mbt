@@ -4,13 +4,13 @@
 
 ///|
 // / expression (prefer)
-pub fn Parser::parse_expr(self : Parser) -> TsExpr raise ParseError {
+pub fn Parser::parse_expr(self : Parser) -> @ast.TsExpr raise ParseError {
   self.parse_comma()
 }
 
 ///|
 // / operator
-fn Parser::parse_comma(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_comma(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_assignment()
   while self.match_(Comma) {
     let right = self.parse_assignment()
@@ -21,7 +21,7 @@ fn Parser::parse_comma(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / assignmentexpression
-fn Parser::parse_assignment(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
   if (self.check(LBracket) || self.check(LBrace)) &&
     self.is_destructuring_assignment_start() {
     let pattern = self.parse_assignment_binding_pattern()
@@ -168,7 +168,7 @@ fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
 
 ///|
 // / operator: cond ? then : else
-fn Parser::parse_ternary(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_ternary(self : Parser) -> @ast.TsExpr raise ParseError {
   let cond = self.parse_or()
   if self.match_(Question) {
     let then_expr = self.parse_expr()
@@ -182,7 +182,7 @@ fn Parser::parse_ternary(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / || (OR)
-fn Parser::parse_or(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_or(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_and()
   while self.match_(PipePipe) {
     let right = self.parse_and()
@@ -193,7 +193,7 @@ fn Parser::parse_or(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / && (AND)
-fn Parser::parse_and(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_and(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_bit_or()
   while self.match_(AmpAmp) {
     let right = self.parse_bit_or()
@@ -204,7 +204,7 @@ fn Parser::parse_and(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / | (OR)
-fn Parser::parse_bit_or(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_bit_or(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_bit_xor()
   while self.match_(Pipe) {
     let right = self.parse_bit_xor()
@@ -215,7 +215,7 @@ fn Parser::parse_bit_or(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / ^ (XOR)
-fn Parser::parse_bit_xor(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_bit_xor(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_bit_and()
   while self.match_(Caret) {
     let right = self.parse_bit_and()
@@ -226,7 +226,7 @@ fn Parser::parse_bit_xor(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / & (AND)
-fn Parser::parse_bit_and(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_bit_and(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_equality()
   while self.match_(Amp) {
     let right = self.parse_equality()
@@ -237,7 +237,7 @@ fn Parser::parse_bit_and(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / === !== == != (comparison)
-fn Parser::parse_equality(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_equality(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_comparison()
   while true {
     if self.match_(EqEqEq) {
@@ -261,7 +261,7 @@ fn Parser::parse_equality(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / < <= > >= (comparison)
-fn Parser::parse_comparison(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_comparison(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_shift()
   while true {
     if self.match_(Lt) {
@@ -291,7 +291,7 @@ fn Parser::parse_comparison(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / << >> >>> ()
-fn Parser::parse_shift(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_shift(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_additive()
   while true {
     if self.match_(LtLt) {
@@ -312,7 +312,7 @@ fn Parser::parse_shift(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / + - ()
-fn Parser::parse_additive(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_additive(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_multiplicative()
   while true {
     if self.match_(Plus) {
@@ -330,7 +330,7 @@ fn Parser::parse_additive(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / * / % ()
-fn Parser::parse_multiplicative(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_multiplicative(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut left = self.parse_exponent()
   while true {
     if self.match_(Star) {
@@ -351,7 +351,7 @@ fn Parser::parse_multiplicative(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / ** ()
-fn Parser::parse_exponent(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_exponent(self : Parser) -> @ast.TsExpr raise ParseError {
   let left = self.parse_unary()
   if self.match_(StarStar) {
     let right = self.parse_exponent()
@@ -363,7 +363,7 @@ fn Parser::parse_exponent(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / unaryoperator
-fn Parser::parse_unary(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
   if self.match_(Minus) {
     let operand = self.parse_unary()
     UnaryOp(Neg, operand)
@@ -418,7 +418,7 @@ fn Parser::parse_unary(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / operator (x++, x--)
-fn Parser::parse_postfix(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_postfix(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_call()
   while true {
     if self.match_(PlusPlus) {
@@ -434,7 +434,7 @@ fn Parser::parse_postfix(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / function, array, property, method
-fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_primary()
 
   // operatorcheck
@@ -599,8 +599,8 @@ fn Parser::parse_call(self : Parser) -> TsExpr raise ParseError {
 
 ///|
 // / argument
-fn Parser::parse_args(self : Parser) -> Array[TsExpr] raise ParseError {
-  let args : Array[TsExpr] = []
+fn Parser::parse_args(self : Parser) -> Array[@ast.TsExpr] raise ParseError {
+  let args : Array[@ast.TsExpr] = []
   if not(self.check(RParen)) {
     if self.match_ellipsis() {
       args.push(Spread(self.parse_assignment()))
@@ -623,7 +623,7 @@ fn Parser::parse_args(self : Parser) -> Array[TsExpr] raise ParseError {
 
 ///|
 // / expression (literal, variable, , array, new)
-fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
+fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
   let tok = self.peek()
   match tok.kind {
     Class => self.parse_class_stub()
@@ -673,7 +673,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
     }
     Regex(pattern, flags) => {
       let _ = self.advance()
-      let args : Array[TsExpr] = []
+      let args : Array[@ast.TsExpr] = []
       args.push(StringLit(pattern))
       if flags != "" {
         args.push(StringLit(flags))
@@ -686,7 +686,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
         let _ = self.expect(Arrow)
         let body = if self.check(LBrace) {
           let block = self.parse_block()
-          ArrowBlock(block)
+          @ast.TsArrowBody::ArrowBlock(block)
         } else {
           let expr = self.parse_assignment()
           ArrowExpr(expr)
@@ -694,7 +694,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
         ArrowFunc(
           [{
             name,
-            binding: Some(TsBinding::Ident(name)),
+            binding: Some(@ast.TsBinding::Ident(name)),
             is_rest: false,
             type_: Any,
             default: None,
@@ -717,7 +717,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
         // : blockexpression
         let body = if self.check(LBrace) {
           let block = self.parse_block()
-          ArrowBlock(block)
+          @ast.TsArrowBody::ArrowBlock(block)
         } else {
           let expr = self.parse_assignment()
           ArrowExpr(expr)
@@ -733,7 +733,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
     LBracket => {
       // arrayliteral: [1, 2, 3]
       let _ = self.advance()
-      let elements : Array[TsExpr] = []
+      let elements : Array[@ast.TsExpr] = []
       while not(self.check(RBracket)) {
         if self.match_ellipsis() {
           elements.push(Spread(self.parse_assignment()))
@@ -816,7 +816,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
         return PropAccess(Var("new"), prop)
       }
       let mut type_name = ""
-      let mut callee_expr : TsExpr? = None
+      let mut callee_expr : @ast.TsExpr? = None
       match self.peek().kind {
         Ident(_) => {
           let first = match self.advance().kind {
@@ -824,7 +824,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
             _ => "<call>"
           }
           type_name = first
-          let mut expr : TsExpr = Var(first)
+          let mut expr : @ast.TsExpr = Var(first)
           // allow dotted constructor name: new obj.Type()
           while self.match_(Dot) {
             let part = match self.advance().kind {
@@ -879,7 +879,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
         }
         Function => {
           let func = self.parse_function_expr()
-          callee_expr = Some(FuncExpr(func))
+          callee_expr = Some(@ast.TsExpr::FuncExpr(func))
           type_name = "<call>"
         }
         Class => {
@@ -925,7 +925,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
     LBrace => {
       // objectliteral: { key: value, ... }
       let _ = self.advance()
-      let fields : Array[(String, TsExpr)] = []
+      let fields : Array[(String, @ast.TsExpr)] = []
       if not(self.check(RBrace)) {
         if self.match_ellipsis() {
           let _ = self.parse_assignment()
@@ -1072,7 +1072,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
               Any
             }
             let body = self.parse_block()
-            FuncExpr({
+            @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
               params,
               return_type,
@@ -1094,7 +1094,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
               Any
             }
             let body = self.parse_block()
-            FuncExpr({
+            @ast.TsExpr::FuncExpr({
               name: prop_key,
               params,
               return_type,
@@ -1258,7 +1258,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
                 Any
               }
             let body = self.parse_block()
-            FuncExpr({
+            @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
               params,
               return_type,
@@ -1280,7 +1280,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
                 Any
               }
               let body = self.parse_block()
-              FuncExpr({
+              @ast.TsExpr::FuncExpr({
                 name: prop_key,
                 params,
                 return_type,
@@ -1300,7 +1300,7 @@ fn Parser::parse_primary(self : Parser) -> TsExpr raise ParseError {
     }
     Function => {
       let func = self.parse_function_expr()
-      FuncExpr(func)
+      @ast.TsExpr::FuncExpr(func)
     }
     Null => {
       // null literal

@@ -1,22 +1,22 @@
 // test
 
 ///|
-fn parse_expr_from(src : String) -> TsExpr {
+fn parse_expr_from(src : String) -> @ast.TsExpr {
   try! Parser::from_source(src).parse_expr()
 }
 
 ///|
-fn parse_stmt_from(src : String) -> TsStmt {
+fn parse_stmt_from(src : String) -> @ast.TsStmt {
   try! Parser::from_source(src).parse_stmt()
 }
 
 ///|
-fn parse_binding_from(src : String) -> TsBinding {
+fn parse_binding_from(src : String) -> @ast.TsBinding {
   try! Parser::from_source(src).parse_binding_pattern()
 }
 
 ///|
-fn parse_assign_binding_from(src : String) -> TsBinding {
+fn parse_assign_binding_from(src : String) -> @ast.TsBinding {
   try! Parser::from_source(src).parse_assignment_binding_pattern()
 }
 
@@ -104,7 +104,7 @@ test "parser: parse let stmt" {
   let parser = Parser::from_source("let x: number = 42;")
   let stmt = parser.parse_stmt()
   match stmt {
-    Let(TsBinding::Ident("x"), Number, IntLit(42)) => ()
+    Let(@ast.TsBinding::Ident("x"), Number, IntLit(42)) => ()
     _ => fail("unexpected result: \{stmt}")
   }
 }
@@ -152,7 +152,7 @@ test "parser: parse for stmt" {
   let stmt = parser.parse_stmt()
   match stmt {
     For(
-      Some(Let(TsBinding::Ident("i"), Any, IntLit(0))),
+      Some(Let(@ast.TsBinding::Ident("i"), Any, IntLit(0))),
       Some(BinOp(BinLt, Var("i"), IntLit(10))),
       update,
       body,
@@ -173,7 +173,7 @@ test "parser: parse for-of stmt" {
   let parser = Parser::from_source("for (let x of arr) { x; }")
   let stmt = parser.parse_stmt()
   match stmt {
-    ForOf(TsForOfKind::Let, TsBinding::Ident("x"), Number, Var("arr"), body) =>
+    ForOf(@ast.TsForOfKind::Let, @ast.TsBinding::Ident("x"), Number, Var("arr"), body) =>
       assert_eq(body.stmts.length(), 1)
     _ => fail("unexpected result: \{stmt}")
   }
@@ -184,7 +184,7 @@ test "parser: parse for-in stmt" {
   let parser = Parser::from_source("for (let k in obj) { k; }")
   let stmt = parser.parse_stmt()
   match stmt {
-    ForIn(TsForOfKind::Let, TsBinding::Ident("k"), Number, Var("obj"), body) =>
+    ForIn(@ast.TsForOfKind::Let, @ast.TsBinding::Ident("k"), Number, Var("obj"), body) =>
       assert_eq(body.stmts.length(), 1)
     _ => fail("unexpected result: \{stmt}")
   }
@@ -479,7 +479,7 @@ test "parser: parse let with string" {
   let parser = Parser::from_source("let s: string = \"hello\";")
   let stmt = parser.parse_stmt()
   match stmt {
-    Let(TsBinding::Ident("s"), String_, StringLit("hello")) => ()
+    Let(@ast.TsBinding::Ident("s"), String_, StringLit("hello")) => ()
     _ => fail("unexpected result: \{stmt}")
   }
 }
@@ -582,7 +582,7 @@ test "parser: parse let without type annotation" {
   let parser = Parser::from_source("let x = 42;")
   let stmt = parser.parse_stmt()
   match stmt {
-    Let(TsBinding::Ident("x"), Any, IntLit(42)) => ()
+    Let(@ast.TsBinding::Ident("x"), Any, IntLit(42)) => ()
     _ => fail("unexpected result: \{stmt}")
   }
 }
@@ -764,7 +764,7 @@ test "parser: ast patterns expr assignments" {
   match parse_expr_from("[a] = arr") {
     AssignPattern(binding, Var("arr")) =>
       match binding {
-        TsBinding::Array(_) => ()
+        @ast.TsBinding::Array(_) => ()
         _ => fail("expected array binding")
       }
     _ => fail("expected AssignPattern")
@@ -809,7 +809,7 @@ test "parser: ast patterns expr functions" {
 ///|
 test "parser: ast patterns stmt basics" {
   match parse_stmt_from("const x = 1;") {
-    Const(TsBinding::Ident("x"), Any, IntLit(1)) => ()
+    Const(@ast.TsBinding::Ident("x"), Any, IntLit(1)) => ()
     _ => fail("expected Const")
   }
   match parse_stmt_from("x = 1;") {
@@ -845,16 +845,16 @@ test "parser: ast patterns stmt basics" {
 ///|
 test "parser: ast patterns binding" {
   match parse_binding_from("x") {
-    TsBinding::Ident("x") => ()
+    @ast.TsBinding::Ident("x") => ()
     _ => fail("expected binding ident")
   }
   match parse_binding_from("[a, , b, ...rest]") {
-    TsBinding::Array(arr) => {
+    @ast.TsBinding::Array(arr) => {
       assert_eq(arr.items.length(), 3)
       match arr.items[0] {
         Some(elem) =>
           match elem.binding {
-            TsBinding::Ident("a") => ()
+            @ast.TsBinding::Ident("a") => ()
             _ => fail("expected binding a")
           }
         None => fail("expected binding a")
@@ -866,27 +866,27 @@ test "parser: ast patterns binding" {
       match arr.items[2] {
         Some(elem) =>
           match elem.binding {
-            TsBinding::Ident("b") => ()
+            @ast.TsBinding::Ident("b") => ()
             _ => fail("expected binding b")
           }
         None => fail("expected binding b")
       }
       match arr.rest {
-        Some(TsBinding::Ident("rest")) => ()
+        Some(@ast.TsBinding::Ident("rest")) => ()
         _ => fail("expected rest")
       }
     }
     _ => fail("expected array binding")
   }
   match parse_binding_from("{ a, b: c, ...rest }") {
-    TsBinding::Object(obj) => {
+    @ast.TsBinding::Object(obj) => {
       assert_eq(obj.props.length(), 2)
       match obj.props[0] {
-        { key: "a", binding: TsBinding::Ident("a"), .. } => ()
+        { key: "a", binding: @ast.TsBinding::Ident("a"), .. } => ()
         _ => fail("expected prop a")
       }
       match obj.props[1] {
-        { key: "b", binding: TsBinding::Ident("c"), .. } => ()
+        { key: "b", binding: @ast.TsBinding::Ident("c"), .. } => ()
         _ => fail("expected prop b: c")
       }
       match obj.rest {
@@ -897,7 +897,7 @@ test "parser: ast patterns binding" {
     _ => fail("expected object binding")
   }
   match parse_assign_binding_from("obj.x") {
-    TsBinding::Target(PropAccess(Var("obj"), "x")) => ()
+    @ast.TsBinding::Target(PropAccess(Var("obj"), "x")) => ()
     _ => fail("expected target binding")
   }
 }

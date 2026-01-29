@@ -203,7 +203,7 @@ fn JSInterpreter::calc_bound_length(
 // / strict mode check
 fn JSInterpreter::is_strict_body(
   _self : JSInterpreter,
-  body : @parser.TsBlock,
+  body : @ast.TsBlock,
   inherit_strict : Bool,
 ) -> Bool {
   if inherit_strict {
@@ -213,7 +213,7 @@ fn JSInterpreter::is_strict_body(
     return false
   }
   match body.stmts[0] {
-    @parser.TsStmt::Expr(@parser.TsExpr::StringLit(s)) => s == "use strict"
+    @ast.TsStmt::Expr(@ast.TsExpr::StringLit(s)) => s == "use strict"
     _ => false
   }
 }

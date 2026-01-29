@@ -4,9 +4,9 @@
 
 ///|
 // / type
-fn Parser::parse_type(self : Parser) -> TsType raise ParseError {
+fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
   let tok = self.advance()
-  let base_type : TsType = match tok.kind {
+  let base_type : @ast.TsType = match tok.kind {
     NumberType => Number
     IntType => Int
     BooleanType => Boolean

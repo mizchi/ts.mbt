@@ -16,7 +16,7 @@ pub struct JSInterpreter {
 
 ///|
 pub(all) struct JSGeneratorState {
-  func : @parser.TsFunc
+  func : @ast.TsFunc
   env : JSEnv
   mut index : Int
   mut done : Bool

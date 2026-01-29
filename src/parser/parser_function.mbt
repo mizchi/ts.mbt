@@ -4,7 +4,7 @@
 
 ///|
 // / parameter
-fn Parser::parse_param(self : Parser) -> TsParam raise ParseError {
+fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
@@ -16,7 +16,7 @@ fn Parser::parse_param(self : Parser) -> TsParam raise ParseError {
     Any // type Any
   }
   // check
-  let default : TsExpr? = if self.match_(Eq) {
+  let default : @ast.TsExpr? = if self.match_(Eq) {
     Some(self.parse_assignment())
   } else {
     None
@@ -26,8 +26,8 @@ fn Parser::parse_param(self : Parser) -> TsParam raise ParseError {
 
 ///|
 // / parameter
-fn Parser::parse_params(self : Parser) -> Array[TsParam] raise ParseError {
-  let params : Array[TsParam] = []
+fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
+  let params : Array[@ast.TsParam] = []
   if not(self.check(RParen)) {
     params.push(self.parse_param())
     while self.match_(Comma) {
@@ -42,7 +42,7 @@ fn Parser::parse_params(self : Parser) -> Array[TsParam] raise ParseError {
 
 ///|
 // / function
-pub fn Parser::parse_function(self : Parser) -> TsFunc raise ParseError {
+pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
   let name = match self.advance().kind {
@@ -70,7 +70,7 @@ pub fn Parser::parse_function(self : Parser) -> TsFunc raise ParseError {
 
 ///|
 // / functionexpression()
-fn Parser::parse_function_expr(self : Parser) -> TsFunc raise ParseError {
+fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
   let name = match self.peek().kind {
@@ -100,14 +100,14 @@ fn Parser::parse_function_expr(self : Parser) -> TsFunc raise ParseError {
 
 ///|
 // / interface
-pub fn Parser::parse_interface(self : Parser) -> TsInterface raise ParseError {
+pub fn Parser::parse_interface(self : Parser) -> @ast.TsInterface raise ParseError {
   let _ = self.expect(Interface)
   let name = match self.advance().kind {
     Ident(n) => n
     k => raise ParseError("Expected interface name, got \{k}")
   }
   let _ = self.expect(LBrace)
-  let fields : Array[(String, TsType)] = []
+  let fields : Array[(String, @ast.TsType)] = []
   while not(self.check(RBrace)) && not(self.check(Eof)) {
     // field: type;
     let field_name = match self.advance().kind {
@@ -126,7 +126,7 @@ pub fn Parser::parse_interface(self : Parser) -> TsInterface raise ParseError {
 ///|
 // / declare function
 /// declare function name(params): returnType;
-pub fn Parser::parse_import(self : Parser) -> TsImport raise ParseError {
+pub fn Parser::parse_import(self : Parser) -> @ast.TsImport raise ParseError {
   let _ = self.expect(Declare)
   let _ = self.expect(Function)
 
@@ -138,7 +138,7 @@ pub fn Parser::parse_import(self : Parser) -> TsImport raise ParseError {
 
   // parameter
   let _ = self.expect(LParen)
-  let params : Array[(String, TsType)] = []
+  let params : Array[(String, @ast.TsType)] = []
   while not(self.check(RParen)) {
     let param_name = match self.advance().kind {
       Ident(n) => n

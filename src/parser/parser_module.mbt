@@ -88,11 +88,11 @@ fn Parser::parse_named_exports(self : Parser) -> Array[(String, String)] raise P
 }
 
 ///|
-fn collect_decl_names_from_stmt(stmt : TsStmt, names : Array[String]) -> Unit {
+fn collect_decl_names_from_stmt(stmt : @ast.TsStmt, names : Array[String]) -> Unit {
   match stmt {
     Let(binding, _, _) | Const(binding, _, _) =>
       match binding {
-        TsBinding::Ident(name) => names.push(name)
+        @ast.TsBinding::Ident(name) => names.push(name)
         _ => ()
       }
     Block(block) =>
@@ -104,7 +104,7 @@ fn collect_decl_names_from_stmt(stmt : TsStmt, names : Array[String]) -> Unit {
 }
 
 ///|
-fn Parser::parse_import_decl(self : Parser) -> TsImportDecl raise ParseError {
+fn Parser::parse_import_decl(self : Parser) -> @ast.TsImportDecl raise ParseError {
   let _ = self.expect(Import)
   let mut type_only = false
   if self.match_(Type) || self.match_ident("type") {
@@ -174,20 +174,20 @@ fn Parser::parse_import_decl(self : Parser) -> TsImportDecl raise ParseError {
 ///|
 fn Parser::parse_export_decl_for_module(
   self : Parser,
-) -> (Array[TsStmt], Array[TsExportSpec], Array[TsReExportSpec]) raise ParseError {
-  let stmts : Array[TsStmt] = []
-  let exports : Array[TsExportSpec] = []
-  let reexports : Array[TsReExportSpec] = []
+) -> (Array[@ast.TsStmt], Array[@ast.TsExportSpec], Array[@ast.TsReExportSpec]) raise ParseError {
+  let stmts : Array[@ast.TsStmt] = []
+  let exports : Array[@ast.TsExportSpec] = []
+  let reexports : Array[@ast.TsReExportSpec] = []
   let _ = self.expect(Export)
   if self.match_(Default) || self.match_ident("default") {
     if self.check(Function) {
       let func = self.parse_function_expr()
       if func.name != "<anon>" {
-        stmts.push(Let(TsBinding::Ident(func.name), Any, FuncExpr(func)))
+        stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
         exports.push({ local_name: func.name, export_name: "default" })
       } else {
         let temp = self.next_temp("__export_default__")
-        stmts.push(Const(TsBinding::Ident(temp), Any, FuncExpr(func)))
+        stmts.push(Const(@ast.TsBinding::Ident(temp), Any, FuncExpr(func)))
         exports.push({ local_name: temp, export_name: "default" })
       }
       self.consume_semicolon()
@@ -207,7 +207,7 @@ fn Parser::parse_export_decl_for_module(
         None => {
           let temp = self.next_temp("__export_default__")
           let expr = self.parse_class_stub()
-          stmts.push(Const(TsBinding::Ident(temp), Any, expr))
+          stmts.push(Const(@ast.TsBinding::Ident(temp), Any, expr))
           exports.push({ local_name: temp, export_name: "default" })
         }
       }
@@ -216,7 +216,7 @@ fn Parser::parse_export_decl_for_module(
     }
     let temp = self.next_temp("__export_default__")
     let expr = self.parse_expr()
-    stmts.push(Const(TsBinding::Ident(temp), Any, expr))
+    stmts.push(Const(@ast.TsBinding::Ident(temp), Any, expr))
     exports.push({ local_name: temp, export_name: "default" })
     self.consume_semicolon()
     return (stmts, exports, reexports)
@@ -228,7 +228,7 @@ fn Parser::parse_export_decl_for_module(
       let module_spec = self.expect_str_literal()
       reexports.push({
         module_spec,
-        kind: TsReExportKind::Namespace(name),
+        kind: @ast.TsReExportKind::Namespace(name),
       })
       self.consume_semicolon()
       return (stmts, exports, reexports)
@@ -237,7 +237,7 @@ fn Parser::parse_export_decl_for_module(
     let module_spec = self.expect_str_literal()
     reexports.push({
       module_spec,
-      kind: TsReExportKind::All,
+      kind: @ast.TsReExportKind::All,
     })
     self.consume_semicolon()
     return (stmts, exports, reexports)
@@ -249,7 +249,7 @@ fn Parser::parse_export_decl_for_module(
       let module_spec = self.expect_str_literal()
       reexports.push({
         module_spec,
-        kind: TsReExportKind::Named(items),
+        kind: @ast.TsReExportKind::Named(items),
       })
     } else {
       for item in items {
@@ -262,7 +262,7 @@ fn Parser::parse_export_decl_for_module(
   }
   if self.check(Function) {
     let func = self.parse_function()
-    stmts.push(Let(TsBinding::Ident(func.name), Any, FuncExpr(func)))
+    stmts.push(Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func)))
     exports.push({ local_name: func.name, export_name: func.name })
     return (stmts, exports, reexports)
   }
@@ -346,9 +346,9 @@ fn Parser::expect_str_literal(self : Parser) -> String raise ParseError {
 ///|
 fn Parser::parse_export_stmt(
   self : Parser,
-  funcs : Array[TsFunc],
-  interfaces : Array[TsInterface],
-  imports : Array[TsImport],
+  funcs : Array[@ast.TsFunc],
+  interfaces : Array[@ast.TsInterface],
+  imports : Array[@ast.TsImport],
 ) -> Unit raise ParseError {
   let _ = self.expect(Export)
   if self.match_(Default) || self.match_ident("default") {
@@ -411,10 +411,10 @@ fn Parser::parse_export_stmt(
 ///|
 ///|
 // /
-pub fn Parser::parse_module(self : Parser) -> TsModule raise ParseError {
-  let funcs : Array[TsFunc] = []
-  let interfaces : Array[TsInterface] = []
-  let imports : Array[TsImport] = []
+pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
+  let funcs : Array[@ast.TsFunc] = []
+  let interfaces : Array[@ast.TsInterface] = []
+  let imports : Array[@ast.TsImport] = []
   while not(self.check(Eof)) {
     if self.check(Function) {
       funcs.push(self.parse_function())
@@ -435,11 +435,11 @@ pub fn Parser::parse_module(self : Parser) -> TsModule raise ParseError {
 
 ///|
 // / module block (script with import/export)
-pub fn Parser::parse_module_block(self : Parser) -> TsModuleBlock raise ParseError {
-  let stmts : Array[TsStmt] = []
-  let imports : Array[TsImportDecl] = []
-  let exports : Array[TsExportSpec] = []
-  let reexports : Array[TsReExportSpec] = []
+pub fn Parser::parse_module_block(self : Parser) -> @ast.TsModuleBlock raise ParseError {
+  let stmts : Array[@ast.TsStmt] = []
+  let imports : Array[@ast.TsImportDecl] = []
+  let exports : Array[@ast.TsExportSpec] = []
+  let reexports : Array[@ast.TsReExportSpec] = []
   while not(self.check(Eof)) {
     if self.check(Import) {
       imports.push(self.parse_import_decl())
@@ -466,7 +466,7 @@ pub fn Parser::parse_module_block(self : Parser) -> TsModuleBlock raise ParseErr
 
 ///|
 // / eval : expression1 Some(expr)
-pub fn parse_expr_from_source(source : String) -> TsExpr? raise ParseError {
+pub fn parse_expr_from_source(source : String) -> @ast.TsExpr? raise ParseError {
   let parser = Parser::from_source(source)
   let expr = parser.parse_expr()
   if parser.check(Eof) {
@@ -478,9 +478,9 @@ pub fn parse_expr_from_source(source : String) -> TsExpr? raise ParseError {
 
 ///|
 // / eval : statementblock
-pub fn parse_block_from_source(source : String) -> TsBlock raise ParseError {
+pub fn parse_block_from_source(source : String) -> @ast.TsBlock raise ParseError {
   let parser = Parser::from_source(source)
-  let stmts : Array[TsStmt] = []
+  let stmts : Array[@ast.TsStmt] = []
   while not(parser.check(Eof)) {
     stmts.push(parser.parse_stmt())
   }
@@ -489,7 +489,7 @@ pub fn parse_block_from_source(source : String) -> TsBlock raise ParseError {
 
 ///|
 // / module block from source
-pub fn parse_module_block_from_source(source : String) -> TsModuleBlock raise ParseError {
+pub fn parse_module_block_from_source(source : String) -> @ast.TsModuleBlock raise ParseError {
   let parser = Parser::from_source(source)
   parser.parse_module_block()
 }

@@ -4,7 +4,7 @@
 
 ///|
 // / statement
-pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
+pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
   let tok = self.peek()
   match tok.kind {
     Var => self.parse_var()
@@ -25,7 +25,7 @@ pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
       // internalfunctiondefine: function name() { ... }
       // Let(name, Any, FuncExpr(func))
       let func = self.parse_function()
-      Let(TsBinding::Ident(func.name), Any, FuncExpr(func))
+      Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
     }
     Break => {
       let _ = self.advance()
@@ -77,27 +77,27 @@ pub fn Parser::parse_stmt(self : Parser) -> TsStmt raise ParseError {
 
 ///|
 // / let statement (type)
-fn Parser::parse_let(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_let(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Let)
   self.parse_let_like(false)
 }
 
 ///|
 // / const statement (type)
-fn Parser::parse_const(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_const(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Const)
   self.parse_let_like(true)
 }
 
 ///|
-fn Parser::parse_var(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_var(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Var)
   self.parse_let_like(false)
 }
 
 ///|
-fn Parser::parse_let_like(self : Parser, is_const : Bool) -> TsStmt raise ParseError {
-  let stmts : Array[TsStmt] = []
+fn Parser::parse_let_like(self : Parser, is_const : Bool) -> @ast.TsStmt raise ParseError {
+  let stmts : Array[@ast.TsStmt] = []
   while true {
     let binding = self.parse_binding_pattern()
     // type ()
@@ -119,9 +119,9 @@ fn Parser::parse_let_like(self : Parser, is_const : Bool) -> TsStmt raise ParseE
       }
     let stmt =
       if is_const {
-        TsStmt::Const(binding, type_, init)
+        @ast.TsStmt::Const(binding, type_, init)
       } else {
-        TsStmt::Let(binding, type_, init)
+        @ast.TsStmt::Let(binding, type_, init)
       }
     stmts.push(stmt)
     if self.match_(Comma) {
@@ -139,7 +139,7 @@ fn Parser::parse_let_like(self : Parser, is_const : Bool) -> TsStmt raise ParseE
 
 ///|
 // / return statement
-fn Parser::parse_return(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_return(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Return)
   if self.check(Semicolon) {
     let _ = self.advance()
@@ -153,7 +153,7 @@ fn Parser::parse_return(self : Parser) -> TsStmt raise ParseError {
 
 ///|
 // / throw statement
-fn Parser::parse_throw(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_throw(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Throw)
   let expr = self.parse_expr()
   self.consume_semicolon()
@@ -162,11 +162,11 @@ fn Parser::parse_throw(self : Parser) -> TsStmt raise ParseError {
 
 ///|
 // / try/catch/finally statement
-fn Parser::parse_try(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Try)
   let try_block = self.parse_block()
   let mut catch_name : String? = None
-  let mut catch_block : TsBlock? = None
+  let mut catch_block : @ast.TsBlock? = None
   if self.match_(Catch) {
     if self.match_(LParen) {
       let name = match self.advance().kind {
@@ -180,7 +180,7 @@ fn Parser::parse_try(self : Parser) -> TsStmt raise ParseError {
     }
     catch_block = Some(self.parse_block())
   }
-  let mut finally_block : TsBlock? = None
+  let mut finally_block : @ast.TsBlock? = None
   if self.match_(Finally) {
     finally_block = Some(self.parse_block())
   }
@@ -193,7 +193,7 @@ fn Parser::parse_try(self : Parser) -> TsStmt raise ParseError {
 
 ///|
 // / if statement
-fn Parser::parse_if(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_if(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(If)
   let _ = self.expect(LParen)
   let cond = self.parse_expr()
@@ -202,19 +202,19 @@ fn Parser::parse_if(self : Parser) -> TsStmt raise ParseError {
   let else_block = if self.match_(Else) {
     if self.check(If) {
       // else if
-      { stmts: [self.parse_if()] }
+      @ast.TsBlock::{ stmts: [self.parse_if()] }
     } else {
       self.parse_block_or_stmt()
     }
   } else {
-    { stmts: [] }
+    @ast.TsBlock::{ stmts: [] }
   }
   If(cond, then_block, Some(else_block))
 }
 
 ///|
 // / while statement
-fn Parser::parse_while(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_while(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(While)
   let _ = self.expect(LParen)
   let cond = self.parse_expr()
@@ -225,7 +225,7 @@ fn Parser::parse_while(self : Parser) -> TsStmt raise ParseError {
 
 ///|
 // / do-while statement
-fn Parser::parse_do_while(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_do_while(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Do)
   let body = self.parse_block_or_stmt()
   let _ = self.expect(While)
@@ -238,15 +238,15 @@ fn Parser::parse_do_while(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-fn Parser::parse_switch(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Switch)
   let _ = self.expect(LParen)
   let expr = self.parse_expr()
   let _ = self.expect(RParen)
   let _ = self.expect(LBrace)
-  let cases : Array[TsSwitchCase] = []
+  let cases : Array[@ast.TsSwitchCase] = []
   while not(self.check(RBrace)) {
-    let case_test : TsExpr? = if self.match_(Case) {
+    let case_test : @ast.TsExpr? = if self.match_(Case) {
       Some(self.parse_expr())
     } else if self.match_(Default) {
       None
@@ -254,7 +254,7 @@ fn Parser::parse_switch(self : Parser) -> TsStmt raise ParseError {
       raise ParseError("Expected case or default in switch")
     }
     let _ = self.expect(Colon)
-    let stmts : Array[TsStmt] = []
+    let stmts : Array[@ast.TsStmt] = []
     while not(self.check(Case)) && not(self.check(Default)) && not(self.check(RBrace)) {
       stmts.push(self.parse_stmt())
     }
@@ -265,7 +265,7 @@ fn Parser::parse_switch(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-fn Parser::parse_with(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_with(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(With)
   let _ = self.expect(LParen)
   let obj_expr = self.parse_expr()
@@ -275,7 +275,7 @@ fn Parser::parse_with(self : Parser) -> TsStmt raise ParseError {
 }
 
 ///|
-fn Parser::parse_debugger(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_debugger(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Debugger)
   self.consume_semicolon()
   Debugger
@@ -318,17 +318,17 @@ fn Parser::is_for_of_head(self : Parser) -> Bool {
 
 ///|
 // / for statement (regularforfor...of)
-fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(For)
   let _ = self.expect(LParen)
 
   // for...of check: for (var/let/const x of arr)
   if self.check(Let) || self.check(Const) || self.check(Var) {
     let kind = match self.advance().kind {
-      Let => TsForOfKind::Let
-      Const => TsForOfKind::Const
-      Var => TsForOfKind::Var
-      _ => TsForOfKind::Var
+      Let => @ast.TsForOfKind::Let
+      Const => @ast.TsForOfKind::Const
+      Var => @ast.TsForOfKind::Var
+      _ => @ast.TsForOfKind::Var
     }
     let binding = self.parse_binding_pattern()
     // for...of / for...in check
@@ -354,17 +354,17 @@ fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
     let _ = self.expect(Eq)
     let init_expr = self.parse_expr()
     let _ = self.expect(Semicolon)
-    let init : TsStmt? = Some(
+    let init : @ast.TsStmt? = Some(
       match kind {
-        TsForOfKind::Const => TsStmt::Const(binding, var_type, init_expr)
-        _ => TsStmt::Let(binding, var_type, init_expr)
+        @ast.TsForOfKind::Const => @ast.TsStmt::Const(binding, var_type, init_expr)
+        _ => @ast.TsStmt::Let(binding, var_type, init_expr)
       },
     )
     return self.parse_for_rest(init)
   }
 
   // init
-  let init : TsStmt? = if self.check(Semicolon) {
+  let init : @ast.TsStmt? = if self.check(Semicolon) {
     let _ = self.advance()
     None
   } else {
@@ -377,13 +377,13 @@ fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
         let _ = self.expect(RParen)
         let body = self.parse_block_or_stmt()
         if is_in {
-          return ForIn(TsForOfKind::Assign, binding, Number, iterable, body)
+          return ForIn(@ast.TsForOfKind::Assign, binding, Number, iterable, body)
         }
-        return ForOf(TsForOfKind::Assign, binding, Number, iterable, body)
+        return ForOf(@ast.TsForOfKind::Assign, binding, Number, iterable, body)
       }
     }
     let expr = self.parse_expr()
-    let stmt : TsStmt =
+    let stmt : @ast.TsStmt =
       if self.match_(Eq) {
         let value = self.parse_expr()
         match expr {
@@ -477,11 +477,11 @@ fn Parser::parse_for(self : Parser) -> TsStmt raise ParseError {
 // / forstatement (cond, update, body)
 fn Parser::parse_for_rest(
   self : Parser,
-  init : TsStmt?,
-) -> TsStmt raise ParseError {
+  init : @ast.TsStmt?,
+) -> @ast.TsStmt raise ParseError {
 
   // cond
-  let cond : TsExpr? = if self.check(Semicolon) {
+  let cond : @ast.TsExpr? = if self.check(Semicolon) {
     None
   } else {
     Some(self.parse_expr())
@@ -489,7 +489,7 @@ fn Parser::parse_for_rest(
   let _ = self.expect(Semicolon)
 
   // update ()
-  let update : TsStmt? = if self.check(RParen) {
+  let update : @ast.TsStmt? = if self.check(RParen) {
     None
   } else {
     let expr = self.parse_expr()
@@ -584,7 +584,7 @@ fn Parser::parse_for_rest(
 
 ///|
 // / assignmentexpressionstatement
-fn Parser::parse_assign_or_expr(self : Parser) -> TsStmt raise ParseError {
+fn Parser::parse_assign_or_expr(self : Parser) -> @ast.TsStmt raise ParseError {
   // expression
   let expr = self.parse_expr()
 
@@ -699,9 +699,9 @@ fn Parser::parse_assign_or_expr(self : Parser) -> TsStmt raise ParseError {
 
 ///|
 // / block
-pub fn Parser::parse_block(self : Parser) -> TsBlock raise ParseError {
+pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let _ = self.expect(LBrace)
-  let stmts : Array[TsStmt] = []
+  let stmts : Array[@ast.TsStmt] = []
   while not(self.check(RBrace)) && not(self.check(Eof)) {
     stmts.push(self.parse_stmt())
   }
@@ -711,7 +711,7 @@ pub fn Parser::parse_block(self : Parser) -> TsBlock raise ParseError {
 ///|
 ///|
 // / blockstatement
-fn Parser::parse_block_or_stmt(self : Parser) -> TsBlock raise ParseError {
+fn Parser::parse_block_or_stmt(self : Parser) -> @ast.TsBlock raise ParseError {
   if self.check(LBrace) {
     self.parse_block()
   } else {
