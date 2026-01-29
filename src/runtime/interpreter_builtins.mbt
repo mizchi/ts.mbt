@@ -1886,10 +1886,24 @@ fn JSInterpreter::eval_script_source(self : JSInterpreter, source : String) -> J
     }
   }
   self.hoist_block(block, self.global_env)
+  // Use exec_block_for_eval to properly track completion values
   let result =
-    match self.exec_block(block, self.global_env) {
-      Some(val) => val
-      None => Undefined
+    match self.exec_block_for_eval(block, self.global_env) {
+      // For break/continue signals, use the completion value with UpdateEmpty
+      (Some(BreakSignal(_)), completion) | (Some(ContinueSignal(_)), completion) =>
+        match completion {
+          Empty => JSValue::Undefined
+          _ => completion
+        }
+      // For other signals (errors, return), return the value
+      (Some(val), _) => val
+      // Normal completion
+      (None, completion) =>
+        // Convert Empty to Undefined for final result
+        match completion {
+          Empty => JSValue::Undefined
+          _ => completion
+        }
     }
   self.drain_microtasks()
   result
@@ -3478,7 +3492,7 @@ fn JSInterpreter::call_native(
             }
           }
         }
-        BreakSignal(_) | ContinueSignal(_) => "Object"
+        BreakSignal(_) | ContinueSignal(_) | Empty => "Object"
       }
       String("[object " + tag + "]")
     }

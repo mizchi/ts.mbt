@@ -1889,7 +1889,8 @@ fn compile_stmt(
   return_type : @ast.TsType,
 ) -> Unit raise CodeGenError {
   match stmt {
-    @ast.TsStmt::Let(binding, type_, init) =>
+    @ast.TsStmt::Var(binding, type_, init)
+    | @ast.TsStmt::Let(binding, type_, init) =>
       match binding {
         @ast.TsBinding::Ident(name) => {
           // @ast.TsType::Any typeliteral
@@ -1898,7 +1899,7 @@ fn compile_stmt(
           compile_expr(ctx, init, resolved_type)
           ctx.emit(LocalSet(idx))
         }
-        _ => raise CodeGenError("Unsupported let binding pattern")
+        _ => raise CodeGenError("Unsupported var/let binding pattern")
       }
     @ast.TsStmt::Const(binding, type_, init) =>
       match binding {
@@ -1992,6 +1993,8 @@ fn compile_stmt(
     @ast.TsStmt::If(cond, then_block, else_block) =>
       compile_if(ctx, cond, then_block, else_block, return_type)
     @ast.TsStmt::While(cond, body) => compile_while(ctx, cond, body, return_type)
+    @ast.TsStmt::DoWhile(_, _) =>
+      raise CodeGenError("do-while is not yet supported in Wasm compiler")
     @ast.TsStmt::Switch(_, _) =>
       raise CodeGenError("switch is not supported in Wasm compiler")
     @ast.TsStmt::With(_, _) =>

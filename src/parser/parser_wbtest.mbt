@@ -298,7 +298,7 @@ test "parser: parse do-while stmt" {
   let parser = Parser::from_source("do { i = i + 1; } while (i < n);")
   let stmt = parser.parse_stmt()
   match stmt {
-    While(BinOp(BinLt, Var("i"), Var("n")), body) =>
+    DoWhile(BinOp(BinLt, Var("i"), Var("n")), body) =>
       assert_eq(body.stmts.length(), 1)
     _ => fail("unexpected result: \{stmt}")
   }

@@ -3,6 +3,14 @@
 // ============================================
 
 ///|
+/// Variable declaration kind
+priv enum VarKind {
+  Var // function-scoped
+  Let // block-scoped
+  Const // block-scoped, immutable
+}
+
+///|
 // / statement
 pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
   let tok = self.peek()
@@ -89,27 +97,27 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
 // / let statement (type)
 fn Parser::parse_let(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Let)
-  self.parse_let_like(false)
+  self.parse_var_like(VarKind::Let)
 }
 
 ///|
 // / const statement (type)
 fn Parser::parse_const(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Const)
-  self.parse_let_like(true)
+  self.parse_var_like(VarKind::Const)
 }
 
 ///|
 fn Parser::parse_var(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Var)
-  self.parse_let_like(false)
+  self.parse_var_like(VarKind::Var)
 }
 
 ///|
-fn Parser::parse_let_like(self : Parser, is_const : Bool) -> @ast.TsStmt raise ParseError {
+fn Parser::parse_var_like(self : Parser, kind : VarKind) -> @ast.TsStmt raise ParseError {
   let binding = self.parse_binding_pattern()
   let type_ = self.parse_var_decl_type()
-  let stmts = self.parse_var_decl_list_from(binding, type_, is_const)
+  let stmts = self.parse_var_decl_list_from(binding, type_, kind)
   self.consume_semicolon()
   self.merge_decl_stmts(stmts)
 }
@@ -205,8 +213,7 @@ fn Parser::parse_do_while(self : Parser) -> @ast.TsStmt raise ParseError {
   let cond = self.parse_expr()
   let _ = self.expect(RParen)
   self.consume_semicolon()
-  // simple while
-  While(cond, body)
+  DoWhile(cond, body)
 }
 
 ///|
@@ -326,8 +333,13 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       }
       return ForOf(kind, binding, Number, iterable, body)
     }
-    let is_const = kind == @ast.TsForOfKind::Const
-    let stmts = self.parse_var_decl_list_from(binding, var_type, is_const)
+    let var_kind = match kind {
+      @ast.TsForOfKind::Var => VarKind::Var
+      @ast.TsForOfKind::Let => VarKind::Let
+      @ast.TsForOfKind::Const => VarKind::Const
+      @ast.TsForOfKind::Assign => VarKind::Var // shouldn't reach here
+    }
+    let stmts = self.parse_var_decl_list_from(binding, var_type, var_kind)
     let _ = self.expect(Semicolon)
     let init : @ast.TsStmt? = Some(self.merge_decl_stmts(stmts))
     return self.parse_for_rest(init)
@@ -787,14 +799,14 @@ fn Parser::parse_var_decl_list_from(
   self : Parser,
   binding : @ast.TsBinding,
   type_ : @ast.TsType,
-  is_const : Bool,
+  kind : VarKind,
 ) -> Array[@ast.TsStmt] raise ParseError {
   let stmts : Array[@ast.TsStmt] = []
-  stmts.push(self.parse_var_decl_item(binding, type_, is_const))
+  stmts.push(self.parse_var_decl_item(binding, type_, kind))
   while self.match_(Comma) {
     let next_binding = self.parse_binding_pattern()
     let next_type = self.parse_var_decl_type()
-    stmts.push(self.parse_var_decl_item(next_binding, next_type, is_const))
+    stmts.push(self.parse_var_decl_item(next_binding, next_type, kind))
   }
   stmts
 }
@@ -804,7 +816,7 @@ fn Parser::parse_var_decl_item(
   self : Parser,
   binding : @ast.TsBinding,
   type_ : @ast.TsType,
-  is_const : Bool,
+  kind : VarKind,
 ) -> @ast.TsStmt raise ParseError {
   let init_opt = if self.match_(Eq) {
     Some(self.parse_assignment())
@@ -815,18 +827,18 @@ fn Parser::parse_var_decl_item(
     match init_opt {
       Some(expr) => expr
       None => {
-        if is_const {
+        if kind is Const {
           raise ParseError("const declaration requires an initializer")
         }
         match binding {
-          @ast.TsBinding::Ident(_) => Var("undefined")
+          @ast.TsBinding::Ident(_) => @ast.TsExpr::Var("undefined")
           _ => raise ParseError("Destructuring declaration requires an initializer")
         }
       }
     }
-  if is_const {
-    @ast.TsStmt::Const(binding, type_, init)
-  } else {
-    @ast.TsStmt::Let(binding, type_, init)
+  match kind {
+    Var => @ast.TsStmt::Var(binding, type_, init)
+    Let => @ast.TsStmt::Let(binding, type_, init)
+    Const => @ast.TsStmt::Const(binding, type_, init)
   }
 }

@@ -60,6 +60,7 @@ pub enum JSValue {
   // internal
   BreakSignal(String?)
   ContinueSignal(String?)
+  Empty // ECMAScript empty completion value (distinct from undefined)
 } derive(Show)
 
 ///|
@@ -73,7 +74,7 @@ pub fn JSValue::tag(self : JSValue) -> JSTag {
     Object(_) => JSTag::Object
     Array(_) => JSTag::Array
     Function(_) => JSTag::Function
-    BreakSignal(_) | ContinueSignal(_) => JSTag::Undefined // internal
+    BreakSignal(_) | ContinueSignal(_) | Empty => JSTag::Undefined // internal
   }
 }
 
@@ -230,7 +231,7 @@ pub fn JSValue::to_boolean(self : JSValue) -> Bool {
       }
       true
     }
-    BreakSignal(_) | ContinueSignal(_) => false // internal
+    BreakSignal(_) | ContinueSignal(_) | Empty => false // internal
   }
 }
 
@@ -257,7 +258,7 @@ pub fn JSValue::to_js_string(self : JSValue) -> String {
       parts.join(",")
     }
     Function(_) => "[function]"
-    BreakSignal(_) | ContinueSignal(_) => "" // internal
+    BreakSignal(_) | ContinueSignal(_) | Empty => "" // internal
   }
 }
 
@@ -333,7 +334,7 @@ pub fn js_typeof(val : JSValue) -> JSValue {
       Object(_) => "object"
       Array(_) => "object"
     Function(_) => "function"
-    BreakSignal(_) | ContinueSignal(_) => "undefined" // internal
+    BreakSignal(_) | ContinueSignal(_) | Empty => "undefined" // internal
   },
   )
 }

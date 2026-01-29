@@ -79,7 +79,7 @@ pub fn JSValue::to_number(self : JSValue) -> Double {
         _ => prim.to_number()
       }
     }
-    BreakSignal(_) | ContinueSignal(_) => js_nan // internal
+    BreakSignal(_) | ContinueSignal(_) | Empty => js_nan // internal
   }
 }
 

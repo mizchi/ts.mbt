@@ -64,6 +64,7 @@ pub fn JSEnv::initialize(
   value : JSValue,
   is_const : Bool,
 ) -> Unit {
+  // First check local bindings
   let len = self.bindings.length()
   let mut i = len - 1
   while i >= 0 {
@@ -75,12 +76,38 @@ pub fn JSEnv::initialize(
     }
     i -= 1
   }
+  // If not found locally, check if parent has the binding
+  // (for var declarations hoisted to outer scope)
+  match self.parent {
+    Some(parent) => {
+      if parent.has_local(name) {
+        parent.initialize(name, value, is_const)
+        return
+      }
+    }
+    None => ()
+  }
+  // Create new binding if not found anywhere
   self.bindings.push({
     name,
     value,
     is_const,
     is_uninitialized: false,
   })
+}
+
+///|
+/// Check if binding exists locally (not in parent)
+pub fn JSEnv::has_local(self : JSEnv, name : String) -> Bool {
+  let len = self.bindings.length()
+  let mut i = len - 1
+  while i >= 0 {
+    if self.bindings[i].name == name {
+      return true
+    }
+    i -= 1
+  }
+  false
 }
 
 ///|

@@ -998,18 +998,599 @@ fn JSInterpreter::exec_eval_block(
 ) -> JSValue {
   let mut last = JSValue::Undefined
   for stmt in block.stmts {
-    match stmt {
-      @ast.TsStmt::Expr(expr) => {
-        last = self.eval_expr(expr, env)
-      }
-      _ =>
-        match self.exec_stmt(stmt, env) {
-          Some(val) => return val
-          None => ()
-        }
+    match self.exec_stmt_for_eval(stmt, env) {
+      (Some(val), _) => return val // Control flow (return, break, throw)
+      (None, completion) => last = completion
     }
   }
   last
+}
+
+///|
+/// Execute a statement and return (control_flow, completion_value)
+/// control_flow: Some(val) for return/break/throw, None for normal completion
+/// completion_value: The completion value of the statement
+fn JSInterpreter::exec_stmt_for_eval(
+  self : JSInterpreter,
+  stmt : @ast.TsStmt,
+  env : JSEnv,
+) -> (JSValue?, JSValue) {
+  self.tick()
+  match self.peek_error() {
+    Some(err) => return (Some(err), Undefined)
+    None => ()
+  }
+  match stmt {
+    @ast.TsStmt::Expr(expr) => {
+      let val = self.eval_expr(expr, env)
+      match self.peek_error() {
+        Some(err) => (Some(err), Undefined)
+        None => (None, val)
+      }
+    }
+    @ast.TsStmt::Var(_, _, _)
+    | @ast.TsStmt::Let(_, _, _)
+    | @ast.TsStmt::Const(_, _, _)
+    | @ast.TsStmt::Assign(_, _)
+    | @ast.TsStmt::CompoundAssign(_, _, _)
+    | @ast.TsStmt::IndexAssign(_, _, _)
+    | @ast.TsStmt::PropAssign(_, _, _)
+    | @ast.TsStmt::Empty => {
+      match self.exec_stmt(stmt, env) {
+        Some(val) => (Some(val), Empty) // abrupt completions have empty value
+        None => (None, Empty) // assignments have empty completion value
+      }
+    }
+    @ast.TsStmt::If(cond, then_block, else_block) => {
+      let cond_val = self.eval_expr(cond, env)
+      match self.peek_error() {
+        Some(err) => return (Some(err), Undefined)
+        None => ()
+      }
+      if cond_val.to_boolean() {
+        self.exec_block_for_eval(then_block, env)
+      } else {
+        match else_block {
+          Some(block) => self.exec_block_for_eval(block, env)
+          None => (None, Undefined) // if (false) {} -> undefined
+        }
+      }
+    }
+    @ast.TsStmt::While(cond, body) => self.exec_while_for_eval(cond, body, env)
+    @ast.TsStmt::DoWhile(cond, body) =>
+      self.exec_do_while_for_eval(cond, body, env)
+    @ast.TsStmt::For(init, cond, update, body) =>
+      self.exec_for_for_eval(init, cond, update, body, env)
+    @ast.TsStmt::Block(block) => {
+      let block_env = js_new_env(Some(env))
+      self.hoist_block_lexical(block, block_env)
+      self.exec_block_for_eval(block, block_env)
+    }
+    @ast.TsStmt::Label(name, inner) => {
+      // Handle labeled statements with completion value tracking
+      match inner {
+        @ast.TsStmt::While(cond, body) =>
+          self.exec_while_for_eval_labeled(cond, body, env, name)
+        @ast.TsStmt::DoWhile(cond, body) =>
+          self.exec_do_while_for_eval_labeled(cond, body, env, name)
+        @ast.TsStmt::For(init, cond, update, body) =>
+          self.exec_for_for_eval_labeled(init, cond, update, body, env, name)
+        _ => {
+          // For non-loop labeled statements
+          match self.exec_stmt_for_eval(inner, env) {
+            (Some(BreakSignal(Some(lbl))), completion) if lbl == name => {
+              // Break to this label - convert to normal completion
+              let final_val = if is_not_empty(completion) {
+                completion
+              } else {
+                Undefined
+              }
+              (None, final_val)
+            }
+            other => other
+          }
+        }
+      }
+    }
+    _ => {
+      // For other statements, fall back to regular exec_stmt
+      match self.exec_stmt(stmt, env) {
+        Some(val) => (Some(val), Empty) // abrupt completions have empty value
+        None => (None, Empty) // most statements have empty completion value
+      }
+    }
+  }
+}
+
+///|
+fn JSInterpreter::exec_block_for_eval(
+  self : JSInterpreter,
+  block : @ast.TsBlock,
+  env : JSEnv,
+) -> (JSValue?, JSValue) {
+  let mut last = JSValue::Undefined // blockValue starts as undefined
+  for stmt in block.stmts {
+    match self.exec_stmt_for_eval(stmt, env) {
+      (Some(val), completion) => {
+        // UpdateEmpty: if completion value is not empty, use it; otherwise use last
+        let final_completion = if is_not_empty(completion) {
+          completion
+        } else {
+          last
+        }
+        return (Some(val), final_completion)
+      }
+      (None, completion) => {
+        // Only update last if completion is not empty (UpdateEmpty semantics)
+        if is_not_empty(completion) {
+          last = completion
+        }
+      }
+    }
+  }
+  (None, last)
+}
+
+///|
+/// Check if a JSValue is not Empty (for UpdateEmpty semantics)
+fn is_not_empty(v : JSValue) -> Bool {
+  match v {
+    Empty => false
+    _ => true
+  }
+}
+
+///|
+fn JSInterpreter::exec_while_for_eval(
+  self : JSInterpreter,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+  env : JSEnv,
+) -> (JSValue?, JSValue) {
+  let mut v = JSValue::Undefined
+  while true {
+    let cond_val = self.eval_expr(cond, env)
+    match self.peek_error() {
+      Some(err) => return (Some(err), Undefined)
+      None => ()
+    }
+    if not(cond_val.to_boolean()) {
+      return (None, v)
+    }
+    match self.exec_block_for_eval(body, env) {
+      (Some(BreakSignal(None)), completion) => {
+        // UpdateEmpty: use completion value if not undefined
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (None, v)
+      }
+      (Some(BreakSignal(Some(_))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(BreakSignal(None)), v)
+      }
+      (Some(ContinueSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        continue
+      }
+      (Some(ContinueSignal(Some(_))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(ContinueSignal(None)), v)
+      }
+      (Some(val), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(val), v)
+      }
+      (None, completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+      }
+    }
+  }
+  (None, v) // unreachable but needed for type
+}
+
+///|
+fn JSInterpreter::exec_do_while_for_eval(
+  self : JSInterpreter,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+  env : JSEnv,
+) -> (JSValue?, JSValue) {
+  let mut v = JSValue::Undefined
+  while true {
+    // Execute body first (do-while semantics)
+    match self.exec_block_for_eval(body, env) {
+      (Some(BreakSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (None, v)
+      }
+      (Some(BreakSignal(Some(_))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(BreakSignal(None)), v)
+      }
+      (Some(ContinueSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        // continue to condition check
+      }
+      (Some(ContinueSignal(Some(_))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(ContinueSignal(None)), v)
+      }
+      (Some(val), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(val), v)
+      }
+      (None, completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+      }
+    }
+    // Check condition after body execution
+    let cond_val = self.eval_expr(cond, env)
+    match self.peek_error() {
+      Some(err) => return (Some(err), Undefined)
+      None => ()
+    }
+    if not(cond_val.to_boolean()) {
+      return (None, v)
+    }
+  }
+  (None, v) // unreachable but needed for type
+}
+
+///|
+fn JSInterpreter::exec_for_for_eval(
+  self : JSInterpreter,
+  init : @ast.TsStmt?,
+  cond : @ast.TsExpr?,
+  update : @ast.TsStmt?,
+  body : @ast.TsBlock,
+  env : JSEnv,
+) -> (JSValue?, JSValue) {
+  // Create new environment for for loop
+  let for_env = js_new_env(Some(env))
+
+  // Execute init
+  match init {
+    Some(s) => {
+      self.hoist_stmt(s, for_env)
+      match self.exec_stmt(s, for_env) {
+        Some(val) => return (Some(val), Undefined)
+        None => ()
+      }
+    }
+    None => ()
+  }
+
+  let mut v = JSValue::Undefined
+  while true {
+    // Check condition
+    match cond {
+      Some(c) => {
+        let cond_val = self.eval_expr(c, for_env)
+        match self.peek_error() {
+          Some(err) => return (Some(err), Undefined)
+          None => ()
+        }
+        if not(cond_val.to_boolean()) {
+          return (None, v)
+        }
+      }
+      None => ()
+    }
+
+    // Execute body
+    match self.exec_block_for_eval(body, for_env) {
+      (Some(BreakSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (None, v)
+      }
+      (Some(BreakSignal(Some(_))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(BreakSignal(None)), v)
+      }
+      (Some(ContinueSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+      }
+      (Some(ContinueSignal(Some(_))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(ContinueSignal(None)), v)
+      }
+      (Some(val), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(val), v)
+      }
+      (None, completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+      }
+    }
+
+    // Execute update
+    match update {
+      Some(u) => {
+        match self.exec_stmt(u, for_env) {
+          Some(val) => return (Some(val), Undefined)
+          None => ()
+        }
+      }
+      None => ()
+    }
+  }
+  (None, v) // unreachable but needed for type
+}
+
+///|
+/// Labeled version of exec_while_for_eval
+fn JSInterpreter::exec_while_for_eval_labeled(
+  self : JSInterpreter,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+  env : JSEnv,
+  label : String,
+) -> (JSValue?, JSValue) {
+  let mut v = JSValue::Undefined
+  while true {
+    let cond_val = self.eval_expr(cond, env)
+    match self.peek_error() {
+      Some(err) => return (Some(err), Undefined)
+      None => ()
+    }
+    if not(cond_val.to_boolean()) {
+      return (None, v)
+    }
+    match self.exec_block_for_eval(body, env) {
+      (Some(BreakSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (None, v)
+      }
+      (Some(BreakSignal(Some(lbl))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        if lbl == label {
+          return (None, v)
+        } else {
+          return (Some(BreakSignal(Some(lbl))), v)
+        }
+      }
+      (Some(ContinueSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        continue
+      }
+      (Some(ContinueSignal(Some(lbl))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        if lbl == label {
+          continue
+        } else {
+          return (Some(ContinueSignal(Some(lbl))), v)
+        }
+      }
+      (Some(val), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(val), v)
+      }
+      (None, completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+      }
+    }
+  }
+  (None, v) // unreachable but needed for type
+}
+
+///|
+/// Labeled version of exec_do_while_for_eval
+fn JSInterpreter::exec_do_while_for_eval_labeled(
+  self : JSInterpreter,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+  env : JSEnv,
+  label : String,
+) -> (JSValue?, JSValue) {
+  let mut v = JSValue::Undefined
+  while true {
+    // Execute body first (do-while semantics)
+    match self.exec_block_for_eval(body, env) {
+      (Some(BreakSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (None, v)
+      }
+      (Some(BreakSignal(Some(lbl))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        if lbl == label {
+          return (None, v)
+        } else {
+          return (Some(BreakSignal(Some(lbl))), v)
+        }
+      }
+      (Some(ContinueSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        // continue to condition check
+      }
+      (Some(ContinueSignal(Some(lbl))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        if lbl == label {
+          // continue to condition check
+        } else {
+          return (Some(ContinueSignal(Some(lbl))), v)
+        }
+      }
+      (Some(val), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(val), v)
+      }
+      (None, completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+      }
+    }
+    // Check condition after body execution
+    let cond_val = self.eval_expr(cond, env)
+    match self.peek_error() {
+      Some(err) => return (Some(err), Undefined)
+      None => ()
+    }
+    if not(cond_val.to_boolean()) {
+      return (None, v)
+    }
+  }
+  (None, v) // unreachable but needed for type
+}
+
+///|
+/// Labeled version of exec_for_for_eval
+fn JSInterpreter::exec_for_for_eval_labeled(
+  self : JSInterpreter,
+  init : @ast.TsStmt?,
+  cond : @ast.TsExpr?,
+  update : @ast.TsStmt?,
+  body : @ast.TsBlock,
+  env : JSEnv,
+  label : String,
+) -> (JSValue?, JSValue) {
+  // Create new environment for for loop
+  let for_env = js_new_env(Some(env))
+
+  // Execute init
+  match init {
+    Some(s) => {
+      self.hoist_stmt(s, for_env)
+      match self.exec_stmt(s, for_env) {
+        Some(val) => return (Some(val), Undefined)
+        None => ()
+      }
+    }
+    None => ()
+  }
+
+  let mut v = JSValue::Undefined
+  while true {
+    // Check condition
+    match cond {
+      Some(c) => {
+        let cond_val = self.eval_expr(c, for_env)
+        match self.peek_error() {
+          Some(err) => return (Some(err), Undefined)
+          None => ()
+        }
+        if not(cond_val.to_boolean()) {
+          return (None, v)
+        }
+      }
+      None => ()
+    }
+
+    // Execute body
+    match self.exec_block_for_eval(body, for_env) {
+      (Some(BreakSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (None, v)
+      }
+      (Some(BreakSignal(Some(lbl))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        if lbl == label {
+          return (None, v)
+        } else {
+          return (Some(BreakSignal(Some(lbl))), v)
+        }
+      }
+      (Some(ContinueSignal(None)), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+      }
+      (Some(ContinueSignal(Some(lbl))), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        if lbl == label {
+          // Continue in this loop - fall through to update
+        } else {
+          return (Some(ContinueSignal(Some(lbl))), v)
+        }
+      }
+      (Some(val), completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+        return (Some(val), v)
+      }
+      (None, completion) => {
+        if is_not_empty(completion) {
+          v = completion
+        }
+      }
+    }
+
+    // Execute update
+    match update {
+      Some(u) => {
+        match self.exec_stmt(u, for_env) {
+          Some(val) => return (Some(val), Undefined)
+          None => ()
+        }
+      }
+      None => ()
+    }
+  }
+  (None, v) // unreachable but needed for type
 }
 
 ///|
@@ -1191,6 +1772,50 @@ fn JSInterpreter::exec_while_loop(
         }
       Some(val) => return Some(val)
       None => ()
+    }
+  }
+  None
+}
+
+///|
+fn JSInterpreter::exec_do_while_loop(
+  self : JSInterpreter,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+  env : JSEnv,
+  loop_label : String?,
+) -> JSValue? {
+  while true {
+    // Execute body first (do-while semantics)
+    self.tick()
+    match self.peek_error() {
+      Some(err) => return Some(err)
+      None => ()
+    }
+    match self.exec_block(body, env) {
+      Some(BreakSignal(label)) =>
+        if loop_label_matches(loop_label, label) {
+          break
+        } else {
+          return Some(BreakSignal(label))
+        }
+      Some(ContinueSignal(label)) =>
+        if loop_label_matches(loop_label, label) {
+          // continue to condition check
+        } else {
+          return Some(ContinueSignal(label))
+        }
+      Some(val) => return Some(val)
+      None => ()
+    }
+    // Check condition after body execution
+    let cond_val = self.eval_expr(cond, env)
+    match self.peek_error() {
+      Some(err) => return Some(err)
+      None => ()
+    }
+    if not(cond_val.to_boolean()) {
+      break
     }
   }
   None
@@ -1480,7 +2105,8 @@ pub fn JSInterpreter::exec_stmt(
     None => ()
   }
   match stmt {
-    @ast.TsStmt::Let(binding, _, init)
+    @ast.TsStmt::Var(binding, _, init)
+    | @ast.TsStmt::Let(binding, _, init)
     | @ast.TsStmt::Const(binding, _, init) => {
       let val = self.eval_expr(init, env)
       match self.peek_error() {
@@ -1515,11 +2141,18 @@ pub fn JSInterpreter::exec_stmt(
       }
     }
     Empty => None
-    @ast.TsStmt::Block(block) => self.exec_block(block, env)
+    @ast.TsStmt::Block(block) => {
+      // Create a new lexical environment for block scope
+      let block_env = js_new_env(Some(env))
+      self.hoist_block_lexical(block, block_env)
+      self.exec_block(block, block_env)
+    }
     @ast.TsStmt::Label(name, inner) => {
       match inner {
         @ast.TsStmt::While(cond, body) =>
           self.exec_while_loop(cond, body, env, Some(name))
+        @ast.TsStmt::DoWhile(cond, body) =>
+          self.exec_do_while_loop(cond, body, env, Some(name))
         @ast.TsStmt::For(init, cond, update, body) =>
           self.exec_for_loop(init, cond, update, body, env, Some(name))
         @ast.TsStmt::ForOf(kind, binding, _, iterable, body) =>
@@ -1632,6 +2265,8 @@ pub fn JSInterpreter::exec_stmt(
       }
     }
     @ast.TsStmt::While(cond, body) => self.exec_while_loop(cond, body, env, None)
+    @ast.TsStmt::DoWhile(cond, body) =>
+      self.exec_do_while_loop(cond, body, env, None)
     @ast.TsStmt::Switch(expr, cases) => {
       let discr = self.eval_expr(expr, env)
       match self.peek_error() {
@@ -1804,7 +2439,25 @@ pub fn JSInterpreter::exec_block(
 // / variablesimple
 fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @ast.TsStmt, env : JSEnv) -> Unit {
   match stmt {
+    @ast.TsStmt::Var(binding, _, _) => {
+      // var declarations are hoisted with initial value undefined (no TDZ)
+      let names : Array[String] = []
+      collect_binding_names(binding, names)
+      for name in names {
+        if not(env.has(name)) {
+          env.define_var(name, Undefined)
+          match env.parent {
+            None => {
+              let global_obj = self.global_env.get("globalThis")
+              let _ = js_set_prop(global_obj, name, Undefined)
+            }
+            Some(_) => ()
+          }
+        }
+      }
+    }
     @ast.TsStmt::Let(binding, _, _) | @ast.TsStmt::Const(binding, _, _) => {
+      // let/const declarations are hoisted with TDZ (uninitialized)
       let names : Array[String] = []
       collect_binding_names(binding, names)
       let is_const = match stmt {
@@ -1915,6 +2568,42 @@ fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @ast.TsStmt, env : JSE
 pub fn JSInterpreter::hoist_block(self : JSInterpreter, block : @ast.TsBlock, env : JSEnv) -> Unit {
   for stmt in block.stmts {
     self.hoist_stmt(stmt, env)
+  }
+}
+
+///|
+/// Hoist only lexical (let/const) declarations to block scope.
+/// Always hoist to local scope (using has_local check) to ensure
+/// block-scoped let/const shadow outer variables properly.
+fn JSInterpreter::hoist_block_lexical(
+  _self : JSInterpreter,
+  block : @ast.TsBlock,
+  env : JSEnv,
+) -> Unit {
+  for stmt in block.stmts {
+    match stmt {
+      @ast.TsStmt::Let(binding, _, _) => {
+        let names : Array[String] = []
+        collect_binding_names(binding, names)
+        for name in names {
+          // Always create local binding for let (shadowing is intended)
+          if not(env.has_local(name)) {
+            env.define_uninitialized(name, false)
+          }
+        }
+      }
+      @ast.TsStmt::Const(binding, _, _) => {
+        let names : Array[String] = []
+        collect_binding_names(binding, names)
+        for name in names {
+          // Always create local binding for const (shadowing is intended)
+          if not(env.has_local(name)) {
+            env.define_uninitialized(name, true)
+          }
+        }
+      }
+      _ => ()
+    }
   }
 }
 

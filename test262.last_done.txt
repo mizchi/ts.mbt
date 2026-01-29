@@ -1,1 +1,1 @@
-test262/test/language/statements/for-await-of/let-identifier-with-newline.js
+test262/test/language/statements/do-while/cptn-abrupt-empty.js

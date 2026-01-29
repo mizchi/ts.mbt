@@ -187,8 +187,9 @@ pub(all) enum TsForOfKind {
 // / statement
 pub(all) enum TsStmt {
   // variable
-  Let(TsBinding, TsType, TsExpr)
-  Const(TsBinding, TsType, TsExpr)
+  Var(TsBinding, TsType, TsExpr) // var declaration (function-scoped)
+  Let(TsBinding, TsType, TsExpr) // let declaration (block-scoped)
+  Const(TsBinding, TsType, TsExpr) // const declaration (block-scoped)
 
   // assignment
   Assign(String, TsExpr)
@@ -218,6 +219,7 @@ pub(all) enum TsStmt {
 
   If(TsExpr, TsBlock, TsBlock?)
   While(TsExpr, TsBlock)
+  DoWhile(TsExpr, TsBlock) // do { body } while (cond)
   For(TsStmt?, TsExpr?, TsStmt?, TsBlock) // init, cond, update, body
   ForOf(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock) // kind, binding, varType, iterable, body
   ForIn(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock) // kind, binding, varType, iterable, body
