@@ -1170,28 +1170,33 @@ fn JSInterpreter::exec_try_for_eval(
   }
 
   // Execute finally block if present
-  match finally_block {
+  let (result_control, result_completion) = match finally_block {
     Some(block) => {
-      let (finally_control, finally_completion) = self.exec_block_for_eval(
+      let (finally_control, _finally_completion) = self.exec_block_for_eval(
         block,
         env,
       )
-      // Finally can override control flow but completion follows UpdateEmpty
+      // ES spec: If F.[[type]] is normal, let F be B (the try/catch result)
+      // Finally only overrides when it has abrupt completion (return/throw/break/continue)
       match finally_control {
-        Some(_) => (finally_control, finally_completion)
+        Some(_) => (finally_control, _finally_completion)
         None => {
-          // Finally completed normally, use after_catch result with UpdateEmpty
-          let final_completion = if is_not_empty(finally_completion) {
-            finally_completion
-          } else {
-            after_catch_completion
-          }
-          (after_catch_control, final_completion)
+          // Finally completed normally, use try/catch result (B), not finally completion
+          (after_catch_control, after_catch_completion)
         }
       }
     }
     None => (after_catch_control, after_catch_completion)
   }
+
+  // ES spec: try statement applies UpdateEmpty(completion, undefined)
+  // If completion is empty, return undefined; otherwise return the completion
+  let final_completion = if is_not_empty(result_completion) {
+    result_completion
+  } else {
+    Undefined
+  }
+  (result_control, final_completion)
 }
 
 ///|
@@ -2334,6 +2339,8 @@ pub fn JSInterpreter::exec_stmt(
     @ast.TsStmt::Try(try_block, catch_binding, catch_block, finally_block) => {
       let mut result = self.exec_block(try_block, env)
       let mut pending_error : JSValue? = None
+
+      // Handle try block error - execute catch if present
       match self.peek_error() {
         Some(_) =>
           match self.take_error() {
@@ -2345,6 +2352,8 @@ pub fn JSInterpreter::exec_stmt(
                     Some(binding) => self.init_pattern(binding, err, catch_env, false)
                     None => ()
                   }
+                  // Hoist let/const declarations in the catch block
+                  self.hoist_block_lexical(block, catch_env)
                   result = self.exec_block(block, catch_env)
                 }
                 None => pending_error = Some(err)
@@ -2354,17 +2363,20 @@ pub fn JSInterpreter::exec_stmt(
           }
         None => ()
       }
-      match self.peek_error() {
-        Some(err) => return Some(err)
-        None => ()
-      }
+
+      // Save any error from catch block (but don't return yet - must execute finally)
+      let catch_error = self.take_error()
+
+      // ALWAYS execute finally block
       match finally_block {
         Some(block) => {
           let final_result = self.exec_block(block, env)
+          // Check if finally threw an error
           match self.peek_error() {
             Some(err) => return Some(err)
             None => ()
           }
+          // If finally has an abrupt completion (return/break), use it
           match final_result {
             Some(val) => return Some(val)
             None => ()
@@ -2372,6 +2384,17 @@ pub fn JSInterpreter::exec_stmt(
         }
         None => ()
       }
+
+      // After finally, restore catch error if any
+      match catch_error {
+        Some(err) => {
+          self.last_error = Some(err)
+          return Some(err)
+        }
+        None => ()
+      }
+
+      // Handle pending error (try threw but no catch block)
       match pending_error {
         Some(err) => {
           self.last_error = Some(err)
