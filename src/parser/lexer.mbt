@@ -6,6 +6,7 @@ pub enum TokenKind {
   // literal
   Number(Double)
   Int(Int)
+  LegacyOctal(Int) // legacy octal (e.g., 01, 07) - forbidden in strict mode
   BigInt(String)
   Bool(Bool)
   Str(String) // stringliteral
@@ -532,6 +533,41 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
         }
         if is_bigint {
           return BigInt(value.to_string())
+        } else {
+          return Int(value)
+        }
+      }
+      Some(c) if c >= '0' && c <= '9' => {
+        // Could be legacy octal (01-07) or non-octal decimal (08, 09, 018, etc.)
+        // We need to scan all digits to determine which
+        let _ = self.advance() // skip '0'
+        let _ = self.advance() // skip first digit (c)
+        let mut value = (c.to_int() - '0'.to_int())
+        let mut is_pure_octal = c >= '0' && c <= '7'
+        while true {
+          match self.peek() {
+            Some(d) if d >= '0' && d <= '9' => {
+              let _ = self.advance()
+              if d >= '8' {
+                is_pure_octal = false
+              }
+              value = value * 10 + (d.to_int() - '0'.to_int())
+            }
+            _ => break
+          }
+        }
+        if is_pure_octal {
+          // Recalculate as octal
+          let mut octal_value = 0
+          let mut mult = 1
+          let mut temp = value
+          while temp > 0 {
+            let digit = temp % 10
+            octal_value = octal_value + digit * mult
+            mult = mult * 8
+            temp = temp / 10
+          }
+          return LegacyOctal(octal_value)
         } else {
           return Int(value)
         }

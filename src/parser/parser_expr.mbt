@@ -659,6 +659,15 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       let _ = self.advance()
       IntLit(i)
     }
+    LegacyOctal(i) => {
+      if self.in_strict {
+        raise ParseError(
+          "Octal literals are not allowed in strict mode",
+        )
+      }
+      let _ = self.advance()
+      IntLit(i)
+    }
     BigInt(s) => {
       let _ = self.advance()
       BigIntLit(s)

@@ -166,7 +166,7 @@ pub fn JSInterpreter::eval_expr(
               let obj = self.eval_expr(obj_expr, env)
               let old_val = self.get_prop_value(obj, prop)
               let new_val = js_add(old_val, Number(1.0))
-              self.set_prop_value(obj, prop, new_val)
+              self.set_prop_value(obj, prop, new_val, strict=env.has("__strict__"))
               new_val
             }
             @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -175,7 +175,7 @@ pub fn JSInterpreter::eval_expr(
               let key = idx.to_js_string()
               let old_val = self.get_prop_value(obj, key)
               let new_val = js_add(old_val, Number(1.0))
-              self.set_prop_value(obj, key, new_val)
+              self.set_prop_value(obj, key, new_val, strict=env.has("__strict__"))
               new_val
             }
             _ => {
@@ -196,7 +196,7 @@ pub fn JSInterpreter::eval_expr(
               let obj = self.eval_expr(obj_expr, env)
               let old_val = self.get_prop_value(obj, prop)
               let new_val = js_sub(old_val, Number(1.0))
-              self.set_prop_value(obj, prop, new_val)
+              self.set_prop_value(obj, prop, new_val, strict=env.has("__strict__"))
               new_val
             }
             @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -205,7 +205,7 @@ pub fn JSInterpreter::eval_expr(
               let key = idx.to_js_string()
               let old_val = self.get_prop_value(obj, key)
               let new_val = js_sub(old_val, Number(1.0))
-              self.set_prop_value(obj, key, new_val)
+              self.set_prop_value(obj, key, new_val, strict=env.has("__strict__"))
               new_val
             }
             _ => {
@@ -226,7 +226,7 @@ pub fn JSInterpreter::eval_expr(
               let obj = self.eval_expr(obj_expr, env)
               let old_val = self.get_prop_value(obj, prop)
               let new_val = js_add(old_val, Number(1.0))
-              self.set_prop_value(obj, prop, new_val)
+              self.set_prop_value(obj, prop, new_val, strict=env.has("__strict__"))
               old_val
             }
             @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -235,7 +235,7 @@ pub fn JSInterpreter::eval_expr(
               let key = idx.to_js_string()
               let old_val = self.get_prop_value(obj, key)
               let new_val = js_add(old_val, Number(1.0))
-              self.set_prop_value(obj, key, new_val)
+              self.set_prop_value(obj, key, new_val, strict=env.has("__strict__"))
               old_val
             }
             _ => {
@@ -256,7 +256,7 @@ pub fn JSInterpreter::eval_expr(
               let obj = self.eval_expr(obj_expr, env)
               let old_val = self.get_prop_value(obj, prop)
               let new_val = js_sub(old_val, Number(1.0))
-              self.set_prop_value(obj, prop, new_val)
+              self.set_prop_value(obj, prop, new_val, strict=env.has("__strict__"))
               old_val
             }
             @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -265,7 +265,7 @@ pub fn JSInterpreter::eval_expr(
               let key = idx.to_js_string()
               let old_val = self.get_prop_value(obj, key)
               let new_val = js_sub(old_val, Number(1.0))
-              self.set_prop_value(obj, key, new_val)
+              self.set_prop_value(obj, key, new_val, strict=env.has("__strict__"))
               old_val
             }
             _ => {
@@ -667,7 +667,7 @@ pub fn JSInterpreter::eval_expr(
     @ast.TsExpr::PropAssignExpr(obj_expr, prop, val_expr) => {
       let obj = self.eval_expr(obj_expr, env)
       let val = self.eval_expr(val_expr, env)
-      self.set_prop_value(obj, prop, val)
+      self.set_prop_value(obj, prop, val, strict=env.has("__strict__"))
       val
     }
     @ast.TsExpr::IndexAssignExpr(obj_expr, idx_expr, val_expr) => {
@@ -677,7 +677,7 @@ pub fn JSInterpreter::eval_expr(
       match obj {
         Array(_) | Object(_) | Function(_) => {
           let key = idx.to_js_string()
-          self.set_prop_value(obj, key, val)
+          self.set_prop_value(obj, key, val, strict=env.has("__strict__"))
         }
         _ => ()
       }
@@ -869,7 +869,7 @@ fn JSInterpreter::eval_expr_gen(
       gen_bind(self.eval_expr_gen(obj_expr, env), obj => gen_bind(
         self.eval_expr_gen(value_expr, env),
         val => {
-          self.set_prop_value(obj, prop, val)
+          self.set_prop_value(obj, prop, val, strict=env.has("__strict__"))
           GenValue::Value(val)
         },
       ))
@@ -878,7 +878,7 @@ fn JSInterpreter::eval_expr_gen(
         self.eval_expr_gen(idx_expr, env),
         idx => gen_bind(self.eval_expr_gen(value_expr, env), val => {
           let key = idx.to_js_string()
-          self.set_prop_value(obj, key, val)
+          self.set_prop_value(obj, key, val, strict=env.has("__strict__"))
           GenValue::Value(val)
         }),
       ))
@@ -2774,7 +2774,7 @@ pub fn JSInterpreter::exec_stmt(
       match arr {
         Array(_) | Object(_) | Function(_) => {
           let key = idx.to_js_string()
-          self.set_prop_value(arr, key, val)
+          self.set_prop_value(arr, key, val, strict=env.has("__strict__"))
         }
         _ => ()
       }
@@ -2827,7 +2827,7 @@ pub fn JSInterpreter::exec_stmt(
         )
 
       } else {
-        self.set_prop_value(obj, prop, val)
+        self.set_prop_value(obj, prop, val, strict=env.has("__strict__"))
       }
       None
     }
@@ -3159,7 +3159,7 @@ fn JSInterpreter::exec_stmt_gen(
         gen_bind(self.eval_expr_gen(obj_expr, env), obj => gen_bind(
           self.eval_expr_gen(value_expr, env),
           val => {
-            self.set_prop_value(obj, prop, val)
+            self.set_prop_value(obj, prop, val, strict=env.has("__strict__"))
             GenValue::Value(val)
           },
         )),
@@ -3174,7 +3174,7 @@ fn JSInterpreter::exec_stmt_gen(
           self.eval_expr_gen(idx_expr, env),
           idx => gen_bind(self.eval_expr_gen(value_expr, env), val => {
             let key = idx.to_js_string()
-            self.set_prop_value(obj, key, val)
+            self.set_prop_value(obj, key, val, strict=env.has("__strict__"))
             GenValue::Value(val)
           }),
         )),

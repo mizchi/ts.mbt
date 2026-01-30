@@ -283,12 +283,15 @@ fn JSInterpreter::assign_prepared_target(
   value : JSValue,
   env : JSEnv,
 ) -> Unit {
+  let is_strict = env.has("__strict__")
   match target {
     AssignTarget::Ident(name) => self.assign_ident(name, value, env)
-    AssignTarget::Prop(obj, prop) => self.set_prop_value(obj, prop, value)
+    AssignTarget::Prop(obj, prop) =>
+      self.set_prop_value(obj, prop, value, strict=is_strict)
     AssignTarget::Index(obj, key) =>
       match obj {
-        Array(_) | Object(_) => self.set_prop_value(obj, key, value)
+        Array(_) | Object(_) | Function(_) =>
+          self.set_prop_value(obj, key, value, strict=is_strict)
         _ => ()
       }
   }

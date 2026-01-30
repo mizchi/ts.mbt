@@ -333,6 +333,7 @@ fn JSInterpreter::set_prop_value(
   obj : JSValue,
   key : String,
   value : JSValue,
+  strict? : Bool = false,
 ) -> Unit {
   let key = self.normalize_prop_key(key)
   if self.is_proxy(obj) {
@@ -340,6 +341,15 @@ fn JSInterpreter::set_prop_value(
     return
   }
   match obj {
+    Undefined | Null => {
+      if strict {
+        let _ = self.set_error_kind(
+          "TypeError",
+          "Cannot set properties of null or undefined (setting '\{key}')",
+        )
+      }
+      return
+    }
     Function(closure) =>
       for prop in closure.props {
         if prop.key == key {
@@ -348,10 +358,19 @@ fn JSInterpreter::set_prop_value(
               let _ = self.call_function(setter, obj, [value])
               return
             }
-            None => {
-              let _ = js_set_prop(obj, key, value)
-              return
-            }
+            None =>
+              if not(prop.writable) {
+                if strict {
+                  let _ = self.set_error_kind(
+                    "TypeError",
+                    "Cannot assign to read only property '\{key}'",
+                  )
+                }
+                return
+              } else {
+                let _ = js_set_prop(obj, key, value)
+                return
+              }
           }
         }
       }
@@ -363,10 +382,19 @@ fn JSInterpreter::set_prop_value(
               let _ = self.call_function(setter, obj, [value])
               return
             }
-            None => {
-              let _ = js_set_prop(obj, key, value)
-              return
-            }
+            None =>
+              if not(prop.writable) {
+                if strict {
+                  let _ = self.set_error_kind(
+                    "TypeError",
+                    "Cannot assign to read only property '\{key}'",
+                  )
+                }
+                return
+              } else {
+                let _ = js_set_prop(obj, key, value)
+                return
+              }
           }
         }
       }
@@ -378,17 +406,25 @@ fn JSInterpreter::set_prop_value(
               let _ = self.call_function(setter, obj, [value])
               return
             }
-            None => {
-              let _ = js_set_prop(obj, key, value)
-              return
-            }
+            None =>
+              if not(prop.writable) {
+                if strict {
+                  let _ = self.set_error_kind(
+                    "TypeError",
+                    "Cannot assign to read only property '\{key}'",
+                  )
+                }
+                return
+              } else {
+                let _ = js_set_prop(obj, key, value)
+                return
+              }
           }
         }
       }
     _ => ()
   }
   let _ = js_set_prop(obj, key, value)
-
 }
 
 ///|
