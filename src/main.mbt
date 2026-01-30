@@ -1005,13 +1005,29 @@ async fn run_test262(test_path : String) -> Unit {
       if contains(meta.flags, "onlyStrict") {
         source = "\"use strict\";\n" + source
       }
-      let wrapped = wrap_test_source(source)
-      result = interp.run(wrapped) catch {
-        e => {
-          has_error = true
-          error_phase = "parse"
-          error_message = "\{e}"
-          undefined_value
+      // For negative parse tests, first try to parse the source directly
+      // to catch SyntaxErrors that wouldn't be caught inside a function wrapper
+      if meta.negative && option_or_empty(meta.negative_phase) == "parse" {
+        let parser = @parser.Parser::from_source(source)
+        try {
+          let _ = parser.parse_module()
+        } catch {
+          e => {
+            has_error = true
+            error_phase = "parse"
+            error_message = "\{e}"
+          }
+        }
+      }
+      if not(has_error) {
+        let wrapped = wrap_test_source(source)
+        result = interp.run(wrapped) catch {
+          e => {
+            has_error = true
+            error_phase = "parse"
+            error_message = "\{e}"
+            undefined_value
+          }
         }
       }
     }

@@ -112,6 +112,7 @@ test "parser: parse let stmt" {
 ///|
 test "parser: parse return stmt" {
   let parser = Parser::from_source("return a + b;")
+  parser.in_function = true // Set function context for return
   let stmt = parser.parse_stmt()
   match stmt {
     Return(Some(BinOp(Add, Var("a"), Var("b")))) => ()
@@ -124,6 +125,7 @@ test "parser: parse if stmt" {
   let parser = Parser::from_source(
     "if (x > 0) { return 1; } else { return 0; }",
   )
+  parser.in_function = true // Set function context for return
   let stmt = parser.parse_stmt()
   match stmt {
     If(_, then_block, Some(else_block)) => {
