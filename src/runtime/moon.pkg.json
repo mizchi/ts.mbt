@@ -10,6 +10,10 @@
     {
       "path": "moonbitlang/typescript/parser",
       "alias": "parser"
+    },
+    {
+      "path": "moonbitlang/typescript/lib",
+      "alias": "lib"
     }
   ]
 }

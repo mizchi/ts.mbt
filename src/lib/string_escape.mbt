@@ -40,7 +40,7 @@ fn is_escape_passthrough(code : Int) -> Bool {
 }
 
 ///|
-fn escape_string_value(value : String) -> String {
+pub fn escape_string(value : String) -> String {
   let sb = StringBuilder::new()
   let len = value.length()
   let mut i = 0
@@ -76,7 +76,7 @@ fn hex_value(unit : UInt16) -> Int? {
 }
 
 ///|
-fn unescape_string_value(value : String) -> String {
+pub fn unescape_string(value : String) -> String {
   let sb = StringBuilder::new()
   let len = value.length()
   let percent : UInt16 = '%'

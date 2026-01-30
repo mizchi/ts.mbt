@@ -219,39 +219,17 @@ fn JSInterpreter::string_method(
     "toString" => String(s)
     "charAt" => {
       let idx = if args.length() > 0 { args[0].to_number().to_int() } else { 0 }
-      if idx >= 0 && idx < s.length() {
-        String(s[idx:idx + 1].to_string() catch { _ => "" })
-      } else {
-        String("")
-      }
+      String(@lib.string_char_at(s, idx))
     }
     "charCodeAt" => {
       let idx = if args.length() > 0 { args[0].to_number().to_int() } else { 0 }
-      if idx >= 0 && idx < s.length() {
-        Number(s[idx].to_int().to_double())
-      } else {
-        Number(0.0 / 0.0)
-      }
+      Number(@lib.string_char_code_at(s, idx))
     }
     "codePointAt" => {
       let idx = if args.length() > 0 { args[0].to_number().to_int() } else { 0 }
-      if idx < 0 || idx >= s.length() {
-        Undefined
-      } else {
-        let cu1 = s[idx]
-        if cu1.is_leading_surrogate() && idx + 1 < s.length() {
-          let cu2 = s[idx + 1]
-          if cu2.is_trailing_surrogate() {
-            let hi = cu1.to_int() - 0xd800
-            let lo = cu2.to_int() - 0xdc00
-            let code = hi * 0x400 + lo + 0x10000
-            Number(code.to_double())
-          } else {
-            Number(cu1.to_int().to_double())
-          }
-        } else {
-          Number(cu1.to_int().to_double())
-        }
+      match @lib.string_code_point_at(s, idx) {
+        Some(v) => Number(v)
+        None => Undefined
       }
     }
     "indexOf" => {
@@ -565,9 +543,9 @@ fn JSInterpreter::string_method(
         Number(regexp_search_simple(pattern, "", s).to_double())
       }
     }
-    "trim" => String(trim_js_string(s, "both"))
-    "trimStart" => String(trim_js_string(s, "start"))
-    "trimEnd" => String(trim_js_string(s, "end"))
+    "trim" => String(@lib.trim_string(s, "both"))
+    "trimStart" => String(@lib.trim_string(s, "start"))
+    "trimEnd" => String(@lib.trim_string(s, "end"))
     "slice" => {
       let len = s.length()
       let start_num = if args.length() > 0 {
@@ -813,79 +791,6 @@ fn JSInterpreter::string_method(
       String(result)
     }
     _ => Undefined
-  }
-}
-
-///|
-// / JS trim check
-fn is_js_trim_whitespace(unit : UInt16) -> Bool {
-  let code = unit.to_int()
-  if code == 0x0009 {
-    return true
-  }
-  if code == 0x000a {
-    return true
-  }
-  if code == 0x000b {
-    return true
-  }
-  if code == 0x000c {
-    return true
-  }
-  if code == 0x000d {
-    return true
-  }
-  if code == 0x0020 {
-    return true
-  }
-  if code == 0x00a0 {
-    return true
-  }
-  if code == 0x1680 {
-    return true
-  }
-  if code >= 0x2000 && code <= 0x200a {
-    return true
-  }
-  if code == 0x2028 {
-    return true
-  }
-  if code == 0x2029 {
-    return true
-  }
-  if code == 0x202f {
-    return true
-  }
-  if code == 0x205f {
-    return true
-  }
-  if code == 0x3000 {
-    return true
-  }
-  if code == 0xfeff {
-    return true
-  }
-  false
-}
-
-///|
-// / JS trim implementation
-fn trim_js_string(s : String, mode : String) -> String {
-  let len = s.length()
-  let mut start = 0
-  let mut end = len
-  if mode == "both" || mode == "start" {
-    while start < end && is_js_trim_whitespace(s[start]) {
-      start = start + 1
-    }
-  }
-  if mode == "both" || mode == "end" {
-    while end > start && is_js_trim_whitespace(s[end - 1]) {
-      end = end - 1
-    }
-  }
-  s[start:end].to_string() catch {
-    _ => ""
   }
 }
 
