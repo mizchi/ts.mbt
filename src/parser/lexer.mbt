@@ -75,10 +75,13 @@ pub enum TokenKind {
   Ge // >=
   AmpAmp // &&
   PipePipe // ||
+  AmpAmpEq // &&=
+  PipePipeEq // ||=
   Bang // !
   Eq // =
   Question // ?
   QuestionQuestion // ??
+  QuestionQuestionEq // ??=
   PlusPlus // ++
   MinusMinus // --
   PlusEq // +=
@@ -1689,7 +1692,13 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
           match self.peek() {
             Some('?') => {
               let _ = self.advance()
-              QuestionQuestion
+              match self.peek() {
+                Some('=') => {
+                  let _ = self.advance()
+                  QuestionQuestionEq
+                }
+                _ => QuestionQuestion
+              }
             }
             _ => Question
           }
@@ -1779,7 +1788,13 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
           match self.peek() {
             Some('&') => {
               let _ = self.advance()
-              AmpAmp
+              match self.peek() {
+                Some('=') => {
+                  let _ = self.advance()
+                  AmpAmpEq
+                }
+                _ => AmpAmp
+              }
             }
             Some('=') => {
               let _ = self.advance()
@@ -1791,7 +1806,13 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
           match self.peek() {
             Some('|') => {
               let _ = self.advance()
-              PipePipe
+              match self.peek() {
+                Some('=') => {
+                  let _ = self.advance()
+                  PipePipeEq
+                }
+                _ => PipePipe
+              }
             }
             Some('=') => {
               let _ = self.advance()

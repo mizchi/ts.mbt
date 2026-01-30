@@ -173,6 +173,36 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         CompoundAssignExpr(IndexAccess(obj, index), PowAssign, right)
       _ => right
     }
+  } else if self.match_(AmpAmpEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), AndAssign, right)
+      PropAccess(obj, prop) =>
+        CompoundAssignExpr(PropAccess(obj, prop), AndAssign, right)
+      IndexAccess(obj, index) =>
+        CompoundAssignExpr(IndexAccess(obj, index), AndAssign, right)
+      _ => right
+    }
+  } else if self.match_(PipePipeEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), OrAssign, right)
+      PropAccess(obj, prop) =>
+        CompoundAssignExpr(PropAccess(obj, prop), OrAssign, right)
+      IndexAccess(obj, index) =>
+        CompoundAssignExpr(IndexAccess(obj, index), OrAssign, right)
+      _ => right
+    }
+  } else if self.match_(QuestionQuestionEq) {
+    let right = self.parse_assignment()
+    match left {
+      Var(name) => CompoundAssignExpr(Var(name), CoalesceAssign, right)
+      PropAccess(obj, prop) =>
+        CompoundAssignExpr(PropAccess(obj, prop), CoalesceAssign, right)
+      IndexAccess(obj, index) =>
+        CompoundAssignExpr(IndexAccess(obj, index), CoalesceAssign, right)
+      _ => right
+    }
   } else {
     left
   }

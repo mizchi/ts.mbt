@@ -8,6 +8,7 @@ priv enum ClassKey {
 priv enum ClassElement {
   Method(Bool, ClassKey, String?, @ast.TsFunc)
   Field(Bool, ClassKey, @ast.TsExpr?)
+  StaticBlock(@ast.TsBlock)
 }
 
 ///|
@@ -155,6 +156,7 @@ fn Parser::parse_class_body(
     }
     let mut is_static = false
     let mut has_modifier = true
+    let mut parsed_static_block = false
     while has_modifier {
       has_modifier = false
       match self.peek().kind {
@@ -163,6 +165,13 @@ fn Parser::parse_class_body(
             let _ = self.advance()
             is_static = true
             has_modifier = true
+            // Check for static initialization block: static { ... }
+            if self.check(LBrace) {
+              let block = self.parse_block()
+              elements.push(StaticBlock(block))
+              parsed_static_block = true
+              break // Exit inner loop, then continue outer loop
+            }
           }
         Ident(n) if n == "async" =>
           if self.peek_at(1).kind != LParen {
@@ -171,6 +180,9 @@ fn Parser::parse_class_body(
           }
         _ => ()
       }
+    }
+    if parsed_static_block {
+      continue // Continue to next class element
     }
     let mut accessor_kind : String? = None
     match self.peek().kind {
@@ -283,6 +295,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             )
           }
         }
+      StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
     }
   }
 
@@ -506,6 +519,20 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         }
         // Note: non-static computed field keys are already handled in instance_assigns
       }
+      StaticBlock(block) => {
+        // Static initialization blocks run during class definition with `this` bound to the class
+        // Generate: (function() { ...block... }).call(ClassName)
+        let static_block_func = @ast.TsExpr::FuncExpr(@ast.TsFunc::{
+          name: "",
+          params: [],
+          return_type: @ast.TsType::Any,
+          body: block,
+          is_generator: false,
+        })
+        let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
+        let call_expr = @ast.TsExpr::CallExpr(call_method, [@ast.TsExpr::Var(tmp_name)])
+        stmts.push(Expr(call_expr))
+      }
     }
   }
   stmts.push(Return(Some(@ast.TsExpr::Var(tmp_name))))
@@ -557,6 +584,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
             )
           }
         }
+      StaticBlock(_) => key_temps.push(None) // Placeholder to keep indices aligned
     }
   }
 
@@ -777,6 +805,20 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
           }
         }
         // Note: non-static computed field keys are already handled in instance_assigns
+      }
+      StaticBlock(block) => {
+        // Static initialization blocks run during class definition with `this` bound to the class
+        // Generate: (function() { ...block... }).call(ClassName)
+        let static_block_func = @ast.TsExpr::FuncExpr(@ast.TsFunc::{
+          name: "",
+          params: [],
+          return_type: @ast.TsType::Any,
+          body: block,
+          is_generator: false,
+        })
+        let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
+        let call_expr = @ast.TsExpr::CallExpr(call_method, [@ast.TsExpr::Var(name)])
+        stmts.push(Expr(call_expr))
       }
     }
   }

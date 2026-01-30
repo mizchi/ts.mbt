@@ -1980,7 +1980,10 @@ fn compile_stmt(
               | @ast.TsCompoundOp::ShlAssign
               | @ast.TsCompoundOp::ShrAssign
               | @ast.TsCompoundOp::UShrAssign
-              | @ast.TsCompoundOp::PowAssign =>
+              | @ast.TsCompoundOp::PowAssign
+              | @ast.TsCompoundOp::AndAssign
+              | @ast.TsCompoundOp::OrAssign
+              | @ast.TsCompoundOp::CoalesceAssign =>
                 raise CodeGenError(
                   "compound op is not supported on f64 in Wasm compiler",
                 )
@@ -1998,9 +2001,12 @@ fn compile_stmt(
               @ast.TsCompoundOp::ShlAssign => ctx.emit(I32Shl)
               @ast.TsCompoundOp::ShrAssign => ctx.emit(I32ShrS)
               @ast.TsCompoundOp::UShrAssign => ctx.emit(I32ShrU)
-              @ast.TsCompoundOp::PowAssign =>
+              @ast.TsCompoundOp::PowAssign
+              | @ast.TsCompoundOp::AndAssign
+              | @ast.TsCompoundOp::OrAssign
+              | @ast.TsCompoundOp::CoalesceAssign =>
                 raise CodeGenError(
-                  "pow= is not supported in Wasm compiler (use interpreter)",
+                  "logical/pow assignment is not supported in Wasm compiler (use interpreter)",
                 )
             }
           }

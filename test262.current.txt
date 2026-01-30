@@ -1,1 +1,1 @@
-/Users/mz/ghq/github.com/tc39/test262/test/language/computed-property-names/to-name-side-effects/numbers-object.js
+test262 results: total=23876, passed=11992, failed=2775, skipped=9109

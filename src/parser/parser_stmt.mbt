@@ -538,6 +538,24 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         Var(name) => CompoundAssign(name, PowAssign, value)
         _ => Expr(expr)
       }
+    } else if self.match_(AmpAmpEq) {
+      let value = self.parse_expr()
+      match expr {
+        Var(name) => CompoundAssign(name, AndAssign, value)
+        _ => Expr(expr)
+      }
+    } else if self.match_(PipePipeEq) {
+      let value = self.parse_expr()
+      match expr {
+        Var(name) => CompoundAssign(name, OrAssign, value)
+        _ => Expr(expr)
+      }
+    } else if self.match_(QuestionQuestionEq) {
+      let value = self.parse_expr()
+      match expr {
+        Var(name) => CompoundAssign(name, CoalesceAssign, value)
+        _ => Expr(expr)
+      }
     } else {
       Expr(expr)
     }

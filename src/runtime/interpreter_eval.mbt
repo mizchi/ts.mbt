@@ -823,34 +823,138 @@ pub fn JSInterpreter::eval_expr(
       match left {
         @ast.TsExpr::Var(name) => {
           let current = env.get(name)
-          let val = self.eval_expr(right, env)
-          let new_val = apply_compound_op(op, current, val)
-          self.assign_ident(name, new_val, env)
-          new_val
+          // Handle logical assignment operators with short-circuit evaluation
+          match op {
+            @ast.TsCompoundOp::AndAssign =>
+              if current.to_boolean() {
+                let val = self.eval_expr(right, env)
+                self.assign_ident(name, val, env)
+                val
+              } else {
+                current
+              }
+            @ast.TsCompoundOp::OrAssign =>
+              if not(current.to_boolean()) {
+                let val = self.eval_expr(right, env)
+                self.assign_ident(name, val, env)
+                val
+              } else {
+                current
+              }
+            @ast.TsCompoundOp::CoalesceAssign =>
+              match current {
+                Null | Undefined => {
+                  let val = self.eval_expr(right, env)
+                  self.assign_ident(name, val, env)
+                  val
+                }
+                _ => current
+              }
+            _ => {
+              let val = self.eval_expr(right, env)
+              let new_val = apply_compound_op(op, current, val)
+              self.assign_ident(name, new_val, env)
+              new_val
+            }
+          }
         }
         @ast.TsExpr::PropAccess(obj_expr, prop) => {
           let obj = self.eval_expr(obj_expr, env)
           let current = self.get_prop_value(obj, prop)
-          let val = self.eval_expr(right, env)
-          let new_val = apply_compound_op(op, current, val)
-          let _ = js_set_prop(obj, prop, new_val)
-          new_val
+          // Handle logical assignment operators with short-circuit evaluation
+          match op {
+            @ast.TsCompoundOp::AndAssign =>
+              if current.to_boolean() {
+                let val = self.eval_expr(right, env)
+                let _ = js_set_prop(obj, prop, val)
+                val
+              } else {
+                current
+              }
+            @ast.TsCompoundOp::OrAssign =>
+              if not(current.to_boolean()) {
+                let val = self.eval_expr(right, env)
+                let _ = js_set_prop(obj, prop, val)
+                val
+              } else {
+                current
+              }
+            @ast.TsCompoundOp::CoalesceAssign =>
+              match current {
+                Null | Undefined => {
+                  let val = self.eval_expr(right, env)
+                  let _ = js_set_prop(obj, prop, val)
+                  val
+                }
+                _ => current
+              }
+            _ => {
+              let val = self.eval_expr(right, env)
+              let new_val = apply_compound_op(op, current, val)
+              let _ = js_set_prop(obj, prop, new_val)
+              new_val
+            }
+          }
         }
         @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
           let obj = self.eval_expr(obj_expr, env)
           let idx = self.eval_expr(idx_expr, env)
           let key = idx.to_js_string()
           let current = self.get_prop_value(obj, key)
-          let val = self.eval_expr(right, env)
-          let new_val = apply_compound_op(op, current, val)
-          match obj {
-            Array(_) | Object(_) => {
-              let _ = js_set_prop(obj, key, new_val)
-
+          // Handle logical assignment operators with short-circuit evaluation
+          match op {
+            @ast.TsCompoundOp::AndAssign =>
+              if current.to_boolean() {
+                let val = self.eval_expr(right, env)
+                match obj {
+                  Array(_) | Object(_) => {
+                    let _ = js_set_prop(obj, key, val)
+                  }
+                  _ => ()
+                }
+                val
+              } else {
+                current
+              }
+            @ast.TsCompoundOp::OrAssign =>
+              if not(current.to_boolean()) {
+                let val = self.eval_expr(right, env)
+                match obj {
+                  Array(_) | Object(_) => {
+                    let _ = js_set_prop(obj, key, val)
+                  }
+                  _ => ()
+                }
+                val
+              } else {
+                current
+              }
+            @ast.TsCompoundOp::CoalesceAssign =>
+              match current {
+                Null | Undefined => {
+                  let val = self.eval_expr(right, env)
+                  match obj {
+                    Array(_) | Object(_) => {
+                      let _ = js_set_prop(obj, key, val)
+                    }
+                    _ => ()
+                  }
+                  val
+                }
+                _ => current
+              }
+            _ => {
+              let val = self.eval_expr(right, env)
+              let new_val = apply_compound_op(op, current, val)
+              match obj {
+                Array(_) | Object(_) => {
+                  let _ = js_set_prop(obj, key, new_val)
+                }
+                _ => ()
+              }
+              new_val
             }
-            _ => ()
           }
-          new_val
         }
         _ => self.eval_expr(right, env)
       }
@@ -2065,6 +2169,12 @@ fn apply_compound_op(
     }
     @ast.TsCompoundOp::PowAssign =>
       Number(@math.pow(current.to_number(), val.to_number()))
+    // Logical assignment operators - these should be handled separately
+    // in exec_stmt with short-circuit evaluation, but we need cases here
+    // for exhaustiveness
+    @ast.TsCompoundOp::AndAssign => val // handled separately
+    @ast.TsCompoundOp::OrAssign => val // handled separately
+    @ast.TsCompoundOp::CoalesceAssign => val // handled separately
   }
 }
 
@@ -2956,13 +3066,51 @@ pub fn JSInterpreter::exec_stmt(
     Continue(label) => Some(ContinueSignal(label))
     @ast.TsStmt::CompoundAssign(name, op, val_expr) => {
       let current = env.get(name)
-      let val = self.eval_expr(val_expr, env)
-      match self.peek_error() {
-        Some(err) => return Some(err)
-        None => ()
+      // Handle logical assignment operators with short-circuit evaluation
+      match op {
+        @ast.TsCompoundOp::AndAssign =>
+          // x &&= y: only assign if x is truthy
+          if current.to_boolean() {
+            let val = self.eval_expr(val_expr, env)
+            match self.peek_error() {
+              Some(err) => return Some(err)
+              None => ()
+            }
+            self.assign_ident(name, val, env)
+          }
+        @ast.TsCompoundOp::OrAssign =>
+          // x ||= y: only assign if x is falsy
+          if not(current.to_boolean()) {
+            let val = self.eval_expr(val_expr, env)
+            match self.peek_error() {
+              Some(err) => return Some(err)
+              None => ()
+            }
+            self.assign_ident(name, val, env)
+          }
+        @ast.TsCompoundOp::CoalesceAssign =>
+          // x ??= y: only assign if x is null/undefined
+          match current {
+            Null | Undefined => {
+              let val = self.eval_expr(val_expr, env)
+              match self.peek_error() {
+                Some(err) => return Some(err)
+                None => ()
+              }
+              self.assign_ident(name, val, env)
+            }
+            _ => ()
+          }
+        _ => {
+          let val = self.eval_expr(val_expr, env)
+          match self.peek_error() {
+            Some(err) => return Some(err)
+            None => ()
+          }
+          let new_val = apply_compound_op(op, current, val)
+          self.assign_ident(name, new_val, env)
+        }
       }
-      let new_val = apply_compound_op(op, current, val)
-      self.assign_ident(name, new_val, env)
       None
     }
     @ast.TsStmt::IndexAssign(arr_expr, idx_expr, val_expr) => {

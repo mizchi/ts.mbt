@@ -173,6 +173,10 @@ pub(all) enum TsCompoundOp {
   ShrAssign // >>=
   UShrAssign // >>>=
   PowAssign // **=
+  // Logical assignment operators (ES2021)
+  AndAssign // &&=
+  OrAssign // ||=
+  CoalesceAssign // ??=
 } derive(Eq, Show)
 
 ///|
