@@ -9,10 +9,26 @@
 | language/module-code | 386 | 203 | 148 | 737 |
 | template-literal | 43 | 14 | 0 | 57 |
 | for-of | 589 | 104 | 58 | 751 |
+| async-generator (expr) | 434 | 125 | 64 | 623 |
+| async-generator (stmt) | 204 | 65 | 32 | 301 |
 | **許可リスト** | - | - | - | **34,268** |
 | **スキップリスト** | - | - | - | 18,698 |
 
-### 最新の修正 (template literal + iterator) - 完了
+### 最新の修正 (async generator + Map/Set) - 完了
+- **for-await-of パーサーバグ修正**
+  - `for await` が `ForOf` ではなく `ForAwaitOf` として正しくパースされるように
+  - これにより `exec_for_await_of_loop` が呼び出されるようになった
+- **Async generator の Promise ラッピング**
+  - `Generator.prototype.next/return/throw` が async generator の場合 Promise を返す
+  - `@@asyncIterator` メソッドを async generator に追加
+- **Map/Set 完全実装**
+  - `Map`: `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries`, `size`
+  - `Set`: `add`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries`, `size`
+  - イテレータプロトコル対応 (for-of で反復可能)
+  - SameValueZero 比較セマンティクス
+- **async-generator テスト: 638/924 passed (69%)**
+
+### 以前の修正 (template literal + iterator) - 完了
 - **テンプレートリテラル対応**
   - バッククォート文字列 `` `hello ${name}` `` が動作
   - 式の評価順序修正（各式を括弧で囲む）
@@ -275,10 +291,12 @@
    - [x] メッセージ改善 (`Cannot read/set properties of null/undefined`)
    - ファイル: `interpreter_props.mbt`, `interpreter_eval.mbt`
 
-4. **[ ] イテレータプロトコル完全対応 (~100件)**
-   - for-of での正しいイテレータ呼び出し
-   - Symbol.iterator対応
-   - iterator.return() / throw() 呼び出し
+4. **[x] イテレータプロトコル対応 (部分完了)**
+   - [x] for-of での正しいイテレータ呼び出し
+   - [x] @@iterator 対応 (Symbol.iterator 代替)
+   - [x] for-await-of での @@asyncIterator 対応
+   - [x] Map/Set イテレータ実装
+   - [ ] iterator.return() / throw() 呼び出し (クリーンアップ)
 
 ### P1: 中優先度
 
@@ -329,8 +347,9 @@
 11. **[x] async/await (完了)**
     - Promise対応 ✓
     - async function ✓
-    - async generator (部分的)
+    - async generator ✓ (for-await-of 動作)
     - **+520 passed, -3,857 skipped**
+    - **async-generator: 638/924 passed (69%)**
 
 12. **[ ] using declaration (ES2024, ~50件)**
     - `using` キーワード
@@ -354,10 +373,12 @@
 4. ~~dynamic import / import.meta~~ ✓完了
 5. strict mode エラー処理の残り (arguments/eval代入禁止、重複引数名)
 6. ~~generator関数内のループ/try-catch での yield~~ ✓完了
-7. generator の yield* 対応の改善 (~30件失敗中)
-8. パーサーの正規表現リテラル対応
-9. ~~module構文対応~~ ✓完了 (基本機能)
-10. モジュールのexport default匿名関数のnameプロパティ修正
+7. ~~async generator + for-await-of~~ ✓完了 (638/924 passed)
+8. ~~Map/Set 実装~~ ✓完了
+9. async generator の yield* 対応の改善 (~125件失敗中)
+10. パーサーの正規表現リテラル対応
+11. ~~module構文対応~~ ✓完了 (基本機能)
+12. モジュールのexport default匿名関数のnameプロパティ修正
 
 ---
 
@@ -377,9 +398,11 @@
 | module syntax | 14,500+ | - | - | +386 (module-code) |
 | test262 scan更新 | - | - | - | 許可リスト27,623件 |
 | template literal + async解禁 | - | - | - | 許可リスト34,268件 |
+| async generator + Map/Set | - | - | - | for-await-of修正、Map/Set実装 |
 
 **総合改善: +2,260+ passed tests**
 **許可リスト: 19,810 → 34,268 (+14,458件)**
 **スキップリスト: 18,698件**
 **template-literal: passed=43, failed=14 (75.4%)**
 **for-of: passed=589, failed=104, skipped=58 (78.4%)**
+**async-generator: passed=638, failed=190, skipped=96 (69%)**
