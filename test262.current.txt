@@ -1,1 +1,1 @@
-test262/test/language/statements/async-generator/yield-star-next-then-non-callable-undefined-fulfillpromise.js
+test262/test/language/module-code/export-default-asyncgenerator-declaration-binding-exists.js

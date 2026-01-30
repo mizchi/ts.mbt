@@ -96,16 +96,42 @@ fn collect_decl_names_from_stmt(
   names : Array[String],
 ) -> Unit {
   match stmt {
-    Let(binding, _, _) | Const(binding, _, _) =>
-      match binding {
-        @ast.TsBinding::Ident(name) => names.push(name)
-        _ => ()
-      }
+    Var(binding, _, _) | Let(binding, _, _) | Const(binding, _, _) =>
+      collect_binding_names(binding, names)
     Block(block) =>
       for inner in block.stmts {
         collect_decl_names_from_stmt(inner, names)
       }
     _ => ()
+  }
+}
+
+///|
+fn collect_binding_names(binding : @ast.TsBinding, names : Array[String]) -> Unit {
+  match binding {
+    @ast.TsBinding::Ident(name) => names.push(name)
+    @ast.TsBinding::Array(arr_binding) => {
+      for item in arr_binding.items {
+        match item {
+          Some(elem) => collect_binding_names(elem.binding, names)
+          None => ()
+        }
+      }
+      match arr_binding.rest {
+        Some(rest) => collect_binding_names(rest, names)
+        None => ()
+      }
+    }
+    @ast.TsBinding::Object(obj_binding) => {
+      for prop in obj_binding.props {
+        collect_binding_names(prop.binding, names)
+      }
+      match obj_binding.rest {
+        Some(name) => names.push(name)
+        None => ()
+      }
+    }
+    @ast.TsBinding::Target(_) => () // Expression targets don't have names
   }
 }
 
