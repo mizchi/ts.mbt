@@ -103,6 +103,12 @@ pub(all) enum TsExpr {
 
   // await expression (async)
   Await(TsExpr)
+
+  // dynamic import expression: import(specifier)
+  DynamicImport(TsExpr)
+
+  // import.meta expression
+  ImportMeta
 } derive(Show)
 
 ///|

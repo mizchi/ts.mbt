@@ -192,6 +192,8 @@ fn infer_literal_type(expr : @ast.TsExpr) -> @ast.TsType {
     @ast.TsExpr::Yield(_) => @ast.TsType::Any
     @ast.TsExpr::YieldStar(_) => @ast.TsType::Any
     @ast.TsExpr::Await(_) => @ast.TsType::Any
+    @ast.TsExpr::DynamicImport(_) => @ast.TsType::Any
+    @ast.TsExpr::ImportMeta => @ast.TsType::Any
     @ast.TsExpr::Seq(_, right) => infer_literal_type(right)
     @ast.TsExpr::PropAssignExpr(_, _, value) => infer_literal_type(value)
     @ast.TsExpr::IndexAssignExpr(_, _, value) => infer_literal_type(value)
@@ -406,6 +408,8 @@ fn infer_type(ctx : CodeGenCtx, expr : @ast.TsExpr) -> @ast.TsType {
     @ast.TsExpr::Yield(_) => @ast.TsType::Any
     @ast.TsExpr::YieldStar(_) => @ast.TsType::Any
     @ast.TsExpr::Await(_) => @ast.TsType::Any
+    @ast.TsExpr::DynamicImport(_) => @ast.TsType::Any
+    @ast.TsExpr::ImportMeta => @ast.TsType::Any
     @ast.TsExpr::Var(name) =>
       match ctx.get_local(name) {
         Some(local_var) => local_var.type_
@@ -612,6 +616,14 @@ fn compile_expr(
     @ast.TsExpr::Await(_) =>
       raise CodeGenError(
         "await is not supported in Wasm compiler (use interpreter)",
+      )
+    @ast.TsExpr::DynamicImport(_) =>
+      raise CodeGenError(
+        "dynamic import is not supported in Wasm compiler (use interpreter)",
+      )
+    @ast.TsExpr::ImportMeta =>
+      raise CodeGenError(
+        "import.meta is not supported in Wasm compiler (use interpreter)",
       )
     @ast.TsExpr::Seq(_, _) =>
       raise CodeGenError(

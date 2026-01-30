@@ -535,7 +535,13 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
         _ => {
           let prop = match self.advance().kind {
             Ident(name) => name
-            PrivateIdent(name) => "#" + name
+            PrivateIdent(name) => {
+              let private_name = "#" + name
+              match self.current_class_brand {
+                Some(brand) => mangle_private_name(private_name, brand)
+                None => private_name
+              }
+            }
             Return => "return"
             If => "if"
             Else => "else"
@@ -606,7 +612,13 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       let _ = self.advance()
       let prop = match self.advance().kind {
         Ident(name) => name
-        PrivateIdent(name) => "#" + name
+        PrivateIdent(name) => {
+          let private_name = "#" + name
+          match self.current_class_brand {
+            Some(brand) => mangle_private_name(private_name, brand)
+            None => private_name
+          }
+        }
         Return => "return"
         If => "if"
         Else => "else"
@@ -829,7 +841,12 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       }
     PrivateIdent(name) => {
       let _ = self.advance()
-      Var("#" + name)
+      let private_name = "#" + name
+      let mangled = match self.current_class_brand {
+        Some(brand) => mangle_private_name(private_name, brand)
+        None => private_name
+      }
+      Var(mangled)
     }
     LParen =>
       // functioncheck
@@ -1522,6 +1539,28 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       // null literal
       let _ = self.advance()
       NullLit
+    }
+    Import => {
+      // dynamic import: import(specifier) or import.meta
+      let _ = self.advance()
+      if self.match_(Dot) {
+        // import.meta
+        let prop = match self.advance().kind {
+          Ident(n) => n
+          k => raise ParseError("Expected identifier after import., got \{k}")
+        }
+        if prop == "meta" {
+          ImportMeta
+        } else {
+          raise ParseError("Expected 'meta' after import., got '\{prop}'")
+        }
+      } else {
+        // dynamic import: import(specifier)
+        let _ = self.expect(LParen)
+        let specifier = self.parse_assignment()
+        let _ = self.expect(RParen)
+        DynamicImport(specifier)
+      }
     }
     _ => raise ParseError("Unexpected token: \{tok.kind}")
   }

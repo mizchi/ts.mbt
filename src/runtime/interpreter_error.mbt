@@ -75,3 +75,9 @@ fn JSInterpreter::take_error(self : JSInterpreter) -> JSValue? {
 fn JSInterpreter::peek_error(self : JSInterpreter) -> JSValue? {
   self.last_error
 }
+
+///|
+// / Get the last error (public API for test runners)
+pub fn JSInterpreter::get_last_error(self : JSInterpreter) -> JSValue? {
+  self.last_error
+}
