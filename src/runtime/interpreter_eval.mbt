@@ -749,7 +749,8 @@ pub fn JSInterpreter::eval_expr(
         props: [],
         object_proto: Some(self.function_proto),
       })
-      self.set_function_length(closure, param_names.length().to_double())
+      let formal_count = calc_formal_parameter_count(params)
+      self.set_function_length(closure, formal_count.to_double())
       closure
     }
     @ast.TsExpr::FuncExpr(func) => {
@@ -768,7 +769,8 @@ pub fn JSInterpreter::eval_expr(
         props: [],
         object_proto: Some(self.function_proto),
       })
-      self.set_function_length(closure, param_names.length().to_double())
+      let formal_count = calc_formal_parameter_count(func.params)
+      self.set_function_length(closure, formal_count.to_double())
       if func.name != "<anon>" {
         self.set_function_name(closure, func.name)
       }

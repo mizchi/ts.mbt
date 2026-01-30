@@ -79,7 +79,23 @@ fn JSInterpreter::set_function_length(
   len : Double,
 ) -> Unit {
   let _ = js_define_data_prop(func, "length", Number(len), false, false, true)
+}
 
+///|
+// / Calculate function formal parameter count (excludes parameters after first default/rest)
+fn calc_formal_parameter_count(params : Array[@ast.TsParam]) -> Int {
+  let mut count = 0
+  for param in params {
+    // Stop counting at first rest parameter or parameter with default value
+    if param.is_rest {
+      break
+    }
+    match param.default {
+      Some(_) => break
+      None => count = count + 1
+    }
+  }
+  count
 }
 
 ///|

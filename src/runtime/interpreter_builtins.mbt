@@ -4323,7 +4323,8 @@ fn JSInterpreter::call_native(
             props: [],
             object_proto: Some(self.function_proto),
           })
-          self.set_function_length(closure, param_names.length().to_double())
+          let formal_count = calc_formal_parameter_count(func.params)
+          self.set_function_length(closure, formal_count.to_double())
           let proto = self.new_object()
           let _ = js_set_prop(proto, "constructor", closure)
           let _ = js_define_data_prop(
