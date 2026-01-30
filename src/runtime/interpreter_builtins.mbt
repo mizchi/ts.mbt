@@ -3,28 +3,28 @@
 fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let global_obj = self.new_object()
 
-  // Object.prototype
+  // Object.prototype - all properties should be non-enumerable
   let has_own = self.make_native("Object.hasOwnProperty")
   self.set_function_length(has_own, 1.0)
-  let _ = js_set_prop(self.object_proto, "hasOwnProperty", has_own)
+  let _ = js_define_data_prop(self.object_proto, "hasOwnProperty", has_own, true, false, true)
   let to_string_fn = self.make_native("Object.prototype.toString")
   self.set_function_length(to_string_fn, 0.0)
-  let _ = js_set_prop(self.object_proto, "toString", to_string_fn)
+  let _ = js_define_data_prop(self.object_proto, "toString", to_string_fn, true, false, true)
   let is_proto_fn = self.make_native("Object.prototype.isPrototypeOf")
   self.set_function_length(is_proto_fn, 1.0)
-  let _ = js_set_prop(self.object_proto, "isPrototypeOf", is_proto_fn)
+  let _ = js_define_data_prop(self.object_proto, "isPrototypeOf", is_proto_fn, true, false, true)
   let value_of_fn = self.make_native("Object.prototype.valueOf")
   self.set_function_length(value_of_fn, 0.0)
-  let _ = js_set_prop(self.object_proto, "valueOf", value_of_fn)
+  let _ = js_define_data_prop(self.object_proto, "valueOf", value_of_fn, true, false, true)
   let prop_enum_fn = self.make_native("Object.prototype.propertyIsEnumerable")
   self.set_function_length(prop_enum_fn, 1.0)
-  let _ = js_set_prop(self.object_proto, "propertyIsEnumerable", prop_enum_fn)
+  let _ = js_define_data_prop(self.object_proto, "propertyIsEnumerable", prop_enum_fn, true, false, true)
 
   // Object
   let object_ctor = self.make_native("Object")
   let _ = js_define_data_prop(object_ctor, "prototype", self.object_proto, true, false, true)
   let _ = js_set_prop(object_ctor, "name", JSValue::String("Object"))
-  let _ = js_set_prop(self.object_proto, "constructor", object_ctor)
+  let _ = js_define_data_prop(self.object_proto, "constructor", object_ctor, true, false, true)
   let get_own = self.make_native("Object.getOwnPropertyNames")
   self.set_function_length(get_own, 1.0)
   let _ = js_set_prop(object_ctor, "getOwnPropertyNames", get_own)
