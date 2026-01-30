@@ -16,9 +16,13 @@
 - **`run` コマンドでモジュールを自動検出して実行**
   - `has_module_syntax()` でimport/export構文を検出
   - モジュールファイルは `eval_module()` で評価
+- **`export var/let/const` の名前収集バグを修正**
+  - `collect_decl_names_from_stmt` に `Var` ケースを追加
+  - `collect_binding_names` ヘルパーを追加（destructuring対応）
+  - `export var x = 42;` が正しくエクスポートリストに追加されるように
 - **許可リストが大幅増加: 19,810 → 24,788 (+4,978件)**
 - **module-code テスト結果:**
-  - passed=371, failed=218, skipped=148 (FIXTURE)
+  - passed=386, failed=203, skipped=148 (FIXTURE)
   - 基本的なimport/export, re-export, export * が動作
 
 ### 以前の修正 (generator CPS対応 + yield*) - 完了
@@ -166,7 +170,7 @@
 - ~~propertyHelper.js~~ → ハーネス実装完了
 - ~~fnGlobalObject.js~~ → ハーネス実装完了
 - ~~asyncHelpers.js~~ → ハーネス実装完了
-- ~~module syntax (flags: [module])~~ → 実行可能に (+371 passed in module-code)
+- ~~module syntax (flags: [module])~~ → 実行可能に (+386 passed in module-code)
 - ~~banned: import/export~~ → 許可リストに追加
 - ~~banned: function*/yield~~ → 許可リストに追加
 
@@ -345,7 +349,8 @@
 | private method/accessor | 14,097 | 5,713 | 4,066 | +106 |
 | strict mode + proto | 14,169 | 5,641 | 4,066 | +72 |
 | generator CPS + yield* | 14,215 | 5,595 | 4,066 | +46 |
-| module syntax | 14,500+ | - | - | +371 (module-code) |
+| module syntax | 14,500+ | - | - | +386 (module-code) |
 
 **総合改善: +2,260+ passed tests**
 **許可リスト: 19,810 → 24,788 (+4,978件)**
+**module-code: passed=386, failed=203, skipped=148**
