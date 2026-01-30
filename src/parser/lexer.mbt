@@ -1340,10 +1340,13 @@ fn Lexer::enqueue_template_tokens(self : Lexer, pos : Int) -> Unit {
       let part = if i < parts.length() { parts[i] } else { "" }
       tokens.push({ kind: Str(part), pos })
       tokens.push({ kind: Plus, pos })
+      // Wrap expression in parentheses to ensure proper evaluation order
+      tokens.push({ kind: LParen, pos })
       let expr_tokens = self.tokenize_fragment(exprs[i], pos)
       for tok in expr_tokens {
         tokens.push(tok)
       }
+      tokens.push({ kind: RParen, pos })
       tokens.push({ kind: Plus, pos })
     }
     let tail = if last_index >= 0 { parts[last_index] } else { "" }

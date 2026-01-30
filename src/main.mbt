@@ -66,7 +66,9 @@ async fn run_ts_file(file_path : String) -> Unit {
       println("Error: \{error_msg.to_js_string()}")
     }
   } else {
-    let result = interp.run(content) catch {
+    // Wrap source in function main() for non-module code
+    let wrapped = "function main() {\n" + content + "\n}"
+    let result = interp.run(wrapped) catch {
       e => {
         println("Error: \{e}")
         return

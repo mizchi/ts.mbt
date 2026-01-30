@@ -84,8 +84,6 @@ SUPPORTED_INCLUDES = {
 
 
 BANNED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    # Template literals (not yet implemented)
-    ("template", re.compile(r"`")),
     # With statement (deprecated, not supported)
     ("with", re.compile(r"\bwith\s*\(")),
     # Eval (complex semantics, not fully supported)
