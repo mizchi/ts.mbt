@@ -473,6 +473,11 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
     } else {
       Var("yield")
     }
+  } else if self.peek().kind == Ident("await") {
+    // await expression - valid in async functions or top-level await
+    let _ = self.advance()
+    let expr = self.parse_unary()
+    Await(expr)
   } else {
     self.parse_postfix()
   }
@@ -748,8 +753,16 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         self.peek_at(1).kind == Function &&
         not(self.has_line_terminator_after()) {
         let _ = self.advance()
+        self.in_async = true
         let func = self.parse_function_expr()
+        self.in_async = false
         @ast.TsExpr::FuncExpr(func)
+      } else if name == "async" &&
+        not(self.has_line_terminator_after()) &&
+        self.is_async_arrow_function() {
+        // async arrow function: async (params) => body or async x => body
+        let _ = self.advance()
+        self.parse_async_arrow_function()
       } else if self.peek_at(1).kind == Arrow {
         let _ = self.advance()
         let _ = self.expect(Arrow)
@@ -798,6 +811,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             },
           ],
           body,
+          false,
         )
       } else {
         let _ = self.advance()
@@ -857,7 +871,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           let expr = self.parse_assignment()
           ArrowExpr(expr)
         }
-        ArrowFunc(params, body)
+        ArrowFunc(params, body, false)
       } else {
         // regularexpression
         let _ = self.advance()
@@ -1228,7 +1242,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
-              is_generator: false,
+              is_generator: false, is_async: false,
             })
           } else if self.match_(Colon) {
             self.parse_assignment()
@@ -1250,7 +1264,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
-              is_generator: false,
+              is_generator: false, is_async: false,
             })
           } else if is_ident_key && (self.check(Comma) || self.check(RBrace)) {
             Var(prop_key)
@@ -1433,7 +1447,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
-              is_generator: false,
+              is_generator: false, is_async: false,
             })
           } else if self.match_(Colon) {
             self.parse_assignment()
@@ -1455,7 +1469,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
-              is_generator: false,
+              is_generator: false, is_async: false,
             })
           } else if is_ident_key && (self.check(Comma) || self.check(RBrace)) {
             Var(prop_key)
@@ -1484,4 +1498,146 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
     }
     _ => raise ParseError("Unexpected token: \{tok.kind}")
   }
+}
+
+///|
+// / Check if this is an async arrow function
+fn Parser::is_async_arrow_function(self : Parser) -> Bool {
+  // Check for async identifier => ... (single parameter without parens)
+  if self.peek_at(1).kind is Ident(_) {
+    // Could be: async x => ...
+    // Look for => after the identifier
+    return self.peek_at(2).kind == Arrow
+  }
+  // Check for async (params) => ...
+  if self.peek_at(1).kind == LParen {
+    // Save position and scan to find matching ) and =>
+    let save_pos = self.pos
+    let _ = self.advance() // consume 'async'
+    let _ = self.advance() // consume '('
+    let mut paren_depth = 1
+    while paren_depth > 0 && not(self.check(Eof)) {
+      match self.peek().kind {
+        LParen => paren_depth += 1
+        RParen => paren_depth -= 1
+        _ => ()
+      }
+      let _ = self.advance()
+    }
+    let is_arrow = self.check(Arrow) ||
+      (self.check(Colon) && {
+        // Skip type annotation: (): ReturnType =>
+        while not(self.check(Arrow)) && not(self.check(Eof)) {
+          let _ = self.advance()
+        }
+        self.check(Arrow)
+      })
+    self.pos = save_pos
+    return is_arrow
+  }
+  false
+}
+
+///|
+// / Parse async arrow function: async (params) => body or async x => body
+fn Parser::parse_async_arrow_function(
+  self : Parser,
+) -> @ast.TsExpr raise ParseError {
+  // Check for single parameter without parens: async x => ...
+  if self.peek().kind is Ident(_) && self.peek_at(1).kind == Arrow {
+    let name = match self.advance().kind {
+      Ident(n) => n
+      _ => "<anon>"
+    }
+    let _ = self.expect(Arrow)
+    let prev_async = self.in_async
+    self.in_async = true
+    let body = if self.check(LBrace) {
+      let prev_function = self.in_function
+      let prev_iteration = self.in_iteration
+      let prev_switch = self.in_switch
+      let prev_labels : Array[String] = []
+      for label in self.labels {
+        prev_labels.push(label)
+      }
+      self.in_function = true
+      self.in_iteration = false
+      self.in_switch = false
+      while self.labels.length() > 0 {
+        let _ = self.labels.pop()
+      }
+      let block = self.parse_block()
+      self.in_function = prev_function
+      self.in_iteration = prev_iteration
+      self.in_switch = prev_switch
+      while self.labels.length() > 0 {
+        let _ = self.labels.pop()
+      }
+      for label in prev_labels {
+        self.labels.push(label)
+      }
+      @ast.TsArrowBody::ArrowBlock(block)
+    } else {
+      let expr = self.parse_assignment()
+      ArrowExpr(expr)
+    }
+    self.in_async = prev_async
+    return ArrowFunc(
+      [
+        {
+          name,
+          binding: Some(@ast.TsBinding::Ident(name)),
+          is_rest: false,
+          type_: Any,
+          default: None,
+        },
+      ],
+      body,
+      true, // is_async = true
+    )
+  }
+
+  // Parse with parentheses: async (params) => body
+  let _ = self.expect(LParen)
+  let params = self.parse_params()
+  let _ = self.expect(RParen)
+  // Skip optional return type annotation
+  if self.check(Colon) {
+    let _ = self.advance()
+    let _ = self.parse_type()
+  }
+  let _ = self.expect(Arrow)
+  let prev_async = self.in_async
+  self.in_async = true
+  let body = if self.check(LBrace) {
+    let prev_function = self.in_function
+    let prev_iteration = self.in_iteration
+    let prev_switch = self.in_switch
+    let prev_labels : Array[String] = []
+    for label in self.labels {
+      prev_labels.push(label)
+    }
+    self.in_function = true
+    self.in_iteration = false
+    self.in_switch = false
+    while self.labels.length() > 0 {
+      let _ = self.labels.pop()
+    }
+    let block = self.parse_block()
+    self.in_function = prev_function
+    self.in_iteration = prev_iteration
+    self.in_switch = prev_switch
+    while self.labels.length() > 0 {
+      let _ = self.labels.pop()
+    }
+    for label in prev_labels {
+      self.labels.push(label)
+    }
+    @ast.TsArrowBody::ArrowBlock(block)
+  } else {
+    let expr = self.parse_assignment()
+    ArrowExpr(expr)
+  }
+  self.in_async = prev_async
+  ArrowFunc(params, body, true) // is_async = true
 }

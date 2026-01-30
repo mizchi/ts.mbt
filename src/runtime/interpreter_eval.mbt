@@ -30,6 +30,11 @@ pub fn JSInterpreter::eval_expr(
     }
     @ast.TsExpr::Yield(_) => Undefined
     @ast.TsExpr::YieldStar(_) => Undefined
+    @ast.TsExpr::Await(inner) => {
+      // Evaluate the inner expression and wait for the promise to settle
+      let value = self.eval_expr(inner, env)
+      self.await_promise(value)
+    }
     @ast.TsExpr::Var(name) =>
       if name == "super" && env.has("__super_proto") {
         env.get("__super_proto")
@@ -1015,7 +1020,7 @@ pub fn JSInterpreter::eval_expr(
         _ => self.new_object()
       }
     }
-    @ast.TsExpr::ArrowFunc(params, body) => {
+    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
       let param_names : Array[String] = []
       for param in params {
         param_names.push(param.name)
@@ -1035,7 +1040,7 @@ pub fn JSInterpreter::eval_expr(
               params,
               return_type: @ast.TsType::Any,
               body: { stmts: [@ast.TsStmt::Return(Some(expr))] },
-              is_generator: false,
+              is_generator: false, is_async,
             })
           @ast.TsArrowBody::ArrowBlock(block) =>
             Ast({
@@ -1043,13 +1048,13 @@ pub fn JSInterpreter::eval_expr(
               params,
               return_type: @ast.TsType::Any,
               body: block,
-              is_generator: false,
+              is_generator: false, is_async,
             })
         },
         env,
         is_arrow: true,
         is_strict,
-        is_generator: false,
+        is_generator: false, is_async,
         props: [],
         object_proto: Some(self.function_proto),
       })
@@ -1069,7 +1074,7 @@ pub fn JSInterpreter::eval_expr(
         env,
         is_arrow: false,
         is_strict: self.is_strict_body(func.body, env.has("__strict__")),
-        is_generator: func.is_generator,
+        is_generator: func.is_generator, is_async: func.is_async,
         props: [],
         object_proto: Some(self.function_proto),
       })
@@ -1303,6 +1308,14 @@ fn collect_decl_names_from_stmt(
         }
       }
     @ast.TsStmt::ForOf(kind, binding, _, _, body) => {
+      if kind != @ast.TsForOfKind::Assign {
+        collect_binding_names(binding, names)
+      }
+      for inner in body.stmts {
+        collect_decl_names_from_stmt(inner, names)
+      }
+    }
+    @ast.TsStmt::ForAwaitOf(kind, binding, _, _, body) => {
       if kind != @ast.TsForOfKind::Assign {
         collect_binding_names(binding, names)
       }
@@ -2864,6 +2877,10 @@ pub fn JSInterpreter::exec_stmt(
           self.exec_for_loop(init, cond, update, body, env, Some(name))
         @ast.TsStmt::ForOf(kind, binding, _, iterable, body) =>
           self.exec_for_of_loop(kind, binding, iterable, body, env, Some(name))
+        @ast.TsStmt::ForAwaitOf(kind, binding, _, iterable, body) =>
+          self.exec_for_await_of_loop(
+            kind, binding, iterable, body, env, Some(name),
+          )
         @ast.TsStmt::ForIn(kind, binding, _, iterable, body) =>
           self.exec_for_in_loop(kind, binding, iterable, body, env, Some(name))
         _ =>
@@ -3211,6 +3228,8 @@ pub fn JSInterpreter::exec_stmt(
     }
     @ast.TsStmt::ForOf(kind, binding, _, iterable, body) =>
       self.exec_for_of_loop(kind, binding, iterable, body, env, None)
+    @ast.TsStmt::ForAwaitOf(kind, binding, _, iterable, body) =>
+      self.exec_for_await_of_loop(kind, binding, iterable, body, env, None)
     @ast.TsStmt::ForIn(kind, binding, _, iterable, body) =>
       self.exec_for_in_loop(kind, binding, iterable, body, env, None)
     @ast.TsStmt::With(obj_expr, body) => {
@@ -3392,6 +3411,32 @@ fn JSInterpreter::hoist_stmt(
       }
       self.hoist_block(body, env)
     }
+    @ast.TsStmt::ForAwaitOf(kind, binding, _, _, body) => {
+      if kind != @ast.TsForOfKind::Assign {
+        let names : Array[String] = []
+        collect_binding_names(binding, names)
+        let is_const = kind == @ast.TsForOfKind::Const
+        for name in names {
+          if not(env.has(name)) {
+            match kind {
+              @ast.TsForOfKind::Var => env.define_var(name, Undefined)
+              @ast.TsForOfKind::Let | @ast.TsForOfKind::Const =>
+                env.define_uninitialized(name, is_const)
+              @ast.TsForOfKind::Assign => ()
+            }
+            match env.parent {
+              None => {
+                let global_obj = self.global_env.get("globalThis")
+                let _ = js_set_prop(global_obj, name, Undefined)
+
+              }
+              Some(_) => ()
+            }
+          }
+        }
+      }
+      self.hoist_block(body, env)
+    }
     @ast.TsStmt::Try(try_block, _, catch_block, finally_block) => {
       self.hoist_block(try_block, env)
       match catch_block {
@@ -3520,6 +3565,8 @@ fn JSInterpreter::hoist_var_stmt_to_local(
     @ast.TsStmt::DoWhile(_, body) => self.hoist_var_to_local(body, env)
     @ast.TsStmt::For(_, _, _, body) => self.hoist_var_to_local(body, env)
     @ast.TsStmt::ForOf(_, _, _, _, body) => self.hoist_var_to_local(body, env)
+    @ast.TsStmt::ForAwaitOf(_, _, _, _, body) =>
+      self.hoist_var_to_local(body, env)
     @ast.TsStmt::ForIn(_, _, _, _, body) => self.hoist_var_to_local(body, env)
     @ast.TsStmt::Try(try_block, _catch_binding, catch_block, finally_block) => {
       self.hoist_var_to_local(try_block, env)
@@ -3694,6 +3741,10 @@ pub fn JSInterpreter::call_function(
     Function(closure) => {
       if closure.is_generator {
         return self.make_generator(closure, this_arg, args, new_target)
+      }
+      // Handle async functions - wrap result in Promise
+      if closure.is_async {
+        return self.call_async_function(closure, this_arg, args, new_target)
       }
       // create
       let call_env = js_new_env(Some(closure.env))

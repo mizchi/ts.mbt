@@ -12,6 +12,7 @@ pub struct Parser {
   tokens : Array[Token]
   mut pos : Int
   mut in_generator : Bool
+  mut in_async : Bool
   mut temp_index : Int
   mut in_strict : Bool
   mut in_function : Bool // for return validation
@@ -36,6 +37,7 @@ pub fn Parser::new_with_strict(
     tokens,
     pos: 0,
     in_generator: false,
+    in_async: false,
     temp_index: 0,
     in_strict,
     in_function: false,
@@ -58,6 +60,7 @@ pub fn Parser::from_source(src : String) -> Parser {
     tokens,
     pos: 0,
     in_generator: false,
+    in_async: false,
     temp_index: 0,
     in_strict,
     in_function: false,

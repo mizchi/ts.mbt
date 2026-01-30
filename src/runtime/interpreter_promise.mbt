@@ -155,7 +155,7 @@ fn JSInterpreter::make_bound_native(
     env: self.global_env,
     is_arrow: false,
     is_strict: false,
-    is_generator: false,
+    is_generator: false, is_async: false,
     props: [],
     object_proto: Some(self.function_proto),
   })
@@ -1112,4 +1112,273 @@ fn JSInterpreter::make_aggregate_error(
   let obj = self.make_error_obj("AggregateError", "All promises were rejected")
   let _ = js_set_prop(obj, "errors", errors)
   obj
+}
+
+///|
+// / Execute async function - wraps result in Promise
+fn JSInterpreter::call_async_function(
+  self : JSInterpreter,
+  closure : JSClosure,
+  this_arg : JSValue,
+  args : Array[JSValue],
+  new_target : JSValue,
+) -> JSValue {
+  // Create a non-async version of the closure to call synchronously
+  let sync_closure : JSClosure = {
+    id: closure.id,
+    params: closure.params,
+    body: closure.body,
+    env: closure.env,
+    is_arrow: closure.is_arrow,
+    is_strict: closure.is_strict,
+    is_generator: closure.is_generator,
+    is_async: false, // Mark as non-async to avoid recursion
+    props: closure.props,
+    object_proto: closure.object_proto,
+  }
+
+  // Execute the function body
+  let result = self.call_function(
+    Function(sync_closure), this_arg, args, new_target~,
+  )
+
+  // Get Promise constructor
+  let promise_ctor = self.global_env.get("Promise")
+
+  // Check for errors
+  match self.take_error() {
+    Some(err) => {
+      // Return rejected Promise
+      let (promise, _resolve, reject) = self.promise_new_capability(promise_ctor)
+      match self.peek_error() {
+        Some(e) => return e
+        None => ()
+      }
+      let _ = self.call_function(reject, Undefined, [err])
+      promise
+    }
+    None =>
+      // If result is already a Promise, return it
+      if self.is_promise(result) {
+        result
+      } else {
+        // Wrap result in resolved Promise
+        let (promise, resolve, _reject) = self.promise_new_capability(
+          promise_ctor,
+        )
+        match self.peek_error() {
+          Some(e) => return e
+          None => ()
+        }
+        let _ = self.call_function(resolve, Undefined, [result])
+        promise
+      }
+  }
+}
+
+///|
+// / await expression: synchronously wait for Promise to settle
+pub fn JSInterpreter::await_promise(
+  self : JSInterpreter,
+  value : JSValue,
+) -> JSValue {
+  // If value is not a Promise, wrap it in resolved Promise semantics (return as-is)
+  if not(self.is_promise(value)) {
+    return value
+  }
+
+  // Keep draining microtasks until promise settles or error
+  let max_iterations = 100000
+  let mut iterations = 0
+  while self.promise_state(value) == "pending" && iterations < max_iterations {
+    if self.microtasks.length() == 0 {
+      // No more microtasks but promise still pending - deadlock
+      break
+    }
+    self.drain_microtasks()
+    match self.last_error {
+      Some(_) => return Undefined
+      None => ()
+    }
+    iterations += 1
+  }
+
+  // Check final state
+  match self.promise_state(value) {
+    "fulfilled" => self.promise_result(value)
+    "rejected" => {
+      let reason = self.promise_result(value)
+      self.last_error = Some(reason)
+      Undefined
+    }
+    _ => {
+      // Still pending after max iterations
+      let _ = self.set_error_kind(
+        "Error", "await timeout: Promise did not settle",
+      )
+      Undefined
+    }
+  }
+}
+
+///|
+// / for-await-of loop execution
+fn JSInterpreter::exec_for_await_of_loop(
+  self : JSInterpreter,
+  kind : @ast.TsForOfKind,
+  binding : @ast.TsBinding,
+  iterable : @ast.TsExpr,
+  body : @ast.TsBlock,
+  env : JSEnv,
+  loop_label : String?,
+) -> JSValue? {
+  let iter_val = self.eval_expr(iterable, env)
+  match self.peek_error() {
+    Some(err) => return Some(err)
+    None => ()
+  }
+
+  // For let/const bindings, create a fresh environment for each iteration
+  let needs_per_iteration_env = match kind {
+    @ast.TsForOfKind::Let | @ast.TsForOfKind::Const => true
+    _ => false
+  }
+
+  // Helper to create per-iteration environment
+  fn create_iter_env(
+    base_env : JSEnv,
+    binding : @ast.TsBinding,
+    is_const : Bool,
+    needs_new : Bool,
+  ) -> JSEnv {
+    if needs_new {
+      let new_env = js_new_env(Some(base_env))
+      let names : Array[String] = []
+      collect_binding_names(binding, names)
+      for name in names {
+        new_env.define_uninitialized(name, is_const)
+      }
+      new_env
+    } else {
+      base_env
+    }
+  }
+
+  let is_const = kind == @ast.TsForOfKind::Const
+
+  // Try to get async iterator first, fall back to sync iterator
+  let iterator = match self.get_async_iterator(iter_val) {
+    Some(it) => it
+    None =>
+      match self.get_iterator(iter_val) {
+        Some(it) => it
+        None => {
+          let _ = self.set_error_kind("TypeError", "object is not iterable")
+          return Some(self.peek_error().unwrap())
+        }
+      }
+  }
+
+  while true {
+    self.tick()
+    match self.peek_error() {
+      Some(err) => return Some(err)
+      None => ()
+    }
+
+    let next_method = self.get_prop_value(iterator, "next")
+    match self.peek_error() {
+      Some(err) => return Some(err)
+      None => ()
+    }
+
+    let next_result = self.call_function(next_method, iterator, [])
+    match self.peek_error() {
+      Some(err) => return Some(err)
+      None => ()
+    }
+
+    // Await the next result (may be a Promise)
+    let next_val = self.await_promise(next_result)
+    match self.peek_error() {
+      Some(err) => return Some(err)
+      None => ()
+    }
+
+    let done = self.get_prop_value(next_val, "done").to_boolean()
+    if done {
+      break
+    }
+
+    let value_or_promise = self.get_prop_value(next_val, "value")
+    // Await the value (may be a Promise)
+    let value = self.await_promise(value_or_promise)
+    match self.peek_error() {
+      Some(err) => {
+        self.iterator_close_on_error(iterator)
+        return Some(err)
+      }
+      None => ()
+    }
+
+    // ES6: Create per-iteration environment for let/const
+    let iter_env = create_iter_env(env, binding, is_const, needs_per_iteration_env)
+    self.apply_for_of_binding(kind, binding, value, iter_env)
+    match self.peek_error() {
+      Some(err) => {
+        self.iterator_close_on_error(iterator)
+        return Some(err)
+      }
+      None => ()
+    }
+
+    match self.exec_block(body, iter_env) {
+      Some(BreakSignal(label)) =>
+        if loop_label_matches(loop_label, label) {
+          self.iterator_close(iterator)
+          break
+        } else {
+          self.iterator_close(iterator)
+          return Some(BreakSignal(label))
+        }
+      Some(ContinueSignal(label)) =>
+        if loop_label_matches(loop_label, label) {
+          continue
+        } else {
+          self.iterator_close(iterator)
+          return Some(ContinueSignal(label))
+        }
+      Some(val) => {
+        match self.peek_error() {
+          Some(_) => self.iterator_close_on_error(iterator)
+          None => self.iterator_close(iterator)
+        }
+        return Some(val)
+      }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+// / Get async iterator from object
+fn JSInterpreter::get_async_iterator(
+  self : JSInterpreter,
+  obj : JSValue,
+) -> JSValue? {
+  // Try Symbol.asyncIterator first (using @@asyncIterator convention)
+  let async_iter_method = self.get_prop_value(obj, "@@asyncIterator")
+  if self.is_callable(async_iter_method) {
+    let iterator = self.call_function(async_iter_method, obj, [])
+    match self.peek_error() {
+      Some(_) => return None
+      None => ()
+    }
+    match iterator {
+      Object(_) => return Some(iterator)
+      _ => ()
+    }
+  }
+  None
 }

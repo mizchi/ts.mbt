@@ -45,6 +45,7 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
 pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
+  let is_async = self.in_async
   let name = match self.advance().kind {
     Ident(n) => n
     k => raise ParseError("Expected function name, got \{k}")
@@ -61,6 +62,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   }
   // Save and set function context (new function scope resets iteration/switch/labels context)
   let prev_generator = self.in_generator
+  let prev_async = self.in_async
   let prev_function = self.in_function
   let prev_iteration = self.in_iteration
   let prev_switch = self.in_switch
@@ -72,6 +74,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   if is_generator {
     self.in_generator = true
   }
+  self.in_async = false // Reset for nested functions
   self.in_function = true
   self.in_iteration = false
   self.in_switch = false
@@ -82,6 +85,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   }
   let body = self.parse_block()
   self.in_generator = prev_generator
+  self.in_async = prev_async
   self.in_function = prev_function
   self.in_iteration = prev_iteration
   self.in_switch = prev_switch
@@ -93,7 +97,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, params, return_type, body, is_generator }
+  { name, params, return_type, body, is_generator, is_async }
 }
 
 ///|
@@ -101,6 +105,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
 fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
+  let is_async = self.in_async
   let name = match self.peek().kind {
     Ident(n) => {
       let _ = self.advance()
@@ -119,6 +124,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   }
   // Save and set function context (new function scope resets iteration/switch/labels context)
   let prev_generator = self.in_generator
+  let prev_async = self.in_async
   let prev_function = self.in_function
   let prev_iteration = self.in_iteration
   let prev_switch = self.in_switch
@@ -130,6 +136,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   if is_generator {
     self.in_generator = true
   }
+  self.in_async = false // Reset for nested functions
   self.in_function = true
   self.in_iteration = false
   self.in_switch = false
@@ -140,6 +147,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   }
   let body = self.parse_block()
   self.in_generator = prev_generator
+  self.in_async = prev_async
   self.in_function = prev_function
   self.in_iteration = prev_iteration
   self.in_switch = prev_switch
@@ -151,7 +159,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, params, return_type, body, is_generator }
+  { name, params, return_type, body, is_generator, is_async }
 }
 
 ///|

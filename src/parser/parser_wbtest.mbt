@@ -932,12 +932,12 @@ test "parser: ast patterns expr assignments" {
 ///|
 test "parser: ast patterns expr functions" {
   match parse_expr_from("x => x + 1") {
-    ArrowFunc(params, ArrowExpr(BinOp(Add, Var("x"), IntLit(1)))) =>
+    ArrowFunc(params, ArrowExpr(BinOp(Add, Var("x"), IntLit(1))), _) =>
       assert_eq(params.length(), 1)
     _ => fail("expected ArrowFunc (expr)")
   }
   match parse_expr_from("(x) => { return x; }") {
-    ArrowFunc(_, ArrowBlock(block)) => assert_eq(block.stmts.length(), 1)
+    ArrowFunc(_, ArrowBlock(block), _) => assert_eq(block.stmts.length(), 1)
     _ => fail("expected ArrowFunc (block)")
   }
   match parse_expr_from("function foo(x) { return x; }") {

@@ -91,8 +91,8 @@ pub(all) enum TsExpr {
   // operator
   Seq(TsExpr, TsExpr)
 
-  // function
-  ArrowFunc(Array[TsParam], TsArrowBody)
+  // function (is_async)
+  ArrowFunc(Array[TsParam], TsArrowBody, Bool)
 
   // functionexpression (function() {})
   FuncExpr(TsFunc)
@@ -100,6 +100,9 @@ pub(all) enum TsExpr {
   // yield expression (generator)
   Yield(TsExpr?)
   YieldStar(TsExpr)
+
+  // await expression (async)
+  Await(TsExpr)
 } derive(Show)
 
 ///|
@@ -225,6 +228,7 @@ pub(all) enum TsStmt {
   DoWhile(TsExpr, TsBlock) // do { body } while (cond)
   For(TsStmt?, TsExpr?, TsStmt?, TsBlock) // init, cond, update, body
   ForOf(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock) // kind, binding, varType, iterable, body
+  ForAwaitOf(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock) // kind, binding, varType, async-iterable, body
   ForIn(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock) // kind, binding, varType, iterable, body
   Switch(TsExpr, Array[TsSwitchCase])
   With(TsExpr, TsBlock)
@@ -302,6 +306,7 @@ pub(all) struct TsFunc {
   return_type : TsType
   body : TsBlock
   is_generator : Bool
+  is_async : Bool
 } derive(Show)
 
 ///|

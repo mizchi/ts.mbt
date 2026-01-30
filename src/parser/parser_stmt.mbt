@@ -37,7 +37,9 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     Ident("async") if self.peek_at(1).kind == Function &&
       not(self.has_line_terminator_after()) => {
       let _ = self.advance()
+      self.in_async = true
       let func = self.parse_function()
+      self.in_async = false
       Let(@ast.TsBinding::Ident(func.name), Any, FuncExpr(func))
     }
     Function => {

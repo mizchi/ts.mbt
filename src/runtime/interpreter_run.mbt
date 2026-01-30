@@ -17,7 +17,7 @@ pub fn JSInterpreter::run_module(
       env: self.global_env,
       is_arrow: false,
       is_strict: self.is_strict_body(func.body, false),
-      is_generator: func.is_generator,
+      is_generator: func.is_generator, is_async: func.is_async,
       props: [],
       object_proto: Some(self.function_proto),
     })

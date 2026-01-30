@@ -139,7 +139,7 @@ fn Parser::inject_instance_field_assigns(
     params: func.params,
     return_type: func.return_type,
     body: { stmts: new_stmts },
-    is_generator: func.is_generator,
+    is_generator: func.is_generator, is_async: func.is_async,
   }
 }
 
@@ -212,6 +212,7 @@ fn Parser::parse_class_body(
         return_type,
         body,
         is_generator,
+        is_async: false,
       }
       if accessor_kind is None && key is Name("constructor") && not(is_static) {
         ctor = Some(func)
@@ -266,7 +267,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [],
             return_type: @ast.TsType::Any,
             body: throw_body,
-            is_generator: false,
+            is_generator: false, is_async: false,
           }),
           [],
         )
@@ -356,7 +357,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [rest_param],
             return_type: Any,
             body: empty_body,
-            is_generator: false,
+            is_generator: false, is_async: false,
           }
         }
         None => {
@@ -366,7 +367,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [],
             return_type: Any,
             body: empty_body,
-            is_generator: false,
+            is_generator: false, is_async: false,
           }
         }
       }
@@ -527,7 +528,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           params: [],
           return_type: @ast.TsType::Any,
           body: block,
-          is_generator: false,
+          is_generator: false, is_async: false,
         })
         let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
         let call_expr = @ast.TsExpr::CallExpr(call_method, [@ast.TsExpr::Var(tmp_name)])
@@ -542,7 +543,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       params: [],
       return_type: @ast.TsType::Any,
       body: @ast.TsBlock::{ stmts, },
-      is_generator: false,
+      is_generator: false, is_async: false,
     }),
     [],
   )
@@ -652,7 +653,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
             params: [rest_param],
             return_type: Any,
             body: empty_body,
-            is_generator: false,
+            is_generator: false, is_async: false,
           }
         }
         None => {
@@ -662,7 +663,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
             params: [],
             return_type: Any,
             body: empty_body,
-            is_generator: false,
+            is_generator: false, is_async: false,
           }
         }
       }
@@ -814,7 +815,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
           params: [],
           return_type: @ast.TsType::Any,
           body: block,
-          is_generator: false,
+          is_generator: false, is_async: false,
         })
         let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
         let call_expr = @ast.TsExpr::CallExpr(call_method, [@ast.TsExpr::Var(name)])
@@ -839,7 +840,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
         params: [],
         return_type: @ast.TsType::Any,
         body: @ast.TsBlock::{ stmts: internal_stmts },
-        is_generator: false,
+        is_generator: false, is_async: false,
       }),
       [],
     )

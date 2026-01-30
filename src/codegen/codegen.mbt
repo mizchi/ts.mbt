@@ -191,6 +191,7 @@ fn infer_literal_type(expr : @ast.TsExpr) -> @ast.TsType {
     @ast.TsExpr::Var(_) => @ast.TsType::Any // variablestatement
     @ast.TsExpr::Yield(_) => @ast.TsType::Any
     @ast.TsExpr::YieldStar(_) => @ast.TsType::Any
+    @ast.TsExpr::Await(_) => @ast.TsType::Any
     @ast.TsExpr::Seq(_, right) => infer_literal_type(right)
     @ast.TsExpr::PropAssignExpr(_, _, value) => infer_literal_type(value)
     @ast.TsExpr::IndexAssignExpr(_, _, value) => infer_literal_type(value)
@@ -251,7 +252,7 @@ fn infer_literal_type(expr : @ast.TsExpr) -> @ast.TsType {
     @ast.TsExpr::MethodCall(_, _, _) => @ast.TsType::Any // methodreturn valuetype
     @ast.TsExpr::AssignExpr(_, e) => infer_literal_type(e) // assignmentexpressiontypetype
     @ast.TsExpr::AssignPattern(_, e) => infer_literal_type(e)
-    @ast.TsExpr::ArrowFunc(_, _) => @ast.TsType::Any // function @ast.TsType::Any
+    @ast.TsExpr::ArrowFunc(_, _, _) => @ast.TsType::Any // function @ast.TsType::Any
     @ast.TsExpr::FuncExpr(_) => @ast.TsType::Any // functionexpression @ast.TsType::Any
   }
 }
@@ -403,6 +404,7 @@ fn infer_type(ctx : CodeGenCtx, expr : @ast.TsExpr) -> @ast.TsType {
     @ast.TsExpr::CompoundAssignExpr(left, _, _) => infer_type(ctx, left)
     @ast.TsExpr::Yield(_) => @ast.TsType::Any
     @ast.TsExpr::YieldStar(_) => @ast.TsType::Any
+    @ast.TsExpr::Await(_) => @ast.TsType::Any
     @ast.TsExpr::Var(name) =>
       match ctx.get_local(name) {
         Some(local_var) => local_var.type_
@@ -493,7 +495,7 @@ fn infer_type(ctx : CodeGenCtx, expr : @ast.TsExpr) -> @ast.TsType {
     }
     @ast.TsExpr::AssignExpr(_, e) => infer_type(ctx, e) // assignmentexpressiontypetype
     @ast.TsExpr::AssignPattern(_, e) => infer_type(ctx, e)
-    @ast.TsExpr::ArrowFunc(_, _) => @ast.TsType::Any // function @ast.TsType::Any
+    @ast.TsExpr::ArrowFunc(_, _, _) => @ast.TsType::Any // function @ast.TsType::Any
     @ast.TsExpr::FuncExpr(_) => @ast.TsType::Any // functionexpression @ast.TsType::Any
   }
 }
@@ -605,6 +607,10 @@ fn compile_expr(
       raise CodeGenError(
         "yield* is not supported in Wasm compiler (use interpreter)",
       )
+    @ast.TsExpr::Await(_) =>
+      raise CodeGenError(
+        "await is not supported in Wasm compiler (use interpreter)",
+      )
     @ast.TsExpr::Seq(_, _) =>
       raise CodeGenError(
         "comma operator is not supported in Wasm compiler (use interpreter)",
@@ -697,7 +703,7 @@ fn compile_expr(
       raise CodeGenError(
         "Destructuring assignment is not supported in Wasm compiler (use interpreter)",
       )
-    @ast.TsExpr::ArrowFunc(_, _) =>
+    @ast.TsExpr::ArrowFunc(_, _, _) =>
       raise CodeGenError(
         "ArrowFunc is not supported in Wasm compiler (use interpreter)",
       )
@@ -2052,6 +2058,8 @@ fn compile_stmt(
       compile_for(ctx, init, cond, update, body, return_type)
     @ast.TsStmt::ForOf(kind, binding, var_type, iterable, body) =>
       compile_for_of(ctx, kind, binding, var_type, iterable, body, return_type)
+    @ast.TsStmt::ForAwaitOf(_, _, _, _, _) =>
+      raise CodeGenError("for-await-of is not supported in Wasm compiler")
     @ast.TsStmt::ForIn(_, _, _, _, _) =>
       raise CodeGenError("for-in is not supported in Wasm compiler")
     @ast.TsStmt::Break(label) =>

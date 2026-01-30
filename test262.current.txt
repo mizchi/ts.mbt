@@ -1,1 +1,1 @@
-test262 results: total=23876, passed=11992, failed=2775, skipped=9109
+test262 results: total=23876, passed=12141, failed=2626, skipped=9109

@@ -4437,7 +4437,7 @@ fn JSInterpreter::call_native(
             env: self.global_env,
             is_arrow: false,
             is_strict: self.is_strict_body(func.body, false),
-            is_generator: func.is_generator,
+            is_generator: func.is_generator, is_async: func.is_async,
             props: [],
             object_proto: Some(self.function_proto),
           })
@@ -4562,7 +4562,7 @@ fn JSInterpreter::call_native(
         env: self.global_env,
         is_arrow: false,
         is_strict: false,
-        is_generator: false,
+        is_generator: false, is_async: false,
         props: [],
         object_proto: Some(self.function_proto),
       })

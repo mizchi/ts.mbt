@@ -12,7 +12,7 @@ pub fn JSInterpreter::new() -> JSInterpreter {
     env,
     is_arrow: false,
     is_strict: false,
-    is_generator: false,
+    is_generator: false, is_async: false,
     props: [],
     object_proto: Some(object_proto),
   })
@@ -50,7 +50,7 @@ fn JSInterpreter::make_native(self : JSInterpreter, name : String) -> JSValue {
     env: self.global_env,
     is_arrow: false,
     is_strict: false,
-    is_generator: false,
+    is_generator: false, is_async: false,
     props: [],
     object_proto: Some(self.function_proto),
   })

@@ -574,7 +574,7 @@ fn expr_has_yield(expr : @ast.TsExpr) -> Bool {
       }
       false
     }
-    @ast.TsExpr::ArrowFunc(_, _) => false
+    @ast.TsExpr::ArrowFunc(_, _, _) => false
     @ast.TsExpr::FuncExpr(_) => false
     _ => false
   }
