@@ -564,76 +564,14 @@ fn JSInterpreter::assign_array_pattern_gen(
       process_index(0)
     }
     None => {
-      let len = self.array_like_length(value)
-      fn process_index(
-        self : JSInterpreter,
-        pattern : @ast.TsArrayBinding,
-        env : JSEnv,
-        value : JSValue,
-        len : Int,
-        index : Int,
-      ) -> GenValue {
-        if self.peek_error() is Some(_) {
-          return GenValue::Value(Undefined)
-        }
-        if index >= pattern.items.length() {
-          match pattern.rest {
-            None => GenValue::Value(Undefined)
-            Some(rest_binding) => {
-              let rest_items : Array[JSValue] = []
-              let mut i = index
-              while i < len {
-                rest_items.push(self.array_like_get(value, i))
-                i = i + 1
-              }
-              let rest_val = js_array_from(rest_items)
-              self.assign_pattern_gen(rest_binding, rest_val, env)
-            }
-          }
-        } else {
-          match pattern.items[index] {
-            None => process_index(self, pattern, env, value, len, index + 1)
-            Some(elem) => {
-              let val = if index < len {
-                self.array_like_get(value, index)
-              } else {
-                Undefined
-              }
-              let mut used_default = false
-              let default_expr = elem.default
-              let with_default =
-                match elem.default {
-                  Some(expr) =>
-                    if val is Undefined {
-                      used_default = true
-                      Some(self.eval_expr_gen(expr, env))
-                    } else {
-                      None
-                    }
-                  None => None
-                }
-              let assign_elem = fn(v : JSValue) -> GenValue {
-                if used_default {
-                  self.maybe_set_default_name_for_binding(
-                    elem.binding,
-                    v,
-                    default_expr,
-                  )
-                }
-                gen_bind(self.assign_pattern_gen(elem.binding, v, env), (_unused) =>
-                  process_index(self, pattern, env, value, len, index + 1)
-                )
-              }
-              match with_default {
-                Some(default_signal) =>
-                  gen_bind(default_signal, (default_val) => assign_elem(default_val))
-                None => assign_elem(val)
-              }
-            }
-          }
-        }
+      // Check if get_iterator already set an error
+      match self.peek_error() {
+        Some(_) => return GenValue::Value(Undefined)
+        None => ()
       }
-      process_index(self, pattern, env, value, len, 0)
+      // If no error but get_iterator returned None, value is not iterable
+      let _ = self.set_error_kind("TypeError", "is not iterable")
+      GenValue::Value(Undefined)
     }
   }
 }
@@ -949,51 +887,13 @@ fn JSInterpreter::bind_array_pattern(
           }
         }
         None => {
-          let len = self.array_like_length(value)
-          let mut index = 0
-          for item in pattern.items {
-            match item {
-              None => index = index + 1
-            Some(elem) => {
-              let mut val = if index < len {
-                self.array_like_get(value, index)
-              } else {
-                Undefined
-              }
-              let mut used_default = false
-              let default_expr = elem.default
-              match elem.default {
-                Some(expr) =>
-                  if val is Undefined {
-                    val = self.eval_expr(expr, env)
-                    used_default = true
-                  }
-                None => ()
-              }
-              if used_default {
-                self.maybe_set_default_name_for_binding(
-                  elem.binding,
-                  val,
-                  default_expr,
-                )
-              }
-              self.bind_pattern(elem.binding, val, env)
-              index = index + 1
-            }
-            }
-          }
-          match pattern.rest {
+          // Check if get_iterator already set an error
+          match self.peek_error() {
+            Some(_) => return
             None => ()
-            Some(rest_binding) => {
-              let rest_items : Array[JSValue] = []
-              while index < len {
-                rest_items.push(self.array_like_get(value, index))
-                index = index + 1
-              }
-              let rest_val = js_array_from(rest_items)
-              self.bind_pattern(rest_binding, rest_val, env)
-            }
           }
+          // If no error but get_iterator returned None, value is not iterable
+          let _ = self.set_error_kind("TypeError", "is not iterable")
         }
       }
   }
@@ -1184,51 +1084,13 @@ fn JSInterpreter::init_array_pattern(
           }
         }
         None => {
-          let len = self.array_like_length(value)
-          let mut index = 0
-          for item in pattern.items {
-            match item {
-              None => index = index + 1
-              Some(elem) => {
-                let mut val = if index < len {
-                  self.array_like_get(value, index)
-                } else {
-                  Undefined
-                }
-                let mut used_default = false
-                let default_expr = elem.default
-                match elem.default {
-                  Some(expr) =>
-                    if val is Undefined {
-                      val = self.eval_expr(expr, env)
-                      used_default = true
-                    }
-                  None => ()
-                }
-                if used_default {
-                  self.maybe_set_default_name_for_binding(
-                    elem.binding,
-                    val,
-                    default_expr,
-                  )
-                }
-                self.init_pattern(elem.binding, val, env, is_const)
-                index = index + 1
-              }
-            }
-          }
-          match pattern.rest {
+          // Check if get_iterator already set an error (e.g., from calling the iterator method)
+          match self.peek_error() {
+            Some(_) => return
             None => ()
-            Some(rest_binding) => {
-              let rest_items : Array[JSValue] = []
-              while index < len {
-                rest_items.push(self.array_like_get(value, index))
-                index = index + 1
-              }
-              let rest_val = js_array_from(rest_items)
-              self.init_pattern(rest_binding, rest_val, env, is_const)
-            }
           }
+          // If no error but get_iterator returned None, value is not iterable
+          let _ = self.set_error_kind("TypeError", "is not iterable")
         }
       }
   }
@@ -1453,51 +1315,13 @@ fn JSInterpreter::assign_array_pattern(
           }
         }
         None => {
-          let len = self.array_like_length(value)
-          let mut index = 0
-          for item in pattern.items {
-            match item {
-              None => index = index + 1
-              Some(elem) => {
-                let mut val = if index < len {
-                  self.array_like_get(value, index)
-                } else {
-                  Undefined
-                }
-                let mut used_default = false
-                let default_expr = elem.default
-                match elem.default {
-                  Some(expr) =>
-                    if val is Undefined {
-                      val = self.eval_expr(expr, env)
-                      used_default = true
-                    }
-                  None => ()
-                }
-                if used_default {
-                  self.maybe_set_default_name_for_binding(
-                    elem.binding,
-                    val,
-                    default_expr,
-                  )
-                }
-                self.assign_pattern(elem.binding, val, env)
-                index = index + 1
-              }
-            }
-          }
-          match pattern.rest {
+          // Check if get_iterator already set an error
+          match self.peek_error() {
+            Some(_) => return
             None => ()
-            Some(rest_binding) => {
-              let rest_items : Array[JSValue] = []
-              while index < len {
-                rest_items.push(self.array_like_get(value, index))
-                index = index + 1
-              }
-              let rest_val = js_array_from(rest_items)
-              self.assign_pattern(rest_binding, rest_val, env)
-            }
           }
+          // If no error but get_iterator returned None, value is not iterable
+          let _ = self.set_error_kind("TypeError", "is not iterable")
         }
       }
   }

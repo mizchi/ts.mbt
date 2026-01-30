@@ -539,9 +539,42 @@ pub fn parse_expr_from_source(source : String) -> @ast.TsExpr? raise ParseError 
 }
 
 ///|
+// / eval : expression with inherited strict mode
+pub fn parse_expr_from_source_strict(source : String, inherit_strict : Bool) -> @ast.TsExpr? raise ParseError {
+  let lexer = Lexer::new(source)
+  let tokens = lexer.tokenize()
+  // Check if source itself declares strict mode
+  let trimmed = source.trim_start()
+  let source_strict = trimmed.has_prefix("\"use strict\";") || trimmed.has_prefix("'use strict';")
+  let parser = Parser::new_with_strict(tokens, inherit_strict || source_strict)
+  let expr = parser.parse_expr()
+  if parser.check(Eof) {
+    Some(expr)
+  } else {
+    None
+  }
+}
+
+///|
 // / eval : statementblock
 pub fn parse_block_from_source(source : String) -> @ast.TsBlock raise ParseError {
   let parser = Parser::from_source(source)
+  let stmts : Array[@ast.TsStmt] = []
+  while not(parser.check(Eof)) {
+    stmts.push(parser.parse_stmt())
+  }
+  { stmts, }
+}
+
+///|
+// / eval : statementblock with inherited strict mode
+pub fn parse_block_from_source_strict(source : String, inherit_strict : Bool) -> @ast.TsBlock raise ParseError {
+  let lexer = Lexer::new(source)
+  let tokens = lexer.tokenize()
+  // Check if source itself declares strict mode
+  let trimmed = source.trim_start()
+  let source_strict = trimmed.has_prefix("\"use strict\";") || trimmed.has_prefix("'use strict';")
+  let parser = Parser::new_with_strict(tokens, inherit_strict || source_strict)
   let stmts : Array[@ast.TsStmt] = []
   while not(parser.check(Eof)) {
     stmts.push(parser.parse_stmt())

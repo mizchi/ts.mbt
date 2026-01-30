@@ -174,23 +174,6 @@ fn JSInterpreter::array_like_length(self : JSInterpreter, value : JSValue) -> In
 }
 
 ///|
-fn JSInterpreter::array_like_get(self : JSInterpreter, value : JSValue, index : Int) -> JSValue {
-  let key = index.to_string()
-  if js_has_prop(value, key) {
-    return self.get_prop_value(value, key)
-  }
-  match self.array_like_string_value(value) {
-    Some(s) =>
-      if index >= 0 && index < s.length() {
-        String(try { s[index:index + 1].to_string() } catch { _ => "" })
-      } else {
-        self.get_prop_value(value, key)
-      }
-    None => self.get_prop_value(value, key)
-  }
-}
-
-///|
 fn JSInterpreter::get_iterator(self : JSInterpreter, value : JSValue) -> JSValue? {
   match value {
     String(s) if s.has_prefix("Symbol(") => {

@@ -377,8 +377,25 @@ pub fn JSInterpreter::eval_expr(
         }
         return Undefined
       }
-      // functionget
-      let func = env.get(name)
+      // functionget - check if variable exists first (ReferenceError for undefined)
+      let func = if env.is_uninitialized(name) {
+        let _ = self.set_error_kind("ReferenceError", name + " is not defined")
+        JSValue::Undefined
+      } else if env.has(name) {
+        env.get(name)
+      } else {
+        let global_obj = self.global_env.get("globalThis")
+        if js_has_prop(global_obj, name) {
+          js_get_prop(global_obj, name)
+        } else {
+          let _ = self.set_error_kind("ReferenceError", name + " is not defined")
+          JSValue::Undefined
+        }
+      }
+      match self.peek_error() {
+        Some(_) => return self.error_or_undefined()
+        None => ()
+      }
       let arg_values = self.eval_args(args, env)
       match self.peek_error() {
         Some(_) => return self.error_or_undefined()
@@ -395,18 +412,34 @@ pub fn JSInterpreter::eval_expr(
       match callee {
         @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
           let obj = self.eval_expr(obj_expr, env)
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
+          }
           let idx = self.eval_expr(idx_expr, env)
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
+          }
           let key = idx.to_js_string()
           let func = self.get_prop_value(obj, key)
           self.call_function(func, obj, arg_values)
         }
         @ast.TsExpr::PropAccess(obj_expr, prop) => {
           let obj = self.eval_expr(obj_expr, env)
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
+          }
           let func = self.get_prop_value(obj, prop)
           self.call_function(func, obj, arg_values)
         }
         _ => {
           let func = self.eval_expr(callee, env)
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
+          }
           self.call_function(func, Undefined, arg_values)
         }
       }
@@ -826,11 +859,13 @@ fn JSInterpreter::eval_expr_gen(
 ///|
 // / direct eval: expression/statementrun
 fn JSInterpreter::direct_eval(self : JSInterpreter, source : String, env : JSEnv) -> JSValue {
-  let parsed_expr = try { @parser.parse_expr_from_source(source) } catch { _ => None }
+  // Direct eval inherits strict mode from the calling context
+  let inherit_strict = env.has("__strict__")
+  let parsed_expr = try { @parser.parse_expr_from_source_strict(source, inherit_strict) } catch { _ => None }
   match parsed_expr {
     Some(expr) => self.eval_expr(expr, env)
     None => {
-      let block = try { @parser.parse_block_from_source(source) } catch {
+      let block = try { @parser.parse_block_from_source_strict(source, inherit_strict) } catch {
         @parser.ParseError::ParseError(msg) => {
           let _ = self.set_error_kind("SyntaxError", msg)
           return JSValue::Undefined
@@ -1214,62 +1249,91 @@ fn JSInterpreter::exec_switch_for_eval(
     None => ()
   }
 
-  let mut v = JSValue::Undefined // V starts as undefined
-  let mut matched = false
-
+  // ES spec: Create a single block environment for entire switch
+  let switch_env = js_new_env(Some(env))
+  // Hoist var declarations to outer env, let/const to switch_env
   for case_ in cases {
-    if not(matched) {
-      match case_.test_expr {
-        None => matched = true // default case
-        Some(test_expr) => {
-          let test_val = self.eval_expr(test_expr, env)
+    // Only hoist var to outer env (not let/const)
+    self.hoist_block_var_only(case_.body, env)
+    self.hoist_block_lexical(case_.body, switch_env)
+  }
+
+  // ES spec: First find a matching case (not default)
+  let mut match_index : Int = -1
+  let mut default_index : Int = -1
+
+  for i, case_ in cases {
+    match case_.test_expr {
+      None => {
+        // Remember default position for later
+        if default_index < 0 {
+          default_index = i
+        }
+      }
+      Some(test_expr) => {
+        if match_index < 0 {
+          let test_val = self.eval_expr(test_expr, switch_env)
           match self.peek_error() {
             Some(err) => return (Some(err), Undefined)
             None => ()
           }
           match js_strict_eq(discr, test_val) {
-            Bool(true) => matched = true
+            Bool(true) => match_index = i
             _ => ()
           }
         }
       }
     }
-    if matched {
-      match self.exec_block_for_eval(case_.body, env) {
+  }
+
+  // If no case matched, use default if present
+  let start_index = if match_index >= 0 {
+    match_index
+  } else if default_index >= 0 {
+    default_index
+  } else {
+    -1
+  }
+
+  // If nothing to execute, return undefined
+  if start_index < 0 {
+    return (None, Undefined)
+  }
+
+  // Execute from start_index with fall-through using switch_env
+  let mut v = JSValue::Undefined
+  for i = start_index; i < cases.length(); i = i + 1 {
+    let case_ = cases[i]
+    // Execute case body directly in switch_env (no nested block scope)
+    for stmt in case_.body.stmts {
+      match self.exec_stmt_for_eval(stmt, switch_env) {
         (Some(BreakSignal(None)), completion) => {
-          // Break without label ends the switch
           if is_not_empty(completion) {
             v = completion
           }
-          // ES spec: switch returns UpdateEmpty(result, undefined)
           return (None, v)
         }
         (Some(BreakSignal(Some(_))), completion) => {
-          // Break with label propagates
           if is_not_empty(completion) {
             v = completion
           }
           return (Some(BreakSignal(None)), v)
         }
         (Some(control), completion) => {
-          // Other abrupt completion (return, throw, continue)
           if is_not_empty(completion) {
             v = completion
           }
           return (Some(control), v)
         }
         (None, completion) => {
-          // Normal completion - update v
           if is_not_empty(completion) {
             v = completion
           }
-          // Fall through to next case
         }
       }
     }
   }
   // ES spec: switch returns UpdateEmpty(result, undefined)
-  // v is either undefined (no match) or the last completion value
   (None, v)
 }
 
@@ -2011,6 +2075,26 @@ fn is_lexical_init(init : @ast.TsStmt?) -> Bool {
 }
 
 ///|
+// Collect let/const variable names from for-loop init statement
+fn collect_per_iteration_bindings(init : @ast.TsStmt?) -> Array[String] {
+  let names : Array[String] = []
+  match init {
+    Some(@ast.TsStmt::Let(binding, _, _)) | Some(@ast.TsStmt::Const(binding, _, _)) =>
+      collect_binding_names(binding, names)
+    Some(@ast.TsStmt::Block(block)) =>
+      for stmt in block.stmts {
+        match stmt {
+          @ast.TsStmt::Let(binding, _, _) | @ast.TsStmt::Const(binding, _, _) =>
+            collect_binding_names(binding, names)
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  names
+}
+
+///|
 fn JSInterpreter::exec_for_loop(
   self : JSInterpreter,
   init : @ast.TsStmt?,
@@ -2021,10 +2105,18 @@ fn JSInterpreter::exec_for_loop(
   loop_label : String?,
 ) -> JSValue? {
   // Create new environment for let/const bindings (ES6 semantics)
-  let loop_env = if is_lexical_init(init) {
+  let is_lexical = is_lexical_init(init)
+  let loop_env = if is_lexical {
     js_new_env(Some(env))
   } else {
     env
+  }
+
+  // Collect per-iteration binding names for ES6 per-iteration environment
+  let per_iteration_bindings = if is_lexical {
+    collect_per_iteration_bindings(init)
+  } else {
+    []
   }
 
   // initialize
@@ -2050,9 +2142,37 @@ fn JSInterpreter::exec_for_loop(
     }
     None => ()
   }
+
+  // Current iteration environment
+  // For per-iteration bindings, we need to create new env for EACH iteration
+  // including the first one after initialization
+  let mut iter_env = loop_env
+
+  // Helper function to create per-iteration environment
+  fn create_per_iteration_env(
+    parent : JSEnv,
+    source_env : JSEnv,
+    bindings : Array[String],
+  ) -> JSEnv {
+    if bindings.length() == 0 {
+      return source_env
+    }
+    let new_env = js_new_env(Some(parent))
+    for name in bindings {
+      let value = source_env.get(name)
+      new_env.define_var(name, value)
+    }
+    new_env
+  }
+
+  // Create the first per-iteration environment after initialization
+  if per_iteration_bindings.length() > 0 {
+    iter_env = create_per_iteration_env(env, loop_env, per_iteration_bindings)
+  }
+
   // loop
   while (match cond {
-          Some(c) => self.eval_expr(c, loop_env).to_boolean()
+          Some(c) => self.eval_expr(c, iter_env).to_boolean()
           None => true
         }) {
     match self.peek_error() {
@@ -2064,7 +2184,8 @@ fn JSInterpreter::exec_for_loop(
       Some(err) => return Some(err)
       None => ()
     }
-    match self.exec_block(body, loop_env) {
+
+    match self.exec_block(body, iter_env) {
       Some(BreakSignal(label)) =>
         if loop_label_matches(loop_label, label) {
           break
@@ -2073,9 +2194,13 @@ fn JSInterpreter::exec_for_loop(
         }
       Some(ContinueSignal(label)) =>
         if loop_label_matches(loop_label, label) {
+          // ES6: Create new per-iteration environment BEFORE update
+          if per_iteration_bindings.length() > 0 {
+            iter_env = create_per_iteration_env(env, iter_env, per_iteration_bindings)
+          }
           match update {
             Some(u) =>
-              match self.exec_stmt(u, loop_env) {
+              match self.exec_stmt(u, iter_env) {
                 Some(val) => return Some(val)
                 None => ()
               }
@@ -2088,9 +2213,15 @@ fn JSInterpreter::exec_for_loop(
       Some(val) => return Some(val)
       None => ()
     }
+    // ES6: Create new per-iteration environment BEFORE executing update
+    // This ensures closures from this iteration capture the current iteration's values,
+    // while the update modifies the new environment for the next iteration
+    if per_iteration_bindings.length() > 0 {
+      iter_env = create_per_iteration_env(env, iter_env, per_iteration_bindings)
+    }
     match update {
       Some(u) =>
-        match self.exec_stmt(u, loop_env) {
+        match self.exec_stmt(u, iter_env) {
           Some(val) => return Some(val)
           None => ()
         }
@@ -2115,6 +2246,35 @@ fn JSInterpreter::exec_for_of_loop(
     Some(err) => return Some(err)
     None => ()
   }
+
+  // For let/const bindings, create a fresh environment for each iteration
+  let needs_per_iteration_env = match kind {
+    @ast.TsForOfKind::Let | @ast.TsForOfKind::Const => true
+    _ => false
+  }
+
+  // Helper to create per-iteration environment
+  fn create_iter_env(
+    base_env : JSEnv,
+    binding : @ast.TsBinding,
+    is_const : Bool,
+    needs_new : Bool,
+  ) -> JSEnv {
+    if needs_new {
+      let new_env = js_new_env(Some(base_env))
+      let names : Array[String] = []
+      collect_binding_names(binding, names)
+      for name in names {
+        new_env.define_uninitialized(name, is_const)
+      }
+      new_env
+    } else {
+      base_env
+    }
+  }
+
+  let is_const = kind == @ast.TsForOfKind::Const
+
   match self.get_iterator(iter_val) {
     Some(iterator) => {
       while true {
@@ -2138,7 +2298,11 @@ fn JSInterpreter::exec_for_of_loop(
           break
         }
         let value = self.get_prop_value(next_val, "value")
-        self.apply_for_of_binding(kind, binding, value, env)
+
+        // ES6: Create per-iteration environment for let/const
+        let iter_env = create_iter_env(env, binding, is_const, needs_per_iteration_env)
+
+        self.apply_for_of_binding(kind, binding, value, iter_env)
         match self.peek_error() {
           Some(err) => {
             self.iterator_close_on_error(iterator)
@@ -2146,7 +2310,7 @@ fn JSInterpreter::exec_for_of_loop(
           }
           None => ()
         }
-        match self.exec_block(body, env) {
+        match self.exec_block(body, iter_env) {
           Some(BreakSignal(label)) =>
             if loop_label_matches(loop_label, label) {
               self.iterator_close(iterator)
@@ -2185,12 +2349,16 @@ fn JSInterpreter::exec_for_of_loop(
               None => ()
             }
             let item = self.get_prop_value(arr_val, idx.to_string())
-            self.apply_for_of_binding(kind, binding, item, env)
+
+            // ES6: Create per-iteration environment for let/const
+            let iter_env = create_iter_env(env, binding, is_const, needs_per_iteration_env)
+
+            self.apply_for_of_binding(kind, binding, item, iter_env)
             match self.peek_error() {
               Some(err) => return Some(err)
               None => ()
             }
-            match self.exec_block(body, env) {
+            match self.exec_block(body, iter_env) {
               Some(BreakSignal(label)) =>
                 if loop_label_matches(loop_label, label) {
                   break
@@ -2219,12 +2387,16 @@ fn JSInterpreter::exec_for_of_loop(
               None => ()
             }
             let char_str = try { s[idx:idx + 1].to_string() } catch { _ => "" }
-            self.apply_for_of_binding(kind, binding, String(char_str), env)
+
+            // ES6: Create per-iteration environment for let/const
+            let iter_env = create_iter_env(env, binding, is_const, needs_per_iteration_env)
+
+            self.apply_for_of_binding(kind, binding, String(char_str), iter_env)
             match self.peek_error() {
               Some(err) => return Some(err)
               None => ()
             }
-            match self.exec_block(body, env) {
+            match self.exec_block(body, iter_env) {
               Some(BreakSignal(label)) =>
                 if loop_label_matches(loop_label, label) {
                   break
@@ -2271,18 +2443,40 @@ fn JSInterpreter::exec_for_in_loop(
     _ => iter_val
   }
   let keys = self.collect_for_in_keys(iter_val, target)
+
+  // For let/const bindings, create a fresh environment for each iteration
+  let needs_per_iteration_env = match kind {
+    @ast.TsForOfKind::Let | @ast.TsForOfKind::Const => true
+    _ => false
+  }
+
   for key in keys {
     self.tick()
     match self.peek_error() {
       Some(err) => return Some(err)
       None => ()
     }
-    self.apply_for_of_binding(kind, binding, String(key), env)
+
+    // ES6: Create per-iteration environment for let/const
+    let iter_env = if needs_per_iteration_env {
+      let new_env = js_new_env(Some(env))
+      // Define the binding in the new environment
+      let names : Array[String] = []
+      collect_binding_names(binding, names)
+      for name in names {
+        new_env.define_uninitialized(name, kind == @ast.TsForOfKind::Const)
+      }
+      new_env
+    } else {
+      env
+    }
+
+    self.apply_for_of_binding(kind, binding, String(key), iter_env)
     match self.peek_error() {
       Some(err) => return Some(err)
       None => ()
     }
-    match self.exec_block(body, env) {
+    match self.exec_block(body, iter_env) {
       Some(BreakSignal(label)) =>
         if loop_label_matches(loop_label, label) {
           break
@@ -2329,6 +2523,10 @@ pub fn JSInterpreter::exec_stmt(
         _ => false
       }
       self.init_pattern(binding, val, env, is_const)
+      match self.peek_error() {
+        Some(err) => return Some(err)
+        None => ()
+      }
       match env.parent {
         None => {
           let global_obj = self.global_env.get("globalThis")
@@ -2517,13 +2715,20 @@ pub fn JSInterpreter::exec_stmt(
         Some(err) => return Some(err)
         None => ()
       }
+      // ES spec: Create a single block environment for entire switch
+      let switch_env = js_new_env(Some(env))
+      // Hoist var declarations to outer env, let/const to switch_env
+      for case_ in cases {
+        self.hoist_block_var_only(case_.body, env)
+        self.hoist_block_lexical(case_.body, switch_env)
+      }
       let mut matched = false
       for case_ in cases {
         if not(matched) {
           match case_.test_expr {
             None => matched = true
             Some(test_expr) => {
-              let test_val = self.eval_expr(test_expr, env)
+              let test_val = self.eval_expr(test_expr, switch_env)
               match self.peek_error() {
                 Some(err) => return Some(err)
                 None => ()
@@ -2536,15 +2741,18 @@ pub fn JSInterpreter::exec_stmt(
           }
         }
         if matched {
-          match self.exec_block(case_.body, env) {
-            Some(BreakSignal(label)) =>
-              match label {
-                None => return None
-                Some(_) => return Some(BreakSignal(label))
-              }
-            Some(ContinueSignal(label)) => return Some(ContinueSignal(label))
-            Some(val) => return Some(val)
-            None => ()
+          // Execute case body directly in switch_env
+          for stmt in case_.body.stmts {
+            match self.exec_stmt(stmt, switch_env) {
+              Some(BreakSignal(label)) =>
+                match label {
+                  None => return None
+                  Some(_) => return Some(BreakSignal(label))
+                }
+              Some(ContinueSignal(label)) => return Some(ContinueSignal(label))
+              Some(val) => return Some(val)
+              None => ()
+            }
           }
         }
       }
@@ -2734,15 +2942,20 @@ fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @ast.TsStmt, env : JSE
     @ast.TsStmt::While(_, body) => self.hoist_block(body, env)
     @ast.TsStmt::DoWhile(_, body) => self.hoist_block(body, env)
     @ast.TsStmt::For(init, _, _, body) => {
+      // Only hoist var declarations - let/const are block-scoped to the for loop
       match init {
-        Some(s) => self.hoist_stmt(s, env)
-        None => ()
+        Some(@ast.TsStmt::Var(_, _, _) as s) => self.hoist_stmt(s, env)
+        Some(@ast.TsStmt::Block(block)) =>
+          // For comma-separated declarations, only hoist var
+          self.hoist_block_var_only(block, env)
+        _ => ()
       }
       self.hoist_block(body, env)
     }
     @ast.TsStmt::Switch(_, cases) =>
+      // Only hoist var from switch cases, not let/const (they're block-scoped to switch)
       for case_ in cases {
-        self.hoist_block(case_.body, env)
+        self.hoist_block_var_only(case_.body, env)
       }
     @ast.TsStmt::ForIn(kind, binding, _, _, body) => {
       if kind != @ast.TsForOfKind::Assign {
@@ -2814,6 +3027,26 @@ fn JSInterpreter::hoist_stmt(self : JSInterpreter, stmt : @ast.TsStmt, env : JSE
 pub fn JSInterpreter::hoist_block(self : JSInterpreter, block : @ast.TsBlock, env : JSEnv) -> Unit {
   for stmt in block.stmts {
     self.hoist_stmt(stmt, env)
+  }
+}
+
+///|
+/// Hoist only var declarations (not let/const) to the given environment.
+/// Used for switch blocks where let/const go to switch_env but var goes to outer env.
+fn JSInterpreter::hoist_block_var_only(_self : JSInterpreter, block : @ast.TsBlock, env : JSEnv) -> Unit {
+  for stmt in block.stmts {
+    match stmt {
+      @ast.TsStmt::Var(binding, _, _) => {
+        let names : Array[String] = []
+        collect_binding_names(binding, names)
+        for name in names {
+          if not(env.has(name)) {
+            env.define_var(name, Undefined)
+          }
+        }
+      }
+      _ => ()
+    }
   }
 }
 

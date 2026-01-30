@@ -33,6 +33,10 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
   if self.check(Eq) {
     match left {
       Var(name) => {
+        // In strict mode, cannot assign to eval or arguments
+        if self.in_strict && (name == "eval" || name == "arguments") {
+          raise ParseError("Cannot assign to '\{name}' in strict mode")
+        }
         let _ = self.advance()
         let right = self.parse_assignment()
         AssignExpr(name, right)
@@ -692,7 +696,32 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         let _ = self.advance()
         let _ = self.expect(Arrow)
         let body = if self.check(LBrace) {
+          // Save and set function context for arrow block body
+          let prev_function = self.in_function
+          let prev_iteration = self.in_iteration
+          let prev_switch = self.in_switch
+          // Save labels and clear for new function scope
+          let prev_labels : Array[String] = []
+          for label in self.labels {
+            prev_labels.push(label)
+          }
+          self.in_function = true
+          self.in_iteration = false
+          self.in_switch = false
+          while self.labels.length() > 0 {
+            let _ = self.labels.pop()
+          }
           let block = self.parse_block()
+          self.in_function = prev_function
+          self.in_iteration = prev_iteration
+          self.in_switch = prev_switch
+          // Restore labels
+          while self.labels.length() > 0 {
+            let _ = self.labels.pop()
+          }
+          for label in prev_labels {
+            self.labels.push(label)
+          }
           @ast.TsArrowBody::ArrowBlock(block)
         } else {
           let expr = self.parse_assignment()
@@ -734,7 +763,32 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         let _ = self.expect(Arrow)
         // : blockexpression
         let body = if self.check(LBrace) {
+          // Save and set function context for arrow block body
+          let prev_function = self.in_function
+          let prev_iteration = self.in_iteration
+          let prev_switch = self.in_switch
+          // Save labels and clear for new function scope
+          let prev_labels : Array[String] = []
+          for label in self.labels {
+            prev_labels.push(label)
+          }
+          self.in_function = true
+          self.in_iteration = false
+          self.in_switch = false
+          while self.labels.length() > 0 {
+            let _ = self.labels.pop()
+          }
           let block = self.parse_block()
+          self.in_function = prev_function
+          self.in_iteration = prev_iteration
+          self.in_switch = prev_switch
+          // Restore labels
+          while self.labels.length() > 0 {
+            let _ = self.labels.pop()
+          }
+          for label in prev_labels {
+            self.labels.push(label)
+          }
           @ast.TsArrowBody::ArrowBlock(block)
         } else {
           let expr = self.parse_assignment()

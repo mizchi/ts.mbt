@@ -1877,8 +1877,13 @@ fn JSInterpreter::array_like_method(
 
 ///|
 fn JSInterpreter::eval_script_source(self : JSInterpreter, source : String) -> JSValue {
+  self.eval_script_source_with_strict(source, false)
+}
+
+///|
+fn JSInterpreter::eval_script_source_with_strict(self : JSInterpreter, source : String, inherit_strict : Bool) -> JSValue {
   let block = try {
-    @parser.parse_block_from_source(source)
+    @parser.parse_block_from_source_strict(source, inherit_strict)
   } catch {
     @parser.ParseError::ParseError(msg) => {
       let _ = self.set_error_kind("SyntaxError", msg)

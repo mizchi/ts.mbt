@@ -59,12 +59,38 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   } else {
     Any // type Any
   }
-  let prev = self.in_generator
+  // Save and set function context (new function scope resets iteration/switch/labels context)
+  let prev_generator = self.in_generator
+  let prev_function = self.in_function
+  let prev_iteration = self.in_iteration
+  let prev_switch = self.in_switch
+  // Save labels and clear for new function scope (labels don't cross function boundaries)
+  let prev_labels : Array[String] = []
+  for label in self.labels {
+    prev_labels.push(label)
+  }
   if is_generator {
     self.in_generator = true
   }
+  self.in_function = true
+  self.in_iteration = false
+  self.in_switch = false
+  // Clear labels for new function scope
+  while self.labels.length() > 0 {
+    let _ = self.labels.pop()
+  }
   let body = self.parse_block()
-  self.in_generator = prev
+  self.in_generator = prev_generator
+  self.in_function = prev_function
+  self.in_iteration = prev_iteration
+  self.in_switch = prev_switch
+  // Restore labels
+  while self.labels.length() > 0 {
+    let _ = self.labels.pop()
+  }
+  for label in prev_labels {
+    self.labels.push(label)
+  }
   { name, params, return_type, body, is_generator }
 }
 
@@ -89,12 +115,38 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   } else {
     Any
   }
-  let prev = self.in_generator
+  // Save and set function context (new function scope resets iteration/switch/labels context)
+  let prev_generator = self.in_generator
+  let prev_function = self.in_function
+  let prev_iteration = self.in_iteration
+  let prev_switch = self.in_switch
+  // Save labels and clear for new function scope (labels don't cross function boundaries)
+  let prev_labels : Array[String] = []
+  for label in self.labels {
+    prev_labels.push(label)
+  }
   if is_generator {
     self.in_generator = true
   }
+  self.in_function = true
+  self.in_iteration = false
+  self.in_switch = false
+  // Clear labels for new function scope
+  while self.labels.length() > 0 {
+    let _ = self.labels.pop()
+  }
   let body = self.parse_block()
-  self.in_generator = prev
+  self.in_generator = prev_generator
+  self.in_function = prev_function
+  self.in_iteration = prev_iteration
+  self.in_switch = prev_switch
+  // Restore labels
+  while self.labels.length() > 0 {
+    let _ = self.labels.pop()
+  }
+  for label in prev_labels {
+    self.labels.push(label)
+  }
   { name, params, return_type, body, is_generator }
 }
 

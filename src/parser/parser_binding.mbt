@@ -3,7 +3,13 @@
 fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
   match self.peek().kind {
     Ident(_) => match self.advance().kind {
-      Ident(n) => n
+      Ident(n) => {
+        // In strict mode, eval and arguments cannot be used as binding identifiers
+        if self.in_strict && (n == "eval" || n == "arguments") {
+          raise ParseError("'" + n + "' cannot be used as identifier in strict mode")
+        }
+        n
+      }
       _ => "<param>"
     }
     Yield => {

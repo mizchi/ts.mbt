@@ -14,6 +14,10 @@ pub struct Parser {
   mut in_generator : Bool
   mut temp_index : Int
   mut in_strict : Bool
+  mut in_function : Bool // for return validation
+  mut in_iteration : Bool // for continue validation
+  mut in_switch : Bool // for break validation (break works in switch too)
+  labels : Array[String] // for labeled break/continue validation
   src : String
 } derive(Show)
 
@@ -25,7 +29,18 @@ pub fn Parser::new(tokens : Array[Token]) -> Parser {
 
 ///|
 pub fn Parser::new_with_strict(tokens : Array[Token], in_strict : Bool) -> Parser {
-  { tokens, pos: 0, in_generator: false, temp_index: 0, in_strict, src: "" }
+  {
+    tokens,
+    pos: 0,
+    in_generator: false,
+    temp_index: 0,
+    in_strict,
+    in_function: false,
+    in_iteration: false,
+    in_switch: false,
+    labels: [],
+    src: "",
+  }
 }
 
 ///|
@@ -36,7 +51,18 @@ pub fn Parser::from_source(src : String) -> Parser {
   let trimmed = src.trim_start()
   let in_strict =
     trimmed.has_prefix("\"use strict\";") || trimmed.has_prefix("'use strict';")
-  { tokens, pos: 0, in_generator: false, temp_index: 0, in_strict, src }
+  {
+    tokens,
+    pos: 0,
+    in_generator: false,
+    temp_index: 0,
+    in_strict,
+    in_function: false,
+    in_iteration: false,
+    in_switch: false,
+    labels: [],
+    src,
+  }
 }
 
 ///|
@@ -198,7 +224,8 @@ fn Parser::has_line_terminator_between_positions(
     }
   while i < limit {
     let ch = self.src[i]
-    if ch == '\n' || ch == '\r' {
+    // JavaScript line terminators: LF, CR, LS (U+2028), PS (U+2029)
+    if ch == '\n' || ch == '\r' || ch == '\u2028' || ch == '\u2029' {
       return true
     }
     i += 1
@@ -214,5 +241,17 @@ fn Parser::has_line_terminator_after(self : Parser) -> Bool {
   }
   let start_pos = self.tokens[self.pos].pos
   let end_pos = self.tokens[next].pos
+  self.has_line_terminator_between_positions(start_pos, end_pos)
+}
+
+///|
+/// Check if there's a line terminator between the previous token and current token
+fn Parser::has_line_terminator_before(self : Parser) -> Bool {
+  if self.pos == 0 {
+    return false
+  }
+  let prev = self.pos - 1
+  let start_pos = self.tokens[prev].pos
+  let end_pos = self.tokens[self.pos].pos
   self.has_line_terminator_between_positions(start_pos, end_pos)
 }

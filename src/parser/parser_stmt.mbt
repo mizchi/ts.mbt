@@ -47,24 +47,58 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     Break => {
       let _ = self.advance()
-      let label = match self.peek().kind {
-        Ident(_) => match self.advance().kind {
-          Ident(name) => Some(name)
+      // ASI: line terminator after break means no label
+      let label = if self.has_line_terminator_before() {
+        None
+      } else {
+        match self.peek().kind {
+          Ident(_) => match self.advance().kind {
+            Ident(name) => Some(name)
+            _ => None
+          }
           _ => None
         }
-        _ => None
+      }
+      // Check if break is inside iteration or switch (or has valid label)
+      match label {
+        None =>
+          if not(self.in_iteration) && not(self.in_switch) {
+            raise ParseError("Illegal break statement")
+          }
+        Some(name) =>
+          // Check if label exists
+          if not(self.labels.contains(name)) {
+            raise ParseError("Undefined label '\{name}'")
+          }
       }
       self.consume_semicolon()
       Break(label)
     }
     Continue => {
       let _ = self.advance()
-      let label = match self.peek().kind {
-        Ident(_) => match self.advance().kind {
-          Ident(name) => Some(name)
+      // ASI: line terminator after continue means no label
+      let label = if self.has_line_terminator_before() {
+        None
+      } else {
+        match self.peek().kind {
+          Ident(_) => match self.advance().kind {
+            Ident(name) => Some(name)
+            _ => None
+          }
           _ => None
         }
-        _ => None
+      }
+      // Check if continue is inside iteration (or has valid label for an iteration)
+      match label {
+        None =>
+          if not(self.in_iteration) {
+            raise ParseError("Illegal continue statement")
+          }
+        Some(name) =>
+          // Check if label exists (should be an iteration label for continue)
+          if not(self.labels.contains(name)) {
+            raise ParseError("Undefined label '\{name}'")
+          }
       }
       self.consume_semicolon()
       Continue(label)
@@ -83,8 +117,22 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
         _ => "<label>"
       }
       let _ = self.expect(Colon)
+      // Add label to context for break/continue validation
+      self.labels.push(name)
       // statement
       let stmt = self.parse_stmt_no_lexical(false)
+      // Remove label from context
+      let _ = self.labels.pop()
+      Label(name, stmt)
+    }
+    // yield as label identifier in non-strict mode
+    Yield if not(self.in_strict) && self.peek_at(1).kind == Colon => {
+      let _ = self.advance()
+      let name = "yield"
+      let _ = self.expect(Colon)
+      self.labels.push(name)
+      let stmt = self.parse_stmt_no_lexical(false)
+      let _ = self.labels.pop()
       Label(name, stmt)
     }
     _ =>
@@ -125,9 +173,19 @@ fn Parser::parse_var_like(self : Parser, kind : VarKind) -> @ast.TsStmt raise Pa
 ///|
 // / return statement
 fn Parser::parse_return(self : Parser) -> @ast.TsStmt raise ParseError {
+  // Check if return is inside a function
+  if not(self.in_function) {
+    raise ParseError("Illegal return statement")
+  }
   let _ = self.expect(Return)
-  if self.check(Semicolon) {
-    let _ = self.advance()
+  // ASI: line terminator after return means return undefined
+  // After expect(Return), pos points to the next token
+  // Use has_line_terminator_before to check if there was a newline after return
+  if self.check(Semicolon) || self.check(RBrace) || self.check(Eof) ||
+    self.has_line_terminator_before() {
+    if self.check(Semicolon) {
+      let _ = self.advance()
+    }
     Return(None)
   } else {
     let expr = self.parse_expr()
@@ -199,7 +257,11 @@ fn Parser::parse_while(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(LParen)
   let cond = self.parse_expr()
   let _ = self.expect(RParen)
+  // Set iteration context for body
+  let prev_iteration = self.in_iteration
+  self.in_iteration = true
   let body = self.parse_block_or_stmt_no_lexical()
+  self.in_iteration = prev_iteration
   While(cond, body)
 }
 
@@ -207,7 +269,11 @@ fn Parser::parse_while(self : Parser) -> @ast.TsStmt raise ParseError {
 // / do-while statement
 fn Parser::parse_do_while(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Do)
+  // Set iteration context for body
+  let prev_iteration = self.in_iteration
+  self.in_iteration = true
   let body = self.parse_block_or_stmt_no_lexical()
+  self.in_iteration = prev_iteration
   let _ = self.expect(While)
   let _ = self.expect(LParen)
   let cond = self.parse_expr()
@@ -223,6 +289,9 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
   let expr = self.parse_expr()
   let _ = self.expect(RParen)
   let _ = self.expect(LBrace)
+  // Set switch context for case bodies
+  let prev_switch = self.in_switch
+  self.in_switch = true
   let cases : Array[@ast.TsSwitchCase] = []
   while not(self.check(RBrace)) {
     let case_test : @ast.TsExpr? = if self.match_(Case) {
@@ -239,6 +308,7 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     cases.push({ test_expr: case_test, body: { stmts, } })
   }
+  self.in_switch = prev_switch
   let _ = self.expect(RBrace)
   Switch(expr, cases)
 }
@@ -326,7 +396,11 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       let _ = self.advance() // of/in
       let iterable = self.parse_expr()
       let _ = self.expect(RParen)
+      // Set iteration context for body
+      let prev_iteration = self.in_iteration
+      self.in_iteration = true
       let body = self.parse_block_or_stmt_no_lexical()
+      self.in_iteration = prev_iteration
       // arrayelementtype ( Number)
       if is_in {
         return ForIn(kind, binding, Number, iterable, body)
@@ -360,7 +434,11 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         let _ = self.advance()
         let iterable = self.parse_expr()
         let _ = self.expect(RParen)
+        // Set iteration context for body
+        let prev_iteration = self.in_iteration
+        self.in_iteration = true
         let body = self.parse_block_or_stmt_no_lexical()
+        self.in_iteration = prev_iteration
         if is_in {
           return ForIn(@ast.TsForOfKind::Assign, binding, Number, iterable, body)
         }
@@ -563,7 +641,11 @@ fn Parser::parse_for_rest(
     }
   }
   let _ = self.expect(RParen)
+  // Set iteration context for body
+  let prev_iteration = self.in_iteration
+  self.in_iteration = true
   let body = self.parse_block_or_stmt_no_lexical()
+  self.in_iteration = prev_iteration
   For(init, cond, update, body)
 }
 
