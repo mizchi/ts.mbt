@@ -1150,33 +1150,62 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.global_env.define_var("Reflect", reflect)
   let _ = js_set_prop(global_obj, "Reflect", reflect)
 
-  // Map (stub)
+  // Map
   let map_ctor = self.make_native("Map")
   self.set_function_length(map_ctor, 0.0)
   self.set_function_name(map_ctor, "Map")
-  let _ = js_define_data_prop(
-    map_ctor,
-    "prototype",
-    self.new_object(),
-    true,
-    false,
-    true,
+  let map_proto = self.new_object()
+  let _ = js_set_prop(map_proto, "get", self.make_native("Map.prototype.get"))
+  let _ = js_set_prop(map_proto, "set", self.make_native("Map.prototype.set"))
+  let _ = js_set_prop(map_proto, "has", self.make_native("Map.prototype.has"))
+  let _ = js_set_prop(
+    map_proto, "delete", self.make_native("Map.prototype.delete"),
   )
+  let _ = js_set_prop(
+    map_proto, "clear", self.make_native("Map.prototype.clear"),
+  )
+  let _ = js_set_prop(map_proto, "keys", self.make_native("Map.prototype.keys"))
+  let _ = js_set_prop(
+    map_proto, "values", self.make_native("Map.prototype.values"),
+  )
+  let _ = js_set_prop(
+    map_proto, "entries", self.make_native("Map.prototype.entries"),
+  )
+  let _ = js_set_prop(
+    map_proto, "forEach", self.make_native("Map.prototype.forEach"),
+  )
+  let map_iter_fn = self.make_native("Map.prototype.entries")
+  let _ = js_set_prop(map_proto, "@@iterator", map_iter_fn)
+  let _ = js_define_data_prop(map_ctor, "prototype", map_proto, true, false, true)
   self.global_env.define_var("Map", map_ctor)
   let _ = js_set_prop(global_obj, "Map", map_ctor)
 
-  // Set (stub)
+  // Set
   let set_ctor = self.make_native("Set")
   self.set_function_length(set_ctor, 0.0)
   self.set_function_name(set_ctor, "Set")
-  let _ = js_define_data_prop(
-    set_ctor,
-    "prototype",
-    self.new_object(),
-    true,
-    false,
-    true,
+  let set_proto = self.new_object()
+  let _ = js_set_prop(set_proto, "add", self.make_native("Set.prototype.add"))
+  let _ = js_set_prop(set_proto, "has", self.make_native("Set.prototype.has"))
+  let _ = js_set_prop(
+    set_proto, "delete", self.make_native("Set.prototype.delete"),
   )
+  let _ = js_set_prop(
+    set_proto, "clear", self.make_native("Set.prototype.clear"),
+  )
+  let _ = js_set_prop(set_proto, "keys", self.make_native("Set.prototype.values"))
+  let _ = js_set_prop(
+    set_proto, "values", self.make_native("Set.prototype.values"),
+  )
+  let _ = js_set_prop(
+    set_proto, "entries", self.make_native("Set.prototype.entries"),
+  )
+  let _ = js_set_prop(
+    set_proto, "forEach", self.make_native("Set.prototype.forEach"),
+  )
+  let set_iter_fn = self.make_native("Set.prototype.values")
+  let _ = js_set_prop(set_proto, "@@iterator", set_iter_fn)
+  let _ = js_define_data_prop(set_ctor, "prototype", set_proto, true, false, true)
   self.global_env.define_var("Set", set_ctor)
   let _ = js_set_prop(global_obj, "Set", set_ctor)
 
@@ -4604,7 +4633,15 @@ fn JSInterpreter::call_native(
       match self.get_generator_id(this_arg) {
         Some(gen_id) => {
           let sent = if args.length() > 0 { args[0] } else { Undefined }
-          self.generator_next(gen_id, sent)
+          let result = self.generator_next(gen_id, sent)
+          // For async generators, wrap result in a Promise
+          match js_get_prop(this_arg, "__is_async") {
+            Bool(true) => {
+              let promise_ctor = self.global_env.get("Promise")
+              self.promise_static_resolve_with_ctor(promise_ctor, result)
+            }
+            _ => result
+          }
         }
         None =>
           self.set_error_kind(
@@ -4615,7 +4652,15 @@ fn JSInterpreter::call_native(
       match self.get_generator_id(this_arg) {
         Some(gen_id) => {
           let sent = if args.length() > 0 { args[0] } else { Undefined }
-          self.generator_return(gen_id, sent)
+          let result = self.generator_return(gen_id, sent)
+          // For async generators, wrap result in a Promise
+          match js_get_prop(this_arg, "__is_async") {
+            Bool(true) => {
+              let promise_ctor = self.global_env.get("Promise")
+              self.promise_static_resolve_with_ctor(promise_ctor, result)
+            }
+            _ => result
+          }
         }
         None =>
           self.set_error_kind(
@@ -4626,7 +4671,15 @@ fn JSInterpreter::call_native(
       match self.get_generator_id(this_arg) {
         Some(gen_id) => {
           let sent = if args.length() > 0 { args[0] } else { Undefined }
-          self.generator_throw(gen_id, sent)
+          let result = self.generator_throw(gen_id, sent)
+          // For async generators, wrap result in a Promise
+          match js_get_prop(this_arg, "__is_async") {
+            Bool(true) => {
+              let promise_ctor = self.global_env.get("Promise")
+              self.promise_static_resolve_with_ctor(promise_ctor, result)
+            }
+            _ => result
+          }
         }
         None =>
           self.set_error_kind(
@@ -5772,6 +5825,241 @@ fn JSInterpreter::call_native(
       }
       realm
     }
+    // Map constructor
+    "Map" => {
+      let map_obj = self.new_object()
+      let map_proto = js_get_prop(self.global_env.get("Map"), "prototype")
+      let _ = js_set_prop(map_obj, "__proto__", map_proto)
+      let _ = js_set_prop(map_obj, "__class", String("Map"))
+      let entries : Array[JSValue] = []
+      let _ = js_set_prop(map_obj, "__map_entries", js_array_from(entries))
+      // Initialize from iterable if provided
+      if args.length() > 0 && !args[0].is_nullish() {
+        let iterable = args[0]
+        let iter_fn = js_get_prop(iterable, "@@iterator")
+        match iter_fn {
+          Function(_) => {
+            let iter = self.call_function(iter_fn, iterable, [])
+            let next_method = js_get_prop(iter, "next")
+            while true {
+              let next_result = self.call_function(next_method, iter, [])
+              match js_get_prop(next_result, "done") {
+                Bool(true) => break
+                _ => {
+                  let val = js_get_prop(next_result, "value")
+                  // Each item should be [key, value]
+                  let key = js_get_prop(val, "0")
+                  let value = js_get_prop(val, "1")
+                  let _ = self.map_set_entry(map_obj, key, value)
+                }
+              }
+            }
+          }
+          _ => ()
+        }
+      }
+      map_obj
+    }
+    // Map.prototype methods
+    "Map.prototype.get" => {
+      let key = if args.length() > 0 { args[0] } else { Undefined }
+      self.map_get_entry(this_arg, key)
+    }
+    "Map.prototype.set" => {
+      let key = if args.length() > 0 { args[0] } else { Undefined }
+      let value = if args.length() > 1 { args[1] } else { Undefined }
+      let _ = self.map_set_entry(this_arg, key, value)
+      this_arg
+    }
+    "Map.prototype.has" => {
+      let key = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.map_has_entry(this_arg, key))
+    }
+    "Map.prototype.delete" => {
+      let key = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.map_delete_entry(this_arg, key))
+    }
+    "Map.prototype.clear" => {
+      let entries : Array[JSValue] = []
+      let _ = js_set_prop(this_arg, "__map_entries", js_array_from(entries))
+      Undefined
+    }
+    "Map.prototype.keys" => self.new_map_key_iterator(this_arg)
+    "Map.prototype.values" => self.new_map_value_iterator(this_arg)
+    "Map.prototype.entries" => self.new_map_entry_iterator(this_arg)
+    "Map.prototype.forEach" => {
+      let callback = if args.length() > 0 { args[0] } else { Undefined }
+      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      match js_get_prop(this_arg, "__map_entries") {
+        JSValue::Array(arr) => {
+          for i = 0; i < arr.length; i = i + 1 {
+            match arr.items[i] {
+              JSValue::Array(pair) if pair.length >= 2 => {
+                let key = pair.items[0]
+                let value = pair.items[1]
+                let _ = self.call_function(
+                  callback, this_for_callback, [value, key, this_arg],
+                )
+              }
+              _ => ()
+            }
+          }
+        }
+        _ => ()
+      }
+      Undefined
+    }
+    // Set constructor
+    "Set" => {
+      let set_obj = self.new_object()
+      let set_proto = js_get_prop(self.global_env.get("Set"), "prototype")
+      let _ = js_set_prop(set_obj, "__proto__", set_proto)
+      let _ = js_set_prop(set_obj, "__class", String("Set"))
+      let entries : Array[JSValue] = []
+      let _ = js_set_prop(set_obj, "__set_entries", js_array_from(entries))
+      // Initialize from iterable if provided
+      if args.length() > 0 && !args[0].is_nullish() {
+        let iterable = args[0]
+        let iter_fn = js_get_prop(iterable, "@@iterator")
+        match iter_fn {
+          Function(_) => {
+            let iter = self.call_function(iter_fn, iterable, [])
+            let next_method = js_get_prop(iter, "next")
+            while true {
+              let next_result = self.call_function(next_method, iter, [])
+              match js_get_prop(next_result, "done") {
+                Bool(true) => break
+                _ => {
+                  let val = js_get_prop(next_result, "value")
+                  let _ = self.set_add_entry(set_obj, val)
+                }
+              }
+            }
+          }
+          _ => ()
+        }
+      }
+      set_obj
+    }
+    // Set.prototype methods
+    "Set.prototype.add" => {
+      let value = if args.length() > 0 { args[0] } else { Undefined }
+      let _ = self.set_add_entry(this_arg, value)
+      this_arg
+    }
+    "Set.prototype.has" => {
+      let value = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.set_has_entry(this_arg, value))
+    }
+    "Set.prototype.delete" => {
+      let value = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.set_delete_entry(this_arg, value))
+    }
+    "Set.prototype.clear" => {
+      let entries : Array[JSValue] = []
+      let _ = js_set_prop(this_arg, "__set_entries", js_array_from(entries))
+      Undefined
+    }
+    "Set.prototype.values" => self.new_set_value_iterator(this_arg)
+    "Set.prototype.entries" => self.new_set_entry_iterator(this_arg)
+    "Set.prototype.forEach" => {
+      let callback = if args.length() > 0 { args[0] } else { Undefined }
+      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      match js_get_prop(this_arg, "__set_entries") {
+        JSValue::Array(arr) => {
+          for i = 0; i < arr.length; i = i + 1 {
+            let value = arr.items[i]
+            let _ = self.call_function(
+              callback, this_for_callback, [value, value, this_arg],
+            )
+          }
+        }
+        _ => ()
+      }
+      Undefined
+    }
+    // MapIterator.next
+    "MapIterator.next" => {
+      let map_ref = js_get_prop(this_arg, "__map_ref")
+      let index_val = js_get_prop(this_arg, "__iter_index")
+      let kind_val = js_get_prop(this_arg, "__iter_kind")
+      match (js_get_prop(map_ref, "__map_entries"), index_val, kind_val) {
+        (JSValue::Array(arr), Number(index), String(kind)) => {
+          let idx = index.to_int()
+          if idx >= arr.length {
+            let result = self.new_object()
+            let _ = js_set_prop(result, "done", Bool(true))
+            let _ = js_set_prop(result, "value", Undefined)
+            result
+          } else {
+            let _ = js_set_prop(this_arg, "__iter_index", Number(index + 1.0))
+            let entry = arr.items[idx]
+            let value = match (entry, kind) {
+              (JSValue::Array(pair), "key") if pair.length >= 2 => pair.items[0]
+              (JSValue::Array(pair), "value") if pair.length >= 2 => pair.items[1]
+              (JSValue::Array(pair), _) if pair.length >= 2 => {
+                let result = js_new_array()
+                let _ = js_array_push(result, pair.items[0])
+                let _ = js_array_push(result, pair.items[1])
+                result
+              }
+              _ => Undefined
+            }
+            let result = self.new_object()
+            let _ = js_set_prop(result, "done", Bool(false))
+            let _ = js_set_prop(result, "value", value)
+            result
+          }
+        }
+        _ => {
+          let result = self.new_object()
+          let _ = js_set_prop(result, "done", Bool(true))
+          let _ = js_set_prop(result, "value", Undefined)
+          result
+        }
+      }
+    }
+    // SetIterator.next
+    "SetIterator.next" => {
+      let set_ref = js_get_prop(this_arg, "__set_ref")
+      let index_val = js_get_prop(this_arg, "__iter_index")
+      let kind_val = js_get_prop(this_arg, "__iter_kind")
+      match (js_get_prop(set_ref, "__set_entries"), index_val, kind_val) {
+        (JSValue::Array(arr), Number(index), String(kind)) => {
+          let idx = index.to_int()
+          if idx >= arr.length {
+            let result = self.new_object()
+            let _ = js_set_prop(result, "done", Bool(true))
+            let _ = js_set_prop(result, "value", Undefined)
+            result
+          } else {
+            let _ = js_set_prop(this_arg, "__iter_index", Number(index + 1.0))
+            let entry = arr.items[idx]
+            let value = match kind {
+              "entry" => {
+                let result = js_new_array()
+                let _ = js_array_push(result, entry)
+                let _ = js_array_push(result, entry)
+                result
+              }
+              _ => entry
+            }
+            let result = self.new_object()
+            let _ = js_set_prop(result, "done", Bool(false))
+            let _ = js_set_prop(result, "value", value)
+            result
+          }
+        }
+        _ => {
+          let result = self.new_object()
+          let _ = js_set_prop(result, "done", Bool(true))
+          let _ = js_set_prop(result, "value", Undefined)
+          result
+        }
+      }
+    }
+    // Iterator.self - returns the iterator itself for @@iterator method
+    "Iterator.self" => this_arg
     _ => Undefined
   }
 }
@@ -5881,4 +6169,289 @@ fn JSInterpreter::new_instance(
       }
     }
   }
+}
+
+///|
+// SameValueZero comparison for Map/Set keys
+fn same_value_zero(a : JSValue, b : JSValue) -> Bool {
+  match (a, b) {
+    (Number(x), Number(y)) => {
+      if x.is_nan() && y.is_nan() {
+        true
+      } else if x == 0.0 && y == 0.0 {
+        // +0 === -0 in SameValueZero
+        true
+      } else {
+        x == y
+      }
+    }
+    (String(x), String(y)) => x == y
+    (Bool(x), Bool(y)) => x == y
+    (Undefined, Undefined) => true
+    (Null, Null) => true
+    // Reference equality for objects
+    (Object(m1), Object(m2)) => m1.id == m2.id
+    (JSValue::Array(a1), JSValue::Array(a2)) => a1.id == a2.id
+    (Function(f1), Function(f2)) => f1.id == f2.id
+    _ => false
+  }
+}
+
+///|
+fn JSInterpreter::map_get_entry(
+  self : JSInterpreter,
+  map_obj : JSValue,
+  key : JSValue,
+) -> JSValue {
+  let _ = self
+  match js_get_prop(map_obj, "__map_entries") {
+    JSValue::Array(arr) => {
+      for i = 0; i < arr.length; i = i + 1 {
+        match arr.items[i] {
+          JSValue::Array(pair) if pair.length >= 2 => {
+            if same_value_zero(pair.items[0], key) {
+              return pair.items[1]
+            }
+          }
+          _ => ()
+        }
+      }
+      Undefined
+    }
+    _ => Undefined
+  }
+}
+
+///|
+fn JSInterpreter::map_set_entry(
+  self : JSInterpreter,
+  map_obj : JSValue,
+  key : JSValue,
+  value : JSValue,
+) -> JSValue {
+  let _ = self
+  match js_get_prop(map_obj, "__map_entries") {
+    JSValue::Array(arr) => {
+      // Check if key exists
+      for i = 0; i < arr.length; i = i + 1 {
+        match arr.items[i] {
+          JSValue::Array(pair) if pair.length >= 2 => {
+            if same_value_zero(pair.items[0], key) {
+              // Update existing entry
+              let new_pair = js_new_array()
+              let _ = js_array_push(new_pair, key)
+              let _ = js_array_push(new_pair, value)
+              arr.items[i] = new_pair
+              return value
+            }
+          }
+          _ => ()
+        }
+      }
+      // Add new entry
+      let new_pair = js_new_array()
+      let _ = js_array_push(new_pair, key)
+      let _ = js_array_push(new_pair, value)
+      let _ = js_array_push(JSValue::Array(arr), new_pair)
+    }
+    _ => ()
+  }
+  value
+}
+
+///|
+fn JSInterpreter::map_has_entry(
+  self : JSInterpreter,
+  map_obj : JSValue,
+  key : JSValue,
+) -> Bool {
+  let _ = self
+  match js_get_prop(map_obj, "__map_entries") {
+    JSValue::Array(arr) => {
+      for i = 0; i < arr.length; i = i + 1 {
+        match arr.items[i] {
+          JSValue::Array(pair) if pair.length >= 2 => {
+            if same_value_zero(pair.items[0], key) {
+              return true
+            }
+          }
+          _ => ()
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn JSInterpreter::map_delete_entry(
+  self : JSInterpreter,
+  map_obj : JSValue,
+  key : JSValue,
+) -> Bool {
+  let _ = self
+  match js_get_prop(map_obj, "__map_entries") {
+    JSValue::Array(arr) => {
+      for i = 0; i < arr.length; i = i + 1 {
+        match arr.items[i] {
+          JSValue::Array(pair) if pair.length >= 2 => {
+            if same_value_zero(pair.items[0], key) {
+              let _ = arr.items.remove(i)
+              arr.length = arr.length - 1
+              return true
+            }
+          }
+          _ => ()
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn JSInterpreter::set_add_entry(
+  self : JSInterpreter,
+  set_obj : JSValue,
+  value : JSValue,
+) -> JSValue {
+  let _ = self
+  match js_get_prop(set_obj, "__set_entries") {
+    JSValue::Array(arr) => {
+      // Check if value exists
+      for i = 0; i < arr.length; i = i + 1 {
+        if same_value_zero(arr.items[i], value) {
+          return value
+        }
+      }
+      // Add new entry
+      let _ = js_array_push(JSValue::Array(arr), value)
+    }
+    _ => ()
+  }
+  value
+}
+
+///|
+fn JSInterpreter::set_has_entry(
+  self : JSInterpreter,
+  set_obj : JSValue,
+  value : JSValue,
+) -> Bool {
+  let _ = self
+  match js_get_prop(set_obj, "__set_entries") {
+    JSValue::Array(arr) => {
+      for i = 0; i < arr.length; i = i + 1 {
+        if same_value_zero(arr.items[i], value) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn JSInterpreter::set_delete_entry(
+  self : JSInterpreter,
+  set_obj : JSValue,
+  value : JSValue,
+) -> Bool {
+  let _ = self
+  match js_get_prop(set_obj, "__set_entries") {
+    JSValue::Array(arr) => {
+      for i = 0; i < arr.length; i = i + 1 {
+        if same_value_zero(arr.items[i], value) {
+          let _ = arr.items.remove(i)
+          arr.length = arr.length - 1
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn JSInterpreter::new_map_key_iterator(
+  self : JSInterpreter,
+  map_obj : JSValue,
+) -> JSValue {
+  let iter = self.new_object()
+  let _ = js_set_prop(iter, "__map_ref", map_obj)
+  let _ = js_set_prop(iter, "__iter_index", Number(0.0))
+  let _ = js_set_prop(iter, "__iter_kind", String("key"))
+  let next_fn = self.make_native("MapIterator.next")
+  let _ = js_set_prop(iter, "next", next_fn)
+  let iter_self_fn = self.make_native("Iterator.self")
+  let _ = js_set_prop(iter, "@@iterator", iter_self_fn)
+  iter
+}
+
+///|
+fn JSInterpreter::new_map_value_iterator(
+  self : JSInterpreter,
+  map_obj : JSValue,
+) -> JSValue {
+  let iter = self.new_object()
+  let _ = js_set_prop(iter, "__map_ref", map_obj)
+  let _ = js_set_prop(iter, "__iter_index", Number(0.0))
+  let _ = js_set_prop(iter, "__iter_kind", String("value"))
+  let next_fn = self.make_native("MapIterator.next")
+  let _ = js_set_prop(iter, "next", next_fn)
+  let iter_self_fn = self.make_native("Iterator.self")
+  let _ = js_set_prop(iter, "@@iterator", iter_self_fn)
+  iter
+}
+
+///|
+fn JSInterpreter::new_map_entry_iterator(
+  self : JSInterpreter,
+  map_obj : JSValue,
+) -> JSValue {
+  let iter = self.new_object()
+  let _ = js_set_prop(iter, "__map_ref", map_obj)
+  let _ = js_set_prop(iter, "__iter_index", Number(0.0))
+  let _ = js_set_prop(iter, "__iter_kind", String("entry"))
+  let next_fn = self.make_native("MapIterator.next")
+  let _ = js_set_prop(iter, "next", next_fn)
+  let iter_self_fn = self.make_native("Iterator.self")
+  let _ = js_set_prop(iter, "@@iterator", iter_self_fn)
+  iter
+}
+
+///|
+fn JSInterpreter::new_set_value_iterator(
+  self : JSInterpreter,
+  set_obj : JSValue,
+) -> JSValue {
+  let iter = self.new_object()
+  let _ = js_set_prop(iter, "__set_ref", set_obj)
+  let _ = js_set_prop(iter, "__iter_index", Number(0.0))
+  let _ = js_set_prop(iter, "__iter_kind", String("value"))
+  let next_fn = self.make_native("SetIterator.next")
+  let _ = js_set_prop(iter, "next", next_fn)
+  let iter_self_fn = self.make_native("Iterator.self")
+  let _ = js_set_prop(iter, "@@iterator", iter_self_fn)
+  iter
+}
+
+///|
+fn JSInterpreter::new_set_entry_iterator(
+  self : JSInterpreter,
+  set_obj : JSValue,
+) -> JSValue {
+  let iter = self.new_object()
+  let _ = js_set_prop(iter, "__set_ref", set_obj)
+  let _ = js_set_prop(iter, "__iter_index", Number(0.0))
+  let _ = js_set_prop(iter, "__iter_kind", String("entry"))
+  let next_fn = self.make_native("SetIterator.next")
+  let _ = js_set_prop(iter, "next", next_fn)
+  let iter_self_fn = self.make_native("Iterator.self")
+  let _ = js_set_prop(iter, "@@iterator", iter_self_fn)
+  iter
 }

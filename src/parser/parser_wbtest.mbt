@@ -251,7 +251,7 @@ test "parser: parse for-await-of stmt" {
   let parser = Parser::from_source("for await (var x of []) { x; }")
   let stmt = parser.parse_stmt()
   match stmt {
-    ForOf(
+    ForAwaitOf(
       @ast.TsForOfKind::Var,
       @ast.TsBinding::Ident("x"),
       Number,

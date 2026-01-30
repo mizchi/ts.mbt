@@ -698,6 +698,22 @@ fn JSInterpreter::get_prop_value_with_receiver(
       }
     }
     Object(map) => {
+      // Handle Map/Set.size specially
+      if key == "size" {
+        match js_get_prop(target, "__class") {
+          String("Map") =>
+            match js_get_prop(target, "__map_entries") {
+              JSValue::Array(arr) => return Number(arr.length.to_double())
+              _ => ()
+            }
+          String("Set") =>
+            match js_get_prop(target, "__set_entries") {
+              JSValue::Array(arr) => return Number(arr.length.to_double())
+              _ => ()
+            }
+          _ => ()
+        }
+      }
       for prop in map.props {
         if prop.key == key {
           return self.eval_prop_value(receiver, prop)

@@ -83,6 +83,17 @@ fn JSInterpreter::make_generator(
       let obj = self.new_object()
       let _ = js_set_prop(obj, "__class", String("Generator"))
       let _ = js_set_prop(obj, "__gen_id", Number(gen_id.to_double()))
+      // Mark if this is an async generator
+      if closure.is_async {
+        let _ = js_set_prop(obj, "__is_async", Bool(true))
+        let _ = js_set_prop(obj, "__class", String("AsyncGenerator"))
+        // Async generators implement both @@asyncIterator and @@iterator
+        let _ = js_set_prop(
+          obj,
+          "@@asyncIterator",
+          self.make_native("Iterator.prototype[@@iterator]"),
+        )
+      }
       let _ = js_set_prop(
         obj,
         "next",

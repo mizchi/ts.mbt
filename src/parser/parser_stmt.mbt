@@ -413,6 +413,9 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       if is_in {
         return ForIn(kind, binding, Number, iterable, body)
       }
+      if is_await {
+        return ForAwaitOf(kind, binding, Number, iterable, body)
+      }
       return ForOf(kind, binding, Number, iterable, body)
     }
     let var_kind = match kind {
@@ -449,6 +452,15 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         self.in_iteration = prev_iteration
         if is_in {
           return ForIn(
+            @ast.TsForOfKind::Assign,
+            binding,
+            Number,
+            iterable,
+            body,
+          )
+        }
+        if is_await {
+          return ForAwaitOf(
             @ast.TsForOfKind::Assign,
             binding,
             Number,
