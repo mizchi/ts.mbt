@@ -49,6 +49,21 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let obj_is = self.make_native("Object.is")
   self.set_function_length(obj_is, 2.0)
   let _ = js_set_prop(object_ctor, "is", obj_is)
+  let obj_keys = self.make_native("Object.keys")
+  self.set_function_length(obj_keys, 1.0)
+  let _ = js_set_prop(object_ctor, "keys", obj_keys)
+  let obj_values = self.make_native("Object.values")
+  self.set_function_length(obj_values, 1.0)
+  let _ = js_set_prop(object_ctor, "values", obj_values)
+  let obj_entries = self.make_native("Object.entries")
+  self.set_function_length(obj_entries, 1.0)
+  let _ = js_set_prop(object_ctor, "entries", obj_entries)
+  let obj_assign = self.make_native("Object.assign")
+  self.set_function_length(obj_assign, 2.0)
+  let _ = js_set_prop(object_ctor, "assign", obj_assign)
+  let obj_from_entries = self.make_native("Object.fromEntries")
+  self.set_function_length(obj_from_entries, 1.0)
+  let _ = js_set_prop(object_ctor, "fromEntries", obj_from_entries)
   self.global_env.define_var("Object", object_ctor)
   let _ = js_set_prop(global_obj, "Object", object_ctor)
 
@@ -3553,6 +3568,170 @@ fn JSInterpreter::call_native(
         _ => ()
       }
       js_array_from(names)
+    }
+    "Object.keys" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let names : Array[JSValue] = []
+      match target {
+        Function(closure) =>
+          for prop in closure.props {
+            if prop.enumerable {
+              names.push(String(prop.key))
+            }
+          }
+        Object(map) =>
+          for prop in map.props {
+            if prop.enumerable {
+              names.push(String(prop.key))
+            }
+          }
+        Array(arr) => {
+          for i in 0..<arr.items.length() {
+            if arr.present[i] {
+              names.push(String(i.to_string()))
+            }
+          }
+          for prop in arr.props {
+            if prop.enumerable {
+              names.push(String(prop.key))
+            }
+          }
+        }
+        _ => ()
+      }
+      js_array_from(names)
+    }
+    "Object.values" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let values : Array[JSValue] = []
+      match target {
+        Function(closure) =>
+          for prop in closure.props {
+            if prop.enumerable {
+              values.push(prop.value)
+            }
+          }
+        Object(map) =>
+          for prop in map.props {
+            if prop.enumerable {
+              values.push(prop.value)
+            }
+          }
+        Array(arr) => {
+          for i in 0..<arr.items.length() {
+            if arr.present[i] {
+              values.push(arr.items[i])
+            }
+          }
+          for prop in arr.props {
+            if prop.enumerable {
+              values.push(prop.value)
+            }
+          }
+        }
+        _ => ()
+      }
+      js_array_from(values)
+    }
+    "Object.entries" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let entries : Array[JSValue] = []
+      match target {
+        Function(closure) =>
+          for prop in closure.props {
+            if prop.enumerable {
+              entries.push(js_array_from([String(prop.key), prop.value]))
+            }
+          }
+        Object(map) =>
+          for prop in map.props {
+            if prop.enumerable {
+              entries.push(js_array_from([String(prop.key), prop.value]))
+            }
+          }
+        Array(arr) => {
+          for i in 0..<arr.items.length() {
+            if arr.present[i] {
+              entries.push(js_array_from([String(i.to_string()), arr.items[i]]))
+            }
+          }
+          for prop in arr.props {
+            if prop.enumerable {
+              entries.push(js_array_from([String(prop.key), prop.value]))
+            }
+          }
+        }
+        _ => ()
+      }
+      js_array_from(entries)
+    }
+    "Object.assign" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      match target {
+        Undefined | Null => {
+          let err = self.set_error_kind(
+            "TypeError",
+            "Cannot convert undefined or null to object",
+          )
+          return err
+        }
+        _ => ()
+      }
+      for i in 1..<args.length() {
+        let source = args[i]
+        match source {
+          Undefined | Null => continue
+          Object(map) =>
+            for prop in map.props {
+              if prop.enumerable {
+                let _ = js_set_prop(target, prop.key, prop.value)
+              }
+            }
+          Array(arr) => {
+            for j in 0..<arr.items.length() {
+              if arr.present[j] {
+                let _ = js_set_prop(target, j.to_string(), arr.items[j])
+              }
+            }
+            for prop in arr.props {
+              if prop.enumerable {
+                let _ = js_set_prop(target, prop.key, prop.value)
+              }
+            }
+          }
+          Function(closure) =>
+            for prop in closure.props {
+              if prop.enumerable {
+                let _ = js_set_prop(target, prop.key, prop.value)
+              }
+            }
+          _ => ()
+        }
+      }
+      target
+    }
+    "Object.fromEntries" => {
+      let iterable = if args.length() > 0 { args[0] } else { Undefined }
+      let obj = js_new_object_with_proto(Some(self.object_proto))
+      match iterable {
+        Array(arr) => {
+          for i in 0..<arr.items.length() {
+            if arr.present[i] {
+              match arr.items[i] {
+                Array(entry) =>
+                  if entry.items.length() >= 2 && entry.present[0] && entry.present[1] {
+                    let key = entry.items[0].to_js_string()
+                    let value = entry.items[1]
+                    let _ = js_set_prop(obj, key, value)
+                  }
+                _ => ()
+              }
+            }
+          }
+        }
+        _ => ()
+      }
+      obj
     }
     "Object.isExtensible" => {
       let target = if args.length() > 0 { args[0] } else { Undefined }
