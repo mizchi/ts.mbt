@@ -5364,7 +5364,15 @@ fn JSInterpreter::new_instance(
     }
     "String" => {
       let val = if args.length() > 0 {
-        JSValue::String(args[0].to_js_string())
+        // Check if argument is a Symbol - cannot convert to string
+        match args[0] {
+          String(s) if is_symbol_string(s) =>
+            return self.set_error_kind(
+              "TypeError",
+              "Cannot convert a Symbol value to a string",
+            )
+          _ => JSValue::String(args[0].to_js_string())
+        }
       } else {
         JSValue::String("")
       }

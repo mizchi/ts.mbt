@@ -1,1 +1,1 @@
-test262/test/language/computed-property-names/to-name-side-effects/numbers-object.js
+test262/test/language/statements/class/elements/redeclaration-symbol.js
