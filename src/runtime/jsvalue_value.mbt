@@ -251,9 +251,17 @@ pub fn JSValue::to_js_string(self : JSValue) -> String {
     String(s) => s
     Object(_) =>
       // Check for special object types
-      match js_get_prop(self, "__gen_id") {
-        Number(_) => "[object Generator]"
-        _ => "[object Object]"
+      match js_get_prop(self, "__class") {
+        String("BigInt") =>
+          match js_get_prop(self, "value") {
+            String(s) => s + "n"
+            _ => "[object Object]"
+          }
+        _ =>
+          match js_get_prop(self, "__gen_id") {
+            Number(_) => "[object Generator]"
+            _ => "[object Object]"
+          }
       }
     Array(arr) => {
       let parts : Array[String] = []
@@ -381,8 +389,32 @@ pub fn js_typeof(val : JSValue) -> JSValue {
 // === comparisonoperator ===
 
 ///|
+// Helper to check if a JSValue is a BigInt and get its value string
+fn get_bigint_value(val : JSValue) -> String? {
+  match val {
+    Object(_) => {
+      match js_get_prop(val, "__class") {
+        String("BigInt") =>
+          match js_get_prop(val, "value") {
+            String(s) => Some(s)
+            _ => None
+          }
+        _ => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 // / (===)
 pub fn js_strict_eq(left : JSValue, right : JSValue) -> JSValue {
+  // Special case for BigInt comparison
+  match (get_bigint_value(left), get_bigint_value(right)) {
+    (Some(a), Some(b)) => return Bool(a == b)
+    (Some(_), None) | (None, Some(_)) => return Bool(false) // BigInt !== non-BigInt
+    _ => ()
+  }
   Bool(
     match (left, right) {
       (Undefined, Undefined) => true

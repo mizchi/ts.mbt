@@ -1,1 +1,1 @@
-/Users/mz/ghq/github.com/tc39/test262/test/language/expressions/strict-does-not-equals/bigint-and-incomparable-primitive.js
+/Users/mz/ghq/github.com/tc39/test262/test/language/computed-property-names/to-name-side-effects/numbers-object.js
