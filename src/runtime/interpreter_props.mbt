@@ -749,7 +749,14 @@ fn JSInterpreter::get_prop_value_with_receiver(
         }
       }
     String(s) =>
-      if key == "length" {
+      // Check if this is a symbol (Symbol(...)#N, @@global:key, or @@name)
+      // Note: "Symbol(...)" without #N suffix is NOT a symbol (it's the toString result)
+      if s.has_prefix("@@") || (s.has_prefix("Symbol(") && s.contains("#")) {
+        // Look up on Symbol.prototype
+        let symbol_ctor = self.global_env.get("Symbol")
+        let symbol_proto = js_get_prop(symbol_ctor, "prototype")
+        self.get_prop_value_with_receiver(symbol_proto, receiver, key)
+      } else if key == "length" {
         Number(s.length().to_double())
       } else {
         let idx = @strconv.parse_int(key) catch { _ => -1 }

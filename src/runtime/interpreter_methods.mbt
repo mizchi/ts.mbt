@@ -7,7 +7,15 @@ pub fn JSInterpreter::call_method(
   args : Array[JSValue],
 ) -> JSValue {
   match obj {
-    String(s) => self.string_method(s, method_name, args)
+    String(s) =>
+      // Check if this is a symbol (Symbol(...)#N, @@global:key, or @@name)
+      if is_symbol_string(s) {
+        // Symbol method - look up on Symbol.prototype
+        let func = self.get_prop_value(obj, method_name)
+        self.call_function(func, obj, args)
+      } else {
+        self.string_method(s, method_name, args)
+      }
     Array(arr) => self.array_method(arr, method_name, args)
     Bool(_) | Number(_) => {
       let boxed = self.wrap_primitive(self.global_env, obj)

@@ -1090,14 +1090,62 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   // Symbol
   let symbol_fn = self.make_native("Symbol")
   self.set_function_length(symbol_fn, 0.0)
-  let string_ctor = self.global_env.get("String")
-  let string_proto = js_get_prop(string_ctor, "prototype")
-  let _ = js_define_data_prop(
-    symbol_fn, "prototype", string_proto, true, false, true,
+  // Create Symbol.prototype
+  let symbol_proto = self.new_object()
+  let _ = js_set_prop(symbol_proto, "__class", String("Symbol"))
+  // Symbol.prototype.description (getter)
+  let sym_desc_get = self.make_native("Symbol.prototype.description")
+  self.set_function_length(sym_desc_get, 0.0)
+  self.set_function_name(sym_desc_get, "get description")
+  let _ = js_define_accessor_prop(
+    symbol_proto, "description", Some(sym_desc_get), None, false, true,
   )
-  let _ = js_set_prop(symbol_fn, "hasInstance", String("@@hasInstance"))
-  let _ = js_set_prop(symbol_fn, "iterator", String("@@iterator"))
-  let _ = js_set_prop(symbol_fn, "species", String("@@species"))
+  // Symbol.prototype.toString
+  let sym_to_str = self.make_native("Symbol.prototype.toString")
+  self.set_function_length(sym_to_str, 0.0)
+  self.set_function_name(sym_to_str, "toString")
+  let _ = js_define_data_prop(symbol_proto, "toString", sym_to_str, true, false, true)
+  // Symbol.prototype.valueOf
+  let sym_value_of = self.make_native("Symbol.prototype.valueOf")
+  self.set_function_length(sym_value_of, 0.0)
+  self.set_function_name(sym_value_of, "valueOf")
+  let _ = js_define_data_prop(symbol_proto, "valueOf", sym_value_of, true, false, true)
+  // Symbol.prototype[@@toPrimitive]
+  let sym_to_prim = self.make_native("Symbol.prototype[@@toPrimitive]")
+  self.set_function_length(sym_to_prim, 1.0)
+  self.set_function_name(sym_to_prim, "[Symbol.toPrimitive]")
+  let _ = js_define_data_prop(symbol_proto, "@@toPrimitive", sym_to_prim, false, false, true)
+  // Symbol.prototype[@@toStringTag]
+  let _ = js_define_data_prop(
+    symbol_proto, "@@toStringTag", String("Symbol"), false, false, true,
+  )
+  let _ = js_define_data_prop(symbol_fn, "prototype", symbol_proto, false, false, false)
+  // Symbol.for
+  let symbol_for = self.make_native("Symbol.for")
+  self.set_function_length(symbol_for, 1.0)
+  self.set_function_name(symbol_for, "for")
+  let _ = js_define_data_prop(symbol_fn, "for", symbol_for, true, false, true)
+  // Symbol.keyFor
+  let symbol_key_for = self.make_native("Symbol.keyFor")
+  self.set_function_length(symbol_key_for, 1.0)
+  self.set_function_name(symbol_key_for, "keyFor")
+  let _ = js_define_data_prop(symbol_fn, "keyFor", symbol_key_for, true, false, true)
+  // Well-known symbols (not enumerable, not writable, not configurable)
+  let _ = js_define_data_prop(symbol_fn, "asyncIterator", String("@@asyncIterator"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "hasInstance", String("@@hasInstance"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "isConcatSpreadable", String("@@isConcatSpreadable"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "iterator", String("@@iterator"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "match", String("@@match"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "matchAll", String("@@matchAll"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "replace", String("@@replace"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "search", String("@@search"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "species", String("@@species"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "split", String("@@split"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "toPrimitive", String("@@toPrimitive"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "toStringTag", String("@@toStringTag"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "unscopables", String("@@unscopables"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "dispose", String("@@dispose"), false, false, false)
+  let _ = js_define_data_prop(symbol_fn, "asyncDispose", String("@@asyncDispose"), false, false, false)
   self.global_env.define_var("Symbol", symbol_fn)
   let _ = js_set_prop(global_obj, "Symbol", symbol_fn)
 
@@ -4879,10 +4927,138 @@ fn JSInterpreter::call_native(
     "Symbol" => {
       let id = self.symbol_counter
       self.symbol_counter += 1
-      if args.length() > 0 {
-        String("Symbol(" + args[0].to_js_string() + ")#" + id.to_string())
-      } else {
+      // Symbol() vs Symbol("") vs Symbol("desc")
+      // - Symbol() or Symbol(undefined): description is undefined -> format: Symbol()#id
+      // - Symbol(""): description is "" -> format: Symbol([empty])#id
+      // - Symbol("desc"): description is "desc" -> format: Symbol(desc)#id
+      if args.length() == 0 || args[0].is_undefined() {
         String("Symbol()#" + id.to_string())
+      } else {
+        let desc = args[0].to_js_string()
+        if desc == "" {
+          // Special marker for empty string description
+          String("Symbol([empty])#" + id.to_string())
+        } else {
+          String("Symbol(" + desc + ")#" + id.to_string())
+        }
+      }
+    }
+    "Symbol.for" => {
+      let key = if args.length() > 0 {
+        args[0].to_js_string()
+      } else {
+        "undefined"
+      }
+      match self.symbol_registry.get(key) {
+        Some(sym) => String(sym)
+        None => {
+          // Global symbols use format "@@global:key"
+          let sym = "@@global:" + key
+          self.symbol_registry.set(key, sym)
+          String(sym)
+        }
+      }
+    }
+    "Symbol.keyFor" => {
+      let arg = if args.length() > 0 { args[0] } else { Undefined }
+      match arg {
+        String(s) =>
+          if s.has_prefix("@@global:") {
+            // Extract key from "@@global:key"
+            String(s[9:].to_string() catch { _ => "" })
+          } else if s.has_prefix("Symbol(") || s.has_prefix("@@") {
+            // Non-global symbol
+            Undefined
+          } else {
+            self.set_error_kind("TypeError", "Symbol.keyFor requires a symbol")
+          }
+        _ => self.set_error_kind("TypeError", "Symbol.keyFor requires a symbol")
+      }
+    }
+    "Symbol.prototype.description" => {
+      let sym = self.get_symbol_value(this_arg)
+      match sym {
+        String(s) =>
+          if s.has_prefix("@@global:") {
+            // Global symbol - description is the key
+            String(s[9:].to_string() catch { _ => "" })
+          } else if s.has_prefix("@@") {
+            // Well-known symbol - description is "Symbol." + name
+            String("Symbol." + (s[2:].to_string() catch { _ => "" }))
+          } else if s.has_prefix("Symbol([empty])") {
+            // Symbol("") - empty string description
+            String("")
+          } else if s.has_prefix("Symbol(") {
+            // Regular symbol - extract description from Symbol(desc)#id or Symbol()#id
+            // Find index of ")" in the string
+            let mut end_idx = -1
+            let chars : Array[Char] = s.iter().collect()
+            for i, ch in chars {
+              if ch == ')' {
+                end_idx = i
+                break
+              }
+            }
+            if end_idx > 7 {
+              String(s[7:end_idx].to_string() catch { _ => "" })
+            } else if end_idx == 7 {
+              // Symbol()#id - no description
+              Undefined
+            } else {
+              Undefined
+            }
+          } else {
+            Undefined
+          }
+        _ => self.set_error_kind("TypeError", "Symbol.prototype.description requires a symbol")
+      }
+    }
+    "Symbol.prototype.toString" => {
+      let sym = self.get_symbol_value(this_arg)
+      match sym {
+        String(s) =>
+          if s.has_prefix("@@global:") {
+            // Global symbol - format as Symbol(key)
+            String("Symbol(" + (s[9:].to_string() catch { _ => "" }) + ")")
+          } else if s.has_prefix("@@") {
+            // Well-known symbol - format as Symbol(Symbol.name)
+            String("Symbol(Symbol." + (s[2:].to_string() catch { _ => "" }) + ")")
+          } else if s.has_prefix("Symbol([empty])") {
+            // Symbol("") - empty string description -> "Symbol()"
+            String("Symbol()")
+          } else if s.has_prefix("Symbol(") {
+            // Regular symbol - strip #id suffix
+            // Find last index of "#" in the string
+            let mut hash_idx = -1
+            let chars : Array[Char] = s.iter().collect()
+            for i, ch in chars {
+              if ch == '#' {
+                hash_idx = i
+              }
+            }
+            if hash_idx > 0 {
+              String(s[:hash_idx].to_string() catch { _ => s })
+            } else {
+              String(s)
+            }
+          } else {
+            String(s)
+          }
+        _ => self.set_error_kind("TypeError", "Symbol.prototype.toString requires a symbol")
+      }
+    }
+    "Symbol.prototype.valueOf" => {
+      let sym = self.get_symbol_value(this_arg)
+      match sym {
+        String(s) if s.has_prefix("Symbol(") || s.has_prefix("@@") => sym
+        _ => self.set_error_kind("TypeError", "Symbol.prototype.valueOf requires a symbol")
+      }
+    }
+    "Symbol.prototype[@@toPrimitive]" => {
+      let sym = self.get_symbol_value(this_arg)
+      match sym {
+        String(s) if s.has_prefix("Symbol(") || s.has_prefix("@@") => sym
+        _ => self.set_error_kind("TypeError", "Symbol.prototype[@@toPrimitive] requires a symbol")
       }
     }
     "Boolean" =>

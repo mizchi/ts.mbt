@@ -429,8 +429,11 @@ pub fn js_typeof(val : JSValue) -> JSValue {
       Bool(_) => "boolean"
       Number(_) => "number"
       String(s) =>
-        // Symbols are represented as strings "Symbol(...)#N"
-        if s.has_prefix("Symbol(") {
+        // Symbols are represented as strings "Symbol(...)#N", "@@global:key", or "@@name"
+        // Note: "Symbol(...)" without #N suffix is NOT a symbol (it's the toString result)
+        if s.has_prefix("@@") {
+          "symbol"
+        } else if s.has_prefix("Symbol(") && s.contains("#") {
           "symbol"
         } else {
           "string"

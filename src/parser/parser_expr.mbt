@@ -669,7 +669,22 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       }
       expr = PropAccess(expr, prop)
     } else {
-      break
+      // Check for tagged template literal
+      match self.peek().kind {
+        Template(cooked_parts, raw_parts, expr_sources) => {
+          let _ = self.advance()
+          // Parse expression sources into AST expressions
+          let exprs : Array[@ast.TsExpr] = []
+          for src in expr_sources {
+            let sub_parser = Parser::from_source(src)
+            let sub_expr = sub_parser.parse_expr()
+            exprs.push(sub_expr)
+          }
+          // Create tagged template expression
+          expr = @ast.TsExpr::TaggedTemplate(expr, cooked_parts, raw_parts, exprs)
+        }
+        _ => break
+      }
     }
   }
   expr
@@ -766,6 +781,18 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         args.push(StringLit(flags))
       }
       New("RegExp", args)
+    }
+    Template(cooked_parts, _, expr_sources) => {
+      let _ = self.advance()
+      // Parse expression sources into AST expressions
+      let exprs : Array[@ast.TsExpr] = []
+      for src in expr_sources {
+        let sub_parser = Parser::from_source(src)
+        let expr = sub_parser.parse_expr()
+        exprs.push(expr)
+      }
+      // For untagged template literals, convert to TemplateLiteral AST node
+      @ast.TsExpr::TemplateLiteral(cooked_parts, exprs)
     }
     Ident(name) =>
       if name == "async" &&
@@ -1002,6 +1029,49 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           while self.match_(Dot) {
             let part = match self.advance().kind {
               Ident(n) => n
+              // Allow reserved words as property names (e.g., Symbol.for)
+              For => "for"
+              Return => "return"
+              If => "if"
+              Else => "else"
+              While => "while"
+              Switch => "switch"
+              Case => "case"
+              Default => "default"
+              With => "with"
+              Debugger => "debugger"
+              Import => "import"
+              Export => "export"
+              From => "from"
+              As => "as"
+              Break => "break"
+              Continue => "continue"
+              Function => "function"
+              Do => "do"
+              Try => "try"
+              Catch => "catch"
+              Finally => "finally"
+              Throw => "throw"
+              Delete => "delete"
+              Yield => "yield"
+              Let => "let"
+              Const => "const"
+              Var => "var"
+              New => "new"
+              Typeof => "typeof"
+              Of => "of"
+              In => "in"
+              Class => "class"
+              Declare => "declare"
+              Interface => "interface"
+              Instanceof => "instanceof"
+              NumberType => "number"
+              BooleanType => "boolean"
+              StringType => "string"
+              VoidType => "void"
+              IntType => "int"
+              Type => "type"
+              Extends => "extends"
               k => raise ParseError("Expected identifier after '.', got \{k}")
             }
             type_name = type_name + "." + part

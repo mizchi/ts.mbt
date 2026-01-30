@@ -13,6 +13,7 @@ pub struct JSInterpreter {
   mut current_gen_id : Int?
   mut microtasks : Array[MicrotaskJob]
   mut symbol_counter : Int
+  symbol_registry : Map[String, String] // Global symbol registry for Symbol.for/keyFor
 }
 
 ///|

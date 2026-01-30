@@ -27,6 +27,7 @@ pub fn JSInterpreter::new() -> JSInterpreter {
     current_gen_id: None,
     microtasks: [],
     symbol_counter: 0,
+    symbol_registry: {},
   }
   interp.install_builtins()
   interp
@@ -245,4 +246,33 @@ fn JSInterpreter::is_strict_body(
 // / Object.prototype objectcreate
 fn JSInterpreter::new_object(self : JSInterpreter) -> JSValue {
   js_new_object_with_proto(Some(self.object_proto))
+}
+
+///|
+// / Check if a string is a symbol internal representation
+pub fn is_symbol_string(s : String) -> Bool {
+  s.has_prefix("@@") || (s.has_prefix("Symbol(") && s.contains("#"))
+}
+
+///|
+// / Get Symbol value from primitive or wrapper object
+fn JSInterpreter::get_symbol_value(
+  _self : JSInterpreter,
+  value : JSValue,
+) -> JSValue {
+  match value {
+    String(s) if is_symbol_string(s) => value
+    Object(_) => {
+      // Check if it's a Symbol wrapper object
+      match js_get_prop(value, "__class") {
+        String("Symbol") =>
+          match js_get_prop(value, "__symbol_value") {
+            String(s) if is_symbol_string(s) => String(s)
+            _ => Undefined
+          }
+        _ => Undefined
+      }
+    }
+    _ => Undefined
+  }
 }
