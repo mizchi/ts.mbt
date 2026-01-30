@@ -366,12 +366,26 @@ pub fn js_div(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
-// / (%)
+// / (%) - ECMAScript remainder operator
 pub fn js_mod(left : JSValue, right : JSValue) -> JSValue {
-  let a = left.to_number()
-  let b = right.to_number()
-  // JSfmod
-  Number(a - (a / b).floor() * b)
+  let n = left.to_number()
+  let d = right.to_number()
+  // Handle special cases
+  if n.is_nan() || d.is_nan() || n.is_inf() || d == 0.0 {
+    return Number(js_nan)
+  }
+  if d.is_inf() {
+    return Number(n)
+  }
+  // ECMAScript: r = n - d * trunc(n/d)
+  // If r = 0 and n < 0, return -0
+  let q = (n / d).trunc()
+  let r = n - d * q
+  if r == 0.0 && n < 0.0 {
+    Number(-0.0)
+  } else {
+    Number(r)
+  }
 }
 
 ///|

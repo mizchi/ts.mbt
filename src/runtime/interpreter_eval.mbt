@@ -950,9 +950,44 @@ pub fn JSInterpreter::eval_expr(
         }
         @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
           let obj = self.eval_expr(obj_expr, env)
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
+          }
           let idx = self.eval_expr(idx_expr, env)
-          let key = idx.to_js_string()
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
+          }
+          // Check RequireObjectCoercible before ToPropertyKey (ECMAScript spec)
+          match obj {
+            Null => {
+              let _ = self.set_error_kind(
+                "TypeError",
+                "Cannot read properties of null",
+              )
+              return self.error_or_undefined()
+            }
+            Undefined => {
+              let _ = self.set_error_kind(
+                "TypeError",
+                "Cannot read properties of undefined",
+              )
+              return self.error_or_undefined()
+            }
+            _ => ()
+          }
+          // Use to_property_key to properly call toString on objects
+          let key = self.to_property_key(idx)
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
+          }
           let current = self.get_prop_value(obj, key)
+          match self.peek_error() {
+            Some(_) => return self.error_or_undefined()
+            None => ()
+          }
           let is_strict = env.has("__strict__")
           // Handle logical assignment operators with short-circuit evaluation
           match op {
