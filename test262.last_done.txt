@@ -1,1 +1,1 @@
-test262/test/language/module-code/export-default-asyncgenerator-declaration-binding-exists.js
+test262/test/language/computed-property-names/to-name-side-effects/numbers-object.js

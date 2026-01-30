@@ -69,7 +69,18 @@ def parse_meta(text: str) -> Meta:
     return Meta(includes=includes, flags=flags, negative=negative)
 
 
-SUPPORTED_INCLUDES = {"assert.js", "sta.js", "compareArray.js", "nans.js"}
+SUPPORTED_INCLUDES = {
+    "assert.js",
+    "sta.js",
+    "compareArray.js",
+    "nans.js",
+    "propertyHelper.js",
+    "fnGlobalObject.js",
+    "isConstructor.js",
+    "deepEqual.js",
+    "decimalToHexString.js",
+    "proxyTrapsHelper.js",
+}
 
 
 BANNED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -82,6 +93,10 @@ BANNED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("with", re.compile(r"\bwith\s*\(")),
     # Eval (complex semantics, not fully supported)
     ("eval", re.compile(r"\beval\s*\(")),
+    # Function constructor (dynamic code, not supported)
+    ("Function", re.compile(r"\bFunction\s*\(")),
+    # Import defer (ES2024, not supported)
+    ("import-defer", re.compile(r"\bimport\s+defer\b")),
 ]
 
 
