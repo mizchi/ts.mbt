@@ -509,16 +509,19 @@ pub fn js_strict_ne(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
-// / (==) - typeconversion
+// / (==) - typeconversion according to ECMAScript abstract equality
 pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
   Bool(
     match (left, right) {
       (a, Undefined) | (a, Null) if is_html_dda(a) => true
       (Undefined, b) | (Null, b) if is_html_dda(b) => true
-      // type
+      // null and undefined only equal each other
       (Undefined, Undefined) => true
       (Null, Null) => true
       (Undefined, Null) | (Null, Undefined) => true
+      // null/undefined are not equal to any other type
+      (Undefined, _) | (_, Undefined) | (Null, _) | (_, Null) => false
+      // same type comparison
       (Bool(a), Bool(b)) => a == b
       (Number(a), Number(b)) => a == b
       (String(a), String(b)) => a == b
@@ -529,7 +532,7 @@ pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
           Bool(b) => b
           _ => false
         }
-      // typeconversioncomparison
+      // type coercion comparison (now null/undefined are already excluded)
       (Number(_), _) | (_, Number(_)) => left.to_number() == right.to_number()
       (Bool(_), _) | (_, Bool(_)) => left.to_number() == right.to_number()
       (String(_), _) | (_, String(_)) => left.to_number() == right.to_number()
@@ -552,27 +555,40 @@ pub fn js_ne(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
-// / (<)
+// / (<) - Compare values, using string comparison for strings
 pub fn js_lt(left : JSValue, right : JSValue) -> JSValue {
-  Bool(left.to_number() < right.to_number())
+  // If both are strings, compare lexicographically
+  match (left, right) {
+    (String(l), String(r)) => Bool(l < r)
+    _ => Bool(left.to_number() < right.to_number())
+  }
 }
 
 ///|
-// / (<=)
+// / (<=) - Compare values, using string comparison for strings
 pub fn js_le(left : JSValue, right : JSValue) -> JSValue {
-  Bool(left.to_number() <= right.to_number())
+  match (left, right) {
+    (String(l), String(r)) => Bool(l <= r)
+    _ => Bool(left.to_number() <= right.to_number())
+  }
 }
 
 ///|
-// / (>)
+// / (>) - Compare values, using string comparison for strings
 pub fn js_gt(left : JSValue, right : JSValue) -> JSValue {
-  Bool(left.to_number() > right.to_number())
+  match (left, right) {
+    (String(l), String(r)) => Bool(l > r)
+    _ => Bool(left.to_number() > right.to_number())
+  }
 }
 
 ///|
-// / (>=)
+// / (>=) - Compare values, using string comparison for strings
 pub fn js_ge(left : JSValue, right : JSValue) -> JSValue {
-  Bool(left.to_number() >= right.to_number())
+  match (left, right) {
+    (String(l), String(r)) => Bool(l >= r)
+    _ => Bool(left.to_number() >= right.to_number())
+  }
 }
 
 // === object ===

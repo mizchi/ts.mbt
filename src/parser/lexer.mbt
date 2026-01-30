@@ -128,6 +128,7 @@ pub enum TokenKind {
 pub struct Token {
   kind : TokenKind
   pos : Int // position
+  has_newline_before : Bool // true if there was a newline before this token
 } derive(Show)
 
 ///|
@@ -147,6 +148,7 @@ pub struct Lexer {
   mut allow_regex : Bool
   mut pending : Array[Token]
   mut pending_index : Int
+  mut newline_before_next : Bool // Set when whitespace skipping encounters a newline
 } derive(Show)
 
 ///|
@@ -173,7 +175,14 @@ fn Lexer::read_hex_digit(self : Lexer) -> Int? {
 ///|
 // / create
 pub fn Lexer::new(src : String) -> Lexer {
-  { src, pos: 0, allow_regex: true, pending: [], pending_index: 0 }
+  {
+    src,
+    pos: 0,
+    allow_regex: true,
+    pending: [],
+    pending_index: 0,
+    newline_before_next: false,
+  }
 }
 
 ///|
@@ -220,13 +229,20 @@ fn Lexer::advance(self : Lexer) -> Char? {
 ///|
 // /
 fn Lexer::skip_whitespace(self : Lexer) -> Unit {
+  self.newline_before_next = false // Reset at start of whitespace skipping
   while true {
     match self.peek_byte(0) {
       Some(0x0B) | Some(0x0C) => {
         self.pos += 1
         continue
       }
-      Some(0xA0) | Some(0x2028) | Some(0x2029) => {
+      Some(0xA0) => {
+        self.pos += 1
+        continue
+      }
+      Some(0x2028) | Some(0x2029) => {
+        // Line Separator and Paragraph Separator are line terminators
+        self.newline_before_next = true
         self.pos += 1
         continue
       }
@@ -237,6 +253,8 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
       Some(0xE2) if self.peek_byte(1) == Some(0x80) =>
         match self.peek_byte(2) {
           Some(0xA8) | Some(0xA9) => {
+            // LS (U+2028) and PS (U+2029) in UTF-8
+            self.newline_before_next = true
             self.pos += 3
             continue
           }
@@ -264,8 +282,14 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             }
           }
         }
+        // Hashbang is followed by a line terminator
+        self.newline_before_next = true
       }
-      Some(' ') | Some('\t') | Some('\n') | Some('\r') => {
+      Some(' ') | Some('\t') => {
+        let _ = self.advance()
+      }
+      Some('\n') | Some('\r') => {
+        self.newline_before_next = true
         let _ = self.advance()
 
       }
@@ -1381,9 +1405,14 @@ fn Lexer::scan_template_parts_with_raw(
 
 ///|
 fn Lexer::enqueue_template_tokens(self : Lexer, pos : Int) -> Unit {
+  let has_newline = self.newline_before_next
   let (cooked_parts, raw_parts, exprs) = self.scan_template_parts_with_raw()
   // Create a single Template token containing all parts and expression sources
-  let token = { kind: Template(cooked_parts, raw_parts, exprs), pos }
+  let token = {
+    kind: Template(cooked_parts, raw_parts, exprs),
+    pos,
+    has_newline_before: has_newline,
+  }
   if self.pending_index >= self.pending.length() {
     self.pending = [token]
     self.pending_index = 0
@@ -1695,9 +1724,10 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
     return tok
   }
   self.skip_whitespace()
+  let has_newline = self.newline_before_next
   let pos = self.pos
   match self.advance() {
-    None => { kind: Eof, pos }
+    None => { kind: Eof, pos, has_newline_before: has_newline }
     Some(c) => {
       let kind : TokenKind = match c {
         '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
@@ -2031,7 +2061,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
         _ => Eof // statement
       }
       self.allow_regex = not(token_can_end_expr(kind))
-      { kind, pos }
+      { kind, pos, has_newline_before: has_newline }
     }
   }
 }

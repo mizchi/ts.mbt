@@ -492,9 +492,15 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
 
 ///|
 // / operator (x++, x--)
+// ES spec: ++ and -- are NOT postfix operators if they appear on a new line
 fn Parser::parse_postfix(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_call()
   while true {
+    let tok = self.peek()
+    // ASI: If ++ or -- appears after a line terminator, it's NOT a postfix operator
+    if tok.has_newline_before {
+      break
+    }
     if self.match_(PlusPlus) {
       expr = UnaryOp(PostInc, expr)
     } else if self.match_(MinusMinus) {

@@ -81,7 +81,7 @@ pub fn Parser::from_source(src : String) -> Parser {
 // / currentget
 fn Parser::peek(self : Parser) -> Token {
   if self.pos >= self.tokens.length() {
-    { kind: Eof, pos: 0 }
+    { kind: Eof, pos: 0, has_newline_before: false }
   } else {
     self.tokens[self.pos]
   }
@@ -122,7 +122,7 @@ fn Parser::check(self : Parser, kind : TokenKind) -> Bool {
 fn Parser::peek_at(self : Parser, offset : Int) -> Token {
   let idx = self.pos + offset
   if idx >= self.tokens.length() {
-    { kind: Eof, pos: 0 }
+    { kind: Eof, pos: 0, has_newline_before: false }
   } else {
     self.tokens[idx]
   }

@@ -307,7 +307,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       class_name = n
       self.advance()
     }
-    _ => { kind: Eof, pos: 0 }
+    _ => { kind: Eof, pos: 0, has_newline_before: false }
   }
   let mut base : String? = None
   if self.match_(Extends) {

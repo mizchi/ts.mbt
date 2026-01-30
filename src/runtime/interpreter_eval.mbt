@@ -228,7 +228,17 @@ pub fn JSInterpreter::eval_expr(
           // ++x: returns ToNumber(oldValue) + 1
           match operand {
             @ast.TsExpr::Var(name) => {
-              let raw_val = env.get(name)
+              // Get value from env or globalThis (like Var evaluation)
+              let raw_val = if env.has(name) {
+                env.get(name)
+              } else {
+                let global_obj = self.global_env.get("globalThis")
+                if js_has_prop(global_obj, name) {
+                  js_get_prop(global_obj, name)
+                } else {
+                  env.get(name)
+                }
+              }
               let new_val = JSValue::Number(raw_val.to_number() + 1.0)
               self.assign_ident(name, new_val, env)
               new_val
@@ -268,7 +278,17 @@ pub fn JSInterpreter::eval_expr(
           // --x: returns ToNumber(oldValue) - 1
           match operand {
             @ast.TsExpr::Var(name) => {
-              let raw_val = env.get(name)
+              // Get value from env or globalThis (like Var evaluation)
+              let raw_val = if env.has(name) {
+                env.get(name)
+              } else {
+                let global_obj = self.global_env.get("globalThis")
+                if js_has_prop(global_obj, name) {
+                  js_get_prop(global_obj, name)
+                } else {
+                  env.get(name)
+                }
+              }
               let new_val = JSValue::Number(raw_val.to_number() - 1.0)
               self.assign_ident(name, new_val, env)
               new_val
@@ -308,7 +328,17 @@ pub fn JSInterpreter::eval_expr(
           // x++: returns ToNumber(oldValue), stores oldValue + 1
           match operand {
             @ast.TsExpr::Var(name) => {
-              let raw_val = env.get(name)
+              // Get value from env or globalThis (like Var evaluation)
+              let raw_val = if env.has(name) {
+                env.get(name)
+              } else {
+                let global_obj = self.global_env.get("globalThis")
+                if js_has_prop(global_obj, name) {
+                  js_get_prop(global_obj, name)
+                } else {
+                  env.get(name)
+                }
+              }
               let old_num = JSValue::Number(raw_val.to_number())
               let new_val = JSValue::Number(raw_val.to_number() + 1.0)
               self.assign_ident(name, new_val, env)
@@ -351,7 +381,17 @@ pub fn JSInterpreter::eval_expr(
           // x--: returns ToNumber(oldValue), stores oldValue - 1
           match operand {
             @ast.TsExpr::Var(name) => {
-              let raw_val = env.get(name)
+              // Get value from env or globalThis (like Var evaluation)
+              let raw_val = if env.has(name) {
+                env.get(name)
+              } else {
+                let global_obj = self.global_env.get("globalThis")
+                if js_has_prop(global_obj, name) {
+                  js_get_prop(global_obj, name)
+                } else {
+                  env.get(name)
+                }
+              }
               let old_num = JSValue::Number(raw_val.to_number())
               let new_val = JSValue::Number(raw_val.to_number() - 1.0)
               self.assign_ident(name, new_val, env)
