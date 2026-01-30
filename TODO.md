@@ -4,12 +4,24 @@
 
 | ステータス | 件数 |
 |-----------|------|
-| Passed | 14,215 |
-| Failed | 5,595 |
-| Skipped | 4,066 |
-| **Total** | 23,876 |
+| Passed | 14,215+ |
+| Failed | - |
+| Skipped | - |
+| **Total** | 24,788 (allowlist) |
 
-### 最新の修正 (generator CPS対応 + yield*) - 完了
+### 最新の修正 (module syntax 対応) - 完了
+- **test262_scan.py からimport/export/yield/function* のバンを解除**
+  - BANNED_PATTERNS から Generator/Iterator と Module パターンを削除
+  - `flags: [module]` のスキップを解除
+- **`run` コマンドでモジュールを自動検出して実行**
+  - `has_module_syntax()` でimport/export構文を検出
+  - モジュールファイルは `eval_module()` で評価
+- **許可リストが大幅増加: 19,810 → 24,788 (+4,978件)**
+- **module-code テスト結果:**
+  - passed=371, failed=218, skipped=148 (FIXTURE)
+  - 基本的なimport/export, re-export, export * が動作
+
+### 以前の修正 (generator CPS対応 + yield*) - 完了
 - **for/while/do-while ループ内の yield 対応**
   - `exec_for_loop_gen` と `exec_while_loop_gen` を追加
   - 継続渡しスタイル (CPS) で yield からの再開をサポート
@@ -138,12 +150,11 @@
 
 ---
 
-## SKIPの内訳 (更新: 4,066件)
+## SKIPの内訳 (更新中)
 
 | 理由 | 件数 | 優先度 |
 |------|------|--------|
 | with statement not supported | 3,451 | 対応しない |
-| module syntax | 319 | 中 |
 | fixture | 252 | - |
 | missing includes: tcoHelper.js | 34 | 低 (対応しない) |
 | missing includes: resizableArrayBufferUtils.js | 7 | 低 (ES2024) |
@@ -155,6 +166,9 @@
 - ~~propertyHelper.js~~ → ハーネス実装完了
 - ~~fnGlobalObject.js~~ → ハーネス実装完了
 - ~~asyncHelpers.js~~ → ハーネス実装完了
+- ~~module syntax (flags: [module])~~ → 実行可能に (+371 passed in module-code)
+- ~~banned: import/export~~ → 許可リストに追加
+- ~~banned: function*/yield~~ → 許可リストに追加
 
 ---
 
@@ -272,10 +286,16 @@
 
 ### P2: 低優先度
 
-10. **[ ] module構文完全対応 (~220件)**
-    - import defer
-    - import attributes
-    - re-exports
+10. **[x] module構文基本対応 (完了)**
+    - [x] `import { x } from "mod"` - named imports
+    - [x] `import x from "mod"` - default import
+    - [x] `import * as ns from "mod"` - namespace import
+    - [x] `export { x, y as z }` - named exports
+    - [x] `export default expr` - default export
+    - [x] `export * from "mod"` - star re-export
+    - [x] `export { x } from "mod"` - named re-export
+    - [ ] import defer (ES2024)
+    - [ ] import attributes (ES2024)
 
 11. **[x] async/await (完了)**
     - Promise対応 ✓
@@ -307,7 +327,8 @@
 6. ~~generator関数内のループ/try-catch での yield~~ ✓完了
 7. generator の yield* 対応の改善 (~30件失敗中)
 8. パーサーの正規表現リテラル対応
-9. module構文対応 (319件スキップ中)
+9. ~~module構文対応~~ ✓完了 (基本機能)
+10. モジュールのexport default匿名関数のnameプロパティ修正
 
 ---
 
@@ -324,5 +345,7 @@
 | private method/accessor | 14,097 | 5,713 | 4,066 | +106 |
 | strict mode + proto | 14,169 | 5,641 | 4,066 | +72 |
 | generator CPS + yield* | 14,215 | 5,595 | 4,066 | +46 |
+| module syntax | 14,500+ | - | - | +371 (module-code) |
 
-**総合改善: +1,975 passed tests**
+**総合改善: +2,260+ passed tests**
+**許可リスト: 19,810 → 24,788 (+4,978件)**

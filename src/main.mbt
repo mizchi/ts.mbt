@@ -53,13 +53,27 @@ async fn run_ts_file(file_path : String) -> Unit {
     }
   }
   let interp = @runtime.JSInterpreter::new()
-  let result = interp.run(content) catch {
-    e => {
-      println("Error: \{e}")
-      return
+  if has_module_syntax(content) {
+    let module_cache : Array[(String, @runtime.JSValue)] = []
+    let result = eval_module(interp, file_path, module_cache, source=content) catch {
+      e => {
+        println("Error: \{e}")
+        return
+      }
     }
+    if is_error_value(result) {
+      let error_msg = @runtime.js_get_prop(result, "error")
+      println("Error: \{error_msg.to_js_string()}")
+    }
+  } else {
+    let result = interp.run(content) catch {
+      e => {
+        println("Error: \{e}")
+        return
+      }
+    }
+    println(result.to_js_string())
   }
-  println(result.to_js_string())
 }
 
 ///|

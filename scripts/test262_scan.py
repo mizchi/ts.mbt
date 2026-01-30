@@ -73,15 +73,9 @@ SUPPORTED_INCLUDES = {"assert.js", "sta.js", "compareArray.js", "nans.js"}
 
 
 BANNED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    # Generator/Iterator
-    ("function*", re.compile(r"\bfunction\s*\*")),
-    ("yield", re.compile(r"\byield\b")),
     # Async
     ("await", re.compile(r"\bawait\b")),
     ("async", re.compile(r"\basync\b")),
-    # Module
-    ("import", re.compile(r"\bimport\b")),
-    ("export", re.compile(r"\bexport\b")),
     # Template literals (not yet implemented)
     ("template", re.compile(r"`")),
 ]
@@ -91,8 +85,6 @@ def reason_to_skip(path: Path, text: str) -> str | None:
     meta = parse_meta(text)
     if meta.negative:
         return "negative"
-    if "module" in meta.flags:
-        return "flag:module"
     if "async" in meta.flags:
         return "flag:async"
     missing = [i for i in meta.includes if i not in SUPPORTED_INCLUDES]
