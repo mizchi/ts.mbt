@@ -12,7 +12,8 @@ pub fn JSInterpreter::new() -> JSInterpreter {
     env,
     is_arrow: false,
     is_strict: false,
-    is_generator: false, is_async: false,
+    is_generator: false,
+    is_async: false,
     props: [],
     object_proto: Some(object_proto),
   })
@@ -51,7 +52,8 @@ fn JSInterpreter::make_native(self : JSInterpreter, name : String) -> JSValue {
     env: self.global_env,
     is_arrow: false,
     is_strict: false,
-    is_generator: false, is_async: false,
+    is_generator: false,
+    is_async: false,
     props: [],
     object_proto: Some(self.function_proto),
   })
@@ -81,6 +83,7 @@ fn JSInterpreter::set_function_length(
   len : Double,
 ) -> Unit {
   let _ = js_define_data_prop(func, "length", Number(len), false, false, true)
+
 }
 
 ///|
@@ -262,7 +265,7 @@ fn JSInterpreter::get_symbol_value(
 ) -> JSValue {
   match value {
     String(s) if is_symbol_string(s) => value
-    Object(_) => {
+    Object(_) =>
       // Check if it's a Symbol wrapper object
       match js_get_prop(value, "__class") {
         String("Symbol") =>
@@ -272,7 +275,6 @@ fn JSInterpreter::get_symbol_value(
           }
         _ => Undefined
       }
-    }
     _ => Undefined
   }
 }

@@ -42,14 +42,14 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
   // duplicate names are forbidden
   let has_default = params.iter().any(fn(p) { not(p.default is None) })
   let has_rest = params.iter().any(fn(p) { p.is_rest })
-  let has_destructuring = params.iter().any(
-    fn(p) {
+  let has_destructuring = params
+    .iter()
+    .any(fn(p) {
       match p.binding {
         Some(@ast.TsBinding::Array(_)) | Some(@ast.TsBinding::Object(_)) => true
         _ => false
       }
-    },
-  )
+    })
   let is_simple = not(has_default) && not(has_rest) && not(has_destructuring)
   // Collect all bound names
   let all_names : Array[String] = []

@@ -17,7 +17,8 @@ pub fn JSInterpreter::run_module(
       env: self.global_env,
       is_arrow: false,
       is_strict: self.is_strict_body(func.body, false),
-      is_generator: func.is_generator, is_async: func.is_async,
+      is_generator: func.is_generator,
+      is_async: func.is_async,
       props: [],
       object_proto: Some(self.function_proto),
     })
@@ -25,7 +26,9 @@ pub fn JSInterpreter::run_module(
     self.set_function_length(closure, formal_count.to_double())
     self.set_function_name(closure, func.name)
     let proto = self.new_object()
-    let _ = js_define_data_prop(proto, "constructor", closure, true, false, true)
+    let _ = js_define_data_prop(
+      proto, "constructor", closure, true, false, true,
+    )
     let _ = js_define_data_prop(closure, "prototype", proto, true, false, true)
     self.global_env.define_var(func.name, closure)
   }

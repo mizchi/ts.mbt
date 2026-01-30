@@ -55,6 +55,47 @@ pub fn JSInterpreter::eval_expr(
       let _ = js_set_prop(meta, "url", String(""))
       meta
     }
+    @ast.TsExpr::TemplateLiteral(cooked_parts, exprs) => {
+      // Evaluate untagged template literal: `string ${expr} string`
+      // Concatenate cooked parts with evaluated expressions
+      let result = StringBuilder::new()
+      for i = 0; i < cooked_parts.length(); i = i + 1 {
+        result.write_string(cooked_parts[i])
+        if i < exprs.length() {
+          let value = self.eval_expr(exprs[i], env)
+          result.write_string(value.to_js_string())
+        }
+      }
+      String(result.to_string())
+    }
+    @ast.TsExpr::TaggedTemplate(tag_expr, cooked_parts, raw_parts, exprs) => {
+      // Evaluate tagged template literal: tag`string ${expr} string`
+      // Create strings array with .raw property
+      let strings_array = js_new_array()
+      for i = 0; i < cooked_parts.length(); i = i + 1 {
+        let _ = js_array_push(strings_array, String(cooked_parts[i]))
+
+      }
+      // Create and set raw array
+      let raw_array = js_new_array()
+      for i = 0; i < raw_parts.length(); i = i + 1 {
+        let _ = js_array_push(raw_array, String(raw_parts[i]))
+
+      }
+      let _ = js_set_prop(strings_array, "raw", raw_array)
+      // Note: In a full implementation, we would freeze the arrays
+      // Evaluate tag function
+      let tag_fn = self.eval_expr(tag_expr, env)
+      // Evaluate expression arguments
+      let args : Array[JSValue] = []
+      args.push(strings_array)
+      for expr in exprs {
+        let value = self.eval_expr(expr, env)
+        args.push(value)
+      }
+      // Call tag function with (strings, ...values)
+      self.call_function(tag_fn, Undefined, args)
+    }
     @ast.TsExpr::Var(name) =>
       if name == "super" && env.has("__super_proto") {
         env.get("__super_proto")
@@ -196,7 +237,12 @@ pub fn JSInterpreter::eval_expr(
               let obj = self.eval_expr(obj_expr, env)
               let raw_val = self.get_prop_value(obj, prop)
               let new_val = JSValue::Number(raw_val.to_number() + 1.0)
-              self.set_prop_value(obj, prop, new_val, strict=env.has("__strict__"))
+              self.set_prop_value(
+                obj,
+                prop,
+                new_val,
+                strict=env.has("__strict__"),
+              )
               new_val
             }
             @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -205,7 +251,12 @@ pub fn JSInterpreter::eval_expr(
               let key = idx.to_js_string()
               let raw_val = self.get_prop_value(obj, key)
               let new_val = JSValue::Number(raw_val.to_number() + 1.0)
-              self.set_prop_value(obj, key, new_val, strict=env.has("__strict__"))
+              self.set_prop_value(
+                obj,
+                key,
+                new_val,
+                strict=env.has("__strict__"),
+              )
               new_val
             }
             _ => {
@@ -226,7 +277,12 @@ pub fn JSInterpreter::eval_expr(
               let obj = self.eval_expr(obj_expr, env)
               let raw_val = self.get_prop_value(obj, prop)
               let new_val = JSValue::Number(raw_val.to_number() - 1.0)
-              self.set_prop_value(obj, prop, new_val, strict=env.has("__strict__"))
+              self.set_prop_value(
+                obj,
+                prop,
+                new_val,
+                strict=env.has("__strict__"),
+              )
               new_val
             }
             @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -235,7 +291,12 @@ pub fn JSInterpreter::eval_expr(
               let key = idx.to_js_string()
               let raw_val = self.get_prop_value(obj, key)
               let new_val = JSValue::Number(raw_val.to_number() - 1.0)
-              self.set_prop_value(obj, key, new_val, strict=env.has("__strict__"))
+              self.set_prop_value(
+                obj,
+                key,
+                new_val,
+                strict=env.has("__strict__"),
+              )
               new_val
             }
             _ => {
@@ -258,7 +319,12 @@ pub fn JSInterpreter::eval_expr(
               let raw_val = self.get_prop_value(obj, prop)
               let old_num = JSValue::Number(raw_val.to_number())
               let new_val = JSValue::Number(raw_val.to_number() + 1.0)
-              self.set_prop_value(obj, prop, new_val, strict=env.has("__strict__"))
+              self.set_prop_value(
+                obj,
+                prop,
+                new_val,
+                strict=env.has("__strict__"),
+              )
               old_num
             }
             @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -268,7 +334,12 @@ pub fn JSInterpreter::eval_expr(
               let raw_val = self.get_prop_value(obj, key)
               let old_num = JSValue::Number(raw_val.to_number())
               let new_val = JSValue::Number(raw_val.to_number() + 1.0)
-              self.set_prop_value(obj, key, new_val, strict=env.has("__strict__"))
+              self.set_prop_value(
+                obj,
+                key,
+                new_val,
+                strict=env.has("__strict__"),
+              )
               old_num
             }
             _ => {
@@ -291,7 +362,12 @@ pub fn JSInterpreter::eval_expr(
               let raw_val = self.get_prop_value(obj, prop)
               let old_num = JSValue::Number(raw_val.to_number())
               let new_val = JSValue::Number(raw_val.to_number() - 1.0)
-              self.set_prop_value(obj, prop, new_val, strict=env.has("__strict__"))
+              self.set_prop_value(
+                obj,
+                prop,
+                new_val,
+                strict=env.has("__strict__"),
+              )
               old_num
             }
             @ast.TsExpr::IndexAccess(obj_expr, idx_expr) => {
@@ -301,7 +377,12 @@ pub fn JSInterpreter::eval_expr(
               let raw_val = self.get_prop_value(obj, key)
               let old_num = JSValue::Number(raw_val.to_number())
               let new_val = JSValue::Number(raw_val.to_number() - 1.0)
-              self.set_prop_value(obj, key, new_val, strict=env.has("__strict__"))
+              self.set_prop_value(
+                obj,
+                key,
+                new_val,
+                strict=env.has("__strict__"),
+              )
               old_num
             }
             _ => {
@@ -311,7 +392,8 @@ pub fn JSInterpreter::eval_expr(
           }
         @ast.TsUnaryOp::Neg => js_neg(self.eval_expr(operand, env))
         @ast.TsUnaryOp::Not => js_not(self.eval_expr(operand, env))
-        @ast.TsUnaryOp::BitwiseNot => js_bitwise_not(self.eval_expr(operand, env))
+        @ast.TsUnaryOp::BitwiseNot =>
+          js_bitwise_not(self.eval_expr(operand, env))
         @ast.TsUnaryOp::Plus => js_pos(self.eval_expr(operand, env))
         @ast.TsUnaryOp::Typeof =>
           match operand {
@@ -331,8 +413,7 @@ pub fn JSInterpreter::eval_expr(
               match obj_expr {
                 @ast.TsExpr::Var(name) if name == "super" => {
                   let _ = self.set_error_kind(
-                    "ReferenceError",
-                    "Unsupported reference to 'super'",
+                    "ReferenceError", "Unsupported reference to 'super'",
                   )
                   return self.error_or_undefined()
                 }
@@ -373,8 +454,7 @@ pub fn JSInterpreter::eval_expr(
               match obj_expr {
                 @ast.TsExpr::Var(name) if name == "super" => {
                   let _ = self.set_error_kind(
-                    "ReferenceError",
-                    "Unsupported reference to 'super'",
+                    "ReferenceError", "Unsupported reference to 'super'",
                   )
                   return self.error_or_undefined()
                 }
@@ -655,7 +735,7 @@ pub fn JSInterpreter::eval_expr(
           // Handle object spread: copy all enumerable own properties
           let spread_val = self.eval_expr(val_expr, env)
           match spread_val {
-            Object(map) => {
+            Object(map) =>
               for prop in map.props {
                 // Only copy enumerable properties
                 if prop.enumerable {
@@ -684,7 +764,6 @@ pub fn JSInterpreter::eval_expr(
                   }
                 }
               }
-            }
             Array(arr) => {
               // Spread array into object: {0: a, 1: b, ...}
               for i = 0; i < arr.length; i = i + 1 {
@@ -931,8 +1010,14 @@ pub fn JSInterpreter::eval_expr(
             match prop.value {
               Function(_) => {
                 let _ = js_define_data_prop(
-                  prop.value, "__home_object", obj, true, false, true,
+                  prop.value,
+                  "__home_object",
+                  obj,
+                  true,
+                  false,
+                  true,
                 )
+
               }
               _ => ()
             }
@@ -942,6 +1027,7 @@ pub fn JSInterpreter::eval_expr(
                 let _ = js_define_data_prop(
                   getter, "__home_object", obj, true, false, true,
                 )
+
               }
               _ => ()
             }
@@ -950,6 +1036,7 @@ pub fn JSInterpreter::eval_expr(
                 let _ = js_define_data_prop(
                   setter, "__home_object", obj, true, false, true,
                 )
+
               }
               _ => ()
             }
@@ -981,7 +1068,10 @@ pub fn JSInterpreter::eval_expr(
           // Check if variable exists before reading
           let global_obj = self.global_env.get("globalThis")
           if not(env.has(name)) && not(js_has_prop(global_obj, name)) {
-            let _ = self.set_error_kind("ReferenceError", name + " is not defined")
+            let _ = self.set_error_kind(
+              "ReferenceError",
+              name + " is not defined",
+            )
             return Undefined
           }
           let current = env.get(name)
@@ -1074,15 +1164,13 @@ pub fn JSInterpreter::eval_expr(
           match obj {
             Null => {
               let _ = self.set_error_kind(
-                "TypeError",
-                "Cannot read properties of null",
+                "TypeError", "Cannot read properties of null",
               )
               return self.error_or_undefined()
             }
             Undefined => {
               let _ = self.set_error_kind(
-                "TypeError",
-                "Cannot read properties of undefined",
+                "TypeError", "Cannot read properties of undefined",
               )
               return self.error_or_undefined()
             }
@@ -1226,7 +1314,8 @@ pub fn JSInterpreter::eval_expr(
               params,
               return_type: @ast.TsType::Any,
               body: { stmts: [@ast.TsStmt::Return(Some(expr))] },
-              is_generator: false, is_async,
+              is_generator: false,
+              is_async,
             })
           @ast.TsArrowBody::ArrowBlock(block) =>
             Ast({
@@ -1234,13 +1323,15 @@ pub fn JSInterpreter::eval_expr(
               params,
               return_type: @ast.TsType::Any,
               body: block,
-              is_generator: false, is_async,
+              is_generator: false,
+              is_async,
             })
         },
         env,
         is_arrow: true,
         is_strict,
-        is_generator: false, is_async,
+        is_generator: false,
+        is_async,
         props: [],
         object_proto: Some(self.function_proto),
       })
@@ -1249,8 +1340,14 @@ pub fn JSInterpreter::eval_expr(
       // Arrow functions inherit super binding from enclosing scope
       if env.has("__super_proto") {
         let _ = js_define_data_prop(
-          closure, "__super_proto", env.get("__super_proto"), true, false, true,
+          closure,
+          "__super_proto",
+          env.get("__super_proto"),
+          true,
+          false,
+          true,
         )
+
       }
       closure
     }
@@ -1273,7 +1370,8 @@ pub fn JSInterpreter::eval_expr(
         env: func_env,
         is_arrow: false,
         is_strict: self.is_strict_body(func.body, env.has("__strict__")),
-        is_generator: func.is_generator, is_async: func.is_async,
+        is_generator: func.is_generator,
+        is_async: func.is_async,
         props: [],
         object_proto: Some(self.function_proto),
       })
@@ -1287,7 +1385,9 @@ pub fn JSInterpreter::eval_expr(
         self.set_function_name(closure, func.name)
       }
       let proto = self.new_object()
-      let _ = js_define_data_prop(proto, "constructor", closure, true, false, true)
+      let _ = js_define_data_prop(
+        proto, "constructor", closure, true, false, true,
+      )
       let _ = js_define_data_prop(
         closure, "prototype", proto, true, false, true,
       )
@@ -1396,11 +1496,9 @@ fn JSInterpreter::eval_expr_gen(
           GenValue::Value(val)
         }),
       ))
-    @ast.TsExpr::ArrayLit(elements) =>
-      self.eval_array_lit_gen(elements, env)
+    @ast.TsExpr::ArrayLit(elements) => self.eval_array_lit_gen(elements, env)
     @ast.TsExpr::Cond(cond, then_expr, else_expr) =>
-      gen_bind(self.eval_expr_gen(cond, env), cond_val => if cond_val.to_boolean(
-        ) {
+      gen_bind(self.eval_expr_gen(cond, env), cond_val => if cond_val.to_boolean() {
         self.eval_expr_gen(then_expr, env)
       } else {
         self.eval_expr_gen(else_expr, env)
@@ -1731,9 +1829,23 @@ fn JSInterpreter::exec_stmt_for_eval(
         @ast.TsStmt::For(init, cond, update, body) =>
           self.exec_for_for_eval_labeled(init, cond, update, body, env, name)
         @ast.TsStmt::ForIn(kind, binding, _, iterable, body) =>
-          self.exec_for_in_for_eval(kind, binding, iterable, body, env, Some(name))
+          self.exec_for_in_for_eval(
+            kind,
+            binding,
+            iterable,
+            body,
+            env,
+            Some(name),
+          )
         @ast.TsStmt::ForOf(kind, binding, _, iterable, body) =>
-          self.exec_for_of_for_eval(kind, binding, iterable, body, env, Some(name))
+          self.exec_for_of_for_eval(
+            kind,
+            binding,
+            iterable,
+            body,
+            env,
+            Some(name),
+          )
         _ =>
           // For non-loop labeled statements
           match self.exec_stmt_for_eval(inner, env) {
@@ -2536,7 +2648,6 @@ fn JSInterpreter::exec_for_of_for_eval(
   }
   let is_const = kind == @ast.TsForOfKind::Const
   let mut v = JSValue::Undefined
-
   match self.get_iterator(iter_val) {
     Some(iterator) =>
       while true {
@@ -2631,9 +2742,7 @@ fn JSInterpreter::exec_for_of_for_eval(
         }
       }
     None => {
-      let _ = self.set_error_kind(
-        "TypeError", "object is not iterable",
-      )
+      let _ = self.set_error_kind("TypeError", "object is not iterable")
       return (Some(self.peek_error().unwrap()), Undefined)
     }
   }
@@ -3437,7 +3546,12 @@ pub fn JSInterpreter::exec_stmt(
           self.exec_for_of_loop(kind, binding, iterable, body, env, Some(name))
         @ast.TsStmt::ForAwaitOf(kind, binding, _, iterable, body) =>
           self.exec_for_await_of_loop(
-            kind, binding, iterable, body, env, Some(name),
+            kind,
+            binding,
+            iterable,
+            body,
+            env,
+            Some(name),
           )
         @ast.TsStmt::ForIn(kind, binding, _, iterable, body) =>
           self.exec_for_in_loop(kind, binding, iterable, body, env, Some(name))
@@ -3727,8 +3841,7 @@ pub fn JSInterpreter::exec_stmt(
             Function(_) =>
               return Some(
                 self.set_error_kind(
-                  "TypeError",
-                  "Classes may not have a static property named 'prototype'",
+                  "TypeError", "Classes may not have a static property named 'prototype'",
                 ),
               )
             _ => ()
@@ -3771,8 +3884,7 @@ pub fn JSInterpreter::exec_stmt(
             Function(_) =>
               return Some(
                 self.set_error_kind(
-                  "TypeError",
-                  "Classes may not have a static property named 'prototype'",
+                  "TypeError", "Classes may not have a static property named 'prototype'",
                 ),
               )
             _ => ()
@@ -3788,6 +3900,7 @@ pub fn JSInterpreter::exec_stmt(
       } else if prop == "__super_proto" || prop == "__super_ctor" {
         // These internal properties should be non-enumerable
         let _ = js_define_data_prop(obj, prop, val, true, false, true)
+
       } else {
         self.set_prop_value(obj, prop, val, strict=env.has("__strict__"))
       }
@@ -4304,20 +4417,17 @@ fn JSInterpreter::exec_stmt_gen(
               GenSignal::Continue
             }
           GenSignal::Suspend(val, cont) =>
-            GenSignal::Suspend(
-              val,
-              fn(sent) {
-                match cont(sent) {
-                  GenSignal::Continue =>
-                    if self.eval_expr(cond, env).to_boolean() {
-                      self.exec_while_loop_gen(cond, body, env)
-                    } else {
-                      GenSignal::Continue
-                    }
-                  other => other
-                }
-              },
-            )
+            GenSignal::Suspend(val, fn(sent) {
+              match cont(sent) {
+                GenSignal::Continue =>
+                  if self.eval_expr(cond, env).to_boolean() {
+                    self.exec_while_loop_gen(cond, body, env)
+                  } else {
+                    GenSignal::Continue
+                  }
+                other => other
+              }
+            })
           other => other
         }
       } else {

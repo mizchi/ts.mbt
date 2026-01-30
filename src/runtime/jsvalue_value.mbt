@@ -415,7 +415,7 @@ pub fn js_bitwise_not(val : JSValue) -> JSValue {
     Number((-1).to_double()) // ~0 = -1
   } else {
     let i32 = n.to_int()
-    Number((i32.lnot()).to_double())
+    Number(i32.lnot().to_double())
   }
 }
 
@@ -458,7 +458,7 @@ pub fn js_typeof(val : JSValue) -> JSValue {
 // Helper to check if a JSValue is a BigInt and get its value string
 fn get_bigint_value(val : JSValue) -> String? {
   match val {
-    Object(_) => {
+    Object(_) =>
       match js_get_prop(val, "__class") {
         String("BigInt") =>
           match js_get_prop(val, "value") {
@@ -467,7 +467,6 @@ fn get_bigint_value(val : JSValue) -> String? {
           }
         _ => None
       }
-    }
     _ => None
   }
 }

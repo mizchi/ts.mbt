@@ -681,7 +681,9 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
             exprs.push(sub_expr)
           }
           // Create tagged template expression
-          expr = @ast.TsExpr::TaggedTemplate(expr, cooked_parts, raw_parts, exprs)
+          expr = @ast.TsExpr::TaggedTemplate(
+            expr, cooked_parts, raw_parts, exprs,
+          )
         }
         _ => break
       }
@@ -730,9 +732,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
     }
     LegacyOctal(i) => {
       if self.in_strict {
-        raise ParseError(
-          "Octal literals are not allowed in strict mode",
-        )
+        raise ParseError("Octal literals are not allowed in strict mode")
       }
       let _ = self.advance()
       IntLit(i)
@@ -1339,7 +1339,8 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
-              is_generator: false, is_async: false,
+              is_generator: false,
+              is_async: false,
             })
           } else if self.match_(Colon) {
             self.parse_assignment()
@@ -1556,7 +1557,8 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
-              is_generator: false, is_async: false,
+              is_generator: false,
+              is_async: false,
             })
           } else if self.match_(Colon) {
             self.parse_assignment()
@@ -1663,15 +1665,20 @@ fn Parser::is_async_arrow_function(self : Parser) -> Bool {
         _ => ()
       }
       let _ = self.advance()
+
     }
     let is_arrow = self.check(Arrow) ||
-      (self.check(Colon) && {
-        // Skip type annotation: (): ReturnType =>
-        while not(self.check(Arrow)) && not(self.check(Eof)) {
-          let _ = self.advance()
+      (
+        self.check(Colon) &&
+        {
+          // Skip type annotation: (): ReturnType =>
+          while not(self.check(Arrow)) && not(self.check(Eof)) {
+            let _ = self.advance()
+
+          }
+          self.check(Arrow)
         }
-        self.check(Arrow)
-      })
+      )
     self.pos = save_pos
     return is_arrow
   }
@@ -1705,6 +1712,7 @@ fn Parser::parse_async_arrow_function(
       self.in_switch = false
       while self.labels.length() > 0 {
         let _ = self.labels.pop()
+
       }
       let block = self.parse_block()
       self.in_function = prev_function
@@ -1712,6 +1720,7 @@ fn Parser::parse_async_arrow_function(
       self.in_switch = prev_switch
       while self.labels.length() > 0 {
         let _ = self.labels.pop()
+
       }
       for label in prev_labels {
         self.labels.push(label)
@@ -1745,6 +1754,7 @@ fn Parser::parse_async_arrow_function(
   if self.check(Colon) {
     let _ = self.advance()
     let _ = self.parse_type()
+
   }
   let _ = self.expect(Arrow)
   let prev_async = self.in_async
@@ -1762,6 +1772,7 @@ fn Parser::parse_async_arrow_function(
     self.in_switch = false
     while self.labels.length() > 0 {
       let _ = self.labels.pop()
+
     }
     let block = self.parse_block()
     self.in_function = prev_function
@@ -1769,6 +1780,7 @@ fn Parser::parse_async_arrow_function(
     self.in_switch = prev_switch
     while self.labels.length() > 0 {
       let _ = self.labels.pop()
+
     }
     for label in prev_labels {
       self.labels.push(label)

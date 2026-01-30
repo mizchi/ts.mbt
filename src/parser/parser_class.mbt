@@ -184,7 +184,8 @@ fn Parser::inject_instance_field_assigns(
     params: func.params,
     return_type: func.return_type,
     body: { stmts: new_stmts },
-    is_generator: func.is_generator, is_async: func.is_async,
+    is_generator: func.is_generator,
+    is_async: func.is_async,
   }
 }
 
@@ -332,7 +333,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [],
             return_type: @ast.TsType::Any,
             body: throw_body,
-            is_generator: false, is_async: false,
+            is_generator: false,
+            is_async: false,
           }),
           [],
         )
@@ -349,8 +351,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       PropAssign(@ast.TsExpr::Var("this"), brand, @ast.TsExpr::BoolLit(true)),
     )
   }
-  let key_temps : Array[String?] = []  // Temp var names for ALL elements' computed keys
-  let key_init_stmts : Array[@ast.TsStmt] = []  // Initialization statements for computed keys
+  let key_temps : Array[String?] = [] // Temp var names for ALL elements' computed keys
+  let key_init_stmts : Array[@ast.TsStmt] = [] // Initialization statements for computed keys
   let mut key_index = 0
 
   // First pass: collect all computed keys and generate temp variables
@@ -413,8 +415,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // Define __super_proto early for static field arrow functions to capture
   let super_proto_expr = match base {
     Some(base_name) => @ast.TsExpr::Var(base_name)
-    None =>
-      @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Function"), "prototype")
+    None => @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Function"), "prototype")
   }
   stmts.push(Let(@ast.TsBinding::Ident("__super_proto"), Any, super_proto_expr))
   // Add computed key initializations first (in order of appearance)
@@ -442,7 +443,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [rest_param],
             return_type: Any,
             body: empty_body,
-            is_generator: false, is_async: false,
+            is_generator: false,
+            is_async: false,
           }
         }
         None => {
@@ -452,7 +454,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [],
             return_type: Any,
             body: empty_body,
-            is_generator: false, is_async: false,
+            is_generator: false,
+            is_async: false,
           }
         }
       }
@@ -699,10 +702,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           params: [],
           return_type: @ast.TsType::Any,
           body: block,
-          is_generator: false, is_async: false,
+          is_generator: false,
+          is_async: false,
         })
         let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
-        let call_expr = @ast.TsExpr::CallExpr(call_method, [@ast.TsExpr::Var(tmp_name)])
+        let call_expr = @ast.TsExpr::CallExpr(call_method, [
+          @ast.TsExpr::Var(tmp_name),
+        ])
         stmts.push(Expr(call_expr))
       }
     }
@@ -714,7 +720,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       params: [],
       return_type: @ast.TsType::Any,
       body: @ast.TsBlock::{ stmts, },
-      is_generator: false, is_async: false,
+      is_generator: false,
+      is_async: false,
     }),
     [],
   )
@@ -751,8 +758,8 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
       PropAssign(@ast.TsExpr::Var("this"), brand, @ast.TsExpr::BoolLit(true)),
     )
   }
-  let key_temps : Array[String?] = []  // Temp var names for ALL elements' computed keys
-  let key_init_stmts : Array[@ast.TsStmt] = []  // Initialization statements for computed keys
+  let key_temps : Array[String?] = [] // Temp var names for ALL elements' computed keys
+  let key_init_stmts : Array[@ast.TsStmt] = [] // Initialization statements for computed keys
   let mut key_index = 0
 
   // First pass: collect all computed keys and generate temp variables
@@ -815,8 +822,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
   // Define __super_proto early for static field arrow functions to capture
   let super_proto_expr = match base {
     Some(base_name) => @ast.TsExpr::Var(base_name)
-    None =>
-      @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Function"), "prototype")
+    None => @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Function"), "prototype")
   }
   stmts.push(Let(@ast.TsBinding::Ident("__super_proto"), Any, super_proto_expr))
   // Add computed key initializations first (in order of appearance)
@@ -851,7 +857,8 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
             params: [rest_param],
             return_type: Any,
             body: empty_body,
-            is_generator: false, is_async: false,
+            is_generator: false,
+            is_async: false,
           }
         }
         None => {
@@ -861,7 +868,8 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
             params: [],
             return_type: Any,
             body: empty_body,
-            is_generator: false, is_async: false,
+            is_generator: false,
+            is_async: false,
           }
         }
       }
@@ -1099,10 +1107,13 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
           params: [],
           return_type: @ast.TsType::Any,
           body: block,
-          is_generator: false, is_async: false,
+          is_generator: false,
+          is_async: false,
         })
         let call_method = @ast.TsExpr::PropAccess(static_block_func, "call")
-        let call_expr = @ast.TsExpr::CallExpr(call_method, [@ast.TsExpr::Var(name)])
+        let call_expr = @ast.TsExpr::CallExpr(call_method, [
+          @ast.TsExpr::Var(name),
+        ])
         stmts.push(Expr(call_expr))
       }
     }
@@ -1124,7 +1135,8 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
         params: [],
         return_type: @ast.TsType::Any,
         body: @ast.TsBlock::{ stmts: internal_stmts },
-        is_generator: false, is_async: false,
+        is_generator: false,
+        is_async: false,
       }),
       [],
     )

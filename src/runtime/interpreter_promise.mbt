@@ -155,7 +155,8 @@ fn JSInterpreter::make_bound_native(
     env: self.global_env,
     is_arrow: false,
     is_strict: false,
-    is_generator: false, is_async: false,
+    is_generator: false,
+    is_async: false,
     props: [],
     object_proto: Some(self.function_proto),
   })
@@ -1139,7 +1140,10 @@ fn JSInterpreter::call_async_function(
 
   // Execute the function body
   let result = self.call_function(
-    Function(sync_closure), this_arg, args, new_target~,
+    Function(sync_closure),
+    this_arg,
+    args,
+    new_target~,
   )
 
   // Get Promise constructor
@@ -1149,7 +1153,9 @@ fn JSInterpreter::call_async_function(
   match self.take_error() {
     Some(err) => {
       // Return rejected Promise
-      let (promise, _resolve, reject) = self.promise_new_capability(promise_ctor)
+      let (promise, _resolve, reject) = self.promise_new_capability(
+        promise_ctor,
+      )
       match self.peek_error() {
         Some(e) => return e
         None => ()
@@ -1278,20 +1284,17 @@ fn JSInterpreter::exec_for_await_of_loop(
         }
       }
   }
-
   while true {
     self.tick()
     match self.peek_error() {
       Some(err) => return Some(err)
       None => ()
     }
-
     let next_method = self.get_prop_value(iterator, "next")
     match self.peek_error() {
       Some(err) => return Some(err)
       None => ()
     }
-
     let next_result = self.call_function(next_method, iterator, [])
     match self.peek_error() {
       Some(err) => return Some(err)
@@ -1304,12 +1307,10 @@ fn JSInterpreter::exec_for_await_of_loop(
       Some(err) => return Some(err)
       None => ()
     }
-
     let done = self.get_prop_value(next_val, "done").to_boolean()
     if done {
       break
     }
-
     let value_or_promise = self.get_prop_value(next_val, "value")
     // Await the value (may be a Promise)
     let value = self.await_promise(value_or_promise)
@@ -1322,7 +1323,9 @@ fn JSInterpreter::exec_for_await_of_loop(
     }
 
     // ES6: Create per-iteration environment for let/const
-    let iter_env = create_iter_env(env, binding, is_const, needs_per_iteration_env)
+    let iter_env = create_iter_env(
+      env, binding, is_const, needs_per_iteration_env,
+    )
     self.apply_for_of_binding(kind, binding, value, iter_env)
     match self.peek_error() {
       Some(err) => {
@@ -1331,7 +1334,6 @@ fn JSInterpreter::exec_for_await_of_loop(
       }
       None => ()
     }
-
     match self.exec_block(body, iter_env) {
       Some(BreakSignal(label)) =>
         if loop_label_matches(loop_label, label) {

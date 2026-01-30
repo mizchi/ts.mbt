@@ -72,7 +72,8 @@ pub fn js_new_native_function_with_env(
     env,
     is_arrow: false,
     is_strict: false,
-    is_generator: false, is_async: false,
+    is_generator: false,
+    is_async: false,
     props: [],
     object_proto,
   })

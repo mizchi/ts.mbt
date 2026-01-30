@@ -194,6 +194,8 @@ fn infer_literal_type(expr : @ast.TsExpr) -> @ast.TsType {
     @ast.TsExpr::Await(_) => @ast.TsType::Any
     @ast.TsExpr::DynamicImport(_) => @ast.TsType::Any
     @ast.TsExpr::ImportMeta => @ast.TsType::Any
+    @ast.TsExpr::TemplateLiteral(_, _) => @ast.TsType::String_
+    @ast.TsExpr::TaggedTemplate(_, _, _, _) => @ast.TsType::Any
     @ast.TsExpr::Seq(_, right) => infer_literal_type(right)
     @ast.TsExpr::PropAssignExpr(_, _, value) => infer_literal_type(value)
     @ast.TsExpr::IndexAssignExpr(_, _, value) => infer_literal_type(value)
@@ -410,6 +412,8 @@ fn infer_type(ctx : CodeGenCtx, expr : @ast.TsExpr) -> @ast.TsType {
     @ast.TsExpr::Await(_) => @ast.TsType::Any
     @ast.TsExpr::DynamicImport(_) => @ast.TsType::Any
     @ast.TsExpr::ImportMeta => @ast.TsType::Any
+    @ast.TsExpr::TemplateLiteral(_, _) => @ast.TsType::String_
+    @ast.TsExpr::TaggedTemplate(_, _, _, _) => @ast.TsType::Any
     @ast.TsExpr::Var(name) =>
       match ctx.get_local(name) {
         Some(local_var) => local_var.type_
@@ -624,6 +628,14 @@ fn compile_expr(
     @ast.TsExpr::ImportMeta =>
       raise CodeGenError(
         "import.meta is not supported in Wasm compiler (use interpreter)",
+      )
+    @ast.TsExpr::TemplateLiteral(_, _) =>
+      raise CodeGenError(
+        "template literals are not supported in Wasm compiler (use interpreter)",
+      )
+    @ast.TsExpr::TaggedTemplate(_, _, _, _) =>
+      raise CodeGenError(
+        "tagged templates are not supported in Wasm compiler (use interpreter)",
       )
     @ast.TsExpr::Seq(_, _) =>
       raise CodeGenError(

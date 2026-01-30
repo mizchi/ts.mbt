@@ -44,13 +44,14 @@ fn extract_private_name(key : String) -> String {
   let mut idx = 0
   while idx < len - 2 {
     if key[idx] == '_' && key[idx + 1] == '_' && key[idx + 2] == '#' {
-      return key[(idx + 2):].to_string() catch { _ => key }
+      return key[idx + 2:].to_string() catch { _ => key }
     }
     idx += 1
   }
   key
 }
 
+///|
 /// Check if a private property is a method or getter-only accessor (cannot be assigned)
 /// Returns true if assignment should throw TypeError
 fn is_private_readonly(obj : JSValue, key : String) -> Bool {
@@ -58,6 +59,7 @@ fn is_private_readonly(obj : JSValue, key : String) -> Bool {
   is_private_readonly_on_chain(obj, key)
 }
 
+///|
 /// Find a setter for a property on the prototype chain
 fn find_setter_on_chain(obj : JSValue, key : String) -> JSValue? {
   match obj {
@@ -91,6 +93,7 @@ fn find_setter_on_chain(obj : JSValue, key : String) -> JSValue? {
   }
 }
 
+///|
 /// Recursively check if a property is readonly on the prototype chain
 fn is_private_readonly_on_chain(obj : JSValue, key : String) -> Bool {
   // Check own properties first
@@ -143,7 +146,6 @@ fn is_private_readonly_on_chain(obj : JSValue, key : String) -> Bool {
   }
 }
 
-
 ///|
 /// Check if a property name is a mangled private field (e.g. __private_brand_0__#field)
 /// and extract the brand name if so.
@@ -195,7 +197,9 @@ fn JSInterpreter::check_private_brand(
           }
           idx += 1
         }
-        key[idx + 2:].to_string() catch { _ => key }
+        key[idx + 2:].to_string() catch {
+          _ => key
+        }
       } else {
         key
       }
@@ -573,6 +577,7 @@ fn JSInterpreter::set_prop_value(
                     "TypeError",
                     "Cannot assign to read only property '\{key}'",
                   )
+
                 }
                 return
               } else {
@@ -597,6 +602,7 @@ fn JSInterpreter::set_prop_value(
                     "TypeError",
                     "Cannot assign to read only property '\{key}'",
                   )
+
                 }
                 return
               } else {
@@ -621,6 +627,7 @@ fn JSInterpreter::set_prop_value(
                     "TypeError",
                     "Cannot assign to read only property '\{key}'",
                   )
+
                 }
                 return
               } else {
@@ -646,6 +653,7 @@ fn JSInterpreter::set_prop_value(
     }
   }
   let _ = js_set_prop(obj, key, value)
+
 }
 
 ///|

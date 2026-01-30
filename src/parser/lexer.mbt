@@ -277,8 +277,11 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             while true {
               match self.peek() {
                 // Line terminators: LF, CR, LS, PS
-                Some('\n') | Some('\r') | Some('\u2028') | Some('\u2029') | None =>
-                  break
+                Some('\n')
+                | Some('\r')
+                | Some('\u2028')
+                | Some('\u2029')
+                | None => break
                 _ => {
                   let _ = self.advance()
 
@@ -552,7 +555,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
         // We need to scan all digits to determine which
         let _ = self.advance() // skip '0'
         let _ = self.advance() // skip first digit (c)
-        let mut value = (c.to_int() - '0'.to_int())
+        let mut value = c.to_int() - '0'.to_int()
         let mut is_pure_octal = c >= '0' && c <= '7'
         while true {
           match self.peek() {
@@ -971,7 +974,9 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
                         // 3-digit octal: \000 - \377
                         let _ = self.advance()
                         let third_digit = d3.to_int() - '0'.to_int()
-                        let code = first_digit * 64 + second_digit * 8 + third_digit
+                        let code = first_digit * 64 +
+                          second_digit * 8 +
+                          third_digit
                         buf.write_char(code.unsafe_to_char())
                       }
                       _ => {
@@ -987,10 +992,9 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
                     buf.write_char(code.unsafe_to_char())
                   }
                 }
-                _ => {
+                _ =>
                   // Single digit octal: \0 - \7
                   buf.write_char(first_digit.unsafe_to_char())
-                }
               }
             }
             Some('x') => {
@@ -1078,21 +1082,25 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
             Some('\n') => {
               // \<LF> - skip the newline (empty code unit sequence)
               let _ = self.advance()
+
             }
             Some('\r') => {
               // \<CR> or \<CR><LF> - skip both (empty code unit sequence)
               let _ = self.advance()
               if self.peek() == Some('\n') {
                 let _ = self.advance()
+
               }
             }
             Some('\u2028') => {
               // \<LS> (U+2028 LINE SEPARATOR) - skip
               let _ = self.advance()
+
             }
             Some('\u2029') => {
               // \<PS> (U+2029 PARAGRAPH SEPARATOR) - skip
               let _ = self.advance()
+
             }
             Some(other) => {
               let _ = self.advance()
@@ -1217,7 +1225,9 @@ fn Lexer::scan_template_parts_with_raw(
                         let _ = self.advance()
                         raw_buf.write_char(d3)
                         let third_digit = d3.to_int() - '0'.to_int()
-                        let code = first_digit * 64 + second_digit * 8 + third_digit
+                        let code = first_digit * 64 +
+                          second_digit * 8 +
+                          third_digit
                         cooked_buf.write_char(code.unsafe_to_char())
                       }
                       _ => {
@@ -1234,10 +1244,9 @@ fn Lexer::scan_template_parts_with_raw(
                     cooked_buf.write_char(code.unsafe_to_char())
                   }
                 }
-                _ => {
+                _ =>
                   // Single digit octal: \0 - \7
                   cooked_buf.write_char(first_digit.unsafe_to_char())
-                }
               }
             }
             Some('x') => {
@@ -1435,7 +1444,9 @@ fn Lexer::scan_template(self : Lexer) -> TokenKind {
                         // 3-digit octal: \000 - \377
                         let _ = self.advance()
                         let third_digit = d3.to_int() - '0'.to_int()
-                        let code = first_digit * 64 + second_digit * 8 + third_digit
+                        let code = first_digit * 64 +
+                          second_digit * 8 +
+                          third_digit
                         buf.write_char(code.unsafe_to_char())
                       }
                       _ => {
@@ -1451,10 +1462,9 @@ fn Lexer::scan_template(self : Lexer) -> TokenKind {
                     buf.write_char(code.unsafe_to_char())
                   }
                 }
-                _ => {
+                _ =>
                   // Single digit octal: \0 - \7
                   buf.write_char(first_digit.unsafe_to_char())
-                }
               }
             }
             Some('x') => {

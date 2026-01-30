@@ -109,6 +109,14 @@ pub(all) enum TsExpr {
 
   // import.meta expression
   ImportMeta
+
+  // tagged template literal: tag`string ${expr} string`
+  // tag, strings (cooked), strings (raw), expressions
+  TaggedTemplate(TsExpr, Array[String], Array[String], Array[TsExpr])
+
+  // untagged template literal: `string ${expr} string`
+  // strings (cooked), expressions
+  TemplateLiteral(Array[String], Array[TsExpr])
 } derive(Show)
 
 ///|

@@ -107,7 +107,10 @@ fn collect_decl_names_from_stmt(
 }
 
 ///|
-fn collect_binding_names(binding : @ast.TsBinding, names : Array[String]) -> Unit {
+fn collect_binding_names(
+  binding : @ast.TsBinding,
+  names : Array[String],
+) -> Unit {
   match binding {
     @ast.TsBinding::Ident(name) => names.push(name)
     @ast.TsBinding::Array(arr_binding) => {
