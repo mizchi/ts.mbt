@@ -20,6 +20,8 @@ pub struct Parser {
   mut in_switch : Bool // for break validation (break works in switch too)
   labels : Array[String] // for labeled break/continue validation
   src : String
+  mut class_id : Int // for private field brand generation
+  mut current_class_brand : String? // brand ID of current class being parsed
 } derive(Show)
 
 ///|
@@ -45,6 +47,8 @@ pub fn Parser::new_with_strict(
     in_switch: false,
     labels: [],
     src: "",
+    class_id: 0,
+    current_class_brand: None,
   }
 }
 
@@ -68,6 +72,8 @@ pub fn Parser::from_source(src : String) -> Parser {
     in_switch: false,
     labels: [],
     src,
+    class_id: 0,
+    current_class_brand: None,
   }
 }
 

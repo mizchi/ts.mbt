@@ -20,6 +20,45 @@ fn class_key_name(key : ClassKey) -> String {
 }
 
 ///|
+fn has_static_private_elements(elements : Array[ClassElement]) -> Bool {
+  for element in elements {
+    match element {
+      Field(is_static, Name(name), _) | Method(is_static, Name(name), _, _) =>
+        // Check for static private members
+        if is_static && (name.has_prefix("#") || name.contains("__#")) {
+          return true
+        }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+fn has_instance_private_elements(elements : Array[ClassElement]) -> Bool {
+  for element in elements {
+    match element {
+      Field(is_static, Name(name), _) | Method(is_static, Name(name), _, _) =>
+        // Check for instance (non-static) private members
+        if not(is_static) && (name.has_prefix("#") || name.contains("__#")) {
+          return true
+        }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+fn mangle_private_name(name : String, brand : String) -> String {
+  if name.has_prefix("#") {
+    brand + "__" + name
+  } else {
+    name
+  }
+}
+
+///|
 fn class_key_expr(key : ClassKey) -> @ast.TsExpr {
   match key {
     Name(name) => @ast.TsExpr::StringLit(name)
@@ -36,7 +75,13 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
   }
   let name = match self.advance().kind {
     Ident(n) => n
-    PrivateIdent(n) => "#" + n
+    PrivateIdent(n) => {
+      let private_name = "#" + n
+      match self.current_class_brand {
+        Some(brand) => mangle_private_name(private_name, brand)
+        None => private_name
+      }
+    }
     Str(s) => s
     Number(n) => "\{n}"
     Int(n) => "\{n}"
@@ -264,7 +309,14 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       k => raise ParseError("Expected base class name, got \{k}")
     }
   }
+  // Generate unique brand ID for private fields
+  let brand_id = self.class_id
+  self.class_id += 1
+  let brand = "__private_brand__" + brand_id.to_string()
+  let prev_brand = self.current_class_brand
+  self.current_class_brand = Some(brand)
   let (ctor_opt, elements) = self.parse_class_body()
+  self.current_class_brand = prev_brand
   match base {
     Some(base_name) =>
       if class_name.length() > 0 && base_name == class_name {
@@ -285,6 +337,14 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   let tmp_name = if class_name == "" { "<anon>" } else { class_name }
   let instance_assigns : Array[@ast.TsStmt] = []
+  let has_instance_private = has_instance_private_elements(elements)
+  let has_static_private = has_static_private_elements(elements)
+  // Add brand marking for instance private field access control
+  if has_instance_private {
+    instance_assigns.push(
+      PropAssign(@ast.TsExpr::Var("this"), brand, @ast.TsExpr::BoolLit(true)),
+    )
+  }
   let key_temps : Array[String?] = []  // Temp var names for ALL elements' computed keys
   let key_init_stmts : Array[@ast.TsStmt] = []  // Initialization statements for computed keys
   let mut key_index = 0
@@ -319,10 +379,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             None => @ast.TsExpr::Var("undefined")
           }
           match key {
-            Name(field_name) =>
+            Name(field_name) => {
+              // Mangle private field names with brand for access control
+              let actual_name = mangle_private_name(field_name, brand)
               instance_assigns.push(
-                PropAssign(@ast.TsExpr::Var("this"), field_name, init),
+                PropAssign(@ast.TsExpr::Var("this"), actual_name, init),
               )
+            }
             Computed(_) =>
               match key_temps[idx] {
                 Some(temp_name) =>
@@ -396,6 +459,12 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   stmts.push(
     Let(@ast.TsBinding::Ident(tmp_name), Any, @ast.TsExpr::FuncExpr(ctor_func)),
   )
+  // Add brand to class constructor for static private members
+  if has_static_private {
+    stmts.push(
+      PropAssign(@ast.TsExpr::Var(tmp_name), brand, @ast.TsExpr::BoolLit(true)),
+    )
+  }
   let proto_expr = @ast.TsExpr::PropAccess(
     @ast.TsExpr::Var(tmp_name),
     "prototype",
@@ -497,7 +566,6 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
               }
               None => {
                 let prop_key = "@@define:" + method_name
-                stmts.push(PropAssign(target, prop_key, func_expr))
                 // Set __super_proto for both instance and static methods
                 let super_proto = if is_static {
                   // Static: super refers to parent class (or Function.prototype)
@@ -524,10 +592,29 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
                       )
                   }
                 }
-                let method_ref = @ast.TsExpr::PropAccess(target, method_name)
-                stmts.push(
-                  PropAssign(method_ref, "__super_proto", super_proto),
-                )
+                // For private methods, use temp var pattern to avoid brand check issues
+                if method_name.contains("__#") {
+                  let method_tmp = "__method_" + method_name
+                  stmts.push(
+                    Let(@ast.TsBinding::Ident(method_tmp), Any, func_expr),
+                  )
+                  stmts.push(
+                    PropAssign(
+                      @ast.TsExpr::Var(method_tmp),
+                      "__super_proto",
+                      super_proto,
+                    ),
+                  )
+                  stmts.push(
+                    PropAssign(target, prop_key, @ast.TsExpr::Var(method_tmp)),
+                  )
+                } else {
+                  stmts.push(PropAssign(target, prop_key, func_expr))
+                  let method_ref = @ast.TsExpr::PropAccess(target, method_name)
+                  stmts.push(
+                    PropAssign(method_ref, "__super_proto", super_proto),
+                  )
+                }
               }
             }
           Computed(_) => {
@@ -643,8 +730,23 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
       k => raise ParseError("Expected base class name, got \{k}")
     }
   }
+  // Generate unique brand ID for private fields
+  let brand_id = self.class_id
+  self.class_id += 1
+  let brand = "__private_brand__" + brand_id.to_string()
+  let prev_brand = self.current_class_brand
+  self.current_class_brand = Some(brand)
   let (ctor_opt, elements) = self.parse_class_body()
+  self.current_class_brand = prev_brand
   let instance_assigns : Array[@ast.TsStmt] = []
+  let has_instance_private = has_instance_private_elements(elements)
+  let has_static_private = has_static_private_elements(elements)
+  // Add brand marking for instance private field access control
+  if has_instance_private {
+    instance_assigns.push(
+      PropAssign(@ast.TsExpr::Var("this"), brand, @ast.TsExpr::BoolLit(true)),
+    )
+  }
   let key_temps : Array[String?] = []  // Temp var names for ALL elements' computed keys
   let key_init_stmts : Array[@ast.TsStmt] = []  // Initialization statements for computed keys
   let mut key_index = 0
@@ -679,10 +781,13 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
             None => @ast.TsExpr::Var("undefined")
           }
           match key {
-            Name(field_name) =>
+            Name(field_name) => {
+              // Mangle private field names with brand for access control
+              let actual_name = mangle_private_name(field_name, brand)
               instance_assigns.push(
-                PropAssign(@ast.TsExpr::Var("this"), field_name, init),
+                PropAssign(@ast.TsExpr::Var("this"), actual_name, init),
               )
+            }
             Computed(_) =>
               match key_temps[idx] {
                 Some(temp_name) =>
@@ -763,6 +868,12 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
   stmts.push(
     Let(@ast.TsBinding::Ident(name), Any, @ast.TsExpr::FuncExpr(ctor_func)),
   )
+  // Add brand to class constructor for static private members
+  if has_static_private {
+    stmts.push(
+      PropAssign(@ast.TsExpr::Var(name), brand, @ast.TsExpr::BoolLit(true)),
+    )
+  }
   let proto_expr = @ast.TsExpr::PropAccess(@ast.TsExpr::Var(name), "prototype")
   match base {
     Some(base_name) => {
@@ -857,7 +968,6 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
               }
               None => {
                 let prop_key = "@@define:" + method_name
-                stmts.push(PropAssign(target, prop_key, func_expr))
                 // Set __super_proto for both instance and static methods
                 let super_proto = if is_static {
                   // Static: super refers to parent class (or Function.prototype)
@@ -884,10 +994,29 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
                       )
                   }
                 }
-                let method_ref = @ast.TsExpr::PropAccess(target, method_name)
-                stmts.push(
-                  PropAssign(method_ref, "__super_proto", super_proto),
-                )
+                // For private methods, use temp var pattern to avoid brand check issues
+                if method_name.contains("__#") {
+                  let method_tmp = "__method_" + method_name
+                  stmts.push(
+                    Let(@ast.TsBinding::Ident(method_tmp), Any, func_expr),
+                  )
+                  stmts.push(
+                    PropAssign(
+                      @ast.TsExpr::Var(method_tmp),
+                      "__super_proto",
+                      super_proto,
+                    ),
+                  )
+                  stmts.push(
+                    PropAssign(target, prop_key, @ast.TsExpr::Var(method_tmp)),
+                  )
+                } else {
+                  stmts.push(PropAssign(target, prop_key, func_expr))
+                  let method_ref = @ast.TsExpr::PropAccess(target, method_name)
+                  stmts.push(
+                    PropAssign(method_ref, "__super_proto", super_proto),
+                  )
+                }
               }
             }
           Computed(_) => {

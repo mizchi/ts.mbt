@@ -590,6 +590,273 @@ fn include_prelude(name : String) -> String? {
           #|let NaNs = [0/0];
         ),
       )
+    "propertyHelper.js" =>
+      Some(
+        (
+          #|var __isArray = Array.isArray;
+        #|var __defineProperty = Object.defineProperty;
+        #|var __getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+        #|var __getOwnPropertyNames = Object.getOwnPropertyNames;
+        #|var __join = Function.prototype.call.bind(Array.prototype.join);
+        #|var __push = Function.prototype.call.bind(Array.prototype.push);
+        #|var __hasOwnProperty = Function.prototype.call.bind(Object.prototype.hasOwnProperty);
+        #|var __propertyIsEnumerable = Function.prototype.call.bind(Object.prototype.propertyIsEnumerable);
+        #|var nonIndexNumericPropertyName = Math.pow(2, 32) - 1;
+        #|function isSameValue(a, b) {
+        #|  if (a === 0 && b === 0) return 1 / a === 1 / b;
+        #|  if (a !== a && b !== b) return true;
+        #|  return a === b;
+        #|}
+        #|function isConfigurable(obj, name) {
+        #|  try { delete obj[name]; } catch (e) {
+        #|    if (!(e instanceof TypeError)) throw new Test262Error("Expected TypeError, got " + e);
+        #|  }
+        #|  return !__hasOwnProperty(obj, name);
+        #|}
+        #|function isEnumerable(obj, name) {
+        #|  var stringCheck = false;
+        #|  if (typeof name === "string") {
+        #|    for (var x in obj) { if (x === name) { stringCheck = true; break; } }
+        #|  } else { stringCheck = true; }
+        #|  return stringCheck && __hasOwnProperty(obj, name) && __propertyIsEnumerable(obj, name);
+        #|}
+        #|function isWritable(obj, name, verifyProp, value) {
+        #|  var unlikelyValue = __isArray(obj) && name === "length" ? nonIndexNumericPropertyName : "unlikelyValue";
+        #|  var newValue = value || unlikelyValue;
+        #|  var hadValue = __hasOwnProperty(obj, name);
+        #|  var oldValue = obj[name];
+        #|  var writeSucceeded;
+        #|  if (arguments.length < 4 && newValue === oldValue) { newValue = newValue + "2"; }
+        #|  try { obj[name] = newValue; } catch (e) {
+        #|    if (!(e instanceof TypeError)) throw new Test262Error("Expected TypeError, got " + e);
+        #|  }
+        #|  writeSucceeded = isSameValue(obj[verifyProp || name], newValue);
+        #|  if (writeSucceeded) {
+        #|    if (hadValue) { obj[name] = oldValue; } else { delete obj[name]; }
+        #|  }
+        #|  return writeSucceeded;
+        #|}
+        #|function verifyProperty(obj, name, desc, options) {
+        #|  if (arguments.length < 3) { assert(false, 'verifyProperty should receive at least 3 arguments'); return false; }
+        #|  var originalDesc = __getOwnPropertyDescriptor(obj, name);
+        #|  var nameStr = String(name);
+        #|  if (desc === undefined) {
+        #|    assert.sameValue(originalDesc, undefined, "obj['" + nameStr + "'] descriptor should be undefined");
+        #|    return true;
+        #|  }
+        #|  assert(__hasOwnProperty(obj, name), "obj should have an own property " + nameStr);
+        #|  assert.notSameValue(desc, null, "The desc argument should be an object or undefined, null");
+        #|  assert.sameValue(typeof desc, "object", "The desc argument should be an object or undefined, " + String(desc));
+        #|  var names = __getOwnPropertyNames(desc);
+        #|  for (var i = 0; i < names.length; i++) {
+        #|    assert(names[i] === "value" || names[i] === "writable" || names[i] === "enumerable" || names[i] === "configurable" || names[i] === "get" || names[i] === "set", "Invalid descriptor field: " + names[i]);
+        #|  }
+        #|  var failures = [];
+        #|  if (__hasOwnProperty(desc, 'value')) {
+        #|    if (!isSameValue(desc.value, originalDesc.value)) { __push(failures, "obj['" + nameStr + "'] descriptor value should be " + desc.value); }
+        #|    if (!isSameValue(desc.value, obj[name])) { __push(failures, "obj['" + nameStr + "'] value should be " + desc.value); }
+        #|  }
+        #|  if (__hasOwnProperty(desc, 'enumerable') && desc.enumerable !== undefined) {
+        #|    if (desc.enumerable !== originalDesc.enumerable || desc.enumerable !== isEnumerable(obj, name)) {
+        #|      __push(failures, "obj['" + nameStr + "'] descriptor should " + (desc.enumerable ? '' : 'not ') + "be enumerable");
+        #|    }
+        #|  }
+        #|  if (__hasOwnProperty(desc, 'writable') && desc.writable !== undefined) {
+        #|    if (desc.writable !== originalDesc.writable || desc.writable !== isWritable(obj, name)) {
+        #|      __push(failures, "obj['" + nameStr + "'] descriptor should " + (desc.writable ? '' : 'not ') + "be writable");
+        #|    }
+        #|  }
+        #|  if (__hasOwnProperty(desc, 'configurable') && desc.configurable !== undefined) {
+        #|    if (desc.configurable !== originalDesc.configurable || desc.configurable !== isConfigurable(obj, name)) {
+        #|      __push(failures, "obj['" + nameStr + "'] descriptor should " + (desc.configurable ? '' : 'not ') + "be configurable");
+        #|    }
+        #|  }
+        #|  if (failures.length) { assert(false, __join(failures, '; ')); }
+        #|  if (options && options.restore) { __defineProperty(obj, name, originalDesc); }
+        #|  return true;
+        #|}
+        #|function verifyCallableProperty(obj, name, functionName, functionLength, desc, options) {
+        #|  var value = obj[name];
+        #|  assert.sameValue(typeof value, "function", "obj['" + String(name) + "'] descriptor should be a function");
+        #|  if (desc === undefined) { desc = { writable: true, enumerable: false, configurable: true, value: value }; }
+        #|  else if (!__hasOwnProperty(desc, "value") && !__hasOwnProperty(desc, "get")) { desc.value = value; }
+        #|  verifyProperty(obj, name, desc, options);
+        #|  if (functionName === undefined) {
+        #|    if (typeof name === "symbol") { functionName = "[" + name.description + "]"; } else { functionName = name; }
+        #|  }
+        #|  verifyProperty(value, "name", { value: functionName, writable: false, enumerable: false, configurable: desc.configurable }, options);
+        #|  verifyProperty(value, "length", { value: functionLength, writable: false, enumerable: false, configurable: desc.configurable }, options);
+        #|}
+        #|function verifyEqualTo(obj, name, value) { if (!isSameValue(obj[name], value)) throw new Test262Error("Expected obj[" + String(name) + "] to equal " + value + ", actually " + obj[name]); }
+        #|function verifyWritable(obj, name, verifyProp, value) {
+        #|  if (!verifyProp) { assert(__getOwnPropertyDescriptor(obj, name).writable, "Expected obj[" + String(name) + "] to have writable:true."); }
+        #|  if (!isWritable(obj, name, verifyProp, value)) throw new Test262Error("Expected obj[" + String(name) + "] to be writable, but was not.");
+        #|}
+        #|function verifyNotWritable(obj, name, verifyProp, value) {
+        #|  if (!verifyProp) { assert(!__getOwnPropertyDescriptor(obj, name).writable, "Expected obj[" + String(name) + "] to have writable:false."); }
+        #|  if (isWritable(obj, name, verifyProp)) throw new Test262Error("Expected obj[" + String(name) + "] NOT to be writable, but was.");
+        #|}
+        #|function verifyEnumerable(obj, name) {
+        #|  assert(__getOwnPropertyDescriptor(obj, name).enumerable, "Expected obj[" + String(name) + "] to have enumerable:true.");
+        #|  if (!isEnumerable(obj, name)) throw new Test262Error("Expected obj[" + String(name) + "] to be enumerable, but was not.");
+        #|}
+        #|function verifyNotEnumerable(obj, name) {
+        #|  assert(!__getOwnPropertyDescriptor(obj, name).enumerable, "Expected obj[" + String(name) + "] to have enumerable:false.");
+        #|  if (isEnumerable(obj, name)) throw new Test262Error("Expected obj[" + String(name) + "] NOT to be enumerable, but was.");
+        #|}
+        #|function verifyConfigurable(obj, name) {
+        #|  assert(__getOwnPropertyDescriptor(obj, name).configurable, "Expected obj[" + String(name) + "] to have configurable:true.");
+        #|  if (!isConfigurable(obj, name)) throw new Test262Error("Expected obj[" + String(name) + "] to be configurable, but was not.");
+        #|}
+        #|function verifyNotConfigurable(obj, name) {
+        #|  assert(!__getOwnPropertyDescriptor(obj, name).configurable, "Expected obj[" + String(name) + "] to have configurable:false.");
+        #|  if (isConfigurable(obj, name)) throw new Test262Error("Expected obj[" + String(name) + "] NOT to be configurable, but was.");
+        #|}
+          #|var verifyPrimordialProperty = verifyProperty;
+          #|var verifyPrimordialCallableProperty = verifyCallableProperty;
+        ),
+      )
+    "fnGlobalObject.js" =>
+      Some(
+        (
+          #|var __globalObject = Function("return this;")();
+          #|function fnGlobalObject() { return __globalObject; }
+        ),
+      )
+    "isConstructor.js" =>
+      Some(
+        (
+          #|function isConstructor(f) {
+          #|  if (typeof f !== "function") { throw new Test262Error("isConstructor invoked with a non-function value"); }
+          #|  try { Reflect.construct(function(){}, [], f); } catch (e) { return false; }
+          #|  return true;
+          #|}
+        ),
+      )
+    "deepEqual.js" =>
+      Some(
+        (
+          #|function deepEqual(a, b) {
+          #|  if (a === b) return true;
+          #|  if (typeof a !== typeof b) return false;
+          #|  if (typeof a !== "object" || a === null || b === null) return false;
+          #|  var keysA = Object.keys(a), keysB = Object.keys(b);
+          #|  if (keysA.length !== keysB.length) return false;
+          #|  for (var i = 0; i < keysA.length; i++) {
+          #|    if (!deepEqual(a[keysA[i]], b[keysA[i]])) return false;
+          #|  }
+          #|  return true;
+          #|}
+          #|assert.deepEqual = function(actual, expected, message) {
+          #|  if (!deepEqual(actual, expected)) {
+          #|    throw new Test262Error(message || "deepEqual assertion failed");
+          #|  }
+          #|};
+        ),
+      )
+    "decimalToHexString.js" =>
+      Some(
+        (
+          #|function decimalToHexString(n) {
+          #|  var hex = "0123456789ABCDEF";
+          #|  n >>>= 0;
+          #|  var s = "";
+          #|  while (n) { s = hex[n & 0xf] + s; n >>>= 4; }
+          #|  while (s.length < 4) { s = "0" + s; }
+          #|  return s;
+          #|}
+          #|function decimalToPercentHexString(n) {
+          #|  var hex = "0123456789ABCDEF";
+          #|  return "%" + hex[(n >> 4) & 0xf] + hex[n & 0xf];
+          #|}
+        ),
+      )
+    "proxyTrapsHelper.js" =>
+      Some(
+        (
+          #|function allowProxyTraps(overrides) {
+          #|  function throwTest262Error(msg) { return function () { throw new Test262Error(msg); }; }
+          #|  if (!overrides) { overrides = {}; }
+          #|  return {
+          #|    getPrototypeOf: overrides.getPrototypeOf || throwTest262Error('[[GetPrototypeOf]] trap called'),
+          #|    setPrototypeOf: overrides.setPrototypeOf || throwTest262Error('[[SetPrototypeOf]] trap called'),
+          #|    isExtensible: overrides.isExtensible || throwTest262Error('[[IsExtensible]] trap called'),
+          #|    preventExtensions: overrides.preventExtensions || throwTest262Error('[[PreventExtensions]] trap called'),
+          #|    getOwnPropertyDescriptor: overrides.getOwnPropertyDescriptor || throwTest262Error('[[GetOwnProperty]] trap called'),
+          #|    has: overrides.has || throwTest262Error('[[HasProperty]] trap called'),
+          #|    get: overrides.get || throwTest262Error('[[Get]] trap called'),
+          #|    set: overrides.set || throwTest262Error('[[Set]] trap called'),
+          #|    deleteProperty: overrides.deleteProperty || throwTest262Error('[[Delete]] trap called'),
+          #|    defineProperty: overrides.defineProperty || throwTest262Error('[[DefineOwnProperty]] trap called'),
+          #|    enumerate: throwTest262Error('[[Enumerate]] trap called: this trap has been removed'),
+          #|    ownKeys: overrides.ownKeys || throwTest262Error('[[OwnPropertyKeys]] trap called'),
+          #|    apply: overrides.apply || throwTest262Error('[[Call]] trap called'),
+          #|    construct: overrides.construct || throwTest262Error('[[Construct]] trap called')
+          #|  };
+          #|}
+        ),
+      )
+    "asyncHelpers.js" =>
+      Some(
+        (
+          #|function asyncTest(testFunc) {
+          #|  if (!Object.prototype.hasOwnProperty.call(globalThis, "$DONE")) {
+          #|    throw new Test262Error("asyncTest called without async flag");
+          #|  }
+          #|  if (typeof testFunc !== "function") {
+          #|    $DONE(new Test262Error("asyncTest called with non-function argument"));
+          #|    return;
+          #|  }
+          #|  try {
+          #|    testFunc().then(function () { $DONE(); }, function (error) { $DONE(error); });
+          #|  } catch (syncError) { $DONE(syncError); }
+          #|}
+          #|assert.throwsAsync = function (expectedErrorConstructor, func, message) {
+          #|  return new Promise(function (resolve) {
+          #|    var fail = function (detail) {
+          #|      if (message === undefined) { throw new Test262Error(detail); }
+          #|      throw new Test262Error(message + " " + detail);
+          #|    };
+          #|    if (typeof expectedErrorConstructor !== "function") {
+          #|      fail("assert.throwsAsync called with an argument that is not an error constructor");
+          #|    }
+          #|    if (typeof func !== "function") {
+          #|      fail("assert.throwsAsync called with an argument that is not a function");
+          #|    }
+          #|    var expectedName = expectedErrorConstructor.name;
+          #|    var expectation = "Expected a " + expectedName + " to be thrown asynchronously";
+          #|    var res;
+          #|    try { res = func(); } catch (thrown) { fail(expectation + " but the function threw synchronously"); }
+          #|    if (res === null || typeof res !== "object" || typeof res.then !== "function") {
+          #|      fail(expectation + " but result was not a thenable");
+          #|    }
+          #|    var onResFulfilled, onResRejected;
+          #|    var resSettlementP = new Promise(function (onFulfilled, onRejected) {
+          #|      onResFulfilled = onFulfilled;
+          #|      onResRejected = onRejected;
+          #|    });
+          #|    try { res.then(onResFulfilled, onResRejected); } catch (thrown) {
+          #|      fail(expectation + " but .then threw synchronously");
+          #|    }
+          #|    resolve(resSettlementP.then(
+          #|      function () { fail(expectation + " but no exception was thrown at all"); },
+          #|      function (thrown) {
+          #|        var actualName;
+          #|        if (thrown === null || typeof thrown !== "object") {
+          #|          fail(expectation + " but thrown value was not an object");
+          #|        } else if (thrown.constructor !== expectedErrorConstructor) {
+          #|          actualName = thrown.constructor.name;
+          #|          if (expectedName === actualName) {
+          #|            fail(expectation + " but got a different error constructor with the same name");
+          #|          }
+          #|          fail(expectation + " but got a " + actualName);
+          #|        }
+          #|      }
+          #|    ));
+          #|  });
+          #|};
+        ),
+      )
     _ => None
   }
 }
@@ -609,9 +876,7 @@ fn build_includes(includes : Array[String]) -> (String, Array[String]) {
 
 ///|
 fn should_skip_test(meta : Test262Meta, content : String) -> String? {
-  if contains(meta.flags, "async") {
-    return Some("async flag")
-  }
+  // async tests are now supported - no longer skipping
   let is_module = contains(meta.flags, "module")
   for line in content.split("\n") {
     let trimmed = line.trim().to_string()
@@ -1058,6 +1323,15 @@ async fn run_test262(test_path : String) -> Unit {
     let mut runtime_error : @runtime.JSValue? = None
     if is_error_value(result) {
       runtime_error = Some(result)
+    }
+    // For async tests, also check last_error from $DONE(error)
+    match runtime_error {
+      Some(_) => ()
+      None =>
+        match interp.get_last_error() {
+          Some(err) => runtime_error = Some(err)
+          None => ()
+        }
     }
     if meta.negative {
       match runtime_error {
