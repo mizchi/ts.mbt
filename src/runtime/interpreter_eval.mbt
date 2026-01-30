@@ -1396,7 +1396,58 @@ fn JSInterpreter::eval_expr_gen(
           GenValue::Value(val)
         }),
       ))
+    @ast.TsExpr::ArrayLit(elements) =>
+      self.eval_array_lit_gen(elements, env)
+    @ast.TsExpr::Cond(cond, then_expr, else_expr) =>
+      gen_bind(self.eval_expr_gen(cond, env), cond_val => if cond_val.to_boolean(
+        ) {
+        self.eval_expr_gen(then_expr, env)
+      } else {
+        self.eval_expr_gen(else_expr, env)
+      })
     _ => GenValue::Value(self.eval_expr(expr, env))
+  }
+}
+
+///|
+fn JSInterpreter::eval_array_lit_gen(
+  self : JSInterpreter,
+  elements : Array[@ast.TsExpr],
+  env : JSEnv,
+) -> GenValue {
+  let result : Array[JSValue] = []
+  self.eval_array_elements_gen(elements, 0, result, env)
+}
+
+///|
+fn JSInterpreter::eval_array_elements_gen(
+  self : JSInterpreter,
+  elements : Array[@ast.TsExpr],
+  index : Int,
+  result : Array[JSValue],
+  env : JSEnv,
+) -> GenValue {
+  if index >= elements.length() {
+    return GenValue::Value(js_array_from(result))
+  }
+  let elem = elements[index]
+  match elem {
+    @ast.TsExpr::Spread(inner) =>
+      gen_bind(self.eval_expr_gen(inner, env), spread_val => {
+        match spread_val {
+          Array(arr) =>
+            for item in arr.items {
+              result.push(item)
+            }
+          _ => result.push(spread_val)
+        }
+        self.eval_array_elements_gen(elements, index + 1, result, env)
+      })
+    _ =>
+      gen_bind(self.eval_expr_gen(elem, env), val => {
+        result.push(val)
+        self.eval_array_elements_gen(elements, index + 1, result, env)
+      })
   }
 }
 
@@ -4220,6 +4271,74 @@ fn JSInterpreter::exec_stmt_gen(
           None => GenSignal::Continue
         }
       })
+    @ast.TsStmt::For(init, cond, update, body) =>
+      if stmt_has_yield(stmt) {
+        self.exec_for_loop_gen(init, cond, update, body, env)
+      } else {
+        match self.exec_stmt(stmt, env) {
+          Some(BreakSignal(_)) | Some(ContinueSignal(_)) => GenSignal::Continue
+          Some(val) => GenSignal::Return(val)
+          None => GenSignal::Continue
+        }
+      }
+    @ast.TsStmt::While(cond, body) =>
+      if stmt_has_yield(stmt) {
+        self.exec_while_loop_gen(cond, body, env)
+      } else {
+        match self.exec_stmt(stmt, env) {
+          Some(BreakSignal(_)) | Some(ContinueSignal(_)) => GenSignal::Continue
+          Some(val) => GenSignal::Return(val)
+          None => GenSignal::Continue
+        }
+      }
+    @ast.TsStmt::DoWhile(cond, body) =>
+      if stmt_has_yield(stmt) {
+        // For do-while, execute body first then check condition
+        let body_env = js_new_env(Some(env))
+        self.hoist_block_lexical(body, body_env)
+        match self.exec_block_gen(body, body_env) {
+          GenSignal::Continue =>
+            if self.eval_expr(cond, env).to_boolean() {
+              self.exec_while_loop_gen(cond, body, env)
+            } else {
+              GenSignal::Continue
+            }
+          GenSignal::Suspend(val, cont) =>
+            GenSignal::Suspend(
+              val,
+              fn(sent) {
+                match cont(sent) {
+                  GenSignal::Continue =>
+                    if self.eval_expr(cond, env).to_boolean() {
+                      self.exec_while_loop_gen(cond, body, env)
+                    } else {
+                      GenSignal::Continue
+                    }
+                  other => other
+                }
+              },
+            )
+          other => other
+        }
+      } else {
+        match self.exec_stmt(stmt, env) {
+          Some(BreakSignal(_)) | Some(ContinueSignal(_)) => GenSignal::Continue
+          Some(val) => GenSignal::Return(val)
+          None => GenSignal::Continue
+        }
+      }
+    @ast.TsStmt::Try(try_block, catch_binding, catch_block, finally_block) =>
+      if stmt_has_yield(stmt) {
+        self.exec_try_catch_gen(
+          try_block, catch_binding, catch_block, finally_block, env,
+        )
+      } else {
+        match self.exec_stmt(stmt, env) {
+          Some(BreakSignal(_)) | Some(ContinueSignal(_)) => GenSignal::Continue
+          Some(val) => GenSignal::Return(val)
+          None => GenSignal::Continue
+        }
+      }
     _ =>
       match self.exec_stmt(stmt, env) {
         Some(BreakSignal(_)) | Some(ContinueSignal(_)) => GenSignal::Continue

@@ -4,12 +4,30 @@
 
 | ステータス | 件数 |
 |-----------|------|
-| Passed | 14,169 |
-| Failed | 5,641 |
+| Passed | 14,215 |
+| Failed | 5,595 |
 | Skipped | 4,066 |
 | **Total** | 23,876 |
 
-### 最新の修正 (strict mode + prototype lookup) - 完了
+### 最新の修正 (generator CPS対応 + yield*) - 完了
+- **for/while/do-while ループ内の yield 対応**
+  - `exec_for_loop_gen` と `exec_while_loop_gen` を追加
+  - 継続渡しスタイル (CPS) で yield からの再開をサポート
+- **try-catch-finally 内の yield 対応**
+  - `exec_try_catch_gen` を追加
+  - try ブロック内の yield から再開可能
+- **`stmt_has_yield` / `block_has_yield` 判定関数を追加**
+  - yield を含む構造のみ CPS 版を使用（パフォーマンス最適化）
+- **yield* が元のイテレータ result をそのまま返すように修正**
+  - `GenSignal::YieldRaw` / `GenSignal::SuspendRaw` を追加
+  - yield* の結果で done フラグが自動追加されなくなった
+- **eval_expr_gen に配列リテラル、条件演算子の generator 対応を追加**
+  - `[yield x]` や `(yield x) ? a : b` が正しく動作
+- **パーサー修正: yield の引数を AssignmentExpression でパース**
+  - `yield 'hit' in obj` が正しく `yield ('hit' in obj)` としてパースされる
+- **Passed: 14,169 → 14,215 (+46)**
+
+### 以前の修正 (strict mode + prototype lookup) - 完了
 - **グローバル定数を non-writable に**
   - `Infinity`, `NaN`, `undefined` を `writable: false, enumerable: false, configurable: false` に
   - strict mode で代入すると TypeError
@@ -286,9 +304,10 @@
 3. ~~async/await テストサポート~~ ✓完了
 4. ~~dynamic import / import.meta~~ ✓完了
 5. strict mode エラー処理の残り (arguments/eval代入禁止、重複引数名)
-6. generator関数の yield式の値 (.next(value) 引数伝播)
-7. パーサーの正規表現リテラル対応
-8. module構文対応 (319件スキップ中)
+6. ~~generator関数内のループ/try-catch での yield~~ ✓完了
+7. generator の yield* 対応の改善 (~30件失敗中)
+8. パーサーの正規表現リテラル対応
+9. module構文対応 (319件スキップ中)
 
 ---
 
@@ -304,5 +323,6 @@
 | dynamic import | 13,991 | 5,819 | 4,066 | +277 |
 | private method/accessor | 14,097 | 5,713 | 4,066 | +106 |
 | strict mode + proto | 14,169 | 5,641 | 4,066 | +72 |
+| generator CPS + yield* | 14,215 | 5,595 | 4,066 | +46 |
 
-**総合改善: +1,929 passed tests**
+**総合改善: +1,975 passed tests**

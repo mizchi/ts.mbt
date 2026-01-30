@@ -462,14 +462,18 @@ fn Parser::parse_unary(self : Parser) -> @ast.TsExpr raise ParseError {
         let expr = self.parse_assignment()
         YieldStar(expr)
       } else {
+        // yield takes AssignmentExpression as operand (ES6 14.4)
+        // Check for end of yield expression
         let expr = if self.check(Semicolon) ||
           self.check(Comma) ||
           self.check(RParen) ||
           self.check(RBracket) ||
-          self.check(RBrace) {
+          self.check(RBrace) ||
+          self.check(Colon) ||
+          self.check(Eof) {
           None
         } else {
-          Some(self.parse_unary())
+          Some(self.parse_assignment())
         }
         Yield(expr)
       }

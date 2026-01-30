@@ -29,7 +29,9 @@ pub(all) struct JSGeneratorState {
 pub(all) enum GenSignal {
   Continue
   Yield(JSValue)
+  YieldRaw(JSValue) // For yield*: returns the raw iterator result object as-is
   Suspend(JSValue, (JSValue) -> GenSignal)
+  SuspendRaw(JSValue, (JSValue) -> GenSignal) // For yield*: raw result with continuation
   Return(JSValue)
 }
 

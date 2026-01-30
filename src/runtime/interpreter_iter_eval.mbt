@@ -401,6 +401,7 @@ fn JSInterpreter::pop_active_iterator(self : JSInterpreter) -> Unit {
 priv enum GenValue {
   Value(JSValue)
   Yield(JSValue, (JSValue) -> GenValue)
+  YieldRaw(JSValue, (JSValue) -> GenValue) // For yield*: raw iterator result
 }
 
 ///|
@@ -409,6 +410,8 @@ fn gen_bind(value : GenValue, cont : (JSValue) -> GenValue) -> GenValue {
     GenValue::Value(v) => cont(v)
     GenValue::Yield(yielded, cont_fn) =>
       GenValue::Yield(yielded, sent => gen_bind(cont_fn(sent), cont))
+    GenValue::YieldRaw(result, cont_fn) =>
+      GenValue::YieldRaw(result, sent => gen_bind(cont_fn(sent), cont))
   }
 }
 
@@ -418,6 +421,8 @@ fn gen_to_signal(value : GenValue, cont : (JSValue) -> GenSignal) -> GenSignal {
     GenValue::Value(v) => cont(v)
     GenValue::Yield(yielded, cont_fn) =>
       GenSignal::Suspend(yielded, sent => gen_to_signal(cont_fn(sent), cont))
+    GenValue::YieldRaw(result, cont_fn) =>
+      GenSignal::SuspendRaw(result, sent => gen_to_signal(cont_fn(sent), cont))
   }
 }
 
@@ -460,7 +465,8 @@ fn JSInterpreter::yield_star_next(
     self.pop_active_iterator()
     return GenValue::Value(value)
   }
-  GenValue::Yield(value, sent_val => self.yield_star_next(
+  // Use YieldRaw to return the raw iterator result object as-is
+  GenValue::YieldRaw(result, sent_val => self.yield_star_next(
     iterator,
     Some(sent_val),
     true,
@@ -691,11 +697,24 @@ fn JSInterpreter::generator_next(
           self.current_gen_id = None
           return self.make_iter_result(val, false)
         }
+        GenSignal::YieldRaw(result) => {
+          // For yield*: return the raw iterator result as-is
+          self.generators[gen_id] = state
+          self.current_gen_id = None
+          return result
+        }
         GenSignal::Suspend(val, cont) => {
           state.cont = Some(cont)
           self.generators[gen_id] = state
           self.current_gen_id = None
           return self.make_iter_result(val, false)
+        }
+        GenSignal::SuspendRaw(result, cont) => {
+          // For yield*: return raw result and save continuation
+          state.cont = Some(cont)
+          self.generators[gen_id] = state
+          self.current_gen_id = None
+          return result
         }
         GenSignal::Return(val) => {
           state.done = true
@@ -727,11 +746,22 @@ fn JSInterpreter::generator_next(
         self.current_gen_id = None
         return self.make_iter_result(val, false)
       }
+      GenSignal::YieldRaw(result) => {
+        self.generators[gen_id] = state
+        self.current_gen_id = None
+        return result
+      }
       GenSignal::Suspend(val, cont) => {
         state.cont = Some(cont)
         self.generators[gen_id] = state
         self.current_gen_id = None
         return self.make_iter_result(val, false)
+      }
+      GenSignal::SuspendRaw(result, cont) => {
+        state.cont = Some(cont)
+        self.generators[gen_id] = state
+        self.current_gen_id = None
+        return result
       }
       GenSignal::Return(val) => {
         state.done = true
@@ -816,5 +846,464 @@ fn JSInterpreter::iter_result_value_done(
       (done, val)
     }
     _ => (true, Undefined)
+  }
+}
+
+///|
+fn stmt_has_yield(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    @ast.TsStmt::Expr(expr) => return expr_has_yield(expr)
+    @ast.TsStmt::Assign(_, value) => return expr_has_yield(value)
+    @ast.TsStmt::PropAssign(obj, _, val) =>
+      return expr_has_yield(obj) || expr_has_yield(val)
+    @ast.TsStmt::IndexAssign(obj, idx, val) =>
+      return expr_has_yield(obj) || expr_has_yield(idx) || expr_has_yield(val)
+    @ast.TsStmt::CompoundAssign(_, _, val) => return expr_has_yield(val)
+    @ast.TsStmt::Return(opt) =>
+      return match opt {
+        Some(e) => expr_has_yield(e)
+        None => false
+      }
+    @ast.TsStmt::If(cond, then_block, else_block) => {
+      if expr_has_yield(cond) || block_has_yield(then_block) {
+        return true
+      }
+      return match else_block {
+        Some(b) => block_has_yield(b)
+        None => false
+      }
+    }
+    @ast.TsStmt::Block(block) => return block_has_yield(block)
+    @ast.TsStmt::Var(_, _, init)
+    | @ast.TsStmt::Let(_, _, init)
+    | @ast.TsStmt::Const(_, _, init) => return expr_has_yield(init)
+    @ast.TsStmt::For(init, cond, update, body) => {
+      match init {
+        Some(s) => if stmt_has_yield(s) { return true }
+        None => ()
+      }
+      match cond {
+        Some(e) => if expr_has_yield(e) { return true }
+        None => ()
+      }
+      match update {
+        Some(s) => if stmt_has_yield(s) { return true }
+        None => ()
+      }
+      return block_has_yield(body)
+    }
+    @ast.TsStmt::ForIn(_, _, _, expr, body)
+    | @ast.TsStmt::ForOf(_, _, _, expr, body) =>
+      return expr_has_yield(expr) || block_has_yield(body)
+    @ast.TsStmt::While(cond, body) =>
+      return expr_has_yield(cond) || block_has_yield(body)
+    @ast.TsStmt::DoWhile(cond, body) =>
+      return expr_has_yield(cond) || block_has_yield(body)
+    @ast.TsStmt::Try(try_block, _, catch_block, finally_block) => {
+      if block_has_yield(try_block) {
+        return true
+      }
+      match catch_block {
+        Some(b) => if block_has_yield(b) { return true }
+        None => ()
+      }
+      return match finally_block {
+        Some(b) => block_has_yield(b)
+        None => false
+      }
+    }
+    @ast.TsStmt::Switch(expr, cases) => {
+      if expr_has_yield(expr) {
+        return true
+      }
+      for c in cases {
+        match c.test_expr {
+          Some(e) => if expr_has_yield(e) { return true }
+          None => ()
+        }
+        if block_has_yield(c.body) {
+          return true
+        }
+      }
+      return false
+    }
+    @ast.TsStmt::Throw(expr) => return expr_has_yield(expr)
+    _ => return false
+  }
+}
+
+///|
+fn block_has_yield(block : @ast.TsBlock) -> Bool {
+  for stmt in block.stmts {
+    if stmt_has_yield(stmt) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn JSInterpreter::exec_for_loop_gen(
+  self : JSInterpreter,
+  init : @ast.TsStmt?,
+  cond : @ast.TsExpr?,
+  update : @ast.TsStmt?,
+  body : @ast.TsBlock,
+  env : JSEnv,
+) -> GenSignal {
+  // Create loop environment
+  let loop_env = js_new_env(Some(env))
+  // Initialize
+  match init {
+    Some(init_stmt) => {
+      self.hoist_stmt(init_stmt, loop_env)
+      match self.exec_stmt(init_stmt, loop_env) {
+        Some(val) =>
+          match val {
+            BreakSignal(_) | ContinueSignal(_) => ()
+            _ => return GenSignal::Return(val)
+          }
+        None => ()
+      }
+    }
+    None => ()
+  }
+  // Start iteration
+  self.exec_for_loop_iter_gen(cond, update, body, loop_env)
+}
+
+///|
+fn JSInterpreter::exec_for_loop_iter_gen(
+  self : JSInterpreter,
+  cond : @ast.TsExpr?,
+  update : @ast.TsStmt?,
+  body : @ast.TsBlock,
+  env : JSEnv,
+) -> GenSignal {
+  // Check for errors
+  match self.peek_error() {
+    Some(err) => return GenSignal::Return(err)
+    None => ()
+  }
+  self.tick()
+  match self.peek_error() {
+    Some(err) => return GenSignal::Return(err)
+    None => ()
+  }
+  // Check condition
+  let cond_val = match cond {
+    Some(c) => self.eval_expr(c, env).to_boolean()
+    None => true
+  }
+  if not(cond_val) {
+    return GenSignal::Continue
+  }
+  // Execute body
+  let body_env = js_new_env(Some(env))
+  self.hoist_block_lexical(body, body_env)
+  match self.exec_block_gen(body, body_env) {
+    GenSignal::Continue => {
+      // Update and continue loop
+      match update {
+        Some(u) => {
+          let _ = self.exec_stmt(u, env)
+        }
+        None => ()
+      }
+      self.exec_for_loop_iter_gen(cond, update, body, env)
+    }
+    GenSignal::Yield(val) => GenSignal::Yield(val)
+    GenSignal::YieldRaw(result) => GenSignal::YieldRaw(result)
+    GenSignal::Suspend(val, cont) =>
+      // Create continuation that resumes loop after body
+      GenSignal::Suspend(
+        val,
+        fn(sent) {
+          match cont(sent) {
+            GenSignal::Continue => {
+              // Update and continue loop
+              match update {
+                Some(u) => {
+                  let _ = self.exec_stmt(u, env)
+                }
+                None => ()
+              }
+              self.exec_for_loop_iter_gen(cond, update, body, env)
+            }
+            other => other
+          }
+        },
+      )
+    GenSignal::SuspendRaw(result, cont) =>
+      GenSignal::SuspendRaw(
+        result,
+        fn(sent) {
+          match cont(sent) {
+            GenSignal::Continue => {
+              match update {
+                Some(u) => {
+                  let _ = self.exec_stmt(u, env)
+                }
+                None => ()
+              }
+              self.exec_for_loop_iter_gen(cond, update, body, env)
+            }
+            other => other
+          }
+        },
+      )
+    GenSignal::Return(val) =>
+      match val {
+        BreakSignal(_) => GenSignal::Continue
+        ContinueSignal(_) => {
+          // Update and continue loop
+          match update {
+            Some(u) => {
+              let _ = self.exec_stmt(u, env)
+            }
+            None => ()
+          }
+          self.exec_for_loop_iter_gen(cond, update, body, env)
+        }
+        _ => GenSignal::Return(val)
+      }
+  }
+}
+
+///|
+fn JSInterpreter::exec_while_loop_gen(
+  self : JSInterpreter,
+  cond : @ast.TsExpr,
+  body : @ast.TsBlock,
+  env : JSEnv,
+) -> GenSignal {
+  // Check for errors
+  match self.peek_error() {
+    Some(err) => return GenSignal::Return(err)
+    None => ()
+  }
+  self.tick()
+  match self.peek_error() {
+    Some(err) => return GenSignal::Return(err)
+    None => ()
+  }
+  // Check condition
+  if not(self.eval_expr(cond, env).to_boolean()) {
+    return GenSignal::Continue
+  }
+  // Execute body
+  let body_env = js_new_env(Some(env))
+  self.hoist_block_lexical(body, body_env)
+  match self.exec_block_gen(body, body_env) {
+    GenSignal::Continue => self.exec_while_loop_gen(cond, body, env)
+    GenSignal::Yield(val) => GenSignal::Yield(val)
+    GenSignal::YieldRaw(result) => GenSignal::YieldRaw(result)
+    GenSignal::Suspend(val, cont) =>
+      GenSignal::Suspend(
+        val,
+        fn(sent) {
+          match cont(sent) {
+            GenSignal::Continue => self.exec_while_loop_gen(cond, body, env)
+            other => other
+          }
+        },
+      )
+    GenSignal::SuspendRaw(result, cont) =>
+      GenSignal::SuspendRaw(
+        result,
+        fn(sent) {
+          match cont(sent) {
+            GenSignal::Continue => self.exec_while_loop_gen(cond, body, env)
+            other => other
+          }
+        },
+      )
+    GenSignal::Return(val) =>
+      match val {
+        BreakSignal(_) => GenSignal::Continue
+        ContinueSignal(_) => self.exec_while_loop_gen(cond, body, env)
+        _ => GenSignal::Return(val)
+      }
+  }
+}
+
+///|
+fn JSInterpreter::exec_try_catch_gen(
+  self : JSInterpreter,
+  try_block : @ast.TsBlock,
+  catch_binding : @ast.TsBinding?,
+  catch_block : @ast.TsBlock?,
+  finally_block : @ast.TsBlock?,
+  env : JSEnv,
+) -> GenSignal {
+  // Execute try block
+  let try_env = js_new_env(Some(env))
+  self.hoist_block_lexical(try_block, try_env)
+  let result = self.exec_block_gen(try_block, try_env)
+  match result {
+    GenSignal::Continue | GenSignal::Return(_) => {
+      // Check for errors that were thrown
+      match self.peek_error() {
+        Some(err) =>
+          // Handle error in catch block
+          match catch_block {
+            Some(cb) => {
+              let _ = self.take_error()
+              let catch_env = js_new_env(Some(env))
+              match catch_binding {
+                Some(binding) => self.bind_pattern(binding, err, catch_env)
+                None => ()
+              }
+              self.hoist_block_lexical(cb, catch_env)
+              let catch_result = self.exec_block_gen(cb, catch_env)
+              // Run finally if present
+              match finally_block {
+                Some(fb) => {
+                  let finally_env = js_new_env(Some(env))
+                  self.hoist_block_lexical(fb, finally_env)
+                  let _ = self.exec_block_gen(fb, finally_env)
+                }
+                None => ()
+              }
+              catch_result
+            }
+            None =>
+              // No catch, run finally and propagate error
+              match finally_block {
+                Some(fb) => {
+                  let finally_env = js_new_env(Some(env))
+                  self.hoist_block_lexical(fb, finally_env)
+                  let _ = self.exec_block_gen(fb, finally_env)
+                  GenSignal::Return(err)
+                }
+                None => GenSignal::Return(err)
+              }
+          }
+        None =>
+          // No error, run finally
+          match finally_block {
+            Some(fb) => {
+              let finally_env = js_new_env(Some(env))
+              self.hoist_block_lexical(fb, finally_env)
+              let _ = self.exec_block_gen(fb, finally_env)
+              result
+            }
+            None => result
+          }
+      }
+    }
+    GenSignal::Yield(val) => GenSignal::Yield(val)
+    GenSignal::YieldRaw(res) => GenSignal::YieldRaw(res)
+    GenSignal::Suspend(val, cont) =>
+      // Yield from try block - need to handle potential errors on resume
+      GenSignal::Suspend(
+        val,
+        fn(sent) {
+          match cont(sent) {
+            GenSignal::Continue | GenSignal::Return(_) as inner_result =>
+              match self.peek_error() {
+                Some(err) =>
+                  match catch_block {
+                    Some(cb) => {
+                      let _ = self.take_error()
+                      let catch_env = js_new_env(Some(env))
+                      match catch_binding {
+                        Some(binding) =>
+                          self.bind_pattern(binding, err, catch_env)
+                        None => ()
+                      }
+                      self.hoist_block_lexical(cb, catch_env)
+                      let catch_result = self.exec_block_gen(cb, catch_env)
+                      match finally_block {
+                        Some(fb) => {
+                          let finally_env = js_new_env(Some(env))
+                          self.hoist_block_lexical(fb, finally_env)
+                          let _ = self.exec_block_gen(fb, finally_env)
+                        }
+                        None => ()
+                      }
+                      catch_result
+                    }
+                    None =>
+                      match finally_block {
+                        Some(fb) => {
+                          let finally_env = js_new_env(Some(env))
+                          self.hoist_block_lexical(fb, finally_env)
+                          let _ = self.exec_block_gen(fb, finally_env)
+                          GenSignal::Return(err)
+                        }
+                        None => GenSignal::Return(err)
+                      }
+                  }
+                None =>
+                  match finally_block {
+                    Some(fb) => {
+                      let finally_env = js_new_env(Some(env))
+                      self.hoist_block_lexical(fb, finally_env)
+                      let _ = self.exec_block_gen(fb, finally_env)
+                      inner_result
+                    }
+                    None => inner_result
+                  }
+              }
+            other => other
+          }
+        },
+      )
+    GenSignal::SuspendRaw(res, cont) =>
+      GenSignal::SuspendRaw(
+        res,
+        fn(sent) {
+          match cont(sent) {
+            GenSignal::Continue | GenSignal::Return(_) as inner_result =>
+              match self.peek_error() {
+                Some(err) =>
+                  match catch_block {
+                    Some(cb) => {
+                      let _ = self.take_error()
+                      let catch_env = js_new_env(Some(env))
+                      match catch_binding {
+                        Some(binding) =>
+                          self.bind_pattern(binding, err, catch_env)
+                        None => ()
+                      }
+                      self.hoist_block_lexical(cb, catch_env)
+                      let catch_result = self.exec_block_gen(cb, catch_env)
+                      match finally_block {
+                        Some(fb) => {
+                          let finally_env = js_new_env(Some(env))
+                          self.hoist_block_lexical(fb, finally_env)
+                          let _ = self.exec_block_gen(fb, finally_env)
+                        }
+                        None => ()
+                      }
+                      catch_result
+                    }
+                    None =>
+                      match finally_block {
+                        Some(fb) => {
+                          let finally_env = js_new_env(Some(env))
+                          self.hoist_block_lexical(fb, finally_env)
+                          let _ = self.exec_block_gen(fb, finally_env)
+                          GenSignal::Return(err)
+                        }
+                        None => GenSignal::Return(err)
+                      }
+                  }
+                None =>
+                  match finally_block {
+                    Some(fb) => {
+                      let finally_env = js_new_env(Some(env))
+                      self.hoist_block_lexical(fb, finally_env)
+                      let _ = self.exec_block_gen(fb, finally_env)
+                      inner_result
+                    }
+                    None => inner_result
+                  }
+              }
+            other => other
+          }
+        },
+      )
   }
 }
