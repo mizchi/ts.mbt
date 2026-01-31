@@ -1040,6 +1040,15 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let num_is_nan = self.make_native("Number.isNaN")
   self.set_function_length(num_is_nan, 1.0)
   set_proto_method(number_ctor, "isNaN", num_is_nan)
+  let num_is_finite = self.make_native("Number.isFinite")
+  self.set_function_length(num_is_finite, 1.0)
+  set_proto_method(number_ctor, "isFinite", num_is_finite)
+  let num_is_integer = self.make_native("Number.isInteger")
+  self.set_function_length(num_is_integer, 1.0)
+  set_proto_method(number_ctor, "isInteger", num_is_integer)
+  let num_is_safe_integer = self.make_native("Number.isSafeInteger")
+  self.set_function_length(num_is_safe_integer, 1.0)
+  set_proto_method(number_ctor, "isSafeInteger", num_is_safe_integer)
   let _ = js_define_data_prop(
     number_ctor,
     "NaN",
@@ -3948,6 +3957,46 @@ fn JSInterpreter::call_native(
       if args.length() > 0 {
         match args[0] {
           Number(n) => Bool(n.is_nan())
+          _ => Bool(false)
+        }
+      } else {
+        Bool(false)
+      }
+    "Number.isFinite" =>
+      if args.length() > 0 {
+        match args[0] {
+          Number(n) => Bool(not(n.is_nan()) && not(n.is_inf()))
+          _ => Bool(false)
+        }
+      } else {
+        Bool(false)
+      }
+    "Number.isInteger" =>
+      if args.length() > 0 {
+        match args[0] {
+          Number(n) =>
+            if n.is_nan() || n.is_inf() {
+              Bool(false)
+            } else {
+              Bool(n.floor() == n)
+            }
+          _ => Bool(false)
+        }
+      } else {
+        Bool(false)
+      }
+    "Number.isSafeInteger" =>
+      if args.length() > 0 {
+        match args[0] {
+          Number(n) =>
+            if n.is_nan() || n.is_inf() {
+              Bool(false)
+            } else if n.floor() != n {
+              Bool(false)
+            } else {
+              // MAX_SAFE_INTEGER = 2^53 - 1 = 9007199254740991
+              Bool(n.abs() <= 9007199254740991.0)
+            }
           _ => Bool(false)
         }
       } else {
