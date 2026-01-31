@@ -63,36 +63,41 @@ See [TODO.md](./TODO.md) for detailed status.
 
 | Category | Tests | Notes |
 |----------|-------|-------|
-| Allowlist total | 34,268 | Tests in scope |
-| Skipped | 14,029 | Async, TypedArray, Temporal, etc. |
-| Runnable | ~20,000 | |
+| Total | 23,876 | Tests in allowlist |
+| Passed | 15,936 | 66.7% |
+| Failed | 3,874 | |
+| Skipped | 4,066 | Missing harness, modules, etc. |
 
 ### Not Tested / Not Supported
 
-- **Intl402** (1,712 tests) - Internationalization API
-- **Temporal** (2,957 tests) - Temporal API
-- **TypedArray** (1,123+ tests) - Typed arrays
-- **with statement** (497 tests) - Deprecated feature
-- **Dynamic eval** (1,418 tests) - Advanced eval features
+- **Intl402** - Internationalization API
+- **Temporal** - Temporal API
+- **with statement** - Deprecated feature
+- **Dynamic eval** - Advanced eval features
 - **ES Modules** - Parser accepts but not executed
+
+### Partial Support
+
+- **TypedArray** - Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array, BigInt64Array, BigUint64Array
+- **BigInt** - Basic operations
 
 ## Wasm Codegen Scope
 
 The Wasm codegen intentionally supports a strict subset and errors on
-dynamic JS features.
+dynamic JS features. Uses wasm-gc for arrays and structs.
 
-- **Statements**: `let`/`const`, assignments, `if`, `while`, `for`, `for-of`
-  (arrays), `break`/`continue`, `return`, block/expr statements
-- **Expressions**: literals, variables, arithmetic/comparison, string `+`,
+- **Statements**: `let`/`const`, assignments, `if`, `while`, `do-while`, `for`, `for-of`
+  (arrays), `switch`, `break`/`continue`, `return`, block/expr statements
+- **Expressions**: literals, variables, arithmetic/comparison/bitwise, string `+`,
   array access/length, struct field access, `new Array(size)`,
-  `new <interface>` struct allocation
+  `new <interface>` struct allocation, ternary, nullish coalescing (`??`)
+- **wasm-gc**: GC arrays, GC structs, generator state machines
 
 **Explicitly unsupported in codegen**:
 - `throw`, `try`/`catch`/`finally`
-- `typeof`, `void`, `delete`, `yield`
-- Object literals, function/arrow expressions
+- `typeof`, `void`, `delete`
+- Object literals, closures (arrow/function expressions)
 - Dynamic call expressions
-- Most bitwise/shift operations on non-integers
 
 ## Development
 
@@ -108,6 +113,11 @@ moon fmt
 
 # Run test262 (requires test262 repo in ./test262)
 moon run src -- test262 test262.allowlist.txt
+
+# AOT compilation (wasm-gc)
+just aot-check      # Check AOT compilability
+just aot-compile    # Compile fixtures to wasm
+just aot-test       # Run with wasmtime
 ```
 
 ## License
