@@ -1,4 +1,96 @@
 ///|
+fn number_to_precision(n : Double, precision : Int) -> String {
+  if n == 0.0 {
+    if precision == 1 {
+      return "0"
+    }
+    let buf = StringBuilder::new()
+    buf.write_string("0.")
+    for i = 1; i < precision; i = i + 1 {
+      buf.write_char('0')
+    }
+    return buf.to_string()
+  }
+  let is_negative = n < 0.0
+  let abs_n = if is_negative { -n } else { n }
+  // Calculate exponent
+  let exponent = @math.log10(abs_n).floor().to_int()
+  // Determine if we should use exponential notation
+  // Use fixed for numbers where exponent is in range [-6, precision)
+  if exponent >= -6 && exponent < precision {
+    // Fixed notation
+    let frac_digits = precision - exponent - 1
+    let result = number_to_fixed(abs_n, if frac_digits > 0 { frac_digits } else { 0 })
+    if is_negative { "-" + result } else { result }
+  } else {
+    // Exponential notation
+    let result = number_to_exponential(abs_n, Some(precision - 1))
+    if is_negative { "-" + result } else { result }
+  }
+}
+
+///|
+fn number_to_exponential(n : Double, frac_digits : Int?) -> String {
+  if n == 0.0 {
+    match frac_digits {
+      Some(d) => {
+        if d == 0 {
+          return "0e+0"
+        }
+        let buf = StringBuilder::new()
+        buf.write_string("0.")
+        for i = 0; i < d; i = i + 1 {
+          buf.write_char('0')
+        }
+        buf.write_string("e+0")
+        return buf.to_string()
+      }
+      None => return "0e+0"
+    }
+  }
+  let is_negative = n < 0.0
+  let abs_n = if is_negative { -n } else { n }
+  // Calculate exponent
+  let exponent = @math.log10(abs_n).floor().to_int()
+  // Normalize mantissa
+  let mantissa = abs_n / @math.pow(10.0, exponent.to_double())
+  let buf = StringBuilder::new()
+  if is_negative {
+    buf.write_char('-')
+  }
+  // Format mantissa
+  match frac_digits {
+    Some(d) => {
+      let fixed = number_to_fixed(mantissa, d)
+      buf.write_string(fixed)
+    }
+    None => {
+      // Default: remove trailing zeros
+      let fixed = number_to_fixed(mantissa, 16)
+      // Remove trailing zeros after decimal point
+      let chars : Array[Char] = fixed.iter().collect()
+      let mut end = chars.length() - 1
+      while end > 0 && chars[end] == '0' {
+        end = end - 1
+      }
+      if end > 0 && chars[end] == '.' {
+        end = end - 1
+      }
+      for i = 0; i <= end; i = i + 1 {
+        buf.write_char(chars[i])
+      }
+    }
+  }
+  // Add exponent
+  buf.write_char('e')
+  if exponent >= 0 {
+    buf.write_char('+')
+  }
+  buf.write_string(exponent.to_string())
+  buf.to_string()
+}
+
+///|
 fn number_to_fixed(n : Double, digits : Int) -> String {
   let is_negative = n < 0.0
   let abs_n = if is_negative { -n } else { n }
@@ -1118,6 +1210,12 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let num_to_fixed = self.make_native("Number.prototype.toFixed")
   self.set_function_length(num_to_fixed, 1.0)
   set_proto_method(number_proto, "toFixed", num_to_fixed)
+  let num_to_precision = self.make_native("Number.prototype.toPrecision")
+  self.set_function_length(num_to_precision, 1.0)
+  set_proto_method(number_proto, "toPrecision", num_to_precision)
+  let num_to_exponential = self.make_native("Number.prototype.toExponential")
+  self.set_function_length(num_to_exponential, 1.0)
+  set_proto_method(number_proto, "toExponential", num_to_exponential)
   let num_is_nan = self.make_native("Number.isNaN")
   self.set_function_length(num_is_nan, 1.0)
   set_proto_method(number_ctor, "isNaN", num_is_nan)
@@ -4088,6 +4186,62 @@ fn JSInterpreter::call_native(
       }
       // Use built-in formatting and truncate/pad to digits
       String(number_to_fixed(n, digits))
+    }
+    "Number.prototype.toPrecision" => {
+      let prim = match this_arg {
+        Number(_) => this_arg
+        Object(_) | Function(_) | Array(_) => js_get_prop(this_arg, "value")
+        _ => this_arg
+      }
+      let n = match prim {
+        Number(v) => v
+        _ => return String(prim.to_js_string())
+      }
+      // Get precision argument
+      if args.length() == 0 || args[0].is_undefined() {
+        return String(JSValue::Number(n).to_js_string())
+      }
+      let precision = self.to_number_value(args[0]).to_int()
+      if precision < 1 || precision > 100 {
+        let _ = self.set_error_kind("RangeError", "toPrecision() argument must be between 1 and 100")
+        return Undefined
+      }
+      if n.is_nan() {
+        return String("NaN")
+      }
+      if n.is_inf() {
+        return if n > 0.0 { String("Infinity") } else { String("-Infinity") }
+      }
+      String(number_to_precision(n, precision))
+    }
+    "Number.prototype.toExponential" => {
+      let prim = match this_arg {
+        Number(_) => this_arg
+        Object(_) | Function(_) | Array(_) => js_get_prop(this_arg, "value")
+        _ => this_arg
+      }
+      let n = match prim {
+        Number(v) => v
+        _ => return String(prim.to_js_string())
+      }
+      if n.is_nan() {
+        return String("NaN")
+      }
+      if n.is_inf() {
+        return if n > 0.0 { String("Infinity") } else { String("-Infinity") }
+      }
+      // Get fraction digits argument
+      let frac_digits : Int? = if args.length() > 0 && not(args[0].is_undefined()) {
+        let d = self.to_number_value(args[0]).to_int()
+        if d < 0 || d > 100 {
+          let _ = self.set_error_kind("RangeError", "toExponential() argument must be between 0 and 100")
+          return Undefined
+        }
+        Some(d)
+      } else {
+        None
+      }
+      String(number_to_exponential(n, frac_digits))
     }
     "Number.isNaN" =>
       if args.length() > 0 {
