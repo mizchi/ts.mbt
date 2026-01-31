@@ -442,7 +442,7 @@ fn JSInterpreter::install_collections(
     // Create individual prototype that inherits from TypedArray.prototype
     let proto = self.new_object()
     let _ = js_set_prop(proto, "__proto__", typed_array_proto)
-    let _ = js_set_prop(proto, "constructor", ctor)
+    set_proto_method(proto, "constructor", ctor)
     // BYTES_PER_ELEMENT on prototype and constructor
     let bytes_per = match name {
       "Int8Array" | "Uint8Array" | "Uint8ClampedArray" => 1.0
@@ -469,8 +469,7 @@ fn JSInterpreter::install_collections(
     )
     let _ = js_define_data_prop(ctor, "prototype", proto, false, false, false)
     self.global_env.define_var(name, ctor)
-    let _ = js_set_prop(global_obj, name, ctor)
-
+    set_global_ctor(global_obj, name, ctor)
   }
 
   // BigInt64Array/BigUint64Array
@@ -482,7 +481,7 @@ fn JSInterpreter::install_collections(
     let _ = js_set_prop(ctor, "__proto__", typed_array_ctor)
     let proto = self.new_object()
     let _ = js_set_prop(proto, "__proto__", typed_array_proto)
-    let _ = js_set_prop(proto, "constructor", ctor)
+    set_proto_method(proto, "constructor", ctor)
     let _ = js_define_data_prop(
       proto,
       "BYTES_PER_ELEMENT",
@@ -501,8 +500,7 @@ fn JSInterpreter::install_collections(
     )
     let _ = js_define_data_prop(ctor, "prototype", proto, false, false, false)
     self.global_env.define_var(name, ctor)
-    let _ = js_set_prop(global_obj, name, ctor)
-
+    set_global_ctor(global_obj, name, ctor)
   }
 
   // testTypedArray.js harness - arrays of constructors
@@ -1102,11 +1100,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   set_proto_method(bigint_proto, "toLocaleString", bigint_to_locale_string)
   // BigInt static methods
   set_proto_method(bigint_ctor, "asIntN", self.make_native("BigInt.asIntN"))
-  let _ = js_set_prop(
-    bigint_ctor,
-    "asUintN",
-    self.make_native("BigInt.asUintN"),
-  )
+  set_proto_method(bigint_ctor, "asUintN", self.make_native("BigInt.asUintN"))
   self.global_env.define_var("BigInt", bigint_ctor)
   set_global_ctor(global_obj, "BigInt", bigint_ctor)
   let string_proto = self.new_object()
@@ -1465,9 +1459,7 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
     "Date.prototype.getUTCMilliseconds",
   )
   self.set_function_length(date_get_utc_milliseconds, 0.0)
-  let _ = js_set_prop(
-    date_proto, "getUTCMilliseconds", date_get_utc_milliseconds,
-  )
+  set_proto_method(date_proto, "getUTCMilliseconds", date_get_utc_milliseconds)
   let date_get_timezone_offset = self.make_native(
     "Date.prototype.getTimezoneOffset",
   )
@@ -2963,10 +2955,10 @@ fn JSInterpreter::new_array_iterator(
   let _ = js_set_prop(iter, "__iter_index", Number(0.0))
   let next_fn = self.make_native("ArrayIterator.prototype.next")
   self.set_function_length(next_fn, 0.0)
-  let _ = js_set_prop(iter, "next", next_fn)
+  set_proto_method(iter, "next", next_fn)
   let iter_fn = self.make_native("Iterator.prototype[@@iterator]")
   self.set_function_length(iter_fn, 0.0)
-  let _ = js_set_prop(iter, "@@iterator", iter_fn)
+  set_proto_method(iter, "@@iterator", iter_fn)
   iter
 }
 
@@ -2989,10 +2981,10 @@ fn JSInterpreter::new_string_iterator(
   let _ = js_set_prop(iter, "__iter_index", Number(0.0))
   let next_fn = self.make_native("StringIterator.prototype.next")
   self.set_function_length(next_fn, 0.0)
-  let _ = js_set_prop(iter, "next", next_fn)
+  set_proto_method(iter, "next", next_fn)
   let iter_fn = self.make_native("Iterator.prototype[@@iterator]")
   self.set_function_length(iter_fn, 0.0)
-  let _ = js_set_prop(iter, "@@iterator", iter_fn)
+  set_proto_method(iter, "@@iterator", iter_fn)
   iter
 }
 
