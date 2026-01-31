@@ -18,6 +18,8 @@ fn JSInterpreter::install_collections(
   set_proto_method(map_proto, "entries", self.make_native("Map.prototype.entries"))
   set_proto_method(map_proto, "forEach", self.make_native("Map.prototype.forEach"))
   set_proto_method(map_proto, "@@iterator", self.make_native("Map.prototype.entries"))
+  // Map.prototype[@@toStringTag] = "Map"
+  let _ = js_define_data_prop(map_proto, "@@toStringTag", String("Map"), false, false, true)
   let _ = js_define_data_prop(
     map_ctor, "prototype", map_proto, true, false, true,
   )
@@ -38,6 +40,8 @@ fn JSInterpreter::install_collections(
   set_proto_method(set_proto, "entries", self.make_native("Set.prototype.entries"))
   set_proto_method(set_proto, "forEach", self.make_native("Set.prototype.forEach"))
   set_proto_method(set_proto, "@@iterator", self.make_native("Set.prototype.values"))
+  // Set.prototype[@@toStringTag] = "Set"
+  let _ = js_define_data_prop(set_proto, "@@toStringTag", String("Set"), false, false, true)
   let _ = js_define_data_prop(
     set_ctor, "prototype", set_proto, true, false, true,
   )
@@ -53,6 +57,8 @@ fn JSInterpreter::install_collections(
   set_proto_method(weakmap_proto, "set", self.make_native("WeakMap.prototype.set"))
   set_proto_method(weakmap_proto, "has", self.make_native("WeakMap.prototype.has"))
   set_proto_method(weakmap_proto, "delete", self.make_native("WeakMap.prototype.delete"))
+  // WeakMap.prototype[@@toStringTag] = "WeakMap"
+  let _ = js_define_data_prop(weakmap_proto, "@@toStringTag", String("WeakMap"), false, false, true)
   let _ = js_define_data_prop(
     weakmap_ctor, "prototype", weakmap_proto, true, false, true,
   )
@@ -67,6 +73,8 @@ fn JSInterpreter::install_collections(
   set_proto_method(weakset_proto, "add", self.make_native("WeakSet.prototype.add"))
   set_proto_method(weakset_proto, "has", self.make_native("WeakSet.prototype.has"))
   set_proto_method(weakset_proto, "delete", self.make_native("WeakSet.prototype.delete"))
+  // WeakSet.prototype[@@toStringTag] = "WeakSet"
+  let _ = js_define_data_prop(weakset_proto, "@@toStringTag", String("WeakSet"), false, false, true)
   let _ = js_define_data_prop(
     weakset_ctor, "prototype", weakset_proto, true, false, true,
   )
@@ -1928,6 +1936,8 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.set_function_length(reflect_get_desc, 2.0)
   self.set_function_name(reflect_get_desc, "getOwnPropertyDescriptor")
   set_proto_method(reflect, "getOwnPropertyDescriptor", reflect_get_desc)
+  // Reflect[@@toStringTag] = "Reflect"
+  let _ = js_define_data_prop(reflect, "@@toStringTag", String("Reflect"), false, false, true)
   self.global_env.define_var("Reflect", reflect)
   set_global_ctor(global_obj, "Reflect", reflect)
   self.install_collections(global_obj)
