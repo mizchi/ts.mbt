@@ -63,17 +63,21 @@ See [TODO.md](./TODO.md) for detailed status.
 
 ### Pass Rate by Category (2026-02-01)
 
+Pass Rate = Passed / (Passed + Failed), excluding skipped tests.
+Tests related to `eval`, `Function` constructor, and `with` statement are excluded.
+
 | Category | Passed | Failed | Skipped | Total | Pass Rate |
 |----------|--------|--------|---------|-------|-----------|
-| **Math** | 291 | 35 | 1 | 327 | **89.0%** |
+| **Math** | 291 | 35 | 1 | 327 | **89.3%** |
+| **language/statements** | 6,532 | 1,230 | 763 | 8,525 | **84.1%** |
+| **language/expressions** | 5,983 | 1,701 | 2,653 | 10,337 | **77.8%** |
 | **Boolean** | 38 | 13 | 0 | 51 | **74.5%** |
-| **Number** | 249 | 84 | 2 | 335 | **74.3%** |
+| **Number** | 249 | 84 | 2 | 335 | **74.8%** |
 | **Promise** | 459 | 180 | 0 | 639 | **71.8%** |
-| **String** | 796 | 412 | 7 | 1215 | **65.5%** |
-| **language/expressions** | 6218 | 1794 | 2671 | 10683 | **58.2%** |
-| **Function** | 285 | 154 | 70 | 509 | **56.0%** |
-| **Object** | 1671 | 1712 | 28 | 3411 | **49.0%** |
-| **Date** | 269 | 310 | 15 | 594 | **45.3%** |
+| **String** | 796 | 412 | 7 | 1215 | **65.9%** |
+| **Function** | 285 | 154 | 70 | 509 | **64.9%** |
+| **Object** | 1671 | 1712 | 28 | 3411 | **49.4%** |
+| **Date** | 269 | 310 | 15 | 594 | **46.5%** |
 
 ### Not Tested / Not Supported
 
