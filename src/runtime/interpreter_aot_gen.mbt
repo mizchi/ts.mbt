@@ -170,12 +170,121 @@ fn try_build_aot_state_machine(
 ///|
 /// Check if a generator body is simple enough for AOT compilation.
 fn is_simple_generator_body(block : @ast.TsBlock) -> Bool {
+  // Count all yields - current AOT state machine doesn't support
+  // multiple yields properly (each yield needs its own state)
+  let yield_count = count_all_yields_in_block(block)
+  if yield_count > 1 {
+    // Multiple yields require proper state machine generation
+    // Fall back to CPS interpreter for now
+    return false
+  }
+  // Check for yields inside loops - these can't be handled by current AOT
+  if has_yield_in_loop(block) {
+    return false
+  }
   for stmt in block.stmts {
     if not(is_simple_stmt(stmt)) {
       return false
     }
   }
   true
+}
+
+///|
+/// Check if any yield is inside a loop.
+fn has_yield_in_loop(block : @ast.TsBlock) -> Bool {
+  for stmt in block.stmts {
+    if has_yield_in_loop_stmt(stmt) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Check if a statement has a yield inside a loop.
+fn has_yield_in_loop_stmt(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    @ast.TsStmt::While(_, body) | @ast.TsStmt::DoWhile(_, body) =>
+      count_all_yields_in_block(body) > 0
+    @ast.TsStmt::For(_, _, _, body) => count_all_yields_in_block(body) > 0
+    @ast.TsStmt::If(_, then_block, else_block) => {
+      if has_yield_in_loop(then_block) {
+        return true
+      }
+      match else_block {
+        Some(eb) => has_yield_in_loop(eb)
+        None => false
+      }
+    }
+    @ast.TsStmt::Block(block) => has_yield_in_loop(block)
+    _ => false
+  }
+}
+
+///|
+/// Count all yield statements in a block (recursive).
+fn count_all_yields_in_block(block : @ast.TsBlock) -> Int {
+  let mut count = 0
+  for stmt in block.stmts {
+    count = count + count_all_yields_in_stmt(stmt)
+  }
+  count
+}
+
+///|
+/// Count all yields in a statement (recursive for nested control flow).
+fn count_all_yields_in_stmt(stmt : @ast.TsStmt) -> Int {
+  match stmt {
+    @ast.TsStmt::Expr(expr) => count_all_yields_in_expr(expr)
+    @ast.TsStmt::Return(Some(expr)) => count_all_yields_in_expr(expr)
+    @ast.TsStmt::Return(None) => 0
+    @ast.TsStmt::If(cond, then_block, else_block) => {
+      let mut count = count_all_yields_in_expr(cond)
+      count = count + count_all_yields_in_block(then_block)
+      match else_block {
+        Some(eb) => count + count_all_yields_in_block(eb)
+        None => count
+      }
+    }
+    @ast.TsStmt::While(cond, body) =>
+      count_all_yields_in_expr(cond) + count_all_yields_in_block(body)
+    @ast.TsStmt::DoWhile(cond, body) =>
+      count_all_yields_in_expr(cond) + count_all_yields_in_block(body)
+    @ast.TsStmt::For(init, cond, update, body) => {
+      let mut count = 0
+      match init {
+        Some(s) => count = count + count_all_yields_in_stmt(s)
+        None => ()
+      }
+      match cond {
+        Some(e) => count = count + count_all_yields_in_expr(e)
+        None => ()
+      }
+      match update {
+        Some(s) => count = count + count_all_yields_in_stmt(s)
+        None => ()
+      }
+      count + count_all_yields_in_block(body)
+    }
+    @ast.TsStmt::Block(block) => count_all_yields_in_block(block)
+    @ast.TsStmt::Var(_, _, init)
+    | @ast.TsStmt::Let(_, _, init)
+    | @ast.TsStmt::Const(_, _, init) => count_all_yields_in_expr(init)
+    @ast.TsStmt::Assign(_, expr) => count_all_yields_in_expr(expr)
+    @ast.TsStmt::CompoundAssign(_, _, expr) => count_all_yields_in_expr(expr)
+    _ => 0
+  }
+}
+
+///|
+/// Count yields in an expression.
+fn count_all_yields_in_expr(expr : @ast.TsExpr) -> Int {
+  match expr {
+    @ast.TsExpr::Yield(_) => 1
+    @ast.TsExpr::YieldStar(_) => 1
+    _ => 0
+  }
 }
 
 ///|
