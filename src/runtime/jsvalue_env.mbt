@@ -19,6 +19,7 @@ pub struct JSEnv {
 ///|
 // / create
 pub fn js_new_env(parent : JSEnv?) -> JSEnv {
+  gc_stats_inc_env()
   { parent, bindings: [] }
 }
 

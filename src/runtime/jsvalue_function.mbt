@@ -39,6 +39,7 @@ let id_gen : IdGen = { object_id: 1, function_id: 1, array_id: 1 }
 fn fresh_object_id() -> Int {
   let id = id_gen.object_id
   id_gen.object_id = id + 1
+  gc_stats.objects_created += 1
   id
 }
 
@@ -46,6 +47,7 @@ fn fresh_object_id() -> Int {
 fn fresh_function_id() -> Int {
   let id = id_gen.function_id
   id_gen.function_id = id + 1
+  gc_stats.functions_created += 1
   id
 }
 
@@ -53,7 +55,62 @@ fn fresh_function_id() -> Int {
 fn fresh_array_id() -> Int {
   let id = id_gen.array_id
   id_gen.array_id = id + 1
+  gc_stats.arrays_created += 1
   id
+}
+
+// === GC stats tracking ===
+
+///|
+/// Tracks allocation statistics for GC testing
+pub struct GCStats {
+  mut objects_created : Int
+  mut functions_created : Int
+  mut arrays_created : Int
+  mut envs_created : Int
+}
+
+///|
+let gc_stats : GCStats = {
+  objects_created: 0,
+  functions_created: 0,
+  arrays_created: 0,
+  envs_created: 0,
+}
+
+///|
+/// Reset GC stats counters
+pub fn gc_stats_reset() -> Unit {
+  gc_stats.objects_created = 0
+  gc_stats.functions_created = 0
+  gc_stats.arrays_created = 0
+  gc_stats.envs_created = 0
+}
+
+///|
+/// Get current GC stats snapshot
+pub fn gc_stats_snapshot() -> (Int, Int, Int, Int) {
+  (
+    gc_stats.objects_created,
+    gc_stats.functions_created,
+    gc_stats.arrays_created,
+    gc_stats.envs_created,
+  )
+}
+
+///|
+/// Get total allocations since last reset
+pub fn gc_stats_total() -> Int {
+  gc_stats.objects_created +
+  gc_stats.functions_created +
+  gc_stats.arrays_created +
+  gc_stats.envs_created
+}
+
+///|
+/// Increment env counter (called from jsvalue_env.mbt)
+pub fn gc_stats_inc_env() -> Unit {
+  gc_stats.envs_created += 1
 }
 
 // === typecheck ===

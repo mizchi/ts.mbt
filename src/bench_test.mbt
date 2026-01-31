@@ -494,3 +494,104 @@ test "bench runtime string methods" (b : @bench.T) {
     count=10,
   )
 }
+
+// ============================================================
+// GC / Memory Allocation Benchmarks
+// ============================================================
+
+///|
+let gc_object_creation_src : String =
+  #|function main() {
+  #|  for (let i = 0; i < 1000; i++) {
+  #|    let obj = { a: 1, b: 2, c: i };
+  #|  }
+  #|  return "done";
+  #|}
+
+///|
+test "bench gc object creation" (b : @bench.T) {
+  b.bench(
+    () => {
+      @runtime.gc_stats_reset()
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(gc_object_creation_src)
+
+    },
+    name="gc.object.creation.1000",
+    count=5,
+  )
+}
+
+///|
+let gc_array_creation_src : String =
+  #|function main() {
+  #|  for (let i = 0; i < 1000; i++) {
+  #|    let arr = [1, 2, 3, i];
+  #|  }
+  #|  return "done";
+  #|}
+
+///|
+test "bench gc array creation" (b : @bench.T) {
+  b.bench(
+    () => {
+      @runtime.gc_stats_reset()
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(gc_array_creation_src)
+
+    },
+    name="gc.array.creation.1000",
+    count=5,
+  )
+}
+
+///|
+let gc_closure_creation_src : String =
+  #|function main() {
+  #|  let funcs = [];
+  #|  for (let i = 0; i < 100; i++) {
+  #|    funcs.push(() => i);
+  #|  }
+  #|  return funcs.length;
+  #|}
+
+///|
+test "bench gc closure creation" (b : @bench.T) {
+  b.bench(
+    () => {
+      @runtime.gc_stats_reset()
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(gc_closure_creation_src)
+
+    },
+    name="gc.closure.creation.100",
+    count=10,
+  )
+}
+
+///|
+let gc_nested_scopes_src : String =
+  #|function main() {
+  #|  let sum = 0;
+  #|  for (let i = 0; i < 100; i++) {
+  #|    for (let j = 0; j < 10; j++) {
+  #|      let x = i + j;
+  #|      sum += x;
+  #|    }
+  #|  }
+  #|  return sum;
+  #|}
+
+///|
+test "bench gc nested scopes" (b : @bench.T) {
+  b.bench(
+    () => {
+      @runtime.gc_stats_reset()
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(gc_nested_scopes_src)
+
+    },
+    name="gc.nested.scopes",
+    count=10,
+  )
+}
