@@ -189,7 +189,8 @@ fn JSInterpreter::assign_ident(
       let _ = self.set_error_kind("ReferenceError", name + " is not defined")
 
     } else {
-      self.global_env.define_var(name, value)
+      // Implicit global: only set on globalThis (not in env)
+      // This makes it deletable (configurable)
       let global_obj = self.global_env.get("globalThis")
       let _ = js_set_prop(global_obj, name, value)
 

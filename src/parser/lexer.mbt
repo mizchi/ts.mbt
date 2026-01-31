@@ -681,7 +681,8 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
       let d = @strconv.parse_double(s)
       Number(d)
     } catch {
-      _ => Number(0.0)
+      // Overflow to Infinity for very large numbers
+      _ => Number(1.0 / 0.0) // Infinity
     }
   } else {
     // Int - but use Double for large numbers to avoid overflow
@@ -696,7 +697,8 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
         Number(d)
       }
     } catch {
-      _ => Int(0)
+      // Overflow to Infinity for very large integers
+      _ => Number(1.0 / 0.0) // Infinity
     }
   }
 }

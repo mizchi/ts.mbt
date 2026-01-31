@@ -279,6 +279,15 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
   match obj {
     Function(closure) => {
       if key == "__proto__" {
+        // Check if object is non-extensible
+        for prop in closure.props {
+          if prop.key == "__non_extensible" {
+            match prop.value {
+              Bool(true) => return value // Silently fail for non-extensible objects
+              _ => ()
+            }
+          }
+        }
         closure.object_proto = match value {
           Object(_) | Array(_) | Function(_) => Some(value)
           Null | Undefined => None
@@ -319,6 +328,15 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
     }
     Object(map) => {
       if key == "__proto__" {
+        // Check if object is non-extensible (preventExtensions was called)
+        for prop in map.props {
+          if prop.key == "__non_extensible" {
+            match prop.value {
+              Bool(true) => return value // Silently fail for non-extensible objects
+              _ => ()
+            }
+          }
+        }
         map.prototype = match value {
           Object(_) | Array(_) | Function(_) => Some(value)
           Null | Undefined => None
@@ -361,6 +379,15 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
     }
     Array(arr) => {
       if key == "__proto__" {
+        // Check if array is non-extensible
+        for prop in arr.props {
+          if prop.key == "__non_extensible" {
+            match prop.value {
+              Bool(true) => return value // Silently fail for non-extensible objects
+              _ => ()
+            }
+          }
+        }
         arr.prototype = match value {
           Object(_) | Array(_) | Function(_) => Some(value)
           Null | Undefined => None
