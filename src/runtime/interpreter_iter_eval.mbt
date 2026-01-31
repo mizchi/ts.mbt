@@ -70,6 +70,13 @@ fn JSInterpreter::make_generator(
       } else {
         call_env
       }
+      // Check if this generator is AOT compilable (simple generators only)
+      let (aot_mode, aot_wasm_bytes, aot_state_data) = match try_compile_generator_aot(
+        func_def, args,
+      ) {
+        Some((wasm_bytes, state_data, _sm)) => (true, Some(wasm_bytes), state_data)
+        None => (false, None, [])
+      }
       let state : JSGeneratorState = {
         func: func_def,
         env: body_env,
@@ -77,6 +84,9 @@ fn JSInterpreter::make_generator(
         done: false,
         cont: None,
         active_iterators: [],
+        aot_mode,
+        aot_wasm_bytes,
+        aot_state_data,
       }
       self.generators.push(state)
       let gen_id = self.generators.length() - 1
@@ -698,6 +708,10 @@ fn JSInterpreter::generator_next(
   if state.done {
     return self.make_iter_result(Undefined, true)
   }
+  // Check for AOT mode
+  if state.aot_mode {
+    return self.generator_next_aot(gen_id, sent)
+  }
   self.current_gen_id = Some(gen_id)
   match state.cont {
     Some(cont_fn) => {
@@ -811,6 +825,10 @@ fn JSInterpreter::generator_return(
   if state.done {
     return self.make_iter_result(value, true)
   }
+  // Check for AOT mode
+  if state.aot_mode {
+    return self.generator_return_aot(gen_id, value)
+  }
   for iterator in state.active_iterators {
     self.iterator_close(iterator)
   }
@@ -834,6 +852,10 @@ fn JSInterpreter::generator_throw(
     return self.set_error_kind("TypeError", "Invalid generator")
   }
   let state = self.generators[gen_id]
+  // Check for AOT mode
+  if state.aot_mode {
+    return self.generator_throw_aot(gen_id, value)
+  }
   self.last_error = Some(value)
   for iterator in state.active_iterators {
     self.iterator_close_on_error(iterator)

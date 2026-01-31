@@ -1,11 +1,11 @@
 {
   "import": [
     {
-      "path": "moonbitlang/wasm5/src/core",
+      "path": "moonbitlang/wasm5/core",
       "alias": "core"
     },
     {
-      "path": "moonbitlang/wasm5/src/encode",
+      "path": "moonbitlang/wasm5/encode",
       "alias": "encode"
     },
     {
@@ -23,7 +23,7 @@
   ],
   "wbtest-import": [
     {
-      "path": "moonbitlang/wasm5/src/runtime",
+      "path": "moonbitlang/wasm5/runtime",
       "alias": "runtime"
     }
   ]

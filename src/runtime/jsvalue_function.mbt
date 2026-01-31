@@ -16,11 +16,69 @@ pub struct JSClosure {
 } derive(Show)
 
 ///|
+/// Compiled wasm function representation for AOT compilation.
+pub struct CompiledFunc {
+  name : String // Function name for identification
+  ast : @ast.TsFunc // Original AST for fallback
+  wasm_bytes : Bytes // Compiled wasm-gc module
+  func_index : UInt // Function index in the wasm module
+}
+
+///|
+impl Show for CompiledFunc with output(self, logger) {
+  logger.write_string("CompiledFunc(\{self.name}, index=\{self.func_index})")
+}
+
+///|
+/// Create a new CompiledFunc
+pub fn CompiledFunc::new(
+  name : String,
+  ast : @ast.TsFunc,
+  wasm_bytes : Bytes,
+  func_index : UInt,
+) -> CompiledFunc {
+  { name, ast, wasm_bytes, func_index }
+}
+
+///|
+/// Create a JSValue function with compiled wasm body.
+/// Used by AOT compiler to wrap compiled functions.
+pub fn js_new_compiled_function(
+  name : String,
+  ast : @ast.TsFunc,
+  wasm_bytes : Bytes,
+  func_index : UInt,
+  env : JSEnv,
+) -> JSValue {
+  let param_names : Array[String] = []
+  for p in ast.params {
+    match p.binding {
+      Some(@ast.TsBinding::Ident(id)) => param_names.push(id)
+      _ => param_names.push("_")
+    }
+  }
+  let compiled = CompiledFunc::new(name, ast, wasm_bytes, func_index)
+  JSValue::Function({
+    id: fresh_function_id(),
+    params: param_names,
+    body: Compiled(compiled),
+    env,
+    is_arrow: false,
+    is_strict: false,
+    is_generator: ast.is_generator,
+    is_async: ast.is_async,
+    props: [],
+    object_proto: None,
+  })
+}
+
+///|
 // / function(AST)
 pub enum JSFuncBody {
-  Ast(@ast.TsFunc) // run
-  Native(String) // function
+  Ast(@ast.TsFunc) // Interpreted function
+  Native(String) // Built-in native function
   Bound(JSValue, JSValue, Array[JSValue]) // target, thisArg, bound args
+  Compiled(CompiledFunc) // AOT compiled to wasm-gc
 } derive(Show)
 
 // === ID generator (object/function/array identity) ===

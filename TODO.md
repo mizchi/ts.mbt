@@ -115,3 +115,55 @@ These features are intentionally not implemented:
 - for-await-of parser fix
 - Async generator basic support
 - Line terminator handling (CR, LS, PS)
+- AOT compilation基盤 (TypeScript → wasm-gc → wasm5 runtime)
+
+---
+
+## Architecture Decisions
+
+### AOT Compilation & Intermediate Representation (2026-01-31)
+
+**現在のアーキテクチャ:**
+```
+TypeScript → wasm-gc → wasmtime (Cranelift最適化)
+```
+
+**決定:** HIR/TIRのような独自中間IRは**現時点では不要**
+
+**理由:**
+1. AOTコンパイルで10-12x高速化を達成済み（インタプリタ比）
+2. wasmtimeのCranelift最適化が成熟している
+3. wasm外での実行を必要とするユースケースが現時点でない
+
+**YAGNI原則を適用:** 具体的なニーズが生じた時点でIR層を追加する
+
+**再検討するタイミング:**
+- wasmがサポートされない環境への対応が必要になった場合
+- Cranelift最適化を超える性能が必要になった場合
+- ネイティブバイナリや他言語への出力が必要になった場合
+
+### Generator AOT Compilation (2026-01-31) ✅ 完了
+
+Generatorを状態機械としてwasm-gcにコンパイルする機能を実装。
+
+**実装状況:**
+- ✅ Phase 1: Generator分析 (`src/analysis/generator_analysis.mbt`)
+  - yield ポイント抽出
+  - 持続変数の収集
+  - AOTコンパイル可能性判定
+- ✅ Phase 2: 状態機械IR生成 (`src/codegen/generator_ir.mbt`)
+  - GenStateMachine, GenInstr, GenExpr 定義
+  - AST → GenIR 変換
+- ✅ Phase 3: wasm-gc コード生成 (`src/codegen/generator_codegen.mbt`)
+  - State struct type 生成
+  - create()/next() 関数生成
+  - br_table による状態遷移（最適化済み）
+- ✅ メインcodegenへの統合 (`src/codegen/codegen.mbt`)
+  - `compile_module_gc` でgeneratorを自動検出
+  - `{name}_create` と `{name}_next` 関数をエクスポート
+
+**残作業:**
+- Iterator protocolとの完全な接続（ランタイム側）
+- throw/return メソッドのサポート
+
+詳細: `docs/generator-aot-design.md`

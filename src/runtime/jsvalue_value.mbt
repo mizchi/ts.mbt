@@ -292,6 +292,7 @@ pub fn JSValue::to_js_string(self : JSValue) -> String {
       match closure.body {
         Native(_) => "function \{name}() { [native code] }"
         Bound(_, _, _) => "function \{name}() { [native code] }"
+        Compiled(compiled) => "function \{compiled.name}() { [compiled code] }"
         Ast(func) => {
           let params_arr : Array[String] = []
           for p in func.params {
@@ -494,6 +495,50 @@ pub fn js_strict_ne(left : JSValue, right : JSValue) -> JSValue {
 }
 
 ///|
+/// StringToBigInt - ECMAScript spec compliant conversion.
+/// Returns None if the string cannot be parsed as BigInt.
+fn string_to_bigint(s : String) -> BigInt? {
+  // Trim whitespace
+  let trimmed = s.trim().to_string()
+  // Empty string converts to 0n
+  if trimmed.is_empty() {
+    return Some(0N)
+  }
+  // Try to parse as BigInt - from_string panics on invalid input
+  // so we need to validate first
+  let mut valid = true
+  let mut start = 0
+  // Allow leading minus
+  if trimmed.length() > 0 && trimmed[0] == '-' {
+    start = 1
+  }
+  // Check remaining chars are digits
+  if start >= trimmed.length() {
+    valid = false
+  } else {
+    for i = start; i < trimmed.length(); i = i + 1 {
+      let c = trimmed[i]
+      if c < '0' || c > '9' {
+        valid = false
+        break
+      }
+    }
+  }
+  if valid {
+    let n = BigInt::from_string(trimmed)
+    // Normalize: -0 should be treated as 0
+    // Use string comparison since MoonBit's BigInt may have -0 != 0 bug
+    if n.to_string() == "0" || n.to_string() == "-0" {
+      Some(0N)
+    } else {
+      Some(n)
+    }
+  } else {
+    None
+  }
+}
+
+///|
 // / (==) - typeconversion according to ECMAScript abstract equality
 pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
   Bool(
@@ -521,8 +566,16 @@ pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
       (BigInt(a), BigInt(b)) => a == b
       (BigInt(a), Number(b)) => a.to_int64().to_double() == b
       (Number(a), BigInt(b)) => a == b.to_int64().to_double()
-      (BigInt(a), String(s)) => a == BigInt::from_string(s)
-      (String(s), BigInt(b)) => BigInt::from_string(s) == b
+      (BigInt(a), String(s)) =>
+        match string_to_bigint(s) {
+          Some(n) => a == n
+          None => false
+        }
+      (String(s), BigInt(b)) =>
+        match string_to_bigint(s) {
+          Some(n) => n == b
+          None => false
+        }
       // type coercion comparison (now null/undefined are already excluded)
       (Number(_), _) | (_, Number(_)) => left.to_number() == right.to_number()
       (Bool(_), _) | (_, Bool(_)) => left.to_number() == right.to_number()

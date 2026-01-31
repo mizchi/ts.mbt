@@ -203,28 +203,50 @@ fn JSInterpreter::install_collections(
   self.set_function_length(ab_bytelength_get, 0.0)
   self.set_function_name(ab_bytelength_get, "get byteLength")
   let _ = js_define_accessor_prop(
-    ab_proto, "byteLength", Some(ab_bytelength_get), None, false, true,
+    ab_proto,
+    "byteLength",
+    Some(ab_bytelength_get),
+    None,
+    false,
+    true,
   )
   // ArrayBuffer.prototype.maxByteLength getter
-  let ab_maxbytelength_get = self.make_native("ArrayBuffer.prototype.maxByteLength")
+  let ab_maxbytelength_get = self.make_native(
+    "ArrayBuffer.prototype.maxByteLength",
+  )
   self.set_function_length(ab_maxbytelength_get, 0.0)
   self.set_function_name(ab_maxbytelength_get, "get maxByteLength")
   let _ = js_define_accessor_prop(
-    ab_proto, "maxByteLength", Some(ab_maxbytelength_get), None, false, true,
+    ab_proto,
+    "maxByteLength",
+    Some(ab_maxbytelength_get),
+    None,
+    false,
+    true,
   )
   // ArrayBuffer.prototype.resizable getter
   let ab_resizable_get = self.make_native("ArrayBuffer.prototype.resizable")
   self.set_function_length(ab_resizable_get, 0.0)
   self.set_function_name(ab_resizable_get, "get resizable")
   let _ = js_define_accessor_prop(
-    ab_proto, "resizable", Some(ab_resizable_get), None, false, true,
+    ab_proto,
+    "resizable",
+    Some(ab_resizable_get),
+    None,
+    false,
+    true,
   )
   // ArrayBuffer.prototype.detached getter
   let ab_detached_get = self.make_native("ArrayBuffer.prototype.detached")
   self.set_function_length(ab_detached_get, 0.0)
   self.set_function_name(ab_detached_get, "get detached")
   let _ = js_define_accessor_prop(
-    ab_proto, "detached", Some(ab_detached_get), None, false, true,
+    ab_proto,
+    "detached",
+    Some(ab_detached_get),
+    None,
+    false,
+    true,
   )
   // ArrayBuffer.prototype methods
   let ab_slice = self.make_native("ArrayBuffer.prototype.slice")
@@ -239,12 +261,21 @@ fn JSInterpreter::install_collections(
   self.set_function_length(ab_transfer, 0.0)
   self.set_function_name(ab_transfer, "transfer")
   let _ = js_set_prop(ab_proto, "transfer", ab_transfer)
-  let ab_transfer_fixed = self.make_native("ArrayBuffer.prototype.transferToFixedLength")
+  let ab_transfer_fixed = self.make_native(
+    "ArrayBuffer.prototype.transferToFixedLength",
+  )
   self.set_function_length(ab_transfer_fixed, 0.0)
   self.set_function_name(ab_transfer_fixed, "transferToFixedLength")
   let _ = js_set_prop(ab_proto, "transferToFixedLength", ab_transfer_fixed)
   // ArrayBuffer.prototype[@@toStringTag]
-  let _ = js_define_data_prop(ab_proto, "@@toStringTag", String("ArrayBuffer"), false, false, true)
+  let _ = js_define_data_prop(
+    ab_proto,
+    "@@toStringTag",
+    String("ArrayBuffer"),
+    false,
+    false,
+    true,
+  )
   let _ = js_define_data_prop(ab_ctor, "prototype", ab_proto, true, false, true)
   let _ = js_set_prop(ab_ctor, "isView", self.make_native("ArrayBuffer.isView"))
   self.global_env.define_var("ArrayBuffer", ab_ctor)
@@ -259,34 +290,126 @@ fn JSInterpreter::install_collections(
   let dv_buffer_get = self.make_native("DataView.prototype.buffer")
   self.set_function_length(dv_buffer_get, 0.0)
   self.set_function_name(dv_buffer_get, "get buffer")
-  let _ = js_define_accessor_prop(dv_proto, "buffer", Some(dv_buffer_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    dv_proto,
+    "buffer",
+    Some(dv_buffer_get),
+    None,
+    false,
+    true,
+  )
   let dv_bytelength_get = self.make_native("DataView.prototype.byteLength")
   self.set_function_length(dv_bytelength_get, 0.0)
   self.set_function_name(dv_bytelength_get, "get byteLength")
-  let _ = js_define_accessor_prop(dv_proto, "byteLength", Some(dv_bytelength_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    dv_proto,
+    "byteLength",
+    Some(dv_bytelength_get),
+    None,
+    false,
+    true,
+  )
   let dv_byteoffset_get = self.make_native("DataView.prototype.byteOffset")
   self.set_function_length(dv_byteoffset_get, 0.0)
   self.set_function_name(dv_byteoffset_get, "get byteOffset")
-  let _ = js_define_accessor_prop(dv_proto, "byteOffset", Some(dv_byteoffset_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    dv_proto,
+    "byteOffset",
+    Some(dv_byteoffset_get),
+    None,
+    false,
+    true,
+  )
   // DataView.prototype methods
-  let _ = js_set_prop(dv_proto, "getInt8", self.make_native("DataView.prototype.getInt8"))
-  let _ = js_set_prop(dv_proto, "getUint8", self.make_native("DataView.prototype.getUint8"))
-  let _ = js_set_prop(dv_proto, "getInt16", self.make_native("DataView.prototype.getInt16"))
-  let _ = js_set_prop(dv_proto, "getUint16", self.make_native("DataView.prototype.getUint16"))
-  let _ = js_set_prop(dv_proto, "getInt32", self.make_native("DataView.prototype.getInt32"))
-  let _ = js_set_prop(dv_proto, "getUint32", self.make_native("DataView.prototype.getUint32"))
-  let _ = js_set_prop(dv_proto, "getFloat32", self.make_native("DataView.prototype.getFloat32"))
-  let _ = js_set_prop(dv_proto, "getFloat64", self.make_native("DataView.prototype.getFloat64"))
-  let _ = js_set_prop(dv_proto, "setInt8", self.make_native("DataView.prototype.setInt8"))
-  let _ = js_set_prop(dv_proto, "setUint8", self.make_native("DataView.prototype.setUint8"))
-  let _ = js_set_prop(dv_proto, "setInt16", self.make_native("DataView.prototype.setInt16"))
-  let _ = js_set_prop(dv_proto, "setUint16", self.make_native("DataView.prototype.setUint16"))
-  let _ = js_set_prop(dv_proto, "setInt32", self.make_native("DataView.prototype.setInt32"))
-  let _ = js_set_prop(dv_proto, "setUint32", self.make_native("DataView.prototype.setUint32"))
-  let _ = js_set_prop(dv_proto, "setFloat32", self.make_native("DataView.prototype.setFloat32"))
-  let _ = js_set_prop(dv_proto, "setFloat64", self.make_native("DataView.prototype.setFloat64"))
+  let _ = js_set_prop(
+    dv_proto,
+    "getInt8",
+    self.make_native("DataView.prototype.getInt8"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "getUint8",
+    self.make_native("DataView.prototype.getUint8"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "getInt16",
+    self.make_native("DataView.prototype.getInt16"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "getUint16",
+    self.make_native("DataView.prototype.getUint16"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "getInt32",
+    self.make_native("DataView.prototype.getInt32"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "getUint32",
+    self.make_native("DataView.prototype.getUint32"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "getFloat32",
+    self.make_native("DataView.prototype.getFloat32"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "getFloat64",
+    self.make_native("DataView.prototype.getFloat64"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "setInt8",
+    self.make_native("DataView.prototype.setInt8"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "setUint8",
+    self.make_native("DataView.prototype.setUint8"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "setInt16",
+    self.make_native("DataView.prototype.setInt16"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "setUint16",
+    self.make_native("DataView.prototype.setUint16"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "setInt32",
+    self.make_native("DataView.prototype.setInt32"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "setUint32",
+    self.make_native("DataView.prototype.setUint32"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "setFloat32",
+    self.make_native("DataView.prototype.setFloat32"),
+  )
+  let _ = js_set_prop(
+    dv_proto,
+    "setFloat64",
+    self.make_native("DataView.prototype.setFloat64"),
+  )
   // DataView.prototype[@@toStringTag]
-  let _ = js_define_data_prop(dv_proto, "@@toStringTag", String("DataView"), false, false, true)
+  let _ = js_define_data_prop(
+    dv_proto,
+    "@@toStringTag",
+    String("DataView"),
+    false,
+    false,
+    true,
+  )
   let _ = js_define_data_prop(dv_ctor, "prototype", dv_proto, true, false, true)
   self.global_env.define_var("DataView", dv_ctor)
   let _ = js_set_prop(global_obj, "DataView", dv_ctor)
@@ -298,67 +421,169 @@ fn JSInterpreter::install_collections(
   let typed_array_proto = self.new_object()
   // TypedArray.prototype methods (shared by all typed arrays)
   self.install_method(typed_array_proto, "set", "TypedArray.prototype.set", 1.0)
-  self.install_method(typed_array_proto, "subarray", "TypedArray.prototype.subarray", 2.0)
-  self.install_method(typed_array_proto, "slice", "TypedArray.prototype.slice", 2.0)
-  self.install_method(typed_array_proto, "fill", "TypedArray.prototype.fill", 1.0)
-  self.install_method(typed_array_proto, "copyWithin", "TypedArray.prototype.copyWithin", 2.0)
-  self.install_method(typed_array_proto, "forEach", "TypedArray.prototype.forEach", 1.0)
+  self.install_method(
+    typed_array_proto, "subarray", "TypedArray.prototype.subarray", 2.0,
+  )
+  self.install_method(
+    typed_array_proto, "slice", "TypedArray.prototype.slice", 2.0,
+  )
+  self.install_method(
+    typed_array_proto, "fill", "TypedArray.prototype.fill", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "copyWithin", "TypedArray.prototype.copyWithin", 2.0,
+  )
+  self.install_method(
+    typed_array_proto, "forEach", "TypedArray.prototype.forEach", 1.0,
+  )
   self.install_method(typed_array_proto, "map", "TypedArray.prototype.map", 1.0)
-  self.install_method(typed_array_proto, "filter", "TypedArray.prototype.filter", 1.0)
-  self.install_method(typed_array_proto, "reduce", "TypedArray.prototype.reduce", 1.0)
-  self.install_method(typed_array_proto, "reduceRight", "TypedArray.prototype.reduceRight", 1.0)
-  self.install_method(typed_array_proto, "every", "TypedArray.prototype.every", 1.0)
-  self.install_method(typed_array_proto, "some", "TypedArray.prototype.some", 1.0)
-  self.install_method(typed_array_proto, "find", "TypedArray.prototype.find", 1.0)
-  self.install_method(typed_array_proto, "findIndex", "TypedArray.prototype.findIndex", 1.0)
-  self.install_method(typed_array_proto, "indexOf", "TypedArray.prototype.indexOf", 1.0)
-  self.install_method(typed_array_proto, "lastIndexOf", "TypedArray.prototype.lastIndexOf", 1.0)
-  self.install_method(typed_array_proto, "includes", "TypedArray.prototype.includes", 1.0)
-  self.install_method(typed_array_proto, "join", "TypedArray.prototype.join", 1.0)
-  self.install_method(typed_array_proto, "reverse", "TypedArray.prototype.reverse", 0.0)
-  self.install_method(typed_array_proto, "sort", "TypedArray.prototype.sort", 1.0)
+  self.install_method(
+    typed_array_proto, "filter", "TypedArray.prototype.filter", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "reduce", "TypedArray.prototype.reduce", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "reduceRight", "TypedArray.prototype.reduceRight", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "every", "TypedArray.prototype.every", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "some", "TypedArray.prototype.some", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "find", "TypedArray.prototype.find", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "findIndex", "TypedArray.prototype.findIndex", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "indexOf", "TypedArray.prototype.indexOf", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "lastIndexOf", "TypedArray.prototype.lastIndexOf", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "includes", "TypedArray.prototype.includes", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "join", "TypedArray.prototype.join", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "reverse", "TypedArray.prototype.reverse", 0.0,
+  )
+  self.install_method(
+    typed_array_proto, "sort", "TypedArray.prototype.sort", 1.0,
+  )
   self.install_method(typed_array_proto, "at", "TypedArray.prototype.at", 1.0)
-  self.install_method(typed_array_proto, "keys", "TypedArray.prototype.keys", 0.0)
-  self.install_method(typed_array_proto, "values", "TypedArray.prototype.values", 0.0)
-  self.install_method(typed_array_proto, "entries", "TypedArray.prototype.entries", 0.0)
-  self.install_method(typed_array_proto, "@@iterator", "TypedArray.prototype.values", 0.0)
-  self.install_method(typed_array_proto, "toLocaleString", "TypedArray.prototype.toLocaleString", 0.0)
-  self.install_method(typed_array_proto, "findLast", "TypedArray.prototype.findLast", 1.0)
-  self.install_method(typed_array_proto, "findLastIndex", "TypedArray.prototype.findLastIndex", 1.0)
-  self.install_method(typed_array_proto, "with", "TypedArray.prototype.with", 2.0)
-  self.install_method(typed_array_proto, "toReversed", "TypedArray.prototype.toReversed", 0.0)
-  self.install_method(typed_array_proto, "toSorted", "TypedArray.prototype.toSorted", 1.0)
+  self.install_method(
+    typed_array_proto, "keys", "TypedArray.prototype.keys", 0.0,
+  )
+  self.install_method(
+    typed_array_proto, "values", "TypedArray.prototype.values", 0.0,
+  )
+  self.install_method(
+    typed_array_proto, "entries", "TypedArray.prototype.entries", 0.0,
+  )
+  self.install_method(
+    typed_array_proto, "@@iterator", "TypedArray.prototype.values", 0.0,
+  )
+  self.install_method(
+    typed_array_proto, "toLocaleString", "TypedArray.prototype.toLocaleString", 0.0,
+  )
+  self.install_method(
+    typed_array_proto, "findLast", "TypedArray.prototype.findLast", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "findLastIndex", "TypedArray.prototype.findLastIndex", 1.0,
+  )
+  self.install_method(
+    typed_array_proto, "with", "TypedArray.prototype.with", 2.0,
+  )
+  self.install_method(
+    typed_array_proto, "toReversed", "TypedArray.prototype.toReversed", 0.0,
+  )
+  self.install_method(
+    typed_array_proto, "toSorted", "TypedArray.prototype.toSorted", 1.0,
+  )
   // TypedArray.prototype[@@toStringTag] getter
-  let ta_toStringTag_get = self.make_native("TypedArray.prototype.@@toStringTag")
+  let ta_toStringTag_get = self.make_native(
+    "TypedArray.prototype.@@toStringTag",
+  )
   self.set_function_length(ta_toStringTag_get, 0.0)
   self.set_function_name(ta_toStringTag_get, "get [Symbol.toStringTag]")
-  let _ = js_define_accessor_prop(typed_array_proto, "@@toStringTag", Some(ta_toStringTag_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    typed_array_proto,
+    "@@toStringTag",
+    Some(ta_toStringTag_get),
+    None,
+    false,
+    true,
+  )
   // TypedArray.prototype getters: length, byteLength, byteOffset, buffer
   let ta_length_get = self.make_native("TypedArray.prototype.length")
   self.set_function_length(ta_length_get, 0.0)
   self.set_function_name(ta_length_get, "get length")
-  let _ = js_define_accessor_prop(typed_array_proto, "length", Some(ta_length_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    typed_array_proto,
+    "length",
+    Some(ta_length_get),
+    None,
+    false,
+    true,
+  )
   let ta_byteLength_get = self.make_native("TypedArray.prototype.byteLength")
   self.set_function_length(ta_byteLength_get, 0.0)
   self.set_function_name(ta_byteLength_get, "get byteLength")
-  let _ = js_define_accessor_prop(typed_array_proto, "byteLength", Some(ta_byteLength_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    typed_array_proto,
+    "byteLength",
+    Some(ta_byteLength_get),
+    None,
+    false,
+    true,
+  )
   let ta_byteOffset_get = self.make_native("TypedArray.prototype.byteOffset")
   self.set_function_length(ta_byteOffset_get, 0.0)
   self.set_function_name(ta_byteOffset_get, "get byteOffset")
-  let _ = js_define_accessor_prop(typed_array_proto, "byteOffset", Some(ta_byteOffset_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    typed_array_proto,
+    "byteOffset",
+    Some(ta_byteOffset_get),
+    None,
+    false,
+    true,
+  )
   let ta_buffer_get = self.make_native("TypedArray.prototype.buffer")
   self.set_function_length(ta_buffer_get, 0.0)
   self.set_function_name(ta_buffer_get, "get buffer")
-  let _ = js_define_accessor_prop(typed_array_proto, "buffer", Some(ta_buffer_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    typed_array_proto,
+    "buffer",
+    Some(ta_buffer_get),
+    None,
+    false,
+    true,
+  )
   // TypedArray[@@species] getter
   let ta_species_get = self.make_native("TypedArray.@@species")
   self.set_function_length(ta_species_get, 0.0)
   self.set_function_name(ta_species_get, "get [Symbol.species]")
-  let _ = js_define_accessor_prop(typed_array_ctor, "@@species", Some(ta_species_get), None, false, true)
+  let _ = js_define_accessor_prop(
+    typed_array_ctor,
+    "@@species",
+    Some(ta_species_get),
+    None,
+    false,
+    true,
+  )
   // TypedArray.from and TypedArray.of
   self.install_static_method(typed_array_ctor, "from", "TypedArray.from", 1.0)
   self.install_static_method(typed_array_ctor, "of", "TypedArray.of", 0.0)
-  let _ = js_define_data_prop(typed_array_ctor, "prototype", typed_array_proto, false, false, false)
+  let _ = js_define_data_prop(
+    typed_array_ctor, "prototype", typed_array_proto, false, false, false,
+  )
   // Store globally for harness access
   self.global_env.define_var("TypedArray", typed_array_ctor)
   let _ = js_set_prop(global_obj, "TypedArray", typed_array_ctor)
@@ -386,11 +611,26 @@ fn JSInterpreter::install_collections(
       "Float64Array" => 8.0
       _ => 1.0
     }
-    let _ = js_define_data_prop(proto, "BYTES_PER_ELEMENT", Number(bytes_per), false, false, false)
-    let _ = js_define_data_prop(ctor, "BYTES_PER_ELEMENT", Number(bytes_per), false, false, false)
+    let _ = js_define_data_prop(
+      proto,
+      "BYTES_PER_ELEMENT",
+      Number(bytes_per),
+      false,
+      false,
+      false,
+    )
+    let _ = js_define_data_prop(
+      ctor,
+      "BYTES_PER_ELEMENT",
+      Number(bytes_per),
+      false,
+      false,
+      false,
+    )
     let _ = js_define_data_prop(ctor, "prototype", proto, false, false, false)
     self.global_env.define_var(name, ctor)
     let _ = js_set_prop(global_obj, name, ctor)
+
   }
 
   // BigInt64Array/BigUint64Array
@@ -403,11 +643,26 @@ fn JSInterpreter::install_collections(
     let proto = self.new_object()
     let _ = js_set_prop(proto, "__proto__", typed_array_proto)
     let _ = js_set_prop(proto, "constructor", ctor)
-    let _ = js_define_data_prop(proto, "BYTES_PER_ELEMENT", Number(8.0), false, false, false)
-    let _ = js_define_data_prop(ctor, "BYTES_PER_ELEMENT", Number(8.0), false, false, false)
+    let _ = js_define_data_prop(
+      proto,
+      "BYTES_PER_ELEMENT",
+      Number(8.0),
+      false,
+      false,
+      false,
+    )
+    let _ = js_define_data_prop(
+      ctor,
+      "BYTES_PER_ELEMENT",
+      Number(8.0),
+      false,
+      false,
+      false,
+    )
     let _ = js_define_data_prop(ctor, "prototype", proto, false, false, false)
     self.global_env.define_var(name, ctor)
     let _ = js_set_prop(global_obj, name, ctor)
+
   }
 
   // testTypedArray.js harness - arrays of constructors
@@ -419,14 +674,33 @@ fn JSInterpreter::install_collections(
   let _ = js_set_prop(global_obj, "floatArrayConstructors", float_ctors)
   // nonClampedIntArrayConstructors
   let non_clamped_int_ctors = js_new_array()
-  let _ = js_array_push(non_clamped_int_ctors, self.global_env.get("Int32Array"))
-  let _ = js_array_push(non_clamped_int_ctors, self.global_env.get("Int16Array"))
+  let _ = js_array_push(
+    non_clamped_int_ctors,
+    self.global_env.get("Int32Array"),
+  )
+  let _ = js_array_push(
+    non_clamped_int_ctors,
+    self.global_env.get("Int16Array"),
+  )
   let _ = js_array_push(non_clamped_int_ctors, self.global_env.get("Int8Array"))
-  let _ = js_array_push(non_clamped_int_ctors, self.global_env.get("Uint32Array"))
-  let _ = js_array_push(non_clamped_int_ctors, self.global_env.get("Uint16Array"))
-  let _ = js_array_push(non_clamped_int_ctors, self.global_env.get("Uint8Array"))
-  self.global_env.define_var("nonClampedIntArrayConstructors", non_clamped_int_ctors)
-  let _ = js_set_prop(global_obj, "nonClampedIntArrayConstructors", non_clamped_int_ctors)
+  let _ = js_array_push(
+    non_clamped_int_ctors,
+    self.global_env.get("Uint32Array"),
+  )
+  let _ = js_array_push(
+    non_clamped_int_ctors,
+    self.global_env.get("Uint16Array"),
+  )
+  let _ = js_array_push(
+    non_clamped_int_ctors,
+    self.global_env.get("Uint8Array"),
+  )
+  self.global_env.define_var(
+    "nonClampedIntArrayConstructors", non_clamped_int_ctors,
+  )
+  let _ = js_set_prop(
+    global_obj, "nonClampedIntArrayConstructors", non_clamped_int_ctors,
+  )
   // intArrayConstructors
   let int_ctors = js_new_array()
   let _ = js_array_push(int_ctors, self.global_env.get("Int32Array"))
@@ -457,6 +731,7 @@ fn JSInterpreter::install_collections(
   let _ = js_array_push(bigint_ctors, self.global_env.get("BigUint64Array"))
   self.global_env.define_var("bigIntArrayConstructors", bigint_ctors)
   let _ = js_set_prop(global_obj, "bigIntArrayConstructors", bigint_ctors)
+
 }
 
 ///|
@@ -714,6 +989,7 @@ fn JSInterpreter::install_method(
   self.set_function_length(fn_val, length)
   self.set_function_name(fn_val, name)
   let _ = js_define_data_prop(proto, name, fn_val, true, false, true)
+
 }
 
 ///|
@@ -729,6 +1005,7 @@ fn JSInterpreter::install_static_method(
   self.set_function_length(fn_val, length)
   self.set_function_name(fn_val, name)
   let _ = js_define_data_prop(ctor, name, fn_val, true, false, true)
+
 }
 
 ///|
@@ -969,7 +1246,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let bigint_ctor = self.make_native("BigInt")
   self.set_function_length(bigint_ctor, 1.0)
   self.set_function_name(bigint_ctor, "BigInt")
-  let _ = js_define_data_prop(bigint_ctor, "prototype", bigint_proto, false, false, false)
+  let _ = js_define_data_prop(
+    bigint_ctor, "prototype", bigint_proto, false, false, false,
+  )
   let _ = js_set_prop(bigint_proto, "constructor", bigint_ctor)
   let bigint_value_of = self.make_native("BigInt.prototype.valueOf")
   self.set_function_length(bigint_value_of, 0.0)
@@ -977,12 +1256,18 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let bigint_to_string = self.make_native("BigInt.prototype.toString")
   self.set_function_length(bigint_to_string, 1.0)
   let _ = js_set_prop(bigint_proto, "toString", bigint_to_string)
-  let bigint_to_locale_string = self.make_native("BigInt.prototype.toLocaleString")
+  let bigint_to_locale_string = self.make_native(
+    "BigInt.prototype.toLocaleString",
+  )
   self.set_function_length(bigint_to_locale_string, 0.0)
   let _ = js_set_prop(bigint_proto, "toLocaleString", bigint_to_locale_string)
   // BigInt static methods
   let _ = js_set_prop(bigint_ctor, "asIntN", self.make_native("BigInt.asIntN"))
-  let _ = js_set_prop(bigint_ctor, "asUintN", self.make_native("BigInt.asUintN"))
+  let _ = js_set_prop(
+    bigint_ctor,
+    "asUintN",
+    self.make_native("BigInt.asUintN"),
+  )
   self.global_env.define_var("BigInt", bigint_ctor)
   let _ = js_set_prop(global_obj, "BigInt", bigint_ctor)
   let string_proto = self.new_object()
@@ -1623,7 +1908,6 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.set_function_length(mark_escaped_fn, 1.0)
   self.global_env.define_var("$markEscaped", mark_escaped_fn)
   let _ = js_set_prop(global_obj, "$markEscaped", mark_escaped_fn)
-
   let escape_fn = self.make_native("escape")
   self.set_function_length(escape_fn, 1.0)
   self.global_env.define_var("escape", escape_fn)
@@ -1663,7 +1947,11 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let _ = js_set_prop(t262, "global", global_obj)
   let _ = js_set_prop(t262, "evalScript", self.make_native("$262.evalScript"))
   let _ = js_set_prop(t262, "createRealm", self.make_native("$262.createRealm"))
-  let _ = js_set_prop(t262, "detachArrayBuffer", self.make_native("$262.detachArrayBuffer"))
+  let _ = js_set_prop(
+    t262,
+    "detachArrayBuffer",
+    self.make_native("$262.detachArrayBuffer"),
+  )
   let html_dda = self.new_object()
   let _ = js_set_prop(html_dda, "__class", String("IsHTMLDDA"))
   let _ = js_set_prop(html_dda, "$call", self.make_native("IsHTMLDDA"))
@@ -1675,19 +1963,39 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   // Note: Constructor arrays are set up in install_collections
   let test_with_ta = self.make_native("testWithTypedArrayConstructors")
   self.global_env.define_var("testWithTypedArrayConstructors", test_with_ta)
-  let _ = js_set_prop(global_obj, "testWithTypedArrayConstructors", test_with_ta)
-  let test_with_atomics = self.make_native("testWithAtomicsFriendlyTypedArrayConstructors")
-  self.global_env.define_var("testWithAtomicsFriendlyTypedArrayConstructors", test_with_atomics)
-  let _ = js_set_prop(global_obj, "testWithAtomicsFriendlyTypedArrayConstructors", test_with_atomics)
-  let test_with_non_atomics = self.make_native("testWithNonAtomicsFriendlyTypedArrayConstructors")
-  self.global_env.define_var("testWithNonAtomicsFriendlyTypedArrayConstructors", test_with_non_atomics)
-  let _ = js_set_prop(global_obj, "testWithNonAtomicsFriendlyTypedArrayConstructors", test_with_non_atomics)
+  let _ = js_set_prop(
+    global_obj, "testWithTypedArrayConstructors", test_with_ta,
+  )
+  let test_with_atomics = self.make_native(
+    "testWithAtomicsFriendlyTypedArrayConstructors",
+  )
+  self.global_env.define_var(
+    "testWithAtomicsFriendlyTypedArrayConstructors", test_with_atomics,
+  )
+  let _ = js_set_prop(
+    global_obj, "testWithAtomicsFriendlyTypedArrayConstructors", test_with_atomics,
+  )
+  let test_with_non_atomics = self.make_native(
+    "testWithNonAtomicsFriendlyTypedArrayConstructors",
+  )
+  self.global_env.define_var(
+    "testWithNonAtomicsFriendlyTypedArrayConstructors", test_with_non_atomics,
+  )
+  let _ = js_set_prop(
+    global_obj, "testWithNonAtomicsFriendlyTypedArrayConstructors", test_with_non_atomics,
+  )
   let detach_buffer = self.make_native("$DETACHBUFFER")
   self.global_env.define_var("$DETACHBUFFER", detach_buffer)
   let _ = js_set_prop(global_obj, "$DETACHBUFFER", detach_buffer)
-  let test_with_bigint_ta = self.make_native("testWithBigIntTypedArrayConstructors")
-  self.global_env.define_var("testWithBigIntTypedArrayConstructors", test_with_bigint_ta)
-  let _ = js_set_prop(global_obj, "testWithBigIntTypedArrayConstructors", test_with_bigint_ta)
+  let test_with_bigint_ta = self.make_native(
+    "testWithBigIntTypedArrayConstructors",
+  )
+  self.global_env.define_var(
+    "testWithBigIntTypedArrayConstructors", test_with_bigint_ta,
+  )
+  let _ = js_set_prop(
+    global_obj, "testWithBigIntTypedArrayConstructors", test_with_bigint_ta,
+  )
 
   // globalThis / global
   self.global_env.define_var("globalThis", global_obj)
@@ -3931,6 +4239,9 @@ fn JSInterpreter::call_native(
           match closure.body {
             Native(_) => js_string("function \{name}() { [native code] }")
             Bound(_, _, _) => js_string("function \{name}() { [native code] }")
+            Compiled(compiled) =>
+              // Show as native-like for compiled functions
+              js_string("function \{compiled.name}() { [compiled code] }")
             Ast(func) => {
               let params_arr : Array[String] = []
               for p in func.params {
@@ -4918,20 +5229,30 @@ fn JSInterpreter::call_native(
     "BigInt" => {
       // BigInt() cannot be called with new - it's not a constructor
       if args.length() == 0 {
-        return self.set_error_kind("TypeError", "Cannot convert undefined to a BigInt")
+        return self.set_error_kind(
+          "TypeError", "Cannot convert undefined to a BigInt",
+        )
       }
       let arg = args[0]
       match arg {
         BigInt(n) => BigInt(n)
         Number(n) => {
           if n.is_nan() || n.is_inf() || n != n.trunc() {
-            return self.set_error_kind("RangeError", "Cannot convert non-integer to BigInt")
+            return self.set_error_kind(
+              "RangeError", "Cannot convert non-integer to BigInt",
+            )
           }
           BigInt(BigInt::from_int64(n.to_int64()))
         }
         String(s) => {
           // Try to parse as BigInt
-          BigInt(BigInt::from_string(s))
+          let n = BigInt::from_string(s)
+          // Normalize -0 to 0 (MoonBit BigInt may have -0 != 0 issue)
+          if n.to_string() == "0" || n.to_string() == "-0" {
+            BigInt(0N)
+          } else {
+            BigInt(n)
+          }
         }
         Bool(b) => BigInt(BigInt::from_int(if b { 1 } else { 0 }))
         _ => self.set_error_kind("TypeError", "Cannot convert to a BigInt")
@@ -4940,9 +5261,12 @@ fn JSInterpreter::call_native(
     "BigInt.prototype.valueOf" =>
       match this_arg {
         BigInt(n) => BigInt(n)
-        _ => self.set_error_kind("TypeError", "BigInt.prototype.valueOf requires that 'this' be a BigInt")
+        _ =>
+          self.set_error_kind(
+            "TypeError", "BigInt.prototype.valueOf requires that 'this' be a BigInt",
+          )
       }
-    "BigInt.prototype.toString" => {
+    "BigInt.prototype.toString" =>
       match this_arg {
         BigInt(n) => {
           let radix = if args.length() > 0 {
@@ -4951,7 +5275,9 @@ fn JSInterpreter::call_native(
             10
           }
           if radix < 2 || radix > 36 {
-            return self.set_error_kind("RangeError", "toString() radix must be between 2 and 36")
+            return self.set_error_kind(
+              "RangeError", "toString() radix must be between 2 and 36",
+            )
           }
           if radix == 10 {
             String(n.to_string())
@@ -4962,13 +5288,18 @@ fn JSInterpreter::call_native(
             String(n.to_string())
           }
         }
-        _ => self.set_error_kind("TypeError", "BigInt.prototype.toString requires that 'this' be a BigInt")
+        _ =>
+          self.set_error_kind(
+            "TypeError", "BigInt.prototype.toString requires that 'this' be a BigInt",
+          )
       }
-    }
     "BigInt.prototype.toLocaleString" =>
       match this_arg {
         BigInt(n) => String(n.to_string())
-        _ => self.set_error_kind("TypeError", "BigInt.prototype.toLocaleString requires that 'this' be a BigInt")
+        _ =>
+          self.set_error_kind(
+            "TypeError", "BigInt.prototype.toLocaleString requires that 'this' be a BigInt",
+          )
       }
     "BigInt.asIntN" => {
       if args.length() < 2 {
@@ -4983,14 +5314,18 @@ fn JSInterpreter::call_native(
         BigInt(v) => v
         Number(v) => {
           if v.is_nan() || v.is_inf() || v != v.trunc() {
-            return self.set_error_kind("RangeError", "Cannot convert non-integer to BigInt")
+            return self.set_error_kind(
+              "RangeError", "Cannot convert non-integer to BigInt",
+            )
           }
           BigInt::from_int64(v.to_int64())
         }
         String(s) => BigInt::from_string(s)
         Bool(b) => BigInt::from_int(if b { 1 } else { 0 })
-        Null | Undefined => return self.set_error_kind("TypeError", "Cannot convert to a BigInt")
-        _ => return self.set_error_kind("TypeError", "Cannot convert to a BigInt")
+        Null | Undefined =>
+          return self.set_error_kind("TypeError", "Cannot convert to a BigInt")
+        _ =>
+          return self.set_error_kind("TypeError", "Cannot convert to a BigInt")
       }
       if bits == 0 {
         return BigInt(BigInt::from_int(0))
@@ -5023,14 +5358,18 @@ fn JSInterpreter::call_native(
         BigInt(v) => v
         Number(v) => {
           if v.is_nan() || v.is_inf() || v != v.trunc() {
-            return self.set_error_kind("RangeError", "Cannot convert non-integer to BigInt")
+            return self.set_error_kind(
+              "RangeError", "Cannot convert non-integer to BigInt",
+            )
           }
           BigInt::from_int64(v.to_int64())
         }
         String(s) => BigInt::from_string(s)
         Bool(b) => BigInt::from_int(if b { 1 } else { 0 })
-        Null | Undefined => return self.set_error_kind("TypeError", "Cannot convert to a BigInt")
-        _ => return self.set_error_kind("TypeError", "Cannot convert to a BigInt")
+        Null | Undefined =>
+          return self.set_error_kind("TypeError", "Cannot convert to a BigInt")
+        _ =>
+          return self.set_error_kind("TypeError", "Cannot convert to a BigInt")
       }
       if bits == 0 {
         return BigInt(BigInt::from_int(0))
@@ -6193,29 +6532,30 @@ fn JSInterpreter::call_native(
     "ArrayBuffer" => {
       let length_f = if args.length() > 0 {
         let n = args[0].to_number()
-        if n.is_nan() { 0.0 } else { n }
+        if n.is_nan() {
+          0.0
+        } else {
+          n
+        }
       } else {
         0.0
       }
       // Check for excessively large values (>= 2^53) or negative values
       if length_f >= 9007199254740992.0 || length_f < 0.0 {
-        return self.set_error_kind(
-          "RangeError",
-          "Invalid array buffer length",
-        )
+        return self.set_error_kind("RangeError", "Invalid array buffer length")
       }
       let length = length_f.to_int()
       // Practical limit to prevent memory issues
       if length > 1073741824 { // 1GB limit
-        return self.set_error_kind(
-          "RangeError",
-          "Invalid array buffer length",
-        )
+        return self.set_error_kind("RangeError", "Invalid array buffer length")
       }
       let buf = js_new_bytebuffer(length)
       let buf_id = store_bytebuffer(buf)
       let ab_obj = self.new_object()
-      let ab_proto = js_get_prop(self.global_env.get("ArrayBuffer"), "prototype")
+      let ab_proto = js_get_prop(
+        self.global_env.get("ArrayBuffer"),
+        "prototype",
+      )
       let _ = js_set_prop(ab_obj, "__proto__", ab_proto)
       let _ = js_set_prop(ab_obj, "__class", String("ArrayBuffer"))
       let _ = js_set_prop(ab_obj, "__ab_id", Number(buf_id.to_double()))
@@ -6226,32 +6566,48 @@ fn JSInterpreter::call_native(
       match get_arraybuffer_data(this_arg) {
         Some(buf) => {
           if buf.detached {
-            return self.set_error_kind("TypeError", "Cannot read byteLength of detached ArrayBuffer")
+            return self.set_error_kind(
+              "TypeError", "Cannot read byteLength of detached ArrayBuffer",
+            )
           }
           Number(buf.data.length().to_double())
         }
-        None => self.set_error_kind("TypeError", "ArrayBuffer.prototype.byteLength requires that 'this' be an ArrayBuffer")
+        None =>
+          self.set_error_kind(
+            "TypeError", "ArrayBuffer.prototype.byteLength requires that 'this' be an ArrayBuffer",
+          )
       }
     "ArrayBuffer.prototype.maxByteLength" =>
       match get_arraybuffer_data(this_arg) {
         Some(buf) => {
           if buf.detached {
-            return self.set_error_kind("TypeError", "Cannot read maxByteLength of detached ArrayBuffer")
+            return self.set_error_kind(
+              "TypeError", "Cannot read maxByteLength of detached ArrayBuffer",
+            )
           }
           // Non-resizable ArrayBuffer: maxByteLength equals byteLength
           Number(buf.data.length().to_double())
         }
-        None => self.set_error_kind("TypeError", "ArrayBuffer.prototype.maxByteLength requires that 'this' be an ArrayBuffer")
+        None =>
+          self.set_error_kind(
+            "TypeError", "ArrayBuffer.prototype.maxByteLength requires that 'this' be an ArrayBuffer",
+          )
       }
     "ArrayBuffer.prototype.resizable" =>
       match get_arraybuffer_data(this_arg) {
         Some(_) => Bool(false) // We don't support resizable ArrayBuffers yet
-        None => self.set_error_kind("TypeError", "ArrayBuffer.prototype.resizable requires that 'this' be an ArrayBuffer")
+        None =>
+          self.set_error_kind(
+            "TypeError", "ArrayBuffer.prototype.resizable requires that 'this' be an ArrayBuffer",
+          )
       }
     "ArrayBuffer.prototype.detached" =>
       match get_arraybuffer_data(this_arg) {
         Some(buf) => Bool(buf.detached)
-        None => self.set_error_kind("TypeError", "ArrayBuffer.prototype.detached requires that 'this' be an ArrayBuffer")
+        None =>
+          self.set_error_kind(
+            "TypeError", "ArrayBuffer.prototype.detached requires that 'this' be an ArrayBuffer",
+          )
       }
     "ArrayBuffer.prototype.resize" =>
       // We don't support resizable ArrayBuffers yet
@@ -6260,26 +6616,40 @@ fn JSInterpreter::call_native(
       match get_arraybuffer_data(this_arg) {
         Some(buf) => {
           if buf.detached {
-            return self.set_error_kind("TypeError", "Cannot transfer a detached ArrayBuffer")
+            return self.set_error_kind(
+              "TypeError", "Cannot transfer a detached ArrayBuffer",
+            )
           }
           let new_length_f = if args.length() > 0 && not(args[0].is_undefined()) {
             let n = args[0].to_number()
-            if n.is_nan() { 0.0 } else { n }
+            if n.is_nan() {
+              0.0
+            } else {
+              n
+            }
           } else {
             buf.data.length().to_double()
           }
           // Check for excessively large values (>= 2^53)
           if new_length_f >= 9007199254740992.0 || new_length_f < 0.0 {
-            return self.set_error_kind("RangeError", "Invalid array buffer length")
+            return self.set_error_kind(
+              "RangeError", "Invalid array buffer length",
+            )
           }
           let new_length = new_length_f.to_int()
           // Practical limit to prevent memory issues
           if new_length > 1073741824 { // 1GB limit
-            return self.set_error_kind("RangeError", "Invalid array buffer length")
+            return self.set_error_kind(
+              "RangeError", "Invalid array buffer length",
+            )
           }
           // Create new buffer with new length
           let new_buf = js_new_bytebuffer(new_length)
-          let copy_len = if new_length < buf.data.length() { new_length } else { buf.data.length() }
+          let copy_len = if new_length < buf.data.length() {
+            new_length
+          } else {
+            buf.data.length()
+          }
           for i = 0; i < copy_len; i = i + 1 {
             new_buf.data[i] = buf.data[i]
           }
@@ -6287,38 +6657,58 @@ fn JSInterpreter::call_native(
           detach_bytebuffer(buf.id)
           let new_buf_id = store_bytebuffer(new_buf)
           let new_ab = self.new_object()
-          let ab_proto = js_get_prop(self.global_env.get("ArrayBuffer"), "prototype")
+          let ab_proto = js_get_prop(
+            self.global_env.get("ArrayBuffer"),
+            "prototype",
+          )
           let _ = js_set_prop(new_ab, "__proto__", ab_proto)
           let _ = js_set_prop(new_ab, "__class", String("ArrayBuffer"))
           let _ = js_set_prop(new_ab, "__ab_id", Number(new_buf_id.to_double()))
           new_ab
         }
-        None => self.set_error_kind("TypeError", "ArrayBuffer.prototype.transfer requires that 'this' be an ArrayBuffer")
+        None =>
+          self.set_error_kind(
+            "TypeError", "ArrayBuffer.prototype.transfer requires that 'this' be an ArrayBuffer",
+          )
       }
     "ArrayBuffer.prototype.transferToFixedLength" =>
       match get_arraybuffer_data(this_arg) {
         Some(buf) => {
           if buf.detached {
-            return self.set_error_kind("TypeError", "Cannot transfer a detached ArrayBuffer")
+            return self.set_error_kind(
+              "TypeError", "Cannot transfer a detached ArrayBuffer",
+            )
           }
           let new_length_f = if args.length() > 0 && not(args[0].is_undefined()) {
             let n = args[0].to_number()
-            if n.is_nan() { 0.0 } else { n }
+            if n.is_nan() {
+              0.0
+            } else {
+              n
+            }
           } else {
             buf.data.length().to_double()
           }
           // Check for excessively large values (>= 2^53)
           if new_length_f >= 9007199254740992.0 || new_length_f < 0.0 {
-            return self.set_error_kind("RangeError", "Invalid array buffer length")
+            return self.set_error_kind(
+              "RangeError", "Invalid array buffer length",
+            )
           }
           let new_length = new_length_f.to_int()
           // Practical limit to prevent memory issues
           if new_length > 1073741824 { // 1GB limit
-            return self.set_error_kind("RangeError", "Invalid array buffer length")
+            return self.set_error_kind(
+              "RangeError", "Invalid array buffer length",
+            )
           }
           // Create new buffer with new length
           let new_buf = js_new_bytebuffer(new_length)
-          let copy_len = if new_length < buf.data.length() { new_length } else { buf.data.length() }
+          let copy_len = if new_length < buf.data.length() {
+            new_length
+          } else {
+            buf.data.length()
+          }
           for i = 0; i < copy_len; i = i + 1 {
             new_buf.data[i] = buf.data[i]
           }
@@ -6326,15 +6716,21 @@ fn JSInterpreter::call_native(
           detach_bytebuffer(buf.id)
           let new_buf_id = store_bytebuffer(new_buf)
           let new_ab = self.new_object()
-          let ab_proto = js_get_prop(self.global_env.get("ArrayBuffer"), "prototype")
+          let ab_proto = js_get_prop(
+            self.global_env.get("ArrayBuffer"),
+            "prototype",
+          )
           let _ = js_set_prop(new_ab, "__proto__", ab_proto)
           let _ = js_set_prop(new_ab, "__class", String("ArrayBuffer"))
           let _ = js_set_prop(new_ab, "__ab_id", Number(new_buf_id.to_double()))
           new_ab
         }
-        None => self.set_error_kind("TypeError", "ArrayBuffer.prototype.transferToFixedLength requires that 'this' be an ArrayBuffer")
+        None =>
+          self.set_error_kind(
+            "TypeError", "ArrayBuffer.prototype.transferToFixedLength requires that 'this' be an ArrayBuffer",
+          )
       }
-    "ArrayBuffer.prototype.slice" => {
+    "ArrayBuffer.prototype.slice" =>
       match get_arraybuffer_data(this_arg) {
         Some(buf) => {
           if buf.detached {
@@ -6354,7 +6750,11 @@ fn JSInterpreter::call_native(
           // Resolve relative indices
           let start = if start_arg < 0 {
             let s = byte_length + start_arg
-            if s < 0 { 0 } else { s }
+            if s < 0 {
+              0
+            } else {
+              s
+            }
           } else if start_arg > byte_length {
             byte_length
           } else {
@@ -6362,7 +6762,11 @@ fn JSInterpreter::call_native(
           }
           let end = if end_arg < 0 {
             let e = byte_length + end_arg
-            if e < 0 { 0 } else { e }
+            if e < 0 {
+              0
+            } else {
+              e
+            }
           } else if end_arg > byte_length {
             byte_length
           } else {
@@ -6387,7 +6791,6 @@ fn JSInterpreter::call_native(
         }
         None => self.set_error_kind("TypeError", "Not an ArrayBuffer")
       }
-    }
     "ArrayBuffer.isView" => {
       let arg = if args.length() > 0 { args[0] } else { Undefined }
       Bool(is_typedarray(arg) || is_dataview(arg))
@@ -6425,17 +6828,19 @@ fn JSInterpreter::call_native(
     "TypedArray.prototype.indexOf" => self.typedarray_index_of(this_arg, args)
     "TypedArray.prototype.lastIndexOf" =>
       self.typedarray_last_index_of(this_arg, args)
-    "TypedArray.prototype.includes" =>
-      self.typedarray_includes(this_arg, args)
+    "TypedArray.prototype.includes" => self.typedarray_includes(this_arg, args)
     "TypedArray.prototype.join" => self.typedarray_join(this_arg, args)
     "TypedArray.prototype.reverse" => self.typedarray_reverse(this_arg, args)
     "TypedArray.prototype.sort" => self.typedarray_sort(this_arg, args)
     "TypedArray.prototype.at" => self.typedarray_at(this_arg, args)
-    "TypedArray.prototype.toLocaleString" => self.typedarray_to_locale_string(this_arg, args)
+    "TypedArray.prototype.toLocaleString" =>
+      self.typedarray_to_locale_string(this_arg, args)
     "TypedArray.prototype.findLast" => self.typedarray_find_last(this_arg, args)
-    "TypedArray.prototype.findLastIndex" => self.typedarray_find_last_index(this_arg, args)
+    "TypedArray.prototype.findLastIndex" =>
+      self.typedarray_find_last_index(this_arg, args)
     "TypedArray.prototype.with" => self.typedarray_with(this_arg, args)
-    "TypedArray.prototype.toReversed" => self.typedarray_to_reversed(this_arg, args)
+    "TypedArray.prototype.toReversed" =>
+      self.typedarray_to_reversed(this_arg, args)
     "TypedArray.prototype.toSorted" => self.typedarray_to_sorted(this_arg, args)
     "TypedArray.prototype.keys" => self.typedarray_keys(this_arg)
     "TypedArray.prototype.values" => self.typedarray_values(this_arg)
@@ -6449,7 +6854,10 @@ fn JSInterpreter::call_native(
           }
           Number(data.length.to_double())
         }
-        None => self.set_error_kind("TypeError", "TypedArray.prototype.length requires that 'this' be a TypedArray")
+        None =>
+          self.set_error_kind(
+            "TypeError", "TypedArray.prototype.length requires that 'this' be a TypedArray",
+          )
       }
     "TypedArray.prototype.byteLength" =>
       match get_typedarray_data(this_arg) {
@@ -6459,7 +6867,10 @@ fn JSInterpreter::call_native(
           }
           Number(data.byte_length.to_double())
         }
-        None => self.set_error_kind("TypeError", "TypedArray.prototype.byteLength requires that 'this' be a TypedArray")
+        None =>
+          self.set_error_kind(
+            "TypeError", "TypedArray.prototype.byteLength requires that 'this' be a TypedArray",
+          )
       }
     "TypedArray.prototype.byteOffset" =>
       match get_typedarray_data(this_arg) {
@@ -6469,12 +6880,18 @@ fn JSInterpreter::call_native(
           }
           Number(data.byte_offset.to_double())
         }
-        None => self.set_error_kind("TypeError", "TypedArray.prototype.byteOffset requires that 'this' be a TypedArray")
+        None =>
+          self.set_error_kind(
+            "TypeError", "TypedArray.prototype.byteOffset requires that 'this' be a TypedArray",
+          )
       }
     "TypedArray.prototype.buffer" =>
       match get_typedarray_data(this_arg) {
         Some(_) => js_get_prop(this_arg, "buffer")
-        None => self.set_error_kind("TypeError", "TypedArray.prototype.buffer requires that 'this' be a TypedArray")
+        None =>
+          self.set_error_kind(
+            "TypeError", "TypedArray.prototype.buffer requires that 'this' be a TypedArray",
+          )
       }
     "TypedArray.prototype.@@toStringTag" =>
       match js_get_prop(this_arg, "__ta_type_tag") {
@@ -6482,28 +6899,41 @@ fn JSInterpreter::call_native(
         _ => Undefined
       }
     // TypedArray static methods
-    "TypedArray.@@species" => this_arg  // get [Symbol.species] returns `this`
+    "TypedArray.@@species" => this_arg // get [Symbol.species] returns `this`
     "TypedArray.from" => {
       // TypedArray.from(source [, mapfn [, thisArg]])
       // `this` should be a TypedArray constructor (Int8Array, etc.)
       if args.length() == 0 {
-        return self.set_error_kind("TypeError", "Cannot convert undefined or null to object")
+        return self.set_error_kind(
+          "TypeError", "Cannot convert undefined or null to object",
+        )
       }
       let source = args[0]
-      let mapfn : JSValue? = if args.length() > 1 { Some(args[1]) } else { None }
+      let mapfn : JSValue? = if args.length() > 1 {
+        Some(args[1])
+      } else {
+        None
+      }
       let this_arg_for_map = if args.length() > 2 { args[2] } else { Undefined }
       // Get source as array-like
       let source_len = js_get_prop(source, "length").to_number().to_int()
       // Create new typed array with the constructor
-      let new_ta = self.call_function(this_arg, Undefined, [Number(source_len.to_double())])
+      let new_ta = self.call_function(this_arg, Undefined, [
+        Number(source_len.to_double()),
+      ])
       // Copy elements
       for i = 0; i < source_len; i = i + 1 {
         let elem = js_get_prop(source, i.to_string())
         let mapped = match mapfn {
-          Some(map_func) => self.call_function(map_func, this_arg_for_map, [elem, Number(i.to_double())])
+          Some(map_func) =>
+            self.call_function(map_func, this_arg_for_map, [
+              elem,
+              Number(i.to_double()),
+            ])
           None => elem
         }
         let _ = js_set_prop(new_ta, i.to_string(), mapped)
+
       }
       new_ta
     }
@@ -6511,52 +6941,75 @@ fn JSInterpreter::call_native(
       // TypedArray.of(element0, element1, ...)
       // `this` should be a TypedArray constructor
       let len = args.length()
-      let new_ta = self.call_function(this_arg, Undefined, [Number(len.to_double())])
+      let new_ta = self.call_function(this_arg, Undefined, [
+        Number(len.to_double()),
+      ])
       for i = 0; i < len; i = i + 1 {
         let _ = js_set_prop(new_ta, i.to_string(), args[i])
+
       }
       new_ta
     }
-    "TypedArray" => self.set_error_kind("TypeError", "Abstract class TypedArray not directly constructable")
+    "TypedArray" =>
+      self.set_error_kind(
+        "TypeError", "Abstract class TypedArray not directly constructable",
+      )
     // DataView
     "DataView" => self.create_dataview(args)
     // DataView.prototype getters
     "DataView.prototype.buffer" =>
       match js_get_prop(this_arg, "__class") {
         String("DataView") => js_get_prop(this_arg, "buffer")
-        _ => self.set_error_kind("TypeError", "DataView.prototype.buffer requires that 'this' be a DataView")
+        _ =>
+          self.set_error_kind(
+            "TypeError", "DataView.prototype.buffer requires that 'this' be a DataView",
+          )
       }
     "DataView.prototype.byteLength" =>
       match js_get_prop(this_arg, "__class") {
         String("DataView") => {
-          let buf_id = js_get_prop(this_arg, "__dv_buffer_id").to_number().to_int()
+          let buf_id = js_get_prop(this_arg, "__dv_buffer_id")
+            .to_number()
+            .to_int()
           match get_bytebuffer(buf_id) {
             Some(buf) => {
               if buf.detached {
-                return self.set_error_kind("TypeError", "Cannot read byteLength of DataView with detached buffer")
+                return self.set_error_kind(
+                  "TypeError", "Cannot read byteLength of DataView with detached buffer",
+                )
               }
               js_get_prop(this_arg, "byteLength")
             }
             None => Undefined
           }
         }
-        _ => self.set_error_kind("TypeError", "DataView.prototype.byteLength requires that 'this' be a DataView")
+        _ =>
+          self.set_error_kind(
+            "TypeError", "DataView.prototype.byteLength requires that 'this' be a DataView",
+          )
       }
     "DataView.prototype.byteOffset" =>
       match js_get_prop(this_arg, "__class") {
         String("DataView") => {
-          let buf_id = js_get_prop(this_arg, "__dv_buffer_id").to_number().to_int()
+          let buf_id = js_get_prop(this_arg, "__dv_buffer_id")
+            .to_number()
+            .to_int()
           match get_bytebuffer(buf_id) {
             Some(buf) => {
               if buf.detached {
-                return self.set_error_kind("TypeError", "Cannot read byteOffset of DataView with detached buffer")
+                return self.set_error_kind(
+                  "TypeError", "Cannot read byteOffset of DataView with detached buffer",
+                )
               }
               js_get_prop(this_arg, "byteOffset")
             }
             None => Undefined
           }
         }
-        _ => self.set_error_kind("TypeError", "DataView.prototype.byteOffset requires that 'this' be a DataView")
+        _ =>
+          self.set_error_kind(
+            "TypeError", "DataView.prototype.byteOffset requires that 'this' be a DataView",
+          )
       }
     // DataView.prototype methods
     "DataView.prototype.getInt8" => self.dataview_get(this_arg, args, "Int8")

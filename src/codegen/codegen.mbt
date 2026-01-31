@@ -188,7 +188,8 @@ fn serialize_type_metadata(module_ : @ast.TsModule) -> Bytes {
 // / literaltype()
 fn infer_literal_type(expr : @ast.TsExpr) -> @ast.TsType {
   match expr {
-    @ast.TsExpr::IntLit(_) => @ast.TsType::Int
+    // In TypeScript, all number literals are f64 (number type)
+    @ast.TsExpr::IntLit(_) => @ast.TsType::Number
     @ast.TsExpr::NumberLit(_) => @ast.TsType::Number
     @ast.TsExpr::BigIntLit(_) => @ast.TsType::Any
     @ast.TsExpr::BoolLit(_) => @ast.TsType::Boolean
@@ -314,6 +315,14 @@ priv struct CodeGenCtx {
   builtins_used : Map[String, Bool]
   // Constant propagation: track const variable values
   const_values : Map[String, @analysis.ConstValue]
+  // wasm-gc mode: use GC types instead of linear memory
+  use_gc : Bool
+  // wasm-gc type indices (element type -> type index)
+  gc_array_types : Map[String, UInt]
+  // wasm-gc struct type indices (struct name -> type index)
+  gc_struct_types : Map[String, UInt]
+  // wasm-gc struct field indices (struct name -> (field name -> field index))
+  gc_struct_fields : Map[String, Map[String, UInt]]
 }
 
 ///|
@@ -337,6 +346,10 @@ fn CodeGenCtx::new(
     string_pool,
     builtins_used,
     const_values: {},
+    use_gc: false,
+    gc_array_types: {},
+    gc_struct_types: {},
+    gc_struct_fields: {},
   }
 }
 
@@ -395,6 +408,46 @@ fn ts_type_to_valtype(t : @ast.TsType) -> @core.ValType {
 }
 
 ///|
+/// @ast.TsType → ValType for wasm-gc mode
+/// Uses ref types for arrays and structs
+fn ts_type_to_valtype_gc(
+  t : @ast.TsType,
+  gc_array_types : Map[String, UInt],
+  gc_struct_types : Map[String, UInt],
+) -> @core.ValType {
+  match t {
+    @ast.TsType::Number => F64
+    @ast.TsType::Int => I32
+    @ast.TsType::Boolean => I32
+    @ast.TsType::String_ => I32 // string (still i32 pointer for now)
+    @ast.TsType::Array(elem_type) => {
+      // Get GC array type index based on element type
+      let type_key = if is_f64_type(elem_type) { "f64" } else { "i32" }
+      match gc_array_types.get(type_key) {
+        Some(type_idx) =>
+          @core.ValType::Ref(
+            @core.RefType::TypeIndex(type_idx.reinterpret_as_int()),
+            true, // nullable
+          )
+        None => I32 // fallback
+      }
+    }
+    @ast.TsType::Named(name) =>
+      // Struct reference
+      match gc_struct_types.get(name) {
+        Some(type_idx) =>
+          @core.ValType::Ref(
+            @core.RefType::TypeIndex(type_idx.reinterpret_as_int()),
+            true, // nullable
+          )
+        None => I32 // fallback for unknown types
+      }
+    @ast.TsType::Void => I32 // void
+    _ => F64 // f64
+  }
+}
+
+///|
 // / @ast.TsType f64 (Any も F64 として扱う)
 fn is_f64_type(t : @ast.TsType) -> Bool {
   match t {
@@ -436,8 +489,9 @@ fn codegen_unify_numeric(t1 : @ast.TsType, t2 : @ast.TsType) -> @ast.TsType {
 // / expressiontype
 fn infer_type(ctx : CodeGenCtx, expr : @ast.TsExpr) -> @ast.TsType {
   match expr {
+    // In TypeScript, all number literals are f64 (number type)
     @ast.TsExpr::NumberLit(_) => @ast.TsType::Number
-    @ast.TsExpr::IntLit(_) => @ast.TsType::Int
+    @ast.TsExpr::IntLit(_) => @ast.TsType::Number
     @ast.TsExpr::BigIntLit(_) => @ast.TsType::Any
     @ast.TsExpr::BoolLit(_) => @ast.TsType::Boolean
     @ast.TsExpr::StringLit(_) => @ast.TsType::String_
@@ -654,6 +708,19 @@ fn field_type(
   None
 }
 
+///|
+/// Get field type from interface map by type name and field name
+fn field_type_from_interface(
+  interfaces : Map[String, Array[(String, @ast.TsType)]],
+  type_name : String,
+  field_name : String,
+) -> @ast.TsType? {
+  match interfaces.get(type_name) {
+    Some(fields) => field_type(fields, field_name)
+    None => None
+  }
+}
+
 // ============================================
 // expressioncodegen
 // ============================================
@@ -743,13 +810,12 @@ fn compile_expr(
     @ast.TsExpr::Var(name) =>
       // Constant propagation: emit constant directly if known
       match ctx.const_values.get(name) {
-        Some(@analysis.ConstValue::Int(n)) => {
+        Some(@analysis.ConstValue::Int(n)) =>
           if is_f64_type(expected_type) {
             ctx.emit(F64Const(n.to_double()))
           } else {
             ctx.emit(I32Const(n.reinterpret_as_uint()))
           }
-        }
         Some(@analysis.ConstValue::Number(f)) => ctx.emit(F64Const(f))
         Some(@analysis.ConstValue::Boolean(b)) =>
           ctx.emit(I32Const(if b { 1U } else { 0U }))
@@ -757,8 +823,8 @@ fn compile_expr(
           let offset = ctx.string_pool.add(s)
           ctx.emit(I32Const(offset.reinterpret_as_uint()))
         }
-        Some(@analysis.ConstValue::Null) | Some(@analysis.ConstValue::Undefined) =>
-          ctx.emit(I32Const(0U)) // null/undefined as 0
+        Some(@analysis.ConstValue::Null)
+        | Some(@analysis.ConstValue::Undefined) => ctx.emit(I32Const(0U)) // null/undefined as 0
         Some(@analysis.ConstValue::NotConst) | None =>
           match ctx.get_local(name) {
             Some(local_var) => ctx.emit(LocalGet(local_var.index))
@@ -814,13 +880,16 @@ fn compile_expr(
     @ast.TsExpr::Cond(cond, then_expr, else_expr) => {
       // Try constant folding on condition
       match @analysis.eval_const(cond) {
-        @analysis.ConstValue::Boolean(true) | @analysis.ConstValue::Int(_)
-        | @analysis.ConstValue::Number(_) | @analysis.ConstValue::String_(_) => {
+        @analysis.ConstValue::Boolean(true)
+        | @analysis.ConstValue::Int(_)
+        | @analysis.ConstValue::Number(_)
+        | @analysis.ConstValue::String_(_) => {
           // Truthy - only compile then branch
           compile_expr(ctx, then_expr, expected_type)
           return
         }
-        @analysis.ConstValue::Boolean(false) | @analysis.ConstValue::Null
+        @analysis.ConstValue::Boolean(false)
+        | @analysis.ConstValue::Null
         | @analysis.ConstValue::Undefined => {
           // Falsy - only compile else branch
           compile_expr(ctx, else_expr, expected_type)
@@ -842,6 +911,10 @@ fn compile_expr(
         string_pool: ctx.string_pool,
         builtins_used: ctx.builtins_used,
         const_values: ctx.const_values,
+        use_gc: ctx.use_gc,
+        gc_array_types: ctx.gc_array_types,
+        gc_struct_types: ctx.gc_struct_types,
+        gc_struct_fields: ctx.gc_struct_fields,
       }
       compile_expr(then_ctx, then_expr, expected_type)
       let else_ctx : CodeGenCtx = {
@@ -856,6 +929,10 @@ fn compile_expr(
         string_pool: ctx.string_pool,
         builtins_used: ctx.builtins_used,
         const_values: ctx.const_values,
+        use_gc: ctx.use_gc,
+        gc_array_types: ctx.gc_array_types,
+        gc_struct_types: ctx.gc_struct_types,
+        gc_struct_fields: ctx.gc_struct_fields,
       }
       compile_expr(else_ctx, else_expr, expected_type)
       let result_type = ts_type_to_valtype(expected_type)
@@ -922,8 +999,37 @@ fn compile_array_lit(
     @ast.TsType::Array(t) => t
     _ => @ast.TsType::Number
   }
-  let elem_sz = element_size(elem_type)
   let length = elements.length()
+
+  // wasm-gc mode: use ArrayNewFixed
+  if ctx.use_gc {
+    // Check for spread elements
+    for elem in elements {
+      match elem {
+        @ast.TsExpr::Spread(_) =>
+          raise CodeGenError(
+            "Spread is not supported in Wasm compiler (use interpreter)",
+          )
+        _ => ()
+      }
+    }
+    // Push all elements onto stack
+    for elem in elements {
+      compile_expr(ctx, elem, elem_type)
+    }
+    // Get array type index for this element type
+    let type_key = if is_f64_type(elem_type) { "f64" } else { "i32" }
+    match ctx.gc_array_types.get(type_key) {
+      Some(type_idx) =>
+        ctx.emit(ArrayNewFixed(type_idx, length.reinterpret_as_uint()))
+      None =>
+        raise CodeGenError("wasm-gc array type not defined for: \{type_key}")
+    }
+    return
+  }
+
+  // Linear memory mode (original implementation)
+  let elem_sz = element_size(elem_type)
 
   // : 4 (length) + length * elem_size
   // variable 0 =
@@ -972,6 +1078,21 @@ fn compile_index_access(
     @ast.TsType::Array(t) => t
     _ => expected_type
   }
+
+  // wasm-gc mode: use ArrayGet
+  if ctx.use_gc {
+    compile_expr(ctx, arr, arr_type) // array reference
+    compile_expr(ctx, index, @ast.TsType::Int) // index
+    let type_key = if is_f64_type(elem_type) { "f64" } else { "i32" }
+    match ctx.gc_array_types.get(type_key) {
+      Some(type_idx) => ctx.emit(ArrayGet(type_idx))
+      None =>
+        raise CodeGenError("wasm-gc array type not defined for: \{type_key}")
+    }
+    return
+  }
+
+  // Linear memory mode (original implementation)
   let elem_sz = element_size(elem_type)
 
   // compute: arr + 4 + index * elem_size
@@ -1004,7 +1125,12 @@ fn compile_prop_access(
     @ast.TsType::Array(_) =>
       if prop == "length" {
         compile_expr(ctx, obj, obj_type)
-        ctx.emit(I32Load(2U, 0U, 0U)) // 4 = length
+        // wasm-gc mode: use ArrayLen
+        if ctx.use_gc {
+          ctx.emit(ArrayLen)
+        } else {
+          ctx.emit(I32Load(2U, 0U, 0U)) // 4 = length
+        }
         return
       }
     @ast.TsType::String_ =>
@@ -1014,25 +1140,45 @@ fn compile_prop_access(
         return
       }
     @ast.TsType::Named(type_name) =>
-      // structfield
-      match ctx.interfaces.get(type_name) {
-        Some(fields) =>
-          match field_offset(fields, prop) {
-            Some(offset) => {
-              compile_expr(ctx, obj, obj_type) // struct
-              ctx.emit(I32Const(offset.reinterpret_as_uint()))
-              ctx.emit(I32Add)
-              // fieldtype
-              match field_type(fields, prop) {
-                Some(@ast.TsType::Number) => ctx.emit(F64Load(3U, 0U, 0U))
-                Some(_) => ctx.emit(I32Load(2U, 0U, 0U))
-                None => raise CodeGenError("Field not found: \{prop}")
-              }
-              return
+      // wasm-gc mode: use StructGet
+      if ctx.use_gc {
+        match ctx.gc_struct_types.get(type_name) {
+          Some(type_idx) =>
+            match ctx.gc_struct_fields.get(type_name) {
+              Some(field_map) =>
+                match field_map.get(prop) {
+                  Some(field_idx) => {
+                    compile_expr(ctx, obj, obj_type) // struct reference
+                    ctx.emit(StructGet(type_idx, field_idx))
+                    return
+                  }
+                  None => ()
+                }
+              None => ()
             }
-            None => ()
-          }
-        None => ()
+          None => ()
+        }
+      } else {
+        // Linear memory mode
+        match ctx.interfaces.get(type_name) {
+          Some(fields) =>
+            match field_offset(fields, prop) {
+              Some(offset) => {
+                compile_expr(ctx, obj, obj_type) // struct
+                ctx.emit(I32Const(offset.reinterpret_as_uint()))
+                ctx.emit(I32Add)
+                // fieldtype
+                match field_type(fields, prop) {
+                  Some(@ast.TsType::Number) => ctx.emit(F64Load(3U, 0U, 0U))
+                  Some(_) => ctx.emit(I32Load(2U, 0U, 0U))
+                  None => raise CodeGenError("Field not found: \{prop}")
+                }
+                return
+              }
+              None => ()
+            }
+          None => ()
+        }
       }
     _ => ()
   }
@@ -1053,10 +1199,28 @@ fn compile_new_expr(
       @ast.TsType::Array(t) => t
       _ => @ast.TsType::Number
     }
-    let elem_sz = element_size(elem_type)
     if args.length() < 1 {
       raise CodeGenError("Array constructor requires size argument")
     }
+
+    // wasm-gc mode: use ArrayNewDefault
+    if ctx.use_gc {
+      // Get the GC array type index
+      let type_key = if is_f64_type(elem_type) { "f64" } else { "i32" }
+      match ctx.gc_array_types.get(type_key) {
+        Some(type_idx) => {
+          // Compile size expression
+          compile_expr(ctx, args[0], @ast.TsType::Int)
+          // ArrayNewDefault creates an array with default values
+          ctx.emit(ArrayNewDefault(type_idx))
+        }
+        None => raise CodeGenError("Unknown gc array type: \{type_key}")
+      }
+      return
+    }
+
+    // Linear memory mode
+    let elem_sz = element_size(elem_type)
 
     // get
     compile_expr(ctx, args[0], @ast.TsType::Int)
@@ -1082,6 +1246,15 @@ fn compile_new_expr(
     ctx.emit(GlobalSet(0U))
   } else {
     // struct new
+    // wasm-gc mode: use StructNewDefault
+    if ctx.use_gc {
+      match ctx.gc_struct_types.get(type_name) {
+        Some(type_idx) => ctx.emit(StructNewDefault(type_idx))
+        None => raise CodeGenError("Unknown gc struct type: \{type_name}")
+      }
+      return
+    }
+    // Linear memory mode
     match ctx.interfaces.get(type_name) {
       Some(fields) => {
         let size = struct_size(fields)
@@ -1107,6 +1280,14 @@ fn compile_method_call(
   args : Array[@ast.TsExpr],
   _expected_type : @ast.TsType,
 ) -> Unit raise CodeGenError {
+  // Check for Math object methods first
+  match receiver {
+    @ast.TsExpr::Var("Math") => {
+      compile_math_method(ctx, method_name, args)
+      return
+    }
+    _ => ()
+  }
   let recv_type = infer_type(ctx, receiver)
   match recv_type {
     @ast.TsType::String_ =>
@@ -1115,6 +1296,196 @@ fn compile_method_call(
       compile_array_method(ctx, receiver, method_name, args, recv_type)
     _ => raise CodeGenError("Cannot call method on type: \{recv_type}")
   }
+}
+
+///|
+/// Math object methods - mapped to wasm instructions
+fn compile_math_method(
+  ctx : CodeGenCtx,
+  method_name : String,
+  args : Array[@ast.TsExpr],
+) -> Unit raise CodeGenError {
+  match method_name {
+    // Single argument functions
+    "abs" => {
+      if args.length() < 1 {
+        raise CodeGenError("Math.abs requires 1 argument")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      ctx.emit(F64Abs)
+    }
+    "sqrt" => {
+      if args.length() < 1 {
+        raise CodeGenError("Math.sqrt requires 1 argument")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      ctx.emit(F64Sqrt)
+    }
+    "floor" => {
+      if args.length() < 1 {
+        raise CodeGenError("Math.floor requires 1 argument")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      ctx.emit(F64Floor)
+    }
+    "ceil" => {
+      if args.length() < 1 {
+        raise CodeGenError("Math.ceil requires 1 argument")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      ctx.emit(F64Ceil)
+    }
+    "trunc" => {
+      if args.length() < 1 {
+        raise CodeGenError("Math.trunc requires 1 argument")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      ctx.emit(F64Trunc)
+    }
+    "round" => {
+      if args.length() < 1 {
+        raise CodeGenError("Math.round requires 1 argument")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      ctx.emit(F64Nearest)
+    }
+    // Two argument functions
+    "min" => {
+      if args.length() < 2 {
+        raise CodeGenError("Math.min requires 2 arguments")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      compile_expr(ctx, args[1], @ast.TsType::Number)
+      ctx.emit(F64Min)
+    }
+    "max" => {
+      if args.length() < 2 {
+        raise CodeGenError("Math.max requires 2 arguments")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      compile_expr(ctx, args[1], @ast.TsType::Number)
+      ctx.emit(F64Max)
+    }
+    "pow" => {
+      // Math.pow(base, exp) - special case for integer exponents
+      if args.length() < 2 {
+        raise CodeGenError("Math.pow requires 2 arguments")
+      }
+      // Check if exponent is a constant integer for optimization
+      match args[1] {
+        @ast.TsExpr::NumberLit(n) => {
+          let exp_int = n.to_int()
+          if n == exp_int.to_double() && exp_int >= 0 && exp_int <= 10 {
+            // Small integer exponent - unroll multiplication
+            compile_expr(ctx, args[0], @ast.TsType::Number)
+            if exp_int == 0 {
+              ctx.emit(Drop)
+              ctx.emit(F64Const(1.0))
+            } else if exp_int == 1 {
+              // base^1 = base, already on stack
+              ()
+            } else {
+              // base^n = base * base * ... (n times)
+              let base_local = ctx.add_local(
+                "__pow_base__",
+                @ast.TsType::Number,
+              )
+              ctx.emit(LocalTee(base_local))
+              for _ in 1..<exp_int {
+                ctx.emit(LocalGet(base_local))
+                ctx.emit(F64Mul)
+              }
+            }
+            return
+          }
+        }
+        _ => ()
+      }
+      // General case: use loop-based power
+      compile_pow_general(ctx, args[0], args[1])
+    }
+    "sign" => {
+      // Math.sign(x) - returns -1, 0, or 1
+      if args.length() < 1 {
+        raise CodeGenError("Math.sign requires 1 argument")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      let x_local = ctx.add_local("__sign_x__", @ast.TsType::Number)
+      ctx.emit(LocalTee(x_local))
+      // if x > 0: 1, else if x < 0: -1, else: 0
+      ctx.emit(F64Const(0.0))
+      ctx.emit(F64Gt)
+      ctx.emit(
+        If(@core.BlockType::Value(F64), [F64Const(1.0)], [
+          LocalGet(x_local),
+          F64Const(0.0),
+          F64Lt,
+          If(@core.BlockType::Value(F64), [F64Const(-1.0)], [F64Const(0.0)]),
+        ]),
+      )
+    }
+    "fround" => {
+      // Math.fround(x) - round to 32-bit float
+      if args.length() < 1 {
+        raise CodeGenError("Math.fround requires 1 argument")
+      }
+      compile_expr(ctx, args[0], @ast.TsType::Number)
+      ctx.emit(F32DemoteF64)
+      ctx.emit(F64PromoteF32)
+    }
+    _ =>
+      raise CodeGenError(
+        "Math.\{method_name} is not supported in Wasm compiler",
+      )
+  }
+}
+
+///|
+/// General power function using loop
+fn compile_pow_general(
+  ctx : CodeGenCtx,
+  base : @ast.TsExpr,
+  exp : @ast.TsExpr,
+) -> Unit raise CodeGenError {
+  // result = 1, while (exp > 0) { result *= base; exp--; }
+  compile_expr(ctx, base, @ast.TsType::Number)
+  let base_local = ctx.add_local("__pow_base__", @ast.TsType::Number)
+  ctx.emit(LocalSet(base_local))
+  compile_expr(ctx, exp, @ast.TsType::Number)
+  ctx.emit(F64Floor) // Ensure integer exponent
+  ctx.emit(I32TruncF64S)
+  let exp_local = ctx.add_local("__pow_exp__", @ast.TsType::Int)
+  ctx.emit(LocalSet(exp_local))
+  ctx.emit(F64Const(1.0))
+  let result_local = ctx.add_local("__pow_result__", @ast.TsType::Number)
+  ctx.emit(LocalSet(result_local))
+
+  // Loop: while exp > 0
+  let loop_body : Array[@core.Instr] = [
+    LocalGet(exp_local),
+    I32Const(0U),
+    I32GtS,
+    If(
+      @core.BlockType::Empty,
+      [
+        // result *= base
+        LocalGet(result_local),
+        LocalGet(base_local),
+        F64Mul,
+        LocalSet(result_local),
+        // exp--
+        LocalGet(exp_local),
+        I32Const(1U),
+        I32Sub,
+        LocalSet(exp_local),
+        // continue loop
+        Br(1U),
+      ],
+      [],
+    ),
+  ]
+  ctx.emit(Loop(@core.BlockType::Empty, loop_body))
+  ctx.emit(LocalGet(result_local))
 }
 
 ///|
@@ -1497,37 +1868,68 @@ fn compile_prop_assign_expr(
   let obj_type = infer_type(ctx, obj)
   match obj_type {
     @ast.TsType::Named(type_name) =>
-      match ctx.interfaces.get(type_name) {
-        Some(fields) =>
-          match field_offset(fields, prop) {
-            Some(offset) =>
-              match field_type(fields, prop) {
-                Some(ft) => {
-                  let obj_local = ctx.add_temp_local(@ast.TsType::Int)
-                  let val_local = ctx.add_temp_local(ft)
-                  // obj
-                  compile_expr(ctx, obj, obj_type)
-                  ctx.emit(LocalSet(obj_local))
-                  // value
-                  compile_expr(ctx, value, ft)
-                  ctx.emit(LocalSet(val_local))
-                  ctx.emit(LocalGet(obj_local))
-                  ctx.emit(I32Const(offset.reinterpret_as_uint()))
-                  ctx.emit(I32Add)
-                  ctx.emit(LocalGet(val_local))
-                  if is_f64_type(ft) {
-                    ctx.emit(F64Store(3U, 0U, 0U))
-                  } else {
-                    ctx.emit(I32Store(2U, 0U, 0U))
-                  }
-                  ctx.emit(LocalGet(val_local))
-                  return
+      // wasm-gc mode: use StructSet
+      if ctx.use_gc {
+        match ctx.gc_struct_types.get(type_name) {
+          Some(type_idx) =>
+            match ctx.gc_struct_fields.get(type_name) {
+              Some(field_map) =>
+                match field_map.get(prop) {
+                  Some(field_idx) =>
+                    match
+                      field_type_from_interface(ctx.interfaces, type_name, prop) {
+                      Some(ft) => {
+                        let val_local = ctx.add_temp_local(ft)
+                        // Stack: structref, value
+                        compile_expr(ctx, obj, obj_type) // struct reference
+                        compile_expr(ctx, value, ft)
+                        ctx.emit(LocalTee(val_local)) // Save value for return
+                        ctx.emit(StructSet(type_idx, field_idx))
+                        ctx.emit(LocalGet(val_local)) // Return assigned value
+                        return
+                      }
+                      None => ()
+                    }
+                  None => ()
                 }
-                None => ()
-              }
-            None => ()
-          }
-        None => ()
+              None => ()
+            }
+          None => ()
+        }
+      } else {
+        // Linear memory mode
+        match ctx.interfaces.get(type_name) {
+          Some(fields) =>
+            match field_offset(fields, prop) {
+              Some(offset) =>
+                match field_type(fields, prop) {
+                  Some(ft) => {
+                    let obj_local = ctx.add_temp_local(@ast.TsType::Int)
+                    let val_local = ctx.add_temp_local(ft)
+                    // obj
+                    compile_expr(ctx, obj, obj_type)
+                    ctx.emit(LocalSet(obj_local))
+                    // value
+                    compile_expr(ctx, value, ft)
+                    ctx.emit(LocalSet(val_local))
+                    ctx.emit(LocalGet(obj_local))
+                    ctx.emit(I32Const(offset.reinterpret_as_uint()))
+                    ctx.emit(I32Add)
+                    ctx.emit(LocalGet(val_local))
+                    if is_f64_type(ft) {
+                      ctx.emit(F64Store(3U, 0U, 0U))
+                    } else {
+                      ctx.emit(I32Store(2U, 0U, 0U))
+                    }
+                    ctx.emit(LocalGet(val_local))
+                    return
+                  }
+                  None => ()
+                }
+              None => ()
+            }
+          None => ()
+        }
       }
     _ => ()
   }
@@ -1578,6 +1980,26 @@ fn compile_index_assign_expr(
     @ast.TsType::Array(t) => t
     _ => @ast.TsType::Number
   }
+
+  // wasm-gc mode: use ArraySet
+  if ctx.use_gc {
+    let val_local = ctx.add_temp_local(elem_type)
+    // Stack order for ArraySet: arrayref, index, value
+    compile_expr(ctx, arr, arr_type)
+    compile_expr(ctx, index, @ast.TsType::Int)
+    compile_expr(ctx, value, elem_type)
+    ctx.emit(LocalTee(val_local)) // Save value for return
+    let type_key = if is_f64_type(elem_type) { "f64" } else { "i32" }
+    match ctx.gc_array_types.get(type_key) {
+      Some(type_idx) => ctx.emit(ArraySet(type_idx))
+      None =>
+        raise CodeGenError("wasm-gc array type not defined for: \{type_key}")
+    }
+    ctx.emit(LocalGet(val_local)) // Return the assigned value
+    return
+  }
+
+  // Linear memory mode
   let elem_sz = element_size(elem_type)
   let arr_local = ctx.add_temp_local(@ast.TsType::Int)
   let idx_local = ctx.add_temp_local(@ast.TsType::Int)
@@ -1848,12 +2270,15 @@ fn compile_binop(
         string_pool: ctx.string_pool,
         builtins_used: ctx.builtins_used,
         const_values: ctx.const_values,
+        use_gc: ctx.use_gc,
+        gc_array_types: ctx.gc_array_types,
+        gc_struct_types: ctx.gc_struct_types,
+        gc_struct_fields: ctx.gc_struct_fields,
       }
       compile_expr(then_ctx, right, @ast.TsType::Int)
 
       // Else branch: left was not null-ish, return left from temp
       let else_instrs : Array[@core.Instr] = [LocalGet(temp)]
-
       ctx.emit(If(Value(I32), then_ctx.instrs, else_instrs))
       return
     }
@@ -2335,15 +2760,18 @@ fn compile_if(
 ) -> Unit raise CodeGenError {
   // Try constant folding on condition - eliminate dead branches
   match @analysis.eval_const(cond) {
-    @analysis.ConstValue::Boolean(true) | @analysis.ConstValue::Int(_)
-    | @analysis.ConstValue::Number(_) | @analysis.ConstValue::String_(_) => {
+    @analysis.ConstValue::Boolean(true)
+    | @analysis.ConstValue::Int(_)
+    | @analysis.ConstValue::Number(_)
+    | @analysis.ConstValue::String_(_) => {
       // Condition is truthy - only compile then branch
       for stmt in then_block.stmts {
         compile_stmt(ctx, stmt, return_type)
       }
       return
     }
-    @analysis.ConstValue::Boolean(false) | @analysis.ConstValue::Null
+    @analysis.ConstValue::Boolean(false)
+    | @analysis.ConstValue::Null
     | @analysis.ConstValue::Undefined => {
       // Condition is falsy - only compile else branch
       match else_block {
@@ -2377,16 +2805,15 @@ fn compile_while(
 ) -> Unit raise CodeGenError {
   // Try constant folding on condition
   match @analysis.eval_const(cond) {
-    @analysis.ConstValue::Boolean(false) | @analysis.ConstValue::Null
-    | @analysis.ConstValue::Undefined => {
+    @analysis.ConstValue::Boolean(false)
+    | @analysis.ConstValue::Null
+    | @analysis.ConstValue::Undefined =>
       // Condition is always false - skip the entire loop
       return
-    }
     // Note: We don't optimize `while(true)` to avoid generating infinite loops
     // that would hang the Wasm runtime
     _ => ()
   }
-
   ctx.loop_depth += 1
 
   // Block(Loop([cond, BrIf(1), ...body, Br(0)]))
@@ -2405,6 +2832,10 @@ fn compile_while(
     string_pool: ctx.string_pool,
     builtins_used: ctx.builtins_used,
     const_values: ctx.const_values,
+    use_gc: ctx.use_gc,
+    gc_array_types: ctx.gc_array_types,
+    gc_struct_types: ctx.gc_struct_types,
+    gc_struct_fields: ctx.gc_struct_fields,
   }
   compile_expr(cond_ctx, cond, @ast.TsType::Boolean)
   for instr in cond_ctx.instrs {
@@ -2455,13 +2886,16 @@ fn compile_do_while(
     string_pool: ctx.string_pool,
     builtins_used: ctx.builtins_used,
     const_values: ctx.const_values,
+    use_gc: ctx.use_gc,
+    gc_array_types: ctx.gc_array_types,
+    gc_struct_types: ctx.gc_struct_types,
+    gc_struct_fields: ctx.gc_struct_fields,
   }
   compile_expr(cond_ctx, cond, @ast.TsType::Boolean)
   for instr in cond_ctx.instrs {
     loop_instrs.push(instr)
   }
   loop_instrs.push(BrIf(0U)) // if cond is true, jump back to loop start
-
   ctx.emit(Block(Empty, [Loop(Empty, loop_instrs)]))
   ctx.loop_depth -= 1
 }
@@ -2499,6 +2933,10 @@ fn compile_for(
         string_pool: ctx.string_pool,
         builtins_used: ctx.builtins_used,
         const_values: ctx.const_values,
+        use_gc: ctx.use_gc,
+        gc_array_types: ctx.gc_array_types,
+        gc_struct_types: ctx.gc_struct_types,
+        gc_struct_fields: ctx.gc_struct_fields,
       }
       compile_expr(cond_ctx, c, @ast.TsType::Boolean)
       for instr in cond_ctx.instrs {
@@ -2531,6 +2969,10 @@ fn compile_for(
         string_pool: ctx.string_pool,
         builtins_used: ctx.builtins_used,
         const_values: ctx.const_values,
+        use_gc: ctx.use_gc,
+        gc_array_types: ctx.gc_array_types,
+        gc_struct_types: ctx.gc_struct_types,
+        gc_struct_fields: ctx.gc_struct_fields,
       }
       compile_stmt(update_ctx, stmt, return_type)
       for instr in update_ctx.instrs {
@@ -2662,13 +3104,7 @@ fn compile_switch(
   // Use block/br structure for break support
   ctx.loop_depth += 1
   let switch_instrs = compile_switch_cases(
-    ctx,
-    disc_local,
-    disc_type,
-    cases,
-    0,
-    default_idx,
-    return_type,
+    ctx, disc_local, disc_type, cases, 0, default_idx, return_type,
   )
   ctx.emit(Block(Empty, switch_instrs))
   ctx.loop_depth -= 1
@@ -2699,7 +3135,13 @@ fn compile_switch_cases(
       None =>
         // Default case - skip here, will be handled at the end
         compile_switch_cases(
-          ctx, disc_local, disc_type, cases, idx + 1, default_idx, return_type,
+          ctx,
+          disc_local,
+          disc_type,
+          cases,
+          idx + 1,
+          default_idx,
+          return_type,
         )
       Some(test_expr) => {
         // Compile comparison: disc == test_expr
@@ -2715,6 +3157,10 @@ fn compile_switch_cases(
           string_pool: ctx.string_pool,
           builtins_used: ctx.builtins_used,
           const_values: ctx.const_values,
+          use_gc: ctx.use_gc,
+          gc_array_types: ctx.gc_array_types,
+          gc_struct_types: ctx.gc_struct_types,
+          gc_struct_fields: ctx.gc_struct_fields,
         }
         cond_ctx.emit(LocalGet(disc_local))
         compile_expr(cond_ctx, test_expr, disc_type)
@@ -2729,7 +3175,13 @@ fn compile_switch_cases(
 
         // Compile else branch (remaining cases)
         let else_instrs = compile_switch_cases(
-          ctx, disc_local, disc_type, cases, idx + 1, default_idx, return_type,
+          ctx,
+          disc_local,
+          disc_type,
+          cases,
+          idx + 1,
+          default_idx,
+          return_type,
         )
 
         // Build if-then-else
@@ -2764,6 +3216,10 @@ fn compile_block_to_instrs(
     string_pool: ctx.string_pool,
     builtins_used: ctx.builtins_used,
     const_values: ctx.const_values,
+    use_gc: ctx.use_gc,
+    gc_array_types: ctx.gc_array_types,
+    gc_struct_types: ctx.gc_struct_types,
+    gc_struct_fields: ctx.gc_struct_fields,
   }
   for stmt in block.stmts {
     compile_stmt(sub_ctx, stmt, return_type)
@@ -2975,6 +3431,328 @@ pub fn compile_module(
 }
 
 ///|
+/// Compile module using wasm-gc types instead of linear memory.
+/// Arrays are represented as GC arrays, no linear memory allocation.
+pub fn compile_module_gc(
+  module_ : @ast.TsModule,
+) -> @core.Module raise CodeGenError {
+  // Import count
+  let num_imports = module_.imports.length().reinterpret_as_uint()
+
+  // Function map
+  let func_map : Map[String, UInt] = {}
+  for i, imp in module_.imports {
+    func_map[imp.name] = i.reinterpret_as_uint()
+  }
+  for i, func in module_.funcs {
+    func_map[func.name] = i.reinterpret_as_uint() + num_imports
+  }
+
+  // Interface map
+  let interface_map : Map[String, Array[(String, @ast.TsType)]] = {}
+  for iface in module_.interfaces {
+    interface_map[iface.name] = iface.fields
+  }
+
+  // Import types
+  let import_types : Map[String, (Array[@ast.TsType], @ast.TsType)] = {}
+  for imp in module_.imports {
+    let param_types : Array[@ast.TsType] = []
+    for param in imp.params {
+      param_types.push(param.1)
+    }
+    import_types[imp.name] = (param_types, imp.return_type)
+  }
+
+  // String pool (still needed for string literals)
+  let string_pool = StringPool::new()
+
+  // Type definitions
+  let types : Array[@core.TypeDef] = []
+
+  // Add GC array types first
+  // Type 0: (array i32) - for i32 arrays
+  types.push(
+    @core.TypeDef::Array({
+      element: { storage: @core.StorageType::Val(I32), mutable: true },
+    }),
+  )
+  // Type 1: (array f64) - for f64 arrays
+  types.push(
+    @core.TypeDef::Array({
+      element: { storage: @core.StorageType::Val(F64), mutable: true },
+    }),
+  )
+
+  // GC array type indices map
+  let gc_array_types : Map[String, UInt] = {}
+  gc_array_types["i32"] = 0U
+  gc_array_types["f64"] = 1U
+
+  // Add GC struct types for each interface
+  let gc_struct_types : Map[String, UInt] = {}
+  let gc_struct_fields : Map[String, Map[String, UInt]] = {}
+  let mut next_type_idx = 2U // First 2 types are GC array types
+  for iface in module_.interfaces {
+    let fields : Array[@core.FieldType] = []
+    let field_map : Map[String, UInt] = {}
+    for i, field_tuple in iface.fields {
+      let (_, field_type) = field_tuple
+      let storage = if is_f64_type(field_type) {
+        @core.StorageType::Val(F64)
+      } else {
+        @core.StorageType::Val(I32)
+      }
+      fields.push({ storage, mutable: true })
+      field_map[field_tuple.0] = i.reinterpret_as_uint()
+    }
+    types.push(@core.TypeDef::Struct({ fields, }))
+    gc_struct_types[iface.name] = next_type_idx
+    gc_struct_fields[iface.name] = field_map
+    next_type_idx += 1
+  }
+
+  // Add generator state struct types
+  let generator_struct_types : Map[String, UInt] = {}
+  for func in module_.funcs {
+    if func.is_generator {
+      // Analyze to get field count
+      let analysis = @analysis.analyze_generator(func)
+      if analysis.compilable {
+        // Create struct fields: state (i32), done (i32), params... (f64), locals... (f64)
+        let gen_fields : Array[@core.FieldType] = []
+        gen_fields.push({
+          storage: @core.StorageType::Val(@core.ValType::I32),
+          mutable: true,
+        })
+        gen_fields.push({
+          storage: @core.StorageType::Val(@core.ValType::I32),
+          mutable: true,
+        })
+        for _ in func.params {
+          gen_fields.push({
+            storage: @core.StorageType::Val(@core.ValType::F64),
+            mutable: true,
+          })
+        }
+        for v in analysis.persisted_vars {
+          if not(v.is_param) {
+            gen_fields.push({
+              storage: @core.StorageType::Val(@core.ValType::F64),
+              mutable: true,
+            })
+          }
+        }
+        types.push(@core.TypeDef::Struct({ fields: gen_fields }))
+        generator_struct_types[func.name] = next_type_idx
+        next_type_idx += 1
+      }
+    }
+  }
+  let gc_type_offset = next_type_idx
+
+  // Add import function types
+  for imp in module_.imports {
+    let params : Array[@core.ValType] = []
+    for param in imp.params {
+      params.push(ts_type_to_valtype(param.1))
+    }
+    let results : Array[@core.ValType] = match imp.return_type {
+      @ast.TsType::Void => []
+      t => [ts_type_to_valtype(t)]
+    }
+    types.push(@core.TypeDef::Func({ params, results }))
+  }
+
+  // Compile functions with GC mode
+  let codes : Array[@core.Code] = []
+  let funcs : Array[UInt] = []
+  let exports : Array[@core.Export] = []
+  let builtins_used : Map[String, Bool] = {}
+  let mut func_idx_counter = 0U
+  for func in module_.funcs {
+    // Check if this is a compilable generator
+    match generator_struct_types.get(func.name) {
+      Some(struct_type_idx) => {
+        // Compile generator: produces create() and next() functions
+        let gen_code = compile_generator_func(func, struct_type_idx)
+        match gen_code {
+          Some(gc) => {
+            // Add create function
+            types.push(gc.create_func_type)
+            codes.push(gc.create_func_code)
+            let create_func_idx = func_idx_counter + num_imports
+            funcs.push(create_func_idx + gc_type_offset)
+            let create_name = string_to_bytes(func.name + "_create")
+            exports.push({
+              name: create_name,
+              desc: @core.ExportDesc::Func(create_func_idx),
+            })
+            func_idx_counter += 1
+
+            // Add next function
+            types.push(gc.next_func_type)
+            codes.push(gc.next_func_code)
+            let next_func_idx = func_idx_counter + num_imports
+            funcs.push(next_func_idx + gc_type_offset)
+            let next_name = string_to_bytes(func.name + "_next")
+            exports.push({
+              name: next_name,
+              desc: @core.ExportDesc::Func(next_func_idx),
+            })
+            func_idx_counter += 1
+          }
+          None => {
+            // Fallback: compile as regular function (will fail at runtime for yield)
+            let (func_type, code) = compile_function_gc(
+              func, func_map, interface_map, import_types, string_pool, builtins_used,
+              gc_array_types, gc_struct_types, gc_struct_fields,
+            )
+            types.push(func_type)
+            codes.push(code)
+            let func_idx = func_idx_counter + num_imports
+            funcs.push(func_idx + gc_type_offset)
+            let name_bytes = string_to_bytes(func.name)
+            exports.push({
+              name: name_bytes,
+              desc: @core.ExportDesc::Func(func_idx),
+            })
+            func_idx_counter += 1
+          }
+        }
+      }
+      None => {
+        // Regular function
+        let (func_type, code) = compile_function_gc(
+          func, func_map, interface_map, import_types, string_pool, builtins_used,
+          gc_array_types, gc_struct_types, gc_struct_fields,
+        )
+        types.push(func_type)
+        codes.push(code)
+        let func_idx = func_idx_counter + num_imports
+        funcs.push(func_idx + gc_type_offset)
+        let name_bytes = string_to_bytes(func.name)
+        exports.push({
+          name: name_bytes,
+          desc: @core.ExportDesc::Func(func_idx),
+        })
+        func_idx_counter += 1
+      }
+    }
+  }
+
+  // Imports
+  let imports : Array[@core.Import] = []
+  for i, imp in module_.imports {
+    imports.push({
+      module_: string_to_bytes(imp.module_),
+      name: string_to_bytes(imp.name),
+      desc: @core.ImportDesc::Func(i.reinterpret_as_uint() + gc_type_offset),
+    })
+  }
+
+  // No linear memory for GC mode
+  let mems : Array[@core.MemType] = []
+  let globals : Array[@core.Global] = []
+  let datas : Array[@core.Data] = []
+
+  // Type metadata
+  let type_metadata = serialize_type_metadata(module_)
+  let customs : Array[@core.CustomSection] = [
+    { name: string_to_bytes("tstype"), data: type_metadata, placement: End },
+  ]
+  @core.Module::{
+    types,
+    type_groups: [],
+    customs,
+    funcs,
+    tables: [],
+    mems,
+    globals,
+    tags: [],
+    elems: [],
+    datas,
+    start: None,
+    imports,
+    exports,
+    codes,
+  }
+}
+
+///|
+/// Compile a function using wasm-gc mode
+fn compile_function_gc(
+  func : @ast.TsFunc,
+  func_map : Map[String, UInt],
+  interfaces : Map[String, Array[(String, @ast.TsType)]],
+  import_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
+  string_pool : StringPool,
+  builtins_used : Map[String, Bool],
+  gc_array_types : Map[String, UInt],
+  gc_struct_types : Map[String, UInt],
+  gc_struct_fields : Map[String, Map[String, UInt]],
+) -> (@core.TypeDef, @core.Code) raise CodeGenError {
+  let ctx : CodeGenCtx = {
+    locals: {},
+    local_types: [],
+    next_local: 0,
+    funcs: func_map,
+    interfaces,
+    import_types,
+    instrs: [],
+    loop_depth: 0,
+    string_pool,
+    builtins_used,
+    const_values: {},
+    use_gc: true,
+    gc_array_types,
+    gc_struct_types,
+    gc_struct_fields,
+  }
+
+  // Register parameters
+  for param in func.params {
+    ignore(ctx.add_local(param.name, param.type_))
+  }
+  let param_count = func.params.length().reinterpret_as_uint()
+
+  // Compile function body
+  for stmt in func.body.stmts {
+    compile_stmt(ctx, stmt, func.return_type)
+  }
+
+  // Build function type (use gc types for params and results)
+  let params : Array[@core.ValType] = []
+  for param in func.params {
+    params.push(
+      ts_type_to_valtype_gc(param.type_, gc_array_types, gc_struct_types),
+    )
+  }
+  let results : Array[@core.ValType] = match func.return_type {
+    @ast.TsType::Void => []
+    t => [ts_type_to_valtype_gc(t, gc_array_types, gc_struct_types)]
+  }
+  let func_type : @core.TypeDef = @core.TypeDef::Func({ params, results })
+
+  // Build locals (excluding parameters) - use gc types
+  let locals : Array[@core.ValType] = []
+  let mut i = param_count.reinterpret_as_int()
+  while i < ctx.next_local.reinterpret_as_int() {
+    locals.push(
+      ts_type_to_valtype_gc(ctx.local_types[i], gc_array_types, gc_struct_types),
+    )
+    i += 1
+  }
+  let code : @core.Code = {
+    locals,
+    body: @core.Expr::{ instrs: ctx.instrs },
+    compiled: None,
+    max_stack_height: 0,
+  }
+  (func_type, code)
+}
+
+///|
 /// Compile a typed function with pre-resolved local variable types.
 fn compile_typed_function(
   typed_func : @ast.TypedFunc,
@@ -2992,6 +3770,7 @@ fn compile_typed_function(
   // Register parameters
   for param in func.params {
     let _ = ctx.add_local(param.name, param.type_)
+
   }
 
   // Pre-register local variables with their inferred types
@@ -3004,10 +3783,10 @@ fn compile_typed_function(
         // Skip if already registered (e.g., shadowing or params)
         if ctx.get_local(name) is None {
           let _ = ctx.add_local(name, type_)
+
         }
     }
   }
-
   let param_count = func.params.length().reinterpret_as_uint()
 
   // Compile function body
@@ -3075,7 +3854,6 @@ pub fn compile_typed_module(
     }
     import_types[imp.name] = (param_types, imp.return_type)
   }
-
   let string_pool = StringPool::new()
 
   // Build type definitions for imports
@@ -3097,21 +3875,14 @@ pub fn compile_typed_module(
   let funcs : Array[UInt] = []
   let exports : Array[@core.Export] = []
   let builtins_used : Map[String, Bool] = {}
-
   for i, typed_func in typed_module.funcs {
     let (func_type, code) = compile_typed_function(
-      typed_func,
-      func_map,
-      interface_map,
-      import_types,
-      string_pool,
-      builtins_used,
+      typed_func, func_map, interface_map, import_types, string_pool, builtins_used,
     )
     types.push(func_type)
     codes.push(code)
     let func_idx = i.reinterpret_as_uint() + num_imports
     funcs.push(func_idx)
-
     let name_bytes = string_to_bytes(typed_func.func.name)
     exports.push({ name: name_bytes, desc: @core.ExportDesc::Func(func_idx) })
   }
@@ -3160,7 +3931,6 @@ pub fn compile_typed_module(
   let customs : Array[@core.CustomSection] = [
     { name: string_to_bytes("tstype"), data: type_metadata, placement: End },
   ]
-
   @core.Module::{
     types,
     type_groups: [],

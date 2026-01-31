@@ -17,12 +17,28 @@
       "path": "moonbitlang/typescript/parser",
       "alias": "parser"
     },
+    {
+      "path": "moonbitlang/typescript/codegen",
+      "alias": "codegen"
+    },
+    {
+      "path": "moonbitlang/wasm5/encode",
+      "alias": "encode"
+    },
+    {
+      "path": "moonbitlang/typescript/analysis",
+      "alias": "analysis"
+    }
   ],
   "test-import": [
     "moonbitlang/core/bench",
     {
       "path": "moonbitlang/typescript/parser",
       "alias": "parser"
+    },
+    {
+      "path": "moonbitlang/typescript/aot",
+      "alias": "aot"
     }
   ]
 }

@@ -575,7 +575,7 @@ test "perceus: nested scopes" {
     #|}
   let result = interp.run(src)
   match result {
-    JSValue::Array(arr) => {
+    JSValue::Array(arr) =>
       // All results should be numbers
       for item in arr.items {
         match item {
@@ -583,7 +583,6 @@ test "perceus: nested scopes" {
           _ => panic()
         }
       }
-    }
     _ => panic()
   }
 }

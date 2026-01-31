@@ -339,7 +339,11 @@ pub fn read_float32_be(buf : JSByteBuffer, offset : Int) -> Double {
 
 ///|
 /// Write Float32 to buffer at offset (little-endian)
-pub fn write_float32_le(buf : JSByteBuffer, offset : Int, value : Double) -> Unit {
+pub fn write_float32_le(
+  buf : JSByteBuffer,
+  offset : Int,
+  value : Double,
+) -> Unit {
   let f = Float::from_double(value)
   let bits = f.reinterpret_as_int()
   write_uint32_le(buf, offset, bits)
@@ -347,7 +351,11 @@ pub fn write_float32_le(buf : JSByteBuffer, offset : Int, value : Double) -> Uni
 
 ///|
 /// Write Float32 to buffer at offset (big-endian)
-pub fn write_float32_be(buf : JSByteBuffer, offset : Int, value : Double) -> Unit {
+pub fn write_float32_be(
+  buf : JSByteBuffer,
+  offset : Int,
+  value : Double,
+) -> Unit {
   let f = Float::from_double(value)
   let bits = f.reinterpret_as_int()
   write_uint32_be(buf, offset, bits)
@@ -373,7 +381,11 @@ pub fn read_float64_be(buf : JSByteBuffer, offset : Int) -> Double {
 
 ///|
 /// Write Float64 to buffer at offset (little-endian)
-pub fn write_float64_le(buf : JSByteBuffer, offset : Int, value : Double) -> Unit {
+pub fn write_float64_le(
+  buf : JSByteBuffer,
+  offset : Int,
+  value : Double,
+) -> Unit {
   let bits = value.reinterpret_as_int64()
   let lo = (bits & 0xFFFFFFFFL).to_int()
   let hi = (bits >> 32).to_int()
@@ -383,7 +395,11 @@ pub fn write_float64_le(buf : JSByteBuffer, offset : Int, value : Double) -> Uni
 
 ///|
 /// Write Float64 to buffer at offset (big-endian)
-pub fn write_float64_be(buf : JSByteBuffer, offset : Int, value : Double) -> Unit {
+pub fn write_float64_be(
+  buf : JSByteBuffer,
+  offset : Int,
+  value : Double,
+) -> Unit {
   let bits = value.reinterpret_as_int64()
   let lo = (bits & 0xFFFFFFFFL).to_int()
   let hi = (bits >> 32).to_int()
@@ -419,14 +435,16 @@ pub fn typedarray_get_element(data : TypedArrayData, index : Int) -> Double {
   let offset = data.byte_offset + index * data.kind.bytes_per_element()
   match data.kind {
     Int8Array => read_int8(data.buffer, offset).to_double()
-    Uint8Array | Uint8ClampedArray => read_uint8(data.buffer, offset).to_double()
+    Uint8Array | Uint8ClampedArray =>
+      read_uint8(data.buffer, offset).to_double()
     Int16Array => read_int16_le(data.buffer, offset).to_double()
     Uint16Array => read_uint16_le(data.buffer, offset).to_double()
     Int32Array => read_int32_le(data.buffer, offset).to_double()
     Uint32Array => read_uint32_le(data.buffer, offset).to_double()
     Float32Array => read_float32_le(data.buffer, offset)
     Float64Array => read_float64_le(data.buffer, offset)
-    BigInt64Array | BigUint64Array => read_int64_le(data.buffer, offset).to_double()
+    BigInt64Array | BigUint64Array =>
+      read_int64_le(data.buffer, offset).to_double()
   }
 }
 
@@ -457,21 +475,26 @@ pub fn typedarray_set_element(
 
 ///|
 /// Read element from TypedArray as JSValue (handles BigInt types)
-pub fn typedarray_get_element_jsvalue(data : TypedArrayData, index : Int) -> JSValue {
+pub fn typedarray_get_element_jsvalue(
+  data : TypedArrayData,
+  index : Int,
+) -> JSValue {
   if index < 0 || index >= data.length || data.buffer.detached {
     return Undefined
   }
   let offset = data.byte_offset + index * data.kind.bytes_per_element()
   match data.kind {
     Int8Array => Number(read_int8(data.buffer, offset).to_double())
-    Uint8Array | Uint8ClampedArray => Number(read_uint8(data.buffer, offset).to_double())
+    Uint8Array | Uint8ClampedArray =>
+      Number(read_uint8(data.buffer, offset).to_double())
     Int16Array => Number(read_int16_le(data.buffer, offset).to_double())
     Uint16Array => Number(read_uint16_le(data.buffer, offset).to_double())
     Int32Array => Number(read_int32_le(data.buffer, offset).to_double())
     Uint32Array => Number(read_uint32_le(data.buffer, offset).to_double())
     Float32Array => Number(read_float32_le(data.buffer, offset))
     Float64Array => Number(read_float64_le(data.buffer, offset))
-    BigInt64Array => BigInt(BigInt::from_int64(read_int64_le(data.buffer, offset)))
+    BigInt64Array =>
+      BigInt(BigInt::from_int64(read_int64_le(data.buffer, offset)))
     BigUint64Array => {
       // For unsigned 64-bit, we need to handle the sign bit properly
       let val = read_int64_le(data.buffer, offset)
@@ -499,7 +522,8 @@ pub fn typedarray_set_element_jsvalue(
       }
       write_uint8(data.buffer, offset, v)
     }
-    Uint8ClampedArray => write_uint8(data.buffer, offset, clamp_uint8(value.to_number()))
+    Uint8ClampedArray =>
+      write_uint8(data.buffer, offset, clamp_uint8(value.to_number()))
     Int16Array | Uint16Array => {
       let v = match value {
         BigInt(n) => n.to_int()
@@ -645,7 +669,7 @@ fn JSInterpreter::create_typedarray(
       }
       self.create_typedarray_from_length(kind, length, proto)
     }
-    Object(_) => {
+    Object(_) =>
       // Check if ArrayBuffer
       if is_arraybuffer(first_arg) {
         // new TypedArray(buffer, byteOffset?, length?)
@@ -677,14 +701,12 @@ fn JSInterpreter::create_typedarray(
               let len = args[2].to_number().to_int()
               if len < 0 {
                 return self.set_error_kind(
-                  "RangeError",
-                  "Invalid typed array length",
+                  "RangeError", "Invalid typed array length",
                 )
               }
               if byte_offset + len * bytes_per_element > buffer_byte_length {
                 return self.set_error_kind(
-                  "RangeError",
-                  "Invalid typed array length",
+                  "RangeError", "Invalid typed array length",
                 )
               }
               len
@@ -716,13 +738,16 @@ fn JSInterpreter::create_typedarray(
         // new TypedArray(arrayLike) or iterable
         self.create_typedarray_from_arraylike(kind, first_arg, proto)
       }
-    }
     Array(_) =>
       // new TypedArray(array)
       self.create_typedarray_from_arraylike(kind, first_arg, proto)
     _ =>
       // Treat as length
-      self.create_typedarray_from_length(kind, first_arg.to_number().to_int(), proto)
+      self.create_typedarray_from_length(
+        kind,
+        first_arg.to_number().to_int(),
+        proto,
+      )
   }
 }
 
@@ -762,7 +787,13 @@ fn JSInterpreter::create_typedarray_from_buffer(
   ab_obj : JSValue,
   proto : JSValue,
 ) -> JSValue {
-  let data : TypedArrayData = { kind, buffer: buf, byte_offset, byte_length, length }
+  let data : TypedArrayData = {
+    kind,
+    buffer: buf,
+    byte_offset,
+    byte_length,
+    length,
+  }
   let ta_id = store_typedarray(data)
   let ta_obj = self.new_object()
   let _ = js_set_prop(ta_obj, "__proto__", proto)
@@ -848,7 +879,11 @@ fn JSInterpreter::typedarray_set(
         return self.set_error_kind("TypeError", "Buffer is detached")
       }
       let source = if args.length() > 0 { args[0] } else { return Undefined }
-      let offset = if args.length() > 1 { args[1].to_number().to_int() } else { 0 }
+      let offset = if args.length() > 1 {
+        args[1].to_number().to_int()
+      } else {
+        0
+      }
       if offset < 0 {
         return self.set_error_kind("RangeError", "Offset is out of bounds")
       }
@@ -870,20 +905,35 @@ fn JSInterpreter::typedarray_set(
             if is_bigint_target {
               // Target is BigInt typed array, validate value
               match val {
-                BigInt(_) => typedarray_set_element_jsvalue(data, offset + i, val)
+                BigInt(_) =>
+                  typedarray_set_element_jsvalue(data, offset + i, val)
                 Number(n) => {
                   // Convert Number to BigInt for BigInt typed arrays
                   if n.is_nan() || n.is_inf() || n != n.trunc() {
-                    return self.set_error_kind("RangeError", "Cannot convert non-integer to BigInt")
+                    return self.set_error_kind(
+                      "RangeError", "Cannot convert non-integer to BigInt",
+                    )
                   }
-                  typedarray_set_element_jsvalue(data, offset + i, BigInt(BigInt::from_int64(n.to_int64())))
+                  typedarray_set_element_jsvalue(
+                    data,
+                    offset + i,
+                    BigInt(BigInt::from_int64(n.to_int64())),
+                  )
                 }
-                _ => return self.set_error_kind("TypeError", "Cannot convert to BigInt")
+                _ =>
+                  return self.set_error_kind(
+                    "TypeError", "Cannot convert to BigInt",
+                  )
               }
             } else {
               // Target is not BigInt typed array
               match val {
-                BigInt(n) => typedarray_set_element(data, offset + i, n.to_int64().to_double())
+                BigInt(n) =>
+                  typedarray_set_element(
+                    data,
+                    offset + i,
+                    n.to_int64().to_double(),
+                  )
                 _ => typedarray_set_element_jsvalue(data, offset + i, val)
               }
             }
@@ -895,21 +945,35 @@ fn JSInterpreter::typedarray_set(
             if is_bigint_target {
               // Target is BigInt typed array, need BigInt values
               match val {
-                BigInt(_) => typedarray_set_element_jsvalue(data, offset + i, val)
+                BigInt(_) =>
+                  typedarray_set_element_jsvalue(data, offset + i, val)
                 Number(n) => {
                   if n.is_nan() || n.is_inf() || n != n.trunc() {
-                    return self.set_error_kind("RangeError", "Cannot convert non-integer to BigInt")
+                    return self.set_error_kind(
+                      "RangeError", "Cannot convert non-integer to BigInt",
+                    )
                   }
-                  typedarray_set_element_jsvalue(data, offset + i, BigInt(BigInt::from_int64(n.to_int64())))
+                  typedarray_set_element_jsvalue(
+                    data,
+                    offset + i,
+                    BigInt(BigInt::from_int64(n.to_int64())),
+                  )
                 }
                 String(s) => {
                   // Try to parse as BigInt - validate first
                   let trimmed = s.trim_start().trim_end().to_string()
                   if trimmed.is_empty() {
-                    return self.set_error_kind("SyntaxError", "Cannot convert empty string to BigInt")
+                    return self.set_error_kind(
+                      "SyntaxError", "Cannot convert empty string to BigInt",
+                    )
                   }
                   // Check if string is a valid integer
-                  let start = if trimmed.length() > 0 && (trimmed[0] == '-' || trimmed[0] == '+') { 1 } else { 0 }
+                  let start = if trimmed.length() > 0 &&
+                    (trimmed[0] == '-' || trimmed[0] == '+') {
+                    1
+                  } else {
+                    0
+                  }
                   let mut valid = start < trimmed.length()
                   for i = start; i < trimmed.length(); i = i + 1 {
                     let c = trimmed[i]
@@ -919,13 +983,30 @@ fn JSInterpreter::typedarray_set(
                     }
                   }
                   if not(valid) {
-                    return self.set_error_kind("SyntaxError", "Cannot convert to BigInt")
+                    return self.set_error_kind(
+                      "SyntaxError", "Cannot convert to BigInt",
+                    )
                   }
-                  typedarray_set_element_jsvalue(data, offset + i, BigInt(BigInt::from_string(trimmed)))
+                  typedarray_set_element_jsvalue(
+                    data,
+                    offset + i,
+                    BigInt(BigInt::from_string(trimmed)),
+                  )
                 }
-                Bool(b) => typedarray_set_element_jsvalue(data, offset + i, BigInt(BigInt::from_int(if b { 1 } else { 0 })))
-                Null | Undefined => return self.set_error_kind("TypeError", "Cannot convert to BigInt")
-                _ => return self.set_error_kind("TypeError", "Cannot convert to BigInt")
+                Bool(b) =>
+                  typedarray_set_element_jsvalue(
+                    data,
+                    offset + i,
+                    BigInt(BigInt::from_int(if b { 1 } else { 0 })),
+                  )
+                Null | Undefined =>
+                  return self.set_error_kind(
+                    "TypeError", "Cannot convert to BigInt",
+                  )
+                _ =>
+                  return self.set_error_kind(
+                    "TypeError", "Cannot convert to BigInt",
+                  )
               }
             } else {
               typedarray_set_element(data, offset + i, val.to_number())
@@ -961,7 +1042,11 @@ fn JSInterpreter::typedarray_subarray(
       // Resolve relative indices
       let begin = if begin_arg < 0 {
         let b = length + begin_arg
-        if b < 0 { 0 } else { b }
+        if b < 0 {
+          0
+        } else {
+          b
+        }
       } else if begin_arg > length {
         length
       } else {
@@ -969,7 +1054,11 @@ fn JSInterpreter::typedarray_subarray(
       }
       let end = if end_arg < 0 {
         let e = length + end_arg
-        if e < 0 { 0 } else { e }
+        if e < 0 {
+          0
+        } else {
+          e
+        }
       } else if end_arg > length {
         length
       } else {
@@ -1022,7 +1111,11 @@ fn JSInterpreter::typedarray_slice(
       // Resolve relative indices
       let begin = if begin_arg < 0 {
         let b = length + begin_arg
-        if b < 0 { 0 } else { b }
+        if b < 0 {
+          0
+        } else {
+          b
+        }
       } else if begin_arg > length {
         length
       } else {
@@ -1030,7 +1123,11 @@ fn JSInterpreter::typedarray_slice(
       }
       let end = if end_arg < 0 {
         let e = length + end_arg
-        if e < 0 { 0 } else { e }
+        if e < 0 {
+          0
+        } else {
+          e
+        }
       } else if end_arg > length {
         length
       } else {
@@ -1038,7 +1135,11 @@ fn JSInterpreter::typedarray_slice(
       }
       let new_length = if end > begin { end - begin } else { 0 }
       let proto = js_get_prop(this_arg, "__proto__")
-      let result = self.create_typedarray_from_length(data.kind, new_length, proto)
+      let result = self.create_typedarray_from_length(
+        data.kind,
+        new_length,
+        proto,
+      )
       match get_typedarray_data(result) {
         Some(dst_data) =>
           for i = 0; i < new_length; i = i + 1 {
@@ -1073,13 +1174,17 @@ fn JSInterpreter::typedarray_fill(
           BigInt(_) => raw_value
           Number(n) => {
             if n.is_nan() || n.is_inf() || n != n.trunc() {
-              return self.set_error_kind("RangeError", "Cannot convert to BigInt")
+              return self.set_error_kind(
+                "RangeError", "Cannot convert to BigInt",
+              )
             }
             BigInt(BigInt::from_int64(n.to_int64()))
           }
           Bool(b) => BigInt(BigInt::from_int(if b { 1 } else { 0 }))
-          Null | Undefined => return self.set_error_kind("TypeError", "Cannot convert to BigInt")
-          _ => return self.set_error_kind("TypeError", "Cannot convert to BigInt")
+          Null | Undefined =>
+            return self.set_error_kind("TypeError", "Cannot convert to BigInt")
+          _ =>
+            return self.set_error_kind("TypeError", "Cannot convert to BigInt")
         }
       } else {
         Number(raw_value.to_number())
@@ -1097,7 +1202,11 @@ fn JSInterpreter::typedarray_fill(
       }
       let start = if start_arg < 0 {
         let s = length + start_arg
-        if s < 0 { 0 } else { s }
+        if s < 0 {
+          0
+        } else {
+          s
+        }
       } else if start_arg > length {
         length
       } else {
@@ -1105,7 +1214,11 @@ fn JSInterpreter::typedarray_fill(
       }
       let end = if end_arg < 0 {
         let e = length + end_arg
-        if e < 0 { 0 } else { e }
+        if e < 0 {
+          0
+        } else {
+          e
+        }
       } else if end_arg > length {
         length
       } else {
@@ -1151,7 +1264,11 @@ fn JSInterpreter::typedarray_copy_within(
       // Resolve indices
       let target = if target_arg < 0 {
         let t = length + target_arg
-        if t < 0 { 0 } else { t }
+        if t < 0 {
+          0
+        } else {
+          t
+        }
       } else if target_arg > length {
         length
       } else {
@@ -1159,7 +1276,11 @@ fn JSInterpreter::typedarray_copy_within(
       }
       let start = if start_arg < 0 {
         let s = length + start_arg
-        if s < 0 { 0 } else { s }
+        if s < 0 {
+          0
+        } else {
+          s
+        }
       } else if start_arg > length {
         length
       } else {
@@ -1167,7 +1288,11 @@ fn JSInterpreter::typedarray_copy_within(
       }
       let end = if end_arg < 0 {
         let e = length + end_arg
-        if e < 0 { 0 } else { e }
+        if e < 0 {
+          0
+        } else {
+          e
+        }
       } else if end_arg > length {
         length
       } else {
@@ -1206,14 +1331,19 @@ fn JSInterpreter::typedarray_foreach(
   match get_typedarray_data(this_arg) {
     Some(data) => {
       let callback = if args.length() > 0 { args[0] } else { return Undefined }
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       for i = 0; i < data.length; i = i + 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        let _ = self.call_function(
-          callback,
-          this_for_callback,
-          [val, Number(i.to_double()), this_arg],
-        )
+        let _ = self.call_function(callback, this_for_callback, [
+          val,
+          Number(i.to_double()),
+          this_arg,
+        ])
+
       }
       Undefined
     }
@@ -1235,30 +1365,47 @@ fn JSInterpreter::typedarray_map(
       } else {
         return self.set_error_kind("TypeError", "Callback is not a function")
       }
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       let proto = js_get_prop(this_arg, "__proto__")
-      let result = self.create_typedarray_from_length(data.kind, data.length, proto)
+      let result = self.create_typedarray_from_length(
+        data.kind,
+        data.length,
+        proto,
+      )
       let is_bigint = data.kind.is_bigint_type()
       match get_typedarray_data(result) {
         Some(dst_data) =>
           for i = 0; i < data.length; i = i + 1 {
             let val = typedarray_get_element_jsvalue(data, i)
-            let mapped = self.call_function(
-              callback,
-              this_for_callback,
-              [val, Number(i.to_double()), this_arg],
-            )
+            let mapped = self.call_function(callback, this_for_callback, [
+              val,
+              Number(i.to_double()),
+              this_arg,
+            ])
             if is_bigint {
               // Validate BigInt result
               match mapped {
                 BigInt(_) => typedarray_set_element_jsvalue(dst_data, i, mapped)
                 Number(n) => {
                   if n.is_nan() || n.is_inf() || n != n.trunc() {
-                    return self.set_error_kind("RangeError", "Cannot convert to BigInt")
+                    return self.set_error_kind(
+                      "RangeError", "Cannot convert to BigInt",
+                    )
                   }
-                  typedarray_set_element_jsvalue(dst_data, i, BigInt(BigInt::from_int64(n.to_int64())))
+                  typedarray_set_element_jsvalue(
+                    dst_data,
+                    i,
+                    BigInt(BigInt::from_int64(n.to_int64())),
+                  )
                 }
-                _ => return self.set_error_kind("TypeError", "Cannot convert to BigInt")
+                _ =>
+                  return self.set_error_kind(
+                    "TypeError", "Cannot convert to BigInt",
+                  )
               }
             } else {
               typedarray_set_element_jsvalue(dst_data, i, mapped)
@@ -1286,16 +1433,20 @@ fn JSInterpreter::typedarray_filter(
       } else {
         return self.set_error_kind("TypeError", "Callback is not a function")
       }
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       // Collect passing elements
       let kept : Array[JSValue] = []
       for i = 0; i < data.length; i = i + 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        let test_result = self.call_function(
-          callback,
-          this_for_callback,
-          [val, Number(i.to_double()), this_arg],
-        )
+        let test_result = self.call_function(callback, this_for_callback, [
+          val,
+          Number(i.to_double()),
+          this_arg,
+        ])
         if test_result.to_boolean() {
           kept.push(val)
         }
@@ -1335,8 +1486,7 @@ fn JSInterpreter::typedarray_reduce(
       }
       if data.length == 0 && args.length() < 2 {
         return self.set_error_kind(
-          "TypeError",
-          "Reduce of empty array with no initial value",
+          "TypeError", "Reduce of empty array with no initial value",
         )
       }
       let mut accumulator : JSValue = Undefined
@@ -1350,11 +1500,12 @@ fn JSInterpreter::typedarray_reduce(
       }
       for i = start_idx; i < data.length; i = i + 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        accumulator = self.call_function(
-          callback,
-          Undefined,
-          [accumulator, val, JSValue::Number(i.to_double()), this_arg],
-        )
+        accumulator = self.call_function(callback, Undefined, [
+          accumulator,
+          val,
+          JSValue::Number(i.to_double()),
+          this_arg,
+        ])
       }
       accumulator
     }
@@ -1378,8 +1529,7 @@ fn JSInterpreter::typedarray_reduce_right(
       }
       if data.length == 0 && args.length() < 2 {
         return self.set_error_kind(
-          "TypeError",
-          "Reduce of empty array with no initial value",
+          "TypeError", "Reduce of empty array with no initial value",
         )
       }
       let mut accumulator : JSValue = Undefined
@@ -1393,11 +1543,12 @@ fn JSInterpreter::typedarray_reduce_right(
       }
       for i = start_idx; i >= 0; i = i - 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        accumulator = self.call_function(
-          callback,
-          Undefined,
-          [accumulator, val, JSValue::Number(i.to_double()), this_arg],
-        )
+        accumulator = self.call_function(callback, Undefined, [
+          accumulator,
+          val,
+          JSValue::Number(i.to_double()),
+          this_arg,
+        ])
       }
       accumulator
     }
@@ -1419,14 +1570,18 @@ fn JSInterpreter::typedarray_every(
       } else {
         return self.set_error_kind("TypeError", "Callback is not a function")
       }
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       for i = 0; i < data.length; i = i + 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        let result = self.call_function(
-          callback,
-          this_for_callback,
-          [val, Number(i.to_double()), this_arg],
-        )
+        let result = self.call_function(callback, this_for_callback, [
+          val,
+          Number(i.to_double()),
+          this_arg,
+        ])
         if not(result.to_boolean()) {
           return Bool(false)
         }
@@ -1451,14 +1606,18 @@ fn JSInterpreter::typedarray_some(
       } else {
         return self.set_error_kind("TypeError", "Callback is not a function")
       }
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       for i = 0; i < data.length; i = i + 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        let result = self.call_function(
-          callback,
-          this_for_callback,
-          [val, Number(i.to_double()), this_arg],
-        )
+        let result = self.call_function(callback, this_for_callback, [
+          val,
+          Number(i.to_double()),
+          this_arg,
+        ])
         if result.to_boolean() {
           return Bool(true)
         }
@@ -1483,14 +1642,18 @@ fn JSInterpreter::typedarray_find(
       } else {
         return self.set_error_kind("TypeError", "Callback is not a function")
       }
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       for i = 0; i < data.length; i = i + 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        let result = self.call_function(
-          callback,
-          this_for_callback,
-          [val, Number(i.to_double()), this_arg],
-        )
+        let result = self.call_function(callback, this_for_callback, [
+          val,
+          Number(i.to_double()),
+          this_arg,
+        ])
         if result.to_boolean() {
           return val
         }
@@ -1515,14 +1678,18 @@ fn JSInterpreter::typedarray_find_index(
       } else {
         return self.set_error_kind("TypeError", "Callback is not a function")
       }
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       for i = 0; i < data.length; i = i + 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        let result = self.call_function(
-          callback,
-          this_for_callback,
-          [val, Number(i.to_double()), this_arg],
-        )
+        let result = self.call_function(callback, this_for_callback, [
+          val,
+          Number(i.to_double()),
+          this_arg,
+        ])
         if result.to_boolean() {
           return Number(i.to_double())
         }
@@ -1542,7 +1709,11 @@ fn JSInterpreter::typedarray_index_of(
 ) -> JSValue {
   match get_typedarray_data(this_arg) {
     Some(data) => {
-      let search = if args.length() > 0 { args[0].to_number() } else { 0.0 / 0.0 }
+      let search = if args.length() > 0 {
+        args[0].to_number()
+      } else {
+        0.0 / 0.0
+      }
       let from_arg = if args.length() > 1 {
         args[1].to_number().to_int()
       } else {
@@ -1550,7 +1721,11 @@ fn JSInterpreter::typedarray_index_of(
       }
       let start = if from_arg < 0 {
         let s = data.length + from_arg
-        if s < 0 { 0 } else { s }
+        if s < 0 {
+          0
+        } else {
+          s
+        }
       } else {
         from_arg
       }
@@ -1575,7 +1750,11 @@ fn JSInterpreter::typedarray_last_index_of(
 ) -> JSValue {
   match get_typedarray_data(this_arg) {
     Some(data) => {
-      let search = if args.length() > 0 { args[0].to_number() } else { 0.0 / 0.0 }
+      let search = if args.length() > 0 {
+        args[0].to_number()
+      } else {
+        0.0 / 0.0
+      }
       let from_arg = if args.length() > 1 {
         args[1].to_number().to_int()
       } else {
@@ -1609,7 +1788,11 @@ fn JSInterpreter::typedarray_includes(
 ) -> JSValue {
   match get_typedarray_data(this_arg) {
     Some(data) => {
-      let search = if args.length() > 0 { args[0].to_number() } else { 0.0 / 0.0 }
+      let search = if args.length() > 0 {
+        args[0].to_number()
+      } else {
+        0.0 / 0.0
+      }
       let from_arg = if args.length() > 1 {
         args[1].to_number().to_int()
       } else {
@@ -1617,7 +1800,11 @@ fn JSInterpreter::typedarray_includes(
       }
       let start = if from_arg < 0 {
         let s = data.length + from_arg
-        if s < 0 { 0 } else { s }
+        if s < 0 {
+          0
+        } else {
+          s
+        }
       } else {
         from_arg
       }
@@ -1715,11 +1902,10 @@ fn JSInterpreter::typedarray_sort(
         while j >= 0 {
           let cmp = match compare_fn {
             Some(fn_) => {
-              let result = self.call_function(
-                fn_,
-                Undefined,
-                [Number(arr[j]), Number(key)],
-              )
+              let result = self.call_function(fn_, Undefined, [
+                Number(arr[j]),
+                Number(key),
+              ])
               result.to_number()
             }
             None =>
@@ -1767,7 +1953,11 @@ fn JSInterpreter::typedarray_at(
       } else {
         0
       }
-      let index = if index_arg < 0 { data.length + index_arg } else { index_arg }
+      let index = if index_arg < 0 {
+        data.length + index_arg
+      } else {
+        index_arg
+      }
       if index < 0 || index >= data.length {
         return Undefined
       }
@@ -1789,8 +1979,16 @@ fn JSInterpreter::typedarray_keys(
       let _ = js_set_prop(iter, "__iter_type", String("TypedArrayKeys"))
       let _ = js_set_prop(iter, "__iter_source", this_arg)
       let _ = js_set_prop(iter, "__iter_index", Number(0.0))
-      let _ = js_set_prop(iter, "__iter_length", Number(data.length.to_double()))
-      let _ = js_set_prop(iter, "next", self.make_native("TypedArrayIterator.next"))
+      let _ = js_set_prop(
+        iter,
+        "__iter_length",
+        Number(data.length.to_double()),
+      )
+      let _ = js_set_prop(
+        iter,
+        "next",
+        self.make_native("TypedArrayIterator.next"),
+      )
       iter
     }
     None => self.set_error_kind("TypeError", "Not a TypedArray")
@@ -1809,8 +2007,16 @@ fn JSInterpreter::typedarray_values(
       let _ = js_set_prop(iter, "__iter_type", String("TypedArrayValues"))
       let _ = js_set_prop(iter, "__iter_source", this_arg)
       let _ = js_set_prop(iter, "__iter_index", Number(0.0))
-      let _ = js_set_prop(iter, "__iter_length", Number(data.length.to_double()))
-      let _ = js_set_prop(iter, "next", self.make_native("TypedArrayIterator.next"))
+      let _ = js_set_prop(
+        iter,
+        "__iter_length",
+        Number(data.length.to_double()),
+      )
+      let _ = js_set_prop(
+        iter,
+        "next",
+        self.make_native("TypedArrayIterator.next"),
+      )
       iter
     }
     None => self.set_error_kind("TypeError", "Not a TypedArray")
@@ -1829,8 +2035,16 @@ fn JSInterpreter::typedarray_entries(
       let _ = js_set_prop(iter, "__iter_type", String("TypedArrayEntries"))
       let _ = js_set_prop(iter, "__iter_source", this_arg)
       let _ = js_set_prop(iter, "__iter_index", Number(0.0))
-      let _ = js_set_prop(iter, "__iter_length", Number(data.length.to_double()))
-      let _ = js_set_prop(iter, "next", self.make_native("TypedArrayIterator.next"))
+      let _ = js_set_prop(
+        iter,
+        "__iter_length",
+        Number(data.length.to_double()),
+      )
+      let _ = js_set_prop(
+        iter,
+        "next",
+        self.make_native("TypedArrayIterator.next"),
+      )
       iter
     }
     None => self.set_error_kind("TypeError", "Not a TypedArray")
@@ -1851,8 +2065,7 @@ fn JSInterpreter::create_dataview(
   let buffer = args[0]
   if not(is_arraybuffer(buffer)) {
     return self.set_error_kind(
-      "TypeError",
-      "First argument must be an ArrayBuffer",
+      "TypeError", "First argument must be an ArrayBuffer",
     )
   }
   match get_arraybuffer_data(buffer) {
@@ -2111,14 +2324,18 @@ fn JSInterpreter::typedarray_find_last(
         return self.set_error_kind("TypeError", "Missing callback function")
       }
       let callback = args[0]
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       for i = data.length - 1; i >= 0; i = i - 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        let result = self.call_function(
-          callback,
-          this_for_callback,
-          [val, Number(i.to_double()), this_arg],
-        )
+        let result = self.call_function(callback, this_for_callback, [
+          val,
+          Number(i.to_double()),
+          this_arg,
+        ])
         if result.to_boolean() {
           return val
         }
@@ -2142,14 +2359,18 @@ fn JSInterpreter::typedarray_find_last_index(
         return self.set_error_kind("TypeError", "Missing callback function")
       }
       let callback = args[0]
-      let this_for_callback = if args.length() > 1 { args[1] } else { Undefined }
+      let this_for_callback = if args.length() > 1 {
+        args[1]
+      } else {
+        Undefined
+      }
       for i = data.length - 1; i >= 0; i = i - 1 {
         let val = typedarray_get_element_jsvalue(data, i)
-        let result = self.call_function(
-          callback,
-          this_for_callback,
-          [val, Number(i.to_double()), this_arg],
-        )
+        let result = self.call_function(callback, this_for_callback, [
+          val,
+          Number(i.to_double()),
+          this_arg,
+        ])
         if result.to_boolean() {
           return Number(i.to_double())
         }
@@ -2177,14 +2398,20 @@ fn JSInterpreter::typedarray_with(
       } else {
         0
       }
-      let index = if index_arg < 0 { data.length + index_arg } else { index_arg }
+      let index = if index_arg < 0 {
+        data.length + index_arg
+      } else {
+        index_arg
+      }
       if index < 0 || index >= data.length {
         return self.set_error_kind("RangeError", "Invalid index")
       }
       let value = if args.length() > 1 { args[1] } else { Undefined }
       // Create a new TypedArray of the same type
       let ctor = js_get_prop(this_arg, "constructor")
-      let new_ta = self.call_function(ctor, Undefined, [Number(data.length.to_double())])
+      let new_ta = self.call_function(ctor, Undefined, [
+        Number(data.length.to_double()),
+      ])
       match get_typedarray_data(new_ta) {
         Some(new_data) => {
           // Copy all elements
@@ -2219,7 +2446,9 @@ fn JSInterpreter::typedarray_to_reversed(
       }
       // Create a new TypedArray of the same type
       let ctor = js_get_prop(this_arg, "constructor")
-      let new_ta = self.call_function(ctor, Undefined, [Number(data.length.to_double())])
+      let new_ta = self.call_function(ctor, Undefined, [
+        Number(data.length.to_double()),
+      ])
       match get_typedarray_data(new_ta) {
         Some(new_data) => {
           // Copy in reverse order
@@ -2250,7 +2479,9 @@ fn JSInterpreter::typedarray_to_sorted(
       }
       // Create a new TypedArray of the same type
       let ctor = js_get_prop(this_arg, "constructor")
-      let new_ta = self.call_function(ctor, Undefined, [Number(data.length.to_double())])
+      let new_ta = self.call_function(ctor, Undefined, [
+        Number(data.length.to_double()),
+      ])
       match get_typedarray_data(new_ta) {
         Some(new_data) => {
           // Copy elements

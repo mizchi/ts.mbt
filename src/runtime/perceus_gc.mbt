@@ -184,7 +184,7 @@ pub fn perceus_exit_scope_with_return(return_val : JSValue) -> Int {
 /// Recursively mark objects contained in a value as escaped
 fn perceus_mark_contained_objects_escaped(val : JSValue) -> Unit {
   match val {
-    Object(map) => {
+    Object(map) =>
       for prop in map.props {
         let prop_id = perceus_get_object_id(prop.value)
         if prop_id >= 0 {
@@ -192,8 +192,7 @@ fn perceus_mark_contained_objects_escaped(val : JSValue) -> Unit {
           perceus_mark_contained_objects_escaped(prop.value)
         }
       }
-    }
-    JSValue::Array(arr) => {
+    JSValue::Array(arr) =>
       for item in arr.items {
         let item_id = perceus_get_object_id(item)
         if item_id >= 0 {
@@ -201,15 +200,13 @@ fn perceus_mark_contained_objects_escaped(val : JSValue) -> Unit {
           perceus_mark_contained_objects_escaped(item)
         }
       }
-    }
-    Function(closure) => {
+    Function(closure) =>
       for prop in closure.props {
         let prop_id = perceus_get_object_id(prop.value)
         if prop_id >= 0 {
           perceus_mark_escaped(prop_id)
         }
       }
-    }
     _ => ()
   }
 }

@@ -690,3 +690,197 @@ test "bench weakref operations" (b : @bench.T) {
     count=10,
   )
 }
+
+// ============================================================
+// AOT vs Interpreter Benchmarks
+// ============================================================
+
+///|
+let aot_add_src : String =
+  #|export function add(a: number, b: number): number {
+  #|  return a + b;
+  #|}
+
+///|
+test "bench AOT compile add" (b : @bench.T) {
+  let parser = @parser.Parser::from_source(aot_add_src)
+  let module_ = try! parser.parse_module()
+  b.bench(
+    () => {
+      let _ = try! @aot.compile_module_to_wasm(module_)
+
+    },
+    name="aot.compile.add",
+    count=20,
+  )
+}
+
+///|
+test "bench AOT call add" (b : @bench.T) {
+  let parser = @parser.Parser::from_source(aot_add_src)
+  let module_ = try! parser.parse_module()
+  let runtime = try! @aot.create_aot_runtime(module_)
+  b.bench(
+    () => {
+      let _ = try! runtime.call("add", [10.0, 32.0])
+
+    },
+    name="aot.call.add",
+    count=100,
+  )
+}
+
+///|
+let aot_loop_src : String =
+  #|export function sum(n: number): number {
+  #|  let s: number = 0;
+  #|  for (let i: number = 0; i < n; i = i + 1) {
+  #|    s = s + i;
+  #|  }
+  #|  return s;
+  #|}
+
+///|
+test "bench AOT compile loop" (b : @bench.T) {
+  let parser = @parser.Parser::from_source(aot_loop_src)
+  let module_ = try! parser.parse_module()
+  b.bench(
+    () => {
+      let _ = try! @aot.compile_module_to_wasm(module_)
+
+    },
+    name="aot.compile.loop",
+    count=10,
+  )
+}
+
+///|
+test "bench AOT call loop(1000)" (b : @bench.T) {
+  let parser = @parser.Parser::from_source(aot_loop_src)
+  let module_ = try! parser.parse_module()
+  let runtime = try! @aot.create_aot_runtime(module_)
+  b.bench(
+    () => {
+      let _ = try! runtime.call("sum", [1000.0])
+
+    },
+    name="aot.call.loop.1000",
+    count=50,
+  )
+}
+
+///|
+test "bench interpreter call loop(1000)" (b : @bench.T) {
+  let src =
+    #|function sum(n) {
+    #|  let s = 0;
+    #|  for (let i = 0; i < n; i++) { s += i; }
+    #|  return s;
+    #|}
+    #|function main() {
+    #|  return sum(1000);
+    #|}
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(src)
+
+    },
+    name="interpreter.call.loop.1000",
+    count=50,
+  )
+}
+
+///|
+let aot_fib_src : String =
+  #|export function fib(n: number): number {
+  #|  if (n <= 1) { return n; }
+  #|  return fib(n - 1) + fib(n - 2);
+  #|}
+
+///|
+test "bench AOT compile fib" (b : @bench.T) {
+  let parser = @parser.Parser::from_source(aot_fib_src)
+  let module_ = try! parser.parse_module()
+  b.bench(
+    () => {
+      let _ = try! @aot.compile_module_to_wasm(module_)
+
+    },
+    name="aot.compile.fib",
+    count=10,
+  )
+}
+
+///|
+test "bench AOT call fib(20)" (b : @bench.T) {
+  let parser = @parser.Parser::from_source(aot_fib_src)
+  let module_ = try! parser.parse_module()
+  let runtime = try! @aot.create_aot_runtime(module_)
+  b.bench(
+    () => {
+      let _ = try! runtime.call("fib", [20.0])
+
+    },
+    name="aot.call.fib.20",
+    count=3,
+  )
+}
+
+///|
+test "bench interpreter vs AOT loop(10000)" (b : @bench.T) {
+  // Interpreter version
+  let interp_src =
+    #|function sum(n) {
+    #|  let s = 0;
+    #|  for (let i = 0; i < n; i++) { s += i; }
+    #|  return s;
+    #|}
+    #|function main() {
+    #|  return sum(10000);
+    #|}
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(interp_src)
+
+    },
+    name="compare.interpreter.loop.10000",
+    count=5,
+  )
+  // AOT version
+  let parser = @parser.Parser::from_source(aot_loop_src)
+  let module_ = try! parser.parse_module()
+  let runtime = try! @aot.create_aot_runtime(module_)
+  b.bench(
+    () => {
+      let _ = try! runtime.call("sum", [10000.0])
+
+    },
+    name="compare.aot.loop.10000",
+    count=5,
+  )
+}
+
+///|
+let aot_math_src : String =
+  #|export function distance(x1: number, y1: number, x2: number, y2: number): number {
+  #|  const dx: number = x2 - x1;
+  #|  const dy: number = y2 - y1;
+  #|  return Math.sqrt(dx * dx + dy * dy);
+  #|}
+
+///|
+test "bench AOT call math.sqrt" (b : @bench.T) {
+  let parser = @parser.Parser::from_source(aot_math_src)
+  let module_ = try! parser.parse_module()
+  let runtime = try! @aot.create_aot_runtime(module_)
+  b.bench(
+    () => {
+      let _ = try! runtime.call("distance", [0.0, 0.0, 3.0, 4.0])
+
+    },
+    name="aot.call.math.sqrt",
+    count=100,
+  )
+}

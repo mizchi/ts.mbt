@@ -15,6 +15,15 @@ async fn main_async() -> Unit {
       let file_path = args[2]
       run_ts_file(file_path)
     }
+    "emit-gc" => {
+      if args.length() < 3 {
+        println("Error: no file specified")
+        return
+      }
+      let file_path = args[2]
+      let output_path = if args.length() >= 4 { args[3] } else { "out.wasm" }
+      emit_wasm_gc(file_path, output_path)
+    }
     "test262" => {
       if args.length() < 3 {
         println("Error: no test directory or file specified")
@@ -22,6 +31,14 @@ async fn main_async() -> Unit {
       }
       let test_path = args[2]
       run_test262(test_path)
+    }
+    "analyze" | "aot-check" => {
+      if args.length() < 3 {
+        println("Error: no file specified")
+        return
+      }
+      let file_path = args[2]
+      analyze_aot(file_path)
     }
     _ => {
       println("Unknown command: \{command}")
@@ -40,8 +57,103 @@ fn print_usage() -> Unit {
   println("Usage: wasm5-ts <command> [args...]")
   println("")
   println("Commands:")
-  println("  run <file>         Run a TypeScript/JavaScript file")
-  println("  test262 <path>     Run test262 tests (file or directory)")
+  println("  run <file>           Run a TypeScript/JavaScript file")
+  println("  emit-gc <file> [out] Emit wasm-gc binary (default: out.wasm)")
+  println("  test262 <path>       Run test262 tests (file or directory)")
+  println("  analyze <file>       Analyze AOT compilability of functions")
+  println("  aot-check <file>     Alias for analyze")
+}
+
+///|
+async fn analyze_aot(file_path : String) -> Unit {
+  let content = @fs.read_file(file_path).text() catch {
+    e => {
+      println("Error reading file: \{e}")
+      return
+    }
+  }
+  let parser = @parser.Parser::from_source(content)
+  let ts_module = parser.parse_module() catch {
+    e => {
+      println("Parse error: \{e}")
+      return
+    }
+  }
+  println("=== AOT Compilability Analysis ===")
+  println("File: \{file_path}")
+  println("")
+  let mut compilable_count = 0
+  let mut not_compilable_count = 0
+  let compilable_funcs : Array[String] = []
+  let not_compilable_funcs : Array[(String, String)] = []
+  for func in ts_module.funcs {
+    match @analysis.can_compile_to_wasm(func) {
+      @analysis.CompilabilityResult::Compilable => {
+        compilable_count += 1
+        compilable_funcs.push(func.name)
+      }
+      @analysis.CompilabilityResult::NotCompilable(reason) => {
+        not_compilable_count += 1
+        not_compilable_funcs.push((func.name, reason))
+      }
+    }
+  }
+  let total = compilable_count + not_compilable_count
+  let pct = if total > 0 { compilable_count * 100 / total } else { 0 }
+  println("Total functions: \{total}")
+  println("AOT compilable:  \{compilable_count} (\{pct}%)")
+  println("Not compilable:  \{not_compilable_count}")
+  println("")
+  if compilable_funcs.length() > 0 {
+    println("✓ Compilable functions:")
+    for name in compilable_funcs {
+      println("  - \{name}")
+    }
+    println("")
+  }
+  if not_compilable_funcs.length() > 0 {
+    println("✗ Not compilable functions:")
+    for item in not_compilable_funcs {
+      let (name, reason) = item
+      println("  - \{name}: \{reason}")
+    }
+  }
+}
+
+///|
+async fn emit_wasm_gc(file_path : String, output_path : String) -> Unit {
+  let content = @fs.read_file(file_path).text() catch {
+    e => {
+      println("Error reading file: \{e}")
+      return
+    }
+  }
+  let parser = @parser.Parser::from_source(content)
+  let ts_module = parser.parse_module() catch {
+    e => {
+      println("Parse error: \{e}")
+      return
+    }
+  }
+  let wasm_module = @codegen.compile_module_gc(ts_module) catch {
+    e => {
+      println("CodeGen error: \{e}")
+      return
+    }
+  }
+  let wasm_bytes = @encode.encode(wasm_module) catch {
+    e => {
+      println("Encode error: \{e}")
+      return
+    }
+  }
+  let _ = @fs.write_file(output_path, wasm_bytes, create=0o644) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  println("Wrote \{wasm_bytes.length()} bytes to \{output_path}")
 }
 
 ///|

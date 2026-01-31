@@ -24,6 +24,10 @@ pub(all) struct JSGeneratorState {
   mut done : Bool
   mut cont : ((JSValue) -> GenSignal)?
   mut active_iterators : Array[JSValue]
+  // AOT mode fields
+  mut aot_mode : Bool // true if this generator is AOT compiled
+  mut aot_wasm_bytes : Bytes? // compiled wasm module bytes
+  mut aot_state_data : Array[Double] // state struct data: [state_num, done_flag, params..., locals...]
 }
 
 ///|

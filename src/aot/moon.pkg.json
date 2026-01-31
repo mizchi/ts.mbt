@@ -1,0 +1,38 @@
+{
+  "import": [
+    {
+      "path": "moonbitlang/wasm5/core",
+      "alias": "core"
+    },
+    {
+      "path": "moonbitlang/wasm5/encode",
+      "alias": "encode"
+    },
+    {
+      "path": "moonbitlang/wasm5/parse",
+      "alias": "parse"
+    },
+    {
+      "path": "moonbitlang/wasm5/runtime",
+      "alias": "wasm_runtime"
+    },
+    {
+      "path": "moonbitlang/typescript/ast",
+      "alias": "ast"
+    },
+    {
+      "path": "moonbitlang/typescript/analysis",
+      "alias": "analysis"
+    },
+    {
+      "path": "moonbitlang/typescript/codegen",
+      "alias": "codegen"
+    }
+  ],
+  "wbtest-import": [
+    {
+      "path": "moonbitlang/typescript/parser",
+      "alias": "parser"
+    }
+  ]
+}

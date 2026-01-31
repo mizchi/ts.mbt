@@ -4856,6 +4856,13 @@ pub fn JSInterpreter::call_function(
           }
           self.call_function(target, bound_this, merged)
         }
+        Compiled(compiled) =>
+          // TODO: When running in wasm runtime, execute compiled wasm
+          // For now, fall back to interpreting the AST
+          match self.exec_block(compiled.ast.body, body_env) {
+            Some(val) => val
+            None => Undefined
+          }
       }
     }
     Object(map) => {

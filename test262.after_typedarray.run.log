@@ -1,0 +1,1362 @@
+FAIL: test262/test/annexB/built-ins/Date/prototype/getYear/B.2.4.js - obj['getYear'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/Date/prototype/getYear/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/Date/prototype/setYear/B.2.5.js - obj['setYear'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/Date/prototype/setYear/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/Date/prototype/toGMTString/not-a-constructor.js - runtime error
+FAIL: test262/test/annexB/built-ins/Date/prototype/toGMTString/prop-desc.js - obj should have an own property toGMTString
+FAIL: test262/test/annexB/built-ins/Date/prototype/toGMTString/value.js - Expected SameValue(«undefined», «function () { [native code] }») to be true
+FAIL: test262/test/annexB/built-ins/RegExp/RegExp-control-escape-russian-letter.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/RegExp-decimal-escape-class-range.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/RegExp-decimal-escape-not-capturing.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/RegExp-invalid-control-escape-character-class.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/RegExp-leading-escape.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/RegExp-trailing-escape.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/incomplete_hex_unicode_escape.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/index/prop-desc.js - Cannot read properties of undefined (reading 'set')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/index/this-cross-realm-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/index/this-not-regexp-constructor.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/index/this-subclass-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/input/prop-desc.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/input/this-cross-realm-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/input/this-not-regexp-constructor.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/input/this-subclass-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/lastMatch/prop-desc.js - Cannot read properties of undefined (reading 'set')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/lastMatch/this-cross-realm-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/lastMatch/this-not-regexp-constructor.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/lastMatch/this-subclass-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/lastParen/prop-desc.js - Cannot read properties of undefined (reading 'set')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/lastParen/this-cross-realm-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/lastParen/this-not-regexp-constructor.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/lastParen/this-subclass-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/leftContext/prop-desc.js - Cannot read properties of undefined (reading 'set')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/leftContext/this-cross-realm-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/leftContext/this-not-regexp-constructor.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/leftContext/this-subclass-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/rightContext/prop-desc.js - Cannot read properties of undefined (reading 'set')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/rightContext/this-cross-realm-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/rightContext/this-not-regexp-constructor.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/annexB/built-ins/RegExp/legacy-accessors/rightContext/this-subclass-constructor.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/named-groups/non-unicode-malformed-lookbehind.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/named-groups/non-unicode-malformed.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/Symbol.split/Symbol.match-getter-recompiles-source.js - value is not callable
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/Symbol.split/toint32-limit-recompiles-source.js - value is not callable
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/B.RegExp.prototype.compile.js - obj['compile'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/duplicate-named-capturing-groups-syntax.js - Invalid regular expression
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/flags-string-invalid.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/flags-to-string-err.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/pattern-regexp-flags-defined.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/pattern-regexp-immutable-lastindex.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/pattern-regexp-props.js - value is not callable
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/pattern-to-string-err.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/pattern-undefined.js - [[OriginalSource]] (explicit undefined) Expected SameValue(«undefined», «») to be true
+FAIL: test262/test/annexB/built-ins/RegExp/prototype/compile/this-cross-realm-instance.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/String/prototype/anchor/B.2.3.2.js - Expected SameValue(«undefined», «<a name="b">_</a>») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/anchor/attr-tostring-err.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/String/prototype/anchor/length.js - obj should have an own property length
+FAIL: test262/test/annexB/built-ins/String/prototype/anchor/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/anchor/not-a-constructor.js - runtime error
+FAIL: test262/test/annexB/built-ins/String/prototype/anchor/prop-desc.js - obj should have an own property anchor
+FAIL: test262/test/annexB/built-ins/String/prototype/anchor/this-val-tostring-err.js - Expected an error to be thrown
+FAIL: test262/test/annexB/built-ins/String/prototype/big/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/big/prop-desc.js - obj['big'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/blink/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/blink/prop-desc.js - obj['blink'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/bold/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/bold/prop-desc.js - obj['bold'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/fixed/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/fixed/prop-desc.js - obj['fixed'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/fontcolor/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/fontcolor/prop-desc.js - obj['fontcolor'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/fontsize/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/fontsize/prop-desc.js - obj['fontsize'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/italics/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/italics/prop-desc.js - obj['italics'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/link/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/link/prop-desc.js - obj['link'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/match/custom-matcher-emulates-undefined.js - Expected SameValue(«0», «1») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/matchAll/custom-matcher-emulates-undefined.js - Expected SameValue(«undefined», «null») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/replace/custom-replacer-emulates-undefined.js - Expected SameValue(«», «null») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/replaceAll/custom-replacer-emulates-undefined.js - Expected SameValue(«», «null») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/search/custom-searcher-emulates-undefined.js - Expected SameValue(«-1», «null») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/small/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/small/prop-desc.js - obj['small'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/split/custom-splitter-emulates-undefined.js - Expected SameValue(«», «null») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/strike/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/strike/prop-desc.js - obj['strike'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/sub/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/sub/prop-desc.js - obj['sub'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/substr/B.2.3.js - obj['substr'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/substr/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/substr/surrogate-pairs.js - start: 1 Expected SameValue(«», «���») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/sup/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/sup/prop-desc.js - obj['sup'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/String/prototype/trimLeft/length.js - obj should have an own property length
+FAIL: test262/test/annexB/built-ins/String/prototype/trimLeft/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/trimLeft/prop-desc.js - obj should have an own property trimLeft
+FAIL: test262/test/annexB/built-ins/String/prototype/trimLeft/reference-trimStart.js - Expected SameValue(«undefined», «function () { [native code] }») to be true
+FAIL: test262/test/annexB/built-ins/String/prototype/trimRight/length.js - obj should have an own property length
+FAIL: test262/test/annexB/built-ins/String/prototype/trimRight/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/String/prototype/trimRight/prop-desc.js - obj should have an own property trimRight
+FAIL: test262/test/annexB/built-ins/String/prototype/trimRight/reference-trimEnd.js - Expected SameValue(«undefined», «function () { [native code] }») to be true
+test262 progress: 200/34268 (passed=99, failed=101, skipped=0)
+FAIL: test262/test/annexB/built-ins/escape/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/escape/prop-desc.js - obj['escape'] descriptor should not be enumerable
+FAIL: test262/test/annexB/built-ins/unescape/name.js - obj should have an own property name
+FAIL: test262/test/annexB/built-ins/unescape/prop-desc.js - obj['unescape'] descriptor should not be enumerable
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-global-update.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-non-enumerable-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-var-update.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-block-decl-eval-global-update.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-existing-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-existing-non-enumerable-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-a-eval-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-existing-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-existing-non-enumerable-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-decl-b-eval-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-existing-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-existing-non-enumerable-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-else-stmt-eval-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-existing-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-existing-non-enumerable-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-decl-no-else-eval-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-existing-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-existing-non-enumerable-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-if-stmt-else-decl-eval-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-existing-global-init.js - Expected SameValue(«string», «function») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-existing-global-update.js - Expected SameValue(«Another function», «function declaration») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-existing-non-enumerable-global-init.js - Expected SameValue(«string», «function») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-existing-var-update.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-case-eval-global-update.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-existing-global-init.js - Expected SameValue(«string», «function») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-existing-global-update.js - Expected SameValue(«Another function», «function declaration») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-existing-non-enumerable-global-init.js - Expected SameValue(«string», «function») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-existing-var-update.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/eval-code/indirect/global-switch-dflt-eval-global-update.js - Expected SameValue(«undefined», «function») to be true
+SKIP: test262/test/annexB/language/expressions/assignment/dstr/array-pattern-emulates-undefined.js (with statement not supported)
+SKIP: test262/test/annexB/language/expressions/assignment/dstr/object-pattern-emulates-undefined.js (with statement not supported)
+ERROR: test262/test/annexB/language/expressions/assignmenttargettype/callexpression-as-for-in-lhs.js - ParseError("Unexpected token: RParen")
+ERROR: test262/test/annexB/language/expressions/assignmenttargettype/callexpression-as-for-of-lhs.js - ParseError("Unexpected token: RParen")
+FAIL: test262/test/annexB/language/expressions/assignmenttargettype/callexpression-in-compound-assignment.js - Expected an error to be thrown
+FAIL: test262/test/annexB/language/expressions/assignmenttargettype/callexpression-in-postfix-update.js - Expected an error to be thrown
+FAIL: test262/test/annexB/language/expressions/assignmenttargettype/callexpression-in-prefix-update.js - Expected an error to be thrown
+ERROR: test262/test/annexB/language/expressions/assignmenttargettype/callexpression.js - ParseError("Invalid assignment target")
+ERROR: test262/test/annexB/language/expressions/assignmenttargettype/cover-callexpression-and-asyncarrowhead.js - ParseError("Invalid assignment target")
+FAIL: test262/test/annexB/language/expressions/typeof/emulates-undefined.js - === "undefined"
+FAIL: test262/test/annexB/language/expressions/yield/star-iterable-throw-emulates-undefined-throws-when-called.js - Expected SameValue(«1», «0») to be true
+FAIL: test262/test/annexB/language/function-code/block-decl-func-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-existing-var-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-skip-arguments.js - arguments is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-func-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-nested-blocks-with-fun-decl.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/block-decl-nostrict.js - Expected SameValue(«[object Object]», «undefined») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-a-func-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-a-func-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-a-func-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-a-func-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-a-func-skip-dft-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-a-func-skip-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-b-func-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-b-func-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-b-func-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-b-func-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-b-func-skip-dft-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-decl-b-func-skip-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-stmt-func-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-stmt-func-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-stmt-func-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-stmt-func-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-stmt-func-skip-dft-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-stmt-func-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-else-stmt-func-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-else-stmt-func-skip-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-no-else-func-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-no-else-func-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-no-else-func-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-no-else-func-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-no-else-func-skip-dft-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-no-else-func-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-decl-no-else-func-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-decl-no-else-func-skip-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-stmt-else-decl-func-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-stmt-else-decl-func-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-stmt-else-decl-func-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-stmt-else-decl-func-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-stmt-else-decl-func-skip-dft-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/if-stmt-else-decl-func-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/if-stmt-else-decl-func-skip-param.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/function-code/switch-case-decl-nostrict.js - Expected SameValue(«[object Object]», «undefined») to be true
+FAIL: test262/test/annexB/language/function-code/switch-case-func-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-case-func-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-case-func-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-case-func-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-case-func-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-case-func-existing-var-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-case-func-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-case-func-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-case-func-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-decl-nostrict.js - Expected SameValue(«[object Object]», «undefined») to be true
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-existing-var-update.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-init.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/function-code/switch-dflt-func-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-existing-non-enumerable-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-existing-var-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/block-decl-global-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-existing-fn-no-init.js - f is not defined
+test262 progress: 600/34268 (passed=287, failed=311, skipped=2)
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-a-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-decl-b-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-else-stmt-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-decl-no-else-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-for.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/if-stmt-else-decl-global-skip-early-err.js - value is not updated following evaluation Expected SameValue(«function f() {}», «123») to be true
+FAIL: test262/test/annexB/language/global-code/script-decl-lex-collision.js - Expected an error to be thrown
+FAIL: test262/test/annexB/language/global-code/switch-case-global-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-existing-non-enumerable-global-init.js - value is not callable
+FAIL: test262/test/annexB/language/global-code/switch-case-global-existing-var-update.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/annexB/language/global-code/switch-case-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-case-global-update.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-block-scoping.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-existing-block-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-existing-block-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-existing-fn-no-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-existing-fn-update.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-existing-non-enumerable-global-init.js - value is not callable
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-existing-var-update.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-init.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-no-skip-try.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-skip-early-err-block.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-skip-early-err-for-in.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-skip-early-err-for-of.js - f is not defined
+FAIL: test262/test/annexB/language/global-code/switch-dflt-global-update.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/annexB/language/literals/regexp/class-escape.js - Invalid regular expression
+FAIL: test262/test/annexB/language/literals/regexp/extended-pattern-char.js - Invalid regular expression
+FAIL: test262/test/annexB/language/literals/regexp/identity-escape.js - Invalid regular expression
+FAIL: test262/test/annexB/language/literals/regexp/legacy-octal-escape.js - Invalid regular expression
+FAIL: test262/test/annexB/language/literals/regexp/non-empty-class-ranges-no-dash.js - Invalid regular expression
+FAIL: test262/test/annexB/language/literals/regexp/non-empty-class-ranges.js - Invalid regular expression
+FAIL: test262/test/annexB/language/literals/regexp/quantifiable-assertion-followed-by.js - Invalid regular expression
+FAIL: test262/test/annexB/language/literals/regexp/quantifiable-assertion-not-followed-by.js - Invalid regular expression
+FAIL: test262/test/annexB/language/statements/class/subclass/superclass-emulates-undefined.js - Expected an error to be thrown
+SKIP: test262/test/annexB/language/statements/const/dstr/array-pattern-emulates-undefined.js (with statement not supported)
+SKIP: test262/test/annexB/language/statements/const/dstr/object-pattern-emulates-undefined.js (with statement not supported)
+ERROR: test262/test/annexB/language/statements/for-in/nonstrict-initializer.js - ParseError("Expected Semicolon, got RParen")
+ERROR: test262/test/annexB/language/statements/labeled/function-declaration.js - ParseError("Lexical declaration not allowed in single-statement position")
+SKIP: test262/test/annexB/language/statements/try/catch-redeclared-var-statement-captured.js (with statement not supported)
+SKIP: test262/test/annexB/language/statements/try/catch-redeclared-var-statement.js (with statement not supported)
+FAIL: test262/test/built-ins/AbstractModuleSource/length.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/AbstractModuleSource/name.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/AbstractModuleSource/proto.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/AbstractModuleSource/prototype/Symbol.toStringTag.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/AbstractModuleSource/prototype/constructor.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/AbstractModuleSource/prototype/proto.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/AbstractModuleSource/prototype.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/AbstractModuleSource/throw-from-constructor.js - Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/AggregateError/cause-property.js - obj should have an own property cause
+FAIL: test262/test/built-ins/AggregateError/errors-iterabletolist-failures.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/AggregateError/errors-iterabletolist.js - Expected SameValue(«0», «3») to be true
+FAIL: test262/test/built-ins/AggregateError/length.js - obj should have an own property length
+FAIL: test262/test/built-ins/AggregateError/message-method-prop-cast.js - obj should have an own property message
+FAIL: test262/test/built-ins/AggregateError/message-method-prop.js - obj should have an own property message
+FAIL: test262/test/built-ins/AggregateError/message-tostring-abrupt-symbol.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/AggregateError/message-tostring-abrupt.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/AggregateError/newtarget-is-undefined.js - Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/AggregateError/newtarget-proto-custom.js - not a constructor
+FAIL: test262/test/built-ins/AggregateError/prop-desc.js - obj['AggregateError'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/AggregateError/proto.js - Expected SameValue(«function () { [native code] }», «function Error() { [native code] }») to be true
+FAIL: test262/test/built-ins/AggregateError/prototype/constructor.js - obj should have an own property constructor
+FAIL: test262/test/built-ins/AggregateError/prototype/message.js - obj should have an own property message
+FAIL: test262/test/built-ins/AggregateError/prototype/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/AggregateError/prototype/prop-desc.js - obj['prototype'] descriptor should not be writable; obj['prototype'] descriptor should not be configurable
+FAIL: test262/test/built-ins/AggregateError/prototype/proto.js - Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/S15.4.1_A1.1_T2.js - x.toString() must return "[object Array]" Expected SameValue(«», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/S15.4.1_A1.2_T1.js - x.getClass() must return "[object Array]" Expected SameValue(«undefined», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/S15.4.2.1_A1.1_T1.js - x.hasOwnProperty("myproperty") must return false Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/S15.4.2.1_A1.1_T2.js - x.toString() must return "[object Array]" Expected SameValue(«», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/S15.4.2.1_A1.2_T1.js - x.getClass() must return "[object Array]" Expected SameValue(«undefined», «[object Array]») to be true
+test262 progress: 800/34268 (passed=367, failed=427, skipped=6)
+FAIL: test262/test/built-ins/Array/S15.4.5.2_A1_T1.js - The value of x.length is expected to be 2147483649 Expected SameValue(«2», «2147483649») to be true
+FAIL: test262/test/built-ins/Array/S15.4.5.2_A3_T3.js - The value of x.length is expected to be 4294967295 Expected SameValue(«2147483647», «4294967295») to be true
+FAIL: test262/test/built-ins/Array/S15.4_A1.1_T6.js - The value of x["true"] is expected to be 1 Expected SameValue(«undefined», «1») to be true
+FAIL: test262/test/built-ins/Array/S15.4_A1.1_T7.js - The value of x[0] is expected to be 0 Expected SameValue(«undefined», «0») to be true
+FAIL: test262/test/built-ins/Array/S15.4_A1.1_T8.js - The value of x[0] is expected to be 0 Expected SameValue(«undefined», «0») to be true
+FAIL: test262/test/built-ins/Array/S15.4_A1.1_T9.js - The value of x[0] is expected to be 0 Expected SameValue(«undefined», «0») to be true
+FAIL: test262/test/built-ins/Array/Symbol.species/length.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/built-ins/Array/Symbol.species/return-value.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/built-ins/Array/Symbol.species/symbol-species-name.js - Cannot read properties of undefined (reading 'get')
+FAIL: test262/test/built-ins/Array/Symbol.species/symbol-species.js - Cannot read properties of undefined (reading 'set')
+FAIL: test262/test/built-ins/Array/from/Array.from-descriptor.js - obj should have an own property from
+FAIL: test262/test/built-ins/Array/from/Array.from-name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/from/Array.from_arity.js - obj should have an own property length
+FAIL: test262/test/built-ins/Array/from/Array.from_forwards-length-for-array-likes.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/from/array-like-has-length-but-no-indexes-with-values.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/calling-from-valid-1-noStrict.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/calling-from-valid-1-onlyStrict.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/calling-from-valid-2.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/elements-added-after.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/elements-deleted-after.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/elements-updated-after.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/from-array.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/from-string.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/get-iter-method-err.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/from/items-is-arraybuffer.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/iter-adv-err.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/from/iter-cstm-ctor-err.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/from/iter-cstm-ctor.js - The result of evaluating (result instanceof C) is expected to be true
+FAIL: test262/test/built-ins/Array/from/iter-get-iter-err.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/from/iter-get-iter-val-err.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/from/iter-map-fn-args.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/iter-map-fn-err.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/from/iter-map-fn-return.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/iter-map-fn-this-arg.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/iter-map-fn-this-non-strict.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/iter-map-fn-this-strict.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/iter-set-elem-prop-err.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/from/iter-set-elem-prop-non-writable.js - obj should have an own property 0
+FAIL: test262/test/built-ins/Array/from/iter-set-elem-prop.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/iter-set-length-err.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/from/iter-set-length.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/mapfn-throws-exception.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/from/not-a-constructor.js - runtime error
+FAIL: test262/test/built-ins/Array/from/source-array-boundary.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/source-object-constructor.js - Cannot read properties of undefined (reading 'constructor')
+FAIL: test262/test/built-ins/Array/from/source-object-iterator-1.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/from/source-object-iterator-2.js - The value of `typeof a` is expected to be typeof {} Expected SameValue(«undefined», «object») to be true
+FAIL: test262/test/built-ins/Array/from/source-object-length-set-elem-prop-err.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/from/source-object-length-set-elem-prop-non-writable.js - obj should have an own property 0
+FAIL: test262/test/built-ins/Array/from/source-object-length.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/source-object-missing.js - The value of `typeof a` is expected to be "object" Expected SameValue(«undefined», «object») to be true
+FAIL: test262/test/built-ins/Array/from/source-object-without.js - value is not callable
+FAIL: test262/test/built-ins/Array/from/this-null.js - The result of evaluating (result instanceof Array) is expected to be true
+FAIL: test262/test/built-ins/Array/fromAsync/builtin.js - Array.fromAsync is extensible
+FAIL: test262/test/built-ins/Array/fromAsync/length.js - obj should have an own property length
+FAIL: test262/test/built-ins/Array/fromAsync/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/fromAsync/not-a-constructor.js - runtime error
+FAIL: test262/test/built-ins/Array/fromAsync/prop-desc.js - Array.fromAsync is callable Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/Array/isArray/15.4.3.2-0-5.js - Array.isArray(Array.prototype) must return true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/isArray/descriptor.js - obj['isArray'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/isArray/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/isArray/proxy-revoked.js - value is not callable
+FAIL: test262/test/built-ins/Array/isArray/proxy.js - Array.isArray(new Proxy([], {})) must return true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/length/15.4.5.1-3.d-1.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/length/15.4.5.1-3.d-2.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/length/15.4.5.1-3.d-3.js - The value of a.length is expected to be 4294967295 Expected SameValue(«2147483647», «4294967295») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.2.2_A1.1_T2.js - x.toString() must return "[object Array]" Expected SameValue(«», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.2.2_A2.1_T1.js - The value of x.length is expected to be 4294967295 Expected SameValue(«2147483647», «4294967295») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.2.2_A2.2_T1.js - The result of evaluating (e instanceof RangeError) is expected to be true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.2.2_A2.2_T2.js - The result of evaluating (e instanceof RangeError) is expected to be true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.2.2_A2.2_T3.js - The result of evaluating (e instanceof RangeError) is expected to be true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.4_A1.3_T1.js - The value of Array.prototype.length is expected to be 0 Expected SameValue(«undefined», «0») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.5.1_A1.1_T1.js - The result of evaluating (e instanceof RangeError) is expected to be true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.5.1_A1.1_T2.js - The result of evaluating (e instanceof RangeError) is expected to be true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.5.1_A1.2_T3.js - x.hasOwnProperty("2") must return false Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.5.1_A1.3_T2.js - The value of x.length is expected to be 2 Expected SameValue(«0», «2») to be true
+FAIL: test262/test/built-ins/Array/length/S15.4.5.2_A3_T4.js - The value of x[4294967294] is expected to equal undefined Expected SameValue(«4294967294», «undefined») to be true
+FAIL: test262/test/built-ins/Array/length/define-own-prop-length-coercion-order-set.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/length/define-own-prop-length-coercion-order.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/length/define-own-prop-length-error.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/length/define-own-prop-length-no-value-order.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/length/define-own-prop-length-overflow-order.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/length/define-own-prop-length-overflow-realm.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/of/construct-this-with-the-number-of-arguments.js - The value of len is expected to be 0 Expected SameValue(«undefined», «0») to be true
+FAIL: test262/test/built-ins/Array/of/creates-a-new-array-from-arguments.js - value is not callable
+FAIL: test262/test/built-ins/Array/of/does-not-use-prototype-properties.js - value is not callable
+FAIL: test262/test/built-ins/Array/of/does-not-use-set-for-indices.js - obj should have an own property 0
+FAIL: test262/test/built-ins/Array/of/length.js - obj should have an own property length
+FAIL: test262/test/built-ins/Array/of/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/of/not-a-constructor.js - runtime error
+FAIL: test262/test/built-ins/Array/of/of.js - obj should have an own property of
+FAIL: test262/test/built-ins/Array/of/return-a-custom-instance.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/of/return-a-new-array-object.js - value is not callable
+FAIL: test262/test/built-ins/Array/of/return-abrupt-from-contructor.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/of/return-abrupt-from-data-property-using-proxy.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/of/return-abrupt-from-data-property.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/of/return-abrupt-from-setting-length.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/of/sets-length.js - The value of hits is expected to be 1 Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prop-desc.js - obj['Array'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/Symbol.iterator.js - Expected SameValue(«function () { [native code] }», «undefined») to be true
+FAIL: test262/test/built-ins/Array/prototype/Symbol.unscopables/array-find-from-last.js - Expected SameValue(«undefined», «null») to be true
+FAIL: test262/test/built-ins/Array/prototype/Symbol.unscopables/change-array-by-copy.js - obj should have an own property toReversed
+FAIL: test262/test/built-ins/Array/prototype/Symbol.unscopables/prop-desc.js - obj should have an own property @@unscopables
+FAIL: test262/test/built-ins/Array/prototype/Symbol.unscopables/value.js - Expected SameValue(«undefined», «null») to be true
+FAIL: test262/test/built-ins/Array/prototype/at/name.js - The value of Array.prototype.at.name is expected to be "at" Expected SameValue(«», «at») to be true
+FAIL: test262/test/built-ins/Array/prototype/at/prop-desc.js - obj['at'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_array-like-length-to-string-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_array-like-length-value-of-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_array-like-negative-length.js - [].concat({"length": -4294967294, "1": "A", "3": "B", "5": "C"}) must return []Array lengths differ: 1 vs 0
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_array-like-primitive-non-number-length.js - [].concat({"1": "A", "3": "B", "5": "C"}) must return []Array lengths differ: 1 vs 0
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_array-like-string-length.js - The value of actual is expected to equal the value of expectedArray lengths differ: 5 vs 10
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_array-like-to-length-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_array-like.js - The value of actual is expected to equal the value of expectedArray lengths differ: 5 vs 10
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_holey-sloppy-arguments.js - [1, void 0, 3, 1, void 0, 3] must return the same value returned by [].concat(args, args)Array lengths differ: 6 vs 2
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_large-typed-array.js - Array lengths differ: 1 vs 4000
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_length-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_sloppy-arguments-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_sloppy-arguments-with-dupes.js - [].concat((function(a, a, a) {return arguments;})(1, 2, 3), (function(a, a, a) {return arguments;})(1, 2, 3)) must return [1, 2, 3, 1, 2, 3]Array lengths differ: 2 vs 6
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_sloppy-arguments.js - [].concat((function(a, b, c) {return arguments;})(1, 2, 3), (function(a, b, c) {return arguments;})(1, 2, 3)) must return [1, 2, 3, 1, 2, 3]Array lengths differ: 2 vs 6
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_small-typed-array.js - Arrays differ at index 0: [object Object] vs 1
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_spreadable-boolean-wrapper.js - [1, 2, 3] must return the same value returned by [].concat(bool)Array lengths differ: 3 vs 1
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_spreadable-function.js - [1, 2, 3] must return the same value returned by [].concat(fn)Array lengths differ: 3 vs 1
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_spreadable-getter-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_spreadable-number-wrapper.js - [1, 2, 3] must return the same value returned by [].concat(num)Array lengths differ: 3 vs 1
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_spreadable-reg-exp.js - [].concat(/abc/) must return [1, 2, 3]Array lengths differ: 1 vs 3
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_spreadable-sparse-object.js - [void 0, void 0, void 0, void 0, void 0] must return the same value returned by [].concat(obj)Array lengths differ: 5 vs 1
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_spreadable-string-wrapper.js - ["y", "u", "c", "k", "uD83D", "uDCA9"] must return the same value returned by [].concat(str1)Array lengths differ: 6 vs 1
+test262 progress: 1000/34268 (passed=440, failed=554, skipped=6)
+FAIL: test262/test/built-ins/Array/prototype/concat/Array.prototype.concat_strict-arguments.js - [].concat("(function(a, b, c) {"use strict"; return arguments;})(1, 2, 3)", "(function(a, b, c) {"use strict"; return arguments;})(1, 2, 3)") must return [1, 2, 3, 1, 2, 3]Array lengths differ: 2 vs 6
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A1_T1.js - arr.getClass() must return "[object Array]" Expected SameValue(«undefined», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A1_T2.js - arr.getClass() must return "[object Array]" Expected SameValue(«undefined», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A1_T3.js - arr.getClass() must return "[object Array]" Expected SameValue(«undefined», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A1_T4.js - arr.getClass() must return "[object Array]" Expected SameValue(«undefined», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A2_T1.js - arr.getClass() must return "[object Array]" Expected SameValue(«undefined», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A2_T2.js - arr.getClass() must return "[object Array]" Expected SameValue(«undefined», «[object Array]») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A3_T1.js - arr.hasOwnProperty("1") must return true Expected SameValue(«undefined», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A3_T2.js - a.hasOwnProperty("1") must return false Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/S15.4.4.4_A3_T3.js - a.hasOwnProperty("1") must return false Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/arg-length-exceeding-integer-limit.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/arg-length-near-integer-limit.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-ctor-non-object.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-ctor-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-proto-from-ctor-realm-non-array.js - Object.getPrototypeOf(array.concat()) returns CustomCtor.prototype Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/create-proxy.js - Object.getPrototypeOf(Array.prototype.concat.call(proxy)) returns Ctor.prototype Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/create-revoked-proxy.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/concat/create-species-abrupt.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-species-non-ctor.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-species-non-extensible-spreadable.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-species-non-extensible.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-species-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-species-with-non-configurable-property-spreadable.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-species-with-non-configurable-property.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/create-species.js - The value of callCount is expected to be 1 Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/is-concat-spreadable-get-err.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/concat/is-concat-spreadable-get-order.js - The value of calls is expected to be ["constructor", "isConcatSpreadable"]Array lengths differ: 0 vs 2
+FAIL: test262/test/built-ins/Array/prototype/concat/is-concat-spreadable-is-array-proxy-revoked.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/concat/is-concat-spreadable-proxy-revoked.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/concat/is-concat-spreadable-proxy.js - The value of [].concat(arrayProxy).length is expected to be 0 Expected SameValue(«1», «0») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/is-concat-spreadable-val-falsey.js - The value of result.length is expected to be 1 Expected SameValue(«2», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/is-concat-spreadable-val-truthy.js - The value of result.length is expected to be 0 Expected SameValue(«1», «0») to be true
+FAIL: test262/test/built-ins/Array/prototype/concat/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/concat/prop-desc.js - obj['concat'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/constructor.js - obj['constructor'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/call-with-boolean.js - The result of evaluating (Array.prototype.copyWithin.call(true) instanceof Boolean) is expected to be true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/coerced-values-start-change-start.js - currArray.copyWithin(0, {valueOf: shorten}) returns arrayArray lengths differ: 1024 vs 20
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/coerced-values-start-change-target.js - currArray.copyWithin(1000, {valueOf: shorten}) returns arrayArray lengths differ: 1024 vs 1019
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/fill-holes.js - Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/length-near-integer-limit.js - Expected SameValue(«0», «-3») to be true
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/prop-desc.js - obj['copyWithin'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-delete-proxy-target.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-delete-target.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-end-as-symbol.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-end.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-get-start-value.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-has-start.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-set-target-value.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-start-as-symbol.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-start.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-target-as-symbol.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-abrupt-from-target.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/return-this.js - Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/copyWithin/undefined-end.js - [0, 1, 2, 3].copyWithin(0, 1, undefined) must return [1, 2, 3, 3]Arrays differ at index 0: 0 vs 1
+FAIL: test262/test/built-ins/Array/prototype/entries/iteration-mutable.js - Cannot read properties of undefined (reading 'done')
+FAIL: test262/test/built-ins/Array/prototype/entries/iteration.js - Cannot read properties of undefined (reading 'done')
+FAIL: test262/test/built-ins/Array/prototype/entries/length.js - obj should have an own property length
+FAIL: test262/test/built-ins/Array/prototype/entries/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/entries/not-a-constructor.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/entries/prop-desc.js - `typeof Array.prototype.entries` is `function` Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/Array/prototype/entries/return-abrupt-from-this.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/entries/returns-iterator-from-object.js - The prototype of [].entries() is %ArrayIteratorPrototype% Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/entries/returns-iterator.js - The prototype of [].entries() is %ArrayIteratorPrototype% Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-3-16.js - Array.prototype.every.call(obj, callbackfn2) Expected SameValue(«true», «false») to be true
+SKIP: test262/test/built-ins/Array/prototype/every/15.4.4.16-3-17.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-4-11.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-6.js - res Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-b-13.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+test262 progress: 1200/34268 (passed=571, failed=622, skipped=7)
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-b-14.js - arr.every(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-b-15.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-b-16.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-b-5.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-b-7.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-b-9.js - arr.every(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-10.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-12.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-14.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-16.js - [, , , ].every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-18.js - accessed !== true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-20.js - accessed !== true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-22.js - accessed !== true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-28.js - arr.every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-31.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-7-c-i-8.js - [, , , ].every(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-8-10.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-8-2.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-8-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-8-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-8-5.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-8-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-8-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/every/15.4.4.16-8-8.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/every/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/every/prop-desc.js - obj['every'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/exotic-array.js - Expected SameValue(«undefined», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/fill/coerced-indexes.js - [0, 0].fill(1, 0, undefined) must return [1, 1]Arrays differ at index 0: 0 vs 1
+FAIL: test262/test/built-ins/Array/prototype/fill/length-near-integer-limit.js - Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/fill/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/fill/prop-desc.js - obj['fill'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-10-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-18.js - newArr.length Expected SameValue(«0», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-3-16.js - newArr.length Expected SameValue(«0», «1») to be true
+SKIP: test262/test/built-ins/Array/prototype/filter/15.4.4.20-3-17.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-4-11.js - Expected Test262Error but got TypeError
+test262 progress: 1400/34268 (passed=735, failed=657, skipped=8)
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-6-2.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-6-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-6-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-6-5.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-6-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-6-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-6-8.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-6.js - resArr.length Expected SameValue(«3», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-b-13.js - newArr.length Expected SameValue(«2», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-b-14.js - newArr.length Expected SameValue(«4», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-b-15.js - newArr[2] Expected SameValue(«2», «prototype») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-b-16.js - newArr[2] Expected SameValue(«2», «unconfigurable») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-b-5.js - newArr.length Expected SameValue(«2», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-b-7.js - newArr.length Expected SameValue(«2», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-b-9.js - newArr.length Expected SameValue(«2», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-10.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-12.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-14.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-16.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-18.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-20.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-22.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-28.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-31.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-i-8.js - newArr.length Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/15.4.4.20-9-c-iii-1-3.js - enumerable !== true
+FAIL: test262/test/built-ins/Array/prototype/filter/create-ctor-non-object.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/filter/create-ctor-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/filter/create-proto-from-ctor-realm-non-array.js - Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/create-proxy.js - Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/create-revoked-proxy.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/filter/create-species-abrupt.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/filter/create-species-non-ctor.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/filter/create-species-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/filter/create-species.js - Constructor invoked exactly once Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/filter/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/filter/prop-desc.js - obj['filter'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/filter/target-array-non-extensible.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/filter/target-array-with-non-configurable-property.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/find/array-altered-during-loop.js - predicate called three times Expected SameValue(«2», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/find/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/find/predicate-called-for-each-array-property.js - Expected SameValue(«2», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/find/predicate-is-not-callable-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/find/prop-desc.js - obj['find'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/find/return-found-value-predicate-result-is-true.js - coerced string Expected SameValue(«undefined», «Shoes») to be true
+FAIL: test262/test/built-ins/Array/prototype/findIndex/array-altered-during-loop.js - predicate called three times Expected SameValue(«2», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/findIndex/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/findIndex/predicate-called-for-each-array-property.js - Expected SameValue(«2», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/findIndex/predicate-is-not-callable-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/findIndex/prop-desc.js - obj['findIndex'] descriptor should not be enumerable
+test262 progress: 1600/34268 (passed=885, failed=707, skipped=8)
+FAIL: test262/test/built-ins/Array/prototype/findIndex/return-index-predicate-result-is-true.js - coerced string Expected SameValue(«-1», «0») to be true
+FAIL: test262/test/built-ins/Array/prototype/findLast/maximum-index.js - predicate invoked once Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/findLast/name.js - The value of `Array.prototype.findLast.name` is `"findLast"` Expected SameValue(«», «findLast») to be true
+FAIL: test262/test/built-ins/Array/prototype/findLast/predicate-called-for-each-array-property.js - Expected SameValue(«2», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/findLast/predicate-is-not-callable-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/findLast/prop-desc.js - obj['findLast'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/findLast/return-found-value-predicate-result-is-true.js - coerced string Expected SameValue(«undefined», «Bike») to be true
+FAIL: test262/test/built-ins/Array/prototype/findLastIndex/maximum-index.js - predicate invoked once Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/findLastIndex/name.js - The value of `Array.prototype.findLastIndex.name` is `"findLastIndex"` Expected SameValue(«», «findLastIndex») to be true
+FAIL: test262/test/built-ins/Array/prototype/findLastIndex/predicate-called-for-each-array-property.js - Expected SameValue(«2», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/findLastIndex/predicate-is-not-callable-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/findLastIndex/prop-desc.js - obj['findLastIndex'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/findLastIndex/return-index-predicate-result-is-true.js - coerced string Expected SameValue(«-1», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/flat/name.js - The value of `Array.prototype.flat.name` is `"flat"` Expected SameValue(«», «flat») to be true
+FAIL: test262/test/built-ins/Array/prototype/flat/non-numeric-depth-should-not-throw.js - a.flat(undefined) uses default depth of 1Arrays differ at index 1: 2 vs 2
+FAIL: test262/test/built-ins/Array/prototype/flat/non-object-ctor-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flat/prop-desc.js - obj['flat'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/flat/proxy-access-count.js - getCalls is not defined
+FAIL: test262/test/built-ins/Array/prototype/flat/symbol-object-create-null-depth-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flat/target-array-non-extensible.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flat/target-array-with-non-configurable-property.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flatMap/array-like-objects-nested.js - The value of actual is expected to be [obj1, obj2, obj3, arrLike]Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/flatMap/array-like-objects-poisoned-length.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/flatMap/array-like-objects-typedarrays.js - The value of actual is expected to be [1, 0, 42]Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/flatMap/array-like-objects.js - The value of actual is expected to be [39, 2, 39, 42]Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/flatMap/call-with-boolean.js - Array.prototype.flatMap.call(true, () => {}) must return []Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/flatMap/name.js - The value of `Array.prototype.flatMap.name` is `"flatMap"` Expected SameValue(«», «flatMap») to be true
+FAIL: test262/test/built-ins/Array/prototype/flatMap/non-callable-argument-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flatMap/prop-desc.js - obj['flatMap'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/flatMap/proxy-access-count.js - getCalls is not defined
+FAIL: test262/test/built-ins/Array/prototype/flatMap/target-array-non-extensible.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flatMap/target-array-with-non-configurable-property.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flatMap/this-value-ctor-non-object.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flatMap/this-value-ctor-object-species-bad-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flatMap/this-value-ctor-object-species-custom-ctor-poisoned-throws.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/flatMap/this-value-ctor-object-species-custom-ctor.js - returned value is an instance of custom ctor
+FAIL: test262/test/built-ins/Array/prototype/flatMap/this-value-ctor-object-species.js - The value of called is expected to be 1 Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-18.js - result !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-3-16.js - testResult !== true
+SKIP: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-3-17.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-4-11.js - Expected Test262Error but got TypeError
+ERROR: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-5.js - ParseError("Expected Semicolon, got Delete")
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-b-13.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-b-14.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-b-15.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-b-16.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-b-5.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-b-7.js - testResult !== true
+test262 progress: 1800/34268 (passed=1037, failed=754, skipped=9)
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-b-9.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-10.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-12.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-14.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-16.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-18.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-20.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-22.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-28.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-31.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-8.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-10.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-2.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-5.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-8.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/15.4.4.18-8-9.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/forEach/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/forEach/prop-desc.js - obj['forEach'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/includes/get-prop.js - The value of calls is expected to be ["length", "0", "1", "2", "3"]Array lengths differ: 0 vs 5
+FAIL: test262/test/built-ins/Array/prototype/includes/length-boundaries.js - 2**53-1, found value at 2**53-2 Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/includes/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/includes/prop-desc.js - obj['includes'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/includes/return-abrupt-tointeger-fromindex-symbol.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/includes/return-abrupt-tointeger-fromindex.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/includes/return-abrupt-tonumber-length.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/includes/tointeger-fromindex.js - object [0] Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-3-16.js - Array.prototype.indexOf.call(obj, true) Expected SameValue(«-1», «10») to be true
+SKIP: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-3-17.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-5-19.js - [0, 1, targetObj, 3, 4].indexOf(targetObj, "0x0003") Expected SameValue(«2», «-1») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-5-23.js - toStringAccessed !== true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-5-24.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-5-25.js - valueOfAccessed !== true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-5-26.js - stepFiveOccurs !== true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-5-27.js - stepFiveOccurs !== true
+test262 progress: 2000/34268 (passed=1199, failed=791, skipped=10)
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-9.js - a.indexOf(2,4294967290 ) Expected SameValue(«-1», «4294967294») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-10.js - arr.indexOf(6.99) Expected SameValue(«-1», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-14.js - arr.indexOf(1) Expected SameValue(«1», «-1») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-16.js - arr.indexOf(1) Expected SameValue(«-1», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-17.js - arr.indexOf("last") Expected SameValue(«3», «-1») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-18.js - arr.indexOf("prototype") Expected SameValue(«-1», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-19.js - arr.indexOf("unconfigurable") Expected SameValue(«-1», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-2.js - Array.prototype.indexOf.call(arr, targetObj, fromIndex) Expected SameValue(«-1», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-3.js - arr.indexOf(targetObj, fromIndex) Expected SameValue(«-1», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-5.js - Array.prototype.indexOf.call(arr, false, fromIndex) Expected SameValue(«10», «-1») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-6.js - arr.indexOf("10", fromIndex) Expected SameValue(«10», «-1») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-8.js - arr.indexOf(1) Expected SameValue(«-1», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/calls-only-has-on-prototype-after-length-zeroed.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/indexOf/length-near-integer-limit.js - Expected SameValue(«-1», «9007199254740990») to be true
+FAIL: test262/test/built-ins/Array/prototype/indexOf/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/indexOf/prop-desc.js - obj['indexOf'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/join/S15.4.4.5_A1.2_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/join/S15.4.4.5_A1.3_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/join/S15.4.4.5_A2_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/join/S15.4.4.5_A2_T4.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/join/S15.4.4.5_A3.1_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/join/S15.4.4.5_A3.1_T2.js - x.join("{valueOf() {return "+"}, toString() {return "*"}}) must return "0*1*2*3" Expected SameValue(«0[object Object]1[object Object]2[object Object]3», «0*1*2*3») to be true
+FAIL: test262/test/built-ins/Array/prototype/join/S15.4.4.5_A3.2_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/join/S15.4.4.5_A3.2_T2.js - x.join() must return "*" Expected SameValue(«[object Object]», «*») to be true
+FAIL: test262/test/built-ins/Array/prototype/join/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/join/prop-desc.js - obj['join'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/keys/iteration-mutable.js - Cannot read properties of undefined (reading 'done')
+FAIL: test262/test/built-ins/Array/prototype/keys/iteration.js - Cannot read properties of undefined (reading 'value')
+FAIL: test262/test/built-ins/Array/prototype/keys/length.js - obj should have an own property length
+FAIL: test262/test/built-ins/Array/prototype/keys/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/keys/not-a-constructor.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/keys/prop-desc.js - `typeof Array.prototype.keys` is `function` Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/Array/prototype/keys/return-abrupt-from-this.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/keys/returns-iterator-from-object.js - The prototype of [].keys() is %ArrayIteratorPrototype% Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/keys/returns-iterator.js - The prototype of [].keys() is %ArrayIteratorPrototype% Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-16.js - Array.prototype.lastIndexOf.call(obj, 2573) Expected SameValue(«-1», «2573») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-28.js - verify length is 4294967296 finally Expected SameValue(«0», «4294967295») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-12.js - arr.lastIndexOf(null, Infinity) Expected SameValue(«-1», «4294967294») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-16.js - arr.lastIndexOf(true, "Infinity") Expected SameValue(«-1», «4294967294») to be true
+test262 progress: 2200/34268 (passed=1358, failed=832, skipped=10)
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-19.js - [0, true, targetObj, 3, false].lastIndexOf(targetObj, "0x0002") Expected SameValue(«-1», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-21.js - [0, true, targetObj, 3, false].lastIndexOf(targetObj, fromIndex) Expected SameValue(«-1», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-22.js - [0, true, targetObj, 3, false].lastIndexOf(targetObj, fromIndex) Expected SameValue(«-1», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-23.js - [0, true].lastIndexOf(true, fromIndex) Expected SameValue(«-1», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-24.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-25.js - [0, true].lastIndexOf(true, child) Expected SameValue(«-1», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-26.js - stepFiveOccurs !== true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-27.js - stepFiveOccurs !== true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-9.js - a.lastIndexOf(2) Expected SameValue(«-1», «4294967294») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-10.js - arr.lastIndexOf(6.99) Expected SameValue(«-1», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-16.js - arr.lastIndexOf(1) Expected SameValue(«-1», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-17.js - arr.lastIndexOf("last") Expected SameValue(«3», «-1») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-18.js - arr.lastIndexOf("prototype") Expected SameValue(«-1», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-19.js - arr.lastIndexOf("unconfigurable") Expected SameValue(«-1», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-2.js - Array.prototype.lastIndexOf.call(arr, targetObj, fromIndex) Expected SameValue(«-1», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-3.js - arr.lastIndexOf(targetObj, fromIndex) Expected SameValue(«-1», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-8.js - arr.lastIndexOf(1) Expected SameValue(«-1», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-b-i-20.js - arr.hasOwnProperty(0) !== true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/calls-only-has-on-prototype-after-length-zeroed.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/length-near-integer-limit.js - Expected SameValue(«-1», «9007199254740988») to be true
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/lastIndexOf/prop-desc.js - obj['lastIndexOf'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/length.js - Expected SameValue(«undefined», «0») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-3-14.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-3-16.js - newArr.length Expected SameValue(«0», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-3-28.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-3-29.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-3-8.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-4-11.js - Expected Test262Error but got TypeError
+test262 progress: 2400/34268 (passed=1529, failed=861, skipped=10)
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-6.js - resArr[4] Expected SameValue(«undefined», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-9.js - typeof testResult[2] Expected SameValue(«boolean», «undefined») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-b-11.js - typeof testResult[1] Expected SameValue(«number», «undefined») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-b-13.js - testResult[1] Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-b-14.js - typeof testResult[3] Expected SameValue(«boolean», «undefined») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-b-15.js - testResult[2] Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-b-16.js - testResult[2] Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-b-5.js - testResult[1] Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-b-7.js - testResult[1] Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-b-9.js - typeof testResult[1] Expected SameValue(«boolean», «undefined») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-10.js - testResult[0] Expected SameValue(«undefined», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-12.js - testResult[0] Expected SameValue(«11», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-14.js - testResult[0] Expected SameValue(«11», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-16.js - testResult[0] Expected SameValue(«abc», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-18.js - testResult[1] Expected SameValue(«undefined», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-19.js - testResult[0] Expected SameValue(«100», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-22.js - testResult[0] Expected SameValue(«undefined», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-28.js - testResult[0] Expected SameValue(«undefined», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-31.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-8.js - newArr[1] Expected SameValue(«13», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-iii-4.js - enumerable !== true
+FAIL: test262/test/built-ins/Array/prototype/map/15.4.4.19-9-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/map/create-ctor-non-object.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/create-ctor-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/create-non-array-invalid-len.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/create-proto-from-ctor-realm-non-array.js - Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/create-proxy.js - Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/create-revoked-proxy.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/map/create-species-abrupt.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/create-species-non-ctor.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/create-species-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/create-species-undef-invalid-len.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/create-species.js - Constructor invoked exactly once Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/map/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/map/prop-desc.js - obj['map'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/map/target-array-non-extensible.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/map/target-array-with-non-configurable-property.js - Expected an error to be thrown
+SKIP: test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A1.1_T1.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A2_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A3_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A3_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A4_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/pop/clamps-to-integer-limit.js - Length is 2**53 - 1 Expected SameValue(«9999999», «9007199254740990») to be true
+FAIL: test262/test/built-ins/Array/prototype/pop/length-near-integer-limit.js - arrayLike['9007199254740990'] is returned from pop() Expected SameValue(«undefined», «9007199254740990») to be true
+FAIL: test262/test/built-ins/Array/prototype/pop/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/pop/prop-desc.js - obj['pop'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/pop/set-length-array-is-frozen.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/pop/set-length-array-length-is-non-writable.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/pop/set-length-zero-array-is-frozen.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/pop/set-length-zero-array-length-is-non-writable.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/pop/throws-with-string-receiver.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/prop-desc.js - obj['prototype'] descriptor should not be writable; obj['prototype'] descriptor should not be configurable
+FAIL: test262/test/built-ins/Array/prototype/push/S15.4.4.7_A2_T2.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/push/S15.4.4.7_A3.js - The value of push is expected to be 4294967295 Expected SameValue(«0», «4294967295») to be true
+FAIL: test262/test/built-ins/Array/prototype/push/S15.4.4.7_A4_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/push/S15.4.4.7_A4_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/push/clamps-to-integer-limit.js - Length is 2**53 - 1 Expected SameValue(«10000000», «9007199254740991») to be true
+FAIL: test262/test/built-ins/Array/prototype/push/length-near-integer-limit-set-failure.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/push/length-near-integer-limit.js - New arrayLike.length is 2**53 - 1 Expected SameValue(«10000001», «9007199254740991») to be true
+FAIL: test262/test/built-ins/Array/prototype/push/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/push/prop-desc.js - obj['push'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/push/set-length-array-is-frozen.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/push/set-length-array-length-is-non-writable.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/push/set-length-zero-array-is-frozen.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/push/set-length-zero-array-length-is-non-writable.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/push/throws-if-integer-limit-exceeded.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/push/throws-with-string-receiver.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-10-3.js - Cannot set properties of undefined (setting 'prototype')
+test262 progress: 2600/34268 (passed=1661, failed=928, skipped=11)
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-10-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-10-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-10-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-18.js - Array.prototype.reduce.call(str, callbackfn, 1) Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-3-16.js - Array.prototype.reduce.call(obj, callbackfn, 1) Expected SameValue(«1», «true») to be true
+SKIP: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-3-17.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-4-11.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-5-13.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-5-2.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-5-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-5-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-5-5.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-5-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-5-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-5-8.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-7-2.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-7-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-7-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-7-5.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-7-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-7-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-7-8.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-7-9.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-3.js - Reduce of empty array with no initial value
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-10.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-12.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-14.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-16.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-18.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-20.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-22.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-30.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-33.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-8.js - Reduce of empty array with no initial value
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-c-4.js - Reduce of empty array with no initial value
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-c-8.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-6.js - res Expected SameValue(«123», «1235») to be true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-9.js - newAccum Expected SameValue(«initialValue0123», «initialValue01») to be true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-11.js - accessed !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-13.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-14.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-15.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-16.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-18.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-20.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-22.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-26.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-27.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-28.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-29.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-5.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-7.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-b-9.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-10.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-12.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-14.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-16.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-18.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-20.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-22.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-30.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-33.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-8.js - testResult !== true
+test262 progress: 2800/34268 (passed=1798, failed=990, skipped=12)
+FAIL: test262/test/built-ins/Array/prototype/reduce/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/reduce/prop-desc.js - obj['reduce'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-10-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-10-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-10-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-10-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-18.js - Array.prototype.reduceRight.call(str, callbackfn, 111) !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-3-16.js - testResult2 !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-4-11.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-5-13.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-5-2.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-5-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-5-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-5-5.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-5-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-5-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-5-8.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-7-2.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-7-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-7-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-7-5.js - Cannot set properties of undefined (setting 'prototype')
+SKIP: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-7-6.js (with statement not supported)
+SKIP: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-7-7.js (with statement not supported)
+SKIP: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-7-8.js (with statement not supported)
+SKIP: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-7-9.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-2.js - preVal Expected SameValue(«6», «11») to be true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-3.js - Reduce of empty array with no initial value
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-10.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-12.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-14.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-16.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-18.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-20.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-22.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-30.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-33.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-8.js - Reduce of empty array with no initial value
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-c-4.js - Reduce of empty array with no initial value
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-c-8.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-6.js - res Expected SameValue(«91», «151») to be true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-9.js - called Expected SameValue(«4», «3») to be true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-11.js - accessed !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-13.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-14.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-15.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-16.js - testResult !== true
+test262 progress: 3000/34268 (passed=1952, failed=1032, skipped=16)
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-18.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-20.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-22.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-26.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-27.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-28.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-29.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-5.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-7.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-b-9.js - accessed !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-10.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-12.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-14.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-16.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-18.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-20.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-22.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-30.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-33.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-8.js - testResult !== true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/length-near-integer-limit.js - The value of acc.length is expected to be 2 Expected SameValue(«undefined», «2») to be true
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/reduceRight/prop-desc.js - obj['reduceRight'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A1_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A1_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A2_T1.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A2_T2.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A2_T3.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A3_T3.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A4_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A4_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/reverse/call-with-boolean.js - The result of `(Array.prototype.reverse.call(true) instanceof Boolean)` is true Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/reverse/get_if_present_with_delete.js - Indexed property '0' not present Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/reverse/length-exceeding-integer-limit-with-object.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/reverse/length-exceeding-integer-limit-with-proxy.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/reverse/length.js - obj should have an own property length
+FAIL: test262/test/built-ins/Array/prototype/reverse/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/reverse/not-a-constructor.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/reverse/prop-desc.js - typeof Expected SameValue(«undefined», «function») to be true
+SKIP: test262/test/built-ins/Array/prototype/shift/S15.4.4.9_A1.1_T1.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/shift/S15.4.4.9_A4_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/shift/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/shift/prop-desc.js - obj['shift'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/shift/set-length-array-is-frozen.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/shift/set-length-array-length-is-non-writable.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/shift/set-length-zero-array-is-frozen.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/shift/set-length-zero-array-length-is-non-writable.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/shift/throws-when-this-value-length-is-writable-false.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/15.4.4.10-10-c-ii-1.js - newArr.hasOwnProperty("0") !== true
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.1_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.1_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.1_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.1_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.1_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.1_T6.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.1_T7.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.2_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.2_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.2_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.2_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.3_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.3_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.3_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.3_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.4_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.4_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.4_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.4_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.5_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A1.5_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.1_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.1_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.1_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.1_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.1_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.2_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.2_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.2_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.2_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2.2_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A2_T6.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A3_T1.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A3_T2.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/S15.4.4.10_A4_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/slice/create-ctor-non-object.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/create-ctor-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/create-non-array-invalid-len.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/create-proto-from-ctor-realm-non-array.js - Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/slice/create-proxied-array-invalid-len.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/create-proxy.js - Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/slice/create-revoked-proxy.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/slice/create-species-abrupt.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/create-species-neg-zero.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/prototype/slice/create-species-non-ctor.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/create-species-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/create-species.js - Constructor invoked exactly once Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/slice/length-exceeding-integer-limit-proxied-array.js - The value of result is expected to be ["9007199254740989", "9007199254740990"]Array lengths differ: 0 vs 2
+FAIL: test262/test/built-ins/Array/prototype/slice/length-exceeding-integer-limit.js - The value of result is expected to be ["9007199254740989", "9007199254740990"]Array lengths differ: 0 vs 2
+FAIL: test262/test/built-ins/Array/prototype/slice/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/slice/prop-desc.js - obj['slice'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/slice/target-array-non-extensible.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/slice/target-array-with-non-configurable-property.js - Expected an error to be thrown
+test262 progress: 3200/34268 (passed=2045, failed=1138, skipped=17)
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-3-16.js - Array.prototype.some.call(obj, callbackfn1) !== true
+SKIP: test262/test/built-ins/Array/prototype/some/15.4.4.17-3-17.js (with statement not supported)
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-4-11.js - Expected Test262Error but got TypeError
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-6.js - res Expected SameValue(«false», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-b-13.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-b-14.js - arr.some(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-b-15.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-b-16.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-b-5.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-b-7.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-b-9.js - arr.some(callbackfn) Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-10.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-12.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-14.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-16.js - [, , ].some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-18.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-20.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-22.js - [, ].some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-28.js - arr.some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-31.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-7-c-i-8.js - [, ].some(callbackfn) !== true
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-8-10.js - Cannot set properties of undefined (setting 'prototype')
+test262 progress: 3400/34268 (passed=2223, failed=1159, skipped=18)
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-8-2.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-8-3.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-8-4.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-8-5.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-8-6.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-8-7.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/some/15.4.4.17-8-8.js - Cannot set properties of undefined (setting 'prototype')
+FAIL: test262/test/built-ins/Array/prototype/some/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/some/prop-desc.js - obj['some'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/sort/S15.4.4.11_A2.1_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/sort/S15.4.4.11_A3_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/sort/S15.4.4.11_A3_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/sort/S15.4.4.11_A4_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/sort/S15.4.4.11_A6_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/sort/bug_596_1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/sort/bug_596_2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/sort/call-with-primitive.js - boolean
+FAIL: test262/test/built-ins/Array/prototype/sort/comparefn-nonfunction-call-throws.js - Expected TypeError but got Test262Error
+FAIL: test262/test/built-ins/Array/prototype/sort/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-comparefn-throws.js - Expected SameValue(«lolwat», «get») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-getter-appends-elements.js - Expected SameValue(«undefined», «true») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-getter-decreases-length.js - Expected SameValue(«a», «b») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-getter-deletes-predecessor.js - Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-getter-deletes-successor.js - Expected SameValue(«b», «c») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-getter-increases-length.js - Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-getter-pops-elements.js - Expected SameValue(«a», «b») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-getter-sets-predecessor.js - Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-getter-sets-successor.js - Expected SameValue(«b», «c») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-prototype-accessors.js - Expected SameValue(«undefined», «get») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-prototype-element.js - Expected SameValue(«undefined», «4») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-setter-appends-elements.js - Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-setter-decreases-length.js - Expected SameValue(«8», «7») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-setter-deletes-predecessor.js - Expected SameValue(«true», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-setter-deletes-successor.js - Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-setter-increases-length.js - Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-setter-pops-elements.js - Expected SameValue(«8», «7») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-setter-sets-predecessor.js - Expected SameValue(«b», «foobar») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/precise-setter-sets-successor.js - Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/sort/prop-desc.js - obj['sort'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/splice/15.4.4.12-9-c-ii-1.js - verifyConfigurable Expected SameValue(«undefined», «false») to be true
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.1_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.1_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.1_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.1_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.1_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.1_T6.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.2_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.2_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.2_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.2_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.2_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.3_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.3_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.3_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.3_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.3_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.4_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.4_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.4_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.4_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.4_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.4_T6.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.5_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A1.5_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.1_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.1_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.1_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.1_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.1_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.2_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.2_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.2_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.2_T4.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2.2_T5.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2_T1.js - Cannot set properties of undefined (setting 'getClass')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2_T2.js - Cannot set properties of undefined (setting 'getClass')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2_T3.js - Cannot set properties of undefined (setting 'getClass')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A2_T4.js - Cannot set properties of undefined (setting 'getClass')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A3_T1.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A3_T3.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A4_T1.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A4_T2.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A4_T3.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A6.1_T2.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/S15.4.4.12_A6.1_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/splice/call-with-boolean.js - Array.prototype.splice.call(true) must return []Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/splice/clamps-length-to-integer-limit.js - Length is 2**53 Expected SameValue(«9007199254740992», «9007199254740991») to be true
+FAIL: test262/test/built-ins/Array/prototype/splice/create-ctor-non-object.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/create-ctor-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/create-non-array-invalid-len.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/create-non-array.js - Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/splice/create-proto-from-ctor-realm-non-array.js - Expected SameValue(«[object Object]», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/splice/create-proxy.js - Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/splice/create-revoked-proxy.js - value is not callable
+FAIL: test262/test/built-ins/Array/prototype/splice/create-species-abrupt.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/create-species-length-exceeding-integer-limit.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/create-species-neg-zero.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/prototype/splice/create-species-non-ctor.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/create-species-poisoned.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/create-species-undef-invalid-len.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/create-species.js - Constructor invoked exactly once Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/splice/length-and-deleteCount-exceeding-integer-limit.js - The value of result is expected to be ["9007199254740989", "9007199254740990"]Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/splice/length-exceeding-integer-limit-shrink-array.js - The value of result is expected to be ["9007199254740987"]Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/splice/length-near-integer-limit-grow-array.js - The value of result is expected to be []Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/splice/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/splice/prop-desc.js - obj['splice'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/splice/property-traps-order-with-species.js - Array lengths differ: 5 vs 0
+FAIL: test262/test/built-ins/Array/prototype/splice/set_length_no_args.js - Set('length') called exactly once Expected SameValue(«0», «1») to be true
+FAIL: test262/test/built-ins/Array/prototype/splice/target-array-non-extensible.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/target-array-with-non-configurable-property.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/splice/throws-if-integer-limit-exceeded.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/S15.4.4.3_A1_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/S15.4.4.3_A3_T1.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/invoke-element-tolocalestring.js - must skip undefined elements when provided no arguments Expected SameValue(«undefined», «») to be true
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/length.js - obj should have an own property length
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/not-a-constructor.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/primitive_this_value.js - Expected SameValue(«undefined», «booleanundefinedboolean») to be true
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/primitive_this_value_getter.js - Expected SameValue(«undefined», «booleanundefinedboolean») to be true
+FAIL: test262/test/built-ins/Array/prototype/toLocaleString/prop-desc.js - typeof Expected SameValue(«undefined», «function») to be true
+FAIL: test262/test/built-ins/Array/prototype/toReversed/frozen-this-value.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toReversed/get-descending-order.js - Array lengths differ: 0 vs 3
+FAIL: test262/test/built-ins/Array/prototype/toReversed/holes-not-preserved.js - Arrays differ at index 1: undefined vs 3
+FAIL: test262/test/built-ins/Array/prototype/toReversed/length-casted-to-zero.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toReversed/length-decreased-while-iterating.js - Arrays differ at index 2: 2 vs undefined
+FAIL: test262/test/built-ins/Array/prototype/toReversed/length-exceeding-array-length-limit.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/toReversed/length-tolength.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toReversed/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/toReversed/property-descriptor.js - obj['toReversed'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/toReversed/this-value-boolean.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSorted/comparefn-called-after-get-elements.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/toSorted/comparefn-default.js - Arrays differ at index 1: 2 vs 11
+FAIL: test262/test/built-ins/Array/prototype/toSorted/comparefn-not-a-function.js - Expected TypeError but got Test262Error
+FAIL: test262/test/built-ins/Array/prototype/toSorted/comparefn-stop-after-error.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/toSorted/frozen-this-value.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSorted/holes-not-preserved.js - Arrays differ at index 1: 3 vs 2
+FAIL: test262/test/built-ins/Array/prototype/toSorted/length-casted-to-zero.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSorted/length-decreased-while-iterating.js - Arrays differ at index 1: 3 vs 2
+FAIL: test262/test/built-ins/Array/prototype/toSorted/length-exceeding-array-length-limit.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/toSorted/length-tolength.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSorted/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/toSorted/property-descriptor.js - obj['toSorted'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/toSorted/this-value-boolean.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/discarded-element-not-read.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/elements-read-in-order.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/frozen-this-value.js - Array lengths differ: 0 vs 3
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/holes-not-preserved.js - Assertion failed
+test262 progress: 3600/34268 (passed=2276, failed=1306, skipped=18)
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/length-casted-to-zero.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/length-clamped-to-2pow53minus1.js - Cannot read properties of undefined (reading 'length')
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/length-decreased-while-iterating.js - Arrays differ at index 3: 3 vs 6
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/length-exceeding-array-length-limit.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/length-tolength.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/mutate-while-iterating.js - Arrays differ at index 2: 1 vs 42
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/property-descriptor.js - obj['toSpliced'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/start-and-deleteCount-missing.js - Array lengths differ: 0 vs 3
+FAIL: test262/test/built-ins/Array/prototype/toSpliced/this-value-boolean.js - Both arguments must be arrays
+FAIL: test262/test/built-ins/Array/prototype/toString/S15.4.4.2_A1_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/toString/S15.4.4.2_A1_T3.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/toString/S15.4.4.2_A1_T4.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/toString/call-with-boolean.js - Array.prototype.toString.call(true) must return "[object Boolean]" Expected SameValue(«undefined», «[object Boolean]») to be true
+FAIL: test262/test/built-ins/Array/prototype/toString/name.js - obj should have an own property name
+FAIL: test262/test/built-ins/Array/prototype/toString/non-callable-join-string-tag.js - Expected SameValue(«undefined», «[object Object]») to be true
+FAIL: test262/test/built-ins/Array/prototype/toString/prop-desc.js - obj['toString'] descriptor should not be enumerable
+FAIL: test262/test/built-ins/Array/prototype/unshift/S15.4.4.13_A4_T2.js - runtime error
+FAIL: test262/test/built-ins/Array/prototype/unshift/clamps-to-integer-limit.js - Length is 2**53 Expected SameValue(«9007199254740992», «9007199254740991») to be true
+FAIL: test262/test/built-ins/Array/prototype/unshift/length-near-integer-limit.js - Expected an error to be thrown
+FAIL: test262/test/built-ins/Array/prototype/unshift/name.js - obj should have an own property error: Command exited without a return code
