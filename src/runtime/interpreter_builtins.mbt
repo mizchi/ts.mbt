@@ -1591,6 +1591,8 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
     iterator_ctor, "prototype", iterator_proto, false, false, false,
   )
   set_proto_method(iterator_proto, "constructor", iterator_ctor)
+  // Iterator.prototype[@@toStringTag] = "Iterator"
+  let _ = js_define_data_prop(iterator_proto, "@@toStringTag", String("Iterator"), false, false, true)
   let iterator_iter = self.make_native("Iterator.prototype[@@iterator]")
   self.set_function_length(iterator_iter, 0.0)
   let _ = js_define_data_prop(
