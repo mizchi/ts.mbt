@@ -482,3 +482,108 @@ test "gc: finalization_registry allocation tracking" {
   // Should have allocated FinalizationRegistry and registration arrays
   assert_true(obj_after > obj_before)
 }
+
+// === Perceus GC Tests ===
+
+///|
+test "perceus: scope functions exist" {
+  let interp = JSInterpreter::new()
+  let src =
+    #|function main() {
+    #|  return [typeof $enterScope, typeof $exitScope, typeof $markEscaped];
+    #|}
+  let result = interp.run(src)
+  match result {
+    JSValue::Array(arr) => {
+      assert_true(arr.items[0] is String("function"))
+      assert_true(arr.items[1] is String("function"))
+      assert_true(arr.items[2] is String("function"))
+    }
+    _ => panic()
+  }
+}
+
+///|
+test "perceus: enter and exit scope" {
+  let interp = JSInterpreter::new()
+  let src =
+    #|function main() {
+    #|  let scope1 = $enterScope();
+    #|  let scope2 = $enterScope();
+    #|  let cleanup2 = $exitScope();
+    #|  let cleanup1 = $exitScope();
+    #|  return [scope1 > 0, scope2 > scope1, cleanup2, cleanup1];
+    #|}
+  let result = interp.run(src)
+  match result {
+    JSValue::Array(arr) => {
+      // scope IDs should be positive and increasing
+      assert_true(arr.items[0] is Bool(true))
+      assert_true(arr.items[1] is Bool(true))
+      // cleanup counts should be numbers
+      match arr.items[2] {
+        Number(_) => ()
+        _ => panic()
+      }
+      match arr.items[3] {
+        Number(_) => ()
+        _ => panic()
+      }
+    }
+    _ => panic()
+  }
+}
+
+///|
+test "perceus: mark escaped prevents cleanup" {
+  let interp = JSInterpreter::new()
+  let src =
+    #|function main() {
+    #|  let obj = { x: 42 };
+    #|  let scope = $enterScope();
+    #|  // Mark obj as escaped - it should not be cleaned up
+    #|  $markEscaped(obj);
+    #|  let cleanup = $exitScope();
+    #|  return [scope > 0, obj.x];
+    #|}
+  let result = interp.run(src)
+  match result {
+    JSValue::Array(arr) => {
+      assert_true(arr.items[0] is Bool(true))
+      match arr.items[1] {
+        Number(n) => assert_eq(n, 42.0)
+        _ => panic()
+      }
+    }
+    _ => panic()
+  }
+}
+
+///|
+test "perceus: nested scopes" {
+  let interp = JSInterpreter::new()
+  let src =
+    #|function main() {
+    #|  let results = [];
+    #|  let outer = $enterScope();
+    #|  results.push(outer);
+    #|  let inner = $enterScope();
+    #|  results.push(inner);
+    #|  results.push($exitScope()); // exit inner
+    #|  results.push($exitScope()); // exit outer
+    #|  return results;
+    #|}
+  let result = interp.run(src)
+  match result {
+    JSValue::Array(arr) => {
+      // All results should be numbers
+      for item in arr.items {
+        match item {
+          Number(_) => ()
+          _ => panic()
+        }
+      }
+    }
+    _ => panic()
+  }
+}

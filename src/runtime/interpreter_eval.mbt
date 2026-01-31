@@ -4393,7 +4393,10 @@ fn collect_block_lexical_names(block : @ast.TsBlock) -> Array[(String, Bool)] {
 
 ///|
 /// Apply cached lexical names to an environment - faster than hoist_block_lexical
-fn apply_cached_lexical_names(env : JSEnv, names : Array[(String, Bool)]) -> Unit {
+fn apply_cached_lexical_names(
+  env : JSEnv,
+  names : Array[(String, Bool)],
+) -> Unit {
   for pair in names {
     let (name, is_const) = pair
     if not(env.has_local(name)) {

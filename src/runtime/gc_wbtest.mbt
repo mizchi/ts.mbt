@@ -98,9 +98,7 @@ test "gc: allocation count consistency" {
   let interp1 = JSInterpreter::new()
   let _ = interp1.run(src)
   let total1 = gc_stats_total()
-
   gc_stats_reset()
-
   let interp2 = JSInterpreter::new()
   let _ = interp2.run(src)
   let total2 = gc_stats_total()
@@ -135,7 +133,6 @@ test "gc: nested function scopes" {
   gc_stats_reset()
   let interp = JSInterpreter::new()
   let (_, _, _, env_before) = gc_stats_snapshot()
-
   let src =
     #|function outer(x) {
     #|  function inner(y) {
@@ -145,7 +142,6 @@ test "gc: nested function scopes" {
     #|}
     #|function main() { return outer(5); }
   let result = interp.run(src)
-
   let (_, _, _, env_after) = gc_stats_snapshot()
 
   // Should have created envs for outer and inner calls
@@ -171,7 +167,6 @@ test "gc: object property churn" {
     #|  return obj.x;
     #|}
   let _ = interp.run(src)
-
   let (obj_after, _, _, _) = gc_stats_snapshot()
 
   // Modifying existing object shouldn't create many new objects
@@ -196,7 +191,6 @@ test "gc: array push operations" {
     #|  return arr.length;
     #|}
   let _ = interp.run(src)
-
   let (_, _, arr_after, _) = gc_stats_snapshot()
 
   // Should only create one array, not 50
@@ -209,14 +203,12 @@ test "gc: map creates new array" {
   gc_stats_reset()
   let interp = JSInterpreter::new()
   let (_, _, arr_before, _) = gc_stats_snapshot()
-
   let src =
     #|function main() {
     #|  let arr = [1, 2, 3, 4, 5];
     #|  return arr.map(x => x * 2);
     #|}
   let _ = interp.run(src)
-
   let (_, _, arr_after, _) = gc_stats_snapshot()
 
   // map should create a new array (original + result)
@@ -227,7 +219,6 @@ test "gc: map creates new array" {
 ///|
 test "gc: repeated interpreter creation" {
   gc_stats_reset()
-
   let src =
     #|function main() {
     #|  return 42;
@@ -237,8 +228,8 @@ test "gc: repeated interpreter creation" {
   for _ in 0..<5 {
     let interp = JSInterpreter::new()
     let _ = interp.run(src)
-  }
 
+  }
   let total = gc_stats_total()
 
   // Should have consistent allocation per interpreter

@@ -1362,6 +1362,25 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   self.set_function_length(gc_fn, 0.0)
   self.global_env.define_var("gc", gc_fn)
   let _ = js_set_prop(global_obj, "gc", gc_fn)
+
+  // $enterScope - Perceus scope management
+  let enter_scope_fn = self.make_native("$enterScope")
+  self.set_function_length(enter_scope_fn, 0.0)
+  self.global_env.define_var("$enterScope", enter_scope_fn)
+  let _ = js_set_prop(global_obj, "$enterScope", enter_scope_fn)
+
+  // $exitScope - Exit scope and cleanup unreachable objects
+  let exit_scope_fn = self.make_native("$exitScope")
+  self.set_function_length(exit_scope_fn, 0.0)
+  self.global_env.define_var("$exitScope", exit_scope_fn)
+  let _ = js_set_prop(global_obj, "$exitScope", exit_scope_fn)
+
+  // $markEscaped - Mark an object as escaped from current scope
+  let mark_escaped_fn = self.make_native("$markEscaped")
+  self.set_function_length(mark_escaped_fn, 1.0)
+  self.global_env.define_var("$markEscaped", mark_escaped_fn)
+  let _ = js_set_prop(global_obj, "$markEscaped", mark_escaped_fn)
+
   let escape_fn = self.make_native("escape")
   self.set_function_length(escape_fn, 1.0)
   self.global_env.define_var("escape", escape_fn)
@@ -5008,6 +5027,22 @@ fn JSInterpreter::call_native(
       // Return number of collected objects
       Number(collected.length().to_double())
     }
+    "$enterScope" => {
+      // Enter a new Perceus scope
+      let scope_id = perceus_enter_scope()
+      Number(scope_id.to_double())
+    }
+    "$exitScope" => {
+      // Exit current scope and cleanup unreachable objects
+      let cleaned = perceus_exit_scope_with_cleanup()
+      Number(cleaned.to_double())
+    }
+    "$markEscaped" => {
+      // Mark an object as escaped from current scope
+      let obj = if args.length() > 0 { args[0] } else { Undefined }
+      perceus_mark_value_escaped(obj)
+      obj
+    }
     "escape" => {
       let input = if args.length() > 0 {
         self.to_string_value(args[0])
@@ -5477,8 +5512,9 @@ fn JSInterpreter::call_native(
     "WeakMap.prototype.set" => {
       let key = if args.length() > 0 { args[0] } else { Undefined }
       let value = if args.length() > 1 { args[1] } else { Undefined }
-      // Register key with VM GC
+      // Register key with VM GC and Perceus scope tracking
       vm_gc_register_object(key)
+      perceus_track_object(key)
       self.weakmap_set_entry(this_arg, key, value)
     }
     "WeakMap.prototype.has" => {
@@ -5528,8 +5564,9 @@ fn JSInterpreter::call_native(
     }
     "WeakSet.prototype.add" => {
       let value = if args.length() > 0 { args[0] } else { Undefined }
-      // Register value with VM GC
+      // Register value with VM GC and Perceus scope tracking
       vm_gc_register_object(value)
+      perceus_track_object(value)
       self.weakset_add_entry(this_arg, value)
     }
     "WeakSet.prototype.has" => {

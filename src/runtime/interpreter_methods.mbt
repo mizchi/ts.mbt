@@ -1159,7 +1159,12 @@ fn JSInterpreter::array_method(
           }
         }
         // Pre-allocate args array and reuse
-        let args_array : Array[JSValue] = [Undefined, Undefined, Undefined, arr_val]
+        let args_array : Array[JSValue] = [
+          Undefined,
+          Undefined,
+          Undefined,
+          arr_val,
+        ]
         while i < len {
           if i < arr.items.length() && arr.present[i] {
             args_array[0] = accumulator
@@ -1209,7 +1214,12 @@ fn JSInterpreter::array_method(
           }
         }
         // Pre-allocate args array and reuse
-        let args_array : Array[JSValue] = [Undefined, Undefined, Undefined, arr_val]
+        let args_array : Array[JSValue] = [
+          Undefined,
+          Undefined,
+          Undefined,
+          arr_val,
+        ]
         while i >= 0 {
           if i < arr.items.length() && arr.present[i] {
             args_array[0] = accumulator
@@ -1245,6 +1255,7 @@ fn JSInterpreter::array_method(
             args_array[0] = arr.items[i]
             args_array[1] = Number(i.to_double())
             let _ = self.call_function(callback, this_arg, args_array)
+
           }
           i += 1
         }
