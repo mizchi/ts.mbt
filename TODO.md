@@ -1,8 +1,9 @@
 # test262 Progress
 
-## Current Status (2026-01-31)
+## Current Status (2026-02-01)
 
-Based on `test262.allowlist.txt` (34,268 tests) and `test262.skiplist.txt` (14,029 skipped).
+Based on `test262.allowlist.txt` (46,285 tests) and `test262.skiplist.txt` (6,681 skipped).
+Now includes negative tests and async tests (runner supports both).
 
 ### Overall
 
@@ -50,18 +51,21 @@ Based on `test262.allowlist.txt` (34,268 tests) and `test262.skiplist.txt` (14,0
 
 ---
 
-## Skip Reasons (14,029 tests)
+## Skip Reasons (6,681 tests)
 
 | Reason | Count | Notes |
 |--------|-------|-------|
-| flag:async | 5,513 | Async tests (some supported) |
-| includes:temporalHelpers.js | 2,690 | Temporal API |
-| includes:testTypedArray.js | 1,123 | TypedArray |
-| banned:eval | 1,418 | Dynamic eval features |
+| includes:temporalHelpers.js | 2,699 | Temporal API |
+| banned:eval | 1,486 | Dynamic eval features |
 | includes:regExpUtils.js | 574 | RegExp helpers |
-| banned:with | 497 | with statement (deprecated) |
-| banned:Function | 322 | Dynamic Function() |
-| Other includes | ~1,900 | Various test helpers |
+| banned:with | 579 | with statement (deprecated) |
+| banned:Function | 334 | Dynamic Function() |
+| includes:resizableArrayBufferUtils.js | 188 | Resizable ArrayBuffer |
+| includes:testIntl.js | 175 | Intl API |
+| banned:import-defer | 100 | Import defer |
+| Other includes | ~550 | Various test helpers |
+
+Note: negative tests and async tests are now in allowlist (runner supports both).
 
 ---
 

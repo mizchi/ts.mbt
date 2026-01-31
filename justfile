@@ -262,19 +262,8 @@ test262-scan:
         # Extract metadata block
         meta=$(echo "$content" | sed -n '/\/\*---/,/---\*\//p')
 
-        # Check for negative test
-        if echo "$meta" | grep -q "^negative:"; then
-            echo -e "$rel\tnegative" >> "$SKIPLIST"
-            skip_count=$((skip_count + 1))
-            continue
-        fi
-
-        # Check for async flag
-        if echo "$meta" | grep -qE "flags:.*async"; then
-            echo -e "$rel\tflag:async" >> "$SKIPLIST"
-            skip_count=$((skip_count + 1))
-            continue
-        fi
+        # negative tests and async tests are now supported by the runner
+        # (removed skip for negative: and flag:async)
 
         # Check for unsupported includes
         includes=$(echo "$meta" | grep "includes:" | sed 's/.*\[\(.*\)\].*/\1/' | tr ',' '\n' | tr -d ' "')
