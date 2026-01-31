@@ -96,13 +96,105 @@ fn JSInterpreter::install_collections(
   self.global_env.define_var("Set", set_ctor)
   let _ = js_set_prop(global_obj, "Set", set_ctor)
 
-  // Stub constructors: WeakMap, WeakSet, ArrayBuffer, DataView
-  let stub_ctors = [
-    ("WeakMap", 0.0),
-    ("WeakSet", 0.0),
-    ("ArrayBuffer", 1.0),
-    ("DataView", 1.0),
-  ]
+  // WeakMap
+  let weakmap_ctor = self.make_native("WeakMap")
+  self.set_function_length(weakmap_ctor, 0.0)
+  self.set_function_name(weakmap_ctor, "WeakMap")
+  let weakmap_proto = self.new_object()
+  let _ = js_set_prop(
+    weakmap_proto,
+    "get",
+    self.make_native("WeakMap.prototype.get"),
+  )
+  let _ = js_set_prop(
+    weakmap_proto,
+    "set",
+    self.make_native("WeakMap.prototype.set"),
+  )
+  let _ = js_set_prop(
+    weakmap_proto,
+    "has",
+    self.make_native("WeakMap.prototype.has"),
+  )
+  let _ = js_set_prop(
+    weakmap_proto,
+    "delete",
+    self.make_native("WeakMap.prototype.delete"),
+  )
+  let _ = js_define_data_prop(
+    weakmap_ctor, "prototype", weakmap_proto, true, false, true,
+  )
+  self.global_env.define_var("WeakMap", weakmap_ctor)
+  let _ = js_set_prop(global_obj, "WeakMap", weakmap_ctor)
+
+  // WeakSet
+  let weakset_ctor = self.make_native("WeakSet")
+  self.set_function_length(weakset_ctor, 0.0)
+  self.set_function_name(weakset_ctor, "WeakSet")
+  let weakset_proto = self.new_object()
+  let _ = js_set_prop(
+    weakset_proto,
+    "add",
+    self.make_native("WeakSet.prototype.add"),
+  )
+  let _ = js_set_prop(
+    weakset_proto,
+    "has",
+    self.make_native("WeakSet.prototype.has"),
+  )
+  let _ = js_set_prop(
+    weakset_proto,
+    "delete",
+    self.make_native("WeakSet.prototype.delete"),
+  )
+  let _ = js_define_data_prop(
+    weakset_ctor, "prototype", weakset_proto, true, false, true,
+  )
+  self.global_env.define_var("WeakSet", weakset_ctor)
+  let _ = js_set_prop(global_obj, "WeakSet", weakset_ctor)
+
+  // FinalizationRegistry
+  let fr_ctor = self.make_native("FinalizationRegistry")
+  self.set_function_length(fr_ctor, 1.0)
+  self.set_function_name(fr_ctor, "FinalizationRegistry")
+  let fr_proto = self.new_object()
+  let _ = js_set_prop(
+    fr_proto,
+    "register",
+    self.make_native("FinalizationRegistry.prototype.register"),
+  )
+  let _ = js_set_prop(
+    fr_proto,
+    "unregister",
+    self.make_native("FinalizationRegistry.prototype.unregister"),
+  )
+  let _ = js_set_prop(
+    fr_proto,
+    "cleanupSome",
+    self.make_native("FinalizationRegistry.prototype.cleanupSome"),
+  )
+  let _ = js_define_data_prop(fr_ctor, "prototype", fr_proto, true, false, true)
+  self.global_env.define_var("FinalizationRegistry", fr_ctor)
+  let _ = js_set_prop(global_obj, "FinalizationRegistry", fr_ctor)
+
+  // WeakRef
+  let weakref_ctor = self.make_native("WeakRef")
+  self.set_function_length(weakref_ctor, 1.0)
+  self.set_function_name(weakref_ctor, "WeakRef")
+  let weakref_proto = self.new_object()
+  let _ = js_set_prop(
+    weakref_proto,
+    "deref",
+    self.make_native("WeakRef.prototype.deref"),
+  )
+  let _ = js_define_data_prop(
+    weakref_ctor, "prototype", weakref_proto, true, false, true,
+  )
+  self.global_env.define_var("WeakRef", weakref_ctor)
+  let _ = js_set_prop(global_obj, "WeakRef", weakref_ctor)
+
+  // Stub constructors: ArrayBuffer, DataView
+  let stub_ctors = [("ArrayBuffer", 1.0), ("DataView", 1.0)]
   for pair in stub_ctors {
     let (name, len) = pair
     let ctor = self.make_native(name)
@@ -399,6 +491,7 @@ fn JSInterpreter::install_method(
   let fn_val = self.make_native(native_name)
   self.set_function_length(fn_val, length)
   let _ = js_define_data_prop(proto, name, fn_val, true, false, true)
+
 }
 
 ///|
@@ -413,6 +506,7 @@ fn JSInterpreter::install_static_method(
   let fn_val = self.make_native(native_name)
   self.set_function_length(fn_val, length)
   let _ = js_set_prop(ctor, name, fn_val)
+
 }
 
 ///|
@@ -421,11 +515,36 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let global_obj = self.new_object()
 
   // Object.prototype - all properties should be non-enumerable
-  self.install_method(self.object_proto, "hasOwnProperty", "Object.hasOwnProperty", 1.0)
-  self.install_method(self.object_proto, "toString", "Object.prototype.toString", 0.0)
-  self.install_method(self.object_proto, "isPrototypeOf", "Object.prototype.isPrototypeOf", 1.0)
-  self.install_method(self.object_proto, "valueOf", "Object.prototype.valueOf", 0.0)
-  self.install_method(self.object_proto, "propertyIsEnumerable", "Object.prototype.propertyIsEnumerable", 1.0)
+  self.install_method(
+    self.object_proto,
+    "hasOwnProperty",
+    "Object.hasOwnProperty",
+    1.0,
+  )
+  self.install_method(
+    self.object_proto,
+    "toString",
+    "Object.prototype.toString",
+    0.0,
+  )
+  self.install_method(
+    self.object_proto,
+    "isPrototypeOf",
+    "Object.prototype.isPrototypeOf",
+    1.0,
+  )
+  self.install_method(
+    self.object_proto,
+    "valueOf",
+    "Object.prototype.valueOf",
+    0.0,
+  )
+  self.install_method(
+    self.object_proto,
+    "propertyIsEnumerable",
+    "Object.prototype.propertyIsEnumerable",
+    1.0,
+  )
 
   // Object
   let object_ctor = self.make_native("Object")
@@ -446,21 +565,39 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
     false,
     true,
   )
-  self.install_static_method(object_ctor, "getOwnPropertyNames", "Object.getOwnPropertyNames", 1.0)
+  self.install_static_method(
+    object_ctor, "getOwnPropertyNames", "Object.getOwnPropertyNames", 1.0,
+  )
   self.install_static_method(object_ctor, "create", "Object.create", 2.0)
-  self.install_static_method(object_ctor, "getPrototypeOf", "Object.getPrototypeOf", 1.0)
-  self.install_static_method(object_ctor, "getOwnPropertyDescriptor", "Object.getOwnPropertyDescriptor", 2.0)
-  self.install_static_method(object_ctor, "defineProperty", "Object.defineProperty", 3.0)
-  self.install_method(object_ctor, "setPrototypeOf", "Object.setPrototypeOf", 2.0)
-  self.install_static_method(object_ctor, "isExtensible", "Object.isExtensible", 1.0)
+  self.install_static_method(
+    object_ctor, "getPrototypeOf", "Object.getPrototypeOf", 1.0,
+  )
+  self.install_static_method(
+    object_ctor, "getOwnPropertyDescriptor", "Object.getOwnPropertyDescriptor", 2.0,
+  )
+  self.install_static_method(
+    object_ctor, "defineProperty", "Object.defineProperty", 3.0,
+  )
+  self.install_method(
+    object_ctor, "setPrototypeOf", "Object.setPrototypeOf", 2.0,
+  )
+  self.install_static_method(
+    object_ctor, "isExtensible", "Object.isExtensible", 1.0,
+  )
   self.install_static_method(object_ctor, "is", "Object.is", 2.0)
   self.install_static_method(object_ctor, "keys", "Object.keys", 1.0)
-  self.install_static_method(object_ctor, "getOwnPropertySymbols", "Object.getOwnPropertySymbols", 1.0)
+  self.install_static_method(
+    object_ctor, "getOwnPropertySymbols", "Object.getOwnPropertySymbols", 1.0,
+  )
   self.install_static_method(object_ctor, "values", "Object.values", 1.0)
   self.install_static_method(object_ctor, "entries", "Object.entries", 1.0)
   self.install_static_method(object_ctor, "assign", "Object.assign", 2.0)
-  self.install_static_method(object_ctor, "fromEntries", "Object.fromEntries", 1.0)
-  self.install_static_method(object_ctor, "preventExtensions", "Object.preventExtensions", 1.0)
+  self.install_static_method(
+    object_ctor, "fromEntries", "Object.fromEntries", 1.0,
+  )
+  self.install_static_method(
+    object_ctor, "preventExtensions", "Object.preventExtensions", 1.0,
+  )
   self.install_static_method(object_ctor, "freeze", "Object.freeze", 1.0)
   self.install_static_method(object_ctor, "seal", "Object.seal", 1.0)
   self.install_static_method(object_ctor, "isFrozen", "Object.isFrozen", 1.0)
@@ -5265,6 +5402,148 @@ fn JSInterpreter::call_native(
       }
       Undefined
     }
+    // WeakMap
+    "WeakMap" => {
+      let wm_obj = self.new_object()
+      let wm_proto = js_get_prop(self.global_env.get("WeakMap"), "prototype")
+      let _ = js_set_prop(wm_obj, "__proto__", wm_proto)
+      let _ = js_set_prop(wm_obj, "__class", String("WeakMap"))
+      let entries : Array[JSValue] = []
+      let _ = js_set_prop(wm_obj, "__weakmap_entries", js_array_from(entries))
+      // Initialize from iterable if provided
+      if args.length() > 0 && not(args[0].is_nullish()) {
+        let iterable = args[0]
+        let iter_fn = js_get_prop(iterable, "@@iterator")
+        match iter_fn {
+          Function(_) => {
+            let iter = self.call_function(iter_fn, iterable, [])
+            let next_method = js_get_prop(iter, "next")
+            while true {
+              let next_result = self.call_function(next_method, iter, [])
+              match js_get_prop(next_result, "done") {
+                Bool(true) => break
+                _ => {
+                  let val = js_get_prop(next_result, "value")
+                  let key = js_get_prop(val, "0")
+                  let value = js_get_prop(val, "1")
+                  let _ = self.weakmap_set_entry(wm_obj, key, value)
+
+                }
+              }
+            }
+          }
+          _ => ()
+        }
+      }
+      wm_obj
+    }
+    "WeakMap.prototype.get" => {
+      let key = if args.length() > 0 { args[0] } else { Undefined }
+      self.weakmap_get_entry(this_arg, key)
+    }
+    "WeakMap.prototype.set" => {
+      let key = if args.length() > 0 { args[0] } else { Undefined }
+      let value = if args.length() > 1 { args[1] } else { Undefined }
+      self.weakmap_set_entry(this_arg, key, value)
+    }
+    "WeakMap.prototype.has" => {
+      let key = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.weakmap_has_entry(this_arg, key))
+    }
+    "WeakMap.prototype.delete" => {
+      let key = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.weakmap_delete_entry(this_arg, key))
+    }
+    // WeakSet
+    "WeakSet" => {
+      let ws_obj = self.new_object()
+      let ws_proto = js_get_prop(self.global_env.get("WeakSet"), "prototype")
+      let _ = js_set_prop(ws_obj, "__proto__", ws_proto)
+      let _ = js_set_prop(ws_obj, "__class", String("WeakSet"))
+      let entries : Array[JSValue] = []
+      let _ = js_set_prop(ws_obj, "__weakset_entries", js_array_from(entries))
+      // Initialize from iterable if provided
+      if args.length() > 0 && not(args[0].is_nullish()) {
+        let iterable = args[0]
+        let iter_fn = js_get_prop(iterable, "@@iterator")
+        match iter_fn {
+          Function(_) => {
+            let iter = self.call_function(iter_fn, iterable, [])
+            let next_method = js_get_prop(iter, "next")
+            while true {
+              let next_result = self.call_function(next_method, iter, [])
+              match js_get_prop(next_result, "done") {
+                Bool(true) => break
+                _ => {
+                  let val = js_get_prop(next_result, "value")
+                  let _ = self.weakset_add_entry(ws_obj, val)
+
+                }
+              }
+            }
+          }
+          _ => ()
+        }
+      }
+      ws_obj
+    }
+    "WeakSet.prototype.add" => {
+      let value = if args.length() > 0 { args[0] } else { Undefined }
+      self.weakset_add_entry(this_arg, value)
+    }
+    "WeakSet.prototype.has" => {
+      let value = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.weakset_has_entry(this_arg, value))
+    }
+    "WeakSet.prototype.delete" => {
+      let value = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.weakset_delete_entry(this_arg, value))
+    }
+    // WeakRef
+    "WeakRef" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let wr_obj = self.new_object()
+      let wr_proto = js_get_prop(self.global_env.get("WeakRef"), "prototype")
+      let _ = js_set_prop(wr_obj, "__proto__", wr_proto)
+      let _ = js_set_prop(wr_obj, "__class", String("WeakRef"))
+      let _ = js_set_prop(wr_obj, "__weakref_target", target)
+      wr_obj
+    }
+    "WeakRef.prototype.deref" => js_get_prop(this_arg, "__weakref_target")
+    // FinalizationRegistry
+    "FinalizationRegistry" => {
+      let callback = if args.length() > 0 { args[0] } else { Undefined }
+      let fr_obj = self.new_object()
+      let fr_proto = js_get_prop(
+        self.global_env.get("FinalizationRegistry"),
+        "prototype",
+      )
+      let _ = js_set_prop(fr_obj, "__proto__", fr_proto)
+      let _ = js_set_prop(fr_obj, "__class", String("FinalizationRegistry"))
+      let _ = js_set_prop(fr_obj, "__fr_callback", callback)
+      let registrations : Array[JSValue] = []
+      let _ = js_set_prop(
+        fr_obj,
+        "__fr_registrations",
+        js_array_from(registrations),
+      )
+      fr_obj
+    }
+    "FinalizationRegistry.prototype.register" => {
+      let target = if args.length() > 0 { args[0] } else { Undefined }
+      let held_value = if args.length() > 1 { args[1] } else { Undefined }
+      let unregister_token = if args.length() > 2 { args[2] } else { Undefined }
+      self.fr_register(this_arg, target, held_value, unregister_token)
+      Undefined
+    }
+    "FinalizationRegistry.prototype.unregister" => {
+      let unregister_token = if args.length() > 0 { args[0] } else { Undefined }
+      Bool(self.fr_unregister(this_arg, unregister_token))
+    }
+    "FinalizationRegistry.prototype.cleanupSome" =>
+      // In a real implementation, this would be called by the GC
+      // For now, we provide it as a no-op since MoonBit doesn't expose GC hooks
+      Undefined
     _ => Undefined
   }
 }

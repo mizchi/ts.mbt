@@ -595,3 +595,98 @@ test "bench gc nested scopes" (b : @bench.T) {
     count=10,
   )
 }
+
+// ============================================================
+// Weak Collection Benchmarks
+// ============================================================
+
+///|
+let weakmap_bench_src : String =
+  #|function main() {
+  #|  let wm = new WeakMap();
+  #|  let keys = [];
+  #|  for (let i = 0; i < 100; i++) {
+  #|    let k = { id: i };
+  #|    keys.push(k);
+  #|    wm.set(k, i * 2);
+  #|  }
+  #|  let sum = 0;
+  #|  for (let k of keys) {
+  #|    sum += wm.get(k);
+  #|  }
+  #|  return sum;
+  #|}
+
+///|
+test "bench weakmap operations" (b : @bench.T) {
+  b.bench(
+    () => {
+      @runtime.gc_stats_reset()
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(weakmap_bench_src)
+
+    },
+    name="gc.weakmap.100",
+    count=10,
+  )
+}
+
+///|
+let weakset_bench_src : String =
+  #|function main() {
+  #|  let ws = new WeakSet();
+  #|  let items = [];
+  #|  for (let i = 0; i < 100; i++) {
+  #|    let item = { id: i };
+  #|    items.push(item);
+  #|    ws.add(item);
+  #|  }
+  #|  let count = 0;
+  #|  for (let item of items) {
+  #|    if (ws.has(item)) count++;
+  #|  }
+  #|  return count;
+  #|}
+
+///|
+test "bench weakset operations" (b : @bench.T) {
+  b.bench(
+    () => {
+      @runtime.gc_stats_reset()
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(weakset_bench_src)
+
+    },
+    name="gc.weakset.100",
+    count=10,
+  )
+}
+
+///|
+let weakref_bench_src : String =
+  #|function main() {
+  #|  let refs = [];
+  #|  for (let i = 0; i < 100; i++) {
+  #|    refs.push(new WeakRef({ value: i }));
+  #|  }
+  #|  let sum = 0;
+  #|  for (let wr of refs) {
+  #|    let obj = wr.deref();
+  #|    if (obj) sum += obj.value;
+  #|  }
+  #|  return sum;
+  #|}
+
+///|
+test "bench weakref operations" (b : @bench.T) {
+  b.bench(
+    () => {
+      @runtime.gc_stats_reset()
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(weakref_bench_src)
+
+    },
+    name="gc.weakref.100",
+    count=10,
+  )
+}
