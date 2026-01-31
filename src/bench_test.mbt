@@ -181,3 +181,316 @@ test "bench parser typescript dts" (b : @bench.T) {
     count=5,
   )
 }
+
+// ============================================================
+// Initialization Benchmarks
+// ============================================================
+
+///|
+test "bench init interpreter" (b : @bench.T) {
+  b.bench(
+    () => {
+      let _ = @runtime.JSInterpreter::new()
+
+    },
+    name="init.interpreter",
+    count=100,
+  )
+}
+
+///|
+test "bench init lexer" (b : @bench.T) {
+  b.bench(
+    () => {
+      let _ = @parser.Lexer::new("function f() { return 1; }")
+
+    },
+    name="init.lexer",
+    count=100,
+  )
+}
+
+///|
+test "bench init parser" (b : @bench.T) {
+  b.bench(
+    () => {
+      let _ = @parser.Parser::from_source("function f() { return 1; }")
+
+    },
+    name="init.parser",
+    count=100,
+  )
+}
+
+// ============================================================
+// Size-based Execution Benchmarks (fibonacci)
+// ============================================================
+
+///|
+fn fib_source(n : Int) -> String {
+  let sb = StringBuilder::new()
+  sb.write_string("function fib(n) {\n")
+  sb.write_string("  if (n <= 1) return n;\n")
+  sb.write_string("  return fib(n - 1) + fib(n - 2);\n")
+  sb.write_string("}\n")
+  sb.write_string("function main() {\n")
+  sb.write_string("  return fib(")
+  sb.write_string(n.to_string())
+  sb.write_string(");\n")
+  sb.write_string("}")
+  sb.to_string()
+}
+
+///|
+test "bench runtime fib(10)" (b : @bench.T) {
+  let src = fib_source(10)
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(src)
+
+    },
+    name="runtime.fib.10",
+    count=10,
+  )
+}
+
+///|
+test "bench runtime fib(15)" (b : @bench.T) {
+  let src = fib_source(15)
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(src)
+
+    },
+    name="runtime.fib.15",
+    count=5,
+  )
+}
+
+///|
+test "bench runtime fib(20)" (b : @bench.T) {
+  let src = fib_source(20)
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(src)
+
+    },
+    name="runtime.fib.20",
+    count=3,
+  )
+}
+
+///|
+test "bench runtime fib(25)" (b : @bench.T) {
+  let src = fib_source(25)
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(src)
+
+    },
+    name="runtime.fib.25",
+    count=1,
+  )
+}
+
+// ============================================================
+// Size-based Loop Benchmarks
+// ============================================================
+
+///|
+fn loop_source(iterations : Int) -> String {
+  let sb = StringBuilder::new()
+  sb.write_string("function main() {\n")
+  sb.write_string("  let sum = 0;\n")
+  sb.write_string("  for (let i = 0; i < ")
+  sb.write_string(iterations.to_string())
+  sb.write_string("; i++) { sum += i; }\n")
+  sb.write_string("  return sum;\n")
+  sb.write_string("}")
+  sb.to_string()
+}
+
+///|
+test "bench runtime loop 100" (b : @bench.T) {
+  let src = loop_source(100)
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(src)
+
+    },
+    name="runtime.loop.100",
+    count=50,
+  )
+}
+
+///|
+test "bench runtime loop 1000" (b : @bench.T) {
+  let src = loop_source(1000)
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(src)
+
+    },
+    name="runtime.loop.1000",
+    count=10,
+  )
+}
+
+///|
+test "bench runtime loop 10000" (b : @bench.T) {
+  let src = loop_source(10000)
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(src)
+
+    },
+    name="runtime.loop.10000",
+    count=5,
+  )
+}
+
+// ============================================================
+// Parse vs Execute Separation Benchmarks
+// ============================================================
+
+///|
+test "bench parse only fib" (b : @bench.T) {
+  let src = fib_source(20)
+  b.bench(
+    () => {
+      let parser = @parser.Parser::from_source(src)
+      let _ = try! parser.parse_module()
+
+    },
+    name="parse.fib",
+    count=50,
+  )
+}
+
+///|
+test "bench execute only fib(20)" (b : @bench.T) {
+  let src = fib_source(20)
+  // Pre-parse the module
+  let parser = @parser.Parser::from_source(src)
+  let module_ = try! parser.parse_module()
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = interp.run_module(module_)
+
+    },
+    name="execute.fib.20",
+    count=3,
+  )
+}
+
+// ============================================================
+// Object/Array Creation Benchmarks
+// ============================================================
+
+///|
+let object_create_src : String =
+  #|function main() {
+  #|  let arr = [];
+  #|  for (let i = 0; i < 100; i++) {
+  #|    arr.push({ x: i, y: i * 2, z: i * 3 });
+  #|  }
+  #|  return arr.length;
+  #|}
+
+///|
+test "bench runtime object creation" (b : @bench.T) {
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(object_create_src)
+
+    },
+    name="runtime.object.create",
+    count=10,
+  )
+}
+
+///|
+let array_ops_src : String =
+  #|function main() {
+  #|  let arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  #|  let sum = 0;
+  #|  for (let i = 0; i < 100; i++) {
+  #|    sum += arr.reduce((a, b) => a + b, 0);
+  #|  }
+  #|  return sum;
+  #|}
+
+///|
+test "bench runtime array reduce" (b : @bench.T) {
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(array_ops_src)
+
+    },
+    name="runtime.array.reduce",
+    count=5,
+  )
+}
+
+// ============================================================
+// String Operations Benchmarks
+// ============================================================
+
+///|
+let string_concat_src : String =
+  #|function main() {
+  #|  let s = "";
+  #|  for (let i = 0; i < 100; i++) {
+  #|    s = s + "x";
+  #|  }
+  #|  return s.length;
+  #|}
+
+///|
+test "bench runtime string concat" (b : @bench.T) {
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(string_concat_src)
+
+    },
+    name="runtime.string.concat",
+    count=20,
+  )
+}
+
+///|
+let string_methods_src : String =
+  #|function main() {
+  #|  let s = "hello world test string for benchmark";
+  #|  let count = 0;
+  #|  for (let i = 0; i < 100; i++) {
+  #|    count += s.indexOf("test");
+  #|    count += s.slice(0, 5).length;
+  #|    count += s.toUpperCase().length;
+  #|  }
+  #|  return count;
+  #|}
+
+///|
+test "bench runtime string methods" (b : @bench.T) {
+  b.bench(
+    () => {
+      let interp = @runtime.JSInterpreter::new()
+      let _ = try! interp.run(string_methods_src)
+
+    },
+    name="runtime.string.methods",
+    count=10,
+  )
+}
