@@ -909,3 +909,50 @@ test "codegen: switch with default only" {
   let r2 = runtime.call_compiled(b"always42", [@runtime.Value::I32(999)])
   assert_eq(r2[0], @runtime.Value::I32(42))
 }
+
+///|
+test "codegen: nullish coalescing operator" {
+  // Note: In this simplified implementation, 0 is treated as null-ish
+  let src =
+    #|function coalesce(a: int, b: int): int {
+    #|  return a ?? b;
+    #|}
+  let wasm_module = compile(src)
+  let runtime = @runtime.Runtime::load(wasm_module)
+  runtime.run_start()
+  // When a is non-zero, return a
+  let r1 = runtime.call_compiled(
+    b"coalesce",
+    [@runtime.Value::I32(5), @runtime.Value::I32(10)],
+  )
+  assert_eq(r1[0], @runtime.Value::I32(5))
+  // When a is 0 (treated as null-ish), return b
+  let r2 = runtime.call_compiled(
+    b"coalesce",
+    [@runtime.Value::I32(0), @runtime.Value::I32(42)],
+  )
+  assert_eq(r2[0], @runtime.Value::I32(42))
+}
+
+///|
+test "codegen: do-while loop" {
+  let src =
+    #|function sumDoWhile(n: int): int {
+    #|  let sum = 0;
+    #|  let i = 1;
+    #|  do {
+    #|    sum = sum + i;
+    #|    i = i + 1;
+    #|  } while (i <= n);
+    #|  return sum;
+    #|}
+  let wasm_module = compile(src)
+  let runtime = @runtime.Runtime::load(wasm_module)
+  runtime.run_start()
+  // sum of 1 to 5 = 15
+  let r1 = runtime.call_compiled(b"sumDoWhile", [@runtime.Value::I32(5)])
+  assert_eq(r1[0], @runtime.Value::I32(15))
+  // do-while executes at least once even if condition is false initially
+  let r2 = runtime.call_compiled(b"sumDoWhile", [@runtime.Value::I32(0)])
+  assert_eq(r2[0], @runtime.Value::I32(1)) // executes once with i=1
+}

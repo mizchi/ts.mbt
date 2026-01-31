@@ -1826,6 +1826,37 @@ fn compile_binop(
       raise CodeGenError(
         "'in' operator is not supported in Wasm compiler (use interpreter)",
       )
+    @ast.TsBinOp::Coalesce => {
+      // a ?? b: if a is null/undefined, return b, else return a
+      // For i32: approximate null/undefined as 0
+      // Note: This conflates 0 with null, which is not strictly correct
+      let temp = ctx.add_local("__coalesce_tmp__", @ast.TsType::Int)
+      compile_expr(ctx, left, @ast.TsType::Int)
+      ctx.emit(LocalTee(temp))
+      ctx.emit(I32Eqz) // is left == 0 (null-ish)?
+
+      // Then branch: left was null-ish, evaluate and return right
+      let then_ctx : CodeGenCtx = {
+        locals: ctx.locals,
+        local_types: ctx.local_types,
+        next_local: ctx.next_local,
+        funcs: ctx.funcs,
+        interfaces: ctx.interfaces,
+        import_types: ctx.import_types,
+        instrs: [],
+        loop_depth: ctx.loop_depth,
+        string_pool: ctx.string_pool,
+        builtins_used: ctx.builtins_used,
+        const_values: ctx.const_values,
+      }
+      compile_expr(then_ctx, right, @ast.TsType::Int)
+
+      // Else branch: left was not null-ish, return left from temp
+      let else_instrs : Array[@core.Instr] = [LocalGet(temp)]
+
+      ctx.emit(If(Value(I32), then_ctx.instrs, else_instrs))
+      return
+    }
     _ => ()
   }
 
@@ -2257,8 +2288,8 @@ fn compile_stmt(
       compile_if(ctx, cond, then_block, else_block, return_type)
     @ast.TsStmt::While(cond, body) =>
       compile_while(ctx, cond, body, return_type)
-    @ast.TsStmt::DoWhile(_, _) =>
-      raise CodeGenError("do-while is not yet supported in Wasm compiler")
+    @ast.TsStmt::DoWhile(cond, body) =>
+      compile_do_while(ctx, body, cond, return_type)
     @ast.TsStmt::Switch(discriminant, cases) =>
       compile_switch(ctx, discriminant, cases, return_type)
     @ast.TsStmt::With(_, _) =>
@@ -2388,6 +2419,49 @@ fn compile_while(
     loop_instrs.push(instr)
   }
   loop_instrs.push(Br(0U)) // loophead
+  ctx.emit(Block(Empty, [Loop(Empty, loop_instrs)]))
+  ctx.loop_depth -= 1
+}
+
+///|
+// Do-while statement: body executes at least once
+fn compile_do_while(
+  ctx : CodeGenCtx,
+  body : @ast.TsBlock,
+  cond : @ast.TsExpr,
+  return_type : @ast.TsType,
+) -> Unit raise CodeGenError {
+  ctx.loop_depth += 1
+
+  // Structure: loop { body; if cond { br 0 } }
+  let loop_instrs : Array[@core.Instr] = []
+
+  // body (executes first)
+  let body_instrs = compile_block_to_instrs(ctx, body, return_type)
+  for instr in body_instrs {
+    loop_instrs.push(instr)
+  }
+
+  // condition check
+  let cond_ctx : CodeGenCtx = {
+    locals: ctx.locals,
+    local_types: ctx.local_types,
+    next_local: ctx.next_local,
+    funcs: ctx.funcs,
+    interfaces: ctx.interfaces,
+    import_types: ctx.import_types,
+    instrs: [],
+    loop_depth: ctx.loop_depth,
+    string_pool: ctx.string_pool,
+    builtins_used: ctx.builtins_used,
+    const_values: ctx.const_values,
+  }
+  compile_expr(cond_ctx, cond, @ast.TsType::Boolean)
+  for instr in cond_ctx.instrs {
+    loop_instrs.push(instr)
+  }
+  loop_instrs.push(BrIf(0U)) // if cond is true, jump back to loop start
+
   ctx.emit(Block(Empty, [Loop(Empty, loop_instrs)]))
   ctx.loop_depth -= 1
 }
