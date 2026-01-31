@@ -1,0 +1,9 @@
+import {
+  "moonbitlang/core/strconv",
+  "mizchi/ts/ast" as @ast,
+}
+
+import "wbtest" {
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+}

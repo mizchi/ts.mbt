@@ -1464,10 +1464,8 @@ test "compile_aot_group: generator with helper functions" {
   // Build call graph and find AOT groups
   let graph = @analysis.build_call_graph(ts_module)
   let groups = @analysis.find_aot_groups(ts_module, graph)
-
   println("Found \{groups.length()} AOT groups")
   assert_eq(groups.length(), 1)
-
   let group = groups[0]
   println(group.debug_string())
 
@@ -1500,16 +1498,13 @@ test "compile_aot_group: helper function calls in generator" {
     #|}
   let parser = @parser.Parser::from_source(src)
   let ts_module = parser.parse_module()
-
   let graph = @analysis.build_call_graph(ts_module)
   let groups = @analysis.find_aot_groups(ts_module, graph)
-
   assert_eq(groups.length(), 1)
   let group = groups[0]
 
   // add is only called from sum, so no external calls
   assert_false(group.external_calls.contains("add"))
-
   match compile_aot_group(group, ts_module, 0U) {
     Some(code) => {
       println(code.debug_string())
@@ -1531,14 +1526,23 @@ test "compile_aot_group: helper function calls in generator" {
 ///|
 test "compile_arrow_func: no captures" {
   let params : Array[@ast.TsParam] = [
-    { name: "x", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+    {
+      name: "x",
+      type_: @ast.TsType::Number,
+      binding: None,
+      is_rest: false,
+      default: None,
+    },
   ]
   let body = @ast.TsArrowBody::ArrowExpr(
-    @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("x"), @ast.TsExpr::IntLit(1)),
+    @ast.TsExpr::BinOp(
+      @ast.TsBinOp::Add,
+      @ast.TsExpr::Var("x"),
+      @ast.TsExpr::IntLit(1),
+    ),
   )
   let outer_scope : Array[String] = []
   let ctx = ClosureCodegenCtx::new(0U)
-
   match compile_arrow_func(params, body, outer_scope, ctx) {
     Some(code) => {
       // No captures -> no environment struct
@@ -1554,15 +1558,24 @@ test "compile_arrow_func: no captures" {
 ///|
 test "compile_arrow_func: with capture" {
   let params : Array[@ast.TsParam] = [
-    { name: "a", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+    {
+      name: "a",
+      type_: @ast.TsType::Number,
+      binding: None,
+      is_rest: false,
+      default: None,
+    },
   ]
   // (a) => a + x (where x is captured)
   let body = @ast.TsArrowBody::ArrowExpr(
-    @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("a"), @ast.TsExpr::Var("x")),
+    @ast.TsExpr::BinOp(
+      @ast.TsBinOp::Add,
+      @ast.TsExpr::Var("a"),
+      @ast.TsExpr::Var("x"),
+    ),
   )
   let outer_scope : Array[String] = ["x"]
   let ctx = ClosureCodegenCtx::new(0U)
-
   match compile_arrow_func(params, body, outer_scope, ctx) {
     Some(code) => {
       // Has capture -> has environment struct
@@ -1578,7 +1591,13 @@ test "compile_arrow_func: with capture" {
 ///|
 test "compile_arrow_func: block body" {
   let params : Array[@ast.TsParam] = [
-    { name: "n", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+    {
+      name: "n",
+      type_: @ast.TsType::Number,
+      binding: None,
+      is_rest: false,
+      default: None,
+    },
   ]
   // (n) => { let result = n * 2; return result; }
   let body = @ast.TsArrowBody::ArrowBlock({
@@ -1586,14 +1605,17 @@ test "compile_arrow_func: block body" {
       @ast.TsStmt::Let(
         @ast.TsBinding::Ident("result"),
         @ast.TsType::Number,
-        @ast.TsExpr::BinOp(@ast.TsBinOp::Mul, @ast.TsExpr::Var("n"), @ast.TsExpr::IntLit(2)),
+        @ast.TsExpr::BinOp(
+          @ast.TsBinOp::Mul,
+          @ast.TsExpr::Var("n"),
+          @ast.TsExpr::IntLit(2),
+        ),
       ),
       @ast.TsStmt::Return(Some(@ast.TsExpr::Var("result"))),
     ],
   })
   let outer_scope : Array[String] = []
   let ctx = ClosureCodegenCtx::new(0U)
-
   match compile_arrow_func(params, body, outer_scope, ctx) {
     Some(code) => {
       assert_true(code.env_struct_type is None)
@@ -1609,13 +1631,25 @@ test "compile_func_expr: simple function" {
   let func : @ast.TsFunc = {
     name: "double",
     params: [
-      { name: "x", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+      {
+        name: "x",
+        type_: @ast.TsType::Number,
+        binding: None,
+        is_rest: false,
+        default: None,
+      },
     ],
     return_type: @ast.TsType::Number,
     body: {
       stmts: [
         @ast.TsStmt::Return(
-          Some(@ast.TsExpr::BinOp(@ast.TsBinOp::Mul, @ast.TsExpr::Var("x"), @ast.TsExpr::IntLit(2))),
+          Some(
+            @ast.TsExpr::BinOp(
+              @ast.TsBinOp::Mul,
+              @ast.TsExpr::Var("x"),
+              @ast.TsExpr::IntLit(2),
+            ),
+          ),
         ),
       ],
     },
@@ -1624,7 +1658,6 @@ test "compile_func_expr: simple function" {
   }
   let outer_scope : Array[String] = []
   let ctx = ClosureCodegenCtx::new(0U)
-
   match compile_func_expr(func, outer_scope, ctx) {
     Some(code) => {
       assert_true(code.env_struct_type is None)
@@ -1644,20 +1677,25 @@ test "compile_func_expr: with multiple captures" {
     body: {
       stmts: [
         @ast.TsStmt::Return(
-          Some(@ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("a"), @ast.TsExpr::Var("b"))),
+          Some(
+            @ast.TsExpr::BinOp(
+              @ast.TsBinOp::Add,
+              @ast.TsExpr::Var("a"),
+              @ast.TsExpr::Var("b"),
+            ),
+          ),
         ),
       ],
     },
     is_generator: false,
     is_async: false,
   }
-  let outer_scope : Array[String] = ["a", "b", "c"]  // c is not used
+  let outer_scope : Array[String] = ["a", "b", "c"] // c is not used
   let ctx = ClosureCodegenCtx::new(0U)
-
   match compile_func_expr(func, outer_scope, ctx) {
     Some(code) => {
       assert_true(code.env_struct_type is Some(_))
-      assert_eq(code.capture_names.length(), 2)  // only a and b are captured
+      assert_eq(code.capture_names.length(), 2) // only a and b are captured
       assert_true(code.capture_names.contains("a"))
       assert_true(code.capture_names.contains("b"))
       println("Generated func with captures: \{code.func_name}")
@@ -1674,14 +1712,17 @@ test "compile_arrow_func: mutable capture (Phase 3)" {
     stmts: [
       @ast.TsStmt::Assign(
         "x",
-        @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("x"), @ast.TsExpr::IntLit(1)),
+        @ast.TsExpr::BinOp(
+          @ast.TsBinOp::Add,
+          @ast.TsExpr::Var("x"),
+          @ast.TsExpr::IntLit(1),
+        ),
       ),
       @ast.TsStmt::Return(Some(@ast.TsExpr::Var("x"))),
     ],
   })
   let outer_scope : Array[String] = ["x"]
   let ctx = ClosureCodegenCtx::new(0U)
-
   match compile_arrow_func(params, body, outer_scope, ctx) {
     Some(code) => {
       // Has capture with mutable field
@@ -1698,7 +1739,6 @@ test "compile_arrow_func: mutable capture (Phase 3)" {
         }
         _ => fail("Expected struct type")
       }
-
       println("Generated mutable capture closure: \{code.func_name}")
       println("Instructions: \{code.func_code.body.instrs.length()}")
     }
@@ -1717,7 +1757,11 @@ test "compile_func_expr: mixed mutable and immutable captures" {
         // count = count + step (count is mutated, step is read-only)
         @ast.TsStmt::Assign(
           "count",
-          @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("count"), @ast.TsExpr::Var("step")),
+          @ast.TsExpr::BinOp(
+            @ast.TsBinOp::Add,
+            @ast.TsExpr::Var("count"),
+            @ast.TsExpr::Var("step"),
+          ),
         ),
         @ast.TsStmt::Return(Some(@ast.TsExpr::Var("count"))),
       ],
@@ -1727,7 +1771,6 @@ test "compile_func_expr: mixed mutable and immutable captures" {
   }
   let outer_scope : Array[String] = ["count", "step"]
   let ctx = ClosureCodegenCtx::new(0U)
-
   match compile_func_expr(func, outer_scope, ctx) {
     Some(code) => {
       assert_true(code.env_struct_type is Some(_))
@@ -1744,7 +1787,6 @@ test "compile_func_expr: mixed mutable and immutable captures" {
         }
         _ => fail("Expected struct type")
       }
-
       println("Generated mixed capture closure: \{code.func_name}")
     }
     None => fail("Expected compilable function")
@@ -1757,7 +1799,11 @@ test "compile_func_expr: mixed mutable and immutable captures" {
 test "analyze_lifted_vars: no closures" {
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("x"), @ast.TsType::Number, @ast.TsExpr::IntLit(1)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("x"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(1),
+      ),
       @ast.TsStmt::Return(Some(@ast.TsExpr::Var("x"))),
     ],
   }
@@ -1772,13 +1818,23 @@ test "analyze_lifted_vars: closure captures local" {
   // let x = 1; const f = () => x; return f();
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("x"), @ast.TsType::Number, @ast.TsExpr::IntLit(1)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("x"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(1),
+      ),
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident("f"),
         @ast.TsType::Any,
-        @ast.TsExpr::ArrowFunc([], @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var("x")), false),
+        @ast.TsExpr::ArrowFunc(
+          [],
+          @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var("x")),
+          false,
+        ),
       ),
-      @ast.TsStmt::Return(Some(@ast.TsExpr::CallExpr(@ast.TsExpr::Var("f"), []))),
+      @ast.TsStmt::Return(
+        Some(@ast.TsExpr::CallExpr(@ast.TsExpr::Var("f"), [])),
+      ),
     ],
   }
   let params : Array[String] = []
@@ -1795,7 +1851,11 @@ test "analyze_lifted_vars: closure mutates captured var" {
   // let x = 1; const inc = () => { x = x + 1; }; inc(); return x;
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("x"), @ast.TsType::Number, @ast.TsExpr::IntLit(1)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("x"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(1),
+      ),
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident("inc"),
         @ast.TsType::Any,
@@ -1805,7 +1865,11 @@ test "analyze_lifted_vars: closure mutates captured var" {
             stmts: [
               @ast.TsStmt::Assign(
                 "x",
-                @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("x"), @ast.TsExpr::IntLit(1)),
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::Add,
+                  @ast.TsExpr::Var("x"),
+                  @ast.TsExpr::IntLit(1),
+                ),
               ),
             ],
           }),
@@ -1833,7 +1897,11 @@ test "analyze_lifted_vars: multiple closures share captured var" {
   // const dec = () => { x = x - 1; };
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("x"), @ast.TsType::Number, @ast.TsExpr::IntLit(0)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("x"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(0),
+      ),
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident("inc"),
         @ast.TsType::Any,
@@ -1843,7 +1911,11 @@ test "analyze_lifted_vars: multiple closures share captured var" {
             stmts: [
               @ast.TsStmt::Assign(
                 "x",
-                @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("x"), @ast.TsExpr::IntLit(1)),
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::Add,
+                  @ast.TsExpr::Var("x"),
+                  @ast.TsExpr::IntLit(1),
+                ),
               ),
             ],
           }),
@@ -1859,7 +1931,11 @@ test "analyze_lifted_vars: multiple closures share captured var" {
             stmts: [
               @ast.TsStmt::Assign(
                 "x",
-                @ast.TsExpr::BinOp(@ast.TsBinOp::Sub, @ast.TsExpr::Var("x"), @ast.TsExpr::IntLit(1)),
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::Sub,
+                  @ast.TsExpr::Var("x"),
+                  @ast.TsExpr::IntLit(1),
+                ),
               ),
             ],
           }),
@@ -1884,9 +1960,15 @@ test "analyze_lifted_vars: param captured" {
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident("f"),
         @ast.TsType::Any,
-        @ast.TsExpr::ArrowFunc([], @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var("n")), false),
+        @ast.TsExpr::ArrowFunc(
+          [],
+          @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var("n")),
+          false,
+        ),
       ),
-      @ast.TsStmt::Return(Some(@ast.TsExpr::CallExpr(@ast.TsExpr::Var("f"), []))),
+      @ast.TsStmt::Return(
+        Some(@ast.TsExpr::CallExpr(@ast.TsExpr::Var("f"), [])),
+      ),
     ],
   }
   let params : Array[String] = ["n"]
@@ -1903,13 +1985,16 @@ test "compile_func_body_with_env: no closures" {
   // function f() { let x = 1; return x; }
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("x"), @ast.TsType::Number, @ast.TsExpr::IntLit(1)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("x"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(1),
+      ),
       @ast.TsStmt::Return(Some(@ast.TsExpr::Var("x"))),
     ],
   }
   let params : Array[@ast.TsParam] = []
   let lifted_info = analyze_lifted_vars(block, [])
-
   let result = compile_func_body_with_env(block, params, lifted_info, 0U)
 
   // No lifted vars -> no env struct
@@ -1923,18 +2008,25 @@ test "compile_func_body_with_env: with captured read-only var" {
   // function outer() { let x = 1; const f = () => x; return x; }
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("x"), @ast.TsType::Number, @ast.TsExpr::IntLit(1)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("x"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(1),
+      ),
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident("f"),
         @ast.TsType::Any,
-        @ast.TsExpr::ArrowFunc([], @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var("x")), false),
+        @ast.TsExpr::ArrowFunc(
+          [],
+          @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var("x")),
+          false,
+        ),
       ),
       @ast.TsStmt::Return(Some(@ast.TsExpr::Var("x"))),
     ],
   }
   let params : Array[@ast.TsParam] = []
   let lifted_info = analyze_lifted_vars(block, [])
-
   let result = compile_func_body_with_env(block, params, lifted_info, 0U)
 
   // x is captured -> env struct needed
@@ -1949,8 +2041,9 @@ test "compile_func_body_with_env: with captured read-only var" {
     }
     _ => fail("Expected struct type")
   }
-
-  println("Generated env-sharing code with \{result.func_code.body.instrs.length()} instructions")
+  println(
+    "Generated env-sharing code with \{result.func_code.body.instrs.length()} instructions",
+  )
 }
 
 ///|
@@ -1962,7 +2055,11 @@ test "compile_func_body_with_env: with mutable captured var" {
   // }
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("x"), @ast.TsType::Number, @ast.TsExpr::IntLit(1)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("x"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(1),
+      ),
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident("inc"),
         @ast.TsType::Any,
@@ -1972,7 +2069,11 @@ test "compile_func_body_with_env: with mutable captured var" {
             stmts: [
               @ast.TsStmt::Assign(
                 "x",
-                @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("x"), @ast.TsExpr::IntLit(1)),
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::Add,
+                  @ast.TsExpr::Var("x"),
+                  @ast.TsExpr::IntLit(1),
+                ),
               ),
             ],
           }),
@@ -1984,7 +2085,6 @@ test "compile_func_body_with_env: with mutable captured var" {
   }
   let params : Array[@ast.TsParam] = []
   let lifted_info = analyze_lifted_vars(block, [])
-
   let result = compile_func_body_with_env(block, params, lifted_info, 0U)
 
   // x is captured and mutated -> env struct with mutable field
@@ -1992,23 +2092,24 @@ test "compile_func_body_with_env: with mutable captured var" {
   match result.env_struct_type {
     Some(@core.TypeDef::Struct(struct_type)) => {
       assert_eq(struct_type.fields.length(), 1)
-      assert_true(struct_type.fields[0].mutable)  // x is mutated -> mutable field
+      assert_true(struct_type.fields[0].mutable) // x is mutated -> mutable field
     }
     _ => fail("Expected struct type")
   }
 
   // Check instructions include StructNew, StructGet, StructSet
-  let has_struct_new = result.func_code.body.instrs.iter().any(
-    fn(i) {
+  let has_struct_new = result.func_code.body.instrs
+    .iter()
+    .any(fn(i) {
       match i {
         @core.Instr::StructNew(_) => true
         _ => false
       }
-    },
-  )
+    })
   assert_true(has_struct_new)
-
-  println("Generated mutable env-sharing code with \{result.func_code.body.instrs.length()} instructions")
+  println(
+    "Generated mutable env-sharing code with \{result.func_code.body.instrs.length()} instructions",
+  )
 }
 
 ///|
@@ -2021,11 +2122,19 @@ test "compile_func_body_with_env: outer assignment to captured var" {
   // }
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("x"), @ast.TsType::Number, @ast.TsExpr::IntLit(1)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("x"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(1),
+      ),
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident("f"),
         @ast.TsType::Any,
-        @ast.TsExpr::ArrowFunc([], @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var("x")), false),
+        @ast.TsExpr::ArrowFunc(
+          [],
+          @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var("x")),
+          false,
+        ),
       ),
       @ast.TsStmt::Assign("x", @ast.TsExpr::IntLit(2)),
       @ast.TsStmt::Return(Some(@ast.TsExpr::Var("x"))),
@@ -2033,24 +2142,23 @@ test "compile_func_body_with_env: outer assignment to captured var" {
   }
   let params : Array[@ast.TsParam] = []
   let lifted_info = analyze_lifted_vars(block, [])
-
   let result = compile_func_body_with_env(block, params, lifted_info, 0U)
 
   // x is captured -> env struct
   assert_true(result.env_struct_type is Some(_))
 
   // Count StructSet instructions (should have multiple - init + assignment)
-  let struct_set_count = result.func_code.body.instrs.iter().fold(
-    init=0,
-    fn(count, i) {
+  let struct_set_count = result.func_code.body.instrs
+    .iter()
+    .fold(init=0, fn(count, i) {
       match i {
         @core.Instr::StructSet(_, _) => count + 1
         _ => count
       }
-    },
-  )
+    })
   // At least 2: initial value + x = 2
   assert_true(struct_set_count >= 2)
-
-  println("Outer assignment generated \{struct_set_count} StructSet instructions")
+  println(
+    "Outer assignment generated \{struct_set_count} StructSet instructions",
+  )
 }

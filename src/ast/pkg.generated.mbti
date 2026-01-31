@@ -1,0 +1,333 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/ast"
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) struct TsArrayBinding {
+  items : Array[TsBindingElem?]
+  rest : TsBinding?
+}
+pub impl Show for TsArrayBinding
+
+pub(all) enum TsArrowBody {
+  ArrowExpr(TsExpr)
+  ArrowBlock(TsBlock)
+}
+pub impl Show for TsArrowBody
+
+pub(all) enum TsBinOp {
+  Add
+  Sub
+  Mul
+  Div
+  Mod
+  Pow
+  BitAnd
+  BitOr
+  BitXor
+  Shl
+  Shr
+  UShr
+  BinEq
+  BinNe
+  AbstractEq
+  AbstractNe
+  BinLt
+  BinLe
+  BinGt
+  BinGe
+  Instanceof
+  In
+  And
+  Or
+  Coalesce
+}
+pub impl Eq for TsBinOp
+pub impl Show for TsBinOp
+
+pub(all) enum TsBinding {
+  Ident(String)
+  Array(TsArrayBinding)
+  Object(TsObjectBinding)
+  Target(TsExpr)
+}
+pub impl Show for TsBinding
+
+pub(all) struct TsBindingElem {
+  binding : TsBinding
+  default : TsExpr?
+}
+pub impl Show for TsBindingElem
+
+pub(all) struct TsBlock {
+  stmts : Array[TsStmt]
+}
+pub impl Show for TsBlock
+
+pub(all) enum TsCompoundOp {
+  AddAssign
+  SubAssign
+  MulAssign
+  DivAssign
+  ModAssign
+  BitAndAssign
+  BitOrAssign
+  BitXorAssign
+  ShlAssign
+  ShrAssign
+  UShrAssign
+  PowAssign
+  AndAssign
+  OrAssign
+  CoalesceAssign
+}
+pub impl Eq for TsCompoundOp
+pub impl Show for TsCompoundOp
+
+pub(all) struct TsExportSpec {
+  local_name : String
+  export_name : String
+}
+pub impl Show for TsExportSpec
+
+pub(all) enum TsExpr {
+  NumberLit(Double)
+  IntLit(Int)
+  BigIntLit(String)
+  BoolLit(Bool)
+  StringLit(String)
+  NullLit
+  ArrayHole
+  Var(String)
+  BinOp(TsBinOp, TsExpr, TsExpr)
+  UnaryOp(TsUnaryOp, TsExpr)
+  Call(String, Array[TsExpr])
+  CallExpr(TsExpr, Array[TsExpr])
+  Cond(TsExpr, TsExpr, TsExpr)
+  ArrayLit(Array[TsExpr])
+  Spread(TsExpr)
+  ObjectLit(Array[(String, TsExpr)])
+  ComputedProp(TsExpr, TsExpr)
+  IndexAccess(TsExpr, TsExpr)
+  PropAccess(TsExpr, String)
+  New(String, Array[TsExpr])
+  NewExpr(TsExpr, Array[TsExpr])
+  MethodCall(TsExpr, String, Array[TsExpr])
+  AssignExpr(String, TsExpr)
+  AssignPattern(TsBinding, TsExpr)
+  CompoundAssignExpr(TsExpr, TsCompoundOp, TsExpr)
+  PropAssignExpr(TsExpr, String, TsExpr)
+  IndexAssignExpr(TsExpr, TsExpr, TsExpr)
+  Seq(TsExpr, TsExpr)
+  ArrowFunc(Array[TsParam], TsArrowBody, Bool)
+  FuncExpr(TsFunc)
+  Yield(TsExpr?)
+  YieldStar(TsExpr)
+  Await(TsExpr)
+  DynamicImport(TsExpr)
+  ImportMeta
+  TaggedTemplate(TsExpr, Array[String], Array[String], Array[TsExpr])
+  TemplateLiteral(Array[String], Array[TsExpr])
+}
+pub impl Show for TsExpr
+
+pub(all) enum TsForOfKind {
+  Var
+  Let
+  Const
+  Assign
+}
+pub impl Eq for TsForOfKind
+pub impl Show for TsForOfKind
+
+pub(all) struct TsFunc {
+  name : String
+  params : Array[TsParam]
+  return_type : TsType
+  body : TsBlock
+  is_generator : Bool
+  is_async : Bool
+}
+pub impl Show for TsFunc
+
+pub(all) struct TsImport {
+  name : String
+  module_ : String
+  params : Array[(String, TsType)]
+  return_type : TsType
+}
+pub impl Show for TsImport
+
+pub(all) struct TsImportDecl {
+  module_spec : String
+  default_binding : String?
+  namespace_binding : String?
+  named_bindings : Array[(String, String)]
+  side_effect_only : Bool
+  type_only : Bool
+}
+pub impl Show for TsImportDecl
+
+pub(all) struct TsInterface {
+  name : String
+  fields : Array[(String, TsType)]
+}
+pub impl Show for TsInterface
+
+pub(all) struct TsModule {
+  funcs : Array[TsFunc]
+  interfaces : Array[TsInterface]
+  imports : Array[TsImport]
+}
+pub impl Show for TsModule
+
+pub(all) struct TsModuleBlock {
+  block : TsBlock
+  imports : Array[TsImportDecl]
+  exports : Array[TsExportSpec]
+  reexports : Array[TsReExportSpec]
+}
+pub impl Show for TsModuleBlock
+
+pub(all) struct TsObjectBinding {
+  props : Array[TsObjectBindingProp]
+  rest : String?
+}
+pub impl Show for TsObjectBinding
+
+pub(all) struct TsObjectBindingProp {
+  key : String
+  key_expr : TsExpr?
+  binding : TsBinding
+  default : TsExpr?
+}
+pub impl Show for TsObjectBindingProp
+
+pub(all) struct TsParam {
+  name : String
+  binding : TsBinding?
+  is_rest : Bool
+  type_ : TsType
+  default : TsExpr?
+}
+pub impl Show for TsParam
+
+pub(all) enum TsReExportKind {
+  Named(Array[(String, String)])
+  All
+  Namespace(String)
+}
+pub impl Show for TsReExportKind
+
+pub(all) struct TsReExportSpec {
+  module_spec : String
+  kind : TsReExportKind
+}
+pub impl Show for TsReExportSpec
+
+pub(all) enum TsStmt {
+  Var(TsBinding, TsType, TsExpr)
+  Let(TsBinding, TsType, TsExpr)
+  Const(TsBinding, TsType, TsExpr)
+  Assign(String, TsExpr)
+  CompoundAssign(String, TsCompoundOp, TsExpr)
+  IndexAssign(TsExpr, TsExpr, TsExpr)
+  PropAssign(TsExpr, String, TsExpr)
+  Expr(TsExpr)
+  Empty
+  Return(TsExpr?)
+  Throw(TsExpr)
+  Try(TsBlock, TsBinding?, TsBlock?, TsBlock?)
+  If(TsExpr, TsBlock, TsBlock?)
+  While(TsExpr, TsBlock)
+  DoWhile(TsExpr, TsBlock)
+  For(TsStmt?, TsExpr?, TsStmt?, TsBlock)
+  ForOf(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock)
+  ForAwaitOf(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock)
+  ForIn(TsForOfKind, TsBinding, TsType, TsExpr, TsBlock)
+  Switch(TsExpr, Array[TsSwitchCase])
+  With(TsExpr, TsBlock)
+  Debugger
+  Label(String, TsStmt)
+  Block(TsBlock)
+  Break(String?)
+  Continue(String?)
+}
+pub impl Show for TsStmt
+
+pub(all) struct TsSwitchCase {
+  test_expr : TsExpr?
+  body : TsBlock
+}
+pub impl Show for TsSwitchCase
+
+pub(all) enum TsType {
+  Number
+  Int
+  Boolean
+  String_
+  Void
+  BigInt
+  Symbol
+  Any
+  Never
+  Null
+  Undefined
+  Literal(String)
+  Array(TsType)
+  Tuple(Array[TsType])
+  Object(Array[(TsType, TsType)])
+  Struct(String, Array[(String, TsType)])
+  Func(Array[TsType], TsType)
+  Union(Array[TsType])
+  Intersection(Array[TsType])
+  Named(String)
+}
+pub impl Eq for TsType
+pub impl Show for TsType
+
+pub(all) enum TsUnaryOp {
+  Neg
+  Not
+  BitwiseNot
+  Plus
+  Typeof
+  Void
+  Delete
+  PreInc
+  PreDec
+  PostInc
+  PostDec
+}
+pub impl Eq for TsUnaryOp
+pub impl Show for TsUnaryOp
+
+pub(all) struct TypedExpr {
+  expr : TsExpr
+  type_ : TsType
+}
+pub impl Show for TypedExpr
+
+pub(all) struct TypedFunc {
+  func : TsFunc
+  locals : Array[(String, TsType)]
+}
+pub impl Show for TypedFunc
+
+pub(all) struct TypedModule {
+  funcs : Array[TypedFunc]
+}
+pub impl Show for TypedModule
+
+pub(all) struct TypedStmt {
+  stmt : TsStmt
+}
+pub impl Show for TypedStmt
+
+// Type aliases
+
+// Traits
+

@@ -935,4 +935,3 @@ test "interpreter: nullish coalescing preserves false" {
   // false should NOT trigger default value (unlike ||)
   inspect(result, content="Bool(false)")
 }
-

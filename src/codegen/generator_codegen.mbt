@@ -59,7 +59,9 @@ fn generate_signal_check(state_struct_type_idx : UInt) -> Array[@core.Instr] {
   // If throw (1): set done, return (signal_value, 1)
   // If return (2): set done, return (signal_value, 1)
   instrs.push(@core.Instr::LocalGet(0U)) // state
-  instrs.push(@core.Instr::StructGet(state_struct_type_idx, field_idx_signal_mode))
+  instrs.push(
+    @core.Instr::StructGet(state_struct_type_idx, field_idx_signal_mode),
+  )
   instrs.push(@core.Instr::I32Const(signal_mode_normal.reinterpret_as_uint()))
   instrs.push(@core.Instr::I32Ne)
   // If signal_mode != 0, handle throw/return
@@ -67,11 +69,15 @@ fn generate_signal_check(state_struct_type_idx : UInt) -> Array[@core.Instr] {
   // Set done = 1
   handle_signal.push(@core.Instr::LocalGet(0U))
   handle_signal.push(@core.Instr::I32Const(1U))
-  handle_signal.push(@core.Instr::StructSet(state_struct_type_idx, field_idx_done))
+  handle_signal.push(
+    @core.Instr::StructSet(state_struct_type_idx, field_idx_done),
+  )
   // Reset signal_mode to 0
   handle_signal.push(@core.Instr::LocalGet(0U))
   handle_signal.push(@core.Instr::I32Const(0U))
-  handle_signal.push(@core.Instr::StructSet(state_struct_type_idx, field_idx_signal_mode))
+  handle_signal.push(
+    @core.Instr::StructSet(state_struct_type_idx, field_idx_signal_mode),
+  )
   // Return (signal_value, 1)
   handle_signal.push(@core.Instr::LocalGet(0U))
   handle_signal.push(
@@ -169,22 +175,33 @@ pub fn compile_generator_if_else(
 
 // Signal modes for generator throw/return
 // 0 = normal, 1 = throw, 2 = return
+
+///|
 let signal_mode_normal : Int = 0
 
 // Used in runtime interpreter_aot_gen.mbt for throw/return
+
+///|
 let _signal_mode_throw : Int = 1
 
+///|
 let _signal_mode_return : Int = 2
 
 // Field indices in the state struct (after signal support)
+
+///|
 let field_idx_state_num : UInt = 0U
 
+///|
 let field_idx_done : UInt = 1U
 
+///|
 let field_idx_signal_mode : UInt = 2U
 
+///|
 let field_idx_signal_value : UInt = 3U
 
+///|
 let field_idx_params_start : UInt = 4U
 
 ///|
@@ -305,7 +322,9 @@ fn generate_next_instrs_if_else(
   // Build state dispatch using if-else chain
   // Get current state
   instrs.push(@core.Instr::LocalGet(0U)) // state struct
-  instrs.push(@core.Instr::StructGet(state_struct_type_idx, field_idx_state_num))
+  instrs.push(
+    @core.Instr::StructGet(state_struct_type_idx, field_idx_state_num),
+  )
 
   // Build if-else chain for states
   let state_code = build_state_dispatch(sm, state_struct_type_idx, 0)
@@ -338,7 +357,9 @@ fn build_state_dispatch(
   // Build if statement
   // Get state number and compare
   instrs.push(@core.Instr::LocalGet(0U))
-  instrs.push(@core.Instr::StructGet(state_struct_type_idx, field_idx_state_num))
+  instrs.push(
+    @core.Instr::StructGet(state_struct_type_idx, field_idx_state_num),
+  )
   instrs.push(@core.Instr::I32Const(state_idx.reinterpret_as_uint()))
   instrs.push(@core.Instr::I32Eq)
 
@@ -388,7 +409,9 @@ fn generate_gen_instr(
       // Set next state
       instrs.push(@core.Instr::LocalGet(0U))
       instrs.push(@core.Instr::I32Const(next_state.reinterpret_as_uint()))
-      instrs.push(@core.Instr::StructSet(state_struct_type_idx, field_idx_state_num))
+      instrs.push(
+        @core.Instr::StructSet(state_struct_type_idx, field_idx_state_num),
+      )
       // Return (value, false)
       let expr_code = generate_gen_expr(sm, expr, state_struct_type_idx)
       for c in expr_code {
@@ -512,7 +535,9 @@ fn generate_gen_instr(
           // The exception value would be on stack, store it
           catch_instrs.push(@core.Instr::LocalGet(0U))
           catch_instrs.push(@core.Instr::F64Const(0.0)) // Placeholder: exception value
-          catch_instrs.push(@core.Instr::StructSet(state_struct_type_idx, field_idx))
+          catch_instrs.push(
+            @core.Instr::StructSet(state_struct_type_idx, field_idx),
+          )
         }
         None => ()
       }
@@ -566,21 +591,18 @@ fn generate_gen_instr(
         ),
       )
       inner_block.push(@core.Instr::Br(1U)) // Skip catch, jump to outer block end
-
       let outer_block : Array[@core.Instr] = []
       outer_block.push(@core.Instr::Block(@core.BlockType::Empty, inner_block))
       // Catch handler here
       for c in catch_instrs {
         outer_block.push(c)
       }
-
       instrs.push(@core.Instr::Block(@core.BlockType::Empty, outer_block))
 
       // Finally always executes
       for c in finally_instrs {
         instrs.push(c)
       }
-
       instrs
     }
     GenInstr::Throw(expr) => {
@@ -590,14 +612,18 @@ fn generate_gen_instr(
       // Set signal_mode = throw (1)
       instrs.push(@core.Instr::LocalGet(0U))
       instrs.push(@core.Instr::I32Const(1U)) // signal_mode_throw
-      instrs.push(@core.Instr::StructSet(state_struct_type_idx, field_idx_signal_mode))
+      instrs.push(
+        @core.Instr::StructSet(state_struct_type_idx, field_idx_signal_mode),
+      )
       // Set signal_value
       instrs.push(@core.Instr::LocalGet(0U))
       let expr_code = generate_gen_expr(sm, expr, state_struct_type_idx)
       for c in expr_code {
         instrs.push(c)
       }
-      instrs.push(@core.Instr::StructSet(state_struct_type_idx, field_idx_signal_value))
+      instrs.push(
+        @core.Instr::StructSet(state_struct_type_idx, field_idx_signal_value),
+      )
       // Set done
       instrs.push(@core.Instr::LocalGet(0U))
       instrs.push(@core.Instr::I32Const(1U))
@@ -838,22 +864,18 @@ pub fn compile_aot_group(
           // State struct type
           let state_struct_type_idx = type_idx
           type_idx += 1
-
           let gen_code = compile_generator_with_calls(
             sm, state_struct_type_idx, func_map,
           )
           types.push(gen_code.state_struct_type)
           types.push(gen_code.create_func_type)
           types.push(gen_code.next_func_type)
-
           funcs.push(gen_code.create_func_code)
           func_types.push(state_struct_type_idx + 1) // create type
           exports.push((name + "_create", func_map[name + "_create"]))
-
           funcs.push(gen_code.next_func_code)
           func_types.push(state_struct_type_idx + 2) // next type
           exports.push((name + "_next", func_map[name + "_next"]))
-
           type_idx += 2 // create and next types
         } else {
           // Compile helper function
@@ -874,7 +896,6 @@ pub fn compile_aot_group(
       None => return None
     }
   }
-
   Some({ group, types, funcs, func_types, exports, func_map })
 }
 
@@ -915,19 +936,16 @@ fn compile_helper_func(
     params.push(@core.ValType::F64) // All params as f64 for now
   }
   let results : Array[@core.ValType] = [@core.ValType::F64] // All return f64
-
   let func_type = @core.TypeDef::Func({ params, results })
 
   // Build function body
   let instrs = compile_helper_body(func, func_map)
-
   let code : @core.Code = {
     locals: [],
     body: { instrs, },
     compiled: None,
     max_stack_height: 0,
   }
-
   let _ = type_idx
   Some((func_type, code))
 }
@@ -956,15 +974,14 @@ fn compile_helper_body(
 
   // Default return
   if instrs.length() == 0 ||
-     not(
-       match instrs[instrs.length() - 1] {
-         @core.Instr::Return => true
-         _ => false
-       },
-     ) {
+    not(
+      match instrs[instrs.length() - 1] {
+        @core.Instr::Return => true
+        _ => false
+      },
+    ) {
     instrs.push(@core.Instr::F64Const(0.0))
   }
-
   instrs
 }
 
@@ -984,7 +1001,8 @@ fn compile_helper_stmt(
       result.push(@core.Instr::Return)
       result
     }
-    @ast.TsStmt::Return(None) => [@core.Instr::F64Const(0.0), @core.Instr::Return]
+    @ast.TsStmt::Return(None) =>
+      [@core.Instr::F64Const(0.0), @core.Instr::Return]
     @ast.TsStmt::Expr(expr) => {
       let instrs = compile_helper_expr(expr, param_map, func_map)
       let result : Array[@core.Instr] = []

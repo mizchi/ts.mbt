@@ -1242,7 +1242,9 @@ fn JSInterpreter::to_integer_or_error(
   // Check for Symbol - throw TypeError
   match value {
     String(s) if is_symbol_string(s) => {
-      let _ = self.set_error_kind("TypeError", "Cannot convert a Symbol value to a number")
+      let _ = self.set_error_kind(
+        "TypeError", "Cannot convert a Symbol value to a number",
+      )
       return None
     }
     Object(_) | Array(_) | Function(_) => {
@@ -1258,7 +1260,9 @@ fn JSInterpreter::to_integer_or_error(
         // Check result for Symbol
         match res {
           String(s) if is_symbol_string(s) => {
-            let _ = self.set_error_kind("TypeError", "Cannot convert a Symbol value to a number")
+            let _ = self.set_error_kind(
+              "TypeError", "Cannot convert a Symbol value to a number",
+            )
             return None
           }
           _ => return Some(res.to_number().to_int())
@@ -2029,7 +2033,9 @@ fn JSInterpreter::typedarray_keys(
   match get_typedarray_data(this_arg) {
     Some(data) => {
       if data.buffer.detached {
-        return self.set_error_kind("TypeError", "Cannot perform keys on a detached ArrayBuffer")
+        return self.set_error_kind(
+          "TypeError", "Cannot perform keys on a detached ArrayBuffer",
+        )
       }
       let iter = self.new_object()
       // Set up prototype chain to match Array iterators
@@ -2038,6 +2044,7 @@ fn JSInterpreter::typedarray_keys(
       match iterator_proto {
         Object(_) | Function(_) | Array(_) => {
           let _ = js_set_prop(iter, "__proto__", iterator_proto)
+
         }
         _ => ()
       }
@@ -2070,7 +2077,9 @@ fn JSInterpreter::typedarray_values(
   match get_typedarray_data(this_arg) {
     Some(data) => {
       if data.buffer.detached {
-        return self.set_error_kind("TypeError", "Cannot perform values on a detached ArrayBuffer")
+        return self.set_error_kind(
+          "TypeError", "Cannot perform values on a detached ArrayBuffer",
+        )
       }
       let iter = self.new_object()
       // Set up prototype chain to match Array iterators
@@ -2079,6 +2088,7 @@ fn JSInterpreter::typedarray_values(
       match iterator_proto {
         Object(_) | Function(_) | Array(_) => {
           let _ = js_set_prop(iter, "__proto__", iterator_proto)
+
         }
         _ => ()
       }
@@ -2111,7 +2121,9 @@ fn JSInterpreter::typedarray_entries(
   match get_typedarray_data(this_arg) {
     Some(data) => {
       if data.buffer.detached {
-        return self.set_error_kind("TypeError", "Cannot perform entries on a detached ArrayBuffer")
+        return self.set_error_kind(
+          "TypeError", "Cannot perform entries on a detached ArrayBuffer",
+        )
       }
       let iter = self.new_object()
       // Set up prototype chain to match Array iterators
@@ -2120,6 +2132,7 @@ fn JSInterpreter::typedarray_entries(
       match iterator_proto {
         Object(_) | Function(_) | Array(_) => {
           let _ = js_set_prop(iter, "__proto__", iterator_proto)
+
         }
         _ => ()
       }

@@ -34,7 +34,6 @@ pub fn analyze_arrow_func(
   for p in params {
     param_names.push(p.name)
   }
-
   let captures : Map[String, CapturedVar] = {}
 
   // Find captured variables
@@ -44,7 +43,6 @@ pub fn analyze_arrow_func(
     @ast.TsArrowBody::ArrowBlock(block) =>
       find_captures_in_block(block, param_names, outer_scope, captures)
   }
-
   let captures_arr : Array[CapturedVar] = []
   for entry in captures {
     captures_arr.push(entry.1)
@@ -52,8 +50,12 @@ pub fn analyze_arrow_func(
 
   // Check compilability
   let (compilable, reason) = check_closure_compilable(body, captures_arr)
-
-  { params: param_names, captures: captures_arr, compilable, not_compilable_reason: reason }
+  {
+    params: param_names,
+    captures: captures_arr,
+    compilable,
+    not_compilable_reason: reason,
+  }
 }
 
 ///|
@@ -66,12 +68,10 @@ pub fn analyze_func_expr(
   for p in func.params {
     param_names.push(p.name)
   }
-
   let captures : Map[String, CapturedVar] = {}
 
   // Find captured variables in function body
   find_captures_in_block(func.body, param_names, outer_scope, captures)
-
   let captures_arr : Array[CapturedVar] = []
   for entry in captures {
     captures_arr.push(entry.1)
@@ -83,7 +83,9 @@ pub fn analyze_func_expr(
       params: param_names,
       captures: captures_arr,
       compilable: false,
-      not_compilable_reason: Some("generator function expressions not supported"),
+      not_compilable_reason: Some(
+        "generator function expressions not supported",
+      ),
     }
   }
   if func.is_async {
@@ -94,12 +96,16 @@ pub fn analyze_func_expr(
       not_compilable_reason: Some("async function expressions not supported"),
     }
   }
-
   let (compilable, reason) = check_closure_compilable_block(
-    func.body, captures_arr,
+    func.body,
+    captures_arr,
   )
-
-  { params: param_names, captures: captures_arr, compilable, not_compilable_reason: reason }
+  {
+    params: param_names,
+    captures: captures_arr,
+    compilable,
+    not_compilable_reason: reason,
+  }
 }
 
 ///|
@@ -112,14 +118,16 @@ pub fn find_captures_in_block(
   // Collect locally declared variables
   let all_locals = local_vars.copy()
   collect_local_declarations(block, all_locals)
-
   for stmt in block.stmts {
     find_captures_in_stmt(stmt, all_locals, outer_scope, captures)
   }
 }
 
 ///|
-fn collect_local_declarations(block : @ast.TsBlock, locals : Array[String]) -> Unit {
+fn collect_local_declarations(
+  block : @ast.TsBlock,
+  locals : Array[String],
+) -> Unit {
   for stmt in block.stmts {
     match stmt {
       @ast.TsStmt::Var(binding, _, _)
@@ -132,7 +140,10 @@ fn collect_local_declarations(block : @ast.TsBlock, locals : Array[String]) -> U
 }
 
 ///|
-fn closure_collect_binding_names(binding : @ast.TsBinding, names : Array[String]) -> Unit {
+fn closure_collect_binding_names(
+  binding : @ast.TsBinding,
+  names : Array[String],
+) -> Unit {
   match binding {
     @ast.TsBinding::Ident(name) => names.push(name)
     @ast.TsBinding::Array(arr) => {
@@ -181,8 +192,7 @@ fn find_captures_in_stmt(
       if not(local_vars.contains(name)) && outer_scope.contains(name) {
         match captures.get(name) {
           Some(cap) => captures[name] = { ..cap, is_mutated: true }
-          None =>
-            captures[name] = { name, is_mutated: true, type_hint: None }
+          None => captures[name] = { name, is_mutated: true, type_hint: None }
         }
       }
       find_captures_in_expr(expr, local_vars, outer_scope, captures)
@@ -192,8 +202,7 @@ fn find_captures_in_stmt(
       if not(local_vars.contains(name)) && outer_scope.contains(name) {
         match captures.get(name) {
           Some(cap) => captures[name] = { ..cap, is_mutated: true }
-          None =>
-            captures[name] = { name, is_mutated: true, type_hint: None }
+          None => captures[name] = { name, is_mutated: true, type_hint: None }
         }
       }
       find_captures_in_expr(expr, local_vars, outer_scope, captures)
@@ -202,7 +211,8 @@ fn find_captures_in_stmt(
       find_captures_in_expr(cond, local_vars, outer_scope, captures)
       find_captures_in_block(then_block, local_vars, outer_scope, captures)
       match else_block {
-        Some(eb) => find_captures_in_block(eb, local_vars, outer_scope, captures)
+        Some(eb) =>
+          find_captures_in_block(eb, local_vars, outer_scope, captures)
         None => ()
       }
     }
@@ -241,7 +251,8 @@ fn find_captures_in_stmt(
           let catch_locals = local_vars.copy()
           match catch_param {
             Some(@ast.TsBinding::Ident(name)) => catch_locals.push(name)
-            Some(binding) => closure_collect_binding_names(binding, catch_locals)
+            Some(binding) =>
+              closure_collect_binding_names(binding, catch_locals)
             None => ()
           }
           find_captures_in_block(cb, catch_locals, outer_scope, captures)
@@ -327,8 +338,7 @@ pub fn find_captures_in_expr(
       if not(local_vars.contains(name)) && outer_scope.contains(name) {
         match captures.get(name) {
           Some(cap) => captures[name] = { ..cap, is_mutated: true }
-          None =>
-            captures[name] = { name, is_mutated: true, type_hint: None }
+          None => captures[name] = { name, is_mutated: true, type_hint: None }
         }
       }
       find_captures_in_expr(value, local_vars, outer_scope, captures)
@@ -435,7 +445,8 @@ fn check_stmt_closure_compatible(stmt : @ast.TsStmt) -> (Bool, String?) {
     | @ast.TsStmt::Let(_, _, init)
     | @ast.TsStmt::Const(_, _, init) => check_expr_closure_compatible(init)
     @ast.TsStmt::Assign(_, expr) => check_expr_closure_compatible(expr)
-    @ast.TsStmt::CompoundAssign(_, _, expr) => check_expr_closure_compatible(expr)
+    @ast.TsStmt::CompoundAssign(_, _, expr) =>
+      check_expr_closure_compatible(expr)
     @ast.TsStmt::If(cond, then_block, else_block) => {
       match check_expr_closure_compatible(cond) {
         (false, r) => return (false, r)

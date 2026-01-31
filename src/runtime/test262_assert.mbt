@@ -127,18 +127,21 @@ fn get_arraylike_element(value : JSValue, index : Int) -> JSValue {
     JSValue::Object(_) =>
       // Try TypedArray first
       match get_typedarray_data(value) {
-        Some(data) => {
+        Some(data) =>
           if index >= 0 && index < data.length {
             // Return as BigInt for BigInt typed arrays
             match data.kind {
               BigInt64Array | BigUint64Array =>
-                JSValue::BigInt(BigInt::from_int64(typedarray_get_element(data, index).to_int64()))
+                JSValue::BigInt(
+                  BigInt::from_int64(
+                    typedarray_get_element(data, index).to_int64(),
+                  ),
+                )
               _ => JSValue::Number(typedarray_get_element(data, index))
             }
           } else {
             JSValue::Undefined
           }
-        }
         None =>
           // Fall back to regular property access
           js_get_prop(value, index.to_string())

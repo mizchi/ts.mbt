@@ -1,0 +1,8 @@
+import {
+  "moonbitlang/core/math",
+  "moonbitlang/core/strconv",
+  "moonbitlang/regexp",
+  "mizchi/ts/ast" as @ast,
+  "mizchi/ts/parser" as @parser,
+  "mizchi/ts/lib" as @lib,
+}

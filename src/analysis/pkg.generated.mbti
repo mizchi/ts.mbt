@@ -1,0 +1,721 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/analysis"
+
+import {
+  "mizchi/ts/ast",
+}
+
+// Values
+pub fn analyze(@ast.TsModule, String) -> AnalysisResult[@ast.TypedModule]
+
+pub fn analyze_aliases(@ast.TsFunc) -> AliasInfo
+
+pub fn analyze_arrow_func(Array[@ast.TsParam], @ast.TsArrowBody, Array[String]) -> ClosureInfo
+
+pub fn analyze_block(@ast.TsBlock, String) -> AnalysisResult[Unit]
+
+pub fn analyze_block_bindings(AnalysisCtx, @ast.TsBlock) -> Unit
+
+pub fn analyze_block_usage_standalone(@ast.TsBlock, String) -> SymbolTable
+
+pub fn analyze_const_fold(@ast.TsFunc, String) -> ConstFoldInfo
+
+pub fn analyze_cycles(@ast.TsFunc) -> CycleInfo
+
+pub fn analyze_dead_code(@ast.TsFunc) -> Array[@ast.TsStmt]
+
+pub fn analyze_expr_purity(@ast.TsExpr) -> PurityInfo
+
+pub fn analyze_expr_type(@ast.TsExpr, String) -> @ast.TsType
+
+pub fn analyze_full(@ast.TsModule, String) -> AnalysisResult[FullAnalysisResult]
+
+pub fn analyze_func(@ast.TsFunc, String) -> AnalysisResult[@ast.TypedFunc]
+
+pub fn analyze_func_expr(@ast.TsFunc, Array[String]) -> ClosureInfo
+
+pub fn analyze_func_loop_invariants(@ast.TsFunc) -> Array[LoopInvariantInfo]
+
+pub fn analyze_func_purity(@ast.TsFunc) -> PurityInfo
+
+pub fn analyze_function(TypeInferCtx, @ast.TsFunc) -> @ast.TypedFunc
+
+pub fn analyze_function_bindings(AnalysisCtx, @ast.TsFunc) -> Unit
+
+pub fn analyze_generator(@ast.TsFunc) -> GeneratorAnalysis
+
+pub fn analyze_inline(@ast.TsFunc, Int) -> InlineInfo
+
+pub fn analyze_leaks(@ast.TsFunc) -> LeakAnalysis
+
+pub fn analyze_liveness(@ast.TsFunc) -> LivenessInfo
+
+pub fn analyze_loop_invariants(@ast.TsExpr?, @ast.TsBlock) -> LoopInvariantInfo
+
+pub fn analyze_module_bindings(AnalysisCtx, @ast.TsModule) -> Unit
+
+pub fn analyze_module_inline(@ast.TsModule) -> Array[InlineInfo]
+
+pub fn analyze_module_types(TypeInferCtx, @ast.TsModule) -> @ast.TypedModule
+
+pub fn analyze_null_guard(@ast.TsExpr) -> (String, Bool)?
+
+pub fn analyze_refcount(@ast.TsFunc, Map[String, @ast.TsType]) -> RefCountInfo
+
+pub fn analyze_truthiness_guard(@ast.TsExpr) -> String?
+
+pub fn analyze_typeof_guard(@ast.TsExpr) -> (String, String)?
+
+pub fn analyze_usage(@ast.TsModule, String) -> SymbolTable
+
+pub fn build_call_graph(@ast.TsModule) -> CallGraph
+
+pub fn build_cfg(@ast.TsFunc) -> CFG
+
+pub fn can_compile_to_wasm(@ast.TsFunc) -> CompilabilityResult
+
+pub fn check(String) -> Array[AnalysisError]
+
+pub fn check_aot_compilable(@ast.TsModule) -> AOTCheckResult
+
+pub fn check_aot_compilable_source(String) -> AOTCheckResult
+
+pub fn check_duplicate_params(AnalysisCtx, Array[@ast.TsParam], Int) -> Unit
+
+pub fn check_func_aot_compatible(@ast.TsFunc) -> String?
+
+pub fn collect_binding_names(@ast.TsBinding, Array[String]) -> Unit
+
+pub fn collect_param_names(Array[@ast.TsParam]) -> Array[String]
+
+pub fn eval_const(@ast.TsExpr) -> ConstValue
+
+pub fn find_aot_groups(@ast.TsModule, CallGraph) -> Array[AOTGroup]
+
+pub fn find_captures_in_block(@ast.TsBlock, Array[String], Array[String], Map[String, CapturedVar]) -> Unit
+
+pub fn find_captures_in_expr(@ast.TsExpr, Array[String], Array[String], Map[String, CapturedVar]) -> Unit
+
+pub fn find_compilable_functions(@ast.TsModule) -> Array[(String, @ast.TsFunc)]
+
+pub fn format_error(AnalysisError, String) -> String
+
+pub fn format_errors(Array[AnalysisError], String) -> String
+
+pub fn format_leak_report(LeakAnalysis) -> String
+
+pub fn get_capture_names(ClosureInfo) -> Array[String]
+
+pub fn get_cyclic_vars(CycleInfo) -> Array[String]
+
+pub fn get_dead_code(CFG) -> Array[@ast.TsStmt]
+
+pub fn get_decrefs_at(RefCountInfo, Int) -> Array[String]
+
+pub fn get_drop_vars(LivenessInfo, Int) -> Array[String]
+
+pub fn get_errors(LeakAnalysis) -> Array[PotentialLeak]
+
+pub fn get_increfs_at(RefCountInfo, Int) -> Array[String]
+
+pub fn get_last_use(LivenessInfo, String) -> Int?
+
+pub fn get_ops_at(RefCountInfo, Int, Bool) -> Array[RefOp]
+
+pub fn get_warnings(LeakAnalysis) -> Array[PotentialLeak]
+
+pub fn has_dead_code(CFG) -> Bool
+
+pub fn has_leaks(LeakAnalysis) -> Bool
+
+pub fn has_mutable_captures(ClosureInfo) -> Bool
+
+pub fn has_potential_cycles(CycleInfo) -> Bool
+
+pub fn hoist_declarations(AnalysisCtx, @ast.TsBlock) -> Unit
+
+pub fn infer_binop_type(TypeInferCtx, @ast.TsBinOp, @ast.TsExpr, @ast.TsExpr) -> @ast.TsType
+
+pub fn infer_expr(TypeInferCtx, @ast.TsExpr) -> @ast.TypedExpr
+
+pub fn infer_expr_type(TypeInferCtx, @ast.TsExpr) -> @ast.TsType
+
+pub fn infer_literal_type(@ast.TsExpr) -> @ast.TsType
+
+pub fn infer_method_return_type(TypeInferCtx, @ast.TsExpr, String) -> @ast.TsType
+
+pub fn intersect_types(@ast.TsType, @ast.TsType) -> @ast.TsType
+
+pub fn is_aot_compilable(String) -> Bool
+
+pub fn is_assignable(@ast.TsType, @ast.TsType) -> Bool
+
+pub fn is_captured(LivenessInfo, String) -> Bool
+
+pub fn is_const_expr(@ast.TsExpr) -> Bool
+
+pub fn is_live_at(LivenessInfo, String, Int) -> Bool
+
+pub fn is_pure_expr(@ast.TsExpr) -> Bool
+
+pub fn is_unique(AliasInfo, String) -> Bool
+
+pub fn make_const_assign_error(String, SourceLoc) -> AnalysisError
+
+pub fn make_duplicate_decl_error(String, SourceLoc) -> AnalysisError
+
+pub fn make_reference_error(String, SourceLoc) -> AnalysisError
+
+pub fn make_tdz_error(String, SourceLoc) -> AnalysisError
+
+pub fn may_alias(AliasInfo, String, String) -> Bool
+
+pub fn narrow_type(@ast.TsType, String) -> @ast.TsType
+
+pub fn narrow_type_negated(@ast.TsType, String) -> @ast.TsType
+
+pub fn needs_gc(@ast.TsType) -> Bool
+
+pub fn parse_and_analyze(String) -> AnalysisResult[@ast.TypedModule]
+
+pub fn register_lexical_declarations(AnalysisCtx, @ast.TsBlock) -> Unit
+
+pub fn remove_falsy(@ast.TsType) -> @ast.TsType
+
+pub fn remove_null_undefined(@ast.TsType) -> @ast.TsType
+
+pub fn resolve_any(@ast.TsType, @ast.TsExpr) -> @ast.TsType
+
+pub fn resolve_any_with_ctx(TypeInferCtx, @ast.TsType, @ast.TsExpr) -> @ast.TsType
+
+pub fn type_check_module(@ast.TsModule, String) -> TypeCheckResult
+
+pub fn union_types(@ast.TsType, @ast.TsType) -> @ast.TsType
+
+// Errors
+
+// Types and methods
+pub struct AOTCheckResult {
+  compilable : Bool
+  groups : Array[AOTGroup]
+  incompatible_funcs : Array[AOTIncompatibleFunc]
+  diagnostics : Array[String]
+}
+pub fn AOTCheckResult::debug_string(Self) -> String
+
+pub struct AOTGroup {
+  root : String
+  members : Array[String]
+  external_calls : Array[String]
+}
+pub fn AOTGroup::debug_string(Self) -> String
+
+pub struct AOTIncompatibleFunc {
+  name : String
+  reason : String
+}
+
+pub(all) struct AliasInfo {
+  var_to_set : Map[String, Int]
+  sets : Array[AliasSet]
+  escaped : Array[String]
+  unique : Array[String]
+}
+pub fn AliasInfo::new() -> Self
+
+pub(all) struct AliasSet {
+  mut variables : Array[String]
+  mut is_unique : Bool
+}
+pub fn AliasSet::new() -> Self
+pub fn AliasSet::singleton(String) -> Self
+
+pub(all) struct AnalysisCtx {
+  errors : Array[AnalysisError]
+  warnings : Array[AnalysisError]
+  mut current_scope : Scope
+  source : String
+  mut in_loop : Bool
+  mut in_switch : Bool
+  mut is_strict : Bool
+  mut expected_return_type : @ast.TsType?
+  mut current_function_name : String?
+}
+pub fn AnalysisCtx::add_error(Self, AnalysisErrorKind, String, Int) -> Unit
+pub fn AnalysisCtx::add_error_at(Self, AnalysisErrorKind, String, SourceLoc) -> Unit
+pub fn AnalysisCtx::add_warning(Self, String, Int) -> Unit
+pub fn AnalysisCtx::define_binding(Self, String, DeclKind, @ast.TsType, Bool, Int) -> Unit
+pub fn AnalysisCtx::has_errors(Self) -> Bool
+pub fn AnalysisCtx::lookup_binding(Self, String, Int) -> BindingInfo?
+pub fn AnalysisCtx::new(String) -> Self
+pub fn AnalysisCtx::pop_scope(Self) -> Unit
+pub fn AnalysisCtx::push_scope(Self, ScopeKind) -> Unit
+
+pub(all) struct AnalysisError {
+  kind : AnalysisErrorKind
+  message : String
+  loc : SourceLoc
+}
+pub impl Show for AnalysisError
+
+pub(all) enum AnalysisErrorKind {
+  SyntaxError
+  ReferenceError
+  TypeError
+  UnsupportedFeature
+  Warning
+}
+pub impl Eq for AnalysisErrorKind
+pub impl Show for AnalysisErrorKind
+
+pub(all) enum AnalysisResult[T] {
+  Ok(T, Array[AnalysisError])
+  Err(Array[AnalysisError])
+}
+pub fn[T] AnalysisResult::get_errors(Self[T]) -> Array[AnalysisError]
+pub fn[T] AnalysisResult::is_ok(Self[T]) -> Bool
+pub fn[T] AnalysisResult::unwrap(Self[T]) -> T
+pub impl[T : Show] Show for AnalysisResult[T]
+
+pub(all) struct BasicBlock {
+  id : Int
+  stmts : Array[@ast.TsStmt]
+  successors : Array[Int]
+  predecessors : Array[Int]
+  mut is_reachable : Bool
+  mut is_terminal : Bool
+}
+pub fn BasicBlock::new(Int) -> Self
+
+pub(all) struct BindingInfo {
+  name : String
+  kind : DeclKind
+  type_ : @ast.TsType
+  is_initialized : Bool
+  loc : SourceLoc
+}
+pub impl Show for BindingInfo
+
+pub(all) struct CFG {
+  blocks : Array[BasicBlock]
+  entry : Int
+  exits : Array[Int]
+  dead_blocks : Array[Int]
+}
+
+pub struct CallGraph {
+  calls : Map[String, Array[String]]
+  callers : Map[String, Array[String]]
+  functions : Array[String]
+}
+pub fn CallGraph::debug_string(Self) -> String
+
+pub struct CapturedVar {
+  name : String
+  is_mutated : Bool
+  type_hint : @ast.TsType?
+}
+
+pub struct ClosureInfo {
+  params : Array[String]
+  captures : Array[CapturedVar]
+  compilable : Bool
+  not_compilable_reason : String?
+}
+
+pub(all) enum CompilabilityResult {
+  Compilable
+  NotCompilable(String)
+}
+pub fn CompilabilityResult::is_compilable(Self) -> Bool
+
+pub(all) struct ConstFoldInfo {
+  foldable : Array[(Int, ConstValue)]
+  const_vars : Map[String, ConstValue]
+}
+pub fn ConstFoldInfo::new() -> Self
+
+pub(all) enum ConstValue {
+  Int(Int)
+  Number(Double)
+  String_(String)
+  Boolean(Bool)
+  Null
+  Undefined
+  NotConst
+}
+pub fn ConstValue::is_const(Self) -> Bool
+pub impl Eq for ConstValue
+pub impl Show for ConstValue
+
+pub(all) struct ConstraintSolver {
+  constraints : Array[TypeConstraint]
+  errors : Array[TypeError]
+  registry : TypeRegistry
+}
+pub fn ConstraintSolver::add_constraint(Self, TypeConstraint) -> Unit
+pub fn ConstraintSolver::new(TypeRegistry) -> Self
+pub fn ConstraintSolver::solve(Self) -> Unit
+
+pub(all) struct CycleInfo {
+  edges : Array[RefEdge]
+  potential_cycles : Array[PotentialCycle]
+  cyclic_vars : Array[String]
+}
+pub fn CycleInfo::new() -> Self
+
+pub(all) enum DeclKind {
+  Var
+  Let
+  Const
+  Param
+  Function
+  CatchParam
+}
+pub impl Eq for DeclKind
+pub impl Show for DeclKind
+
+pub(all) struct DropAnalysis {
+  drop_after_use : Array[(String, SourceLoc)]
+  never_used : Array[String]
+  captured : Array[String]
+  escaped : Array[String]
+}
+
+pub(all) struct FlowTypeCtx {
+  base_ctx : TypeInferCtx
+  mut type_env : TypeEnv
+  registry : TypeRegistry
+  solver : ConstraintSolver
+  mut return_types : Array[@ast.TsType]
+}
+pub fn FlowTypeCtx::add_constraint(Self, TypeConstraint) -> Unit
+pub fn FlowTypeCtx::enter_scope(Self) -> Unit
+pub fn FlowTypeCtx::get_return_type(Self) -> @ast.TsType
+pub fn FlowTypeCtx::get_type(Self, String) -> @ast.TsType
+pub fn FlowTypeCtx::leave_scope(Self) -> Unit
+pub fn FlowTypeCtx::narrow(Self, String, @ast.TsType) -> Unit
+pub fn FlowTypeCtx::new(String) -> Self
+pub fn FlowTypeCtx::record_return(Self, @ast.TsType) -> Unit
+pub fn FlowTypeCtx::set_type(Self, String, @ast.TsType) -> Unit
+
+pub(all) struct FullAnalysisResult {
+  typed_module : @ast.TypedModule
+  symbol_table : SymbolTable
+  drop_analysis : DropAnalysis
+  warnings : Array[AnalysisError]
+}
+
+pub struct GeneratorAnalysis {
+  yield_points : Array[YieldPoint]
+  persisted_vars : Array[PersistedVar]
+  state_count : Int
+  compilable : Bool
+  not_compilable_reason : String?
+}
+
+pub(all) struct InlineInfo {
+  name : String
+  recommendation : InlineRecommendation
+  stmt_count : Int
+  expr_count : Int
+  has_loops : Bool
+  has_recursion : Bool
+  call_count : Int
+  is_pure : Bool
+}
+
+pub(all) enum InlineRecommendation {
+  Inline
+  MaybeInline
+  NoInline
+}
+pub impl Eq for InlineRecommendation
+pub impl Show for InlineRecommendation
+
+pub(all) struct LeakAnalysis {
+  leaks : Array[PotentialLeak]
+  mut total_vars : Int
+  mut dropped_vars : Int
+  mut escaped_vars : Int
+  mut cyclic_vars : Int
+}
+pub fn LeakAnalysis::new() -> Self
+
+pub(all) enum LeakKind {
+  MissingDrop(String, Int)
+  CyclicReference(Array[String])
+  EscapedWithoutTracking(String)
+  CapturedInLongLivedClosure(String)
+  UnboundedGrowth(String, Int)
+}
+
+pub(all) enum LeakSeverity {
+  Warning
+  Error
+  Info
+}
+
+pub(all) struct LivenessInfo {
+  lifetimes : Map[String, VarLifetime]
+  live_at : Map[Int, Array[String]]
+  drop_points : Map[Int, Array[String]]
+  captured_vars : Array[String]
+}
+pub fn LivenessInfo::new() -> Self
+
+pub(all) struct LoopInvariant {
+  expr : @ast.TsExpr
+  depends_on : Array[String]
+  is_pure : Bool
+}
+
+pub(all) struct LoopInvariantInfo {
+  invariants : Array[LoopInvariant]
+  modified_vars : Array[String]
+}
+pub fn LoopInvariantInfo::new() -> Self
+
+pub(all) struct ObjectType {
+  properties : Map[String, @ast.TsType]
+  index_type : @ast.TsType?
+  mut is_class : Bool
+  mut name : String?
+}
+pub fn ObjectType::from_props(Array[(@ast.TsType, @ast.TsType)]) -> Self
+pub fn ObjectType::get_prop(Self, String) -> @ast.TsType?
+pub fn ObjectType::new() -> Self
+pub fn ObjectType::set_prop(Self, String, @ast.TsType) -> Unit
+
+pub struct PersistedVar {
+  name : String
+  is_param : Bool
+}
+
+pub(all) struct PotentialCycle {
+  variables : Array[String]
+  edges : Array[RefEdge]
+}
+
+pub(all) struct PotentialLeak {
+  kind : LeakKind
+  message : String
+  stmt_index : Int
+  severity : LeakSeverity
+}
+
+pub(all) struct PurityInfo {
+  is_pure : Bool
+  effects : Array[SideEffect]
+  impure_calls : Array[String]
+}
+pub fn PurityInfo::impure(SideEffect) -> Self
+pub fn PurityInfo::pure() -> Self
+
+pub(all) struct RefCountInfo {
+  ops : Array[RefPoint]
+  rc_vars : Array[String]
+  moved_vars : Array[String]
+}
+pub fn RefCountInfo::new() -> Self
+
+pub(all) struct RefEdge {
+  from_var : String
+  to_var : String
+  stmt_index : Int
+}
+
+pub(all) enum RefOp {
+  Incref(String)
+  Decref(String)
+  Move(String)
+}
+pub impl Show for RefOp
+
+pub(all) struct RefPoint {
+  stmt_index : Int
+  op : RefOp
+  is_before : Bool
+}
+
+pub(all) struct Scope {
+  parent : Scope?
+  bindings : Map[String, BindingInfo]
+  kind : ScopeKind
+}
+pub fn Scope::add_binding(Self, String, BindingInfo) -> Unit
+pub fn Scope::find_function_scope(Self) -> Self?
+pub fn Scope::get_local(Self, String) -> BindingInfo?
+pub fn Scope::global() -> Self
+pub fn Scope::has_local(Self, String) -> Bool
+pub fn Scope::initialize(Self, String) -> Unit
+pub fn Scope::is_const(Self, String) -> Bool
+pub fn Scope::is_uninitialized(Self, String) -> Bool
+pub fn Scope::lookup(Self, String) -> BindingInfo?
+pub fn Scope::new(ScopeKind, Self?) -> Self
+
+pub(all) enum ScopeKind {
+  Global
+  Module
+  Function
+  Block
+  Catch
+  With
+  ForLoop
+}
+pub impl Eq for ScopeKind
+pub impl Show for ScopeKind
+
+pub(all) enum SideEffect {
+  Pure
+  ReadGlobal
+  WriteGlobal
+  IO
+  Throws
+  Unknown
+}
+pub impl Eq for SideEffect
+pub impl Show for SideEffect
+
+pub(all) struct SourceLoc {
+  offset : Int
+  line : Int
+  column : Int
+}
+pub fn SourceLoc::from_offset(String, Int) -> Self
+pub fn SourceLoc::unknown() -> Self
+pub impl Eq for SourceLoc
+pub impl Show for SourceLoc
+
+pub(all) struct SymbolRef {
+  loc : SourceLoc
+  kind : UseKind
+  in_closure : Bool
+  scope_depth : Int
+}
+pub impl Show for SymbolRef
+
+pub(all) struct SymbolTable {
+  symbols : Map[String, UsageInfo]
+  mut scope_depth : Int
+  mut in_closure_depth : Int
+  source : String
+}
+pub fn SymbolTable::add_symbol(Self, String, DeclKind, @ast.TsType, Int) -> Unit
+pub fn SymbolTable::compute_drop_points(Self) -> Unit
+pub fn SymbolTable::enter_closure(Self) -> Unit
+pub fn SymbolTable::enter_scope(Self) -> Unit
+pub fn SymbolTable::get_drop_analysis(Self) -> DropAnalysis
+pub fn SymbolTable::get_droppable_symbols(Self) -> Array[UsageInfo]
+pub fn SymbolTable::get_linear_symbols(Self) -> Array[UsageInfo]
+pub fn SymbolTable::get_unused_symbols(Self) -> Array[UsageInfo]
+pub fn SymbolTable::get_usage(Self, String) -> UsageInfo?
+pub fn SymbolTable::leave_closure(Self) -> Unit
+pub fn SymbolTable::leave_scope(Self) -> Unit
+pub fn SymbolTable::mark_escaped(Self, String) -> Unit
+pub fn SymbolTable::new(String) -> Self
+pub fn SymbolTable::record_use(Self, String, UseKind, Int) -> Unit
+
+pub(all) struct TypeCheckResult {
+  typed_module : @ast.TypedModule
+  errors : Array[TypeError]
+  warnings : Array[String]
+}
+
+pub(all) enum TypeConstraint {
+  Assignable(@ast.TsType, @ast.TsType, SourceLoc)
+  MustBe(@ast.TsExpr, @ast.TsType, SourceLoc)
+  Equal(@ast.TsType, @ast.TsType, SourceLoc)
+}
+
+pub(all) struct TypeEnv {
+  parent : TypeEnv?
+  narrowed : Map[String, @ast.TsType]
+  truthy : Array[String]
+  falsy : Array[String]
+}
+pub fn TypeEnv::get_narrowed(Self, String) -> @ast.TsType?
+pub fn TypeEnv::is_truthy(Self, String) -> Bool
+pub fn TypeEnv::mark_falsy(Self, String) -> Unit
+pub fn TypeEnv::mark_truthy(Self, String) -> Unit
+pub fn TypeEnv::new(Self?) -> Self
+pub fn TypeEnv::set_narrowed(Self, String, @ast.TsType) -> Unit
+
+pub(all) struct TypeError {
+  message : String
+  loc : SourceLoc
+  expected : @ast.TsType
+  actual : @ast.TsType
+}
+pub fn TypeError::to_string(Self) -> String
+
+pub(all) struct TypeInferCtx {
+  analysis_ctx : AnalysisCtx
+  var_types : Map[String, @ast.TsType]
+  func_return_types : Map[String, @ast.TsType]
+  mut expected_return : @ast.TsType
+}
+pub fn TypeInferCtx::add_var(Self, String, @ast.TsType) -> Unit
+pub fn TypeInferCtx::get_var_type(Self, String) -> @ast.TsType
+pub fn TypeInferCtx::new(String) -> Self
+
+pub(all) struct TypeRegistry {
+  object_types : Map[String, ObjectType]
+  type_aliases : Map[String, @ast.TsType]
+  type_params : Array[String]
+}
+pub fn TypeRegistry::get_object(Self, String) -> ObjectType?
+pub fn TypeRegistry::new() -> Self
+pub fn TypeRegistry::register_object(Self, String, ObjectType) -> Unit
+
+pub(all) struct UsageInfo {
+  name : String
+  decl_loc : SourceLoc
+  decl_kind : DeclKind
+  type_ : @ast.TsType
+  mut read_count : Int
+  mut write_count : Int
+  mut is_captured : Bool
+  mut is_escaped : Bool
+  references : Array[SymbolRef]
+  mut drop_points : Array[SourceLoc]
+  mut last_use : SourceLoc?
+}
+pub fn UsageInfo::can_drop_at_last_use(Self) -> Bool
+pub fn UsageInfo::is_affine(Self) -> Bool
+pub fn UsageInfo::is_linear(Self) -> Bool
+pub fn UsageInfo::is_unused(Self) -> Bool
+pub fn UsageInfo::new(String, SourceLoc, DeclKind, @ast.TsType) -> Self
+pub impl Show for UsageInfo
+
+pub(all) enum UseKind {
+  Read
+  Write
+  ReadWrite
+}
+pub impl Eq for UseKind
+pub impl Show for UseKind
+
+pub(all) struct UsePoint {
+  stmt_index : Int
+}
+
+pub(all) struct VarLifetime {
+  name : String
+  first_use : Int
+  mut last_use : Int
+  uses : Array[UsePoint]
+  mut escapes : Bool
+  mut is_captured : Bool
+}
+
+pub struct YieldPoint {
+  id : Int
+  expr : @ast.TsExpr?
+  is_delegate : Bool
+}
+
+// Type aliases
+
+// Traits
+

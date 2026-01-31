@@ -281,7 +281,11 @@ fn GenStateBuilder::build_stmt(
         Some(fb) => Some(self.build_block(fb))
         None => None
       }
-      [GenInstr::TryCatch(try_instrs, catch_param_name, catch_instrs, finally_instrs)]
+      [
+        GenInstr::TryCatch(
+          try_instrs, catch_param_name, catch_instrs, finally_instrs,
+        ),
+      ]
     }
     @ast.TsStmt::Throw(expr) => [GenInstr::Throw(self.build_expr(expr))]
     _ => [GenInstr::Nop]

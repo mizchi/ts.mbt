@@ -1,0 +1,112 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/lib"
+
+// Values
+pub fn break_time(Double) -> (Int, Int, Int, Int, Int, Int, Int)
+
+pub fn days_before_month(Int, Int) -> Int
+
+pub fn days_before_year(Int) -> Int
+
+pub fn days_in_month(Int, Int) -> Int
+
+pub fn days_in_year(Int) -> Int
+
+pub fn escape_string(String) -> String
+
+pub fn floor_div(Int, Int) -> Int
+
+pub fn is_js_whitespace(UInt16) -> Bool
+
+pub fn is_leap_year(Int) -> Bool
+
+pub fn make_date_time(Int, Int, Int, Int, Int, Int, Int) -> Double
+
+pub fn math_acosh(Double) -> Double
+
+pub fn math_asinh(Double) -> Double
+
+pub fn math_atanh(Double) -> Double
+
+pub fn math_cbrt(Double) -> Double
+
+pub fn math_clz32(Double) -> Int
+
+pub fn math_cosh(Double) -> Double
+
+pub fn math_expm1(Double) -> Double
+
+pub fn math_fround(Double) -> Double
+
+pub fn math_hypot(Array[Double]) -> Double
+
+pub fn math_imul(Double, Double) -> Int
+
+pub fn math_log10(Double) -> Double
+
+pub fn math_log1p(Double) -> Double
+
+pub fn math_log2(Double) -> Double
+
+pub fn math_max(Array[Double]) -> Double
+
+pub fn math_min(Array[Double]) -> Double
+
+pub fn math_sign(Double) -> Double
+
+pub fn math_sinh(Double) -> Double
+
+pub fn math_tanh(Double) -> Double
+
+pub fn math_trunc(Double) -> Double
+
+pub fn string_at(String, Int) -> String?
+
+pub fn string_char_at(String, Int) -> String
+
+pub fn string_char_code_at(String, Int) -> Double
+
+pub fn string_code_point_at(String, Int) -> Double?
+
+pub fn string_ends_with(String, String, Int) -> Bool
+
+pub fn string_from_char_code(Array[Int]) -> String
+
+pub fn string_from_code_point(Array[Int]) -> String?
+
+pub fn string_includes(String, String, Int) -> Bool
+
+pub fn string_index_of(String, String, Int) -> Int
+
+pub fn string_last_index_of(String, String, Int) -> Int
+
+pub fn string_normalize_newlines(String) -> String
+
+pub fn string_pad_end(String, Int, String) -> String
+
+pub fn string_pad_start(String, Int, String) -> String
+
+pub fn string_repeat(String, Int) -> String
+
+pub fn string_slice(String, Int, Int) -> String
+
+pub fn string_starts_with(String, String, Int) -> Bool
+
+pub fn string_substring(String, Int, Int) -> String
+
+pub fn string_to_lower_case(String) -> String
+
+pub fn string_to_upper_case(String) -> String
+
+pub fn trim_string(String, String) -> String
+
+pub fn unescape_string(String) -> String
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

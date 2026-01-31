@@ -1051,14 +1051,12 @@ test "callgraph: build basic call graph" {
     #|}
   let parser = @parser.Parser::from_source(src)
   let ts_module = parser.parse_module()
-
   let graph = build_call_graph(ts_module)
   println(graph.debug_string())
 
   // gen calls helper
   assert_true(graph.functions.contains("gen"))
   assert_true(graph.functions.contains("helper"))
-
   match graph.calls.get("gen") {
     Some(callees) => assert_true(callees.contains("helper"))
     None => assert_true(false)
@@ -1082,10 +1080,8 @@ test "callgraph: find AOT groups" {
     #|}
   let parser = @parser.Parser::from_source(src)
   let ts_module = parser.parse_module()
-
   let graph = build_call_graph(ts_module)
   let groups = find_aot_groups(ts_module, graph)
-
   println("Found \{groups.length()} AOT groups")
   for group in groups {
     println(group.debug_string())
@@ -1111,7 +1107,6 @@ test "callgraph: external caller detection" {
     #|}
   let parser = @parser.Parser::from_source(src)
   let ts_module = parser.parse_module()
-
   let graph = build_call_graph(ts_module)
   let groups = find_aot_groups(ts_module, graph)
 
@@ -1242,10 +1237,20 @@ test "aot_check: check_func_aot_compatible" {
 ///|
 test "analyze_arrow_func: no captures" {
   let params : Array[@ast.TsParam] = [
-    { name: "x", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+    {
+      name: "x",
+      type_: @ast.TsType::Number,
+      binding: None,
+      is_rest: false,
+      default: None,
+    },
   ]
   let body = @ast.TsArrowBody::ArrowExpr(
-    @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("x"), @ast.TsExpr::IntLit(1)),
+    @ast.TsExpr::BinOp(
+      @ast.TsBinOp::Add,
+      @ast.TsExpr::Var("x"),
+      @ast.TsExpr::IntLit(1),
+    ),
   )
   let outer_scope : Array[String] = []
   let info = analyze_arrow_func(params, body, outer_scope)
@@ -1257,11 +1262,21 @@ test "analyze_arrow_func: no captures" {
 ///|
 test "analyze_arrow_func: with read-only capture" {
   let params : Array[@ast.TsParam] = [
-    { name: "x", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+    {
+      name: "x",
+      type_: @ast.TsType::Number,
+      binding: None,
+      is_rest: false,
+      default: None,
+    },
   ]
   // () => x + y (where y is from outer scope)
   let body = @ast.TsArrowBody::ArrowExpr(
-    @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("x"), @ast.TsExpr::Var("y")),
+    @ast.TsExpr::BinOp(
+      @ast.TsBinOp::Add,
+      @ast.TsExpr::Var("x"),
+      @ast.TsExpr::Var("y"),
+    ),
   )
   let outer_scope : Array[String] = ["y"]
   let info = analyze_arrow_func(params, body, outer_scope)
@@ -1294,14 +1309,32 @@ test "analyze_func_expr: simple function" {
   let func : @ast.TsFunc = {
     name: "add",
     params: [
-      { name: "a", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
-      { name: "b", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+      {
+        name: "a",
+        type_: @ast.TsType::Number,
+        binding: None,
+        is_rest: false,
+        default: None,
+      },
+      {
+        name: "b",
+        type_: @ast.TsType::Number,
+        binding: None,
+        is_rest: false,
+        default: None,
+      },
     ],
     return_type: @ast.TsType::Number,
     body: {
       stmts: [
         @ast.TsStmt::Return(
-          Some(@ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("a"), @ast.TsExpr::Var("b"))),
+          Some(
+            @ast.TsExpr::BinOp(
+              @ast.TsBinOp::Add,
+              @ast.TsExpr::Var("a"),
+              @ast.TsExpr::Var("b"),
+            ),
+          ),
         ),
       ],
     },
@@ -1319,13 +1352,25 @@ test "analyze_func_expr: with capture" {
   let func : @ast.TsFunc = {
     name: "addX",
     params: [
-      { name: "a", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+      {
+        name: "a",
+        type_: @ast.TsType::Number,
+        binding: None,
+        is_rest: false,
+        default: None,
+      },
     ],
     return_type: @ast.TsType::Number,
     body: {
       stmts: [
         @ast.TsStmt::Return(
-          Some(@ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("a"), @ast.TsExpr::Var("x"))),
+          Some(
+            @ast.TsExpr::BinOp(
+              @ast.TsBinOp::Add,
+              @ast.TsExpr::Var("a"),
+              @ast.TsExpr::Var("x"),
+            ),
+          ),
         ),
       ],
     },
@@ -1348,7 +1393,6 @@ test "has_mutable_captures" {
     not_compilable_reason: None,
   }
   assert_false(has_mutable_captures(info_no_mut))
-
   let info_with_mut : ClosureInfo = {
     params: [],
     captures: [

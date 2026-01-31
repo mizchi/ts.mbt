@@ -1,0 +1,22 @@
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+  "moonbitlang/core/env",
+  "moonbitlang/core/encoding/utf8",
+  "mizchi/ts/ast" as @ast,
+  "mizchi/ts/runtime" as @runtime,
+  "mizchi/ts/parser" as @parser,
+  "mizchi/ts/codegen" as @codegen,
+  "moonbitlang/wasm5/encode" as @encode,
+  "mizchi/ts/analysis" as @analysis,
+}
+
+import "test" {
+  "moonbitlang/core/bench",
+  "mizchi/ts/parser" as @parser,
+  "mizchi/ts/aot" as @aot,
+}
+
+options(
+  is_main: true,
+)

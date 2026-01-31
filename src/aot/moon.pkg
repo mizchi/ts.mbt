@@ -1,0 +1,13 @@
+import {
+  "moonbitlang/wasm5/core" as @core,
+  "moonbitlang/wasm5/encode" as @encode,
+  "moonbitlang/wasm5/parse" as @parse,
+  "moonbitlang/wasm5/runtime" as @wasm_runtime,
+  "mizchi/ts/ast" as @ast,
+  "mizchi/ts/analysis" as @analysis,
+  "mizchi/ts/codegen" as @codegen,
+}
+
+import "wbtest" {
+  "mizchi/ts/parser" as @parser,
+}

@@ -36,7 +36,10 @@ pub fn LiftedVarsInfo::empty() -> LiftedVarsInfo {
 ///|
 /// Analyze a function body to find variables that need to be lifted.
 /// Returns info about which variables are captured by closures.
-pub fn analyze_lifted_vars(block : @ast.TsBlock, params : Array[String]) -> LiftedVarsInfo {
+pub fn analyze_lifted_vars(
+  block : @ast.TsBlock,
+  params : Array[String],
+) -> LiftedVarsInfo {
   let captured : Map[String, Bool] = {} // name -> is_mutated
 
   // Collect all local variable declarations
@@ -68,7 +71,6 @@ pub fn analyze_lifted_vars(block : @ast.TsBlock, params : Array[String]) -> Lift
     field_indices[entry.0] = idx
     idx += 1
   }
-
   { lifted_vars, is_mutated, field_indices }
 }
 
@@ -130,13 +132,15 @@ fn collect_local_decls(block : @ast.TsBlock, locals : Array[String]) -> Unit {
 }
 
 ///|
-fn collect_binding_names_for_lift(binding : @ast.TsBinding, names : Array[String]) -> Unit {
+fn collect_binding_names_for_lift(
+  binding : @ast.TsBinding,
+  names : Array[String],
+) -> Unit {
   match binding {
-    @ast.TsBinding::Ident(name) => {
+    @ast.TsBinding::Ident(name) =>
       if not(names.contains(name)) {
         names.push(name)
       }
-    }
     @ast.TsBinding::Array(arr) => {
       for item in arr.items {
         match item {
@@ -269,19 +273,21 @@ fn find_closure_captures_in_expr(
       let closure_captures : Map[String, @analysis.CapturedVar] = {}
       match body {
         @ast.TsArrowBody::ArrowExpr(e) =>
-          @analysis.find_captures_in_expr(e, param_names, outer_scope, closure_captures)
+          @analysis.find_captures_in_expr(
+            e, param_names, outer_scope, closure_captures,
+          )
         @ast.TsArrowBody::ArrowBlock(block) =>
-          @analysis.find_captures_in_block(block, param_names, outer_scope, closure_captures)
+          @analysis.find_captures_in_block(
+            block, param_names, outer_scope, closure_captures,
+          )
       }
       // Add to captured map
       for entry in closure_captures {
         let name = entry.0
         let cap = entry.1
         match captured.get(name) {
-          Some(existing_mut) =>
-            captured[name] = existing_mut || cap.is_mutated
-          None =>
-            captured[name] = cap.is_mutated
+          Some(existing_mut) => captured[name] = existing_mut || cap.is_mutated
+          None => captured[name] = cap.is_mutated
         }
       }
     }
@@ -291,15 +297,18 @@ fn find_closure_captures_in_expr(
         param_names.push(p.name)
       }
       let closure_captures : Map[String, @analysis.CapturedVar] = {}
-      @analysis.find_captures_in_block(func.body, param_names, outer_scope, closure_captures)
+      @analysis.find_captures_in_block(
+        func.body,
+        param_names,
+        outer_scope,
+        closure_captures,
+      )
       for entry in closure_captures {
         let name = entry.0
         let cap = entry.1
         match captured.get(name) {
-          Some(existing_mut) =>
-            captured[name] = existing_mut || cap.is_mutated
-          None =>
-            captured[name] = cap.is_mutated
+          Some(existing_mut) => captured[name] = existing_mut || cap.is_mutated
+          None => captured[name] = cap.is_mutated
         }
       }
     }
@@ -376,7 +385,10 @@ pub fn ClosureCodegenCtx::new(base_type_idx : UInt) -> ClosureCodegenCtx {
 
 ///|
 /// Generate a unique closure name.
-fn ClosureCodegenCtx::gen_name(self : ClosureCodegenCtx, prefix : String) -> String {
+fn ClosureCodegenCtx::gen_name(
+  self : ClosureCodegenCtx,
+  prefix : String,
+) -> String {
   let name = "\{prefix}_\{self.id}"
   self.id += 1
   name
@@ -405,7 +417,10 @@ pub fn compile_arrow_func(
     for cap in info.captures {
       // All captured values are f64 for now
       // Use mutable field if the capture is mutated
-      fields.push({ storage: @core.StorageType::Val(@core.ValType::F64), mutable: cap.is_mutated })
+      fields.push({
+        storage: @core.StorageType::Val(@core.ValType::F64),
+        mutable: cap.is_mutated,
+      })
     }
     Some(@core.TypeDef::Struct({ fields, }))
   } else {
@@ -417,20 +432,30 @@ pub fn compile_arrow_func(
   let param_types : Array[@core.ValType] = []
   if info.captures.length() > 0 {
     // Environment struct reference (nullable=false)
-    param_types.push(@core.ValType::Ref(@core.RefType::TypeIndex(ctx.base_type_idx.reinterpret_as_int()), false))
+    param_types.push(
+      @core.ValType::Ref(
+        @core.RefType::TypeIndex(ctx.base_type_idx.reinterpret_as_int()),
+        false,
+      ),
+    )
   }
   // Regular parameters (all f64 for now)
   for _ in params {
     param_types.push(@core.ValType::F64)
   }
-
-  let func_type = @core.TypeDef::Func({ params: param_types, results: [@core.ValType::F64] })
+  let func_type = @core.TypeDef::Func({
+    params: param_types,
+    results: [@core.ValType::F64],
+  })
 
   // Generate function code
   let func_code = generate_closure_code(
-    params, body, info, ctx.base_type_idx, func_name,
+    params,
+    body,
+    info,
+    ctx.base_type_idx,
+    func_name,
   )
-
   Some({
     env_struct_type,
     func_type,
@@ -465,7 +490,10 @@ pub fn compile_func_expr(
     let fields : Array[@core.FieldType] = []
     for cap in info.captures {
       // Use mutable field if the capture is mutated
-      fields.push({ storage: @core.StorageType::Val(@core.ValType::F64), mutable: cap.is_mutated })
+      fields.push({
+        storage: @core.StorageType::Val(@core.ValType::F64),
+        mutable: cap.is_mutated,
+      })
     }
     Some(@core.TypeDef::Struct({ fields, }))
   } else {
@@ -475,19 +503,28 @@ pub fn compile_func_expr(
   // Build function type
   let param_types : Array[@core.ValType] = []
   if info.captures.length() > 0 {
-    param_types.push(@core.ValType::Ref(@core.RefType::TypeIndex(ctx.base_type_idx.reinterpret_as_int()), false))
+    param_types.push(
+      @core.ValType::Ref(
+        @core.RefType::TypeIndex(ctx.base_type_idx.reinterpret_as_int()),
+        false,
+      ),
+    )
   }
   for _ in func.params {
     param_types.push(@core.ValType::F64)
   }
-
-  let func_type = @core.TypeDef::Func({ params: param_types, results: [@core.ValType::F64] })
+  let func_type = @core.TypeDef::Func({
+    params: param_types,
+    results: [@core.ValType::F64],
+  })
 
   // Generate function code
   let func_code = generate_func_expr_code(
-    func, info, ctx.base_type_idx, func_name,
+    func,
+    info,
+    ctx.base_type_idx,
+    func_name,
   )
-
   Some({
     env_struct_type,
     func_type,
@@ -544,7 +581,6 @@ fn generate_closure_code(
         block, var_indices, capture_indices, has_env, env_type_idx, locals,
       )
   }
-
   for i in body_instrs {
     instrs.push(i)
   }
@@ -553,12 +589,7 @@ fn generate_closure_code(
   // For blocks, we add a default return at the end if needed
   // Expression bodies already leave value on stack
 
-  {
-    locals,
-    body: { instrs, },
-    compiled: None,
-    max_stack_height: 0,
-  }
+  { locals, body: { instrs, }, compiled: None, max_stack_height: 0 }
 }
 
 ///|
@@ -574,39 +605,33 @@ fn generate_func_expr_code(
   // Build variable index mapping
   let var_indices : Map[String, UInt] = {}
   let mut local_idx : UInt = 0
-
   let has_env = info.captures.length() > 0
   if has_env {
     local_idx = 1
   }
-
   for p in func.params {
     var_indices[p.name] = local_idx
     local_idx += 1
   }
-
   let capture_indices : Map[String, UInt] = {}
   for i, cap in info.captures {
     capture_indices[cap.name] = i.reinterpret_as_uint()
   }
-
   let body_instrs = generate_closure_block(
-    func.body, var_indices, capture_indices, has_env, env_type_idx, locals,
+    func.body,
+    var_indices,
+    capture_indices,
+    has_env,
+    env_type_idx,
+    locals,
   )
-
   for i in body_instrs {
     instrs.push(i)
   }
 
   // Default return value
   instrs.push(@core.Instr::F64Const(0.0))
-
-  {
-    locals,
-    body: { instrs, },
-    compiled: None,
-    max_stack_height: 0,
-  }
+  { locals, body: { instrs, }, compiled: None, max_stack_height: 0 }
 }
 
 ///|
@@ -622,11 +647,10 @@ fn generate_closure_block(
 
   // Collect local declarations and assign indices
   let local_var_indices = var_indices.copy()
-  let mut next_local = var_indices.iter().fold(
-    init=0U,
-    fn(max, entry) { if entry.1 > max { entry.1 } else { max } },
-  ) + 1
-
+  let mut next_local = var_indices
+    .iter()
+    .fold(init=0U, fn(max, entry) { if entry.1 > max { entry.1 } else { max } }) +
+    1
   for stmt in block.stmts {
     match stmt {
       @ast.TsStmt::Var(binding, _, _)
@@ -645,7 +669,6 @@ fn generate_closure_block(
       _ => ()
     }
   }
-
   for stmt in block.stmts {
     let stmt_instrs = generate_closure_stmt(
       stmt, local_var_indices, capture_indices, has_env, env_type_idx, locals,
@@ -654,7 +677,6 @@ fn generate_closure_block(
       instrs.push(i)
     }
   }
-
   instrs
 }
 
@@ -805,7 +827,6 @@ fn generate_closure_stmt(
         instrs.push(i)
       }
       instrs.push(@core.Instr::I32TruncF64S)
-
       let then_instrs = generate_closure_block(
         then_block, var_indices, capture_indices, has_env, env_type_idx, locals,
       )
@@ -816,14 +837,14 @@ fn generate_closure_stmt(
           )
         None => []
       }
-
-      instrs.push(@core.Instr::If(@core.BlockType::Empty, then_instrs, else_instrs))
+      instrs.push(
+        @core.Instr::If(@core.BlockType::Empty, then_instrs, else_instrs),
+      )
       instrs
     }
     @ast.TsStmt::While(cond, body) => {
       let instrs : Array[@core.Instr] = []
       let loop_body : Array[@core.Instr] = []
-
       let cond_instrs = generate_closure_expr(
         cond, var_indices, capture_indices, has_env, env_type_idx, locals,
       )
@@ -833,7 +854,6 @@ fn generate_closure_stmt(
       loop_body.push(@core.Instr::I32TruncF64S)
       loop_body.push(@core.Instr::I32Eqz)
       loop_body.push(@core.Instr::BrIf(1U))
-
       let body_instrs = generate_closure_block(
         body, var_indices, capture_indices, has_env, env_type_idx, locals,
       )
@@ -841,10 +861,11 @@ fn generate_closure_stmt(
         loop_body.push(i)
       }
       loop_body.push(@core.Instr::Br(0U))
-
-      instrs.push(@core.Instr::Block(@core.BlockType::Empty, [
-        @core.Instr::Loop(@core.BlockType::Empty, loop_body),
-      ]))
+      instrs.push(
+        @core.Instr::Block(@core.BlockType::Empty, [
+          @core.Instr::Loop(@core.BlockType::Empty, loop_body),
+        ]),
+      )
       instrs
     }
     _ => []
@@ -937,15 +958,19 @@ fn generate_closure_expr(
         instrs.push(i)
       }
       instrs.push(@core.Instr::I32TruncF64S)
-
       let then_instrs = generate_closure_expr(
         then_e, var_indices, capture_indices, has_env, env_type_idx, locals,
       )
       let else_instrs = generate_closure_expr(
         else_e, var_indices, capture_indices, has_env, env_type_idx, locals,
       )
-
-      instrs.push(@core.Instr::If(@core.BlockType::Value(@core.ValType::F64), then_instrs, else_instrs))
+      instrs.push(
+        @core.Instr::If(
+          @core.BlockType::Value(@core.ValType::F64),
+          then_instrs,
+          else_instrs,
+        ),
+      )
       instrs
     }
     @ast.TsExpr::Seq(left, right) => {
@@ -1017,11 +1042,10 @@ fn binop_to_wasm(op : @ast.TsBinOp) -> @core.Instr {
     @ast.TsBinOp::Sub => @core.Instr::F64Sub
     @ast.TsBinOp::Mul => @core.Instr::F64Mul
     @ast.TsBinOp::Div => @core.Instr::F64Div
-    @ast.TsBinOp::Mod => {
+    @ast.TsBinOp::Mod =>
       // f64 mod is tricky, need to implement with sub/trunc
       // For now, simplified
       @core.Instr::F64Sub
-    }
     @ast.TsBinOp::BinLt => @core.Instr::F64Lt
     @ast.TsBinOp::BinGt => @core.Instr::F64Gt
     @ast.TsBinOp::BinLe => @core.Instr::F64Le
@@ -1081,7 +1105,12 @@ pub fn compile_func_body_with_env(
   // Environment local (if we have lifted vars)
   let env_local_idx : UInt? = if lifted_info.lifted_vars.length() > 0 {
     let idx = local_idx
-    locals.push(@core.ValType::Ref(@core.RefType::TypeIndex(env_type_idx.reinterpret_as_int()), true))
+    locals.push(
+      @core.ValType::Ref(
+        @core.RefType::TypeIndex(env_type_idx.reinterpret_as_int()),
+        true,
+      ),
+    )
     local_idx += 1
     Some(idx)
   } else {
@@ -1094,7 +1123,10 @@ pub fn compile_func_body_with_env(
     let fields : Array[@core.FieldType] = []
     for name in lifted_info.lifted_vars {
       let is_mut = lifted_info.is_mutated.get(name).unwrap_or(false)
-      fields.push({ storage: @core.StorageType::Val(@core.ValType::F64), mutable: is_mut })
+      fields.push({
+        storage: @core.StorageType::Val(@core.ValType::F64),
+        mutable: is_mut,
+      })
     }
     let struct_type = @core.TypeDef::Struct({ fields, })
 
@@ -1117,7 +1149,6 @@ pub fn compile_func_body_with_env(
       Some(idx) => instrs.push(@core.Instr::LocalSet(idx))
       None => ()
     }
-
     Some(struct_type)
   } else {
     None
@@ -1125,13 +1156,7 @@ pub fn compile_func_body_with_env(
 
   // Generate body code with env access
   let body_instrs = generate_body_with_env(
-    block,
-    var_indices,
-    lifted_info,
-    env_local_idx,
-    env_type_idx,
-    locals,
-    closure_funcs,
+    block, var_indices, lifted_info, env_local_idx, env_type_idx, locals, closure_funcs,
   )
   for i in body_instrs {
     instrs.push(i)
@@ -1139,10 +1164,14 @@ pub fn compile_func_body_with_env(
 
   // Default return
   instrs.push(@core.Instr::F64Const(0.0))
-
   {
     env_struct_type,
-    func_code: { locals, body: { instrs, }, compiled: None, max_stack_height: 0 },
+    func_code: {
+      locals,
+      body: { instrs, },
+      compiled: None,
+      max_stack_height: 0,
+    },
     closure_funcs,
     env_local_idx,
   }
@@ -1162,11 +1191,16 @@ fn generate_body_with_env(
 
   // Collect local declarations (non-lifted)
   let local_var_indices = var_indices.copy()
-  let mut next_local = locals.length().reinterpret_as_uint() + var_indices.iter().fold(
-    init=0U,
-    fn(max, entry) { if entry.1 >= max { entry.1 + 1 } else { max } },
-  )
-
+  let mut next_local = locals.length().reinterpret_as_uint() +
+    var_indices
+    .iter()
+    .fold(init=0U, fn(max, entry) {
+      if entry.1 >= max {
+        entry.1 + 1
+      } else {
+        max
+      }
+    })
   for stmt in block.stmts {
     match stmt {
       @ast.TsStmt::Var(binding, _, _)
@@ -1187,21 +1221,14 @@ fn generate_body_with_env(
       _ => ()
     }
   }
-
   for stmt in block.stmts {
     let stmt_instrs = generate_stmt_with_env(
-      stmt,
-      local_var_indices,
-      lifted_info,
-      env_local_idx,
-      env_type_idx,
-      locals,
+      stmt, local_var_indices, lifted_info, env_local_idx, env_type_idx, locals,
     )
     for i in stmt_instrs {
       instrs.push(i)
     }
   }
-
   instrs
 }
 
@@ -1336,25 +1363,36 @@ fn generate_stmt_with_env(
         instrs.push(i)
       }
       instrs.push(@core.Instr::I32TruncF64S)
-
       let then_instrs = generate_body_with_env(
-        then_block, var_indices, lifted_info, env_local_idx, env_type_idx, locals, [],
+        then_block,
+        var_indices,
+        lifted_info,
+        env_local_idx,
+        env_type_idx,
+        locals,
+        [],
       )
       let else_instrs = match else_block {
         Some(eb) =>
           generate_body_with_env(
-            eb, var_indices, lifted_info, env_local_idx, env_type_idx, locals, [],
+            eb,
+            var_indices,
+            lifted_info,
+            env_local_idx,
+            env_type_idx,
+            locals,
+            [],
           )
         None => []
       }
-
-      instrs.push(@core.Instr::If(@core.BlockType::Empty, then_instrs, else_instrs))
+      instrs.push(
+        @core.Instr::If(@core.BlockType::Empty, then_instrs, else_instrs),
+      )
       instrs
     }
     @ast.TsStmt::While(cond, body) => {
       let instrs : Array[@core.Instr] = []
       let loop_body : Array[@core.Instr] = []
-
       let cond_instrs = generate_expr_with_env(
         cond, var_indices, lifted_info, env_local_idx, env_type_idx, locals,
       )
@@ -1364,18 +1402,24 @@ fn generate_stmt_with_env(
       loop_body.push(@core.Instr::I32TruncF64S)
       loop_body.push(@core.Instr::I32Eqz)
       loop_body.push(@core.Instr::BrIf(1U))
-
       let body_instrs = generate_body_with_env(
-        body, var_indices, lifted_info, env_local_idx, env_type_idx, locals, [],
+        body,
+        var_indices,
+        lifted_info,
+        env_local_idx,
+        env_type_idx,
+        locals,
+        [],
       )
       for i in body_instrs {
         loop_body.push(i)
       }
       loop_body.push(@core.Instr::Br(0U))
-
-      instrs.push(@core.Instr::Block(@core.BlockType::Empty, [
-        @core.Instr::Loop(@core.BlockType::Empty, loop_body),
-      ]))
+      instrs.push(
+        @core.Instr::Block(@core.BlockType::Empty, [
+          @core.Instr::Loop(@core.BlockType::Empty, loop_body),
+        ]),
+      )
       instrs
     }
     _ => []
@@ -1403,10 +1447,11 @@ fn generate_expr_with_env(
         Some(field_idx) =>
           // Load from env struct
           match env_local_idx {
-            Some(env_idx) => [
-              @core.Instr::LocalGet(env_idx),
-              @core.Instr::StructGet(env_type_idx, field_idx),
-            ]
+            Some(env_idx) =>
+              [
+                @core.Instr::LocalGet(env_idx),
+                @core.Instr::StructGet(env_type_idx, field_idx),
+              ]
             None => [@core.Instr::F64Const(0.0)]
           }
         None =>
@@ -1461,18 +1506,22 @@ fn generate_expr_with_env(
         instrs.push(i)
       }
       instrs.push(@core.Instr::I32TruncF64S)
-
       let then_instrs = generate_expr_with_env(
         then_e, var_indices, lifted_info, env_local_idx, env_type_idx, locals,
       )
       let else_instrs = generate_expr_with_env(
         else_e, var_indices, lifted_info, env_local_idx, env_type_idx, locals,
       )
-
-      instrs.push(@core.Instr::If(@core.BlockType::Value(@core.ValType::F64), then_instrs, else_instrs))
+      instrs.push(
+        @core.Instr::If(
+          @core.BlockType::Value(@core.ValType::F64),
+          then_instrs,
+          else_instrs,
+        ),
+      )
       instrs
     }
-    @ast.TsExpr::AssignExpr(name, value) => {
+    @ast.TsExpr::AssignExpr(name, value) =>
       // Check if it's a lifted var
       match lifted_info.field_indices.get(name) {
         Some(field_idx) =>
@@ -1512,7 +1561,6 @@ fn generate_expr_with_env(
             None => [@core.Instr::F64Const(0.0)]
           }
       }
-    }
     @ast.TsExpr::Seq(left, right) => {
       let instrs = generate_expr_with_env(
         left, var_indices, lifted_info, env_local_idx, env_type_idx, locals,

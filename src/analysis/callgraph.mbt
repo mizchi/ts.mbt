@@ -51,7 +51,6 @@ pub fn build_call_graph(ts_module : @ast.TsModule) -> CallGraph {
       }
     }
   }
-
   { calls, callers, functions }
 }
 
@@ -79,7 +78,8 @@ fn collect_calls_in_stmt(stmt : @ast.TsStmt, calls : Array[String]) -> Unit {
     | @ast.TsStmt::Let(_, _, init)
     | @ast.TsStmt::Const(_, _, init) => collect_calls_in_expr(init, calls)
     @ast.TsStmt::Assign(_, expr) => collect_calls_in_expr(expr, calls)
-    @ast.TsStmt::CompoundAssign(_, _, expr) => collect_calls_in_expr(expr, calls)
+    @ast.TsStmt::CompoundAssign(_, _, expr) =>
+      collect_calls_in_expr(expr, calls)
     @ast.TsStmt::If(cond, then_block, else_block) => {
       collect_calls_in_expr(cond, calls)
       collect_calls_in_block(then_block, calls)
@@ -212,7 +212,6 @@ pub fn find_aot_groups(
       }
     }
   }
-
   groups
 }
 
@@ -262,7 +261,6 @@ fn collect_reachable(
   }
   visited[start] = true
   result.push(start)
-
   match graph.calls.get(start) {
     Some(callees) =>
       for callee in callees {
@@ -349,10 +347,7 @@ fn is_stmt_aot_compatible(stmt : @ast.TsStmt) -> Bool {
         return false
       }
       match catch_block {
-        Some(cb) =>
-          if not(is_block_aot_compatible(cb)) {
-            return false
-          }
+        Some(cb) => if not(is_block_aot_compatible(cb)) { return false }
         None => ()
       }
       match finally_block {

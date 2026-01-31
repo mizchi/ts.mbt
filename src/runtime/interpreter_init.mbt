@@ -87,6 +87,7 @@ fn JSInterpreter::set_function_length(
   len : Double,
 ) -> Unit {
   let _ = js_define_data_prop(func, "length", Number(len), false, false, true)
+
 }
 
 ///|
@@ -97,18 +98,21 @@ fn JSInterpreter::set_function_name(
   name : String,
 ) -> Unit {
   let _ = js_define_data_prop(func, "name", String(name), false, false, true)
+
 }
 
 ///|
 /// Set prototype method property { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }
 fn set_proto_method(proto : JSValue, name : String, func : JSValue) -> Unit {
   let _ = js_define_data_prop(proto, name, func, true, false, true)
+
 }
 
 ///|
 /// Set global constructor property { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }
 fn set_global_ctor(global : JSValue, name : String, ctor : JSValue) -> Unit {
   let _ = js_define_data_prop(global, name, ctor, true, false, true)
+
 }
 
 ///|
@@ -120,13 +124,12 @@ fn extract_function_name(native_name : String) -> String {
   }
   // Handle prototype[...] patterns
   match native_name.find("[") {
-    Some(bracket_idx) => {
+    Some(bracket_idx) =>
       try {
         return native_name[bracket_idx:].to_string()
       } catch {
         _ => ()
       }
-    }
     None => ()
   }
   // Handle "Foo.bar" -> "bar" (find last dot)
@@ -162,7 +165,6 @@ fn calc_formal_parameter_count(params : Array[@ast.TsParam]) -> Int {
   }
   count
 }
-
 
 ///|
 // / datacreate

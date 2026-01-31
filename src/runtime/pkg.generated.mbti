@@ -1,0 +1,557 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/runtime"
+
+import {
+  "mizchi/ts/ast",
+  "mizchi/ts/parser",
+  "moonbitlang/core/bigint",
+}
+
+// Values
+pub fn assert_not_same_value(JSValue, JSValue, String?) -> AssertResult
+
+pub fn assert_same_value(JSValue, JSValue, String?) -> AssertResult
+
+pub fn clamp_uint8(Double) -> Int
+
+pub fn compare_array(JSValue, JSValue, String?) -> AssertResult
+
+pub fn detach_bytebuffer(Int) -> Unit
+
+pub fn dont_evaluate() -> JSValue
+
+pub fn gc_stats_inc_env() -> Unit
+
+pub fn gc_stats_reset() -> Unit
+
+pub fn gc_stats_snapshot() -> (Int, Int, Int, Int)
+
+pub fn gc_stats_total() -> Int
+
+pub fn get_arraybuffer_data(JSValue) -> JSByteBuffer?
+
+pub fn get_bytebuffer(Int) -> JSByteBuffer?
+
+pub fn get_typedarray(Int) -> TypedArrayData?
+
+pub fn get_typedarray_data(JSValue) -> TypedArrayData?
+
+pub fn is_arraybuffer(JSValue) -> Bool
+
+pub fn is_dataview(JSValue) -> Bool
+
+pub fn is_same_value(JSValue, JSValue) -> Bool
+
+pub fn is_symbol_string(String) -> Bool
+
+pub fn is_typedarray(JSValue) -> Bool
+
+pub fn js_add(JSValue, JSValue) -> JSValue
+
+pub fn js_array_from(Array[JSValue]) -> JSValue
+
+pub fn js_array_length(JSValue) -> JSValue
+
+pub fn js_array_push(JSValue, JSValue) -> JSValue
+
+pub fn js_bitwise_not(JSValue) -> JSValue
+
+pub fn js_define_accessor_prop(JSValue, String, JSValue?, JSValue?, Bool, Bool) -> JSValue
+
+pub fn js_define_data_prop(JSValue, String, JSValue, Bool, Bool, Bool) -> JSValue
+
+pub fn js_delete_prop(JSValue, String) -> Bool
+
+pub fn js_div(JSValue, JSValue) -> JSValue
+
+pub fn js_eq(JSValue, JSValue) -> JSValue
+
+pub fn js_ge(JSValue, JSValue) -> JSValue
+
+pub fn js_get_default_array_proto() -> JSValue?
+
+pub fn js_get_prop(JSValue, String) -> JSValue
+
+pub fn js_gt(JSValue, JSValue) -> JSValue
+
+pub fn js_has_prop(JSValue, String) -> Bool
+
+pub fn js_le(JSValue, JSValue) -> JSValue
+
+pub fn js_lt(JSValue, JSValue) -> JSValue
+
+pub fn js_mod(JSValue, JSValue) -> JSValue
+
+pub fn js_mul(JSValue, JSValue) -> JSValue
+
+pub fn js_ne(JSValue, JSValue) -> JSValue
+
+pub fn js_neg(JSValue) -> JSValue
+
+pub fn js_new_array() -> JSValue
+
+pub fn js_new_bytebuffer(Int) -> JSByteBuffer
+
+pub fn js_new_compiled_function(String, @ast.TsFunc, Bytes, UInt, JSEnv) -> JSValue
+
+pub fn js_new_env(JSEnv?) -> JSEnv
+
+pub fn js_new_native_function_with_env(String, JSEnv, JSValue?) -> JSValue
+
+pub fn js_new_object() -> JSValue
+
+pub fn js_new_object_with_proto(JSValue?) -> JSValue
+
+pub fn js_not(JSValue) -> JSValue
+
+pub fn js_object_with_props(Array[JSProp], JSValue?) -> JSValue
+
+pub fn js_pos(JSValue) -> JSValue
+
+pub fn js_set_default_array_proto(JSValue) -> Unit
+
+pub fn js_set_prop(JSValue, String, JSValue) -> JSValue
+
+pub fn js_strict_eq(JSValue, JSValue) -> JSValue
+
+pub fn js_strict_ne(JSValue, JSValue) -> JSValue
+
+pub fn js_string(String) -> JSValue
+
+pub fn js_sub(JSValue, JSValue) -> JSValue
+
+pub fn js_typeof(JSValue) -> JSValue
+
+pub fn perceus_cleanup_objects(Array[Int]) -> Unit
+
+pub fn perceus_current_scope() -> Int
+
+pub fn perceus_enter_scope() -> Int
+
+pub fn perceus_exit_scope_with_cleanup() -> Int
+
+pub fn perceus_exit_scope_with_return(JSValue) -> Int
+
+pub fn perceus_leave_scope() -> Array[Int]
+
+pub fn perceus_mark_escaped(Int) -> Unit
+
+pub fn perceus_mark_value_escaped(JSValue) -> Unit
+
+pub fn perceus_register_object(Int) -> Unit
+
+pub fn perceus_reset() -> Unit
+
+pub fn perceus_track_object(JSValue) -> Unit
+
+pub fn read_float32_be(JSByteBuffer, Int) -> Double
+
+pub fn read_float32_le(JSByteBuffer, Int) -> Double
+
+pub fn read_float64_be(JSByteBuffer, Int) -> Double
+
+pub fn read_float64_le(JSByteBuffer, Int) -> Double
+
+pub fn read_int16_be(JSByteBuffer, Int) -> Int
+
+pub fn read_int16_le(JSByteBuffer, Int) -> Int
+
+pub fn read_int32_be(JSByteBuffer, Int) -> Int
+
+pub fn read_int32_le(JSByteBuffer, Int) -> Int
+
+pub fn read_int64_le(JSByteBuffer, Int) -> Int64
+
+pub fn read_int8(JSByteBuffer, Int) -> Int
+
+pub fn read_uint16_be(JSByteBuffer, Int) -> Int
+
+pub fn read_uint16_le(JSByteBuffer, Int) -> Int
+
+pub fn read_uint32_be(JSByteBuffer, Int) -> Int64
+
+pub fn read_uint32_le(JSByteBuffer, Int) -> Int64
+
+pub fn read_uint8(JSByteBuffer, Int) -> Int
+
+pub fn store_bytebuffer(JSByteBuffer) -> Int
+
+pub fn store_typedarray(TypedArrayData) -> Int
+
+pub fn strip_symbol_id(String) -> String
+
+pub fn typedarray_get_element(TypedArrayData, Int) -> Double
+
+pub fn typedarray_get_element_jsvalue(TypedArrayData, Int) -> JSValue
+
+pub fn typedarray_set_element(TypedArrayData, Int, Double) -> Unit
+
+pub fn typedarray_set_element_jsvalue(TypedArrayData, Int, JSValue) -> Unit
+
+pub fn vm_gc_cleanup_weak_maps(Array[Int]) -> Unit
+
+pub fn vm_gc_cleanup_weak_refs(Array[Int]) -> Unit
+
+pub fn vm_gc_cleanup_weak_sets(Array[Int]) -> Unit
+
+pub fn vm_gc_collect(Array[JSValue], JSEnv?) -> Array[Int]
+
+pub fn vm_gc_get_finalization_callbacks(Array[Int]) -> Array[(JSValue, JSValue)]
+
+pub fn vm_gc_get_object(Int) -> JSValue?
+
+pub fn vm_gc_is_alive(Int) -> Bool
+
+pub fn vm_gc_register_finalization_registry(JSValue) -> Unit
+
+pub fn vm_gc_register_object(JSValue) -> Unit
+
+pub fn vm_gc_register_weak_map(JSValue) -> Unit
+
+pub fn vm_gc_register_weak_ref(JSValue) -> Unit
+
+pub fn vm_gc_register_weak_set(JSValue) -> Unit
+
+pub fn vm_gc_reset() -> Unit
+
+pub fn write_float32_be(JSByteBuffer, Int, Double) -> Unit
+
+pub fn write_float32_le(JSByteBuffer, Int, Double) -> Unit
+
+pub fn write_float64_be(JSByteBuffer, Int, Double) -> Unit
+
+pub fn write_float64_le(JSByteBuffer, Int, Double) -> Unit
+
+pub fn write_int64_le(JSByteBuffer, Int, Int64) -> Unit
+
+pub fn write_uint16_be(JSByteBuffer, Int, Int) -> Unit
+
+pub fn write_uint16_le(JSByteBuffer, Int, Int) -> Unit
+
+pub fn write_uint32_be(JSByteBuffer, Int, Int) -> Unit
+
+pub fn write_uint32_le(JSByteBuffer, Int, Int) -> Unit
+
+pub fn write_uint8(JSByteBuffer, Int, Int) -> Unit
+
+// Errors
+
+// Types and methods
+pub(all) enum AOTGenBinOp {
+  Add
+  Sub
+  Mul
+  Div
+  Mod
+  Lt
+  Le
+  Gt
+  Ge
+  Eq
+  Ne
+  And
+  Or
+  BitAnd
+  BitOr
+  BitXor
+  Shl
+  Shr
+  Ushr
+}
+
+pub(all) enum AOTGenExpr {
+  Number(Double)
+  Bool(Bool)
+  Undefined
+  Var(String)
+  Sent
+  BinOp(AOTGenBinOp, AOTGenExpr, AOTGenExpr)
+  UnaryOp(AOTGenUnaryOp, AOTGenExpr)
+}
+
+pub(all) enum AOTGenInstr {
+  Yield(AOTGenExpr, Int)
+  Return(AOTGenExpr)
+  SetLocal(String, AOTGenExpr)
+  While(AOTGenExpr, Array[AOTGenInstr])
+  Branch(AOTGenExpr, Array[AOTGenInstr], Array[AOTGenInstr])
+  Exec(AOTGenExpr)
+  Nop
+}
+
+pub(all) struct AOTGenState {
+  id : Int
+  body : Array[AOTGenInstr]
+}
+
+pub(all) struct AOTGenStateMachine {
+  name : String
+  params : Array[String]
+  locals : Array[String]
+  states : Array[AOTGenState]
+  done_state : Int
+}
+
+pub(all) enum AOTGenUnaryOp {
+  Neg
+  Not
+  BitNot
+}
+
+pub enum AssertResult {
+  Success
+  Failure(String)
+}
+
+pub struct CompiledFunc {
+  name : String
+  ast : @ast.TsFunc
+  wasm_bytes : Bytes
+  func_index : UInt
+}
+pub fn CompiledFunc::new(String, @ast.TsFunc, Bytes, UInt) -> Self
+
+pub struct GCStats {
+  mut objects_created : Int
+  mut functions_created : Int
+  mut arrays_created : Int
+  mut envs_created : Int
+}
+
+pub(all) enum GenSignal {
+  Continue
+  Yield(JSValue)
+  YieldRaw(JSValue)
+  Suspend(JSValue, (JSValue) -> GenSignal)
+  SuspendRaw(JSValue, (JSValue) -> GenSignal)
+  Return(JSValue)
+}
+
+pub struct JSArray {
+  id : Int
+  items : Array[JSValue]
+  present : Array[Bool]
+  props : Array[JSProp]
+  mut length : Int
+  mut prototype : JSValue?
+}
+pub impl Show for JSArray
+
+pub struct JSBinding {
+  name : String
+  mut value : JSValue
+  mut is_const : Bool
+  mut is_uninitialized : Bool
+}
+pub impl Show for JSBinding
+
+pub struct JSByteBuffer {
+  id : Int
+  data : Array[Byte]
+  mut detached : Bool
+}
+pub impl Show for JSByteBuffer
+
+pub struct JSClosure {
+  id : Int
+  params : Array[String]
+  body : JSFuncBody
+  env : JSEnv
+  is_arrow : Bool
+  is_strict : Bool
+  is_generator : Bool
+  is_async : Bool
+  props : Array[JSProp]
+  mut object_proto : JSValue?
+}
+pub impl Show for JSClosure
+
+pub struct JSEnv {
+  parent : JSEnv?
+  bindings : Array[JSBinding]
+}
+pub fn JSEnv::define_const(Self, String, JSValue) -> Unit
+pub fn JSEnv::define_uninitialized(Self, String, Bool) -> Unit
+pub fn JSEnv::define_var(Self, String, JSValue) -> Unit
+pub fn JSEnv::force_set(Self, String, JSValue) -> Bool
+pub fn JSEnv::get(Self, String) -> JSValue
+pub fn JSEnv::has(Self, String) -> Bool
+pub fn JSEnv::has_local(Self, String) -> Bool
+pub fn JSEnv::initialize(Self, String, JSValue, Bool) -> Unit
+pub fn JSEnv::is_const(Self, String) -> Bool
+pub fn JSEnv::is_uninitialized(Self, String) -> Bool
+pub fn JSEnv::set(Self, String, JSValue) -> Bool
+pub impl Show for JSEnv
+
+pub enum JSFuncBody {
+  Ast(@ast.TsFunc)
+  Native(String)
+  Bound(JSValue, JSValue, Array[JSValue])
+  Compiled(CompiledFunc)
+}
+pub impl Show for JSFuncBody
+
+pub(all) struct JSGeneratorState {
+  func : @ast.TsFunc
+  env : JSEnv
+  mut index : Int
+  mut done : Bool
+  mut cont : ((JSValue) -> GenSignal)?
+  mut active_iterators : Array[JSValue]
+  mut aot_mode : Bool
+  mut aot_wasm_bytes : Bytes?
+  mut aot_state_data : Array[Double]
+}
+
+pub struct JSInterpreter {
+  global_env : JSEnv
+  mut last_error : JSValue?
+  mut steps : Int
+  mut step_limit : Int
+  object_proto : JSValue
+  function_proto : JSValue
+  generators : Array[JSGeneratorState]
+  mut current_gen_id : Int?
+  mut microtasks : Array[MicrotaskJob]
+  mut symbol_counter : Int
+  symbol_registry : Map[String, String]
+}
+pub fn JSInterpreter::await_promise(Self, JSValue) -> JSValue
+pub fn JSInterpreter::call_function(Self, JSValue, JSValue, Array[JSValue], new_target? : JSValue) -> JSValue
+pub fn JSInterpreter::call_method(Self, JSValue, String, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::drain_microtasks(Self) -> Unit
+pub fn JSInterpreter::eval_expr(Self, @ast.TsExpr, JSEnv) -> JSValue
+pub fn JSInterpreter::exec_block(Self, @ast.TsBlock, JSEnv) -> JSValue?
+pub fn JSInterpreter::exec_stmt(Self, @ast.TsStmt, JSEnv) -> JSValue?
+pub fn JSInterpreter::get_last_error(Self) -> JSValue?
+pub fn JSInterpreter::get_prop_value(Self, JSValue, String) -> JSValue
+pub fn JSInterpreter::hoist_block(Self, @ast.TsBlock, JSEnv) -> Unit
+pub fn JSInterpreter::iterator_drop(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_every(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_filter(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_find(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_flat_map(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_for_each(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_from(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_helper_next(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_helper_return(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_helper_throw(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_map(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_reduce(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_some(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_take(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::iterator_to_array(Self, JSValue, Array[JSValue]) -> JSValue
+pub fn JSInterpreter::new() -> Self
+pub fn JSInterpreter::run(Self, String) -> JSValue raise @parser.ParseError
+pub fn JSInterpreter::run_module(Self, @ast.TsModule) -> JSValue
+pub fn JSInterpreter::set_step_limit(Self, Int) -> Unit
+
+pub struct JSProp {
+  key : String
+  value : JSValue
+  writable : Bool
+  enumerable : Bool
+  configurable : Bool
+  get : JSValue?
+  set : JSValue?
+}
+pub impl Show for JSProp
+
+pub struct JSPropMap {
+  id : Int
+  props : Array[JSProp]
+  mut prototype : JSValue?
+}
+pub impl Show for JSPropMap
+
+pub enum JSTag {
+  Undefined
+  Null
+  Bool
+  Number
+  String
+  Object
+  Array
+  Function
+  BigInt
+}
+pub fn JSTag::from_i32(Int) -> Self
+pub fn JSTag::to_i32(Self) -> Int
+pub impl Eq for JSTag
+pub impl Show for JSTag
+
+pub enum JSValue {
+  Undefined
+  Null
+  Bool(Bool)
+  Number(Double)
+  String(String)
+  Object(JSPropMap)
+  Array(JSArray)
+  Function(JSClosure)
+  BigInt(@bigint.BigInt)
+  BreakSignal(String?)
+  ContinueSignal(String?)
+  Empty
+}
+pub fn JSValue::is_array(Self) -> Bool
+pub fn JSValue::is_bigint(Self) -> Bool
+pub fn JSValue::is_bool(Self) -> Bool
+pub fn JSValue::is_function(Self) -> Bool
+pub fn JSValue::is_null(Self) -> Bool
+pub fn JSValue::is_nullish(Self) -> Bool
+pub fn JSValue::is_number(Self) -> Bool
+pub fn JSValue::is_object(Self) -> Bool
+pub fn JSValue::is_string(Self) -> Bool
+pub fn JSValue::is_undefined(Self) -> Bool
+pub fn JSValue::tag(Self) -> JSTag
+pub fn JSValue::to_boolean(Self) -> Bool
+pub fn JSValue::to_js_string(Self) -> String
+pub fn JSValue::to_number(Self) -> Double
+pub impl Show for JSValue
+
+pub(all) struct MicrotaskJob {
+  handler : JSValue
+  argument : JSValue
+  promise : JSValue?
+  is_reject : Bool
+}
+
+pub struct Test262Error {
+  message : String
+}
+pub fn Test262Error::new(String) -> Self
+pub fn Test262Error::to_string(Self) -> String
+
+pub struct TypedArrayData {
+  kind : TypedArrayKind
+  buffer : JSByteBuffer
+  byte_offset : Int
+  byte_length : Int
+  length : Int
+}
+pub impl Show for TypedArrayData
+
+pub enum TypedArrayKind {
+  Int8Array
+  Uint8Array
+  Uint8ClampedArray
+  Int16Array
+  Uint16Array
+  Int32Array
+  Uint32Array
+  Float32Array
+  Float64Array
+  BigInt64Array
+  BigUint64Array
+}
+pub fn TypedArrayKind::bytes_per_element(Self) -> Int
+pub fn TypedArrayKind::is_bigint_type(Self) -> Bool
+pub fn TypedArrayKind::type_name(Self) -> String
+pub impl Eq for TypedArrayKind
+pub impl Show for TypedArrayKind
+
+// Type aliases
+
+// Traits
+

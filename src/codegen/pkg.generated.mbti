@@ -1,0 +1,192 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/codegen"
+
+import {
+  "mizchi/ts/analysis",
+  "mizchi/ts/ast",
+  "moonbitlang/wasm5/core",
+}
+
+// Values
+pub fn analyze_and_compile(String) -> @core.Module raise CodeGenError
+
+pub fn analyze_lifted_vars(@ast.TsBlock, Array[String]) -> LiftedVarsInfo
+
+pub fn compile(String) -> @core.Module raise CompileError
+
+pub fn compile_aot_group(@analysis.AOTGroup, @ast.TsModule, UInt) -> AOTGroupCode?
+
+pub fn compile_arrow_func(Array[@ast.TsParam], @ast.TsArrowBody, Array[String], ClosureCodegenCtx) -> ClosureWasmCode?
+
+pub fn compile_func_body_with_env(@ast.TsBlock, Array[@ast.TsParam], LiftedVarsInfo, UInt) -> FuncWithEnvCode
+
+pub fn compile_func_expr(@ast.TsFunc, Array[String], ClosureCodegenCtx) -> ClosureWasmCode?
+
+pub fn compile_generator(GenStateMachine, UInt) -> GeneratorWasmCode
+
+pub fn compile_generator_func(@ast.TsFunc, UInt) -> GeneratorWasmCode?
+
+pub fn compile_generator_if_else(GenStateMachine, UInt) -> GeneratorWasmCode
+
+pub fn compile_module(@ast.TsModule) -> @core.Module raise CodeGenError
+
+pub fn compile_module_gc(@ast.TsModule) -> @core.Module raise CodeGenError
+
+pub fn compile_to_wasm(String) -> Bytes raise CompileError
+
+pub fn compile_typed_module(@ast.TypedModule, @ast.TsModule) -> @core.Module raise CodeGenError
+
+pub fn transform_to_state_machine(@ast.TsFunc, @analysis.GeneratorAnalysis) -> GenStateMachine
+
+// Errors
+pub suberror CodeGenError {
+  CodeGenError(String)
+}
+pub impl Show for CodeGenError
+
+pub suberror CompileError {
+  CompileError(String)
+}
+pub impl Show for CompileError
+
+// Types and methods
+pub struct AOTGroupCode {
+  group : @analysis.AOTGroup
+  types : Array[@core.TypeDef]
+  funcs : Array[@core.Code]
+  func_types : Array[UInt]
+  exports : Array[(String, UInt)]
+  func_map : Map[String, UInt]
+}
+pub fn AOTGroupCode::debug_string(Self) -> String
+
+pub struct ClosureCodegenCtx {
+  mut id : Int
+  base_type_idx : UInt
+}
+pub fn ClosureCodegenCtx::new(UInt) -> Self
+
+pub struct ClosureWasmCode {
+  env_struct_type : @core.TypeDef?
+  func_type : @core.TypeDef
+  func_code : @core.Code
+  func_name : String
+  capture_names : Array[String]
+}
+
+pub struct FuncWithEnvCode {
+  env_struct_type : @core.TypeDef?
+  func_code : @core.Code
+  closure_funcs : Array[ClosureWasmCode]
+  env_local_idx : UInt?
+}
+
+pub enum GenBinOp {
+  Add
+  Sub
+  Mul
+  Div
+  Mod
+  Lt
+  Le
+  Gt
+  Ge
+  Eq
+  Ne
+  And
+  Or
+  BitAnd
+  BitOr
+  BitXor
+  Shl
+  Shr
+  Ushr
+  Other(@ast.TsBinOp)
+}
+pub impl Show for GenBinOp
+
+pub enum GenExpr {
+  Number(Double)
+  Bool(Bool)
+  Str(String)
+  Undefined
+  Null
+  Var(String)
+  BinOp(GenBinOp, GenExpr, GenExpr)
+  UnaryOp(GenUnaryOp, GenExpr)
+  Call(String, Array[GenExpr])
+  MethodCall(GenExpr, String, Array[GenExpr])
+  PropAccess(GenExpr, String)
+  IndexAccess(GenExpr, GenExpr)
+  ArrayLit(Array[GenExpr])
+  ObjectLit(Array[(String, GenExpr)])
+  Cond(GenExpr, GenExpr, GenExpr)
+  Raw(@ast.TsExpr)
+}
+pub impl Show for GenExpr
+
+pub enum GenInstr {
+  Branch(GenExpr, Array[GenInstr], Array[GenInstr])
+  While(GenExpr, Array[GenInstr])
+  Yield(GenExpr, Int)
+  Return(GenExpr)
+  SetLocal(String, GenExpr)
+  Exec(GenExpr)
+  Nop
+  TryCatch(Array[GenInstr], String?, Array[GenInstr], Array[GenInstr]?)
+  Throw(GenExpr)
+}
+pub impl Show for GenInstr
+
+pub struct GenState {
+  id : Int
+  label : String
+  body : Array[GenInstr]
+}
+pub impl Show for GenState
+
+pub struct GenStateMachine {
+  name : String
+  params : Array[GenVar]
+  locals : Array[GenVar]
+  states : Array[GenState]
+  initial_state : Int
+  done_state : Int
+}
+pub fn GenStateMachine::debug_string(Self) -> String
+pub impl Show for GenStateMachine
+
+pub enum GenUnaryOp {
+  Neg
+  Not
+  BitNot
+  TypeOf
+  Other(@ast.TsUnaryOp)
+}
+pub impl Show for GenUnaryOp
+
+pub struct GenVar {
+  name : String
+}
+pub impl Show for GenVar
+
+pub struct GeneratorWasmCode {
+  state_struct_type : @core.TypeDef
+  next_func_type : @core.TypeDef
+  create_func_type : @core.TypeDef
+  next_func_code : @core.Code
+  create_func_code : @core.Code
+}
+pub fn GeneratorWasmCode::debug_info(Self) -> String
+
+pub struct LiftedVarsInfo {
+  lifted_vars : Array[String]
+  is_mutated : Map[String, Bool]
+  field_indices : Map[String, UInt]
+}
+pub fn LiftedVarsInfo::empty() -> Self
+
+// Type aliases
+
+// Traits
+

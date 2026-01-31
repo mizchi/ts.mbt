@@ -169,20 +169,31 @@ test "closure codegen for fixtures/aot/closure_readonly.ts" {
   // Test that we can generate code for read-only closures
   // (y) => x + y
   let body = @ast.TsArrowBody::ArrowExpr(
-    @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("x"), @ast.TsExpr::Var("y")),
+    @ast.TsExpr::BinOp(
+      @ast.TsBinOp::Add,
+      @ast.TsExpr::Var("x"),
+      @ast.TsExpr::Var("y"),
+    ),
   )
   let arrow_params : Array[@ast.TsParam] = [
-    { name: "y", type_: @ast.TsType::Number, binding: None, is_rest: false, default: None },
+    {
+      name: "y",
+      type_: @ast.TsType::Number,
+      binding: None,
+      is_rest: false,
+      default: None,
+    },
   ]
   let outer_scope : Array[String] = ["x"]
   let ctx = @codegen.ClosureCodegenCtx::new(0U)
-
   match @codegen.compile_arrow_func(arrow_params, body, outer_scope, ctx) {
     Some(code) => {
       assert_true(code.env_struct_type is Some(_))
       assert_eq(code.capture_names.length(), 1)
       assert_eq(code.capture_names[0], "x")
-      println("Generated closure code: \{code.func_code.body.instrs.length()} instructions")
+      println(
+        "Generated closure code: \{code.func_code.body.instrs.length()} instructions",
+      )
     }
     None => fail("Should compile read-only closure")
   }
@@ -193,7 +204,11 @@ test "closure codegen for fixtures/aot/closure_mutable.ts" {
   // Test counter function pattern
   let block : @ast.TsBlock = {
     stmts: [
-      @ast.TsStmt::Let(@ast.TsBinding::Ident("count"), @ast.TsType::Number, @ast.TsExpr::IntLit(0)),
+      @ast.TsStmt::Let(
+        @ast.TsBinding::Ident("count"),
+        @ast.TsType::Number,
+        @ast.TsExpr::IntLit(0),
+      ),
       @ast.TsStmt::Const(
         @ast.TsBinding::Ident("inc"),
         @ast.TsType::Any,
@@ -203,7 +218,11 @@ test "closure codegen for fixtures/aot/closure_mutable.ts" {
             stmts: [
               @ast.TsStmt::Assign(
                 "count",
-                @ast.TsExpr::BinOp(@ast.TsBinOp::Add, @ast.TsExpr::Var("count"), @ast.TsExpr::IntLit(1)),
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::Add,
+                  @ast.TsExpr::Var("count"),
+                  @ast.TsExpr::IntLit(1),
+                ),
               ),
             ],
           }),
@@ -222,10 +241,14 @@ test "closure codegen for fixtures/aot/closure_mutable.ts" {
   assert_eq(lifted_info.is_mutated.get("count"), Some(true))
 
   // Generate code with environment sharing
-  let result = @codegen.compile_func_body_with_env(block, params, lifted_info, 0U)
+  let result = @codegen.compile_func_body_with_env(
+    block, params, lifted_info, 0U,
+  )
   assert_true(result.env_struct_type is Some(_))
   assert_true(result.env_local_idx is Some(_))
-  println("Generated counter with env sharing: \{result.func_code.body.instrs.length()} instructions")
+  println(
+    "Generated counter with env sharing: \{result.func_code.body.instrs.length()} instructions",
+  )
 }
 
 ///|
@@ -247,9 +270,10 @@ test "generator codegen for fixtures/aot/generator.ts - range" {
 
   // Compile generator
   match @codegen.compile_generator_func(func, 0U) {
-    Some(code) => {
-      println("Generated range() next function: \{code.next_func_code.body.instrs.length()} instructions")
-    }
+    Some(code) =>
+      println(
+        "Generated range() next function: \{code.next_func_code.body.instrs.length()} instructions",
+      )
     None => fail("Should compile range generator")
   }
 }

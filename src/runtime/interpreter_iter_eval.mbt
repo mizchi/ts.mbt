@@ -71,10 +71,10 @@ fn JSInterpreter::make_generator(
         call_env
       }
       // Check if this generator is AOT compilable (simple generators only)
-      let (aot_mode, aot_wasm_bytes, aot_state_data) = match try_compile_generator_aot(
-        func_def, args,
-      ) {
-        Some((wasm_bytes, state_data, _sm)) => (true, Some(wasm_bytes), state_data)
+      let (aot_mode, aot_wasm_bytes, aot_state_data) = match
+        try_compile_generator_aot(func_def, args) {
+        Some((wasm_bytes, state_data, _sm)) =>
+          (true, Some(wasm_bytes), state_data)
         None => (false, None, [])
       }
       let state : JSGeneratorState = {

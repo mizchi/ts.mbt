@@ -1,0 +1,64 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/aot"
+
+import {
+  "mizchi/ts/ast",
+  "moonbitlang/wasm5/runtime",
+}
+
+// Values
+pub fn compile_module_aot(@ast.TsModule) -> AOTCompilationResult
+
+pub fn compile_module_to_wasm(@ast.TsModule) -> AOTCompiledModule raise AOTError
+
+pub fn create_aot_runtime(@ast.TsModule) -> AOTRuntime raise AOTError
+
+pub fn get_compilation_info(@ast.TsModule) -> (Int, Int, Array[String], Array[String])
+
+pub fn is_function_compilable(@ast.TsFunc) -> Bool
+
+// Errors
+pub suberror AOTError {
+  CodeGenError(String)
+  EncodeError(String)
+}
+
+pub suberror RuntimeInitError {
+  ParseError(String)
+  LoadError(String)
+  CallError(String)
+}
+
+// Types and methods
+pub struct AOTCompilationResult {
+  compiled_functions : Array[AOTCompiledFunction]
+  uncompiled_functions : Array[@ast.TsFunc]
+}
+
+pub struct AOTCompiledFunction {
+  name : String
+  ast : @ast.TsFunc
+  wasm_bytes : Bytes
+  func_index : UInt
+}
+
+pub struct AOTCompiledModule {
+  functions : Array[AOTCompiledFunction]
+  wasm_bytes : Bytes
+}
+
+pub struct AOTRuntime {
+  wasm_bytes : Bytes
+  mut runtime : @runtime.Runtime?
+  func_indices : Map[String, Int]
+  fallback_funcs : Map[String, @ast.TsFunc]
+}
+pub fn AOTRuntime::call(Self, String, Array[Double]) -> Double raise RuntimeInitError
+pub fn AOTRuntime::get_fallback(Self, String) -> @ast.TsFunc?
+pub fn AOTRuntime::has_function(Self, String) -> Bool
+pub fn AOTRuntime::new(AOTCompiledModule) -> Self
+
+// Type aliases
+
+// Traits
+

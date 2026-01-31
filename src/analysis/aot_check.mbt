@@ -45,7 +45,6 @@ pub fn check_aot_compilable(ts_module : @ast.TsModule) -> AOTCheckResult {
   // Determine overall compilability
   let has_generators = ts_module.funcs.iter().any(fn(f) { f.is_generator })
   let has_aot_groups = groups.length() > 0
-
   let compilable = if has_generators {
     has_aot_groups
   } else {
@@ -66,11 +65,9 @@ pub fn check_aot_compilable(ts_module : @ast.TsModule) -> AOTCheckResult {
       }
     }
   }
-
   for inc in incompatible_funcs {
     diagnostics.push("Incompatible: \{inc.name} - \{inc.reason}")
   }
-
   { compilable, groups, incompatible_funcs, diagnostics }
 }
 
@@ -328,11 +325,7 @@ fn check_expr_aot_issues(expr : @ast.TsExpr) -> String? {
 /// Parses and checks the code.
 pub fn is_aot_compilable(source : String) -> Bool {
   let parser = @parser.Parser::from_source(source)
-  let ts_module = try {
-    parser.parse_module()
-  } catch {
-    _ => return false
-  }
+  let ts_module = parser.parse_module() catch { _ => return false }
   let result = check_aot_compilable(ts_module)
   result.compilable
 }
@@ -342,17 +335,14 @@ pub fn is_aot_compilable(source : String) -> Bool {
 /// Returns a result with compilable=false if parsing fails.
 pub fn check_aot_compilable_source(source : String) -> AOTCheckResult {
   let parser = @parser.Parser::from_source(source)
-  let ts_module = try {
-    parser.parse_module()
-  } catch {
-    e => {
+  let ts_module = parser.parse_module() catch {
+    e =>
       return {
         compilable: false,
         groups: [],
         incompatible_funcs: [],
         diagnostics: ["Parse error: \{e}"],
       }
-    }
   }
   check_aot_compilable(ts_module)
 }

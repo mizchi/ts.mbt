@@ -87,21 +87,31 @@ priv struct AOTExecContext {
 }
 
 // State data field indices (matching generator_codegen.mbt)
+
+///|
 let aot_idx_state_num : Int = 0
 
+///|
 let aot_idx_done : Int = 1
 
+///|
 let aot_idx_signal_mode : Int = 2
 
+///|
 let aot_idx_signal_value : Int = 3
 
+///|
 let aot_idx_params_start : Int = 4
 
 // Signal modes (matching generator_codegen.mbt)
+
+///|
 let aot_signal_normal : Double = 0.0
 
+///|
 let aot_signal_throw : Double = 1.0
 
+///|
 let aot_signal_return : Double = 2.0
 
 ///|
@@ -125,14 +135,12 @@ fn try_build_aot_state_machine(
   for p in func.params {
     params.push(p.name)
   }
-
   let locals : Array[String] = []
   collect_local_names(func.body, locals, params)
 
   // Build state machine from body
   let builder = AOTStateBuilder::new()
   let states = builder.build_states(func.body)
-
   let sm : AOTGenStateMachine = {
     name: func.name,
     params,
@@ -151,11 +159,7 @@ fn try_build_aot_state_machine(
 
   // Add params
   for i in 0..<params.length() {
-    let val = if i < args.length() {
-      js_to_f64(args[i])
-    } else {
-      0.0
-    }
+    let val = if i < args.length() { js_to_f64(args[i]) } else { 0.0 }
     state_data.push(val)
   }
 
@@ -163,7 +167,6 @@ fn try_build_aot_state_machine(
   for _ in locals {
     state_data.push(0.0)
   }
-
   Some((sm, state_data))
 }
 
@@ -332,7 +335,8 @@ fn is_simple_stmt(stmt : @ast.TsStmt) -> Bool {
       is_simple_generator_body(body)
     }
     @ast.TsStmt::Block(block) => is_simple_generator_body(block)
-    @ast.TsStmt::Break(_) | @ast.TsStmt::Continue(_) | @ast.TsStmt::Empty => true
+    @ast.TsStmt::Break(_) | @ast.TsStmt::Continue(_) | @ast.TsStmt::Empty =>
+      true
     // Try/catch, function declarations, classes, etc. are not simple
     _ => false
   }
@@ -395,11 +399,10 @@ fn collect_local_names_stmt(
   match stmt {
     @ast.TsStmt::Var(@ast.TsBinding::Ident(name), _, _)
     | @ast.TsStmt::Let(@ast.TsBinding::Ident(name), _, _)
-    | @ast.TsStmt::Const(@ast.TsBinding::Ident(name), _, _) => {
+    | @ast.TsStmt::Const(@ast.TsBinding::Ident(name), _, _) =>
       if not(params.contains(name)) && not(locals.contains(name)) {
         locals.push(name)
       }
-    }
     @ast.TsStmt::If(_, then_block, else_block) => {
       collect_local_names(then_block, locals, params)
       match else_block {
@@ -407,8 +410,8 @@ fn collect_local_names_stmt(
         None => ()
       }
     }
-    @ast.TsStmt::While(_, body)
-    | @ast.TsStmt::DoWhile(_, body) => collect_local_names(body, locals, params)
+    @ast.TsStmt::While(_, body) | @ast.TsStmt::DoWhile(_, body) =>
+      collect_local_names(body, locals, params)
     @ast.TsStmt::For(init, _, _, body) => {
       match init {
         Some(s) => collect_local_names_stmt(s, locals, params)
@@ -555,7 +558,6 @@ fn AOTStateBuilder::build_for_stmt(
     Some(e) => self.build_expr(e)
     None => AOTGenExpr::Bool(true)
   }
-
   result.push(AOTGenInstr::While(cond_expr, loop_body))
   result
 }
@@ -697,9 +699,7 @@ fn js_to_f64(val : JSValue) -> Double {
     Bool(b) => if b { 1.0 } else { 0.0 }
     Undefined | Null => 0.0
     String(s) =>
-      try {
-        @strconv.parse_double(s)
-      } catch {
+      @strconv.parse_double(s) catch {
         _ => 0.0 / 0.0 // NaN
       }
     _ => 0.0 / 0.0 // NaN for non-numeric types
@@ -735,7 +735,6 @@ fn JSInterpreter::generator_next_aot(
   if gen_id < 0 || gen_id >= self.generators.length() {
     return self.set_error_kind("TypeError", "Invalid generator")
   }
-
   let state = self.generators[gen_id]
   if state.done {
     return self.make_iter_result(Undefined, true)
@@ -910,14 +909,14 @@ fn JSInterpreter::execute_aot_state_machine(
     self.generators[gen_id] = state
     return self.make_iter_result(Undefined, true)
   }
-
   let current_state = sm.states[state_num]
   let sent_f64 = js_to_f64(sent)
 
   // Execute state body
   let ctx : AOTExecContext = { state_data, sm, sent_value: sent_f64 }
   let (value, done, next_state) = self.execute_aot_state_body(
-    ctx, current_state.body,
+    ctx,
+    current_state.body,
   )
 
   // Update state
@@ -927,7 +926,6 @@ fn JSInterpreter::execute_aot_state_machine(
     state_data[aot_idx_done] = 1.0
   }
   self.generators[gen_id] = state
-
   self.make_iter_result(f64_to_js(value), done)
 }
 
@@ -1076,15 +1074,15 @@ fn eval_aot_binop(op : AOTGenBinOp, l : Double, r : Double) -> Double {
     AOTGenBinOp::Ne => if l != r { 1.0 } else { 0.0 }
     AOTGenBinOp::And => if l != 0.0 && r != 0.0 { 1.0 } else { 0.0 }
     AOTGenBinOp::Or => if l != 0.0 || r != 0.0 { 1.0 } else { 0.0 }
-    AOTGenBinOp::BitAnd => (l.to_int().land(r.to_int())).to_double()
-    AOTGenBinOp::BitOr => (l.to_int().lor(r.to_int())).to_double()
-    AOTGenBinOp::BitXor => (l.to_int().lxor(r.to_int())).to_double()
+    AOTGenBinOp::BitAnd => l.to_int().land(r.to_int()).to_double()
+    AOTGenBinOp::BitOr => l.to_int().lor(r.to_int()).to_double()
+    AOTGenBinOp::BitXor => l.to_int().lxor(r.to_int()).to_double()
     AOTGenBinOp::Shl => (l.to_int() << r.to_int()).to_double()
     AOTGenBinOp::Shr => (l.to_int() >> r.to_int()).to_double()
     AOTGenBinOp::Ushr => {
       // Unsigned right shift
       let val = l.to_int()
-      let shift_amt = r.to_int().land(0x1f)
+      let shift_amt = r.to_int() & 0x1f
       if shift_amt == 0 {
         val.to_double()
       } else if val >= 0 {
@@ -1121,14 +1119,12 @@ fn JSInterpreter::generator_throw_aot(
   if gen_id < 0 || gen_id >= self.generators.length() {
     return self.set_error_kind("TypeError", "Invalid generator")
   }
-
   let state = self.generators[gen_id]
   if state.done {
     // If already done, throw the error
     self.last_error = Some(value)
     return value
   }
-
   let state_data = state.aot_state_data
 
   // Set signal mode to throw
@@ -1157,12 +1153,10 @@ fn JSInterpreter::generator_return_aot(
   if gen_id < 0 || gen_id >= self.generators.length() {
     return self.set_error_kind("TypeError", "Invalid generator")
   }
-
   let state = self.generators[gen_id]
   if state.done {
     return self.make_iter_result(value, true)
   }
-
   let state_data = state.aot_state_data
 
   // Set signal mode to return
@@ -1177,6 +1171,5 @@ fn JSInterpreter::generator_return_aot(
   state.done = true
   state_data[aot_idx_done] = 1.0
   self.generators[gen_id] = state
-
   self.make_iter_result(value, true)
 }
