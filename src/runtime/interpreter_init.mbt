@@ -45,7 +45,8 @@ pub fn JSInterpreter::set_step_limit(self : JSInterpreter, limit : Int) -> Unit 
 ///|
 // / functioncreate
 fn JSInterpreter::make_native(self : JSInterpreter, name : String) -> JSValue {
-  JSValue::Function({
+  let short_name = extract_function_name(name)
+  let func = JSValue::Function({
     id: fresh_function_id(),
     params: [],
     body: Native(name),
@@ -57,6 +58,9 @@ fn JSInterpreter::make_native(self : JSInterpreter, name : String) -> JSValue {
     props: [],
     object_proto: Some(self.function_proto),
   })
+  // Set name property (writable: false, enumerable: false, configurable: true)
+  self.set_function_name(func, short_name)
+  func
 }
 
 ///|
@@ -83,7 +87,51 @@ fn JSInterpreter::set_function_length(
   len : Double,
 ) -> Unit {
   let _ = js_define_data_prop(func, "length", Number(len), false, false, true)
+}
 
+///|
+/// Set function name property (writable: false, enumerable: false, configurable: true)
+fn JSInterpreter::set_function_name(
+  _self : JSInterpreter,
+  func : JSValue,
+  name : String,
+) -> Unit {
+  let _ = js_define_data_prop(func, "name", String(name), false, false, true)
+}
+
+///|
+/// Extract short name from native function name (e.g., "Array.isArray" -> "isArray")
+fn extract_function_name(native_name : String) -> String {
+  // Handle @@iterator -> [Symbol.iterator]
+  if native_name.contains("@@iterator") {
+    return "[Symbol.iterator]"
+  }
+  // Handle prototype[...] patterns
+  match native_name.find("[") {
+    Some(bracket_idx) => {
+      try {
+        return native_name[bracket_idx:].to_string()
+      } catch {
+        _ => ()
+      }
+    }
+    None => ()
+  }
+  // Handle "Foo.bar" -> "bar" (find last dot)
+  let mut last_dot = -1
+  for i = 0; i < native_name.length(); i = i + 1 {
+    if native_name[i] == '.' {
+      last_dot = i
+    }
+  }
+  if last_dot >= 0 {
+    try {
+      return native_name[last_dot + 1:].to_string()
+    } catch {
+      _ => ()
+    }
+  }
+  native_name
 }
 
 ///|
@@ -103,16 +151,6 @@ fn calc_formal_parameter_count(params : Array[@ast.TsParam]) -> Int {
   count
 }
 
-///|
-// / function name propertyset
-fn JSInterpreter::set_function_name(
-  _self : JSInterpreter,
-  func : JSValue,
-  name : String,
-) -> Unit {
-  let _ = js_define_data_prop(func, "name", String(name), false, false, true)
-
-}
 
 ///|
 // / datacreate

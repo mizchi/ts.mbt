@@ -1911,23 +1911,23 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let escape_fn = self.make_native("escape")
   self.set_function_length(escape_fn, 1.0)
   self.global_env.define_var("escape", escape_fn)
-  let _ = js_set_prop(global_obj, "escape", escape_fn)
+  let _ = js_define_data_prop(global_obj, "escape", escape_fn, true, false, true)
   let unescape_fn = self.make_native("unescape")
   self.set_function_length(unescape_fn, 1.0)
   self.global_env.define_var("unescape", unescape_fn)
-  let _ = js_set_prop(global_obj, "unescape", unescape_fn)
+  let _ = js_define_data_prop(global_obj, "unescape", unescape_fn, true, false, true)
 
   // eval
   let eval_fn = self.make_native("eval")
   self.set_function_length(eval_fn, 1.0)
   self.global_env.define_var("eval", eval_fn)
-  let _ = js_set_prop(global_obj, "eval", eval_fn)
+  let _ = js_define_data_prop(global_obj, "eval", eval_fn, true, false, true)
 
   // queueMicrotask
   let queue_microtask_fn = self.make_native("queueMicrotask")
   self.set_function_length(queue_microtask_fn, 1.0)
   self.global_env.define_var("queueMicrotask", queue_microtask_fn)
-  let _ = js_set_prop(global_obj, "queueMicrotask", queue_microtask_fn)
+  let _ = js_define_data_prop(global_obj, "queueMicrotask", queue_microtask_fn, true, false, true)
 
   // $DONOTEVALUATE
   let donotevaluate_fn = self.make_native("$DONOTEVALUATE")
@@ -2019,22 +2019,23 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let _ = js_define_data_prop(global_obj, "Infinity", inf, false, false, false)
 
   // Global functions: isNaN, isFinite, parseInt, parseFloat
+  // { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }
   let is_nan_fn = self.make_native("isNaN")
   self.set_function_length(is_nan_fn, 1.0)
   self.global_env.define_var("isNaN", is_nan_fn)
-  let _ = js_set_prop(global_obj, "isNaN", is_nan_fn)
+  let _ = js_define_data_prop(global_obj, "isNaN", is_nan_fn, true, false, true)
   let is_finite_fn = self.make_native("isFinite")
   self.set_function_length(is_finite_fn, 1.0)
   self.global_env.define_var("isFinite", is_finite_fn)
-  let _ = js_set_prop(global_obj, "isFinite", is_finite_fn)
+  let _ = js_define_data_prop(global_obj, "isFinite", is_finite_fn, true, false, true)
   let parse_int_fn = self.make_native("parseInt")
   self.set_function_length(parse_int_fn, 2.0)
   self.global_env.define_var("parseInt", parse_int_fn)
-  let _ = js_set_prop(global_obj, "parseInt", parse_int_fn)
+  let _ = js_define_data_prop(global_obj, "parseInt", parse_int_fn, true, false, true)
   let parse_float_fn = self.make_native("parseFloat")
   self.set_function_length(parse_float_fn, 1.0)
   self.global_env.define_var("parseFloat", parse_float_fn)
-  let _ = js_set_prop(global_obj, "parseFloat", parse_float_fn)
+  let _ = js_define_data_prop(global_obj, "parseFloat", parse_float_fn, true, false, true)
   self.install_symbol(global_obj)
 
   // Proxy (minimal)
