@@ -808,9 +808,10 @@ fn JSInterpreter::install_math(
     false,
     false,
   )
+  // Math[@@toStringTag] = "Math"
+  let _ = js_define_data_prop(math, "@@toStringTag", String("Math"), false, false, true)
   self.global_env.define_var("Math", math)
   set_global_ctor(global_obj, "Math", math)
-
 }
 
 ///|
@@ -957,6 +958,8 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let json_stringify = self.make_native("JSON.stringify")
   self.set_function_length(json_stringify, 3.0)
   set_proto_method(json_obj, "stringify", json_stringify)
+  // JSON[@@toStringTag] = "JSON"
+  let _ = js_define_data_prop(json_obj, "@@toStringTag", String("JSON"), false, false, true)
   self.global_env.define_var("JSON", json_obj)
   set_global_ctor(global_obj, "JSON", json_obj)
 
