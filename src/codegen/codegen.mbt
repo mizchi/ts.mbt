@@ -1620,15 +1620,9 @@ fn emit_compound_op_instr(
     )
   }
   match op {
-    @ast.TsCompoundOp::BitAndAssign
-    | @ast.TsCompoundOp::BitOrAssign
-    | @ast.TsCompoundOp::BitXorAssign
-    | @ast.TsCompoundOp::ShlAssign
-    | @ast.TsCompoundOp::ShrAssign
-    | @ast.TsCompoundOp::UShrAssign
-    | @ast.TsCompoundOp::PowAssign =>
+    @ast.TsCompoundOp::PowAssign =>
       raise CodeGenError(
-        "compound op is not supported in Wasm compiler (use interpreter)",
+        "pow assignment (**=) is not supported in Wasm compiler (use interpreter)",
       )
     _ => ()
   }
@@ -1824,16 +1818,13 @@ fn compile_binop(
     return
   }
   match op {
-    @ast.TsBinOp::Pow
-    | @ast.TsBinOp::BitAnd
-    | @ast.TsBinOp::BitOr
-    | @ast.TsBinOp::BitXor
-    | @ast.TsBinOp::Shl
-    | @ast.TsBinOp::Shr
-    | @ast.TsBinOp::UShr
-    | @ast.TsBinOp::In =>
+    @ast.TsBinOp::Pow =>
       raise CodeGenError(
-        "binary op is not supported in Wasm compiler (use interpreter)",
+        "pow (**) is not supported in Wasm compiler (use interpreter)",
+      )
+    @ast.TsBinOp::In =>
+      raise CodeGenError(
+        "'in' operator is not supported in Wasm compiler (use interpreter)",
       )
     _ => ()
   }
@@ -2069,11 +2060,12 @@ fn compile_unaryop(
       raise CodeGenError(
         "delete is not supported in Wasm compiler (use interpreter)",
       )
-    @ast.TsUnaryOp::BitwiseNot =>
-      // ~x: bitwise NOT (i32)
-      raise CodeGenError(
-        "Bitwise NOT is not supported in Wasm compiler (use interpreter)",
-      )
+    @ast.TsUnaryOp::BitwiseNot => {
+      // ~x: bitwise NOT = x XOR -1
+      compile_expr(ctx, operand, @ast.TsType::Int)
+      ctx.emit(I32Const(0xFFFFFFFFU)) // -1 as unsigned
+      ctx.emit(I32Xor)
+    }
   }
 }
 
@@ -2267,8 +2259,8 @@ fn compile_stmt(
       compile_while(ctx, cond, body, return_type)
     @ast.TsStmt::DoWhile(_, _) =>
       raise CodeGenError("do-while is not yet supported in Wasm compiler")
-    @ast.TsStmt::Switch(_, _) =>
-      raise CodeGenError("switch is not supported in Wasm compiler")
+    @ast.TsStmt::Switch(discriminant, cases) =>
+      compile_switch(ctx, discriminant, cases, return_type)
     @ast.TsStmt::With(_, _) =>
       raise CodeGenError("with is not supported in Wasm compiler")
     @ast.TsStmt::Debugger => ()
@@ -2567,6 +2559,115 @@ fn compile_for_of(
   loop_instrs.push(Br(0U))
   ctx.emit(Block(Empty, [Loop(Empty, loop_instrs)]))
   ctx.loop_depth -= 1
+}
+
+///|
+// Switch statement compilation
+// Compiles switch to nested if-else structure
+fn compile_switch(
+  ctx : CodeGenCtx,
+  discriminant : @ast.TsExpr,
+  cases : Array[@ast.TsSwitchCase],
+  return_type : @ast.TsType,
+) -> Unit raise CodeGenError {
+  // Evaluate discriminant and store in temp local
+  let disc_type = infer_type(ctx, discriminant)
+  let disc_local = ctx.add_local("__switch_disc__", disc_type)
+  compile_expr(ctx, discriminant, disc_type)
+  ctx.emit(LocalSet(disc_local))
+
+  // Find default case index
+  let mut default_idx : Int? = None
+  for i, case_ in cases {
+    if case_.test_expr is None {
+      default_idx = Some(i)
+    }
+  }
+
+  // Compile as nested if-else
+  // Use block/br structure for break support
+  ctx.loop_depth += 1
+  let switch_instrs = compile_switch_cases(
+    ctx,
+    disc_local,
+    disc_type,
+    cases,
+    0,
+    default_idx,
+    return_type,
+  )
+  ctx.emit(Block(Empty, switch_instrs))
+  ctx.loop_depth -= 1
+}
+
+///|
+fn compile_switch_cases(
+  ctx : CodeGenCtx,
+  disc_local : UInt,
+  disc_type : @ast.TsType,
+  cases : Array[@ast.TsSwitchCase],
+  idx : Int,
+  default_idx : Int?,
+  return_type : @ast.TsType,
+) -> Array[@core.Instr] raise CodeGenError {
+  if idx >= cases.length() {
+    // No more cases, compile default if exists
+    match default_idx {
+      Some(di) => {
+        let default_case = cases[di]
+        compile_block_to_instrs(ctx, default_case.body, return_type)
+      }
+      None => []
+    }
+  } else {
+    let case_ = cases[idx]
+    match case_.test_expr {
+      None =>
+        // Default case - skip here, will be handled at the end
+        compile_switch_cases(
+          ctx, disc_local, disc_type, cases, idx + 1, default_idx, return_type,
+        )
+      Some(test_expr) => {
+        // Compile comparison: disc == test_expr
+        let cond_ctx : CodeGenCtx = {
+          locals: ctx.locals,
+          local_types: ctx.local_types,
+          next_local: ctx.next_local,
+          funcs: ctx.funcs,
+          interfaces: ctx.interfaces,
+          import_types: ctx.import_types,
+          instrs: [],
+          loop_depth: ctx.loop_depth,
+          string_pool: ctx.string_pool,
+          builtins_used: ctx.builtins_used,
+          const_values: ctx.const_values,
+        }
+        cond_ctx.emit(LocalGet(disc_local))
+        compile_expr(cond_ctx, test_expr, disc_type)
+        if is_f64_type(disc_type) {
+          cond_ctx.emit(F64Eq)
+        } else {
+          cond_ctx.emit(I32Eq)
+        }
+
+        // Compile then branch (case body)
+        let then_instrs = compile_block_to_instrs(ctx, case_.body, return_type)
+
+        // Compile else branch (remaining cases)
+        let else_instrs = compile_switch_cases(
+          ctx, disc_local, disc_type, cases, idx + 1, default_idx, return_type,
+        )
+
+        // Build if-then-else
+        let result : Array[@core.Instr] = []
+        for instr in cond_ctx.instrs {
+          result.push(instr)
+        }
+        result.push(If(Empty, then_instrs, else_instrs))
+        result
+      }
+    }
+  }
 }
 
 ///|

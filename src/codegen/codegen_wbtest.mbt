@@ -793,3 +793,119 @@ test "codegen: constant propagation replaces variable reads" {
   let results = runtime.call_compiled(b"compute", [@runtime.Value::I32(7)])
   assert_eq(results[0], @runtime.Value::I32(21))
 }
+
+///|
+test "codegen: bitwise NOT operator" {
+  let src =
+    #|function bitnot(x: int): int {
+    #|  return ~x;
+    #|}
+  let wasm_module = compile(src)
+  let runtime = @runtime.Runtime::load(wasm_module)
+  runtime.run_start()
+  // ~0 = -1 (0xFFFFFFFF), ~1 = -2 (0xFFFFFFFE), ~0xFFFFFFFF = 0
+  let r1 = runtime.call_compiled(b"bitnot", [@runtime.Value::I32(0)])
+  assert_eq(r1[0], @runtime.Value::I32(0xFFFFFFFF)) // -1 as unsigned
+  let r2 = runtime.call_compiled(b"bitnot", [@runtime.Value::I32(1)])
+  assert_eq(r2[0], @runtime.Value::I32(0xFFFFFFFE)) // -2 as unsigned
+  let r3 = runtime.call_compiled(b"bitnot", [@runtime.Value::I32(0xFFFFFFFF)])
+  assert_eq(r3[0], @runtime.Value::I32(0))
+}
+
+///|
+test "codegen: bitwise AND, OR, XOR" {
+  let src =
+    #|function bitand(a: int, b: int): int { return a & b; }
+    #|function bitor(a: int, b: int): int { return a | b; }
+    #|function bitxor(a: int, b: int): int { return a ^ b; }
+  let wasm_module = compile(src)
+  let runtime = @runtime.Runtime::load(wasm_module)
+  runtime.run_start()
+  // 0b1100 & 0b1010 = 0b1000 = 8
+  let r1 = runtime.call_compiled(
+    b"bitand",
+    [@runtime.Value::I32(12), @runtime.Value::I32(10)],
+  )
+  assert_eq(r1[0], @runtime.Value::I32(8))
+  // 0b1100 | 0b1010 = 0b1110 = 14
+  let r2 = runtime.call_compiled(
+    b"bitor",
+    [@runtime.Value::I32(12), @runtime.Value::I32(10)],
+  )
+  assert_eq(r2[0], @runtime.Value::I32(14))
+  // 0b1100 ^ 0b1010 = 0b0110 = 6
+  let r3 = runtime.call_compiled(
+    b"bitxor",
+    [@runtime.Value::I32(12), @runtime.Value::I32(10)],
+  )
+  assert_eq(r3[0], @runtime.Value::I32(6))
+}
+
+///|
+test "codegen: bit shift operations" {
+  let src =
+    #|function shl(a: int, b: int): int { return a << b; }
+    #|function shr(a: int, b: int): int { return a >> b; }
+    #|function ushr(a: int, b: int): int { return a >>> b; }
+  let wasm_module = compile(src)
+  let runtime = @runtime.Runtime::load(wasm_module)
+  runtime.run_start()
+  // 1 << 4 = 16
+  let r1 = runtime.call_compiled(
+    b"shl",
+    [@runtime.Value::I32(1), @runtime.Value::I32(4)],
+  )
+  assert_eq(r1[0], @runtime.Value::I32(16))
+  // 16 >> 2 = 4
+  let r2 = runtime.call_compiled(
+    b"shr",
+    [@runtime.Value::I32(16), @runtime.Value::I32(2)],
+  )
+  assert_eq(r2[0], @runtime.Value::I32(4))
+  // 0xFFFFFFF8 (-8) >>> 1 = 0x7FFFFFFC = 2147483644 (unsigned shift)
+  let r3 = runtime.call_compiled(
+    b"ushr",
+    [@runtime.Value::I32(0xFFFFFFF8), @runtime.Value::I32(1)],
+  )
+  assert_eq(r3[0], @runtime.Value::I32(0x7FFFFFFC))
+}
+
+///|
+test "codegen: switch statement" {
+  let src =
+    #|function grade(score: int): int {
+    #|  switch (score) {
+    #|    case 5: return 100;
+    #|    case 4: return 80;
+    #|    case 3: return 60;
+    #|    case 2: return 40;
+    #|    default: return 0;
+    #|  }
+    #|}
+  let wasm_module = compile(src)
+  let runtime = @runtime.Runtime::load(wasm_module)
+  runtime.run_start()
+  let r1 = runtime.call_compiled(b"grade", [@runtime.Value::I32(5)])
+  assert_eq(r1[0], @runtime.Value::I32(100))
+  let r2 = runtime.call_compiled(b"grade", [@runtime.Value::I32(3)])
+  assert_eq(r2[0], @runtime.Value::I32(60))
+  let r3 = runtime.call_compiled(b"grade", [@runtime.Value::I32(1)])
+  assert_eq(r3[0], @runtime.Value::I32(0))
+}
+
+///|
+test "codegen: switch with default only" {
+  let src =
+    #|function always42(x: int): int {
+    #|  switch (x) {
+    #|    default: return 42;
+    #|  }
+    #|}
+  let wasm_module = compile(src)
+  let runtime = @runtime.Runtime::load(wasm_module)
+  runtime.run_start()
+  let r1 = runtime.call_compiled(b"always42", [@runtime.Value::I32(0)])
+  assert_eq(r1[0], @runtime.Value::I32(42))
+  let r2 = runtime.call_compiled(b"always42", [@runtime.Value::I32(999)])
+  assert_eq(r2[0], @runtime.Value::I32(42))
+}
