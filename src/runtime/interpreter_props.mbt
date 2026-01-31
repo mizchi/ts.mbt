@@ -587,7 +587,20 @@ fn JSInterpreter::set_prop_value(
           }
         }
       }
-    Object(map) =>
+    Object(map) => {
+      // Check if this is a TypedArray index access
+      match get_typedarray_data(obj) {
+        Some(data) => {
+          let idx = @strconv.parse_int(key) catch { _ => -1 }
+          if idx >= 0 {
+            if idx < data.length && not(data.buffer.detached) {
+              typedarray_set_element_jsvalue(data, idx, value)
+            }
+            return
+          }
+        }
+        None => ()
+      }
       for prop in map.props {
         if prop.key == key {
           match prop.set {
@@ -612,6 +625,7 @@ fn JSInterpreter::set_prop_value(
           }
         }
       }
+    }
     Array(arr) =>
       for prop in arr.props {
         if prop.key == key {
@@ -721,6 +735,19 @@ fn JSInterpreter::get_prop_value_with_receiver(
             }
           _ => ()
         }
+      }
+      // Check if this is a TypedArray index access
+      match get_typedarray_data(target) {
+        Some(data) => {
+          let idx = @strconv.parse_int(key) catch { _ => -1 }
+          if idx >= 0 {
+            if idx < data.length && not(data.buffer.detached) {
+              return typedarray_get_element_jsvalue(data, idx)
+            }
+            return Undefined
+          }
+        }
+        None => ()
       }
       for prop in map.props {
         if prop.key == key {
@@ -1335,6 +1362,7 @@ fn JSInterpreter::json_stringify_value(
       } else {
         Some(n.to_string())
       }
+    BigInt(n) => Some(n.to_string()) // Note: BigInt not JSON-serializable by spec, but we output as number
     String(s) => Some("\"" + self.json_escape(s) + "\"")
     Array(arr) => {
       let parts : Array[String] = []

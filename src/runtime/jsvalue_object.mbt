@@ -66,6 +66,7 @@ pub fn JSValue::to_number(self : JSValue) -> Double {
     Bool(true) => 1.0
     Bool(false) => 0.0
     Number(n) => n
+    BigInt(n) => n.to_int64().to_double() // Note: May lose precision for large BigInts
     String(s) =>
       // simpleimplementation: string0,
       if s.length() == 0 {
@@ -169,6 +170,19 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
           Some(proto) => return proto
           None => return Undefined
         }
+      }
+      // Check if this is a TypedArray index access
+      match get_typedarray_data(obj) {
+        Some(data) => {
+          let idx = @strconv.parse_int(key) catch { _ => -1 }
+          if idx >= 0 {
+            if idx < data.length && not(data.buffer.detached) {
+              return typedarray_get_element_jsvalue(data, idx)
+            }
+            return Undefined
+          }
+        }
+        None => ()
       }
       // propertylookup
       for prop in map.props {
@@ -343,6 +357,19 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
           _ => map.prototype
         }
         return value
+      }
+      // Check if this is a TypedArray index access
+      match get_typedarray_data(obj) {
+        Some(data) => {
+          let idx = @strconv.parse_int(key) catch { _ => -1 }
+          if idx >= 0 {
+            if idx < data.length && not(data.buffer.detached) {
+              typedarray_set_element_jsvalue(data, idx, value)
+            }
+            return value
+          }
+        }
+        None => ()
       }
       // propertyupdate
       for i, prop in map.props {

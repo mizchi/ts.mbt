@@ -9,12 +9,7 @@ pub fn JSInterpreter::eval_expr(
   match expr {
     @ast.TsExpr::IntLit(n) => Number(n.to_double())
     @ast.TsExpr::NumberLit(n) => Number(n)
-    @ast.TsExpr::BigIntLit(s) => {
-      let obj = self.new_object()
-      let _ = js_set_prop(obj, "__class", String("BigInt"))
-      let _ = js_set_prop(obj, "value", String(s))
-      obj
-    }
+    @ast.TsExpr::BigIntLit(s) => BigInt(BigInt::from_string(s))
     @ast.TsExpr::BoolLit(b) => Bool(b)
     @ast.TsExpr::StringLit(s) => String(s)
     @ast.TsExpr::NullLit => Null

@@ -873,6 +873,9 @@ fn include_prelude(name : String) -> String? {
           #|};
         ),
       )
+    "testTypedArray.js" => Some("")
+    "detachArrayBuffer.js" => Some("")
+    "testBigIntTypedArray.js" => Some("")
     _ => None
   }
 }

@@ -458,6 +458,7 @@ fn JSInterpreter::call_object_native(
             Bool(_) => "Boolean"
             Number(_) => "Number"
             String(_) => "String"
+            BigInt(_) => "BigInt"
             Array(_) => "Array"
             Function(_) => "Function"
             Object(_) => {

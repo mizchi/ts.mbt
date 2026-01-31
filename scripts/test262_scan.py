@@ -80,6 +80,9 @@ SUPPORTED_INCLUDES = {
     "deepEqual.js",
     "decimalToHexString.js",
     "proxyTrapsHelper.js",
+    "testTypedArray.js",
+    "detachArrayBuffer.js",
+    "testBigIntTypedArray.js",
 }
 
 

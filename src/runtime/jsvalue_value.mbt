@@ -13,6 +13,7 @@ pub enum JSTag {
   Object // 5
   Array // 6
   Function // 7
+  BigInt // 8
 } derive(Show, Eq)
 
 ///|
@@ -27,6 +28,7 @@ pub fn JSTag::to_i32(self : JSTag) -> Int {
     Object => 5
     Array => 6
     Function => 7
+    BigInt => 8
   }
 }
 
@@ -42,6 +44,7 @@ pub fn JSTag::from_i32(n : Int) -> JSTag {
     5 => Object
     6 => Array
     7 => Function
+    8 => BigInt
     _ => Undefined
   }
 }
@@ -57,6 +60,7 @@ pub enum JSValue {
   Object(JSPropMap)
   Array(JSArray)
   Function(JSClosure)
+  BigInt(BigInt)
   // internal
   BreakSignal(String?)
   ContinueSignal(String?)
@@ -74,6 +78,7 @@ pub fn JSValue::tag(self : JSValue) -> JSTag {
     Object(_) => JSTag::Object
     Array(_) => JSTag::Array
     Function(_) => JSTag::Function
+    BigInt(_) => JSTag::BigInt
     BreakSignal(_) | ContinueSignal(_) | Empty => JSTag::Undefined // internal
   }
 }
@@ -119,6 +124,14 @@ pub fn JSValue::is_number(self : JSValue) -> Bool {
 }
 
 ///|
+pub fn JSValue::is_bigint(self : JSValue) -> Bool {
+  match self {
+    BigInt(_) => true
+    _ => false
+  }
+}
+
+///|
 pub fn JSValue::is_string(self : JSValue) -> Bool {
   match self {
     String(_) => true
@@ -130,25 +143,13 @@ pub fn JSValue::is_string(self : JSValue) -> Bool {
 pub fn JSValue::is_object(self : JSValue) -> Bool {
   match self {
     Object(map) => {
-      let mut is_bigint = false
-      let mut bigint_value = ""
       for prop in map.props {
         if prop.key == "__class" {
           match prop.value {
             String("IsHTMLDDA") => return false
-            String("BigInt") => is_bigint = true
             _ => ()
           }
         }
-        if prop.key == "value" {
-          match prop.value {
-            String(s) => bigint_value = s
-            _ => ()
-          }
-        }
-      }
-      if is_bigint {
-        return bigint_value != "0"
       }
       true
     }
@@ -193,31 +194,17 @@ pub fn JSValue::to_boolean(self : JSValue) -> Bool {
     Bool(b) => b
     Number(n) => n != 0.0 && not(n.is_nan())
     String(s) => s.length() > 0
+    BigInt(n) => not(n.is_zero())
     Object(map) => {
-      let mut class_name : String? = None
-      let mut bigint_value : String? = None
       for prop in map.props {
         if prop.key == "__class" {
           match prop.value {
-            String(name) => class_name = Some(name)
-            _ => ()
-          }
-        } else if prop.key == "value" {
-          match prop.value {
-            String(val) => bigint_value = Some(val)
+            String("IsHTMLDDA") => return false
             _ => ()
           }
         }
       }
-      match class_name {
-        Some("IsHTMLDDA") => false
-        Some("BigInt") =>
-          match bigint_value {
-            Some("0") => false
-            _ => true
-          }
-        _ => true
-      }
+      true
     }
     Array(_) => true
     Function(closure) => {
@@ -273,6 +260,7 @@ pub fn JSValue::to_js_string(self : JSValue) -> String {
     Bool(false) => "false"
     Number(n) => n.to_string()
     String(s) => s
+    BigInt(n) => n.to_string()
     Object(_) =>
       // Check for special object types
       match js_get_prop(self, "__class") {
@@ -336,66 +324,83 @@ pub fn JSValue::to_js_string(self : JSValue) -> String {
 // === operator ===
 
 ///|
-// / (+) - string
+// / (+) - string or BigInt
 pub fn js_add(left : JSValue, right : JSValue) -> JSValue {
-  // stringstring
   match (left, right) {
     (String(a), String(b)) => String(a + b)
     (String(a), b) => String(a + b.to_js_string())
     (a, String(b)) => String(a.to_js_string() + b)
+    (BigInt(a), BigInt(b)) => BigInt(a + b)
     _ => Number(left.to_number() + right.to_number())
   }
 }
 
 ///|
-// / (-)
+// / (-) - Number or BigInt
 pub fn js_sub(left : JSValue, right : JSValue) -> JSValue {
-  Number(left.to_number() - right.to_number())
+  match (left, right) {
+    (BigInt(a), BigInt(b)) => BigInt(a - b)
+    _ => Number(left.to_number() - right.to_number())
+  }
 }
 
 ///|
-// / (*)
+// / (*) - Number or BigInt
 pub fn js_mul(left : JSValue, right : JSValue) -> JSValue {
-  Number(left.to_number() * right.to_number())
+  match (left, right) {
+    (BigInt(a), BigInt(b)) => BigInt(a * b)
+    _ => Number(left.to_number() * right.to_number())
+  }
 }
 
 ///|
-// / (/)
+// / (/) - Number or BigInt (truncated for BigInt)
 pub fn js_div(left : JSValue, right : JSValue) -> JSValue {
-  Number(left.to_number() / right.to_number())
+  match (left, right) {
+    (BigInt(a), BigInt(b)) => BigInt(a / b)
+    _ => Number(left.to_number() / right.to_number())
+  }
 }
 
 ///|
 // / (%) - ECMAScript remainder operator
 pub fn js_mod(left : JSValue, right : JSValue) -> JSValue {
-  let n = left.to_number()
-  let d = right.to_number()
-  // Handle special cases
-  if n.is_nan() || d.is_nan() || n.is_inf() || d == 0.0 {
-    return Number(js_nan)
-  }
-  if d.is_inf() {
-    return Number(n)
-  }
-  // ECMAScript: r = n - d * trunc(n/d)
-  // If r = 0 and n < 0, return -0
-  let q = (n / d).trunc()
-  let r = n - d * q
-  if r == 0.0 && n < 0.0 {
-    Number(-0.0)
-  } else {
-    Number(r)
+  match (left, right) {
+    (BigInt(a), BigInt(b)) => BigInt(a % b)
+    _ => {
+      let n = left.to_number()
+      let d = right.to_number()
+      // Handle special cases
+      if n.is_nan() || d.is_nan() || n.is_inf() || d == 0.0 {
+        return Number(js_nan)
+      }
+      if d.is_inf() {
+        return Number(n)
+      }
+      // ECMAScript: r = n - d * trunc(n/d)
+      // If r = 0 and n < 0, return -0
+      let q = (n / d).trunc()
+      let r = n - d * q
+      if r == 0.0 && n < 0.0 {
+        Number(-0.0)
+      } else {
+        Number(r)
+      }
+    }
   }
 }
 
 ///|
 // / unary
 pub fn js_neg(val : JSValue) -> JSValue {
-  Number(-val.to_number())
+  match val {
+    BigInt(n) => BigInt(-n)
+    _ => Number(-val.to_number())
+  }
 }
 
 ///|
-// / unary(conversion)
+// / unary(conversion) - Note: +BigInt throws TypeError in JS
 pub fn js_pos(val : JSValue) -> JSValue {
   Number(val.to_number())
 }
@@ -428,6 +433,7 @@ pub fn js_typeof(val : JSValue) -> JSValue {
       Null => "object" // JS
       Bool(_) => "boolean"
       Number(_) => "number"
+      BigInt(_) => "bigint"
       String(s) =>
         // Symbols are represented as strings "Symbol(...)#N", "@@global:key", or "@@name"
         // Note: "Symbol(...)" without #N suffix is NOT a symbol (it's the toString result)
@@ -442,7 +448,6 @@ pub fn js_typeof(val : JSValue) -> JSValue {
         // Check for special object types
         match js_get_prop(val, "__class") {
           String("Symbol") => "symbol"
-          String("BigInt") => "bigint"
           _ => "object"
         }
       Array(_) => "object"
@@ -455,31 +460,10 @@ pub fn js_typeof(val : JSValue) -> JSValue {
 // === comparisonoperator ===
 
 ///|
-// Helper to check if a JSValue is a BigInt and get its value string
-fn get_bigint_value(val : JSValue) -> String? {
-  match val {
-    Object(_) =>
-      match js_get_prop(val, "__class") {
-        String("BigInt") =>
-          match js_get_prop(val, "value") {
-            String(s) => Some(s)
-            _ => None
-          }
-        _ => None
-      }
-    _ => None
-  }
-}
 
 ///|
 // / (===)
 pub fn js_strict_eq(left : JSValue, right : JSValue) -> JSValue {
-  // Special case for BigInt comparison
-  match (get_bigint_value(left), get_bigint_value(right)) {
-    (Some(a), Some(b)) => return Bool(a == b)
-    (Some(_), None) | (None, Some(_)) => return Bool(false) // BigInt !== non-BigInt
-    _ => ()
-  }
   Bool(
     match (left, right) {
       (Undefined, Undefined) => true
@@ -487,6 +471,7 @@ pub fn js_strict_eq(left : JSValue, right : JSValue) -> JSValue {
       (Bool(a), Bool(b)) => a == b
       (Number(a), Number(b)) => a == b
       (String(a), String(b)) => a == b
+      (BigInt(a), BigInt(b)) => a == b
       (Object(a), Object(b)) => a.id == b.id
       (Array(a), Array(b)) => a.id == b.id
       (Function(a), Function(b)) => a.id == b.id
@@ -532,6 +517,12 @@ pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
           Bool(b) => b
           _ => false
         }
+      // BigInt comparison
+      (BigInt(a), BigInt(b)) => a == b
+      (BigInt(a), Number(b)) => a.to_int64().to_double() == b
+      (Number(a), BigInt(b)) => a == b.to_int64().to_double()
+      (BigInt(a), String(s)) => a == BigInt::from_string(s)
+      (String(s), BigInt(b)) => BigInt::from_string(s) == b
       // type coercion comparison (now null/undefined are already excluded)
       (Number(_), _) | (_, Number(_)) => left.to_number() == right.to_number()
       (Bool(_), _) | (_, Bool(_)) => left.to_number() == right.to_number()
@@ -584,9 +575,11 @@ fn str_compare(l : String, r : String) -> Int {
 ///|
 // / (<) - Compare values, using string comparison for strings
 pub fn js_lt(left : JSValue, right : JSValue) -> JSValue {
-  // If both are strings, compare lexicographically
   match (left, right) {
     (String(l), String(r)) => Bool(str_compare(l, r) < 0)
+    (BigInt(a), BigInt(b)) => Bool(a < b)
+    (BigInt(a), Number(b)) => Bool(a.to_int64().to_double() < b)
+    (Number(a), BigInt(b)) => Bool(a < b.to_int64().to_double())
     _ => Bool(left.to_number() < right.to_number())
   }
 }
@@ -596,6 +589,9 @@ pub fn js_lt(left : JSValue, right : JSValue) -> JSValue {
 pub fn js_le(left : JSValue, right : JSValue) -> JSValue {
   match (left, right) {
     (String(l), String(r)) => Bool(str_compare(l, r) <= 0)
+    (BigInt(a), BigInt(b)) => Bool(a <= b)
+    (BigInt(a), Number(b)) => Bool(a.to_int64().to_double() <= b)
+    (Number(a), BigInt(b)) => Bool(a <= b.to_int64().to_double())
     _ => Bool(left.to_number() <= right.to_number())
   }
 }
@@ -605,6 +601,9 @@ pub fn js_le(left : JSValue, right : JSValue) -> JSValue {
 pub fn js_gt(left : JSValue, right : JSValue) -> JSValue {
   match (left, right) {
     (String(l), String(r)) => Bool(str_compare(l, r) > 0)
+    (BigInt(a), BigInt(b)) => Bool(a > b)
+    (BigInt(a), Number(b)) => Bool(a.to_int64().to_double() > b)
+    (Number(a), BigInt(b)) => Bool(a > b.to_int64().to_double())
     _ => Bool(left.to_number() > right.to_number())
   }
 }
@@ -614,6 +613,9 @@ pub fn js_gt(left : JSValue, right : JSValue) -> JSValue {
 pub fn js_ge(left : JSValue, right : JSValue) -> JSValue {
   match (left, right) {
     (String(l), String(r)) => Bool(str_compare(l, r) >= 0)
+    (BigInt(a), BigInt(b)) => Bool(a >= b)
+    (BigInt(a), Number(b)) => Bool(a.to_int64().to_double() >= b)
+    (Number(a), BigInt(b)) => Bool(a >= b.to_int64().to_double())
     _ => Bool(left.to_number() >= right.to_number())
   }
 }
