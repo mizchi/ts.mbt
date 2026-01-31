@@ -1,4 +1,34 @@
 ///|
+fn number_to_fixed(n : Double, digits : Int) -> String {
+  let is_negative = n < 0.0
+  let abs_n = if is_negative { -n } else { n }
+  // Calculate the multiplier
+  let multiplier = @math.pow(10.0, digits.to_double())
+  // Round to the specified number of decimal places
+  let rounded = (abs_n * multiplier + 0.5).floor() / multiplier
+  // Split into integer and fractional parts
+  let int_part = rounded.floor().to_int64()
+  let frac_part = rounded - int_part.to_double()
+  let buf = StringBuilder::new()
+  if is_negative {
+    buf.write_char('-')
+  }
+  buf.write_string(int_part.to_string())
+  if digits > 0 {
+    buf.write_char('.')
+    // Generate fractional digits
+    let mut frac = frac_part
+    for i = 0; i < digits; i = i + 1 {
+      frac = frac * 10.0
+      let digit = frac.floor().to_int()
+      buf.write_char((48 + digit).unsafe_to_char()) // '0' = 48
+      frac = frac - digit.to_double()
+    }
+  }
+  buf.to_string()
+}
+
+///|
 fn number_to_radix_string(n : Double, radix : Int) -> String {
   let digits : Array[Char] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
   if n.is_nan() {
@@ -1085,6 +1115,9 @@ fn JSInterpreter::install_builtins(self : JSInterpreter) -> Unit {
   let num_to_string = self.make_native("Number.prototype.toString")
   self.set_function_length(num_to_string, 0.0)
   set_proto_method(number_proto, "toString", num_to_string)
+  let num_to_fixed = self.make_native("Number.prototype.toFixed")
+  self.set_function_length(num_to_fixed, 1.0)
+  set_proto_method(number_proto, "toFixed", num_to_fixed)
   let num_is_nan = self.make_native("Number.isNaN")
   self.set_function_length(num_is_nan, 1.0)
   set_proto_method(number_ctor, "isNaN", num_is_nan)
@@ -4025,6 +4058,36 @@ fn JSInterpreter::call_native(
       } else {
         String(number_to_radix_string(n, radix))
       }
+    }
+    "Number.prototype.toFixed" => {
+      let prim = match this_arg {
+        Number(_) => this_arg
+        Object(_) | Function(_) | Array(_) => js_get_prop(this_arg, "value")
+        _ => this_arg
+      }
+      let n = match prim {
+        Number(v) => v
+        _ => return String(prim.to_js_string())
+      }
+      // Get digits argument (default 0)
+      let digits = if args.length() > 0 {
+        let d = self.to_number_value(args[0]).to_int()
+        if d < 0 || d > 100 {
+          let _ = self.set_error_kind("RangeError", "toFixed() digits argument must be between 0 and 100")
+          return Undefined
+        }
+        d
+      } else {
+        0
+      }
+      if n.is_nan() {
+        return String("NaN")
+      }
+      if n.is_inf() {
+        return if n > 0.0 { String("Infinity") } else { String("-Infinity") }
+      }
+      // Use built-in formatting and truncate/pad to digits
+      String(number_to_fixed(n, digits))
     }
     "Number.isNaN" =>
       if args.length() > 0 {
