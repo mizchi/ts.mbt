@@ -237,7 +237,7 @@ test262-scan:
     SKIPLIST="test262.skiplist.txt"
 
     # Supported includes
-    SUPPORTED_INCLUDES="assert.js|sta.js|compareArray.js|nans.js|propertyHelper.js|fnGlobalObject.js|isConstructor.js|deepEqual.js|decimalToHexString.js|proxyTrapsHelper.js|testTypedArray.js|detachArrayBuffer.js|testBigIntTypedArray.js|asyncHelpers.js"
+    SUPPORTED_INCLUDES="assert.js|sta.js|compareArray.js|nans.js|propertyHelper.js|fnGlobalObject.js|isConstructor.js|deepEqual.js|decimalToHexString.js|proxyTrapsHelper.js|testTypedArray.js|detachArrayBuffer.js|testBigIntTypedArray.js|asyncHelpers.js|promiseHelper.js|compareIterator.js"
 
     if [ ! -d "$TEST_ROOT" ]; then
         echo "test262 not found at $TEST_ROOT" >&2
