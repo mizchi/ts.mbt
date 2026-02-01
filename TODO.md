@@ -1,173 +1,77 @@
-# test262 Progress
+# TODO
 
-## Current Status (2026-02-01)
+## Codegen Type Mismatch Bugs
 
-Based on `test262.allowlist.txt` (46,285 tests) and `test262.skiplist.txt` (6,681 skipped).
-Now includes negative tests and async tests (runner supports both).
+wasmtime's stricter validation exposed these pre-existing codegen bugs. The generated WASM has type mismatches that need to be fixed.
 
-### Overall
+### 1. if-else statement (codegen_wbtest.mbt:99)
+- **Error**: `expected f64 but nothing on stack`
+- **Cause**: if-else branches don't properly leave a value on the stack
+- **Test code**:
+  ```typescript
+  function max(a: number, b: number): number {
+    if (a > b) {
+      return a;
+    } else {
+      return b;
+    }
+  }
+  ```
 
-| Category | Allowlist | Skipped | Runnable | Notes |
-|----------|-----------|---------|----------|-------|
-| Total | 34,268 | 14,029 | ~20,000 | |
-| built-ins | 17,574 | - | - | |
-| language | 13,179 | - | - | |
-| intl402 | 1,712 | - | - | Not tested |
-| staging | 1,051 | - | - | Not tested |
-| annexB | 752 | - | - | Partial |
+### 2. int factorial (codegen_wbtest.mbt:174)
+- **Error**: `expected f64, found i32`
+- **Cause**: Type inference returning i32 when f64 expected
+- **Test code**:
+  ```typescript
+  function factorial(n: int): int {
+    if (n <= 1) { return 1; }
+    return n * factorial(n - 1);
+  }
+  ```
 
-### Language Features
+### 3. js simple arithmetic (codegen_wbtest.mbt:396)
+- **Error**: `expected i32, found f64`
+- **Cause**: JavaScript-style inference returning f64 when i32 expected
+- **Test code**:
+  ```javascript
+  function add(a, b) { return a + b; }
+  ```
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| expressions | Partial | class, generators, async need work |
-| statements | Partial | for-of, generators |
-| function-code | Good | |
-| arguments-object | Partial | |
-| literals | Good | |
-| identifiers | Good | |
-| module-code | Skipped | ESM not supported |
-| eval-code | Partial | Direct eval only |
+### 4. typed module with nested scopes (codegen_wbtest.mbt:467)
+- **Error**: `expected f64, found i32`
+- **Cause**: Nested scope variable type inference incorrect
+- **Test code**: Function with nested blocks and type inference
 
-### Built-in Objects
+### 5. switch statement (codegen_wbtest.mbt:600)
+- **Error**: `expected i32 but nothing on stack`
+- **Cause**: switch cases don't properly return a value
+- **Test code**:
+  ```typescript
+  function grade(score: int): int {
+    switch (score) {
+      case 5: return 100;
+      case 4: return 80;
+      default: return 0;
+    }
+  }
+  ```
 
-| Object | Status | Notes |
-|--------|--------|-------|
-| Object | Good | keys, values, entries, assign, etc. |
-| Array | Good | Most methods work |
-| String | Good | Most methods work |
-| Number | Good | |
-| Math | Good | |
-| Function | Partial | No dynamic Function() |
-| Date | Minimal | Basic operations only |
-| RegExp | Minimal | Literal parsing incomplete |
-| Promise | Partial | async/await works |
-| Proxy | Partial | Basic traps |
-| Reflect | Partial | |
-| Symbol | Not supported | Using @@iterator workaround |
-| Temporal | Not tested | |
-| TypedArray | Not tested | |
-| WeakMap/Set | Not tested | |
+### 6. switch with default only (codegen_wbtest.mbt:618)
+- **Error**: `expected i32 but nothing on stack`
+- **Cause**: Same issue as #5, default-only case
 
----
+### 7. do-while loop (codegen_wbtest.mbt:644)
+- **Error**: `expected f64, found i32`
+- **Cause**: Loop body type inference incorrect
 
-## Skip Reasons (6,681 tests)
+## Root Causes
 
-| Reason | Count | Notes |
-|--------|-------|-------|
-| includes:temporalHelpers.js | 2,699 | Temporal API |
-| banned:eval | 1,486 | Dynamic eval features |
-| includes:regExpUtils.js | 574 | RegExp helpers |
-| banned:with | 579 | with statement (deprecated) |
-| banned:Function | 334 | Dynamic Function() |
-| includes:resizableArrayBufferUtils.js | 188 | Resizable ArrayBuffer |
-| includes:testIntl.js | 175 | Intl API |
-| banned:import-defer | 100 | Import defer |
-| Other includes | ~550 | Various test helpers |
+These bugs share common patterns:
+1. **Control flow statements** (if-else, switch) not ensuring all branches leave a value
+2. **Type inference** producing wrong types (i32 vs f64) in certain contexts
+3. **Return value handling** in block-based control structures
 
-Note: negative tests and async tests are now in allowlist (runner supports both).
+## CI Notes
 
----
-
-## Next Steps
-
-### High Priority
-
-1. **yield\* for async generators**
-   - Thenable handling in yield*
-
-2. **iterator.return() / throw()**
-   - Cleanup on loop break
-   - for-of early termination
-
-3. **RegExp literal parser**
-   - `/pattern/flags` syntax
-
-### Medium Priority
-
-4. **Symbol support**
-   - Symbol.iterator (currently @@iterator workaround)
-   - Well-known symbols
-
-5. **More built-ins**
-   - Set, Map
-   - WeakMap, WeakSet
-
-### Low Priority (ES2024+)
-
-- `using` declaration
-- import defer
-- import attributes
-
----
-
-## Not Supported
-
-These features are intentionally not implemented:
-
-- **with statement** - Deprecated, 497 tests skipped
-- **Dynamic eval features** - Limited to direct eval
-- **Tail call optimization** - Not implemented
-- **ES modules** - Parser accepts but not fully executed
-
----
-
-## Completed
-
-- Strict mode duplicate parameter validation
-- Strict mode eval/arguments assignment prohibition
-- for-await-of parser fix
-- Async generator basic support
-- Line terminator handling (CR, LS, PS)
-- AOT compilation基盤 (TypeScript → wasm-gc → wasm5 runtime)
-
----
-
-## Architecture Decisions
-
-### AOT Compilation & Intermediate Representation (2026-01-31)
-
-**現在のアーキテクチャ:**
-```
-TypeScript → wasm-gc → wasmtime (Cranelift最適化)
-```
-
-**決定:** HIR/TIRのような独自中間IRは**現時点では不要**
-
-**理由:**
-1. AOTコンパイルで10-12x高速化を達成済み（インタプリタ比）
-2. wasmtimeのCranelift最適化が成熟している
-3. wasm外での実行を必要とするユースケースが現時点でない
-
-**YAGNI原則を適用:** 具体的なニーズが生じた時点でIR層を追加する
-
-**再検討するタイミング:**
-- wasmがサポートされない環境への対応が必要になった場合
-- Cranelift最適化を超える性能が必要になった場合
-- ネイティブバイナリや他言語への出力が必要になった場合
-
-### Generator AOT Compilation (2026-01-31) ✅ 完了
-
-Generatorを状態機械としてwasm-gcにコンパイルする機能を実装。
-
-**実装状況:**
-- ✅ Phase 1: Generator分析 (`src/analysis/generator_analysis.mbt`)
-  - yield ポイント抽出
-  - 持続変数の収集
-  - AOTコンパイル可能性判定
-- ✅ Phase 2: 状態機械IR生成 (`src/codegen/generator_ir.mbt`)
-  - GenStateMachine, GenInstr, GenExpr 定義
-  - AST → GenIR 変換
-- ✅ Phase 3: wasm-gc コード生成 (`src/codegen/generator_codegen.mbt`)
-  - State struct type 生成
-  - create()/next() 関数生成
-  - br_table による状態遷移（最適化済み）
-- ✅ メインcodegenへの統合 (`src/codegen/codegen.mbt`)
-  - `compile_module_gc` でgeneratorを自動検出
-  - `{name}_create` と `{name}_next` 関数をエクスポート
-
-**残作業:**
-- Iterator protocolとの完全な接続（ランタイム側）
-- throw/return メソッドのサポート
-
-詳細: `docs/generator-aot-design.md`
+- 4 parser tests also fail due to missing TypeScript submodule (not a codegen issue)
+- Consider adding `actions/checkout` with `submodules: true` if those tests are needed in CI
