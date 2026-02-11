@@ -23,7 +23,6 @@ fn Parser::parse_import_specifiers(self : Parser) -> Unit raise ParseError {
     let _ = self.parse_binding_ident()
     if self.match_(As) || self.match_ident("as") {
       let _ = self.parse_binding_ident()
-
     }
     if self.match_(Comma) {
       if self.check(RBrace) {
@@ -194,7 +193,6 @@ fn Parser::parse_import_decl(
       named_bindings.push(item)
     }
     let _ = self.expect(RBrace)
-
   }
   self.expect_from()
   let module_spec = self.expect_str_literal()
@@ -355,11 +353,9 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
       raise ParseError("Expected 'as' in import namespace")
     }
     let _ = self.parse_binding_ident()
-
   } else if self.match_(LBrace) {
     self.parse_import_specifiers()
     let _ = self.expect(RBrace)
-
   }
   self.expect_from()
   let _ = self.expect_str_literal()
@@ -435,7 +431,6 @@ fn Parser::parse_export_stmt(
   if self.match_(Star) {
     if self.match_(As) || self.match_ident("as") {
       let _ = self.parse_binding_ident()
-
     }
     self.expect_from()
     let _ = self.expect_str_literal()
@@ -447,7 +442,6 @@ fn Parser::parse_export_stmt(
     let _ = self.expect(RBrace)
     if self.match_(From) || self.match_ident("from") {
       let _ = self.expect_str_literal()
-
     }
     self.consume_semicolon()
     return

@@ -706,7 +706,6 @@ fn JSInterpreter::iterator_helper_next_inner(
           let is_done = self.get_prop_value(result, "done").to_boolean()
           if is_done {
             let _ = js_set_prop(this_arg, "__iter_done", Bool(true))
-
           }
         }
         _ => ()
@@ -958,7 +957,6 @@ fn JSInterpreter::iterator_helper_next_inner(
           }
         }
         let _ = js_set_prop(this_arg, "__iter_inner", inner_iter)
-
       }
       self.make_iter_result(Undefined, true)
     }

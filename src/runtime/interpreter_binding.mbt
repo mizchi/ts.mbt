@@ -53,7 +53,6 @@ fn JSInterpreter::maybe_set_function_name(
           if class_name.length() > 0 {
             if not(self.has_own_prop(value, "name")) {
               let _ = js_set_prop(value, "name", String(class_name))
-
             }
           } else {
             let has_name_prop = match
@@ -63,7 +62,6 @@ fn JSInterpreter::maybe_set_function_name(
             }
             if not(has_name_prop) && not(self.has_own_prop(value, "name")) {
               let _ = js_set_prop(value, "name", String(name))
-
             }
           }
         _ => ()
@@ -143,7 +141,6 @@ fn JSInterpreter::bind_pattern(
     @ast.TsBinding::Object(obj) => self.bind_object_pattern(obj, value, env)
     @ast.TsBinding::Target(_) => {
       let _ = self.set_error_kind("TypeError", "Invalid binding target")
-
     }
   }
 }
@@ -164,7 +161,6 @@ fn JSInterpreter::init_pattern(
       self.init_object_pattern(obj, value, env, is_const)
     @ast.TsBinding::Target(_) => {
       let _ = self.set_error_kind("TypeError", "Invalid binding target")
-
     }
   }
 }
@@ -187,13 +183,11 @@ fn JSInterpreter::assign_ident(
   if not(env.set(name, value)) {
     if env.has("__strict__") {
       let _ = self.set_error_kind("ReferenceError", name + " is not defined")
-
     } else {
       // Implicit global: only set on globalThis (not in env)
       // This makes it deletable (configurable)
       let global_obj = self.global_env.get("globalThis")
       let _ = js_set_prop(global_obj, name, value)
-
     }
   }
 }
@@ -440,40 +434,41 @@ fn JSInterpreter::assign_array_pattern_gen(
             Some(rest_binding) =>
               match rest_binding {
                 @ast.TsBinding::Target(target_expr) =>
-                  self.eval_assignment_target_gen(target_expr, env, prepared => if self.peek_error()
-                    is Some(_) {
-                    if not(done) {
-                      self.iterator_close_on_error(iterator)
-                    }
-                    self.pop_active_iterator()
-                    GenValue::Value(Undefined)
-                  } else {
-                    let rest_items : Array[JSValue] = []
-                    while not(done) {
-                      let val = next_value()
-                      if done {
-                        break
-                      }
-                      rest_items.push(val)
-                      if self.peek_error() is Some(_) {
-                        break
-                      }
-                    }
+                  self.eval_assignment_target_gen(target_expr, env, prepared => {
                     if self.peek_error() is Some(_) {
+                      if not(done) {
+                        self.iterator_close_on_error(iterator)
+                      }
                       self.pop_active_iterator()
                       GenValue::Value(Undefined)
                     } else {
-                      let rest_val = js_array_from(rest_items)
-                      self.assign_prepared_target(prepared, rest_val, env)
-                      if self.peek_error() is Some(_) {
-                        if not(done) {
-                          self.iterator_close_on_error(iterator)
+                      let rest_items : Array[JSValue] = []
+                      while not(done) {
+                        let val = next_value()
+                        if done {
+                          break
                         }
+                        rest_items.push(val)
+                        if self.peek_error() is Some(_) {
+                          break
+                        }
+                      }
+                      if self.peek_error() is Some(_) {
                         self.pop_active_iterator()
                         GenValue::Value(Undefined)
                       } else {
-                        self.pop_active_iterator()
-                        GenValue::Value(Undefined)
+                        let rest_val = js_array_from(rest_items)
+                        self.assign_prepared_target(prepared, rest_val, env)
+                        if self.peek_error() is Some(_) {
+                          if not(done) {
+                            self.iterator_close_on_error(iterator)
+                          }
+                          self.pop_active_iterator()
+                          GenValue::Value(Undefined)
+                        } else {
+                          self.pop_active_iterator()
+                          GenValue::Value(Undefined)
+                        }
                       }
                     }
                   })
@@ -496,15 +491,17 @@ fn JSInterpreter::assign_array_pattern_gen(
                     let rest_val = js_array_from(rest_items)
                     gen_bind(
                       self.assign_pattern_gen(rest_binding, rest_val, env),
-                      _unused => if self.peek_error() is Some(_) {
-                        if not(done) {
-                          self.iterator_close_on_error(iterator)
+                      _unused => {
+                        if self.peek_error() is Some(_) {
+                          if not(done) {
+                            self.iterator_close_on_error(iterator)
+                          }
+                          self.pop_active_iterator()
+                          GenValue::Value(Undefined)
+                        } else {
+                          self.pop_active_iterator()
+                          GenValue::Value(Undefined)
                         }
-                        self.pop_active_iterator()
-                        GenValue::Value(Undefined)
-                      } else {
-                        self.pop_active_iterator()
-                        GenValue::Value(Undefined)
                       },
                     )
                   }
@@ -516,7 +513,6 @@ fn JSInterpreter::assign_array_pattern_gen(
             None => {
               if not(done) {
                 let _ = next_value()
-
               }
               process_index(index + 1)
             }
@@ -545,22 +541,23 @@ fn JSInterpreter::assign_array_pattern_gen(
                     default_expr,
                   )
                 }
-                gen_bind(self.assign_pattern_gen(elem.binding, v, env), _unused => if self.peek_error()
-                  is Some(_) {
-                  if not(done) {
-                    self.iterator_close_on_error(iterator)
+                gen_bind(self.assign_pattern_gen(elem.binding, v, env), _unused => {
+                  if self.peek_error() is Some(_) {
+                    if not(done) {
+                      self.iterator_close_on_error(iterator)
+                    }
+                    self.pop_active_iterator()
+                    GenValue::Value(Undefined)
+                  } else {
+                    process_index(index + 1)
                   }
-                  self.pop_active_iterator()
-                  GenValue::Value(Undefined)
-                } else {
-                  process_index(index + 1)
                 })
               }
               match with_default {
                 Some(default_signal) =>
-                  gen_bind(default_signal, default_val => assign_elem(
-                    default_val,
-                  ))
+                  gen_bind(default_signal, default_val => {
+                    assign_elem(default_val)
+                  })
                 None => assign_elem(val)
               }
             }
@@ -625,7 +622,6 @@ fn JSInterpreter::assign_object_pattern_gen(
                 if not(contains_key(used_keys, prop.key)) {
                   let val = self.eval_prop_value(JSValue::Object(map), prop)
                   let _ = js_set_prop(rest_obj, prop.key, val)
-
                 }
               }
             Array(arr) => {
@@ -633,7 +629,6 @@ fn JSInterpreter::assign_object_pattern_gen(
                 let key = i.to_string()
                 if not(contains_key(used_keys, key)) && arr.present[i] {
                   let _ = js_set_prop(rest_obj, key, item)
-
                 }
               }
               for prop in arr.props {
@@ -643,7 +638,6 @@ fn JSInterpreter::assign_object_pattern_gen(
                   }
                   let val = self.eval_prop_value(JSValue::Array(arr), prop)
                   let _ = js_set_prop(rest_obj, prop.key, val)
-
                 }
               }
             }
@@ -658,7 +652,6 @@ fn JSInterpreter::assign_object_pattern_gen(
                     prop,
                   )
                   let _ = js_set_prop(rest_obj, prop.key, val)
-
                 }
               }
             _ => ()
@@ -697,14 +690,9 @@ fn JSInterpreter::assign_object_pattern_gen(
               default_expr,
             )
           }
-          gen_bind(self.assign_pattern_gen(prop.binding, v, env), _unused => process_prop(
-            self,
-            pattern,
-            env,
-            value,
-            used_keys,
-            index + 1,
-          ))
+          gen_bind(self.assign_pattern_gen(prop.binding, v, env), _unused => {
+            process_prop(self, pattern, env, value, used_keys, index + 1)
+          })
         }
         match with_default {
           Some(default_signal) =>
@@ -749,11 +737,7 @@ fn JSInterpreter::bind_array_pattern(
       }
       for item in pattern.items {
         match item {
-          None =>
-            if not(done) {
-              let _ = next_value()
-
-            }
+          None => if not(done) { let _ = next_value() }
           Some(elem) => {
             let mut val = if done { JSValue::Undefined } else { next_value() }
             let mut used_default = false
@@ -794,7 +778,6 @@ fn JSInterpreter::bind_array_pattern(
       }
       if not(done) {
         let _ = self.generator_return(gen_id, Undefined)
-
       }
     }
     None =>
@@ -823,7 +806,6 @@ fn JSInterpreter::bind_array_pattern(
               None => {
                 if not(done) {
                   let _ = next_value()
-
                 }
                 match self.peek_error() {
                   Some(_) => return
@@ -914,7 +896,6 @@ fn JSInterpreter::bind_array_pattern(
           }
           // If no error but get_iterator returned None, value is not iterable
           let _ = self.set_error_kind("TypeError", "is not iterable")
-
         }
       }
   }
@@ -952,11 +933,7 @@ fn JSInterpreter::init_array_pattern(
       }
       for item in pattern.items {
         match item {
-          None =>
-            if not(done) {
-              let _ = next_value()
-
-            }
+          None => if not(done) { let _ = next_value() }
           Some(elem) => {
             let mut val = if done { JSValue::Undefined } else { next_value() }
             let mut used_default = false
@@ -997,7 +974,6 @@ fn JSInterpreter::init_array_pattern(
       }
       if not(done) {
         let _ = self.generator_return(gen_id, Undefined)
-
       }
     }
     None =>
@@ -1026,7 +1002,6 @@ fn JSInterpreter::init_array_pattern(
               None => {
                 if not(done) {
                   let _ = next_value()
-
                 }
                 match self.peek_error() {
                   Some(_) => return
@@ -1117,7 +1092,6 @@ fn JSInterpreter::init_array_pattern(
           }
           // If no error but get_iterator returned None, value is not iterable
           let _ = self.set_error_kind("TypeError", "is not iterable")
-
         }
       }
   }
@@ -1154,11 +1128,7 @@ fn JSInterpreter::assign_array_pattern(
       }
       for item in pattern.items {
         match item {
-          None =>
-            if not(done) {
-              let _ = next_value()
-
-            }
+          None => if not(done) { let _ = next_value() }
           Some(elem) => {
             let mut val = if done { JSValue::Undefined } else { next_value() }
             let mut used_default = false
@@ -1224,7 +1194,6 @@ fn JSInterpreter::assign_array_pattern(
               None => {
                 if not(done) {
                   let _ = next_value()
-
                 }
                 match self.peek_error() {
                   Some(_) => return
@@ -1355,7 +1324,6 @@ fn JSInterpreter::assign_array_pattern(
           }
           // If no error but get_iterator returned None, value is not iterable
           let _ = self.set_error_kind("TypeError", "is not iterable")
-
         }
       }
   }
@@ -1416,7 +1384,6 @@ fn JSInterpreter::bind_object_pattern(
             if not(contains_key(used_keys, prop.key)) {
               let val = self.eval_prop_value(JSValue::Object(map), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         Array(arr) => {
@@ -1424,7 +1391,6 @@ fn JSInterpreter::bind_object_pattern(
             let key = i.to_string()
             if not(contains_key(used_keys, key)) && arr.present[i] {
               let _ = js_set_prop(rest_obj, key, item)
-
             }
           }
           for prop in arr.props {
@@ -1434,7 +1400,6 @@ fn JSInterpreter::bind_object_pattern(
               }
               let val = self.eval_prop_value(JSValue::Array(arr), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         }
@@ -1446,7 +1411,6 @@ fn JSInterpreter::bind_object_pattern(
               }
               let val = self.eval_prop_value(JSValue::Function(closure), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         _ => ()
@@ -1512,7 +1476,6 @@ fn JSInterpreter::init_object_pattern(
             if not(contains_key(used_keys, prop.key)) {
               let val = self.eval_prop_value(JSValue::Object(map), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         Array(arr) => {
@@ -1520,7 +1483,6 @@ fn JSInterpreter::init_object_pattern(
             let key = i.to_string()
             if not(contains_key(used_keys, key)) && arr.present[i] {
               let _ = js_set_prop(rest_obj, key, item)
-
             }
           }
           for prop in arr.props {
@@ -1530,7 +1492,6 @@ fn JSInterpreter::init_object_pattern(
               }
               let val = self.eval_prop_value(JSValue::Array(arr), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         }
@@ -1542,7 +1503,6 @@ fn JSInterpreter::init_object_pattern(
               }
               let val = self.eval_prop_value(JSValue::Function(closure), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         _ => ()
@@ -1607,7 +1567,6 @@ fn JSInterpreter::assign_object_pattern(
             if not(contains_key(used_keys, prop.key)) {
               let val = self.eval_prop_value(JSValue::Object(map), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         Array(arr) => {
@@ -1615,7 +1574,6 @@ fn JSInterpreter::assign_object_pattern(
             let key = i.to_string()
             if not(contains_key(used_keys, key)) && arr.present[i] {
               let _ = js_set_prop(rest_obj, key, item)
-
             }
           }
           for prop in arr.props {
@@ -1625,7 +1583,6 @@ fn JSInterpreter::assign_object_pattern(
               }
               let val = self.eval_prop_value(JSValue::Array(arr), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         }
@@ -1637,7 +1594,6 @@ fn JSInterpreter::assign_object_pattern(
               }
               let val = self.eval_prop_value(JSValue::Function(closure), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
-
             }
           }
         _ => ()

@@ -1,13 +1,13 @@
 import {
-  "mizchi/wasmx/core" as @core,
-  "mizchi/wasmx/encode" as @encode,
-  "mizchi/wasmx/parse" as @parse,
-  "mizchi/wasmx/runtime" as @wasm_runtime,
-  "mizchi/ts/ast" as @ast,
-  "mizchi/ts/analysis" as @analysis,
-  "mizchi/ts/codegen" as @codegen,
+  "mizchi/wasmx/core" @core,
+  "mizchi/wasmx/encode" @encode,
+  "mizchi/wasmx/parse" @parse,
+  "mizchi/wasmx/runtime" @wasm_runtime,
+  "mizchi/ts/ast" @ast,
+  "mizchi/ts/analysis" @analysis,
+  "mizchi/ts/codegen" @codegen,
 }
 
-import "wbtest" {
-  "mizchi/ts/parser" as @parser,
-}
+import {
+  "mizchi/ts/parser" @parser,
+} for "wbtest"

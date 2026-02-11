@@ -282,7 +282,6 @@ fn Parser::parse_class_body(
     } else {
       if self.match_(Colon) {
         let _ = self.parse_type()
-
       }
       let init : @ast.TsExpr? = if self.match_(Eq) {
         Some(self.parse_assignment())

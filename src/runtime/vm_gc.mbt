@@ -249,15 +249,12 @@ pub fn vm_gc_cleanup_weak_refs(collected : Array[Int]) -> Unit {
     match js_get_prop(wr, "__weakref_target") {
       Object(map) if collected.contains(map.id) => {
         let _ = js_set_prop(wr, "__weakref_target", Undefined)
-
       }
       JSValue::Array(arr) if collected.contains(arr.id) => {
         let _ = js_set_prop(wr, "__weakref_target", Undefined)
-
       }
       Function(f) if collected.contains(f.id) => {
         let _ = js_set_prop(wr, "__weakref_target", Undefined)
-
       }
       _ => ()
     }

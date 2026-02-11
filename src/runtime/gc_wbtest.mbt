@@ -228,7 +228,6 @@ test "gc: repeated interpreter creation" {
   for _ in 0..<5 {
     let interp = JSInterpreter::new()
     let _ = interp.run(src)
-
   }
   let total = gc_stats_total()
 

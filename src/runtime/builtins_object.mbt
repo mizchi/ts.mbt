@@ -548,7 +548,7 @@ fn JSInterpreter::object_get_own_property_names(
     match item {
       String(s) => {
         let is_index = s.length() > 0 &&
-          {
+          ({
             let mut valid = true
             let has_leading_zero = s.length() > 1 && s[0] == '0'
             for i = 0; i < s.length(); i = i + 1 {
@@ -559,7 +559,7 @@ fn JSInterpreter::object_get_own_property_names(
               }
             }
             valid && not(has_leading_zero)
-          }
+          })
         if is_index {
           let mut n = 0
           for i = 0; i < s.length(); i = i + 1 {
@@ -773,20 +773,17 @@ fn JSInterpreter::object_assign(
         for prop in map.props {
           if prop.enumerable {
             let _ = js_set_prop(target, prop.key, prop.value)
-
           }
         }
       Array(arr) => {
         for j in 0..<arr.items.length() {
           if arr.present[j] {
             let _ = js_set_prop(target, j.to_string(), arr.items[j])
-
           }
         }
         for prop in arr.props {
           if prop.enumerable {
             let _ = js_set_prop(target, prop.key, prop.value)
-
           }
         }
       }
@@ -794,7 +791,6 @@ fn JSInterpreter::object_assign(
         for prop in closure.props {
           if prop.enumerable {
             let _ = js_set_prop(target, prop.key, prop.value)
-
           }
         }
       _ => ()
@@ -822,7 +818,6 @@ fn JSInterpreter::object_from_entries(
                 let key = entry.items[0].to_js_string()
                 let value = entry.items[1]
                 let _ = js_set_prop(obj, key, value)
-
               }
             _ => ()
           }

@@ -73,7 +73,6 @@ fn JSInterpreter::make_arguments(
   let _ = js_set_prop(obj, "__class", String("Arguments"))
   for i, item in args {
     let _ = js_set_prop(obj, i.to_string(), item)
-
   }
   let _ = js_set_prop(obj, "length", Number(args.length().to_double()))
   obj
@@ -87,7 +86,6 @@ fn JSInterpreter::set_function_length(
   len : Double,
 ) -> Unit {
   let _ = js_define_data_prop(func, "length", Number(len), false, false, true)
-
 }
 
 ///|
@@ -98,21 +96,18 @@ fn JSInterpreter::set_function_name(
   name : String,
 ) -> Unit {
   let _ = js_define_data_prop(func, "name", String(name), false, false, true)
-
 }
 
 ///|
 /// Set prototype method property { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }
 fn set_proto_method(proto : JSValue, name : String, func : JSValue) -> Unit {
   let _ = js_define_data_prop(proto, name, func, true, false, true)
-
 }
 
 ///|
 /// Set global constructor property { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }
 fn set_global_ctor(global : JSValue, name : String, ctor : JSValue) -> Unit {
   let _ = js_define_data_prop(global, name, ctor, true, false, true)
-
 }
 
 ///|
@@ -223,21 +218,17 @@ fn JSInterpreter::make_accessor_descriptor(
   match get {
     Some(g) => {
       let _ = js_set_prop(desc, "get", g)
-
     }
     None => {
       let _ = js_set_prop(desc, "get", Undefined)
-
     }
   }
   match set {
     Some(s) => {
       let _ = js_set_prop(desc, "set", s)
-
     }
     None => {
       let _ = js_set_prop(desc, "set", Undefined)
-
     }
   }
   let _ = js_set_prop(desc, "enumerable", Bool(enumerable))

@@ -52,7 +52,6 @@ fn JSInterpreter::tick(self : JSInterpreter) -> Unit {
       self.steps += 1
       if self.steps > self.step_limit {
         let _ = self.set_error("Step limit exceeded")
-
       }
     }
   }

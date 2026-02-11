@@ -577,7 +577,6 @@ fn JSInterpreter::set_prop_value(
                     "TypeError",
                     "Cannot assign to read only property '\{key}'",
                   )
-
                 }
                 return
               } else {
@@ -615,7 +614,6 @@ fn JSInterpreter::set_prop_value(
                     "TypeError",
                     "Cannot assign to read only property '\{key}'",
                   )
-
                 }
                 return
               } else {
@@ -641,7 +639,6 @@ fn JSInterpreter::set_prop_value(
                     "TypeError",
                     "Cannot assign to read only property '\{key}'",
                   )
-
                 }
                 return
               } else {
@@ -667,7 +664,6 @@ fn JSInterpreter::set_prop_value(
     }
   }
   let _ = js_set_prop(obj, key, value)
-
 }
 
 ///|

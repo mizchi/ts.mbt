@@ -4,7 +4,7 @@
   "deps": {
     "mizchi/wasmx": "0.1.0",
     "moonbitlang/async": "0.14.2",
-    "moonbitlang/regexp": "0.3.4"
+    "moonbitlang/regexp": "0.3.5"
   },
   "readme": "CLAUDE.md",
   "repository": "https://github.com/mizchi/ts.mbt",
@@ -17,11 +17,11 @@
   ],
   "description": "TypeScript/JavaScript interpreter and compiler to WebAssembly",
   "source": "src",
-  "preferred-target": "native",
   "exclude": [
     "fixtures",
     "test262",
     "test262.*",
     "typescript"
-  ]
+  ],
+  "preferred-target": "native"
 }

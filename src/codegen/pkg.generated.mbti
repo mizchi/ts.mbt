@@ -4,7 +4,7 @@ package "mizchi/ts/codegen"
 import {
   "mizchi/ts/analysis",
   "mizchi/ts/ast",
-  "moonbitlang/wasm5/core",
+  "mizchi/wasmx/core",
 }
 
 // Values

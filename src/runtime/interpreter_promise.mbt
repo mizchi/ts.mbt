@@ -91,7 +91,6 @@ fn JSInterpreter::run_microtask_job(
             match cap_reject {
               Some(reject) => {
                 let _ = self.call_function(reject, Undefined, [err])
-
               }
               None => self.promise_reject(promise, err)
             }
@@ -105,7 +104,6 @@ fn JSInterpreter::run_microtask_job(
             match cap_resolve {
               Some(resolve) => {
                 let _ = self.call_function(resolve, Undefined, [result])
-
               }
               None => self.promise_resolve_value(promise, result)
             }
@@ -121,7 +119,6 @@ fn JSInterpreter::run_microtask_job(
           match cap_reject {
             Some(reject) => {
               let _ = self.call_function(reject, Undefined, [job.argument])
-
             }
             None => self.promise_reject(promise, job.argument)
           }
@@ -129,7 +126,6 @@ fn JSInterpreter::run_microtask_job(
           match cap_resolve {
             Some(resolve) => {
               let _ = self.call_function(resolve, Undefined, [job.argument])
-
             }
             None => self.promise_resolve_value(promise, job.argument)
           }
@@ -278,12 +274,10 @@ fn JSInterpreter::push_promise_reaction(
   match list {
     Array(_) => {
       let _ = js_array_push(list, reaction)
-
     }
     _ => {
       let arr = js_array_from([reaction])
       let _ = js_set_prop(promise, key, arr)
-
     }
   }
 }
@@ -327,7 +321,6 @@ fn JSInterpreter::trigger_promise_reactions(
   }
   let _ = js_set_prop(promise, PROMISE_FULFILL_REACTIONS_KEY, js_new_array())
   let _ = js_set_prop(promise, PROMISE_REJECT_REACTIONS_KEY, js_new_array())
-
 }
 
 ///|
@@ -787,7 +780,6 @@ fn JSInterpreter::promise_all_with_ctor(
       )
       if remaining == 0 {
         let _ = self.call_function(cap_resolve, ctor, [results])
-
       }
       return promise
     }
@@ -1040,7 +1032,6 @@ fn JSInterpreter::promise_any_with_ctor(
       if remaining == 0 {
         let err = self.make_aggregate_error(errors)
         let _ = self.call_function(cap_reject, Undefined, [err])
-
       }
       return promise
     }

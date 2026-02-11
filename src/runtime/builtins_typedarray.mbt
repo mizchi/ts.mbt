@@ -1400,7 +1400,6 @@ fn JSInterpreter::typedarray_foreach(
           Number(i.to_double()),
           this_arg,
         ])
-
       }
       Undefined
     }
@@ -2044,7 +2043,6 @@ fn JSInterpreter::typedarray_keys(
       match iterator_proto {
         Object(_) | Function(_) | Array(_) => {
           let _ = js_set_prop(iter, "__proto__", iterator_proto)
-
         }
         _ => ()
       }
@@ -2088,7 +2086,6 @@ fn JSInterpreter::typedarray_values(
       match iterator_proto {
         Object(_) | Function(_) | Array(_) => {
           let _ = js_set_prop(iter, "__proto__", iterator_proto)
-
         }
         _ => ()
       }
@@ -2132,7 +2129,6 @@ fn JSInterpreter::typedarray_entries(
       match iterator_proto {
         Object(_) | Function(_) | Array(_) => {
           let _ = js_set_prop(iter, "__proto__", iterator_proto)
-
         }
         _ => ()
       }

@@ -278,7 +278,6 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
               break
             _ => {
               let _ = self.advance()
-
             }
           }
         }
@@ -287,12 +286,10 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
       }
       Some(' ') | Some('\t') => {
         let _ = self.advance()
-
       }
       Some('\n') | Some('\r') => {
         self.newline_before_next = true
         let _ = self.advance()
-
       }
       Some('/') =>
         match self.peek_next() {
@@ -309,7 +306,6 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
                 | None => break
                 _ => {
                   let _ = self.advance()
-
                 }
               }
             }
@@ -330,12 +326,10 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
                     }
                     _ => {
                       let _ = self.advance()
-
                     }
                   }
                 _ => {
                   let _ = self.advance()
-
                 }
               }
             }
@@ -363,7 +357,6 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           match self.peek() {
             Some('_') => {
               let _ = self.advance()
-
             }
             Some(c) =>
               match c {
@@ -459,7 +452,6 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
         if self.peek() == Some('n') {
           is_bigint = true
           let _ = self.advance()
-
         }
         if is_bigint {
           return BigInt(value.to_string())
@@ -476,7 +468,6 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           match self.peek() {
             Some('_') => {
               let _ = self.advance()
-
             }
             Some('0') => {
               let _ = self.advance()
@@ -498,7 +489,6 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
         if self.peek() == Some('n') {
           is_bigint = true
           let _ = self.advance()
-
         }
         if is_bigint {
           return BigInt(value.to_string())
@@ -515,7 +505,6 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           match self.peek() {
             Some('_') => {
               let _ = self.advance()
-
             }
             Some('0') => {
               let _ = self.advance()
@@ -567,7 +556,6 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
         if self.peek() == Some('n') {
           is_bigint = true
           let _ = self.advance()
-
         }
         if is_bigint {
           return BigInt(value.to_string())
@@ -622,22 +610,18 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
       Some(c) =>
         if c >= '0' && c <= '9' {
           let _ = self.advance()
-
         } else if c == '_' {
           has_sep = true
           let _ = self.advance()
-
         } else if c == '.' && not(has_dot) && not(has_exp) {
           has_dot = true
           let _ = self.advance()
-
         } else if (c == 'e' || c == 'E') && not(has_exp) {
           has_exp = true
           let _ = self.advance()
           match self.peek() {
             Some('+') | Some('-') => {
               let _ = self.advance()
-
             }
             _ => ()
           }
@@ -650,7 +634,6 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
   if self.peek() == Some('n') {
     is_bigint = true
     let _ = self.advance()
-
   }
   let raw = if is_bigint {
     let end = if self.pos > start { self.pos - 1 } else { self.pos }
@@ -1116,25 +1099,21 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
             Some('\n') => {
               // \<LF> - skip the newline (empty code unit sequence)
               let _ = self.advance()
-
             }
             Some('\r') => {
               // \<CR> or \<CR><LF> - skip both (empty code unit sequence)
               let _ = self.advance()
               if self.peek() == Some('\n') {
                 let _ = self.advance()
-
               }
             }
             Some('\u2028') => {
               // \<LS> (U+2028 LINE SEPARATOR) - skip
               let _ = self.advance()
-
             }
             Some('\u2029') => {
               // \<PS> (U+2029 PARAGRAPH SEPARATOR) - skip
               let _ = self.advance()
-
             }
             Some(other) => {
               let _ = self.advance()
@@ -1166,7 +1145,6 @@ fn Lexer::scan_template_expr_source(self : Lexer) -> String {
           '\'' | '"' => self.skip_string_body(c)
           '`' => {
             let _ = self.scan_template()
-
           }
           _ => ()
         }
@@ -1613,7 +1591,6 @@ fn Lexer::skip_template_expr(self : Lexer) -> Unit {
           '\'' | '"' => self.skip_string_body(c)
           '`' => {
             let _ = self.scan_template()
-
           }
           _ => ()
         }
@@ -1635,7 +1612,6 @@ fn Lexer::skip_string_body(self : Lexer, quote : Char) -> Unit {
         }
         if c == '\\' {
           let _ = self.advance()
-
         }
       }
     }

@@ -1,4 +1,4 @@
 import {
-  "mizchi/ts/ast" as @ast,
-  "mizchi/ts/parser" as @parser,
+  "mizchi/ts/ast" @ast,
+  "mizchi/ts/parser" @parser,
 }

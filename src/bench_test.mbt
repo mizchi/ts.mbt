@@ -8,10 +8,10 @@ fn make_large_source(funcs : Int) -> String {
     ..write_string(i.to_string())
     ..write_string("(x) { return x + ")
     ..write_string(i.to_string())
-    ..write_string("; }\n")
+    .write_string("; }\n")
     i = i + 1
   }
-  sb..write_string("function main() {\n")..write_string("  let acc = 0;\n")
+  sb..write_string("function main() {\n").write_string("  let acc = 0;\n")
   let mut j = 0
   while j < funcs {
     sb
@@ -19,10 +19,10 @@ fn make_large_source(funcs : Int) -> String {
     ..write_string(j.to_string())
     ..write_string("(")
     ..write_string(j.to_string())
-    ..write_string(");\n")
+    .write_string(");\n")
     j = j + 1
   }
-  sb..write_string("  return acc;\n")..write_string("}\n")
+  sb..write_string("  return acc;\n").write_string("}\n")
   sb.to_string()
 }
 
@@ -63,7 +63,6 @@ test "bench parser tokenize small" (b : @bench.T) {
     () => {
       let lexer = @parser.Lexer::new(parser_small_src)
       let _ = lexer.tokenize()
-
     },
     name="parser.tokenize.small",
     count=10,
@@ -76,7 +75,6 @@ test "bench parser module small" (b : @bench.T) {
     () => {
       let parser = @parser.Parser::from_source(parser_small_src)
       let _ = try! parser.parse_module()
-
     },
     name="parser.module.small",
     count=5,
@@ -89,7 +87,6 @@ test "bench parser module large" (b : @bench.T) {
     () => {
       let parser = @parser.Parser::from_source(parser_large_src)
       let _ = try! parser.parse_module()
-
     },
     name="parser.module.large",
     count=1,
@@ -102,7 +99,6 @@ test "bench runtime run small" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(runtime_small_src)
-
     },
     name="runtime.run.small",
     count=1,
@@ -115,7 +111,6 @@ test "bench runtime run large" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(runtime_large_src)
-
     },
     name="runtime.run.large",
     count=1,
@@ -175,7 +170,6 @@ test "bench parser typescript dts" (b : @bench.T) {
     () => {
       let parser = @parser.Parser::from_source(ts_dts_src)
       let _ = try! parser.parse_module()
-
     },
     name="parser.typescript.dts",
     count=5,
@@ -191,7 +185,6 @@ test "bench init interpreter" (b : @bench.T) {
   b.bench(
     () => {
       let _ = @runtime.JSInterpreter::new()
-
     },
     name="init.interpreter",
     count=100,
@@ -203,7 +196,6 @@ test "bench init lexer" (b : @bench.T) {
   b.bench(
     () => {
       let _ = @parser.Lexer::new("function f() { return 1; }")
-
     },
     name="init.lexer",
     count=100,
@@ -215,7 +207,6 @@ test "bench init parser" (b : @bench.T) {
   b.bench(
     () => {
       let _ = @parser.Parser::from_source("function f() { return 1; }")
-
     },
     name="init.parser",
     count=100,
@@ -248,7 +239,6 @@ test "bench runtime fib(10)" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(src)
-
     },
     name="runtime.fib.10",
     count=10,
@@ -262,7 +252,6 @@ test "bench runtime fib(15)" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(src)
-
     },
     name="runtime.fib.15",
     count=5,
@@ -276,7 +265,6 @@ test "bench runtime fib(20)" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(src)
-
     },
     name="runtime.fib.20",
     count=3,
@@ -290,7 +278,6 @@ test "bench runtime fib(25)" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(src)
-
     },
     name="runtime.fib.25",
     count=1,
@@ -321,7 +308,6 @@ test "bench runtime loop 100" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(src)
-
     },
     name="runtime.loop.100",
     count=50,
@@ -335,7 +321,6 @@ test "bench runtime loop 1000" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(src)
-
     },
     name="runtime.loop.1000",
     count=10,
@@ -349,7 +334,6 @@ test "bench runtime loop 10000" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(src)
-
     },
     name="runtime.loop.10000",
     count=5,
@@ -367,7 +351,6 @@ test "bench parse only fib" (b : @bench.T) {
     () => {
       let parser = @parser.Parser::from_source(src)
       let _ = try! parser.parse_module()
-
     },
     name="parse.fib",
     count=50,
@@ -384,7 +367,6 @@ test "bench execute only fib(20)" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = interp.run_module(module_)
-
     },
     name="execute.fib.20",
     count=3,
@@ -411,7 +393,6 @@ test "bench runtime object creation" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(object_create_src)
-
     },
     name="runtime.object.create",
     count=10,
@@ -435,7 +416,6 @@ test "bench runtime array reduce" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(array_ops_src)
-
     },
     name="runtime.array.reduce",
     count=5,
@@ -462,7 +442,6 @@ test "bench runtime string concat" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(string_concat_src)
-
     },
     name="runtime.string.concat",
     count=20,
@@ -488,7 +467,6 @@ test "bench runtime string methods" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(string_methods_src)
-
     },
     name="runtime.string.methods",
     count=10,
@@ -515,7 +493,6 @@ test "bench gc object creation" (b : @bench.T) {
       @runtime.gc_stats_reset()
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(gc_object_creation_src)
-
     },
     name="gc.object.creation.1000",
     count=5,
@@ -538,7 +515,6 @@ test "bench gc array creation" (b : @bench.T) {
       @runtime.gc_stats_reset()
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(gc_array_creation_src)
-
     },
     name="gc.array.creation.1000",
     count=5,
@@ -562,7 +538,6 @@ test "bench gc closure creation" (b : @bench.T) {
       @runtime.gc_stats_reset()
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(gc_closure_creation_src)
-
     },
     name="gc.closure.creation.100",
     count=10,
@@ -589,7 +564,6 @@ test "bench gc nested scopes" (b : @bench.T) {
       @runtime.gc_stats_reset()
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(gc_nested_scopes_src)
-
     },
     name="gc.nested.scopes",
     count=10,
@@ -624,7 +598,6 @@ test "bench weakmap operations" (b : @bench.T) {
       @runtime.gc_stats_reset()
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(weakmap_bench_src)
-
     },
     name="gc.weakmap.100",
     count=10,
@@ -655,7 +628,6 @@ test "bench weakset operations" (b : @bench.T) {
       @runtime.gc_stats_reset()
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(weakset_bench_src)
-
     },
     name="gc.weakset.100",
     count=10,
@@ -684,7 +656,6 @@ test "bench weakref operations" (b : @bench.T) {
       @runtime.gc_stats_reset()
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(weakref_bench_src)
-
     },
     name="gc.weakref.100",
     count=10,
@@ -708,7 +679,6 @@ test "bench AOT compile add" (b : @bench.T) {
   b.bench(
     () => {
       let _ = try! @aot.compile_module_to_wasm(module_)
-
     },
     name="aot.compile.add",
     count=20,
@@ -723,7 +693,6 @@ test "bench AOT call add" (b : @bench.T) {
   b.bench(
     () => {
       let _ = try! runtime.call("add", [10.0, 32.0])
-
     },
     name="aot.call.add",
     count=100,
@@ -747,7 +716,6 @@ test "bench AOT compile loop" (b : @bench.T) {
   b.bench(
     () => {
       let _ = try! @aot.compile_module_to_wasm(module_)
-
     },
     name="aot.compile.loop",
     count=10,
@@ -762,7 +730,6 @@ test "bench AOT call loop(1000)" (b : @bench.T) {
   b.bench(
     () => {
       let _ = try! runtime.call("sum", [1000.0])
-
     },
     name="aot.call.loop.1000",
     count=50,
@@ -784,7 +751,6 @@ test "bench interpreter call loop(1000)" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(src)
-
     },
     name="interpreter.call.loop.1000",
     count=50,
@@ -805,7 +771,6 @@ test "bench AOT compile fib" (b : @bench.T) {
   b.bench(
     () => {
       let _ = try! @aot.compile_module_to_wasm(module_)
-
     },
     name="aot.compile.fib",
     count=10,
@@ -820,7 +785,6 @@ test "bench AOT call fib(20)" (b : @bench.T) {
   b.bench(
     () => {
       let _ = try! runtime.call("fib", [20.0])
-
     },
     name="aot.call.fib.20",
     count=3,
@@ -843,7 +807,6 @@ test "bench interpreter vs AOT loop(10000)" (b : @bench.T) {
     () => {
       let interp = @runtime.JSInterpreter::new()
       let _ = try! interp.run(interp_src)
-
     },
     name="compare.interpreter.loop.10000",
     count=5,
@@ -855,7 +818,6 @@ test "bench interpreter vs AOT loop(10000)" (b : @bench.T) {
   b.bench(
     () => {
       let _ = try! runtime.call("sum", [10000.0])
-
     },
     name="compare.aot.loop.10000",
     count=5,
@@ -878,7 +840,6 @@ test "bench AOT call math.sqrt" (b : @bench.T) {
   b.bench(
     () => {
       let _ = try! runtime.call("distance", [0.0, 0.0, 3.0, 4.0])
-
     },
     name="aot.call.math.sqrt",
     count=100,

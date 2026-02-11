@@ -195,7 +195,6 @@ fn Parser::parse_return(self : Parser) -> @ast.TsStmt raise ParseError {
     self.has_line_terminator_before() {
     if self.check(Semicolon) {
       let _ = self.advance()
-
     }
     Return(None)
   } else {

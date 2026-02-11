@@ -114,7 +114,6 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   // Clear labels for new function scope
   while self.labels.length() > 0 {
     let _ = self.labels.pop()
-
   }
   let body = self.parse_block()
   self.in_generator = prev_generator
@@ -125,7 +124,6 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   // Restore labels
   while self.labels.length() > 0 {
     let _ = self.labels.pop()
-
   }
   for label in prev_labels {
     self.labels.push(label)
@@ -176,7 +174,6 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   // Clear labels for new function scope
   while self.labels.length() > 0 {
     let _ = self.labels.pop()
-
   }
   let body = self.parse_block()
   self.in_generator = prev_generator
@@ -187,7 +184,6 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   // Restore labels
   while self.labels.length() > 0 {
     let _ = self.labels.pop()
-
   }
   for label in prev_labels {
     self.labels.push(label)
@@ -208,28 +204,23 @@ fn Parser::skip_type_params(self : Parser) -> Unit {
       Lt => {
         depth += 1
         let _ = self.advance()
-
       }
       Gt => {
         depth -= 1
         let _ = self.advance()
-
       }
       GtGt => {
         // >> counts as two >
         depth -= 2
         let _ = self.advance()
-
       }
       GtGtGt => {
         // >>> counts as three >
         depth -= 3
         let _ = self.advance()
-
       }
       _ => {
         let _ = self.advance()
-
       }
     }
   }
@@ -247,11 +238,9 @@ fn Parser::skip_extends_clause(self : Parser) -> Unit {
     match self.peek().kind {
       Comma => {
         let _ = self.advance()
-
       }
       _ => {
         let _ = self.advance()
-
       }
     }
   }
@@ -277,7 +266,6 @@ pub fn Parser::parse_interface(
     // Skip readonly modifier
     if self.check(Ident("readonly")) {
       let _ = self.advance()
-
     }
     // Parse field/method name
     let field_name : String = match self.peek().kind {
@@ -299,7 +287,6 @@ pub fn Parser::parse_interface(
         // Skip until ]
         while not(self.check(RBracket)) && not(self.check(Eof)) {
           let _ = self.advance()
-
         }
         let _ = self.expect(RBracket)
         "<computed>"
@@ -472,16 +459,13 @@ pub fn Parser::parse_interface(
           LParen => {
             paren_depth += 1
             let _ = self.advance()
-
           }
           RParen => {
             paren_depth -= 1
             let _ = self.advance()
-
           }
           _ => {
             let _ = self.advance()
-
           }
         }
       }
@@ -505,7 +489,6 @@ pub fn Parser::parse_interface(
     // Skip trailing semicolon or comma (both optional)
     if self.check(Semicolon) || self.check(Comma) {
       let _ = self.advance()
-
     }
   }
   let _ = self.expect(RBrace)
@@ -526,41 +509,33 @@ fn Parser::skip_until_semicolon(self : Parser) -> Unit {
           return
         }
         let _ = self.advance()
-
       }
       LBrace => {
         brace_depth += 1
         let _ = self.advance()
-
       }
       RBrace => {
         brace_depth -= 1
         let _ = self.advance()
-
       }
       LBracket => {
         bracket_depth += 1
         let _ = self.advance()
-
       }
       RBracket => {
         bracket_depth -= 1
         let _ = self.advance()
-
       }
       LParen => {
         paren_depth += 1
         let _ = self.advance()
-
       }
       RParen => {
         paren_depth -= 1
         let _ = self.advance()
-
       }
       _ => {
         let _ = self.advance()
-
       }
     }
   }
@@ -578,7 +553,6 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
       LBrace => {
         brace_depth += 1
         let _ = self.advance()
-
       }
       RBrace => {
         brace_depth -= 1
@@ -590,24 +564,20 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
       Lt => {
         angle_depth += 1
         let _ = self.advance()
-
       }
       Gt => {
         angle_depth -= 1
         let _ = self.advance()
-
       }
       GtGt => {
         // >> counts as two >
         angle_depth -= 2
         let _ = self.advance()
-
       }
       GtGtGt => {
         // >>> counts as three >
         angle_depth -= 3
         let _ = self.advance()
-
       }
       Semicolon => {
         if brace_depth == 0 && angle_depth <= 0 {
@@ -615,11 +585,9 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
           break
         }
         let _ = self.advance()
-
       }
       _ => {
         let _ = self.advance()
-
       }
     }
   }
@@ -633,7 +601,6 @@ fn Parser::skip_declaration_block(self : Parser) -> Unit {
         not(self.check(Semicolon)) &&
         not(self.check(Eof)) {
     let _ = self.advance()
-
   }
   if self.check(Semicolon) {
     let _ = self.advance()
@@ -647,16 +614,13 @@ fn Parser::skip_declaration_block(self : Parser) -> Unit {
         LBrace => {
           depth += 1
           let _ = self.advance()
-
         }
         RBrace => {
           depth -= 1
           let _ = self.advance()
-
         }
         _ => {
           let _ = self.advance()
-
         }
       }
     }
@@ -758,7 +722,6 @@ pub fn Parser::parse_declare_function(
             depth -= 1
           }
           let _ = self.advance()
-
         }
         "<destructured>"
       }
@@ -776,7 +739,6 @@ pub fn Parser::parse_declare_function(
     }
     if self.check(Comma) {
       let _ = self.advance()
-
     }
   }
   let _ = self.expect(RParen)

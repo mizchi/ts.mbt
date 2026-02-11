@@ -3,19 +3,19 @@ import {
   "moonbitlang/async/fs",
   "moonbitlang/core/env",
   "moonbitlang/core/encoding/utf8",
-  "mizchi/ts/ast" as @ast,
-  "mizchi/ts/runtime" as @runtime,
-  "mizchi/ts/parser" as @parser,
-  "mizchi/ts/codegen" as @codegen,
-  "mizchi/wasmx/encode" as @encode,
-  "mizchi/ts/analysis" as @analysis,
+  "mizchi/ts/ast" @ast,
+  "mizchi/ts/runtime" @runtime,
+  "mizchi/ts/parser" @parser,
+  "mizchi/ts/codegen" @codegen,
+  "mizchi/wasmx/encode" @encode,
+  "mizchi/ts/analysis" @analysis,
 }
 
-import "test" {
+import {
   "moonbitlang/core/bench",
-  "mizchi/ts/parser" as @parser,
-  "mizchi/ts/aot" as @aot,
-}
+  "mizchi/ts/parser" @parser,
+  "mizchi/ts/aot" @aot,
+} for "test"
 
 options(
   is_main: true,

@@ -1,0 +1,17 @@
+import {
+  "mizchi/wasmx/core" @core,
+  "mizchi/wasmx/encode" @encode,
+  "mizchi/ts/ast" @ast,
+  "mizchi/ts/parser" @parser,
+  "mizchi/ts/analysis" @analysis,
+}
+
+import {
+  "mizchi/wasmx/runtime" @runtime,
+  "mizchi/wasmx/parse" @parse,
+  "moonbitlang/core/strconv",
+} for "wbtest"
+
+options(
+  "native-stub": [ "runner_ffi.c" ],
+)

@@ -351,7 +351,6 @@ fn make_export_getter(
   match module_exports {
     Some(exports) => {
       let _ = @runtime.js_set_prop(getter, "__export_module", exports)
-
     }
     None => ()
   }
@@ -375,7 +374,6 @@ fn define_export_accessors(
       true,
       true,
     )
-
   }
 }
 
@@ -402,7 +400,6 @@ fn define_reexport_accessor(
     true,
     true,
   )
-
 }
 
 ///|
@@ -488,14 +485,12 @@ fn refresh_import_bindings(
       Some(name) => {
         let value = interp.get_prop_value(dep_exports, "default")
         let _ = module_env.force_set(name, value)
-
       }
       None => ()
     }
     match decl.namespace_binding {
       Some(name) => {
         let _ = module_env.force_set(name, dep_exports)
-
       }
       None => ()
     }
@@ -503,7 +498,6 @@ fn refresh_import_bindings(
       let (imported, local_name) = item
       let value = interp.get_prop_value(dep_exports, imported)
       let _ = module_env.force_set(local_name, value)
-
     }
   }
 }
@@ -566,7 +560,6 @@ async fn eval_module(
         export_all_accessors(interp, exports, module_env, dep_exports)
       @ast.TsReExportKind::Namespace(name) => {
         let _ = @runtime.js_set_prop(exports, name, dep_exports)
-
       }
     }
   }
@@ -1547,7 +1540,6 @@ async fn run_test262(test_path : String) -> Unit {
             undefined_value
           }
         }
-
       }
       if not(has_error) {
         let module_cache : Array[(String, @runtime.JSValue)] = []
@@ -1571,7 +1563,6 @@ async fn run_test262(test_path : String) -> Unit {
         let parser = @parser.Parser::from_source(source)
         try {
           let _ = parser.parse_module()
-
         } catch {
           e => {
             has_error = true

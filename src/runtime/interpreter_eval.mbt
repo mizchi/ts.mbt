@@ -69,13 +69,11 @@ pub fn JSInterpreter::eval_expr(
       let strings_array = js_new_array()
       for i = 0; i < cooked_parts.length(); i = i + 1 {
         let _ = js_array_push(strings_array, String(cooked_parts[i]))
-
       }
       // Create and set raw array
       let raw_array = js_new_array()
       for i = 0; i < raw_parts.length(); i = i + 1 {
         let _ = js_array_push(raw_array, String(raw_parts[i]))
-
       }
       let _ = js_set_prop(strings_array, "raw", raw_array)
       // Note: In a full implementation, we would freeze the arrays
@@ -1113,7 +1111,6 @@ pub fn JSInterpreter::eval_expr(
                   false,
                   true,
                 )
-
               }
               _ => ()
             }
@@ -1123,7 +1120,6 @@ pub fn JSInterpreter::eval_expr(
                 let _ = js_define_data_prop(
                   getter, "__home_object", obj, true, false, true,
                 )
-
               }
               _ => ()
             }
@@ -1132,7 +1128,6 @@ pub fn JSInterpreter::eval_expr(
                 let _ = js_define_data_prop(
                   setter, "__home_object", obj, true, false, true,
                 )
-
               }
               _ => ()
             }
@@ -1457,7 +1452,6 @@ pub fn JSInterpreter::eval_expr(
           false,
           true,
         )
-
       }
       closure
     }
@@ -1555,63 +1549,64 @@ fn JSInterpreter::eval_expr_gen(
     @ast.TsExpr::Yield(opt) =>
       match opt {
         Some(inner) =>
-          gen_bind(self.eval_expr_gen(inner, env), yielded => GenValue::Yield(
-            yielded,
-            sent => GenValue::Value(sent),
-          ))
+          gen_bind(self.eval_expr_gen(inner, env), yielded => {
+            GenValue::Yield(yielded, sent => GenValue::Value(sent))
+          })
         None =>
           GenValue::Yield(JSValue::Undefined, sent => GenValue::Value(sent))
       }
     @ast.TsExpr::YieldStar(inner) => self.eval_yield_star(inner, env)
     @ast.TsExpr::Seq(left, right) =>
-      gen_bind(self.eval_expr_gen(left, env), _unused => self.eval_expr_gen(
-        right, env,
-      ))
+      gen_bind(self.eval_expr_gen(left, env), _unused => {
+        self.eval_expr_gen(right, env)
+      })
     @ast.TsExpr::AssignExpr(name, value) =>
       gen_bind(self.eval_expr_gen(value, env), val => {
         self.assign_ident(name, val, env)
         GenValue::Value(val)
       })
     @ast.TsExpr::AssignPattern(binding, value) =>
-      gen_bind(self.eval_expr_gen(value, env), val => gen_bind(
-        self.assign_pattern_gen(binding, val, env),
-        _unused => GenValue::Value(val),
-      ))
+      gen_bind(self.eval_expr_gen(value, env), val => {
+        gen_bind(self.assign_pattern_gen(binding, val, env), _unused => {
+          GenValue::Value(val)
+        })
+      })
     @ast.TsExpr::PropAccess(obj_expr, prop) =>
-      gen_bind(self.eval_expr_gen(obj_expr, env), obj => GenValue::Value(
-        self.get_prop_value(obj, prop),
-      ))
+      gen_bind(self.eval_expr_gen(obj_expr, env), obj => {
+        GenValue::Value(self.get_prop_value(obj, prop))
+      })
     @ast.TsExpr::IndexAccess(obj_expr, idx_expr) =>
-      gen_bind(self.eval_expr_gen(obj_expr, env), obj => gen_bind(
-        self.eval_expr_gen(idx_expr, env),
-        idx => {
+      gen_bind(self.eval_expr_gen(obj_expr, env), obj => {
+        gen_bind(self.eval_expr_gen(idx_expr, env), idx => {
           let key = idx.to_js_string()
           GenValue::Value(self.get_prop_value(obj, key))
-        },
-      ))
+        })
+      })
     @ast.TsExpr::PropAssignExpr(obj_expr, prop, value_expr) =>
-      gen_bind(self.eval_expr_gen(obj_expr, env), obj => gen_bind(
-        self.eval_expr_gen(value_expr, env),
-        val => {
+      gen_bind(self.eval_expr_gen(obj_expr, env), obj => {
+        gen_bind(self.eval_expr_gen(value_expr, env), val => {
           self.set_prop_value(obj, prop, val, strict=env.has("__strict__"))
           GenValue::Value(val)
-        },
-      ))
+        })
+      })
     @ast.TsExpr::IndexAssignExpr(obj_expr, idx_expr, value_expr) =>
-      gen_bind(self.eval_expr_gen(obj_expr, env), obj => gen_bind(
-        self.eval_expr_gen(idx_expr, env),
-        idx => gen_bind(self.eval_expr_gen(value_expr, env), val => {
-          let key = idx.to_js_string()
-          self.set_prop_value(obj, key, val, strict=env.has("__strict__"))
-          GenValue::Value(val)
-        }),
-      ))
+      gen_bind(self.eval_expr_gen(obj_expr, env), obj => {
+        gen_bind(self.eval_expr_gen(idx_expr, env), idx => {
+          gen_bind(self.eval_expr_gen(value_expr, env), val => {
+            let key = idx.to_js_string()
+            self.set_prop_value(obj, key, val, strict=env.has("__strict__"))
+            GenValue::Value(val)
+          })
+        })
+      })
     @ast.TsExpr::ArrayLit(elements) => self.eval_array_lit_gen(elements, env)
     @ast.TsExpr::Cond(cond, then_expr, else_expr) =>
-      gen_bind(self.eval_expr_gen(cond, env), cond_val => if cond_val.to_boolean() {
-        self.eval_expr_gen(then_expr, env)
-      } else {
-        self.eval_expr_gen(else_expr, env)
+      gen_bind(self.eval_expr_gen(cond, env), cond_val => {
+        if cond_val.to_boolean() {
+          self.eval_expr_gen(then_expr, env)
+        } else {
+          self.eval_expr_gen(else_expr, env)
+        }
       })
     _ => GenValue::Value(self.eval_expr(expr, env))
   }
@@ -3662,7 +3657,6 @@ pub fn JSInterpreter::exec_stmt(
           for name in names {
             let v = env.get(name)
             let _ = js_set_prop(global_obj, name, v)
-
           }
         }
         Some(_) => ()
@@ -4013,7 +4007,6 @@ pub fn JSInterpreter::exec_stmt(
           }
         }
         let _ = js_define_data_prop(obj, real_key, val, true, false, true)
-
       } else if prop.has_prefix("@@get:") || prop.has_prefix("@@set:") {
         fn find_accessor(obj : JSValue, key : String) -> (JSValue?, JSValue?) {
           match obj {
@@ -4061,11 +4054,9 @@ pub fn JSInterpreter::exec_stmt(
         let _ = js_define_accessor_prop(
           obj, real_key, getter, setter, false, true,
         )
-
       } else if prop == "__super_proto" || prop == "__super_ctor" {
         // These internal properties should be non-enumerable
         let _ = js_define_data_prop(obj, prop, val, true, false, true)
-
       } else {
         self.set_prop_value(obj, prop, val, strict=env.has("__strict__"))
       }
@@ -4146,7 +4137,6 @@ fn JSInterpreter::hoist_stmt(
             None => {
               let global_obj = self.global_env.get("globalThis")
               let _ = js_set_prop(global_obj, name, Undefined)
-
             }
             Some(_) => ()
           }
@@ -4169,7 +4159,6 @@ fn JSInterpreter::hoist_stmt(
             None => {
               let global_obj = self.global_env.get("globalThis")
               let _ = js_set_prop(global_obj, name, Undefined)
-
             }
             Some(_) => ()
           }
@@ -4220,7 +4209,6 @@ fn JSInterpreter::hoist_stmt(
               None => {
                 let global_obj = self.global_env.get("globalThis")
                 let _ = js_set_prop(global_obj, name, Undefined)
-
               }
               Some(_) => ()
             }
@@ -4247,7 +4235,6 @@ fn JSInterpreter::hoist_stmt(
               None => {
                 let global_obj = self.global_env.get("globalThis")
                 let _ = js_set_prop(global_obj, name, Undefined)
-
               }
               Some(_) => ()
             }
@@ -4273,7 +4260,6 @@ fn JSInterpreter::hoist_stmt(
               None => {
                 let global_obj = self.global_env.get("globalThis")
                 let _ = js_set_prop(global_obj, name, Undefined)
-
               }
               Some(_) => ()
             }
@@ -4515,10 +4501,11 @@ fn JSInterpreter::exec_stmt_gen(
   }
   match stmt {
     @ast.TsStmt::Expr(expr) =>
-      gen_to_signal(self.eval_expr_gen(expr, env), _val => match
-        self.peek_error() {
-        Some(err) => GenSignal::Return(err)
-        None => GenSignal::Continue
+      gen_to_signal(self.eval_expr_gen(expr, env), _val => {
+        match self.peek_error() {
+          Some(err) => GenSignal::Return(err)
+          None => GenSignal::Continue
+        }
       })
     @ast.TsStmt::Assign(name, value) =>
       gen_to_signal(self.eval_expr_gen(value, env), val => {
@@ -4530,54 +4517,59 @@ fn JSInterpreter::exec_stmt_gen(
       })
     @ast.TsStmt::PropAssign(obj_expr, prop, value_expr) =>
       gen_to_signal(
-        gen_bind(self.eval_expr_gen(obj_expr, env), obj => gen_bind(
-          self.eval_expr_gen(value_expr, env),
-          val => {
+        gen_bind(self.eval_expr_gen(obj_expr, env), obj => {
+          gen_bind(self.eval_expr_gen(value_expr, env), val => {
             self.set_prop_value(obj, prop, val, strict=env.has("__strict__"))
             GenValue::Value(val)
-          },
-        )),
-        _val => match self.peek_error() {
-          Some(err) => GenSignal::Return(err)
-          None => GenSignal::Continue
+          })
+        }),
+        _val => {
+          match self.peek_error() {
+            Some(err) => GenSignal::Return(err)
+            None => GenSignal::Continue
+          }
         },
       )
     @ast.TsStmt::IndexAssign(obj_expr, idx_expr, value_expr) =>
       gen_to_signal(
-        gen_bind(self.eval_expr_gen(obj_expr, env), obj => gen_bind(
-          self.eval_expr_gen(idx_expr, env),
-          idx => gen_bind(self.eval_expr_gen(value_expr, env), val => {
-            let key = idx.to_js_string()
-            self.set_prop_value(obj, key, val, strict=env.has("__strict__"))
-            GenValue::Value(val)
-          }),
-        )),
-        _val => match self.peek_error() {
-          Some(err) => GenSignal::Return(err)
-          None => GenSignal::Continue
+        gen_bind(self.eval_expr_gen(obj_expr, env), obj => {
+          gen_bind(self.eval_expr_gen(idx_expr, env), idx => {
+            gen_bind(self.eval_expr_gen(value_expr, env), val => {
+              let key = idx.to_js_string()
+              self.set_prop_value(obj, key, val, strict=env.has("__strict__"))
+              GenValue::Value(val)
+            })
+          })
+        }),
+        _val => {
+          match self.peek_error() {
+            Some(err) => GenSignal::Return(err)
+            None => GenSignal::Continue
+          }
         },
       )
     @ast.TsStmt::Return(opt) =>
       match opt {
         Some(e) =>
-          gen_to_signal(self.eval_expr_gen(e, env), val => GenSignal::Return(
-            val,
-          ))
+          gen_to_signal(self.eval_expr_gen(e, env), val => {
+            GenSignal::Return(val)
+          })
         None => GenSignal::Return(JSValue::Undefined)
       }
     @ast.TsStmt::If(cond, then_block, else_block) =>
-      gen_to_signal(self.eval_expr_gen(cond, env), cond_val => match
-        self.peek_error() {
-        Some(err) => GenSignal::Return(err)
-        None =>
-          if cond_val.to_boolean() {
-            self.exec_block_gen(then_block, env)
-          } else {
-            match else_block {
-              Some(block) => self.exec_block_gen(block, env)
-              None => GenSignal::Continue
+      gen_to_signal(self.eval_expr_gen(cond, env), cond_val => {
+        match self.peek_error() {
+          Some(err) => GenSignal::Return(err)
+          None =>
+            if cond_val.to_boolean() {
+              self.exec_block_gen(then_block, env)
+            } else {
+              match else_block {
+                Some(block) => self.exec_block_gen(block, env)
+                None => GenSignal::Continue
+              }
             }
-          }
+        }
       })
     @ast.TsStmt::Block(block) => self.exec_block_gen(block, env)
     @ast.TsStmt::Var(binding, _, init)

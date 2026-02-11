@@ -458,7 +458,6 @@ fn analyze_expr_bindings(ctx : AnalysisCtx, expr : @ast.TsExpr) -> Unit {
     @ast.TsExpr::Var(name) => {
       // Check if variable is accessible
       let _ = ctx.lookup_binding(name, 0)
-
     }
     @ast.TsExpr::BinOp(_, left, right) => {
       analyze_expr_bindings(ctx, left)

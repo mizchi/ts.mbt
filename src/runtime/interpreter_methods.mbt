@@ -1263,7 +1263,6 @@ fn JSInterpreter::array_method(
             args_array[0] = arr.items[i]
             args_array[1] = Number(i.to_double())
             let _ = self.call_function(callback, this_arg, args_array)
-
           }
           i += 1
         }

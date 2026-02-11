@@ -173,7 +173,6 @@ fn type_check_stmt(
       type_check_var_decl(ctx, binding, declared, init, locals)
     @ast.TsStmt::Expr(e) => {
       let _ = infer_expr_flow(ctx, e)
-
     }
     @ast.TsStmt::Return(Some(e)) => {
       let ret_type = infer_expr_flow(ctx, e)
@@ -207,7 +206,6 @@ fn type_check_stmt(
       }
       ctx.leave_scope()
       let _ = infer_expr_flow(ctx, cond)
-
     }
     @ast.TsStmt::For(init, cond, update, body) => {
       ctx.enter_scope()
@@ -218,7 +216,6 @@ fn type_check_stmt(
       match cond {
         Some(c) => {
           let _ = infer_expr_flow(ctx, c)
-
         }
         None => ()
       }
@@ -355,7 +352,6 @@ fn type_check_stmt(
     }
     @ast.TsStmt::Throw(e) => {
       let _ = infer_expr_flow(ctx, e)
-
     }
     @ast.TsStmt::Label(_, inner) => type_check_stmt(ctx, inner, locals)
     @ast.TsStmt::With(obj, body) => {
@@ -565,7 +561,6 @@ fn infer_expr_flow(ctx : FlowTypeCtx, expr : @ast.TsExpr) -> @ast.TsType {
           // Still infer argument types for side effects
           for arg in args {
             let _ = infer_expr_flow(ctx, arg)
-
           }
           @ast.TsType::Any
         }
@@ -595,7 +590,6 @@ fn infer_expr_flow(ctx : FlowTypeCtx, expr : @ast.TsExpr) -> @ast.TsType {
           // Fallback: infer args and use method return type inference
           for arg in args {
             let _ = infer_expr_flow(ctx, arg)
-
           }
           infer_method_name_type(recv_type, method_name)
         }
@@ -639,7 +633,6 @@ fn infer_expr_flow(ctx : FlowTypeCtx, expr : @ast.TsExpr) -> @ast.TsType {
     @ast.TsExpr::New(name, args) => {
       for arg in args {
         let _ = infer_expr_flow(ctx, arg)
-
       }
       // Return the class type
       match ctx.registry.get_object(name) {
@@ -651,7 +644,6 @@ fn infer_expr_flow(ctx : FlowTypeCtx, expr : @ast.TsExpr) -> @ast.TsType {
       let _ = infer_expr_flow(ctx, callee)
       for arg in args {
         let _ = infer_expr_flow(ctx, arg)
-
       }
       @ast.TsType::Any
     }
@@ -791,7 +783,7 @@ fn get_method_type(
             }
           _ => ()
         }
-      } else {
+      } nobreak {
         None
       }
     _ => None
@@ -880,7 +872,7 @@ fn infer_method_name_type(
             }
           _ => ()
         }
-      } else {
+      } nobreak {
         @ast.TsType::Any
       }
     _ => @ast.TsType::Any
@@ -913,7 +905,7 @@ fn infer_prop_type(
           @ast.TsType::Literal(name) if name == prop => return p.1
           _ => ()
         }
-      } else {
+      } nobreak {
         @ast.TsType::Any
       }
     _ =>

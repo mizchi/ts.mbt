@@ -429,7 +429,6 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
             while arr.items.length() > new_len {
               let _ = arr.items.pop()
               let _ = arr.present.pop()
-
             }
           } else if new_len <= MAX_DENSE_ARRAY_LENGTH {
             while arr.items.length() < new_len {
@@ -656,7 +655,6 @@ pub fn js_define_data_prop(
             while arr.items.length() > new_len {
               let _ = arr.items.pop()
               let _ = arr.present.pop()
-
             }
           } else if new_len <= MAX_DENSE_ARRAY_LENGTH {
             while arr.items.length() < new_len {

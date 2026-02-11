@@ -77,7 +77,6 @@ fn JSInterpreter::map_set_entry(
       let _ = js_array_push(new_pair, key)
       let _ = js_array_push(new_pair, value)
       let _ = js_array_push(JSValue::Array(arr), new_pair)
-
     }
     _ => ()
   }
@@ -151,7 +150,6 @@ fn JSInterpreter::set_add_entry(
       }
       // Add new entry
       let _ = js_array_push(JSValue::Array(arr), value)
-
     }
     _ => ()
   }
@@ -368,7 +366,6 @@ fn JSInterpreter::weakmap_set_entry(
       let _ = js_array_push(new_pair, Number(key_id.to_double()))
       let _ = js_array_push(new_pair, value)
       let _ = js_array_push(JSValue::Array(arr), new_pair)
-
     }
     _ => ()
   }
@@ -461,7 +458,6 @@ fn JSInterpreter::weakset_add_entry(
       }
       // Add new entry
       let _ = js_array_push(JSValue::Array(arr), Number(val_id.to_double()))
-
     }
     _ => ()
   }
@@ -550,7 +546,6 @@ fn JSInterpreter::fr_register(
       let _ = js_array_push(entry, held_value)
       let _ = js_array_push(entry, Number(token_id.to_double()))
       let _ = js_array_push(JSValue::Array(arr), entry)
-
     }
     _ => ()
   }

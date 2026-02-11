@@ -53,7 +53,7 @@ fn ensure_runner() -> Unit {
 pub fn run_wasm(
   wasm_bytes : Bytes,
   func_name : String,
-  args : Array[Double]
+  args : Array[Double],
 ) -> RunResult {
   ensure_runner()
   match runner_type.val {
@@ -68,7 +68,7 @@ pub fn run_wasm(
 fn run_with_wasmx(
   wasm_bytes : Bytes,
   func_name : String,
-  args : Array[Double]
+  args : Array[Double],
 ) -> RunResult {
   // Parse wasm bytes to module
   let module_ = @parse.parse(wasm_bytes) catch {
@@ -92,7 +92,9 @@ fn run_with_wasmx(
   }
 
   // Call function
-  let func_bytes = Bytes::from_iter(func_name.iter().map(fn(c) { c.to_int().to_byte() }))
+  let func_bytes = Bytes::from_iter(
+    func_name.iter().map(fn(c) { c.to_int().to_byte() }),
+  )
   let results = runtime.call_compiled(func_bytes, wasm_args) catch {
     e => return RunResult::Error("Call error: \{e}")
   }
@@ -115,7 +117,7 @@ pub fn assert_run_f64(
   wasm_bytes : Bytes,
   func_name : String,
   args : Array[Double],
-  expected : Double
+  expected : Double,
 ) -> Unit raise Error {
   match run_wasm(wasm_bytes, func_name, args) {
     RunResult::F64(v) => assert_eq(v, expected)
@@ -130,14 +132,13 @@ pub fn assert_run_i32(
   wasm_bytes : Bytes,
   func_name : String,
   args : Array[Double],
-  expected : Int
+  expected : Int,
 ) -> Unit raise Error {
   match run_wasm(wasm_bytes, func_name, args) {
     RunResult::I32(v) => assert_eq(v, expected)
-    RunResult::F64(v) => {
+    RunResult::F64(v) =>
       // wasmtime may return as f64, convert to int
       assert_eq(v.to_int(), expected)
-    }
     RunResult::Error(e) => fail("Run error: \{e}")
   }
 }
@@ -169,10 +170,9 @@ test "runner: basic wasmtime test" {
   let wasm = compile_to_wasm(src)
   match run_wasm(wasm, "add", [3.0, 5.0]) {
     RunResult::F64(v) => assert_eq(v, 8.0)
-    RunResult::Error(e) => {
+    RunResult::Error(e) =>
       // wasmtime may not be installed, so allow error
       println("Wasmtime CLI error (may be expected): \{e}")
-    }
     _ => fail("Expected F64 result")
   }
 

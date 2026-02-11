@@ -1039,7 +1039,6 @@ fn JSInterpreter::install_symbol(
       false,
       false,
     )
-
   }
   self.global_env.define_var("Symbol", symbol_fn)
   set_global_ctor(global_obj, "Symbol", symbol_fn)
@@ -1205,7 +1204,6 @@ fn JSInterpreter::install_method(
   self.set_function_length(fn_val, length)
   self.set_function_name(fn_val, name)
   let _ = js_define_data_prop(proto, name, fn_val, true, false, true)
-
 }
 
 ///|
@@ -1221,7 +1219,6 @@ fn JSInterpreter::install_static_method(
   self.set_function_length(fn_val, length)
   self.set_function_name(fn_val, name)
   let _ = js_define_data_prop(ctor, name, fn_val, true, false, true)
-
 }
 
 ///|
@@ -2823,7 +2820,6 @@ fn JSInterpreter::array_like_method(
             }
             let args_array = [value, Number(i.to_double()), receiver]
             let _ = self.call_function(callback, this_arg, args_array)
-
           }
           i += 1
         }
@@ -3100,7 +3096,6 @@ fn JSInterpreter::array_like_method(
             self.set_prop_value(receiver, to_key, value)
           } else {
             let _ = js_delete_prop(receiver, to_key)
-
           }
           k += 1
         }
@@ -3123,7 +3118,6 @@ fn JSInterpreter::array_like_method(
           self.set_prop_value(receiver, to_key, value)
         } else {
           let _ = js_delete_prop(receiver, to_key)
-
         }
         if k == 0 {
           break
@@ -3394,7 +3388,6 @@ fn JSInterpreter::new_array_iterator(
   match iterator_proto {
     Object(_) | Function(_) | Array(_) => {
       let _ = js_set_prop(iter, "__proto__", iterator_proto)
-
     }
     _ => ()
   }
@@ -3420,7 +3413,6 @@ fn JSInterpreter::new_string_iterator(
   match iterator_proto {
     Object(_) | Function(_) | Array(_) => {
       let _ = js_set_prop(iter, "__proto__", iterator_proto)
-
     }
     _ => ()
   }
@@ -4011,7 +4003,6 @@ fn JSInterpreter::call_native(
           }
           let _ = js_set_prop(cap, "resolve", resolve)
           let _ = js_set_prop(cap, "reject", reject)
-
         }
         _ => ()
       }
@@ -4102,7 +4093,6 @@ fn JSInterpreter::call_native(
             Bool(true) => return Undefined
             _ => {
               let _ = js_set_prop(already, "__promise_once", Bool(true))
-
             }
           }
         _ => ()
@@ -4121,7 +4111,6 @@ fn JSInterpreter::call_native(
       if next == 0 {
         let resolve = js_get_prop(state, "__all_resolve")
         let _ = self.call_function(resolve, Undefined, [results])
-
       }
       Undefined
     }
@@ -4135,7 +4124,6 @@ fn JSInterpreter::call_native(
             Bool(true) => return Undefined
             _ => {
               let _ = js_set_prop(already, "__promise_once", Bool(true))
-
             }
           }
         _ => ()
@@ -4167,7 +4155,6 @@ fn JSInterpreter::call_native(
             Bool(true) => return Undefined
             _ => {
               let _ = js_set_prop(already, "__promise_once", Bool(true))
-
             }
           }
         _ => ()
@@ -4189,7 +4176,6 @@ fn JSInterpreter::call_native(
       if next == 0 {
         let resolve = js_get_prop(state, "__all_resolve")
         let _ = self.call_function(resolve, Undefined, [results])
-
       }
       Undefined
     }
@@ -4208,7 +4194,6 @@ fn JSInterpreter::call_native(
             Bool(true) => return Undefined
             _ => {
               let _ = js_set_prop(already, "__promise_once", Bool(true))
-
             }
           }
         _ => ()
@@ -4230,7 +4215,6 @@ fn JSInterpreter::call_native(
       if next == 0 {
         let resolve = js_get_prop(state, "__all_resolve")
         let _ = self.call_function(resolve, Undefined, [results])
-
       }
       Undefined
     }
@@ -4249,7 +4233,6 @@ fn JSInterpreter::call_native(
             Bool(true) => return Undefined
             _ => {
               let _ = js_set_prop(already, "__promise_once", Bool(true))
-
             }
           }
         _ => ()
@@ -4269,7 +4252,6 @@ fn JSInterpreter::call_native(
         let reject = js_get_prop(state, "__any_reject")
         let err = self.make_aggregate_error(errors)
         let _ = self.call_function(reject, Undefined, [err])
-
       }
       Undefined
     }
@@ -4794,7 +4776,6 @@ fn JSInterpreter::call_native(
             let arr = js_new_array()
             if len > 0 {
               let _ = js_set_prop(arr, "length", Number(n))
-
             }
             arr
           }
@@ -5794,7 +5775,7 @@ fn JSInterpreter::call_native(
           if radix == 10 {
             String(n.to_string())
           } else if radix == 16 {
-            String(n.to_hex())
+            String(n.to_string(radix=16))
           } else {
             // For other radixes, fall back to decimal for now
             String(n.to_string())
@@ -6148,7 +6129,6 @@ fn JSInterpreter::call_native(
             let has_value = self.has_own_prop(desc, "value")
             if has_value {
               let _ = self.get_prop_value(desc, "value")
-
             }
             let has_writable = self.has_own_prop(desc, "writable")
             let writable = if has_writable {
@@ -6264,7 +6244,6 @@ fn JSInterpreter::call_native(
       for pair in callbacks {
         let (callback, held_value) = pair
         let _ = self.call_function(callback, Undefined, [held_value])
-
       }
       // Return number of collected objects
       Number(collected.length().to_double())
@@ -6707,7 +6686,6 @@ fn JSInterpreter::call_native(
                   let key = js_get_prop(val, "0")
                   let value = js_get_prop(val, "1")
                   let _ = self.map_set_entry(map_obj, key, value)
-
                 }
               }
             }
@@ -6761,7 +6739,6 @@ fn JSInterpreter::call_native(
                 let _ = self.call_function(callback, this_for_callback, [
                   value, key, this_arg,
                 ])
-
               }
               _ => ()
             }
@@ -6793,7 +6770,6 @@ fn JSInterpreter::call_native(
                 _ => {
                   let val = js_get_prop(next_result, "value")
                   let _ = self.set_add_entry(set_obj, val)
-
                 }
               }
             }
@@ -6838,7 +6814,6 @@ fn JSInterpreter::call_native(
             let _ = self.call_function(callback, this_for_callback, [
               value, value, this_arg,
             ])
-
           }
         _ => ()
       }
@@ -6873,7 +6848,6 @@ fn JSInterpreter::call_native(
                   // Register key with VM GC
                   vm_gc_register_object(key)
                   let _ = self.weakmap_set_entry(wm_obj, key, value)
-
                 }
               }
             }
@@ -6930,7 +6904,6 @@ fn JSInterpreter::call_native(
                   // Register value with VM GC
                   vm_gc_register_object(val)
                   let _ = self.weakset_add_entry(ws_obj, val)
-
                 }
               }
             }
@@ -7445,7 +7418,6 @@ fn JSInterpreter::call_native(
           None => elem
         }
         let _ = js_set_prop(new_ta, i.to_string(), mapped)
-
       }
       new_ta
     }
@@ -7458,7 +7430,6 @@ fn JSInterpreter::call_native(
       ])
       for i = 0; i < len; i = i + 1 {
         let _ = js_set_prop(new_ta, i.to_string(), args[i])
-
       }
       new_ta
     }
@@ -7666,7 +7637,6 @@ fn JSInterpreter::new_instance(
             let arr = js_new_array()
             if len > 0 {
               let _ = js_set_prop(arr, "length", Number(n))
-
             }
             arr
           }

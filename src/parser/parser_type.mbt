@@ -78,7 +78,6 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let _ = self.advance()
       if self.is_number_literal() {
         let _ = self.advance()
-
       }
       Any
     }
@@ -139,7 +138,6 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
         if self.check(Extends) {
           let _ = self.advance()
           let _ = self.parse_primary_type()
-
         }
       }
       Any
@@ -158,7 +156,6 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let _ = self.advance()
       if self.is_ident() {
         let _ = self.advance()
-
       }
       Any
     }
@@ -203,16 +200,13 @@ fn Parser::parse_postfix_type(
         LBracket => {
           bracket_depth += 1
           let _ = self.advance()
-
         }
         RBracket => {
           bracket_depth -= 1
           let _ = self.advance()
-
         }
         _ => {
           let _ = self.advance()
-
         }
       }
     }
@@ -234,7 +228,6 @@ fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
   if self.check(Pipe) {
     while self.match_(Pipe) {
       let _ = self.parse_primary_type()
-
     }
     return Any // Return Any for union types
   }
@@ -242,7 +235,6 @@ fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
   if self.check(Amp) {
     while self.match_(Amp) {
       let _ = self.parse_primary_type()
-
     }
     return Any
   }
@@ -259,16 +251,13 @@ fn Parser::skip_object_type(self : Parser) -> Unit {
       LBrace => {
         depth += 1
         let _ = self.advance()
-
       }
       RBrace => {
         depth -= 1
         let _ = self.advance()
-
       }
       _ => {
         let _ = self.advance()
-
       }
     }
   }
@@ -284,16 +273,13 @@ fn Parser::skip_bracket_type(self : Parser) -> Unit {
       LBracket => {
         depth += 1
         let _ = self.advance()
-
       }
       RBracket => {
         depth -= 1
         let _ = self.advance()
-
       }
       _ => {
         let _ = self.advance()
-
       }
     }
   }
@@ -309,16 +295,13 @@ fn Parser::skip_paren_type(self : Parser) -> Unit raise ParseError {
       LParen => {
         depth += 1
         let _ = self.advance()
-
       }
       RParen => {
         depth -= 1
         let _ = self.advance()
-
       }
       _ => {
         let _ = self.advance()
-
       }
     }
   }
@@ -326,7 +309,6 @@ fn Parser::skip_paren_type(self : Parser) -> Unit raise ParseError {
   if self.check(Arrow) {
     let _ = self.advance()
     let _ = self.parse_type()
-
   }
 }
 
@@ -338,7 +320,6 @@ fn Parser::skip_typeof_operand(self : Parser) -> Unit {
     let _ = self.advance()
     if self.check(Dot) {
       let _ = self.advance()
-
     } else {
       break
     }
@@ -362,28 +343,23 @@ fn Parser::skip_type_args(self : Parser) -> Unit {
       Lt => {
         depth += 1
         let _ = self.advance()
-
       }
       Gt => {
         depth -= 1
         let _ = self.advance()
-
       }
       GtGt => {
         // >> counts as two >
         depth -= 2
         let _ = self.advance()
-
       }
       GtGtGt => {
         // >>> counts as three >
         depth -= 3
         let _ = self.advance()
-
       }
       _ => {
         let _ = self.advance()
-
       }
     }
   }
@@ -402,7 +378,6 @@ fn Parser::skip_conditional_type(self : Parser) -> Unit raise ParseError {
     if self.check(Colon) {
       let _ = self.advance()
       let _ = self.parse_type()
-
     }
   }
 }
@@ -413,12 +388,10 @@ fn Parser::skip_asserts_clause(self : Parser) -> Unit raise ParseError {
   // asserts x
   if self.is_ident() {
     let _ = self.advance()
-
   }
   // is T
   if self.check(Ident("is")) {
     let _ = self.advance()
     let _ = self.parse_type()
-
   }
 }

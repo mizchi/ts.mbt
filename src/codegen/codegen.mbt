@@ -383,22 +383,18 @@ fn emit_coerce(
   match (from_type, to_type) {
     // i32 -> f64 (including Any treated as f64)
     (@ast.TsType::Int, @ast.TsType::Any)
-    | (@ast.TsType::Boolean, @ast.TsType::Any) =>
-      ctx.emit(F64ConvertI32S)
+    | (@ast.TsType::Boolean, @ast.TsType::Any) => ctx.emit(F64ConvertI32S)
     // f64 (Any) -> i32/bool
-    (@ast.TsType::Any, @ast.TsType::Int) =>
-      ctx.emit(I32TruncF64S)
+    (@ast.TsType::Any, @ast.TsType::Int) => ctx.emit(I32TruncF64S)
     (@ast.TsType::Any, @ast.TsType::Boolean) => {
       ctx.emit(F64Const(0.0))
       ctx.emit(F64Ne)
     }
     // i32 -> f64
     (@ast.TsType::Int, @ast.TsType::Number)
-    | (@ast.TsType::Boolean, @ast.TsType::Number) =>
-      ctx.emit(F64ConvertI32S)
+    | (@ast.TsType::Boolean, @ast.TsType::Number) => ctx.emit(F64ConvertI32S)
     // f64 -> i32
-    (@ast.TsType::Number, @ast.TsType::Int) =>
-      ctx.emit(I32TruncF64S)
+    (@ast.TsType::Number, @ast.TsType::Int) => ctx.emit(I32TruncF64S)
     // f64 -> bool (non-zero)
     (@ast.TsType::Number, @ast.TsType::Boolean) => {
       ctx.emit(F64Const(0.0))
@@ -451,10 +447,7 @@ fn typeof_string_for_type(t : @ast.TsType) -> String? {
           Some(k) =>
             match kind {
               None => kind = Some(k)
-              Some(prev) =>
-                if prev != k {
-                  return None
-                }
+              Some(prev) => if prev != k { return None }
             }
           None => return None
         }
@@ -468,10 +461,7 @@ fn typeof_string_for_type(t : @ast.TsType) -> String? {
           Some(k) =>
             match kind {
               None => kind = Some(k)
-              Some(prev) =>
-                if prev != k {
-                  return None
-                }
+              Some(prev) => if prev != k { return None }
             }
           None => return None
         }
@@ -1037,8 +1027,7 @@ fn const_key_to_string(key_expr : @ast.TsExpr) -> String? {
     @analysis.ConstValue::String_(s) => Some(s)
     @analysis.ConstValue::Int(n) => Some(n.to_string())
     @analysis.ConstValue::Number(n) => Some(n.to_string())
-    @analysis.ConstValue::Boolean(b) =>
-      Some(if b { "true" } else { "false" })
+    @analysis.ConstValue::Boolean(b) => Some(if b { "true" } else { "false" })
     @analysis.ConstValue::Null => Some("null")
     @analysis.ConstValue::Undefined => Some("undefined")
     @analysis.ConstValue::NotConst => None
@@ -1070,10 +1059,7 @@ fn resolve_object_lit_field(
               "computed property key must be constant in Wasm compiler",
             )
         }
-      _ =>
-        raise CodeGenError(
-          "computed property missing ComputedProp wrapper",
-        )
+      _ => raise CodeGenError("computed property missing ComputedProp wrapper")
     }
   } else {
     (key, value)
@@ -1088,10 +1074,7 @@ fn compile_object_lit(
 ) -> Unit raise CodeGenError {
   let type_name = match expected_type {
     @ast.TsType::Named(name) => name
-    _ =>
-      raise CodeGenError(
-        "ObjectLit requires a named type in Wasm compiler",
-      )
+    _ => raise CodeGenError("ObjectLit requires a named type in Wasm compiler")
   }
   let obj_local = ctx.add_temp_local(@ast.TsType::Named(type_name))
   compile_new_expr(ctx, type_name, [], expected_type)
@@ -1105,8 +1088,7 @@ fn compile_object_lit(
             for item in fields {
               let (raw_key, raw_val) = item
               let (prop_key, value_expr) = resolve_object_lit_field(
-                raw_key,
-                raw_val,
+                raw_key, raw_val,
               )
               match field_map.get(prop_key) {
                 Some(field_idx) =>
@@ -1136,8 +1118,7 @@ fn compile_object_lit(
         for item in fields {
           let (raw_key, raw_val) = item
           let (prop_key, value_expr) = resolve_object_lit_field(
-            raw_key,
-            raw_val,
+            raw_key, raw_val,
           )
           match field_offset(struct_fields, prop_key) {
             Some(offset) =>
@@ -2178,10 +2159,7 @@ fn emit_string_literal(ctx : CodeGenCtx, s : String) -> Unit {
 }
 
 ///|
-fn emit_int_to_string_from_local(
-  ctx : CodeGenCtx,
-  value_local : UInt,
-) -> Unit {
+fn emit_int_to_string_from_local(ctx : CodeGenCtx, value_local : UInt) -> Unit {
   let sign_local = ctx.add_temp_local(@ast.TsType::Int)
   let abs_local = ctx.add_temp_local(@ast.TsType::Int)
   let tmp_local = ctx.add_temp_local(@ast.TsType::Int)
@@ -2202,11 +2180,11 @@ fn emit_int_to_string_from_local(
   ctx.emit(LocalGet(sign_local))
   ctx.emit(I32Eqz)
   ctx.emit(
-    If(
-      Value(I32),
-      [LocalGet(value_local)],
-      [I32Const(0U), LocalGet(value_local), I32Sub],
-    ),
+    If(Value(I32), [LocalGet(value_local)], [
+      I32Const(0U),
+      LocalGet(value_local),
+      I32Sub,
+    ]),
   )
   ctx.emit(LocalSet(abs_local))
 
@@ -2868,14 +2846,18 @@ fn compile_prop_logical_assign_expr(
                   let result_type = ts_type_to_valtype(ft)
                   match op {
                     @ast.TsCompoundOp::AndAssign => {
-                      let then_instrs : Array[@core.Instr] = [LocalGet(tmp_local)]
+                      let then_instrs : Array[@core.Instr] = [
+                        LocalGet(tmp_local),
+                      ]
                       ctx.emit(
                         If(Value(result_type), then_instrs, assign_ctx.instrs),
                       )
                     }
                     @ast.TsCompoundOp::OrAssign
                     | @ast.TsCompoundOp::CoalesceAssign => {
-                      let else_instrs : Array[@core.Instr] = [LocalGet(tmp_local)]
+                      let else_instrs : Array[@core.Instr] = [
+                        LocalGet(tmp_local),
+                      ]
                       ctx.emit(
                         If(Value(result_type), assign_ctx.instrs, else_instrs),
                       )
@@ -3633,9 +3615,7 @@ fn compile_call(
       match ctx.gc_array_types.get(type_key) {
         Some(idx) => idx
         None =>
-          raise CodeGenError(
-            "wasm-gc array type not defined for: \{type_key}",
-          )
+          raise CodeGenError("wasm-gc array type not defined for: \{type_key}")
       }
     } else {
       0U
@@ -3683,7 +3663,7 @@ fn compile_call(
 
   // functionget
   match ctx.funcs.get(name) {
-    Some(idx) => {
+    Some(idx) =>
       // importfunctiontype
       match ctx.import_types.get(name) {
         Some((param_types, return_type)) => {
@@ -3692,7 +3672,7 @@ fn compile_call(
           ctx.emit(Call(idx))
           return return_type
         }
-        None => {
+        None =>
           // definefunction: expected_type
           match ctx.func_types.get(name) {
             Some((param_types, return_type)) => {
@@ -3714,9 +3694,7 @@ fn compile_call(
               return expected_type
             }
           }
-        }
       }
-    }
     None => raise CodeGenError("Undefined function: \{name}")
   }
 }
@@ -4394,10 +4372,7 @@ fn compile_block_to_instrs(
 
 ///|
 // / default return value for non-void functions
-fn emit_default_return(
-  ctx : CodeGenCtx,
-  return_type : @ast.TsType,
-) -> Unit {
+fn emit_default_return(ctx : CodeGenCtx, return_type : @ast.TsType) -> Unit {
   match return_type {
     @ast.TsType::Void => ()
     _ =>
@@ -4427,18 +4402,12 @@ fn compile_function(
   builtins_used : Map[String, Bool],
 ) -> (@core.TypeDef, @core.Code) raise CodeGenError {
   let ctx = CodeGenCtx::new(
-    func_map,
-    interfaces,
-    import_types,
-    func_types,
-    string_pool,
-    builtins_used,
+    func_map, interfaces, import_types, func_types, string_pool, builtins_used,
   )
 
   // parametervariable
   for param in func.params {
     let _ = ctx.add_local(param.name, param.type_)
-
   }
 
   // parametervariable
@@ -4552,13 +4521,7 @@ pub fn compile_module(
   let builtins_used : Map[String, Bool] = {}
   for i, func in module_.funcs {
     let (func_type, code) = compile_function(
-      func,
-      func_map,
-      interface_map,
-      import_types,
-      func_types,
-      string_pool,
-      builtins_used,
+      func, func_map, interface_map, import_types, func_types, string_pool, builtins_used,
     )
     types.push(func_type)
     codes.push(code)
@@ -4591,7 +4554,7 @@ pub fn compile_module(
       {
         mem_idx: 0U,
         offset: { instrs: [I32Const(0U)] },
-        init: Bytes::from_array(string_pool.data).sub(),
+        init: Bytes::from_array(string_pool.data)[:],
         is_active: true,
       },
     ]
@@ -4819,14 +4782,8 @@ pub fn compile_module_gc(
           None => {
             // Fallback: compile as regular function (will fail at runtime for yield)
             let (func_type, code) = compile_function_gc(
-              func,
-              func_map,
-              interface_map,
-              import_types,
-              func_types,
-              string_pool,
-              builtins_used,
-              gc_array_types, gc_struct_types, gc_struct_fields,
+              func, func_map, interface_map, import_types, func_types, string_pool,
+              builtins_used, gc_array_types, gc_struct_types, gc_struct_fields,
             )
             types.push(func_type)
             codes.push(code)
@@ -4844,13 +4801,7 @@ pub fn compile_module_gc(
       None => {
         // Regular function
         let (func_type, code) = compile_function_gc(
-          func,
-          func_map,
-          interface_map,
-          import_types,
-          func_types,
-          string_pool,
-          builtins_used,
+          func, func_map, interface_map, import_types, func_types, string_pool, builtins_used,
           gc_array_types, gc_struct_types, gc_struct_fields,
         )
         types.push(func_type)
@@ -4924,7 +4875,7 @@ fn compile_function_gc(
     local_types: [],
     next_local: 0,
     funcs: func_map,
-    func_types: func_types,
+    func_types,
     interfaces,
     import_types,
     instrs: [],
@@ -4994,18 +4945,12 @@ fn compile_typed_function(
 ) -> (@core.TypeDef, @core.Code) raise CodeGenError {
   let func = typed_func.func
   let ctx = CodeGenCtx::new(
-    func_map,
-    interfaces,
-    import_types,
-    func_types,
-    string_pool,
-    builtins_used,
+    func_map, interfaces, import_types, func_types, string_pool, builtins_used,
   )
 
   // Register parameters
   for param in func.params {
     let _ = ctx.add_local(param.name, param.type_)
-
   }
 
   // Pre-register local variables with their inferred types
@@ -5018,7 +4963,6 @@ fn compile_typed_function(
         // Skip if already registered (e.g., shadowing or params)
         if ctx.get_local(name) is None {
           let _ = ctx.add_local(name, type_)
-
         }
     }
   }
@@ -5123,12 +5067,7 @@ pub fn compile_typed_module(
   let builtins_used : Map[String, Bool] = {}
   for i, typed_func in typed_module.funcs {
     let (func_type, code) = compile_typed_function(
-      typed_func,
-      func_map,
-      interface_map,
-      import_types,
-      func_types,
-      string_pool,
+      typed_func, func_map, interface_map, import_types, func_types, string_pool,
       builtins_used,
     )
     types.push(func_type)
@@ -5160,7 +5099,7 @@ pub fn compile_typed_module(
       {
         mem_idx: 0U,
         offset: { instrs: [I32Const(0U)] },
-        init: Bytes::from_array(string_pool.data).sub(),
+        init: Bytes::from_array(string_pool.data)[:],
         is_active: true,
       },
     ]

@@ -1229,7 +1229,7 @@ fn decode_string_from_pool(pool : BytesView, offset : Int) -> String {
   let len = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
   let start = offset + 4
   let end = start + len
-  bytes_to_string(pool.sub(start=start, end=end).to_bytes())
+  bytes_to_string(pool[start:end].to_bytes())
 }
 
 ///|
@@ -1325,9 +1325,7 @@ test "compile_aot_group: generator with helper functions" {
   assert_eq(groups.length(), 1)
   let group = groups[0]
   match compile_aot_group(group, ts_module, 0U) {
-    Some(code) => {
-      assert_eq(code.funcs.length(), 4)
-    }
+    Some(code) => assert_eq(code.funcs.length(), 4)
     None => assert_true(false)
   }
 }
@@ -1453,9 +1451,7 @@ test "compile_arrow_func: block body" {
   let outer_scope : Array[String] = []
   let ctx = ClosureCodegenCtx::new(0U)
   match compile_arrow_func(params, body, outer_scope, ctx) {
-    Some(code) => {
-      assert_true(code.env_struct_type is None)
-    }
+    Some(code) => assert_true(code.env_struct_type is None)
     None => fail("Expected compilable closure")
   }
 }
@@ -1600,9 +1596,8 @@ test "compile_func_expr: mixed mutable and immutable captures" {
       assert_true(code.env_struct_type is Some(_))
       assert_eq(code.capture_names.length(), 2)
       match code.env_struct_type {
-        Some(@core.TypeDef::Struct(struct_type)) => {
+        Some(@core.TypeDef::Struct(struct_type)) =>
           assert_eq(struct_type.fields.length(), 2)
-        }
         _ => fail("Expected struct type")
       }
     }

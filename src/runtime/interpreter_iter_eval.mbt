@@ -103,7 +103,6 @@ fn JSInterpreter::make_generator(
           "@@asyncIterator",
           self.make_native("Iterator.prototype[@@iterator]"),
         )
-
       }
       let _ = js_set_prop(
         obj,
@@ -367,7 +366,6 @@ fn JSInterpreter::iterator_close(
           let _ = self.set_error_kind(
             "TypeError", "Iterator return is not an object",
           )
-
         }
       }
     }
@@ -488,11 +486,9 @@ fn JSInterpreter::yield_star_next(
     return GenValue::Value(value)
   }
   // Use YieldRaw to return the raw iterator result object as-is
-  GenValue::YieldRaw(result, sent_val => self.yield_star_next(
-    iterator,
-    Some(sent_val),
-    true,
-  ))
+  GenValue::YieldRaw(result, sent_val => {
+    self.yield_star_next(iterator, Some(sent_val), true)
+  })
 }
 
 ///|
@@ -1041,7 +1037,6 @@ fn JSInterpreter::exec_for_loop_iter_gen(
       match update {
         Some(u) => {
           let _ = self.exec_stmt(u, env)
-
         }
         None => ()
       }
@@ -1058,7 +1053,6 @@ fn JSInterpreter::exec_for_loop_iter_gen(
             match update {
               Some(u) => {
                 let _ = self.exec_stmt(u, env)
-
               }
               None => ()
             }
@@ -1074,7 +1068,6 @@ fn JSInterpreter::exec_for_loop_iter_gen(
             match update {
               Some(u) => {
                 let _ = self.exec_stmt(u, env)
-
               }
               None => ()
             }
@@ -1091,7 +1084,6 @@ fn JSInterpreter::exec_for_loop_iter_gen(
           match update {
             Some(u) => {
               let _ = self.exec_stmt(u, env)
-
             }
             None => ()
           }
@@ -1188,7 +1180,6 @@ fn JSInterpreter::exec_try_catch_gen(
                   let finally_env = js_new_env(Some(env))
                   self.hoist_block_lexical(fb, finally_env)
                   let _ = self.exec_block_gen(fb, finally_env)
-
                 }
                 None => ()
               }
@@ -1243,7 +1234,6 @@ fn JSInterpreter::exec_try_catch_gen(
                         let finally_env = js_new_env(Some(env))
                         self.hoist_block_lexical(fb, finally_env)
                         let _ = self.exec_block_gen(fb, finally_env)
-
                       }
                       None => ()
                     }
@@ -1296,7 +1286,6 @@ fn JSInterpreter::exec_try_catch_gen(
                         let finally_env = js_new_env(Some(env))
                         self.hoist_block_lexical(fb, finally_env)
                         let _ = self.exec_block_gen(fb, finally_env)
-
                       }
                       None => ()
                     }
