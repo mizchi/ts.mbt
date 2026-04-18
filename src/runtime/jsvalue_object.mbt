@@ -10,7 +10,7 @@ pub struct JSProp {
   configurable : Bool
   get : JSValue?
   set : JSValue?
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / objectproperty
@@ -18,7 +18,7 @@ pub struct JSPropMap {
   id : Int
   props : Array[JSProp]
   mut prototype : JSValue?
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / array
@@ -29,7 +29,7 @@ pub struct JSArray {
   props : Array[JSProp]
   mut length : Int
   mut prototype : JSValue?
-} derive(Show)
+} derive(Debug)
 
 ///|
 const MAX_DENSE_ARRAY_LENGTH : Int = 1000000
@@ -73,7 +73,7 @@ pub fn JSValue::to_number(self : JSValue) -> Double {
         0.0
       } else {
         // TODO:
-        @strconv.parse_double(s) catch {
+        @string.parse_double(s) catch {
           _ => js_nan
         }
       }
@@ -174,9 +174,9 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
       // Check if this is a TypedArray index access
       match get_typedarray_data(obj) {
         Some(data) => {
-          let idx = @strconv.parse_int(key) catch { _ => -1 }
+          let idx = @string.parse_int(key) catch { _ => -1 }
           if idx >= 0 {
-            if idx < data.length && not(data.buffer.detached) {
+            if idx < data.length && !data.buffer.detached {
               return typedarray_get_element_jsvalue(data, idx)
             }
             return Undefined
@@ -229,7 +229,7 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
           None => Undefined
         }
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < arr.items.length() && arr.present[idx] {
           arr.items[idx]
         } else {
@@ -275,7 +275,7 @@ pub fn js_get_prop(obj : JSValue, key : String) -> JSValue {
       if key == "length" {
         Number(s.length().to_double())
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < s.length() {
           // TODO: charAt
           Undefined
@@ -314,7 +314,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
           if prop.get is Some(_) || prop.set is Some(_) {
             return value
           }
-          if not(prop.writable) {
+          if !prop.writable {
             return prop.value
           }
           closure.props[i] = {
@@ -361,9 +361,9 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
       // Check if this is a TypedArray index access
       match get_typedarray_data(obj) {
         Some(data) => {
-          let idx = @strconv.parse_int(key) catch { _ => -1 }
+          let idx = @string.parse_int(key) catch { _ => -1 }
           if idx >= 0 {
-            if idx < data.length && not(data.buffer.detached) {
+            if idx < data.length && !data.buffer.detached {
               typedarray_set_element_jsvalue(data, idx, value)
             }
             return value
@@ -377,7 +377,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
           if prop.get is Some(_) || prop.set is Some(_) {
             return value
           }
-          if not(prop.writable) {
+          if !prop.writable {
             return prop.value
           }
           map.props[i] = {
@@ -440,7 +440,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
         }
         return value
       }
-      let idx = @strconv.parse_int(key) catch { _ => -1 }
+      let idx = @string.parse_int(key) catch { _ => -1 }
       if idx >= 0 {
         if idx < MAX_DENSE_ARRAY_LENGTH {
           // array
@@ -457,7 +457,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
               if prop.get is Some(_) || prop.set is Some(_) {
                 return value
               }
-              if not(prop.writable) {
+              if !prop.writable {
                 return prop.value
               }
               arr.props[i] = {
@@ -473,7 +473,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
               break
             }
           }
-          if not(replaced) {
+          if !replaced {
             arr.props.push({
               key,
               value,
@@ -495,7 +495,7 @@ pub fn js_set_prop(obj : JSValue, key : String, value : JSValue) -> JSValue {
             if prop.get is Some(_) || prop.set is Some(_) {
               return value
             }
-            if not(prop.writable) {
+            if !prop.writable {
               return prop.value
             }
             arr.props[i] = {
@@ -534,7 +534,7 @@ pub fn js_delete_prop(obj : JSValue, key : String) -> Bool {
       let mut i = 0
       while i < closure.props.length() {
         if closure.props[i].key == key {
-          if not(closure.props[i].configurable) {
+          if !closure.props[i].configurable {
             return false
           }
           let _ = closure.props.remove(i)
@@ -548,7 +548,7 @@ pub fn js_delete_prop(obj : JSValue, key : String) -> Bool {
       let mut i = 0
       while i < map.props.length() {
         if map.props[i].key == key {
-          if not(map.props[i].configurable) {
+          if !map.props[i].configurable {
             return false
           }
           let _ = map.props.remove(i)
@@ -562,14 +562,14 @@ pub fn js_delete_prop(obj : JSValue, key : String) -> Bool {
       if key == "length" {
         false
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < arr.items.length() {
           arr.present[idx] = false
         } else {
           let mut i = 0
           while i < arr.props.length() {
             if arr.props[i].key == key {
-              if not(arr.props[i].configurable) {
+              if !arr.props[i].configurable {
                 return false
               }
               let _ = arr.props.remove(i)
@@ -666,7 +666,7 @@ pub fn js_define_data_prop(
         }
         return value
       }
-      let idx = @strconv.parse_int(key) catch { _ => -1 }
+      let idx = @string.parse_int(key) catch { _ => -1 }
       if idx >= 0 {
         if idx < MAX_DENSE_ARRAY_LENGTH {
           while arr.items.length() <= idx {
@@ -692,7 +692,7 @@ pub fn js_define_data_prop(
               break
             }
           }
-          if not(replaced) {
+          if !replaced {
             arr.props.push({
               key,
               value,
@@ -806,7 +806,7 @@ pub fn js_define_accessor_prop(
       if key == "length" {
         return Undefined
       }
-      let idx = @strconv.parse_int(key) catch { _ => -1 }
+      let idx = @string.parse_int(key) catch { _ => -1 }
       if idx >= 0 {
         let mut replaced = false
         for i, prop in arr.props {
@@ -824,7 +824,7 @@ pub fn js_define_accessor_prop(
             break
           }
         }
-        if not(replaced) {
+        if !replaced {
           arr.props.push({
             key,
             value: Undefined,

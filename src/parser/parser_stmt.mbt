@@ -35,7 +35,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     For => self.parse_for()
     Try => self.parse_try()
     Ident("async") if self.peek_at(1).kind == Function &&
-      not(self.has_line_terminator_after()) => {
+      !self.has_line_terminator_after() => {
       let _ = self.advance()
       self.in_async = true
       let func = self.parse_function()
@@ -66,12 +66,12 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       // Check if break is inside iteration or switch (or has valid label)
       match label {
         None =>
-          if not(self.in_iteration) && not(self.in_switch) {
+          if !self.in_iteration && !self.in_switch {
             raise ParseError("Illegal break statement")
           }
         Some(name) =>
           // Check if label exists
-          if not(self.labels.contains(name)) {
+          if !self.labels.contains(name) {
             raise ParseError("Undefined label '\{name}'")
           }
       }
@@ -96,12 +96,12 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       // Check if continue is inside iteration (or has valid label for an iteration)
       match label {
         None =>
-          if not(self.in_iteration) {
+          if !self.in_iteration {
             raise ParseError("Illegal continue statement")
           }
         Some(name) =>
           // Check if label exists (should be an iteration label for continue)
-          if not(self.labels.contains(name)) {
+          if !self.labels.contains(name) {
             raise ParseError("Undefined label '\{name}'")
           }
       }
@@ -131,7 +131,7 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       Label(name, stmt)
     }
     // yield as label identifier in non-strict mode
-    Yield if not(self.in_strict) && self.peek_at(1).kind == Colon => {
+    Yield if !self.in_strict && self.peek_at(1).kind == Colon => {
       let _ = self.advance()
       let name = "yield"
       let _ = self.expect(Colon)
@@ -182,7 +182,7 @@ fn Parser::parse_var_like(
 // / return statement
 fn Parser::parse_return(self : Parser) -> @ast.TsStmt raise ParseError {
   // Check if return is inside a function
-  if not(self.in_function) {
+  if !self.in_function {
     raise ParseError("Illegal return statement")
   }
   let _ = self.expect(Return)
@@ -303,7 +303,7 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
   let prev_switch = self.in_switch
   self.in_switch = true
   let cases : Array[@ast.TsSwitchCase] = []
-  while not(self.check(RBrace)) {
+  while !self.check(RBrace) {
     let case_test : @ast.TsExpr? = if self.match_(Case) {
       Some(self.parse_expr())
     } else if self.match_(Default) {
@@ -313,9 +313,7 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     let _ = self.expect(Colon)
     let stmts : Array[@ast.TsStmt] = []
-    while not(self.check(Case)) &&
-          not(self.check(Default)) &&
-          not(self.check(RBrace)) {
+    while !self.check(Case) && !self.check(Default) && !self.check(RBrace) {
       stmts.push(self.parse_stmt())
     }
     cases.push({ test_expr: case_test, body: { stmts, } })
@@ -384,7 +382,7 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(LParen)
 
   // for...of check: for (var/let/const x of arr)
-  if (self.check(Let) && not(self.is_let_for_in_head_ident())) ||
+  if (self.check(Let) && !self.is_let_for_in_head_ident()) ||
     self.check(Const) ||
     self.check(Var) {
     let kind = match self.advance().kind {
@@ -811,7 +809,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let stmts : Array[@ast.TsStmt] = []
   let prev_strict = self.in_strict
   let mut in_directive = true
-  while not(self.check(RBrace)) && not(self.check(Eof)) {
+  while !self.check(RBrace) && !self.check(Eof) {
     let stmt = self.parse_stmt()
     if in_directive {
       match stmt {
@@ -863,7 +861,7 @@ fn Parser::is_let_for_in_head_ident(self : Parser) -> Bool {
   if self.in_strict {
     return false
   }
-  if not(self.check(Let)) {
+  if !self.check(Let) {
     return false
   }
   match self.peek_at(1).kind {
@@ -891,16 +889,16 @@ fn Parser::is_disallowed_lexical_stmt_start(
   allow_function : Bool,
 ) -> Bool {
   match self.peek().kind {
-    Let => not(self.is_let_identifier_expr_start())
+    Let => !self.is_let_identifier_expr_start()
     Const | Class => true
     Function =>
       if self.peek_at(1).kind == Star {
         true
       } else {
-        not(allow_function) || self.in_strict
+        !allow_function || self.in_strict
       }
     Ident("async") if self.peek_at(1).kind == Function &&
-      not(self.has_line_terminator_after()) => true
+      !self.has_line_terminator_after() => true
     _ => false
   }
 }

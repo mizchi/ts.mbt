@@ -93,7 +93,7 @@ pub fn run_with_wasmtime(
 
   // Try to parse as number
   try {
-    let v = @strconv.parse_double(result_str)
+    let v = @string.parse_double(result_str)
     RunResult::F64(v)
   } catch {
     _ =>
@@ -103,7 +103,7 @@ pub fn run_with_wasmtime(
       } else {
         // Try parsing as int
         try {
-          let i = @strconv.parse_int(result_str)
+          let i = @string.parse_int(result_str)
           RunResult::I32(i)
         } catch {
           _ => RunResult::Error("Cannot parse result: \{result_str}")

@@ -4,7 +4,7 @@
 // / error
 pub(all) suberror ParseError {
   ParseError(String)
-} derive(Show)
+} derive(Debug)
 
 ///|
 // /
@@ -22,7 +22,7 @@ pub struct Parser {
   src : String
   mut class_id : Int // for private field brand generation
   mut current_class_brand : String? // brand ID of current class being parsed
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / create

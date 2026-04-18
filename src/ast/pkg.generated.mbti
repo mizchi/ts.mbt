@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "mizchi/ts/ast"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 
 // Errors
@@ -9,13 +13,13 @@ package "mizchi/ts/ast"
 pub(all) struct TsArrayBinding {
   items : Array[TsBindingElem?]
   rest : TsBinding?
-}
+} derive(@debug.Debug)
 pub impl Show for TsArrayBinding
 
 pub(all) enum TsArrowBody {
   ArrowExpr(TsExpr)
   ArrowBlock(TsBlock)
-}
+} derive(@debug.Debug)
 pub impl Show for TsArrowBody
 
 pub(all) enum TsBinOp {
@@ -44,8 +48,7 @@ pub(all) enum TsBinOp {
   And
   Or
   Coalesce
-}
-pub impl Eq for TsBinOp
+} derive(Eq, @debug.Debug)
 pub impl Show for TsBinOp
 
 pub(all) enum TsBinding {
@@ -53,18 +56,18 @@ pub(all) enum TsBinding {
   Array(TsArrayBinding)
   Object(TsObjectBinding)
   Target(TsExpr)
-}
+} derive(@debug.Debug)
 pub impl Show for TsBinding
 
 pub(all) struct TsBindingElem {
   binding : TsBinding
   default : TsExpr?
-}
+} derive(@debug.Debug)
 pub impl Show for TsBindingElem
 
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
-}
+} derive(@debug.Debug)
 pub impl Show for TsBlock
 
 pub(all) enum TsCompoundOp {
@@ -83,14 +86,13 @@ pub(all) enum TsCompoundOp {
   AndAssign
   OrAssign
   CoalesceAssign
-}
-pub impl Eq for TsCompoundOp
+} derive(Eq, @debug.Debug)
 pub impl Show for TsCompoundOp
 
 pub(all) struct TsExportSpec {
   local_name : String
   export_name : String
-}
+} derive(@debug.Debug)
 pub impl Show for TsExportSpec
 
 pub(all) enum TsExpr {
@@ -131,7 +133,7 @@ pub(all) enum TsExpr {
   ImportMeta
   TaggedTemplate(TsExpr, Array[String], Array[String], Array[TsExpr])
   TemplateLiteral(Array[String], Array[TsExpr])
-}
+} derive(@debug.Debug)
 pub impl Show for TsExpr
 
 pub(all) enum TsForOfKind {
@@ -139,8 +141,7 @@ pub(all) enum TsForOfKind {
   Let
   Const
   Assign
-}
-pub impl Eq for TsForOfKind
+} derive(Eq, @debug.Debug)
 pub impl Show for TsForOfKind
 
 pub(all) struct TsFunc {
@@ -150,7 +151,7 @@ pub(all) struct TsFunc {
   body : TsBlock
   is_generator : Bool
   is_async : Bool
-}
+} derive(@debug.Debug)
 pub impl Show for TsFunc
 
 pub(all) struct TsImport {
@@ -158,7 +159,7 @@ pub(all) struct TsImport {
   module_ : String
   params : Array[(String, TsType)]
   return_type : TsType
-}
+} derive(@debug.Debug)
 pub impl Show for TsImport
 
 pub(all) struct TsImportDecl {
@@ -168,20 +169,20 @@ pub(all) struct TsImportDecl {
   named_bindings : Array[(String, String)]
   side_effect_only : Bool
   type_only : Bool
-}
+} derive(@debug.Debug)
 pub impl Show for TsImportDecl
 
 pub(all) struct TsInterface {
   name : String
   fields : Array[(String, TsType)]
-}
+} derive(@debug.Debug)
 pub impl Show for TsInterface
 
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
   imports : Array[TsImport]
-}
+} derive(@debug.Debug)
 pub impl Show for TsModule
 
 pub(all) struct TsModuleBlock {
@@ -189,13 +190,13 @@ pub(all) struct TsModuleBlock {
   imports : Array[TsImportDecl]
   exports : Array[TsExportSpec]
   reexports : Array[TsReExportSpec]
-}
+} derive(@debug.Debug)
 pub impl Show for TsModuleBlock
 
 pub(all) struct TsObjectBinding {
   props : Array[TsObjectBindingProp]
   rest : String?
-}
+} derive(@debug.Debug)
 pub impl Show for TsObjectBinding
 
 pub(all) struct TsObjectBindingProp {
@@ -203,7 +204,7 @@ pub(all) struct TsObjectBindingProp {
   key_expr : TsExpr?
   binding : TsBinding
   default : TsExpr?
-}
+} derive(@debug.Debug)
 pub impl Show for TsObjectBindingProp
 
 pub(all) struct TsParam {
@@ -212,20 +213,20 @@ pub(all) struct TsParam {
   is_rest : Bool
   type_ : TsType
   default : TsExpr?
-}
+} derive(@debug.Debug)
 pub impl Show for TsParam
 
 pub(all) enum TsReExportKind {
   Named(Array[(String, String)])
   All
   Namespace(String)
-}
+} derive(@debug.Debug)
 pub impl Show for TsReExportKind
 
 pub(all) struct TsReExportSpec {
   module_spec : String
   kind : TsReExportKind
-}
+} derive(@debug.Debug)
 pub impl Show for TsReExportSpec
 
 pub(all) enum TsStmt {
@@ -255,13 +256,13 @@ pub(all) enum TsStmt {
   Block(TsBlock)
   Break(String?)
   Continue(String?)
-}
+} derive(@debug.Debug)
 pub impl Show for TsStmt
 
 pub(all) struct TsSwitchCase {
   test_expr : TsExpr?
   body : TsBlock
-}
+} derive(@debug.Debug)
 pub impl Show for TsSwitchCase
 
 pub(all) enum TsType {
@@ -285,8 +286,7 @@ pub(all) enum TsType {
   Union(Array[TsType])
   Intersection(Array[TsType])
   Named(String)
-}
-pub impl Eq for TsType
+} derive(Eq, @debug.Debug)
 pub impl Show for TsType
 
 pub(all) enum TsUnaryOp {
@@ -301,30 +301,29 @@ pub(all) enum TsUnaryOp {
   PreDec
   PostInc
   PostDec
-}
-pub impl Eq for TsUnaryOp
+} derive(Eq, @debug.Debug)
 pub impl Show for TsUnaryOp
 
 pub(all) struct TypedExpr {
   expr : TsExpr
   type_ : TsType
-}
+} derive(@debug.Debug)
 pub impl Show for TypedExpr
 
 pub(all) struct TypedFunc {
   func : TsFunc
   locals : Array[(String, TsType)]
-}
+} derive(@debug.Debug)
 pub impl Show for TypedFunc
 
 pub(all) struct TypedModule {
   funcs : Array[TypedFunc]
-}
+} derive(@debug.Debug)
 pub impl Show for TypedModule
 
 pub(all) struct TypedStmt {
   stmt : TsStmt
-}
+} derive(@debug.Debug)
 pub impl Show for TypedStmt
 
 // Type aliases

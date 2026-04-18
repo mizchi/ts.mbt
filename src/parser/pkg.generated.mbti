@@ -3,9 +3,14 @@ package "mizchi/ts/parser"
 
 import {
   "mizchi/ts/ast",
+  "moonbitlang/core/debug",
 }
 
 // Values
+pub fn emit_moonbit_decl(@ast.TsModule) -> String
+
+pub fn emit_moonbit_decl_from_source(String) -> String raise ParseError
+
 pub fn parse_block_from_source(String) -> @ast.TsBlock raise ParseError
 
 pub fn parse_block_from_source_strict(String, Bool) -> @ast.TsBlock raise ParseError
@@ -19,7 +24,7 @@ pub fn parse_module_block_from_source(String) -> @ast.TsModuleBlock raise ParseE
 // Errors
 pub(all) suberror ParseError {
   ParseError(String)
-}
+} derive(@debug.Debug)
 pub impl Show for ParseError
 
 // Types and methods
@@ -30,7 +35,7 @@ pub struct Lexer {
   mut pending : Array[Token]
   mut pending_index : Int
   mut newline_before_next : Bool
-}
+} derive(@debug.Debug)
 pub fn Lexer::new(String) -> Self
 pub fn Lexer::next_token(Self) -> Token
 pub fn Lexer::tokenize(Self) -> Array[Token]
@@ -50,7 +55,7 @@ pub struct Parser {
   src : String
   mut class_id : Int
   mut current_class_brand : String?
-}
+} derive(@debug.Debug)
 pub fn Parser::from_source(String) -> Self
 pub fn Parser::new(Array[Token]) -> Self
 pub fn Parser::new_with_strict(Array[Token], Bool) -> Self
@@ -68,7 +73,7 @@ pub struct Token {
   kind : TokenKind
   pos : Int
   has_newline_before : Bool
-}
+} derive(@debug.Debug)
 pub impl Show for Token
 
 pub enum TokenKind {
@@ -182,8 +187,7 @@ pub enum TokenKind {
   Declare
   Null
   Eof
-}
-pub impl Eq for TokenKind
+} derive(Eq, @debug.Debug)
 pub impl Show for TokenKind
 
 // Type aliases

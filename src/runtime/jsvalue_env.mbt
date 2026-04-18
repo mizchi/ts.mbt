@@ -7,14 +7,14 @@ pub struct JSBinding {
   mut value : JSValue
   mut is_const : Bool
   mut is_uninitialized : Bool
-} derive(Show)
+} derive(Debug)
 
 ///|
 // /
 pub struct JSEnv {
   parent : JSEnv?
   bindings : Array[JSBinding]
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / create

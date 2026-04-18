@@ -19,7 +19,9 @@ pub struct AOTCompilationResult {
 ///|
 /// Compile all compilable functions in a module to wasm-gc.
 /// Returns both the compiled functions and the functions that couldn't be compiled.
-pub fn compile_module_aot(mod : @ast.TsModule) -> AOTCompilationResult {
+pub fn experimental_compile_module_aot(
+  mod : @ast.TsModule,
+) -> AOTCompilationResult {
   let compiled : Array[AOTCompiledFunction] = []
   let uncompiled : Array[@ast.TsFunc] = []
   // Find compilable functions
@@ -41,7 +43,7 @@ pub fn compile_module_aot(mod : @ast.TsModule) -> AOTCompilationResult {
   }
   // Add non-compilable functions to uncompiled
   for func in mod.funcs {
-    if not(compilable_names.contains(func.name)) {
+    if !compilable_names.contains(func.name) {
       uncompiled.push(func)
     }
   }
@@ -55,7 +57,7 @@ fn compile_single_function(func : @ast.TsFunc) -> (Bytes, UInt)? {
   // Create a minimal module with just this function
   let mod : @ast.TsModule = { funcs: [func], interfaces: [], imports: [] }
   try {
-    let wasm_module = @codegen.compile_module_gc(mod)
+    let wasm_module = @codegen.experimental_compile_module_gc(mod)
     // Encode the module to bytes
     let encoded = @encode.encode(wasm_module)
     // The function index is 0 since it's the only function
@@ -67,13 +69,13 @@ fn compile_single_function(func : @ast.TsFunc) -> (Bytes, UInt)? {
 
 ///|
 /// Check if a function is compilable to wasm-gc.
-pub fn is_function_compilable(func : @ast.TsFunc) -> Bool {
+pub fn experimental_is_function_compilable(func : @ast.TsFunc) -> Bool {
   @analysis.can_compile_to_wasm(func).is_compilable()
 }
 
 ///|
 /// Get compilation info for a module (useful for debugging).
-pub fn get_compilation_info(
+pub fn experimental_get_compilation_info(
   mod : @ast.TsModule,
 ) -> (Int, Int, Array[String], Array[String]) {
   let compilable : Array[String] = []

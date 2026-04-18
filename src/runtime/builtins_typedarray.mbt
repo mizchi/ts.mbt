@@ -6,7 +6,7 @@ pub struct JSByteBuffer {
   id : Int
   data : Array[Byte]
   mut detached : Bool
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// ByteBuffer ID generator
@@ -45,7 +45,7 @@ pub enum TypedArrayKind {
   Float64Array
   BigInt64Array
   BigUint64Array
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// Get bytes per element for TypedArray type
@@ -84,7 +84,7 @@ pub struct TypedArrayData {
   byte_offset : Int
   byte_length : Int
   length : Int
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Global storage for ByteBuffers (referenced by ID from Objects)
@@ -697,7 +697,7 @@ fn JSInterpreter::create_typedarray(
             if byte_offset < 0 || byte_offset > buffer_byte_length {
               return self.set_error_kind("RangeError", "Invalid byte offset")
             }
-            let length = if args.length() > 2 && not(args[2].is_undefined()) {
+            let length = if args.length() > 2 && !args[2].is_undefined() {
               let len = args[2].to_number().to_int()
               if len < 0 {
                 return self.set_error_kind(
@@ -982,7 +982,7 @@ fn JSInterpreter::typedarray_set(
                       break
                     }
                   }
-                  if not(valid) {
+                  if !valid {
                     return self.set_error_kind(
                       "SyntaxError", "Cannot convert to BigInt",
                     )
@@ -1034,7 +1034,7 @@ fn JSInterpreter::typedarray_subarray(
       } else {
         0
       }
-      let end_arg = if args.length() > 1 && not(args[1].is_undefined()) {
+      let end_arg = if args.length() > 1 && !args[1].is_undefined() {
         args[1].to_number().to_int()
       } else {
         length
@@ -1103,7 +1103,7 @@ fn JSInterpreter::typedarray_slice(
       } else {
         0
       }
-      let end_arg = if args.length() > 1 && not(args[1].is_undefined()) {
+      let end_arg = if args.length() > 1 && !args[1].is_undefined() {
         args[1].to_number().to_int()
       } else {
         length
@@ -1195,7 +1195,7 @@ fn JSInterpreter::typedarray_fill(
       } else {
         0
       }
-      let end_arg = if args.length() > 2 && not(args[2].is_undefined()) {
+      let end_arg = if args.length() > 2 && !args[2].is_undefined() {
         args[2].to_number().to_int()
       } else {
         length
@@ -1306,7 +1306,7 @@ fn JSInterpreter::typedarray_copy_within(
         0
       }
       // Coerce end to integer (with error handling)
-      let end_arg = if args.length() > 2 && not(args[2].is_undefined()) {
+      let end_arg = if args.length() > 2 && !args[2].is_undefined() {
         match self.to_integer_or_error(args[2]) {
           Some(n) => n
           None => return self.error_or_undefined()
@@ -1638,7 +1638,7 @@ fn JSInterpreter::typedarray_every(
           Number(i.to_double()),
           this_arg,
         ])
-        if not(result.to_boolean()) {
+        if !result.to_boolean() {
           return Bool(false)
         }
       }
@@ -1886,7 +1886,7 @@ fn JSInterpreter::typedarray_join(
 ) -> JSValue {
   match get_typedarray_data(this_arg) {
     Some(data) => {
-      let sep = if args.length() > 0 && not(args[0].is_undefined()) {
+      let sep = if args.length() > 0 && !args[0].is_undefined() {
         args[0].to_js_string()
       } else {
         ","
@@ -2164,7 +2164,7 @@ fn JSInterpreter::create_dataview(
     return self.set_error_kind("TypeError", "DataView requires ArrayBuffer")
   }
   let buffer = args[0]
-  if not(is_arraybuffer(buffer)) {
+  if !is_arraybuffer(buffer) {
     return self.set_error_kind(
       "TypeError", "First argument must be an ArrayBuffer",
     )
@@ -2183,7 +2183,7 @@ fn JSInterpreter::create_dataview(
       if byte_offset < 0 || byte_offset > buffer_byte_length {
         return self.set_error_kind("RangeError", "Invalid byte offset")
       }
-      let byte_length = if args.length() > 2 && not(args[2].is_undefined()) {
+      let byte_length = if args.length() > 2 && !args[2].is_undefined() {
         let len = args[2].to_number().to_int()
         if len < 0 || byte_offset + len > buffer_byte_length {
           return self.set_error_kind("RangeError", "Invalid byte length")
@@ -2214,7 +2214,7 @@ fn JSInterpreter::dataview_get(
   args : Array[JSValue],
   type_name : String,
 ) -> JSValue {
-  if not(is_dataview(this_arg)) {
+  if !is_dataview(this_arg) {
     return self.set_error_kind("TypeError", "Not a DataView")
   }
   let buf_id = match js_get_prop(this_arg, "__dv_buffer_id") {
@@ -2310,7 +2310,7 @@ fn JSInterpreter::dataview_set(
   args : Array[JSValue],
   type_name : String,
 ) -> JSValue {
-  if not(is_dataview(this_arg)) {
+  if !is_dataview(this_arg) {
     return self.set_error_kind("TypeError", "Not a DataView")
   }
   let buf_id = match js_get_prop(this_arg, "__dv_buffer_id") {

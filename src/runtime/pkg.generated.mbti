@@ -5,6 +5,7 @@ import {
   "mizchi/ts/ast",
   "mizchi/ts/parser",
   "moonbitlang/core/bigint",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -308,8 +309,9 @@ pub struct CompiledFunc {
   ast : @ast.TsFunc
   wasm_bytes : Bytes
   func_index : UInt
-}
+} derive(@debug.Debug)
 pub fn CompiledFunc::new(String, @ast.TsFunc, Bytes, UInt) -> Self
+pub impl Show for CompiledFunc
 
 pub struct GCStats {
   mut objects_created : Int
@@ -334,7 +336,7 @@ pub struct JSArray {
   props : Array[JSProp]
   mut length : Int
   mut prototype : JSValue?
-}
+} derive(@debug.Debug)
 pub impl Show for JSArray
 
 pub struct JSBinding {
@@ -342,14 +344,14 @@ pub struct JSBinding {
   mut value : JSValue
   mut is_const : Bool
   mut is_uninitialized : Bool
-}
+} derive(@debug.Debug)
 pub impl Show for JSBinding
 
 pub struct JSByteBuffer {
   id : Int
   data : Array[Byte]
   mut detached : Bool
-}
+} derive(@debug.Debug)
 pub impl Show for JSByteBuffer
 
 pub struct JSClosure {
@@ -363,13 +365,13 @@ pub struct JSClosure {
   is_async : Bool
   props : Array[JSProp]
   mut object_proto : JSValue?
-}
+} derive(@debug.Debug)
 pub impl Show for JSClosure
 
 pub struct JSEnv {
   parent : JSEnv?
   bindings : Array[JSBinding]
-}
+} derive(@debug.Debug)
 pub fn JSEnv::define_const(Self, String, JSValue) -> Unit
 pub fn JSEnv::define_uninitialized(Self, String, Bool) -> Unit
 pub fn JSEnv::define_var(Self, String, JSValue) -> Unit
@@ -388,7 +390,7 @@ pub enum JSFuncBody {
   Native(String)
   Bound(JSValue, JSValue, Array[JSValue])
   Compiled(CompiledFunc)
-}
+} derive(@debug.Debug)
 pub impl Show for JSFuncBody
 
 pub(all) struct JSGeneratorState {
@@ -454,14 +456,14 @@ pub struct JSProp {
   configurable : Bool
   get : JSValue?
   set : JSValue?
-}
+} derive(@debug.Debug)
 pub impl Show for JSProp
 
 pub struct JSPropMap {
   id : Int
   props : Array[JSProp]
   mut prototype : JSValue?
-}
+} derive(@debug.Debug)
 pub impl Show for JSPropMap
 
 pub enum JSTag {
@@ -474,10 +476,9 @@ pub enum JSTag {
   Array
   Function
   BigInt
-}
+} derive(Eq, @debug.Debug)
 pub fn JSTag::from_i32(Int) -> Self
 pub fn JSTag::to_i32(Self) -> Int
-pub impl Eq for JSTag
 pub impl Show for JSTag
 
 pub enum JSValue {
@@ -493,7 +494,7 @@ pub enum JSValue {
   BreakSignal(String?)
   ContinueSignal(String?)
   Empty
-}
+} derive(@debug.Debug)
 pub fn JSValue::is_array(Self) -> Bool
 pub fn JSValue::is_bigint(Self) -> Bool
 pub fn JSValue::is_bool(Self) -> Bool
@@ -529,7 +530,7 @@ pub struct TypedArrayData {
   byte_offset : Int
   byte_length : Int
   length : Int
-}
+} derive(@debug.Debug)
 pub impl Show for TypedArrayData
 
 pub enum TypedArrayKind {
@@ -544,11 +545,10 @@ pub enum TypedArrayKind {
   Float64Array
   BigInt64Array
   BigUint64Array
-}
+} derive(Eq, @debug.Debug)
 pub fn TypedArrayKind::bytes_per_element(Self) -> Int
 pub fn TypedArrayKind::is_bigint_type(Self) -> Bool
 pub fn TypedArrayKind::type_name(Self) -> String
-pub impl Eq for TypedArrayKind
 pub impl Show for TypedArrayKind
 
 // Type aliases

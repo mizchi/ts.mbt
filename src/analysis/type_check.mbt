@@ -147,7 +147,7 @@ fn type_check_function(ctx : FlowTypeCtx, func : @ast.TsFunc) -> @ast.TypedFunc 
     func.return_type != @ast.TsType::Any {
     let inferred_return = ctx.get_return_type()
     if inferred_return != @ast.TsType::Void &&
-      not(is_assignable(inferred_return, func.return_type)) {
+      !is_assignable(inferred_return, func.return_type) {
       ctx.add_constraint(
         Assignable(inferred_return, func.return_type, SourceLoc::unknown()),
       )
@@ -287,8 +287,8 @@ fn type_check_stmt(
           Some(test_e) => {
             let case_type = infer_expr_flow(ctx, test_e)
             // Check case type is compatible
-            if not(is_assignable(case_type, disc_type)) &&
-              not(is_assignable(disc_type, case_type)) {
+            if !is_assignable(case_type, disc_type) &&
+              !is_assignable(disc_type, case_type) {
               ctx.add_constraint(
                 Equal(case_type, disc_type, SourceLoc::unknown()),
               )
@@ -522,7 +522,7 @@ fn infer_expr_flow(ctx : FlowTypeCtx, expr : @ast.TsExpr) -> @ast.TsType {
             let arg_type = infer_expr_flow(ctx, args[i])
             if i < param_types.length() {
               let param_type = param_types[i]
-              if not(is_assignable(arg_type, param_type)) {
+              if !is_assignable(arg_type, param_type) {
                 ctx.add_constraint(
                   Assignable(arg_type, param_type, SourceLoc::unknown()),
                 )
@@ -548,7 +548,7 @@ fn infer_expr_flow(ctx : FlowTypeCtx, expr : @ast.TsExpr) -> @ast.TsType {
             let arg_type = infer_expr_flow(ctx, args[i])
             if i < param_types.length() {
               let param_type = param_types[i]
-              if not(is_assignable(arg_type, param_type)) {
+              if !is_assignable(arg_type, param_type) {
                 ctx.add_constraint(
                   Assignable(arg_type, param_type, SourceLoc::unknown()),
                 )
@@ -577,7 +577,7 @@ fn infer_expr_flow(ctx : FlowTypeCtx, expr : @ast.TsExpr) -> @ast.TsType {
             let arg_type = infer_expr_flow(ctx, args[i])
             if i < param_types.length() {
               let param_type = param_types[i]
-              if not(is_assignable(arg_type, param_type)) {
+              if !is_assignable(arg_type, param_type) {
                 ctx.add_constraint(
                   Assignable(arg_type, param_type, SourceLoc::unknown()),
                 )

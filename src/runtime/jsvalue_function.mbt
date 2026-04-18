@@ -13,7 +13,7 @@ pub struct JSClosure {
   is_async : Bool
   props : Array[JSProp]
   mut object_proto : JSValue?
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Compiled wasm function representation for AOT compilation.
@@ -22,10 +22,10 @@ pub struct CompiledFunc {
   ast : @ast.TsFunc // Original AST for fallback
   wasm_bytes : Bytes // Compiled wasm-gc module
   func_index : UInt // Function index in the wasm module
-}
+} derive(Debug)
 
 ///|
-impl Show for CompiledFunc with output(self, logger) {
+pub impl Show for CompiledFunc with output(self, logger) {
   logger.write_string("CompiledFunc(\{self.name}, index=\{self.func_index})")
 }
 
@@ -79,7 +79,7 @@ pub enum JSFuncBody {
   Native(String) // Built-in native function
   Bound(JSValue, JSValue, Array[JSValue]) // target, thisArg, bound args
   Compiled(CompiledFunc) // AOT compiled to wasm-gc
-} derive(Show)
+} derive(Debug)
 
 // === ID generator (object/function/array identity) ===
 

@@ -34,18 +34,18 @@ update:
 clean:
     rm -rf _build target
 
-# Emit wasm-gc binary
-emit-gc file output="out.wasm":
-    moon run src -- emit-gc {{file}} {{output}}
+# Emit experimental wasm-gc binary
+experimental-emit-gc file output="out.wasm":
+    moon run src -- experimental-emit-gc {{file}} {{output}}
 
-# Run wasm-gc tests with wasmtime
-wasmtime-test:
+# Run experimental wasm-gc tests with wasmtime
+experimental-wasmtime-test:
     #!/usr/bin/env bash
     set -e
     echo "=== wasmtime-gc integration tests ==="
 
     # Simple function tests
-    moon run src -- emit-gc tests/wasmtime/simple.ts tests/wasmtime/simple.wasm
+    moon run src -- experimental-emit-gc tests/wasmtime/simple.ts tests/wasmtime/simple.wasm
 
     # Test factorial (filter out warnings, get last line which is the result)
     result=$(wasmtime --wasm gc --invoke factorial tests/wasmtime/simple.wasm 5.0 2>&1 | tail -1)
@@ -66,7 +66,7 @@ wasmtime-test:
     fi
 
     # Struct tests
-    moon run src -- emit-gc tests/wasmtime/struct_basic.ts tests/wasmtime/struct_basic.wasm
+    moon run src -- experimental-emit-gc tests/wasmtime/struct_basic.ts tests/wasmtime/struct_basic.wasm
 
     result=$(wasmtime --wasm gc --invoke createPoint tests/wasmtime/struct_basic.wasm 2>&1 | tail -1)
     if [ "$result" = "30" ]; then
@@ -77,7 +77,7 @@ wasmtime-test:
     fi
 
     # Array tests
-    moon run src -- emit-gc tests/wasmtime/array.ts tests/wasmtime/array.wasm
+    moon run src -- experimental-emit-gc tests/wasmtime/array.ts tests/wasmtime/array.wasm
 
     result=$(wasmtime --wasm gc --invoke sumArray tests/wasmtime/array.wasm 2>&1 | tail -1)
     if [ "$result" = "60" ]; then
@@ -88,7 +88,7 @@ wasmtime-test:
     fi
 
     # Math function tests
-    moon run src -- emit-gc tests/wasmtime/math.ts tests/wasmtime/math.wasm
+    moon run src -- experimental-emit-gc tests/wasmtime/math.ts tests/wasmtime/math.wasm
 
     result=$(wasmtime --wasm gc --invoke testSqrt tests/wasmtime/math.wasm 16.0 2>&1 | tail -1)
     if [ "$result" = "4" ]; then
@@ -108,27 +108,27 @@ wasmtime-test:
 
     echo "=== All wasmtime tests passed ==="
 
-# AOT check - verify fixtures are AOT compilable
-aot-check:
+# Experimental AOT check - verify fixtures are AOT compilable
+experimental-aot-check:
     #!/usr/bin/env bash
     set -e
     echo "=== AOT Compilability Check ==="
 
     echo "Checking fixtures/aot/simple.ts..."
-    moon run src -- aot-check fixtures/aot/simple.ts
+    moon run src -- experimental-aot-check fixtures/aot/simple.ts
 
     echo "Checking fixtures/aot/closure_readonly.ts..."
-    moon run src -- aot-check fixtures/aot/closure_readonly.ts
+    moon run src -- experimental-aot-check fixtures/aot/closure_readonly.ts
 
     echo "Checking fixtures/aot/closure_mutable.ts..."
-    moon run src -- aot-check fixtures/aot/closure_mutable.ts
+    moon run src -- experimental-aot-check fixtures/aot/closure_mutable.ts
 
     echo "Checking fixtures/aot/generator.ts..."
-    moon run src -- aot-check fixtures/aot/generator.ts
+    moon run src -- experimental-aot-check fixtures/aot/generator.ts
 
     echo ""
     echo "Checking not_aot_compatible.ts (should fail)..."
-    if moon run src -- aot-check fixtures/aot/not_aot_compatible.ts 2>&1 | grep -q "not.*compilable\|incompatible"; then
+    if moon run src -- experimental-aot-check fixtures/aot/not_aot_compatible.ts 2>&1 | grep -q "not.*compilable\|incompatible"; then
         echo "PASS: Correctly identified as not AOT compilable"
     else
         echo "Note: May contain some AOT-incompatible functions"
@@ -136,39 +136,39 @@ aot-check:
 
     echo "=== AOT check complete ==="
 
-# AOT compile all fixtures to wasm
-aot-compile:
+# Experimental AOT compile all fixtures to wasm
+experimental-aot-compile:
     #!/usr/bin/env bash
     set -e
     mkdir -p _build/aot
     echo "=== AOT Compile Fixtures ==="
 
     echo "Compiling fixtures/aot/simple.ts..."
-    moon run src -- emit-gc fixtures/aot/simple.ts _build/aot/simple.wasm
+    moon run src -- experimental-emit-gc fixtures/aot/simple.ts _build/aot/simple.wasm
 
     echo "Compiling fixtures/aot/closure_readonly.ts..."
-    moon run src -- emit-gc fixtures/aot/closure_readonly.ts _build/aot/closure_readonly.wasm
+    moon run src -- experimental-emit-gc fixtures/aot/closure_readonly.ts _build/aot/closure_readonly.wasm
 
     echo "Compiling fixtures/aot/closure_mutable.ts..."
-    moon run src -- emit-gc fixtures/aot/closure_mutable.ts _build/aot/closure_mutable.wasm
+    moon run src -- experimental-emit-gc fixtures/aot/closure_mutable.ts _build/aot/closure_mutable.wasm
 
     echo "Compiling fixtures/aot/generator.ts..."
-    moon run src -- emit-gc fixtures/aot/generator.ts _build/aot/generator.wasm
+    moon run src -- experimental-emit-gc fixtures/aot/generator.ts _build/aot/generator.wasm
 
     echo ""
     echo "Generated files:"
     ls -la _build/aot/*.wasm
     echo "=== AOT compile complete ==="
 
-# AOT test - compile and run fixtures with wasmtime
-aot-test:
+# Experimental AOT test - compile and run fixtures with wasmtime
+experimental-aot-test:
     #!/usr/bin/env bash
     set -e
     echo "=== AOT Test with wasmtime ==="
 
     # Compile
     mkdir -p _build/aot
-    moon run src -- emit-gc fixtures/aot/simple.ts _build/aot/simple.wasm
+    moon run src -- experimental-emit-gc fixtures/aot/simple.ts _build/aot/simple.wasm
 
     # Test simple functions
     echo "Testing add(2.0, 3.0)..."
@@ -219,7 +219,7 @@ aot-test:
     echo "=== All AOT tests passed ==="
 
 # List available AOT fixtures
-aot-list:
+experimental-aot-list:
     @echo "AOT Fixtures:"
     @echo "  fixtures/aot/simple.ts           - Basic pure functions"
     @echo "  fixtures/aot/closure_readonly.ts - Closures with read-only captures"

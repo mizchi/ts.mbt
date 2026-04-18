@@ -182,7 +182,7 @@ pub fn compare_array(
   while i < len1 {
     let elem1 = get_arraylike_element(actual, i)
     let elem2 = get_arraylike_element(expected, i)
-    if not(is_same_value(elem1, elem2)) {
+    if !is_same_value(elem1, elem2) {
       return Failure(
         prefix +
         "Arrays differ at index " +

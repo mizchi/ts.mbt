@@ -631,6 +631,31 @@ test "parser: parse string type" {
 }
 
 ///|
+test "parser: parse template literal type" {
+  let parser = Parser::from_source("`section-${string}`")
+  let t = parser.parse_type()
+  match t {
+    String_ => ()
+    _ => fail("expected String_ for template literal type, got \{t}")
+  }
+}
+
+///|
+test "parser: parse interface method with template literal return type" {
+  let src =
+    #|interface Crypto {
+    #|  randomUUID(): `${string}-${string}-${string}-${string}-${string}`;
+    #|}
+  let parser = Parser::from_source(src)
+  let iface = parser.parse_interface()
+  assert_eq(iface.name, "Crypto")
+  assert_eq(iface.fields.length(), 1)
+  let (name, type_) = iface.fields[0]
+  assert_eq(name, "randomUUID")
+  assert_eq(type_, String_)
+}
+
+///|
 test "parser: parse let with string" {
   let parser = Parser::from_source("let s: string = \"hello\";")
   let stmt = parser.parse_stmt()

@@ -91,7 +91,7 @@ fn JSInterpreter::ensure_iterator_object_with_next(
     }
     _ => ()
   }
-  if not(self.is_callable(iter_method)) {
+  if !self.is_callable(iter_method) {
     let _ = self.set_error_kind(
       "TypeError", "Iterator @@iterator is not callable",
     )
@@ -116,7 +116,7 @@ fn JSInterpreter::ensure_iterator_object_with_next(
     Some(_) => return None
     None => ()
   }
-  if not(self.is_callable(next_method)) {
+  if !self.is_callable(next_method) {
     let _ = self.set_error_kind("TypeError", "Iterator next is not callable")
     return None
   }
@@ -247,7 +247,7 @@ pub fn JSInterpreter::iterator_from(
   match iter_method {
     Undefined | Null => ()
     _ => {
-      if not(self.is_callable(iter_method)) {
+      if !self.is_callable(iter_method) {
         return self.set_error_kind(
           "TypeError", "Iterator.from @@iterator is not callable",
         )
@@ -271,7 +271,7 @@ pub fn JSInterpreter::iterator_from(
     Some(err) => return err
     None => ()
   }
-  if not(self.is_callable(next_method)) {
+  if !self.is_callable(next_method) {
     return self.set_error_kind("TypeError", "Iterator next is not callable")
   }
   if self.ordinary_has_instance(ctor, iterator) {
@@ -289,7 +289,7 @@ pub fn JSInterpreter::iterator_map(
   args : Array[JSValue],
 ) -> JSValue {
   let mapper = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(mapper)) {
+  if !self.is_callable(mapper) {
     return self.set_error_kind("TypeError", "mapper is not callable")
   }
   let (iter, next_method) = match
@@ -312,7 +312,7 @@ pub fn JSInterpreter::iterator_filter(
   args : Array[JSValue],
 ) -> JSValue {
   let predicate = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(predicate)) {
+  if !self.is_callable(predicate) {
     return self.set_error_kind("TypeError", "predicate is not callable")
   }
   let (iter, next_method) = match
@@ -383,7 +383,7 @@ pub fn JSInterpreter::iterator_flat_map(
   args : Array[JSValue],
 ) -> JSValue {
   let mapper = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(mapper)) {
+  if !self.is_callable(mapper) {
     return self.set_error_kind("TypeError", "mapper is not callable")
   }
   let (iter, next_method) = match
@@ -407,7 +407,7 @@ pub fn JSInterpreter::iterator_for_each(
   args : Array[JSValue],
 ) -> JSValue {
   let callback = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(callback)) {
+  if !self.is_callable(callback) {
     self.iterator_close(this_arg)
     return self.set_error_kind("TypeError", "callback is not callable")
   }
@@ -477,7 +477,7 @@ pub fn JSInterpreter::iterator_reduce(
   args : Array[JSValue],
 ) -> JSValue {
   let reducer = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(reducer)) {
+  if !self.is_callable(reducer) {
     self.iterator_close(this_arg)
     return self.set_error_kind("TypeError", "reducer is not callable")
   }
@@ -499,7 +499,7 @@ pub fn JSInterpreter::iterator_reduce(
     }
     let done = self.get_prop_value(result, "done").to_boolean()
     if done {
-      if not(has_acc) {
+      if !has_acc {
         return self.set_error_kind(
           "TypeError", "Reduce of empty iterator with no initial value",
         )
@@ -507,7 +507,7 @@ pub fn JSInterpreter::iterator_reduce(
       return acc
     }
     let value = self.get_prop_value(result, "value")
-    if not(has_acc) {
+    if !has_acc {
       acc = value
       has_acc = true
       idx += 1
@@ -538,7 +538,7 @@ pub fn JSInterpreter::iterator_every(
   args : Array[JSValue],
 ) -> JSValue {
   let predicate = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(predicate)) {
+  if !self.is_callable(predicate) {
     self.iterator_close(this_arg)
     return self.set_error_kind("TypeError", "predicate is not callable")
   }
@@ -569,7 +569,7 @@ pub fn JSInterpreter::iterator_every(
       }
       None => ()
     }
-    if not(passed.to_boolean()) {
+    if !passed.to_boolean() {
       self.iterator_close(iter)
       return Bool(false)
     }
@@ -585,7 +585,7 @@ pub fn JSInterpreter::iterator_some(
   args : Array[JSValue],
 ) -> JSValue {
   let predicate = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(predicate)) {
+  if !self.is_callable(predicate) {
     self.iterator_close(this_arg)
     return self.set_error_kind("TypeError", "predicate is not callable")
   }
@@ -632,7 +632,7 @@ pub fn JSInterpreter::iterator_find(
   args : Array[JSValue],
 ) -> JSValue {
   let predicate = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(predicate)) {
+  if !self.is_callable(predicate) {
     self.iterator_close(this_arg)
     return self.set_error_kind("TypeError", "predicate is not callable")
   }

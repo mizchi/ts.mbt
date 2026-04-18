@@ -118,6 +118,7 @@ async test "parser: parse TypeScript lib d.ts files" {
     for item in failures {
       println(item)
     }
+    fail("Expected all TypeScript lib files to parse")
   }
 }
 
@@ -363,7 +364,7 @@ async test "parser: compare es5 interface fields" {
       ]
       let missing : Array[String] = []
       for name in expected {
-        if not(fields.contains(name)) {
+        if !fields.contains(name) {
           missing.push(name)
         }
       }

@@ -16,13 +16,13 @@ pub struct GenStateMachine {
   initial_state : Int
   /// Done state index
   done_state : Int
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// A variable in the generator state struct.
 pub struct GenVar {
   name : String
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// A state in the generator state machine.
@@ -33,7 +33,7 @@ pub struct GenState {
   label : String
   /// Instructions to execute in this state
   body : Array[GenInstr]
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Instructions in the generator state machine IR.
@@ -56,7 +56,7 @@ pub enum GenInstr {
   TryCatch(Array[GenInstr], String?, Array[GenInstr], Array[GenInstr]?)
   /// Throw exception with value
   Throw(GenExpr)
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Expressions in the generator IR (simplified from AST).
@@ -93,7 +93,7 @@ pub enum GenExpr {
   Cond(GenExpr, GenExpr, GenExpr)
   /// Raw AST expression (fallback for complex cases)
   Raw(@ast.TsExpr)
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Binary operators in generator IR.
@@ -118,7 +118,7 @@ pub enum GenBinOp {
   Shr
   Ushr
   Other(@ast.TsBinOp)
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Unary operators in generator IR.
@@ -128,11 +128,11 @@ pub enum GenUnaryOp {
   BitNot
   TypeOf
   Other(@ast.TsUnaryOp)
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Transform a generator function and its analysis into state machine IR.
-pub fn transform_to_state_machine(
+pub fn experimental_transform_to_state_machine(
   func : @ast.TsFunc,
   analysis : @analysis.GeneratorAnalysis,
 ) -> GenStateMachine {
@@ -145,7 +145,7 @@ pub fn transform_to_state_machine(
   // Build locals from analysis
   let locals : Array[GenVar] = []
   for v in analysis.persisted_vars {
-    if not(v.is_param) {
+    if !v.is_param {
       locals.push({ name: v.name })
     }
   }

@@ -44,7 +44,7 @@ fn extract_private_name(key : String) -> String {
   let mut idx = 0
   while idx < len - 2 {
     if key[idx] == '_' && key[idx + 1] == '_' && key[idx + 2] == '#' {
-      return key[idx + 2:].to_string() catch { _ => key }
+      return key[idx + 2:].to_string()
     }
     idx += 1
   }
@@ -160,7 +160,7 @@ fn extract_private_brand(key : String) -> String? {
       while idx < len - 2 {
         if key[idx] == '_' && key[idx + 1] == '_' && key[idx + 2] == '#' {
           // Brand is everything before "__#"
-          let brand = key[:idx].to_string() catch { _ => "" }
+          let brand = key[:idx].to_string()
           return Some(brand)
         }
         idx += 1
@@ -197,9 +197,7 @@ fn JSInterpreter::check_private_brand(
           }
           idx += 1
         }
-        key[idx + 2:].to_string() catch {
-          _ => key
-        }
+        key[idx + 2:].to_string()
       } else {
         key
       }
@@ -290,7 +288,7 @@ fn JSInterpreter::get_proxy_trap(
   match trap {
     Undefined | Null => None
     _ =>
-      if not(self.is_callable(trap)) {
+      if !self.is_callable(trap) {
         let _ = self.set_error_kind("TypeError", "Proxy trap is not callable")
         None
       } else {
@@ -518,7 +516,7 @@ fn JSInterpreter::set_prop_value(
   // Check private field brand before access
   match extract_private_brand(key) {
     Some(brand) => {
-      if not(self.check_private_brand(obj, brand, key)) {
+      if !self.check_private_brand(obj, brand, key) {
         return
       }
       // PrivateSet throws TypeError when:
@@ -571,7 +569,7 @@ fn JSInterpreter::set_prop_value(
               return
             }
             None =>
-              if not(prop.writable) {
+              if !prop.writable {
                 if strict {
                   let _ = self.set_error_kind(
                     "TypeError",
@@ -590,9 +588,9 @@ fn JSInterpreter::set_prop_value(
       // Check if this is a TypedArray index access
       match get_typedarray_data(obj) {
         Some(data) => {
-          let idx = @strconv.parse_int(key) catch { _ => -1 }
+          let idx = @string.parse_int(key) catch { _ => -1 }
           if idx >= 0 {
-            if idx < data.length && not(data.buffer.detached) {
+            if idx < data.length && !data.buffer.detached {
               typedarray_set_element_jsvalue(data, idx, value)
             }
             return
@@ -608,7 +606,7 @@ fn JSInterpreter::set_prop_value(
               return
             }
             None =>
-              if not(prop.writable) {
+              if !prop.writable {
                 if strict {
                   let _ = self.set_error_kind(
                     "TypeError",
@@ -633,7 +631,7 @@ fn JSInterpreter::set_prop_value(
               return
             }
             None =>
-              if not(prop.writable) {
+              if !prop.writable {
                 if strict {
                   let _ = self.set_error_kind(
                     "TypeError",
@@ -651,7 +649,7 @@ fn JSInterpreter::set_prop_value(
     _ => ()
   }
   // Check if object is non-extensible and we're adding a new property
-  if strict && not(self.has_own_prop(obj, key)) {
+  if strict && !self.has_own_prop(obj, key) {
     match js_get_prop(obj, "__non_extensible") {
       Bool(true) => {
         let _ = self.set_error_kind(
@@ -681,7 +679,7 @@ fn JSInterpreter::get_prop_value_with_receiver(
   // Check private field brand before access
   match extract_private_brand(key) {
     Some(brand) =>
-      if not(self.check_private_brand(receiver, brand, key)) {
+      if !self.check_private_brand(receiver, brand, key) {
         return Undefined
       }
     None => ()
@@ -735,9 +733,9 @@ fn JSInterpreter::get_prop_value_with_receiver(
       // Check if this is a TypedArray index access
       match get_typedarray_data(target) {
         Some(data) => {
-          let idx = @strconv.parse_int(key) catch { _ => -1 }
+          let idx = @string.parse_int(key) catch { _ => -1 }
           if idx >= 0 {
-            if idx < data.length && not(data.buffer.detached) {
+            if idx < data.length && !data.buffer.detached {
               return typedarray_get_element_jsvalue(data, idx)
             }
             return Undefined
@@ -759,7 +757,7 @@ fn JSInterpreter::get_prop_value_with_receiver(
       if key == "length" {
         Number(arr.length.to_double())
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < arr.items.length() && arr.present[idx] {
           arr.items[idx]
         } else {
@@ -790,9 +788,9 @@ fn JSInterpreter::get_prop_value_with_receiver(
       } else if key == "length" {
         Number(s.length().to_double())
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < s.length() {
-          String(s[idx:idx + 1].to_string() catch { _ => "" })
+          String(s[idx:idx + 1].to_string())
         } else {
           // Look up on String.prototype
           let string_ctor = self.global_env.get("String")
@@ -861,7 +859,7 @@ fn JSInterpreter::has_own_prop(
       if key == "length" {
         true
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < arr.items.length() && arr.present[idx] {
           true
         } else {
@@ -879,7 +877,7 @@ fn JSInterpreter::has_own_prop(
       if key == "length" {
         true
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         idx >= 0 && idx < s.length()
       }
     _ => false
@@ -914,7 +912,7 @@ fn JSInterpreter::is_enumerable(
       if key == "length" {
         false
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < arr.items.length() {
           true
         } else {
@@ -932,7 +930,7 @@ fn JSInterpreter::is_enumerable(
       if key == "length" {
         false
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         idx >= 0 && idx < s.length()
       }
     _ => false
@@ -954,7 +952,7 @@ fn JSInterpreter::ordinary_has_instance(
       }
     _ => ctor
   }
-  if not(self.is_callable(target)) {
+  if !self.is_callable(target) {
     return false
   }
   match obj {
@@ -985,7 +983,7 @@ fn JSInterpreter::construct_with(
   new_target : JSValue,
   args : Array[JSValue],
 ) -> JSValue {
-  if not(self.is_constructor(ctor)) || not(self.is_constructor(new_target)) {
+  if !self.is_constructor(ctor) || !self.is_constructor(new_target) {
     return self.set_error_kind("TypeError", "not a constructor")
   }
   match ctor {
@@ -993,7 +991,7 @@ fn JSInterpreter::construct_with(
       match closure.body {
         Native(name) if name == "Promise" => {
           let executor = if args.length() > 0 { args[0] } else { Undefined }
-          if not(self.is_callable(executor)) {
+          if !self.is_callable(executor) {
             return self.set_error_kind(
               "TypeError", "Promise resolver is not a function",
             )
@@ -1154,7 +1152,7 @@ fn JSInterpreter::to_string_value(
           }
           _ => return res.to_js_string()
         }
-      } else if not(to_prim.is_undefined()) {
+      } else if !to_prim.is_undefined() {
         let _ = self.set_error_kind(
           "TypeError", "Cannot convert object to primitive value",
         )

@@ -64,7 +64,7 @@ fn AliasInfo::merge_sets(self : AliasInfo, id1 : Int, id2 : Int) -> Unit {
   }
   // Move all variables from 'from' to 'to'
   for v in self.sets[from].variables {
-    if not(self.sets[to].variables.contains(v)) {
+    if !self.sets[to].variables.contains(v) {
       self.sets[to].variables.push(v)
     }
     self.var_to_set[v] = to
@@ -75,7 +75,7 @@ fn AliasInfo::merge_sets(self : AliasInfo, id1 : Int, id2 : Int) -> Unit {
 
 ///|
 fn AliasInfo::mark_escaped(self : AliasInfo, name : String) -> Unit {
-  if not(self.escaped.contains(name)) {
+  if !self.escaped.contains(name) {
     self.escaped.push(name)
   }
   // Mark the entire alias set as non-unique
@@ -109,7 +109,7 @@ pub fn analyze_aliases(func : @ast.TsFunc) -> AliasInfo {
   for entry in info.var_to_set {
     let name = entry.0
     let set_id = entry.1
-    if info.sets[set_id].is_unique && not(info.escaped.contains(name)) {
+    if info.sets[set_id].is_unique && !info.escaped.contains(name) {
       info.unique.push(name)
     }
   }

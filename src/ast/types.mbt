@@ -29,7 +29,7 @@ pub(all) enum TsType {
   Intersection(Array[TsType]) // A & B
   // Type reference
   Named(String)
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 // / typedexpression
@@ -130,14 +130,14 @@ pub(all) enum TsExpr {
   // untagged template literal: `string ${expr} string`
   // strings (cooked), expressions
   TemplateLiteral(Array[String], Array[TsExpr])
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / function
 pub(all) enum TsArrowBody {
   ArrowExpr(TsExpr) // () => expr
   ArrowBlock(TsBlock) // () => { ... }
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / binaryoperator
@@ -171,7 +171,7 @@ pub(all) enum TsBinOp {
   And // &&
   Or // ||
   Coalesce // ??
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 // / unaryoperator
@@ -187,7 +187,7 @@ pub(all) enum TsUnaryOp {
   PreDec // --x
   PostInc // x++
   PostDec // x--
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 // / compoundassignmentoperator
@@ -208,7 +208,7 @@ pub(all) enum TsCompoundOp {
   AndAssign // &&=
   OrAssign // ||=
   CoalesceAssign // ??=
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 // / for...of binding kind
@@ -217,7 +217,7 @@ pub(all) enum TsForOfKind {
   Let
   Const
   Assign
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 // / statement
@@ -267,19 +267,19 @@ pub(all) enum TsStmt {
   // break/continue
   Break(String?)
   Continue(String?)
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / block (statementarray)
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) struct TsSwitchCase {
   test_expr : TsExpr?
   body : TsBlock
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / functionparameter
@@ -289,7 +289,7 @@ pub(all) struct TsParam {
   is_rest : Bool
   type_ : TsType
   default : TsExpr? // ()
-} derive(Show)
+} derive(Debug)
 
 ///|
 // /
@@ -298,19 +298,19 @@ pub(all) enum TsBinding {
   Array(TsArrayBinding)
   Object(TsObjectBinding)
   Target(TsExpr)
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) struct TsBindingElem {
   binding : TsBinding
   default : TsExpr?
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) struct TsArrayBinding {
   items : Array[TsBindingElem?]
   rest : TsBinding?
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) struct TsObjectBindingProp {
@@ -318,13 +318,13 @@ pub(all) struct TsObjectBindingProp {
   key_expr : TsExpr?
   binding : TsBinding
   default : TsExpr?
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub(all) struct TsObjectBinding {
   props : Array[TsObjectBindingProp]
   rest : String?
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / functiondefine
@@ -335,14 +335,14 @@ pub(all) struct TsFunc {
   body : TsBlock
   is_generator : Bool
   is_async : Bool
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / interface (structtype)
 pub(all) struct TsInterface {
   name : String
   fields : Array[(String, TsType)] // (fieldName, type)
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / externalfunctionimport
@@ -351,7 +351,7 @@ pub(all) struct TsImport {
   module_ : String // import (: "env")
   params : Array[(String, TsType)] // parameter (name, type)
   return_type : TsType // return valuetype
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / ()
@@ -359,7 +359,7 @@ pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
   imports : Array[TsImport] // externalimport
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / module import declaration
@@ -370,14 +370,14 @@ pub(all) struct TsImportDecl {
   named_bindings : Array[(String, String)] // imported, local
   side_effect_only : Bool
   type_only : Bool
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / module export specifier
 pub(all) struct TsExportSpec {
   local_name : String
   export_name : String
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / module re-export kind
@@ -385,14 +385,14 @@ pub(all) enum TsReExportKind {
   Named(Array[(String, String)]) // imported, exported
   All
   Namespace(String) // export * as name from "mod"
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / module re-export specifier
 pub(all) struct TsReExportSpec {
   module_spec : String
   kind : TsReExportKind
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / module block with import/export metadata
@@ -401,7 +401,7 @@ pub(all) struct TsModuleBlock {
   imports : Array[TsImportDecl]
   exports : Array[TsExportSpec]
   reexports : Array[TsReExportSpec]
-} derive(Show)
+} derive(Debug)
 
 // ============================================
 // Typed AST (type-resolved)
@@ -412,14 +412,14 @@ pub(all) struct TsModuleBlock {
 pub(all) struct TypedExpr {
   expr : TsExpr
   type_ : TsType
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / typedstatement
 pub(all) struct TypedStmt {
   stmt : TsStmt
   // add
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / typedfunction
@@ -427,10 +427,10 @@ pub(all) struct TypedFunc {
   func : TsFunc
   // variabletype
   locals : Array[(String, TsType)]
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / typed
 pub(all) struct TypedModule {
   funcs : Array[TypedFunc]
-} derive(Show)
+} derive(Debug)

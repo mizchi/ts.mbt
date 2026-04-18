@@ -6,7 +6,7 @@ pub(all) enum RefOp {
   Incref(String) // Increment reference count
   Decref(String) // Decrement reference count
   Move(String) // Transfer ownership (no ref change)
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// A reference operation at a specific point.
@@ -125,7 +125,7 @@ fn analyze_stmt_refcount(
         @ast.TsExpr::Var(name) =>
           // Returning transfers ownership - mark as moved
           if is_rc_var(name, info, type_info) {
-            if not(info.moved_vars.contains(name)) {
+            if !info.moved_vars.contains(name) {
               info.moved_vars.push(name)
             }
             info.ops.push({ stmt_index: idx, op: Move(name), is_before: false })
@@ -141,7 +141,7 @@ fn analyze_stmt_refcount(
   for var_name in get_drop_vars(liveness, idx) {
     if is_rc_var(var_name, info, type_info) {
       // Don't decref if already moved
-      if not(info.moved_vars.contains(var_name)) {
+      if !info.moved_vars.contains(var_name) {
         // Check if this is the last alias
         if is_unique(aliases, var_name) {
           info.ops.push({

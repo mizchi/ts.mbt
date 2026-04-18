@@ -4,25 +4,25 @@
 ///|
 /// Compile a generator function to wasm-gc.
 /// Returns None if the function is not a generator or cannot be AOT compiled.
-pub fn compile_generator_func(
+pub fn experimental_compile_generator_func(
   func : @ast.TsFunc,
   state_struct_type_idx : UInt,
 ) -> GeneratorWasmCode? {
-  if not(func.is_generator) {
+  if !func.is_generator {
     return None
   }
 
   // Analyze the generator
   let analysis = @analysis.analyze_generator(func)
-  if not(analysis.compilable) {
+  if !analysis.compilable {
     return None
   }
 
   // Transform to state machine IR
-  let sm = transform_to_state_machine(func, analysis)
+  let sm = experimental_transform_to_state_machine(func, analysis)
 
   // Compile to wasm-gc
-  Some(compile_generator(sm, state_struct_type_idx))
+  Some(experimental_compile_generator(sm, state_struct_type_idx))
 }
 
 ///|
@@ -43,7 +43,7 @@ pub struct GeneratorWasmCode {
 ///|
 /// Compile a generator state machine to wasm-gc instructions.
 /// Uses br_table for efficient state dispatch.
-pub fn compile_generator(
+pub fn experimental_compile_generator(
   sm : GenStateMachine,
   state_struct_type_idx : UInt,
 ) -> GeneratorWasmCode {
@@ -166,7 +166,7 @@ fn generate_next_instrs_br_table(
 
 ///|
 /// Compile a generator with if-else chain dispatch (for debugging).
-pub fn compile_generator_if_else(
+pub fn experimental_compile_generator_if_else(
   sm : GenStateMachine,
   state_struct_type_idx : UInt,
 ) -> GeneratorWasmCode {
@@ -818,7 +818,7 @@ pub struct AOTGroupCode {
 ///|
 /// Compile an AOT group to wasm.
 /// All functions in the group are compiled together, allowing internal calls.
-pub fn compile_aot_group(
+pub fn experimental_compile_aot_group(
   group : @analysis.AOTGroup,
   ts_module : @ast.TsModule,
   base_type_idx : UInt,
@@ -856,10 +856,10 @@ pub fn compile_aot_group(
         if func.is_generator {
           // Compile generator
           let analysis = @analysis.analyze_generator(func)
-          if not(analysis.compilable) {
+          if !analysis.compilable {
             return None
           }
-          let sm = transform_to_state_machine(func, analysis)
+          let sm = experimental_transform_to_state_machine(func, analysis)
 
           // State struct type
           let state_struct_type_idx = type_idx
@@ -920,7 +920,7 @@ fn compile_generator_with_calls(
   // For now, use the basic compilation
   // TODO: Replace Call expressions with wasm call instructions using func_map
   let _ = func_map
-  compile_generator(sm, state_struct_type_idx)
+  experimental_compile_generator(sm, state_struct_type_idx)
 }
 
 ///|
@@ -974,12 +974,10 @@ fn compile_helper_body(
 
   // Default return
   if instrs.length() == 0 ||
-    not(
-      match instrs[instrs.length() - 1] {
-        @core.Instr::Return => true
-        _ => false
-      },
-    ) {
+    !(match instrs[instrs.length() - 1] {
+      @core.Instr::Return => true
+      _ => false
+    }) {
     instrs.push(@core.Instr::F64Const(0.0))
   }
   instrs

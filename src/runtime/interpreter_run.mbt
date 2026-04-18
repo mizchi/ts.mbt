@@ -39,7 +39,7 @@ pub fn JSInterpreter::run_module(
     Function(closure) =>
       match closure.body {
         Ast(func_def) => {
-          if closure.is_strict && not(self.global_env.has("__strict__")) {
+          if closure.is_strict && !self.global_env.has("__strict__") {
             self.global_env.define_var("__strict__", Bool(true))
           }
           self.hoist_block(func_def.body, self.global_env)

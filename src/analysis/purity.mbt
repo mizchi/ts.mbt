@@ -9,7 +9,7 @@ pub(all) enum SideEffect {
   IO // Console, network, etc.
   Throws // May throw exception
   Unknown // Cannot determine
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// Purity information for a function.
@@ -290,23 +290,23 @@ fn combine_purity(a : PurityInfo, b : PurityInfo) -> PurityInfo {
   }
   let effects : Array[SideEffect] = []
   for e in a.effects {
-    if not(effects.contains(e)) {
+    if !effects.contains(e) {
       effects.push(e)
     }
   }
   for e in b.effects {
-    if not(effects.contains(e)) {
+    if !effects.contains(e) {
       effects.push(e)
     }
   }
   let impure_calls : Array[String] = []
   for c in a.impure_calls {
-    if not(impure_calls.contains(c)) {
+    if !impure_calls.contains(c) {
       impure_calls.push(c)
     }
   }
   for c in b.impure_calls {
-    if not(impure_calls.contains(c)) {
+    if !impure_calls.contains(c) {
       impure_calls.push(c)
     }
   }

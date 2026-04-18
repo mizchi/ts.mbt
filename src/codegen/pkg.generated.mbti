@@ -5,48 +5,49 @@ import {
   "mizchi/ts/analysis",
   "mizchi/ts/ast",
   "mizchi/wasmx/core",
+  "moonbitlang/core/debug",
 }
 
 // Values
-pub fn analyze_and_compile(String) -> @core.Module raise CodeGenError
+pub fn experimental_analyze_and_compile(String) -> @core.Module raise CodeGenError
 
-pub fn analyze_lifted_vars(@ast.TsBlock, Array[String]) -> LiftedVarsInfo
+pub fn experimental_analyze_lifted_vars(@ast.TsBlock, Array[String]) -> LiftedVarsInfo
 
-pub fn compile(String) -> @core.Module raise CompileError
+pub fn experimental_compile(String) -> @core.Module raise CompileError
 
-pub fn compile_aot_group(@analysis.AOTGroup, @ast.TsModule, UInt) -> AOTGroupCode?
+pub fn experimental_compile_aot_group(@analysis.AOTGroup, @ast.TsModule, UInt) -> AOTGroupCode?
 
-pub fn compile_arrow_func(Array[@ast.TsParam], @ast.TsArrowBody, Array[String], ClosureCodegenCtx) -> ClosureWasmCode?
+pub fn experimental_compile_arrow_func(Array[@ast.TsParam], @ast.TsArrowBody, Array[String], ClosureCodegenCtx) -> ClosureWasmCode?
 
-pub fn compile_func_body_with_env(@ast.TsBlock, Array[@ast.TsParam], LiftedVarsInfo, UInt) -> FuncWithEnvCode
+pub fn experimental_compile_func_body_with_env(@ast.TsBlock, Array[@ast.TsParam], LiftedVarsInfo, UInt) -> FuncWithEnvCode
 
-pub fn compile_func_expr(@ast.TsFunc, Array[String], ClosureCodegenCtx) -> ClosureWasmCode?
+pub fn experimental_compile_func_expr(@ast.TsFunc, Array[String], ClosureCodegenCtx) -> ClosureWasmCode?
 
-pub fn compile_generator(GenStateMachine, UInt) -> GeneratorWasmCode
+pub fn experimental_compile_generator(GenStateMachine, UInt) -> GeneratorWasmCode
 
-pub fn compile_generator_func(@ast.TsFunc, UInt) -> GeneratorWasmCode?
+pub fn experimental_compile_generator_func(@ast.TsFunc, UInt) -> GeneratorWasmCode?
 
-pub fn compile_generator_if_else(GenStateMachine, UInt) -> GeneratorWasmCode
+pub fn experimental_compile_generator_if_else(GenStateMachine, UInt) -> GeneratorWasmCode
 
-pub fn compile_module(@ast.TsModule) -> @core.Module raise CodeGenError
+pub fn experimental_compile_module(@ast.TsModule) -> @core.Module raise CodeGenError
 
-pub fn compile_module_gc(@ast.TsModule) -> @core.Module raise CodeGenError
+pub fn experimental_compile_module_gc(@ast.TsModule) -> @core.Module raise CodeGenError
 
-pub fn compile_to_wasm(String) -> Bytes raise CompileError
+pub fn experimental_compile_to_wasm(String) -> Bytes raise CompileError
 
-pub fn compile_typed_module(@ast.TypedModule, @ast.TsModule) -> @core.Module raise CodeGenError
+pub fn experimental_compile_typed_module(@ast.TypedModule, @ast.TsModule) -> @core.Module raise CodeGenError
 
-pub fn transform_to_state_machine(@ast.TsFunc, @analysis.GeneratorAnalysis) -> GenStateMachine
+pub fn experimental_transform_to_state_machine(@ast.TsFunc, @analysis.GeneratorAnalysis) -> GenStateMachine
 
 // Errors
 pub suberror CodeGenError {
   CodeGenError(String)
-}
+} derive(@debug.Debug)
 pub impl Show for CodeGenError
 
 pub suberror CompileError {
   CompileError(String)
-}
+} derive(@debug.Debug)
 pub impl Show for CompileError
 
 // Types and methods
@@ -102,7 +103,7 @@ pub enum GenBinOp {
   Shr
   Ushr
   Other(@ast.TsBinOp)
-}
+} derive(@debug.Debug)
 pub impl Show for GenBinOp
 
 pub enum GenExpr {
@@ -122,7 +123,7 @@ pub enum GenExpr {
   ObjectLit(Array[(String, GenExpr)])
   Cond(GenExpr, GenExpr, GenExpr)
   Raw(@ast.TsExpr)
-}
+} derive(@debug.Debug)
 pub impl Show for GenExpr
 
 pub enum GenInstr {
@@ -135,14 +136,14 @@ pub enum GenInstr {
   Nop
   TryCatch(Array[GenInstr], String?, Array[GenInstr], Array[GenInstr]?)
   Throw(GenExpr)
-}
+} derive(@debug.Debug)
 pub impl Show for GenInstr
 
 pub struct GenState {
   id : Int
   label : String
   body : Array[GenInstr]
-}
+} derive(@debug.Debug)
 pub impl Show for GenState
 
 pub struct GenStateMachine {
@@ -152,7 +153,7 @@ pub struct GenStateMachine {
   states : Array[GenState]
   initial_state : Int
   done_state : Int
-}
+} derive(@debug.Debug)
 pub fn GenStateMachine::debug_string(Self) -> String
 pub impl Show for GenStateMachine
 
@@ -162,12 +163,12 @@ pub enum GenUnaryOp {
   BitNot
   TypeOf
   Other(@ast.TsUnaryOp)
-}
+} derive(@debug.Debug)
 pub impl Show for GenUnaryOp
 
 pub struct GenVar {
   name : String
-}
+} derive(@debug.Debug)
 pub impl Show for GenVar
 
 pub struct GeneratorWasmCode {

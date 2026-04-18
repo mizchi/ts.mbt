@@ -38,7 +38,7 @@ pub struct GeneratorAnalysis {
 ///|
 /// Analyze a generator function for AOT compilation.
 pub fn analyze_generator(func : @ast.TsFunc) -> GeneratorAnalysis {
-  if not(func.is_generator) {
+  if !func.is_generator {
     return {
       yield_points: [],
       persisted_vars: [],

@@ -84,11 +84,11 @@ pub fn analyze_leaks(func : @ast.TsFunc) -> LeakAnalysis {
 
   // Check 2: Variables that escape but aren't tracked
   for name in aliases.escaped {
-    if not(liveness.captured_vars.contains(name)) {
+    if !liveness.captured_vars.contains(name) {
       // Escaped but not in captured list - may indicate tracking issue
       match liveness.lifetimes.get(name) {
         Some(lifetime) =>
-          if not(lifetime.escapes) {
+          if !lifetime.escapes {
             result.leaks.push({
               kind: EscapedWithoutTracking(name),
               message: "Variable '" +
@@ -219,7 +219,7 @@ fn find_accumulating_in_expr(
           @ast.TsExpr::Var(name) =>
             // Check if this variable is defined outside the loop
             // For now, just report it
-            if not(results.iter().any(fn(p) { p.0 == name })) {
+            if !results.iter().any(fn(p) { p.0 == name }) {
               results.push((name, idx))
             }
           _ => ()
@@ -233,7 +233,7 @@ fn find_accumulating_in_expr(
             match recv {
               @ast.TsExpr::Var(recv_name) =>
                 if recv_name == name {
-                  if not(results.iter().any(fn(p) { p.0 == name })) {
+                  if !results.iter().any(fn(p) { p.0 == name }) {
                     results.push((name, idx))
                   }
                 }
@@ -248,7 +248,7 @@ fn find_accumulating_in_expr(
                 match inner {
                   @ast.TsExpr::Var(spread_name) =>
                     if spread_name == name {
-                      if not(results.iter().any(fn(p) { p.0 == name })) {
+                      if !results.iter().any(fn(p) { p.0 == name }) {
                         results.push((name, idx))
                       }
                     }

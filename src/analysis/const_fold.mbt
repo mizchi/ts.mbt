@@ -10,12 +10,12 @@ pub(all) enum ConstValue {
   Null
   Undefined
   NotConst // Cannot be computed at compile time
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// Check if this value is a compile-time constant.
 pub fn ConstValue::is_const(self : ConstValue) -> Bool {
-  not(self is NotConst)
+  !(self is NotConst)
 }
 
 ///|
@@ -183,7 +183,7 @@ fn eval_unary_const(op : @ast.TsUnaryOp, operand : @ast.TsExpr) -> ConstValue {
     (@ast.TsUnaryOp::Neg, Number(n)) => Number(-n)
     (@ast.TsUnaryOp::Plus, Int(n)) => Int(n)
     (@ast.TsUnaryOp::Plus, Number(n)) => Number(n)
-    (@ast.TsUnaryOp::Not, Boolean(b)) => Boolean(not(b))
+    (@ast.TsUnaryOp::Not, Boolean(b)) => Boolean(!b)
     (@ast.TsUnaryOp::Not, Int(0)) => Boolean(true)
     (@ast.TsUnaryOp::Not, Int(_)) => Boolean(false)
     (@ast.TsUnaryOp::Not, Number(0.0)) => Boolean(true)

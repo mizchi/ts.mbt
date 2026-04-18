@@ -286,7 +286,7 @@ fn JSInterpreter::get_iterator(
           match self.peek_error() {
             Some(_) => None
             None =>
-              if not(self.is_callable(next_method)) {
+              if !self.is_callable(next_method) {
                 let _ = self.set_error_kind(
                   "TypeError", "Iterator next is not callable",
                 )
@@ -1025,7 +1025,7 @@ fn JSInterpreter::exec_for_loop_iter_gen(
     Some(c) => self.eval_expr(c, env).to_boolean()
     None => true
   }
-  if not(cond_val) {
+  if !cond_val {
     return GenSignal::Continue
   }
   // Execute body
@@ -1112,7 +1112,7 @@ fn JSInterpreter::exec_while_loop_gen(
     None => ()
   }
   // Check condition
-  if not(self.eval_expr(cond, env).to_boolean()) {
+  if !self.eval_expr(cond, env).to_boolean() {
     return GenSignal::Continue
   }
   // Execute body

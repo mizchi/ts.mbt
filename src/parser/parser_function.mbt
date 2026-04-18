@@ -28,7 +28,7 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
 // / parameter
 fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
   let params : Array[@ast.TsParam] = []
-  if not(self.check(RParen)) {
+  if !self.check(RParen) {
     params.push(self.parse_param())
     while self.match_(Comma) {
       if self.check(RParen) {
@@ -40,7 +40,7 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
   // Check for duplicate parameter names
   // In strict mode or with non-simple parameters (default, rest, destructuring),
   // duplicate names are forbidden
-  let has_default = params.iter().any(fn(p) { not(p.default is None) })
+  let has_default = params.iter().any(fn(p) { !(p.default is None) })
   let has_rest = params.iter().any(fn(p) { p.is_rest })
   let has_destructuring = params
     .iter()
@@ -50,7 +50,7 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
         _ => false
       }
     })
-  let is_simple = not(has_default) && not(has_rest) && not(has_destructuring)
+  let is_simple = !has_default && !has_rest && !has_destructuring
   // Collect all bound names
   let all_names : Array[String] = []
   for param in params {
@@ -64,7 +64,7 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
   for name in all_names {
     if seen.contains(name) {
       // In strict mode or with non-simple params, duplicates are errors
-      if self.in_strict || not(is_simple) {
+      if self.in_strict || !is_simple {
         raise ParseError("Duplicate parameter name '\{name}' not allowed")
       }
     }
@@ -194,12 +194,12 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
 ///|
 /// Skip generic type parameters <T, U extends Foo, V = Default>
 fn Parser::skip_type_params(self : Parser) -> Unit {
-  if not(self.check(Lt)) {
+  if !self.check(Lt) {
     return
   }
   let _ = self.advance() // consume <
   let mut depth = 1
-  while depth > 0 && not(self.check(Eof)) {
+  while depth > 0 && !self.check(Eof) {
     match self.peek().kind {
       Lt => {
         depth += 1
@@ -229,12 +229,12 @@ fn Parser::skip_type_params(self : Parser) -> Unit {
 ///|
 /// Skip extends clause: extends Foo, Bar<T>
 fn Parser::skip_extends_clause(self : Parser) -> Unit {
-  if not(self.check(Extends)) {
+  if !self.check(Extends) {
     return
   }
   let _ = self.advance() // consume extends
   // Parse comma-separated type references until { or EOF
-  while not(self.check(LBrace)) && not(self.check(Eof)) {
+  while !self.check(LBrace) && !self.check(Eof) {
     match self.peek().kind {
       Comma => {
         let _ = self.advance()
@@ -262,7 +262,7 @@ pub fn Parser::parse_interface(
   self.skip_extends_clause()
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
-  while not(self.check(RBrace)) && not(self.check(Eof)) {
+  while !self.check(RBrace) && !self.check(Eof) {
     // Skip readonly modifier
     if self.check(Ident("readonly")) {
       let _ = self.advance()
@@ -285,7 +285,7 @@ pub fn Parser::parse_interface(
       LBracket => {
         let _ = self.advance()
         // Skip until ]
-        while not(self.check(RBracket)) && not(self.check(Eof)) {
+        while !self.check(RBracket) && !self.check(Eof) {
           let _ = self.advance()
         }
         let _ = self.expect(RBracket)
@@ -454,7 +454,7 @@ pub fn Parser::parse_interface(
       let _ = self.advance()
       // Skip parameters
       let mut paren_depth = 1
-      while paren_depth > 0 && not(self.check(Eof)) {
+      while paren_depth > 0 && !self.check(Eof) {
         match self.peek().kind {
           LParen => {
             paren_depth += 1
@@ -501,7 +501,7 @@ fn Parser::skip_until_semicolon(self : Parser) -> Unit {
   let mut brace_depth = 0
   let mut bracket_depth = 0
   let mut paren_depth = 0
-  while not(self.check(Eof)) {
+  while !self.check(Eof) {
     match self.peek().kind {
       Semicolon => {
         if brace_depth == 0 && bracket_depth == 0 && paren_depth == 0 {
@@ -548,7 +548,7 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
   // Skip until semicolon, handling nested braces and angle brackets
   let mut brace_depth = 0
   let mut angle_depth = 0
-  while not(self.check(Eof)) {
+  while !self.check(Eof) {
     match self.peek().kind {
       LBrace => {
         brace_depth += 1
@@ -597,9 +597,7 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
 /// Skip declaration block (namespace, module, class, enum, etc.)
 fn Parser::skip_declaration_block(self : Parser) -> Unit {
   // Skip until we find { or ;
-  while not(self.check(LBrace)) &&
-        not(self.check(Semicolon)) &&
-        not(self.check(Eof)) {
+  while !self.check(LBrace) && !self.check(Semicolon) && !self.check(Eof) {
     let _ = self.advance()
   }
   if self.check(Semicolon) {
@@ -609,7 +607,7 @@ fn Parser::skip_declaration_block(self : Parser) -> Unit {
   if self.check(LBrace) {
     let _ = self.advance()
     let mut depth = 1
-    while depth > 0 && not(self.check(Eof)) {
+    while depth > 0 && !self.check(Eof) {
       match self.peek().kind {
         LBrace => {
           depth += 1
@@ -647,7 +645,7 @@ pub fn Parser::parse_declare_function(
   // parameter
   let _ = self.expect(LParen)
   let params : Array[(String, @ast.TsType)] = []
-  while not(self.check(RParen)) && not(self.check(Eof)) {
+  while !self.check(RParen) && !self.check(Eof) {
     // Handle rest parameter: ...name
     let _ = self.match_ellipsis()
     // Handle parameter name (can be identifier, keyword, or destructuring pattern)
@@ -715,7 +713,7 @@ pub fn Parser::parse_declare_function(
         }
         let _ = self.advance()
         let mut depth = 1
-        while depth > 0 && not(self.check(Eof)) {
+        while depth > 0 && !self.check(Eof) {
           if self.peek().kind == open_tok {
             depth += 1
           } else if self.peek().kind == close_tok {

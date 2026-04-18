@@ -307,7 +307,7 @@ fn JSInterpreter::weakmap_get_entry(
   key : JSValue,
 ) -> JSValue {
   let _ = self
-  if not(is_weak_key(key)) {
+  if !is_weak_key(key) {
     return Undefined
   }
   let key_id = get_weak_key_id(key)
@@ -337,7 +337,7 @@ fn JSInterpreter::weakmap_set_entry(
   value : JSValue,
 ) -> JSValue {
   let _ = self
-  if not(is_weak_key(key)) {
+  if !is_weak_key(key) {
     return Undefined
   }
   let key_id = get_weak_key_id(key)
@@ -379,7 +379,7 @@ fn JSInterpreter::weakmap_has_entry(
   key : JSValue,
 ) -> Bool {
   let _ = self
-  if not(is_weak_key(key)) {
+  if !is_weak_key(key) {
     return false
   }
   let key_id = get_weak_key_id(key)
@@ -408,7 +408,7 @@ fn JSInterpreter::weakmap_delete_entry(
   key : JSValue,
 ) -> Bool {
   let _ = self
-  if not(is_weak_key(key)) {
+  if !is_weak_key(key) {
     return false
   }
   let key_id = get_weak_key_id(key)
@@ -443,7 +443,7 @@ fn JSInterpreter::weakset_add_entry(
   value : JSValue,
 ) -> JSValue {
   let _ = self
-  if not(is_weak_key(value)) {
+  if !is_weak_key(value) {
     return ws_obj
   }
   let val_id = get_weak_key_id(value)
@@ -471,7 +471,7 @@ fn JSInterpreter::weakset_has_entry(
   value : JSValue,
 ) -> Bool {
   let _ = self
-  if not(is_weak_key(value)) {
+  if !is_weak_key(value) {
     return false
   }
   let val_id = get_weak_key_id(value)
@@ -496,7 +496,7 @@ fn JSInterpreter::weakset_delete_entry(
   value : JSValue,
 ) -> Bool {
   let _ = self
-  if not(is_weak_key(value)) {
+  if !is_weak_key(value) {
     return false
   }
   let val_id = get_weak_key_id(value)
@@ -529,7 +529,7 @@ fn JSInterpreter::fr_register(
   unregister_token : JSValue,
 ) -> Unit {
   let _ = self
-  if not(is_weak_key(target)) {
+  if !is_weak_key(target) {
     return
   }
   let target_id = get_weak_key_id(target)
@@ -558,7 +558,7 @@ fn JSInterpreter::fr_unregister(
   unregister_token : JSValue,
 ) -> Bool {
   let _ = self
-  if not(is_weak_key(unregister_token)) {
+  if !is_weak_key(unregister_token) {
     return false
   }
   let token_id = get_weak_key_id(unregister_token)

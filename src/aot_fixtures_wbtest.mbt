@@ -186,7 +186,10 @@ test "closure codegen for fixtures/aot/closure_readonly.ts" {
   ]
   let outer_scope : Array[String] = ["x"]
   let ctx = @codegen.ClosureCodegenCtx::new(0U)
-  match @codegen.compile_arrow_func(arrow_params, body, outer_scope, ctx) {
+  match
+    @codegen.experimental_compile_arrow_func(
+      arrow_params, body, outer_scope, ctx,
+    ) {
     Some(code) => {
       assert_true(code.env_struct_type is Some(_))
       assert_eq(code.capture_names.length(), 1)
@@ -233,7 +236,7 @@ test "closure codegen for fixtures/aot/closure_mutable.ts" {
     ],
   }
   let params : Array[@ast.TsParam] = []
-  let lifted_info = @codegen.analyze_lifted_vars(block, [])
+  let lifted_info = @codegen.experimental_analyze_lifted_vars(block, [])
 
   // count should be lifted with mutable flag
   assert_eq(lifted_info.lifted_vars.length(), 1)
@@ -241,7 +244,7 @@ test "closure codegen for fixtures/aot/closure_mutable.ts" {
   assert_eq(lifted_info.is_mutated.get("count"), Some(true))
 
   // Generate code with environment sharing
-  let result = @codegen.compile_func_body_with_env(
+  let result = @codegen.experimental_compile_func_body_with_env(
     block, params, lifted_info, 0U,
   )
   assert_true(result.env_struct_type is Some(_))
@@ -269,7 +272,7 @@ test "generator codegen for fixtures/aot/generator.ts - range" {
   println("Generator yield points: \{analysis.yield_points.length()}")
 
   // Compile generator
-  match @codegen.compile_generator_func(func, 0U) {
+  match @codegen.experimental_compile_generator_func(func, 0U) {
     Some(code) =>
       println(
         "Generated range() next function: \{code.next_func_code.body.instrs.length()} instructions",

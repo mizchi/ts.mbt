@@ -36,7 +36,7 @@ pub fn LiftedVarsInfo::empty() -> LiftedVarsInfo {
 ///|
 /// Analyze a function body to find variables that need to be lifted.
 /// Returns info about which variables are captured by closures.
-pub fn analyze_lifted_vars(
+pub fn experimental_analyze_lifted_vars(
   block : @ast.TsBlock,
   params : Array[String],
 ) -> LiftedVarsInfo {
@@ -52,7 +52,7 @@ pub fn analyze_lifted_vars(
     outer_scope.push(p)
   }
   for l in locals {
-    if not(outer_scope.contains(l)) {
+    if !outer_scope.contains(l) {
       outer_scope.push(l)
     }
   }
@@ -137,10 +137,7 @@ fn collect_binding_names_for_lift(
   names : Array[String],
 ) -> Unit {
   match binding {
-    @ast.TsBinding::Ident(name) =>
-      if not(names.contains(name)) {
-        names.push(name)
-      }
+    @ast.TsBinding::Ident(name) => if !names.contains(name) { names.push(name) }
     @ast.TsBinding::Array(arr) => {
       for item in arr.items {
         match item {
@@ -159,7 +156,7 @@ fn collect_binding_names_for_lift(
       }
       match obj.rest {
         Some(rest_name) =>
-          if not(names.contains(rest_name)) {
+          if !names.contains(rest_name) {
             names.push(rest_name)
           }
         None => ()
@@ -396,7 +393,7 @@ fn ClosureCodegenCtx::gen_name(
 
 ///|
 /// Compile an arrow function to wasm-gc.
-pub fn compile_arrow_func(
+pub fn experimental_compile_arrow_func(
   params : Array[@ast.TsParam],
   body : @ast.TsArrowBody,
   outer_scope : Array[String],
@@ -404,7 +401,7 @@ pub fn compile_arrow_func(
 ) -> ClosureWasmCode? {
   // Analyze the closure
   let info = @analysis.analyze_arrow_func(params, body, outer_scope)
-  if not(info.compilable) {
+  if !info.compilable {
     return None
   }
 
@@ -467,14 +464,14 @@ pub fn compile_arrow_func(
 
 ///|
 /// Compile a function expression to wasm-gc.
-pub fn compile_func_expr(
+pub fn experimental_compile_func_expr(
   func : @ast.TsFunc,
   outer_scope : Array[String],
   ctx : ClosureCodegenCtx,
 ) -> ClosureWasmCode? {
   // Analyze the closure
   let info = @analysis.analyze_func_expr(func, outer_scope)
-  if not(info.compilable) {
+  if !info.compilable {
     return None
   }
 
@@ -659,7 +656,7 @@ fn generate_closure_block(
         let names : Array[String] = []
         collect_binding_names_simple(binding, names)
         for name in names {
-          if not(local_var_indices.contains(name)) {
+          if !local_var_indices.contains(name) {
             local_var_indices[name] = next_local
             locals.push(@core.ValType::F64)
             next_local += 1
@@ -1077,7 +1074,7 @@ pub struct FuncWithEnvCode {
 /// Compile a function body with environment sharing for closures.
 /// This handles the case where closures modify captured variables
 /// and the outer function needs to see those modifications.
-pub fn compile_func_body_with_env(
+pub fn experimental_compile_func_body_with_env(
   block : @ast.TsBlock,
   params : Array[@ast.TsParam],
   lifted_info : LiftedVarsInfo,
@@ -1210,8 +1207,8 @@ fn generate_body_with_env(
         collect_binding_names_simple(binding, names)
         for name in names {
           // Don't assign local index to lifted vars
-          if not(lifted_info.lifted_vars.contains(name)) &&
-            not(local_var_indices.contains(name)) {
+          if !lifted_info.lifted_vars.contains(name) &&
+            !local_var_indices.contains(name) {
             local_var_indices[name] = next_local
             locals.push(@core.ValType::F64)
             next_local += 1

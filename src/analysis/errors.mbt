@@ -5,7 +5,7 @@
 pub(all) enum AnalysisResult[T] {
   Ok(T, Array[AnalysisError]) // value and warnings
   Err(Array[AnalysisError]) // errors
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Check if result is successful.

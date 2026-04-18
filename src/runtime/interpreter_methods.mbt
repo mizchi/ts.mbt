@@ -255,7 +255,7 @@ fn JSInterpreter::string_method(
         let end_idx = s.length() - search_len + 1
         let mut i = start_idx
         while i < end_idx && idx == -1 {
-          if (s[i:i + search_len].to_string() catch { _ => "" }) == search_str {
+          if s[i:i + search_len].to_string() == search_str {
             idx = i
           }
           i = i + 1
@@ -290,7 +290,7 @@ fn JSInterpreter::string_method(
         i = 0
       }
       while i >= 0 {
-        if (s[i:i + search_len].to_string() catch { _ => "" }) == search_str {
+        if s[i:i + search_len].to_string() == search_str {
           idx = i
           break
         }
@@ -329,8 +329,8 @@ fn JSInterpreter::string_method(
         let end_idx = s.length() - search_len + 1
         let mut i = start_idx
         let mut found = false
-        while i < end_idx && not(found) {
-          if (s[i:i + search_len].to_string() catch { _ => "" }) == search_str {
+        while i < end_idx && !found {
+          if s[i:i + search_len].to_string() == search_str {
             found = true
           }
           i = i + 1
@@ -363,9 +363,7 @@ fn JSInterpreter::string_method(
       } else if pos + search_len > s.length() {
         Bool(false)
       } else {
-        Bool(
-          (s[pos:pos + search_len].to_string() catch { _ => "" }) == search_str,
-        )
+        Bool(s[pos:pos + search_len].to_string() == search_str)
       }
     }
     "endsWith" => {
@@ -397,7 +395,7 @@ fn JSInterpreter::string_method(
         Bool(false)
       } else {
         let start = end_pos - search_len
-        Bool((s[start:end_pos].to_string() catch { _ => "" }) == search_str)
+        Bool(s[start:end_pos].to_string() == search_str)
       }
     }
     "at" => {
@@ -412,13 +410,13 @@ fn JSInterpreter::string_method(
       if idx < 0 || idx >= s.length() {
         Undefined
       } else {
-        String(s[idx:idx + 1].to_string() catch { _ => "" })
+        String(s[idx:idx + 1].to_string())
       }
     }
     "split" => {
       let sep_val = if args.length() > 0 { args[0] } else { Undefined }
       let mut sep_string : String? = None
-      if not(is_regexp(sep_val)) {
+      if !is_regexp(sep_val) {
         match sep_val {
           Undefined => ()
           _ => sep_string = Some(self.to_string_value(sep_val))
@@ -470,7 +468,7 @@ fn JSInterpreter::string_method(
             if limit >= 0 && result.length() >= limit {
               break
             }
-            result.push(String(s[i:i + 1].to_string() catch { _ => "" }))
+            result.push(String(s[i:i + 1].to_string()))
           }
         }
         return js_array_from(result)
@@ -485,8 +483,8 @@ fn JSInterpreter::string_method(
         let mut pos = start
         if start + sep_len <= s.length() {
           let end_idx = s.length() - sep_len + 1
-          while pos < end_idx && not(found) {
-            if (s[pos:pos + sep_len].to_string() catch { _ => "" }) == sep {
+          while pos < end_idx && !found {
+            if s[pos:pos + sep_len].to_string() == sep {
               found = true
             } else {
               pos = pos + 1
@@ -494,10 +492,10 @@ fn JSInterpreter::string_method(
           }
         }
         if found {
-          result.push(String(s[start:pos].to_string() catch { _ => "" }))
+          result.push(String(s[start:pos].to_string()))
           start = pos + sep_len
         } else {
-          result.push(String(s[start:s.length()].to_string() catch { _ => "" }))
+          result.push(String(s[start:s.length()].to_string()))
           break
         }
       }
@@ -595,7 +593,7 @@ fn JSInterpreter::string_method(
       if end < start {
         end = start
       }
-      String(s[start:end].to_string() catch { _ => "" })
+      String(s[start:end].to_string())
     }
     "substr" => {
       let len = s.length()
@@ -648,7 +646,7 @@ fn JSInterpreter::string_method(
       if end > len {
         end = len
       }
-      String(s[start:end].to_string() catch { _ => "" })
+      String(s[start:end].to_string())
     }
     "substring" => {
       let mut start = if args.length() > 0 {
@@ -678,7 +676,7 @@ fn JSInterpreter::string_method(
       if end > s.length() {
         end = s.length()
       }
-      String(s[start:end].to_string() catch { _ => "" })
+      String(s[start:end].to_string())
     }
     "toUpperCase" => String(s.to_upper())
     "toLowerCase" => String(s.to_lower())
@@ -761,7 +759,7 @@ fn JSInterpreter::string_method(
             pad_str = pad_str + pad
           }
           if pad_str.length() > needed {
-            pad_str = pad_str[:needed].to_string() catch { _ => pad_str }
+            pad_str = pad_str[:needed].to_string()
           }
         }
         String(pad_str + s)
@@ -786,7 +784,7 @@ fn JSInterpreter::string_method(
             pad_str = pad_str + pad
           }
           if pad_str.length() > needed {
-            pad_str = pad_str[:needed].to_string() catch { _ => pad_str }
+            pad_str = pad_str[:needed].to_string()
           }
         }
         String(s + pad_str)
@@ -997,7 +995,7 @@ fn JSInterpreter::array_method(
       }
       for i in start_idx..<len {
         let key = i.to_string()
-        if not(js_has_prop(arr_val, key)) {
+        if !js_has_prop(arr_val, key) {
           continue
         }
         let value = self.get_prop_value(arr_val, key)
@@ -1069,7 +1067,7 @@ fn JSInterpreter::array_method(
         )
       } else {
         let callback = args[0]
-        if not(self.is_callable(callback)) {
+        if !self.is_callable(callback) {
           return self.set_error_kind(
             "TypeError", "Array.prototype.map requires a callback",
           )
@@ -1108,7 +1106,7 @@ fn JSInterpreter::array_method(
         )
       } else {
         let callback = args[0]
-        if not(self.is_callable(callback)) {
+        if !self.is_callable(callback) {
           return self.set_error_kind(
             "TypeError", "Array.prototype.filter requires a callback",
           )
@@ -1139,7 +1137,7 @@ fn JSInterpreter::array_method(
         )
       } else {
         let callback = args[0]
-        if not(self.is_callable(callback)) {
+        if !self.is_callable(callback) {
           return self.set_error_kind(
             "TypeError", "Array.prototype.reduce requires a callback",
           )
@@ -1160,7 +1158,7 @@ fn JSInterpreter::array_method(
             }
             i += 1
           }
-          if not(found) {
+          if !found {
             return self.set_error_kind(
               "TypeError", "Reduce of empty array with no initial value",
             )
@@ -1191,7 +1189,7 @@ fn JSInterpreter::array_method(
         )
       } else {
         let callback = args[0]
-        if not(self.is_callable(callback)) {
+        if !self.is_callable(callback) {
           return self.set_error_kind(
             "TypeError", "Array.prototype.reduceRight requires a callback",
           )
@@ -1215,7 +1213,7 @@ fn JSInterpreter::array_method(
             }
             i = i - 1
           }
-          if not(found) {
+          if !found {
             return self.set_error_kind(
               "TypeError", "Reduce of empty array with no initial value",
             )
@@ -1249,7 +1247,7 @@ fn JSInterpreter::array_method(
         )
       } else {
         let callback = args[0]
-        if not(self.is_callable(callback)) {
+        if !self.is_callable(callback) {
           return self.set_error_kind(
             "TypeError", "Array.prototype.forEach requires a callback",
           )
@@ -1275,7 +1273,7 @@ fn JSInterpreter::array_method(
         )
       } else {
         let callback = args[0]
-        if not(self.is_callable(callback)) {
+        if !self.is_callable(callback) {
           return self.set_error_kind(
             "TypeError", "Array.prototype.every requires a callback",
           )
@@ -1289,7 +1287,7 @@ fn JSInterpreter::array_method(
             args_array[0] = arr.items[i]
             args_array[1] = Number(i.to_double())
             let ok = self.call_function(callback, this_arg, args_array)
-            if not(ok.to_boolean()) {
+            if !ok.to_boolean() {
               return Bool(false)
             }
           }
@@ -1304,7 +1302,7 @@ fn JSInterpreter::array_method(
         )
       } else {
         let callback = args[0]
-        if not(self.is_callable(callback)) {
+        if !self.is_callable(callback) {
           return self.set_error_kind(
             "TypeError", "Array.prototype.some requires a callback",
           )
@@ -1847,7 +1845,7 @@ fn JSInterpreter::array_method(
     "flatMap" =>
       if args.length() > 0 {
         let callback = args[0]
-        if not(self.is_callable(callback)) {
+        if !self.is_callable(callback) {
           return self.set_error_kind(
             "TypeError", "Array.prototype.flatMap requires a callback",
           )

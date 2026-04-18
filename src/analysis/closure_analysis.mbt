@@ -189,7 +189,7 @@ fn find_captures_in_stmt(
       find_captures_in_expr(init, local_vars, outer_scope, captures)
     @ast.TsStmt::Assign(name, expr) => {
       // Check if assigning to captured variable
-      if not(local_vars.contains(name)) && outer_scope.contains(name) {
+      if !local_vars.contains(name) && outer_scope.contains(name) {
         match captures.get(name) {
           Some(cap) => captures[name] = { ..cap, is_mutated: true }
           None => captures[name] = { name, is_mutated: true, type_hint: None }
@@ -199,7 +199,7 @@ fn find_captures_in_stmt(
     }
     @ast.TsStmt::CompoundAssign(name, _, expr) => {
       // Check if compound assigning to captured variable
-      if not(local_vars.contains(name)) && outer_scope.contains(name) {
+      if !local_vars.contains(name) && outer_scope.contains(name) {
         match captures.get(name) {
           Some(cap) => captures[name] = { ..cap, is_mutated: true }
           None => captures[name] = { name, is_mutated: true, type_hint: None }
@@ -287,8 +287,8 @@ pub fn find_captures_in_expr(
   match expr {
     @ast.TsExpr::Var(name) =>
       // Check if it's from outer scope (not local)
-      if not(local_vars.contains(name)) && outer_scope.contains(name) {
-        if not(captures.contains(name)) {
+      if !local_vars.contains(name) && outer_scope.contains(name) {
+        if !captures.contains(name) {
           captures[name] = { name, is_mutated: false, type_hint: None }
         }
       }
@@ -335,7 +335,7 @@ pub fn find_captures_in_expr(
     }
     @ast.TsExpr::AssignExpr(name, value) => {
       // Assignment to captured variable
-      if not(local_vars.contains(name)) && outer_scope.contains(name) {
+      if !local_vars.contains(name) && outer_scope.contains(name) {
         match captures.get(name) {
           Some(cap) => captures[name] = { ..cap, is_mutated: true }
           None => captures[name] = { name, is_mutated: true, type_hint: None }
@@ -374,7 +374,7 @@ pub fn find_captures_in_expr(
       // Extend outer scope with current locals for nested closure
       let extended_scope = outer_scope.copy()
       for v in local_vars {
-        if not(extended_scope.contains(v)) {
+        if !extended_scope.contains(v) {
           extended_scope.push(v)
         }
       }
@@ -392,7 +392,7 @@ pub fn find_captures_in_expr(
       }
       let extended_scope = outer_scope.copy()
       for v in local_vars {
-        if not(extended_scope.contains(v)) {
+        if !extended_scope.contains(v) {
           extended_scope.push(v)
         }
       }
