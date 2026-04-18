@@ -40,6 +40,15 @@ async fn main_async() -> Unit {
       let file_path = args[2]
       analyze_aot(file_path)
     }
+    "emit-moonbit-decl" => {
+      if args.length() < 3 {
+        println("Error: no file specified")
+        return
+      }
+      let file_path = args[2]
+      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
+      emit_moonbit_decl(file_path, output_path)
+    }
     _ => {
       println("Unknown command: \{command}")
       print_usage()
@@ -62,6 +71,9 @@ fn print_usage() -> Unit {
   println("  test262 <path>       Run test262 tests (file or directory)")
   println("  analyze <file>       Analyze AOT compilability of functions")
   println("  aot-check <file>     Alias for analyze")
+  println(
+    "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from TypeScript declarations",
+  )
 }
 
 ///|
@@ -118,6 +130,43 @@ async fn analyze_aot(file_path : String) -> Unit {
       println("  - \{name}: \{reason}")
     }
   }
+}
+
+///|
+async fn emit_moonbit_decl(file_path : String, output_path : String?) -> Unit {
+  let content = @fs.read_file(file_path).text() catch {
+    e => {
+      println("Error reading file: \{e}")
+      return
+    }
+  }
+  let emitted = @parser.emit_moonbit_decl_from_source(content) catch {
+    e => {
+      println("Parse error: \{e}")
+      return
+    }
+  }
+  match output_path {
+    Some(path) => {
+      let _ = @fs.write_file(path, string_to_bytes(emitted), create=0o644) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote MoonBit declarations to \{path}")
+    }
+    None => println(emitted)
+  }
+}
+
+///|
+fn string_to_bytes(s : String) -> Bytes {
+  let arr : Array[Byte] = []
+  for i = 0; i < s.length(); i = i + 1 {
+    arr.push((s[i].to_int() & 0xFF).to_byte())
+  }
+  Bytes::from_array(arr)
 }
 
 ///|

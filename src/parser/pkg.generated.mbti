@@ -6,6 +6,10 @@ import {
 }
 
 // Values
+pub fn emit_moonbit_decl(@ast.TsModule) -> String
+
+pub fn emit_moonbit_decl_from_source(String) -> String raise ParseError
+
 pub fn parse_block_from_source(String) -> @ast.TsBlock raise ParseError
 
 pub fn parse_block_from_source_strict(String, Bool) -> @ast.TsBlock raise ParseError
@@ -19,8 +23,7 @@ pub fn parse_module_block_from_source(String) -> @ast.TsModuleBlock raise ParseE
 // Errors
 pub(all) suberror ParseError {
   ParseError(String)
-}
-pub impl Show for ParseError
+} derive(Show)
 
 // Types and methods
 pub struct Lexer {
@@ -30,11 +33,10 @@ pub struct Lexer {
   mut pending : Array[Token]
   mut pending_index : Int
   mut newline_before_next : Bool
-}
+} derive(Show)
 pub fn Lexer::new(String) -> Self
 pub fn Lexer::next_token(Self) -> Token
 pub fn Lexer::tokenize(Self) -> Array[Token]
-pub impl Show for Lexer
 
 pub struct Parser {
   tokens : Array[Token]
@@ -50,7 +52,7 @@ pub struct Parser {
   src : String
   mut class_id : Int
   mut current_class_brand : String?
-}
+} derive(Show)
 pub fn Parser::from_source(String) -> Self
 pub fn Parser::new(Array[Token]) -> Self
 pub fn Parser::new_with_strict(Array[Token], Bool) -> Self
@@ -62,14 +64,12 @@ pub fn Parser::parse_interface(Self) -> @ast.TsInterface raise ParseError
 pub fn Parser::parse_module(Self) -> @ast.TsModule raise ParseError
 pub fn Parser::parse_module_block(Self) -> @ast.TsModuleBlock raise ParseError
 pub fn Parser::parse_stmt(Self) -> @ast.TsStmt raise ParseError
-pub impl Show for Parser
 
 pub struct Token {
   kind : TokenKind
   pos : Int
   has_newline_before : Bool
-}
-pub impl Show for Token
+} derive(Show)
 
 pub enum TokenKind {
   Number(Double)
@@ -182,9 +182,7 @@ pub enum TokenKind {
   Declare
   Null
   Eof
-}
-pub impl Eq for TokenKind
-pub impl Show for TokenKind
+} derive(Eq, Show)
 
 // Type aliases
 

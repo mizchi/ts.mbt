@@ -118,6 +118,7 @@ async test "parser: parse TypeScript lib d.ts files" {
     for item in failures {
       println(item)
     }
+    fail("Expected all TypeScript lib files to parse")
   }
 }
 

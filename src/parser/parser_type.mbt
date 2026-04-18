@@ -45,6 +45,10 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let _ = self.advance()
       Void
     }
+    Template(_, _, _) => {
+      let _ = self.advance()
+      String_
+    }
     // Literal types: "foo", 1, true, false
     Str(_) => {
       let _ = self.advance()
