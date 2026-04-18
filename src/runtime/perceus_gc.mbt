@@ -74,7 +74,7 @@ pub fn perceus_register_object(obj_id : Int) -> Unit {
 ///|
 /// Mark an object as escaped (it was returned or assigned to outer scope)
 pub fn perceus_mark_escaped(obj_id : Int) -> Unit {
-  if not(perceus_state.escaped_objects.contains(obj_id)) {
+  if !perceus_state.escaped_objects.contains(obj_id) {
     perceus_state.escaped_objects.push(obj_id)
   }
 }
@@ -98,7 +98,7 @@ pub fn perceus_leave_scope() -> Array[Int] {
   // Find objects that haven't escaped
   let to_cleanup : Array[Int] = []
   for obj_id in scope.object_ids {
-    if not(perceus_has_escaped(obj_id)) {
+    if !perceus_has_escaped(obj_id) {
       to_cleanup.push(obj_id)
     }
   }
@@ -106,7 +106,7 @@ pub fn perceus_leave_scope() -> Array[Int] {
   let remaining_scopes : Array[(Int, Int)] = []
   for pair in perceus_state.object_scopes {
     let (obj_id, _scope_id) = pair
-    if not(to_cleanup.contains(obj_id)) {
+    if !to_cleanup.contains(obj_id) {
       remaining_scopes.push(pair)
     }
   }

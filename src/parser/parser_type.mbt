@@ -199,7 +199,7 @@ fn Parser::parse_postfix_type(
     }
     // Indexed access type: T[K] - skip it
     let mut bracket_depth = 1
-    while bracket_depth > 0 && not(self.check(Eof)) {
+    while bracket_depth > 0 && !self.check(Eof) {
       match self.peek().kind {
         LBracket => {
           bracket_depth += 1
@@ -250,7 +250,7 @@ fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
 fn Parser::skip_object_type(self : Parser) -> Unit {
   let _ = self.advance() // consume {
   let mut depth = 1
-  while depth > 0 && not(self.check(Eof)) {
+  while depth > 0 && !self.check(Eof) {
     match self.peek().kind {
       LBrace => {
         depth += 1
@@ -272,7 +272,7 @@ fn Parser::skip_object_type(self : Parser) -> Unit {
 fn Parser::skip_bracket_type(self : Parser) -> Unit {
   let _ = self.advance() // consume [
   let mut depth = 1
-  while depth > 0 && not(self.check(Eof)) {
+  while depth > 0 && !self.check(Eof) {
     match self.peek().kind {
       LBracket => {
         depth += 1
@@ -294,7 +294,7 @@ fn Parser::skip_bracket_type(self : Parser) -> Unit {
 fn Parser::skip_paren_type(self : Parser) -> Unit raise ParseError {
   let _ = self.advance() // consume (
   let mut depth = 1
-  while depth > 0 && not(self.check(Eof)) {
+  while depth > 0 && !self.check(Eof) {
     match self.peek().kind {
       LParen => {
         depth += 1
@@ -337,12 +337,12 @@ fn Parser::skip_typeof_operand(self : Parser) -> Unit {
 ///|
 /// Skip type arguments: <T, U>
 fn Parser::skip_type_args(self : Parser) -> Unit {
-  if not(self.check(Lt)) {
+  if !self.check(Lt) {
     return
   }
   let _ = self.advance() // consume <
   let mut depth = 1
-  while depth > 0 && not(self.check(Eof)) {
+  while depth > 0 && !self.check(Eof) {
     match self.peek().kind {
       Lt => {
         depth += 1

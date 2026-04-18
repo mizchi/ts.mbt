@@ -109,7 +109,7 @@ fn JSInterpreter::call_object_native(
                 false,
               )
             } else {
-              let idx = @strconv.parse_int(key) catch { _ => -1 }
+              let idx = @string.parse_int(key) catch { _ => -1 }
               if idx >= 0 && idx < arr.items.length() && arr.present[idx] {
                 self.make_data_descriptor(arr.items[idx], true, true, true)
               } else {
@@ -146,13 +146,9 @@ fn JSInterpreter::call_object_native(
                 false,
               )
             } else {
-              let idx = @strconv.parse_int(key) catch { _ => -1 }
+              let idx = @string.parse_int(key) catch { _ => -1 }
               if idx >= 0 && idx < s.length() {
-                let ch = JSValue::String(
-                  s[idx:idx + 1].to_string() catch {
-                    _ => ""
-                  },
-                )
+                let ch = JSValue::String(s[idx:idx + 1].to_string())
                 self.make_data_descriptor(ch, false, true, false)
               } else {
                 Undefined
@@ -284,7 +280,7 @@ fn JSInterpreter::call_object_native(
             if key == "length" {
               Bool(true)
             } else {
-              let idx = @strconv.parse_int(key) catch { _ => -1 }
+              let idx = @string.parse_int(key) catch { _ => -1 }
               if idx >= 0 && idx < arr.items.length() && arr.present[idx] {
                 Bool(true)
               } else {
@@ -302,7 +298,7 @@ fn JSInterpreter::call_object_native(
             if key == "length" {
               Bool(true)
             } else {
-              let idx = @strconv.parse_int(key) catch { _ => -1 }
+              let idx = @string.parse_int(key) catch { _ => -1 }
               Bool(idx >= 0 && idx < s.length())
             }
           _ => Bool(false)
@@ -517,13 +513,13 @@ fn JSInterpreter::object_get_own_property_names(
   match target {
     Function(closure) =>
       for prop in closure.props {
-        if not(prop.key.has_prefix("Symbol(")) {
+        if !prop.key.has_prefix("Symbol(") {
           names.push(String(prop.key))
         }
       }
     Object(map) =>
       for prop in map.props {
-        if not(prop.key.has_prefix("Symbol(")) {
+        if !prop.key.has_prefix("Symbol(") {
           names.push(String(prop.key))
         }
       }
@@ -534,7 +530,7 @@ fn JSInterpreter::object_get_own_property_names(
         }
       }
       for prop in arr.props {
-        if not(prop.key.has_prefix("Symbol(")) {
+        if !prop.key.has_prefix("Symbol(") {
           names.push(String(prop.key))
         }
       }
@@ -558,7 +554,7 @@ fn JSInterpreter::object_get_own_property_names(
                 break
               }
             }
-            valid && not(has_leading_zero)
+            valid && !has_leading_zero
           })
         if is_index {
           let mut n = 0

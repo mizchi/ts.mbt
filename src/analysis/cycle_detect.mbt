@@ -51,7 +51,7 @@ pub fn analyze_cycles(func : @ast.TsFunc) -> CycleInfo {
   for edge in info.edges {
     match adj.get(edge.from_var) {
       Some(neighbors) =>
-        if not(neighbors.contains(edge.to_var)) {
+        if !neighbors.contains(edge.to_var) {
           neighbors.push(edge.to_var)
         }
       None => adj[edge.from_var] = [edge.to_var]
@@ -65,11 +65,11 @@ pub fn analyze_cycles(func : @ast.TsFunc) -> CycleInfo {
 
   // Initialize all nodes as white
   for entry in adj {
-    if not(white.contains(entry.0)) {
+    if !white.contains(entry.0) {
       white.push(entry.0)
     }
     for neighbor in entry.1 {
-      if not(white.contains(neighbor)) {
+      if !white.contains(neighbor) {
         white.push(neighbor)
       }
     }
@@ -77,7 +77,7 @@ pub fn analyze_cycles(func : @ast.TsFunc) -> CycleInfo {
 
   // DFS from each unvisited node
   for start in white {
-    if not(black.contains(start)) && not(gray.contains(start)) {
+    if !black.contains(start) && !gray.contains(start) {
       dfs_find_cycles(start, adj, gray, black, info)
     }
   }
@@ -107,7 +107,7 @@ fn dfs_find_cycles(
             }
             if in_cycle {
               cycle_vars.push(v)
-              if not(info.cyclic_vars.contains(v)) {
+              if !info.cyclic_vars.contains(v) {
                 info.cyclic_vars.push(v)
               }
             }
@@ -125,7 +125,7 @@ fn dfs_find_cycles(
             variables: cycle_vars,
             edges: cycle_edges,
           })
-        } else if not(black.contains(neighbor)) {
+        } else if !black.contains(neighbor) {
           dfs_find_cycles(neighbor, adj, gray, black, info)
         }
       }

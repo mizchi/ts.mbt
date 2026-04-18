@@ -84,14 +84,14 @@ fn JSInterpreter::string_iterator_next(
       idx + 1 < s.length() {
       let cu2 = s[idx + 1]
       if cu2.is_trailing_surrogate() {
-        let str = s[idx:idx + 2].to_string() catch { _ => "" }
+        let str = s[idx:idx + 2].to_string()
         (idx + 2, str)
       } else {
-        let str = s[idx:idx + 1].to_string() catch { _ => "" }
+        let str = s[idx:idx + 1].to_string()
         (idx + 1, str)
       }
     } else {
-      let str = s[idx:idx + 1].to_string() catch { _ => "" }
+      let str = s[idx:idx + 1].to_string()
       (idx + 1, str)
     }
     let _ = js_set_prop(this_arg, "__iter_index", Number(next_idx.to_double()))

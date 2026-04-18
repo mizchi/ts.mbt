@@ -168,7 +168,7 @@ pub fn is_assignable(a : @ast.TsType, b : @ast.TsType) -> Bool {
         return false
       }
       for i = 0; i < params_a.length(); i = i + 1 {
-        if not(is_assignable(params_b[i], params_a[i])) {
+        if !is_assignable(params_b[i], params_a[i]) {
           return false
         }
       }
@@ -180,7 +180,7 @@ pub fn is_assignable(a : @ast.TsType, b : @ast.TsType) -> Bool {
         return false
       }
       for i = 0; i < elems_a.length(); i = i + 1 {
-        if not(is_assignable(elems_a[i], elems_b[i])) {
+        if !is_assignable(elems_a[i], elems_b[i]) {
           return false
         }
       }
@@ -212,7 +212,7 @@ pub fn ConstraintSolver::solve(self : ConstraintSolver) -> Unit {
   for constraint in self.constraints {
     match constraint {
       Assignable(from, to, loc) =>
-        if not(is_assignable(from, to)) {
+        if !is_assignable(from, to) {
           self.errors.push({
             message: "Type is not assignable",
             loc,
@@ -224,7 +224,7 @@ pub fn ConstraintSolver::solve(self : ConstraintSolver) -> Unit {
         // For now, just check against inferred type
         ignore(expected)
       Equal(a, b, loc) =>
-        if a != b && not(is_assignable(a, b)) && not(is_assignable(b, a)) {
+        if a != b && !is_assignable(a, b) && !is_assignable(b, a) {
           self.errors.push({
             message: "Types are not equal",
             loc,

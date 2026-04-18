@@ -481,7 +481,7 @@ fn JSInterpreter::promise_construct(
   args : Array[JSValue],
 ) -> JSValue {
   let executor = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(executor)) {
+  if !self.is_callable(executor) {
     return self.set_error_kind(
       "TypeError", "Promise resolver is not a function",
     )
@@ -508,7 +508,7 @@ fn JSInterpreter::promise_construct_with_instance(
   args : Array[JSValue],
 ) -> JSValue {
   let executor = if args.length() > 0 { args[0] } else { Undefined }
-  if not(self.is_callable(executor)) {
+  if !self.is_callable(executor) {
     return self.set_error_kind(
       "TypeError", "Promise resolver is not a function",
     )
@@ -536,7 +536,7 @@ fn JSInterpreter::promise_new_capability(
   self : JSInterpreter,
   ctor : JSValue,
 ) -> (JSValue, JSValue, JSValue) {
-  if not(self.is_constructor(ctor)) {
+  if !self.is_constructor(ctor) {
     let _ = self.set_error_kind("TypeError", "not a constructor")
     return (Undefined, Undefined, Undefined)
   }
@@ -553,7 +553,7 @@ fn JSInterpreter::promise_new_capability(
   }
   let resolve = js_get_prop(cap, "resolve")
   let reject = js_get_prop(cap, "reject")
-  if not(self.is_callable(resolve)) || not(self.is_callable(reject)) {
+  if !self.is_callable(resolve) || !self.is_callable(reject) {
     let _ = self.set_error_kind(
       "TypeError", "Promise capability is not callable",
     )
@@ -656,7 +656,7 @@ fn JSInterpreter::promise_try(
     Some(err) => return err
     None => ()
   }
-  if not(self.is_callable(callback)) {
+  if !self.is_callable(callback) {
     let err = self.set_error_kind(
       "TypeError", "Promise.try callback is not callable",
     )
@@ -734,7 +734,7 @@ fn JSInterpreter::promise_all_with_ctor(
     Some(err) => return err
     None => ()
   }
-  if not(self.is_callable(promise_resolve)) {
+  if !self.is_callable(promise_resolve) {
     return self.set_error_kind("TypeError", "Promise.resolve is not callable")
   }
   let iterator = match self.get_iterator(iter) {
@@ -837,7 +837,7 @@ fn JSInterpreter::promise_all_with_ctor(
       }
       None => ()
     }
-    if not(self.is_callable(then_method)) {
+    if !self.is_callable(then_method) {
       let err = self.set_error_kind(
         "TypeError", "Promise resolve is not callable",
       )
@@ -876,7 +876,7 @@ fn JSInterpreter::promise_race_with_ctor(
     Some(err) => return err
     None => ()
   }
-  if not(self.is_callable(promise_resolve)) {
+  if !self.is_callable(promise_resolve) {
     return self.set_error_kind("TypeError", "Promise.resolve is not callable")
   }
   let iterator = match self.get_iterator(iter) {
@@ -929,7 +929,7 @@ fn JSInterpreter::promise_race_with_ctor(
       }
       None => ()
     }
-    if not(self.is_callable(then_method)) {
+    if !self.is_callable(then_method) {
       let err = self.set_error_kind(
         "TypeError", "Promise resolve is not callable",
       )
@@ -987,7 +987,7 @@ fn JSInterpreter::promise_any_with_ctor(
     Some(err) => return err
     None => ()
   }
-  if not(self.is_callable(promise_resolve)) {
+  if !self.is_callable(promise_resolve) {
     return self.set_error_kind("TypeError", "Promise.resolve is not callable")
   }
   let iterator = match self.get_iterator(iter) {
@@ -1073,7 +1073,7 @@ fn JSInterpreter::promise_any_with_ctor(
       }
       None => ()
     }
-    if not(self.is_callable(then_method)) {
+    if !self.is_callable(then_method) {
       let err = self.set_error_kind(
         "TypeError", "Promise resolve is not callable",
       )
@@ -1180,7 +1180,7 @@ pub fn JSInterpreter::await_promise(
   value : JSValue,
 ) -> JSValue {
   // If value is not a Promise, wrap it in resolved Promise semantics (return as-is)
-  if not(self.is_promise(value)) {
+  if !self.is_promise(value) {
     return value
   }
 

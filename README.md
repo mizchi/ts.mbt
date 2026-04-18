@@ -92,17 +92,17 @@ Tests related to `eval`, `Function` constructor, and `with` statement are exclud
 - **TypedArray** - Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array, BigInt64Array, BigUint64Array
 - **BigInt** - Basic operations
 
-## Wasm Codegen Scope
+## Experimental Wasm Codegen Scope
 
-The Wasm codegen intentionally supports a strict subset and errors on
-dynamic JS features. Uses wasm-gc for arrays and structs.
+The experimental Wasm codegen intentionally supports a strict subset and errors on
+dynamic JS features. It currently uses wasm-gc for arrays and structs.
 
 - **Statements**: `let`/`const`, assignments, `if`, `while`, `do-while`, `for`, `for-of`
   (arrays), `switch`, `break`/`continue`, `return`, block/expr statements
 - **Expressions**: literals, variables, arithmetic/comparison/bitwise, string `+`,
   array access/length, struct field access, `new Array(size)`,
   `new <interface>` struct allocation, ternary, nullish coalescing (`??`)
-- **wasm-gc**: GC arrays, GC structs, generator state machines
+- **experimental wasm-gc**: GC arrays, GC structs, generator state machines
 
 **Explicitly unsupported in codegen**:
 - `throw`, `try`/`catch`/`finally`
@@ -125,10 +125,10 @@ moon fmt
 # Run test262 (requires test262 repo in ./test262)
 moon run src -- test262 test262.allowlist.txt
 
-# AOT compilation (wasm-gc)
-just aot-check      # Check AOT compilability
-just aot-compile    # Compile fixtures to wasm
-just aot-test       # Run with wasmtime
+# Experimental AOT compilation (wasm-gc)
+just experimental-aot-check      # Check AOT compilability
+just experimental-aot-compile    # Compile fixtures to wasm
+just experimental-aot-test       # Run with wasmtime
 ```
 
 ## License

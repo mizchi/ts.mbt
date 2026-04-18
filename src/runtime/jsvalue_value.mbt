@@ -14,7 +14,7 @@ pub enum JSTag {
   Array // 6
   Function // 7
   BigInt // 8
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 // / JSTag i32 conversion
@@ -65,7 +65,7 @@ pub enum JSValue {
   BreakSignal(String?)
   ContinueSignal(String?)
   Empty // ECMAScript empty completion value (distinct from undefined)
-} derive(Show)
+} derive(Debug)
 
 ///|
 pub fn JSValue::tag(self : JSValue) -> JSTag {
@@ -192,9 +192,9 @@ pub fn JSValue::to_boolean(self : JSValue) -> Bool {
     Undefined => false
     Null => false
     Bool(b) => b
-    Number(n) => n != 0.0 && not(n.is_nan())
+    Number(n) => n != 0.0 && !n.is_nan()
     String(s) => s.length() > 0
-    BigInt(n) => not(n.is_zero())
+    BigInt(n) => !n.is_zero()
     Object(map) => {
       for prop in map.props {
         if prop.key == "__class" {
@@ -230,7 +230,7 @@ let js_nan : Double = 0.0 / 0.0
 // / Strip the internal ID suffix from symbol strings for display
 pub fn strip_symbol_id(s : String) -> String {
   // Find the last # and strip the ID suffix
-  if not(s.has_prefix("Symbol(")) || not(s.contains("#")) {
+  if !s.has_prefix("Symbol(") || !s.contains("#") {
     return s
   }
   let mut last_hash_idx = -1
@@ -409,7 +409,7 @@ pub fn js_pos(val : JSValue) -> JSValue {
 ///|
 // / NOT
 pub fn js_not(val : JSValue) -> JSValue {
-  Bool(not(val.to_boolean()))
+  Bool(!val.to_boolean())
 }
 
 ///|
@@ -485,12 +485,10 @@ pub fn js_strict_eq(left : JSValue, right : JSValue) -> JSValue {
 // / (!==)
 pub fn js_strict_ne(left : JSValue, right : JSValue) -> JSValue {
   Bool(
-    not(
-      match js_strict_eq(left, right) {
-        Bool(b) => b
-        _ => false
-      },
-    ),
+    !(match js_strict_eq(left, right) {
+      Bool(b) => b
+      _ => false
+    }),
   )
 }
 
@@ -589,12 +587,10 @@ pub fn js_eq(left : JSValue, right : JSValue) -> JSValue {
 // / (!=)
 pub fn js_ne(left : JSValue, right : JSValue) -> JSValue {
   Bool(
-    not(
-      match js_eq(left, right) {
-        Bool(b) => b
-        _ => false
-      },
-    ),
+    !(match js_eq(left, right) {
+      Bool(b) => b
+      _ => false
+    }),
   )
 }
 
@@ -711,7 +707,7 @@ pub fn js_has_prop(obj : JSValue, key : String) -> Bool {
       if key == "length" {
         true
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         if idx >= 0 && idx < arr.items.length() && arr.present[idx] {
           true
         } else {
@@ -736,7 +732,7 @@ pub fn js_has_prop(obj : JSValue, key : String) -> Bool {
       if key == "length" {
         true
       } else {
-        let idx = @strconv.parse_int(key) catch { _ => -1 }
+        let idx = @string.parse_int(key) catch { _ => -1 }
         idx >= 0 && idx < s.length()
       }
     _ => false

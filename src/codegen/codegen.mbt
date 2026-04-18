@@ -4,7 +4,7 @@
 // / codegenerror
 pub suberror CodeGenError {
   CodeGenError(String)
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / string (snapshot)
@@ -4452,7 +4452,7 @@ fn compile_function(
 
 ///|
 // /
-pub fn compile_module(
+pub fn experimental_compile_module(
   module_ : @ast.TsModule,
 ) -> @core.Module raise CodeGenError {
   // importcompute
@@ -4600,7 +4600,7 @@ pub fn compile_module(
 ///|
 /// Compile module using wasm-gc types instead of linear memory.
 /// Arrays are represented as GC arrays, no linear memory allocation.
-pub fn compile_module_gc(
+pub fn experimental_compile_module_gc(
   module_ : @ast.TsModule,
 ) -> @core.Module raise CodeGenError {
   // Import count
@@ -4713,7 +4713,7 @@ pub fn compile_module_gc(
           })
         }
         for v in analysis.persisted_vars {
-          if not(v.is_param) {
+          if !v.is_param {
             gen_fields.push({
               storage: @core.StorageType::Val(@core.ValType::F64),
               mutable: true,
@@ -4752,7 +4752,9 @@ pub fn compile_module_gc(
     match generator_struct_types.get(func.name) {
       Some(struct_type_idx) => {
         // Compile generator: produces create() and next() functions
-        let gen_code = compile_generator_func(func, struct_type_idx)
+        let gen_code = experimental_compile_generator_func(
+          func, struct_type_idx,
+        )
         match gen_code {
           Some(gc) => {
             // Add create function
@@ -5003,7 +5005,7 @@ fn compile_typed_function(
 ///|
 /// Compile a TypedModule to WebAssembly.
 /// Uses pre-analyzed type information for better optimization.
-pub fn compile_typed_module(
+pub fn experimental_compile_typed_module(
   typed_module : @ast.TypedModule,
   original_module : @ast.TsModule,
 ) -> @core.Module raise CodeGenError {
@@ -5142,7 +5144,9 @@ pub fn compile_typed_module(
 
 ///|
 /// Analyze and compile source code in one step.
-pub fn analyze_and_compile(source : String) -> @core.Module raise CodeGenError {
+pub fn experimental_analyze_and_compile(
+  source : String,
+) -> @core.Module raise CodeGenError {
   let parser = @parser.Parser::from_source(source)
   let module_ = parser.parse_module() catch {
     @parser.ParseError(msg) => raise CodeGenError(msg)
@@ -5162,7 +5166,7 @@ pub fn analyze_and_compile(source : String) -> @core.Module raise CodeGenError {
         raise CodeGenError("Analysis failed with unknown error")
       }
     @analysis.AnalysisResult::Ok(typed_module, _) =>
-      compile_typed_module(typed_module, module_)
+      experimental_compile_typed_module(typed_module, module_)
   }
 }
 
@@ -5184,11 +5188,13 @@ fn string_to_bytes(s : String) -> Bytes {
 // / error ( + codegen)
 pub suberror CompileError {
   CompileError(String)
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / TypeScript Wasm
-pub fn compile_to_wasm(source : String) -> Bytes raise CompileError {
+pub fn experimental_compile_to_wasm(
+  source : String,
+) -> Bytes raise CompileError {
   let parser = @parser.Parser::from_source(source)
   let ts_module = parser.parse_module() catch {
     @parser.ParseError::ParseError(msg) =>
@@ -5196,7 +5202,7 @@ pub fn compile_to_wasm(source : String) -> Bytes raise CompileError {
   }
 
   // codegen
-  let wasm_module = compile_module(ts_module) catch {
+  let wasm_module = experimental_compile_module(ts_module) catch {
     CodeGenError(msg) => raise CompileError("CodeGen error: \{msg}")
   }
 
@@ -5209,13 +5215,13 @@ pub fn compile_to_wasm(source : String) -> Bytes raise CompileError {
 
 ///|
 // / TypeScript wasm5 Module generate
-pub fn compile(source : String) -> @core.Module raise CompileError {
+pub fn experimental_compile(source : String) -> @core.Module raise CompileError {
   let parser = @parser.Parser::from_source(source)
   let ts_module = parser.parse_module() catch {
     @parser.ParseError::ParseError(msg) =>
       raise CompileError("Parse error: \{msg}")
   }
-  compile_module(ts_module) catch {
+  experimental_compile_module(ts_module) catch {
     CodeGenError(msg) => raise CompileError("CodeGen error: \{msg}")
   }
 }

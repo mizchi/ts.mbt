@@ -678,7 +678,7 @@ test "bench AOT compile add" (b : @bench.T) {
   let module_ = try! parser.parse_module()
   b.bench(
     () => {
-      let _ = try! @aot.compile_module_to_wasm(module_)
+      let _ = try! @aot.experimental_compile_module_to_wasm(module_)
     },
     name="aot.compile.add",
     count=20,
@@ -689,7 +689,7 @@ test "bench AOT compile add" (b : @bench.T) {
 test "bench AOT call add" (b : @bench.T) {
   let parser = @parser.Parser::from_source(aot_add_src)
   let module_ = try! parser.parse_module()
-  let runtime = try! @aot.create_aot_runtime(module_)
+  let runtime = try! @aot.experimental_create_aot_runtime(module_)
   b.bench(
     () => {
       let _ = try! runtime.call("add", [10.0, 32.0])
@@ -715,7 +715,7 @@ test "bench AOT compile loop" (b : @bench.T) {
   let module_ = try! parser.parse_module()
   b.bench(
     () => {
-      let _ = try! @aot.compile_module_to_wasm(module_)
+      let _ = try! @aot.experimental_compile_module_to_wasm(module_)
     },
     name="aot.compile.loop",
     count=10,
@@ -726,7 +726,7 @@ test "bench AOT compile loop" (b : @bench.T) {
 test "bench AOT call loop(1000)" (b : @bench.T) {
   let parser = @parser.Parser::from_source(aot_loop_src)
   let module_ = try! parser.parse_module()
-  let runtime = try! @aot.create_aot_runtime(module_)
+  let runtime = try! @aot.experimental_create_aot_runtime(module_)
   b.bench(
     () => {
       let _ = try! runtime.call("sum", [1000.0])
@@ -770,7 +770,7 @@ test "bench AOT compile fib" (b : @bench.T) {
   let module_ = try! parser.parse_module()
   b.bench(
     () => {
-      let _ = try! @aot.compile_module_to_wasm(module_)
+      let _ = try! @aot.experimental_compile_module_to_wasm(module_)
     },
     name="aot.compile.fib",
     count=10,
@@ -781,7 +781,7 @@ test "bench AOT compile fib" (b : @bench.T) {
 test "bench AOT call fib(20)" (b : @bench.T) {
   let parser = @parser.Parser::from_source(aot_fib_src)
   let module_ = try! parser.parse_module()
-  let runtime = try! @aot.create_aot_runtime(module_)
+  let runtime = try! @aot.experimental_create_aot_runtime(module_)
   b.bench(
     () => {
       let _ = try! runtime.call("fib", [20.0])
@@ -814,7 +814,7 @@ test "bench interpreter vs AOT loop(10000)" (b : @bench.T) {
   // AOT version
   let parser = @parser.Parser::from_source(aot_loop_src)
   let module_ = try! parser.parse_module()
-  let runtime = try! @aot.create_aot_runtime(module_)
+  let runtime = try! @aot.experimental_create_aot_runtime(module_)
   b.bench(
     () => {
       let _ = try! runtime.call("sum", [10000.0])
@@ -836,7 +836,7 @@ let aot_math_src : String =
 test "bench AOT call math.sqrt" (b : @bench.T) {
   let parser = @parser.Parser::from_source(aot_math_src)
   let module_ = try! parser.parse_module()
-  let runtime = try! @aot.create_aot_runtime(module_)
+  let runtime = try! @aot.experimental_create_aot_runtime(module_)
   b.bench(
     () => {
       let _ = try! runtime.call("distance", [0.0, 0.0, 3.0, 4.0])

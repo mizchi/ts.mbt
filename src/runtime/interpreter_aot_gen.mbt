@@ -121,12 +121,12 @@ fn try_build_aot_state_machine(
   func : @ast.TsFunc,
   args : Array[JSValue],
 ) -> (AOTGenStateMachine, Array[Double])? {
-  if not(func.is_generator) {
+  if !func.is_generator {
     return None
   }
 
   // Check if the generator body is simple enough for AOT
-  if not(is_simple_generator_body(func.body)) {
+  if !is_simple_generator_body(func.body) {
     return None
   }
 
@@ -186,7 +186,7 @@ fn is_simple_generator_body(block : @ast.TsBlock) -> Bool {
     return false
   }
   for stmt in block.stmts {
-    if not(is_simple_stmt(stmt)) {
+    if !is_simple_stmt(stmt) {
       return false
     }
   }
@@ -307,7 +307,7 @@ fn is_simple_stmt(stmt : @ast.TsStmt) -> Bool {
     @ast.TsStmt::Assign(_, expr) => is_simple_expr(expr)
     @ast.TsStmt::CompoundAssign(_, _, expr) => is_simple_expr(expr)
     @ast.TsStmt::If(cond, then_block, else_block) => {
-      if not(is_simple_expr(cond)) || not(is_simple_generator_body(then_block)) {
+      if !is_simple_expr(cond) || !is_simple_generator_body(then_block) {
         return false
       }
       match else_block {
@@ -321,15 +321,15 @@ fn is_simple_stmt(stmt : @ast.TsStmt) -> Bool {
       is_simple_expr(cond) && is_simple_generator_body(body)
     @ast.TsStmt::For(init, cond, update, body) => {
       match init {
-        Some(s) => if not(is_simple_stmt(s)) { return false }
+        Some(s) => if !is_simple_stmt(s) { return false }
         None => ()
       }
       match cond {
-        Some(e) => if not(is_simple_expr(e)) { return false }
+        Some(e) => if !is_simple_expr(e) { return false }
         None => ()
       }
       match update {
-        Some(s) => if not(is_simple_stmt(s)) { return false }
+        Some(s) => if !is_simple_stmt(s) { return false }
         None => ()
       }
       is_simple_generator_body(body)
@@ -400,7 +400,7 @@ fn collect_local_names_stmt(
     @ast.TsStmt::Var(@ast.TsBinding::Ident(name), _, _)
     | @ast.TsStmt::Let(@ast.TsBinding::Ident(name), _, _)
     | @ast.TsStmt::Const(@ast.TsBinding::Ident(name), _, _) =>
-      if not(params.contains(name)) && not(locals.contains(name)) {
+      if !params.contains(name) && !locals.contains(name) {
         locals.push(name)
       }
     @ast.TsStmt::If(_, then_block, else_block) => {
@@ -699,7 +699,7 @@ fn js_to_f64(val : JSValue) -> Double {
     Bool(b) => if b { 1.0 } else { 0.0 }
     Undefined | Null => 0.0
     String(s) =>
-      @strconv.parse_double(s) catch {
+      @string.parse_double(s) catch {
         _ => 0.0 / 0.0 // NaN
       }
     _ => 0.0 / 0.0 // NaN for non-numeric types

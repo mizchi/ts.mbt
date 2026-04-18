@@ -6,7 +6,7 @@ pub(all) struct SourceLoc {
   offset : Int
   line : Int
   column : Int
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// Create SourceLoc from token offset by scanning source string.
@@ -41,7 +41,7 @@ pub(all) enum DeclKind {
   Param
   Function
   CatchParam
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// Information about a variable binding in scope.
@@ -51,7 +51,7 @@ pub(all) struct BindingInfo {
   type_ : @ast.TsType
   is_initialized : Bool
   loc : SourceLoc
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Kind of scope for different contexts.
@@ -63,7 +63,7 @@ pub(all) enum ScopeKind {
   Catch
   With
   ForLoop
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// Scope for tracking variable bindings.
@@ -137,7 +137,7 @@ pub fn Scope::find_function_scope(self : Scope) -> Scope? {
 /// Check if a name is defined as uninitialized (TDZ).
 pub fn Scope::is_uninitialized(self : Scope, name : String) -> Bool {
   match self.bindings.get(name) {
-    Some(info) => not(info.is_initialized)
+    Some(info) => !info.is_initialized
     None =>
       match self.parent {
         Some(p) => p.is_uninitialized(name)
@@ -199,7 +199,7 @@ pub(all) struct AnalysisError {
   kind : AnalysisErrorKind
   message : String
   loc : SourceLoc
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Error kind enumeration.
@@ -209,7 +209,7 @@ pub(all) enum AnalysisErrorKind {
   TypeError
   UnsupportedFeature
   Warning
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// Create a new analysis context.
@@ -321,7 +321,7 @@ pub fn AnalysisCtx::lookup_binding(
   match self.current_scope.lookup(name) {
     Some(info) => {
       // Check for TDZ violation
-      if not(info.is_initialized) && (info.kind == Let || info.kind == Const) {
+      if !info.is_initialized && (info.kind == Let || info.kind == Const) {
         self.add_error(
           ReferenceError,
           "Cannot access '\{name}' before initialization",

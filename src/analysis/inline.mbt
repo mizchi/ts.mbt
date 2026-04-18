@@ -6,7 +6,7 @@ pub(all) enum InlineRecommendation {
   Inline // Should be inlined
   MaybeInline // Could be inlined if called few times
   NoInline // Should not be inlined
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// Information about a function's inlining suitability.
@@ -53,7 +53,7 @@ pub fn analyze_inline(func : @ast.TsFunc, call_count : Int) -> InlineInfo {
     NoInline
   } else if stmt_count <= inline_stmt_threshold &&
     expr_count <= inline_expr_threshold &&
-    not(has_loops) {
+    !has_loops {
     Inline
   } else if stmt_count <= maybe_inline_stmt_threshold && call_count <= 2 {
     MaybeInline

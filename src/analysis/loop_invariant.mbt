@@ -50,23 +50,20 @@ pub fn analyze_loop_invariants(
 /// Collect variables that are modified in a statement.
 fn collect_modified_vars(stmt : @ast.TsStmt, vars : Array[String]) -> Unit {
   match stmt {
-    @ast.TsStmt::Assign(name, _) =>
-      if not(vars.contains(name)) {
-        vars.push(name)
-      }
+    @ast.TsStmt::Assign(name, _) => if !vars.contains(name) { vars.push(name) }
     @ast.TsStmt::Var(binding, _, _)
     | @ast.TsStmt::Let(binding, _, _)
     | @ast.TsStmt::Const(binding, _, _) => {
       let names : Array[String] = []
       collect_binding_names(binding, names)
       for name in names {
-        if not(vars.contains(name)) {
+        if !vars.contains(name) {
           vars.push(name)
         }
       }
     }
     @ast.TsStmt::CompoundAssign(name, _, _) =>
-      if not(vars.contains(name)) {
+      if !vars.contains(name) {
         vars.push(name)
       }
     @ast.TsStmt::Expr(e) => collect_modified_vars_in_expr(e, vars)
@@ -114,15 +111,12 @@ fn collect_modified_vars_in_expr(
 ) -> Unit {
   match expr {
     @ast.TsExpr::AssignExpr(name, _) =>
-      if not(vars.contains(name)) {
+      if !vars.contains(name) {
         vars.push(name)
       }
     @ast.TsExpr::CompoundAssignExpr(target, _, _) =>
       match target {
-        @ast.TsExpr::Var(name) =>
-          if not(vars.contains(name)) {
-            vars.push(name)
-          }
+        @ast.TsExpr::Var(name) => if !vars.contains(name) { vars.push(name) }
         _ => ()
       }
     @ast.TsExpr::UnaryOp(op, operand) =>
@@ -133,7 +127,7 @@ fn collect_modified_vars_in_expr(
         | @ast.TsUnaryOp::PostDec =>
           match operand {
             @ast.TsExpr::Var(name) =>
-              if not(vars.contains(name)) {
+              if !vars.contains(name) {
                 vars.push(name)
               }
             _ => ()
@@ -273,7 +267,7 @@ fn is_loop_invariant(expr : @ast.TsExpr, modified : Array[String]) -> Bool {
     | @ast.TsExpr::NullLit
     | @ast.TsExpr::ArrayHole => true
     // Variable is invariant if not modified
-    @ast.TsExpr::Var(name) => not(modified.contains(name))
+    @ast.TsExpr::Var(name) => !modified.contains(name)
     // Binary op is invariant if both operands are
     @ast.TsExpr::BinOp(_, left, right) =>
       is_loop_invariant(left, modified) && is_loop_invariant(right, modified)
@@ -318,7 +312,7 @@ fn is_loop_invariant(expr : @ast.TsExpr, modified : Array[String]) -> Bool {
 /// Collect variable dependencies of an expression.
 fn collect_var_deps(expr : @ast.TsExpr, deps : Array[String]) -> Unit {
   match expr {
-    @ast.TsExpr::Var(name) => if not(deps.contains(name)) { deps.push(name) }
+    @ast.TsExpr::Var(name) => if !deps.contains(name) { deps.push(name) }
     @ast.TsExpr::BinOp(_, left, right) => {
       collect_var_deps(left, deps)
       collect_var_deps(right, deps)

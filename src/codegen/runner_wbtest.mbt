@@ -152,7 +152,7 @@ test "runner: basic wasmx test" {
     #|  return a + b;
     #|}
 
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "add", [3.0, 5.0], 8.0)
 
   clear_runner()
@@ -167,7 +167,7 @@ test "runner: basic wasmtime test" {
     #|  return a + b;
     #|}
 
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   match run_wasm(wasm, "add", [3.0, 5.0]) {
     RunResult::F64(v) => assert_eq(v, 8.0)
     RunResult::Error(e) =>

@@ -15,14 +15,14 @@ async fn main_async() -> Unit {
       let file_path = args[2]
       run_ts_file(file_path)
     }
-    "emit-gc" => {
+    "experimental-emit-gc" => {
       if args.length() < 3 {
         println("Error: no file specified")
         return
       }
       let file_path = args[2]
       let output_path = if args.length() >= 4 { args[3] } else { "out.wasm" }
-      emit_wasm_gc(file_path, output_path)
+      experimental_emit_wasm_gc(file_path, output_path)
     }
     "test262" => {
       if args.length() < 3 {
@@ -32,13 +32,13 @@ async fn main_async() -> Unit {
       let test_path = args[2]
       run_test262(test_path)
     }
-    "analyze" | "aot-check" => {
+    "experimental-analyze" | "experimental-aot-check" => {
       if args.length() < 3 {
         println("Error: no file specified")
         return
       }
       let file_path = args[2]
-      analyze_aot(file_path)
+      experimental_analyze_aot(file_path)
     }
     "emit-moonbit-decl" => {
       if args.length() < 3 {
@@ -66,18 +66,22 @@ fn print_usage() -> Unit {
   println("Usage: wasm5-ts <command> [args...]")
   println("")
   println("Commands:")
-  println("  run <file>           Run a TypeScript/JavaScript file")
-  println("  emit-gc <file> [out] Emit wasm-gc binary (default: out.wasm)")
-  println("  test262 <path>       Run test262 tests (file or directory)")
-  println("  analyze <file>       Analyze AOT compilability of functions")
-  println("  aot-check <file>     Alias for analyze")
-  println(
-    "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from TypeScript declarations",
-  )
+  for line in command_help_lines() {
+    println(line)
+  }
 }
 
 ///|
-async fn analyze_aot(file_path : String) -> Unit {
+fn command_help_lines() -> Array[String] {
+  [
+    "  run <file>           Run a TypeScript/JavaScript file", "  experimental-emit-gc <file> [out] Emit experimental wasm-gc binary (default: out.wasm)",
+    "  test262 <path>       Run test262 tests (file or directory)", "  experimental-analyze <file> Analyze experimental AOT compilability of functions",
+    "  experimental-aot-check <file> Alias for experimental-analyze", "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from TypeScript declarations",
+  ]
+}
+
+///|
+async fn experimental_analyze_aot(file_path : String) -> Unit {
   let content = @fs.read_file(file_path).text() catch {
     e => {
       println("Error reading file: \{e}")
@@ -170,7 +174,10 @@ fn string_to_bytes(s : String) -> Bytes {
 }
 
 ///|
-async fn emit_wasm_gc(file_path : String, output_path : String) -> Unit {
+async fn experimental_emit_wasm_gc(
+  file_path : String,
+  output_path : String,
+) -> Unit {
   let content = @fs.read_file(file_path).text() catch {
     e => {
       println("Error reading file: \{e}")
@@ -184,7 +191,7 @@ async fn emit_wasm_gc(file_path : String, output_path : String) -> Unit {
       return
     }
   }
-  let wasm_module = @codegen.compile_module_gc(ts_module) catch {
+  let wasm_module = @codegen.experimental_compile_module_gc(ts_module) catch {
     e => {
       println("CodeGen error: \{e}")
       return
@@ -308,7 +315,7 @@ fn normalize_path(path : String) -> String {
 ///|
 fn dirname(path : String) -> String {
   match path.rev_find("/") {
-    Some(idx) => path[:idx].to_string() catch { _ => "." }
+    Some(idx) => path[:idx].to_string()
     None => "."
   }
 }
@@ -639,12 +646,8 @@ fn parse_bracket_list(line : String) -> Array[String] {
     (Some(s), Some(e)) => if e <= s { return [] }
     _ => return []
   }
-  let inner = try {
-    match (start, end_) {
-      (Some(s), Some(e)) => line[s + 1:e].to_string()
-      _ => ""
-    }
-  } catch {
+  let inner = match (start, end_) {
+    (Some(s), Some(e)) => line[s + 1:e].to_string()
     _ => ""
   }
   let items = inner.split(",")
@@ -657,9 +660,7 @@ fn parse_bracket_list(line : String) -> Array[String] {
     let stripped = if trimmed.length() >= 2 &&
       trimmed.has_prefix("\"") &&
       trimmed.has_suffix("\"") {
-      trimmed[1:trimmed.length() - 1].to_string() catch {
-        _ => trimmed
-      }
+      trimmed[1:trimmed.length() - 1].to_string()
     } else {
       trimmed
     }
@@ -678,9 +679,9 @@ fn parse_test262_meta(content : String) -> Test262Meta {
   let mut meta_block = ""
   match content.find("/*---") {
     Some(start) => {
-      let rest = content[start + 5:].to_string() catch { _ => "" }
+      let rest = content[start + 5:].to_string()
       match rest.find("---*/") {
-        Some(end_) => meta_block = rest[:end_].to_string() catch { _ => "" }
+        Some(end_) => meta_block = rest[:end_].to_string()
         None => ()
       }
     }
@@ -697,19 +698,17 @@ fn parse_test262_meta(content : String) -> Test262Meta {
       if trimmed.length() == 0 {
         continue
       }
-      if not(trimmed.has_prefix("//")) {
+      if !trimmed.has_prefix("//") {
         break
       }
-      let body = trimmed[2:].trim().to_string() catch { _ => "" }
+      let body = trimmed[2:].trim().to_string()
       lines.push(body)
     }
   }
   for raw in lines {
     let line = raw.trim().to_string()
     let body = if line.has_prefix("*") {
-      line[1:].trim().to_string() catch {
-        _ => line
-      }
+      line[1:].trim().to_string()
     } else {
       line
     }
@@ -724,12 +723,12 @@ fn parse_test262_meta(content : String) -> Test262Meta {
     } else if body.has_prefix("negative:") {
       negative = true
     } else if body.has_prefix("phase:") {
-      let value = body[6:].trim().to_string() catch { _ => "" }
+      let value = body[6:].trim().to_string()
       if value.length() > 0 {
         negative_phase = Some(value)
       }
     } else if body.has_prefix("type:") {
-      let value = body[5:].trim().to_string() catch { _ => "" }
+      let value = body[5:].trim().to_string()
       if value.length() > 0 {
         negative_type = Some(value)
       }
@@ -1362,7 +1361,7 @@ fn split_patterns(patterns : Array[String]) -> (Array[String], Array[String]) {
   let excludes : Array[String] = []
   for pat in patterns {
     if pat.has_prefix("!") {
-      let sub = pat[1:].to_string() catch { _ => "" }
+      let sub = pat[1:].to_string()
       if sub.length() > 0 {
         excludes.push(sub)
       }
@@ -1511,7 +1510,7 @@ async fn run_test262(test_path : String) -> Unit {
           let base = "test262/test"
           collect_test_files(base, candidates)
           for path in candidates {
-            if matches_any(includes, path) && not(matches_any(excludes, path)) {
+            if matches_any(includes, path) && !matches_any(excludes, path) {
               files.push(path)
             }
           }
@@ -1590,7 +1589,7 @@ async fn run_test262(test_path : String) -> Unit {
           }
         }
       }
-      if not(has_error) {
+      if !has_error {
         let module_cache : Array[(String, @runtime.JSValue)] = []
         result = eval_module(interp, path, module_cache, source=content) catch {
           e => {
@@ -1620,7 +1619,7 @@ async fn run_test262(test_path : String) -> Unit {
           }
         }
       }
-      if not(has_error) {
+      if !has_error {
         let wrapped = wrap_test_source(source)
         result = interp.run(wrapped) catch {
           e => {

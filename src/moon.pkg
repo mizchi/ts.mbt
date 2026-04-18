@@ -11,12 +11,6 @@ import {
   "mizchi/ts/analysis" @analysis,
 }
 
-import {
-  "moonbitlang/core/bench",
-  "mizchi/ts/parser" @parser,
-  "mizchi/ts/aot" @aot,
-} for "test"
-
 options(
   is_main: true,
 )

@@ -40,7 +40,7 @@ fn has_instance_private_elements(elements : Array[ClassElement]) -> Bool {
     match element {
       Field(is_static, Name(name), _) | Method(is_static, Name(name), _, _) =>
         // Check for instance (non-static) private members
-        if not(is_static) && (name.has_prefix("#") || name.contains("__#")) {
+        if !is_static && (name.has_prefix("#") || name.contains("__#")) {
           return true
         }
       _ => ()
@@ -154,14 +154,14 @@ fn Parser::inject_instance_field_assigns(
   if base is Some(_) {
     for stmt in func.body.stmts {
       new_stmts.push(stmt)
-      if not(inserted) && self.is_super_call_stmt(stmt) {
+      if !inserted && self.is_super_call_stmt(stmt) {
         for assign in assigns {
           new_stmts.push(assign)
         }
         inserted = true
       }
     }
-    if not(inserted) {
+    if !inserted {
       let combined : Array[@ast.TsStmt] = []
       for assign in assigns {
         combined.push(assign)
@@ -199,7 +199,7 @@ fn Parser::parse_class_body(
   self.in_strict = true
   let mut ctor : @ast.TsFunc? = None
   let elements : Array[ClassElement] = []
-  while not(self.check(RBrace)) && not(self.check(Eof)) {
+  while !self.check(RBrace) && !self.check(Eof) {
     if self.match_(Semicolon) {
       continue
     }
@@ -274,7 +274,7 @@ fn Parser::parse_class_body(
         is_generator,
         is_async: is_async_method,
       }
-      if accessor_kind is None && key is Name("constructor") && not(is_static) {
+      if accessor_kind is None && key is Name("constructor") && !is_static {
         ctor = Some(func)
       } else {
         elements.push(Method(is_static, key, accessor_kind, func))
@@ -380,7 +380,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   for idx, element in elements {
     match element {
       Field(is_static, key, init_opt) =>
-        if not(is_static) {
+        if !is_static {
           let init = match init_opt {
             Some(expr) => expr
             None => @ast.TsExpr::Var("undefined")
@@ -787,7 +787,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
   for idx, element in elements {
     match element {
       Field(is_static, key, init_opt) =>
-        if not(is_static) {
+        if !is_static {
           let init = match init_opt {
             Some(expr) => expr
             None => @ast.TsExpr::Var("undefined")

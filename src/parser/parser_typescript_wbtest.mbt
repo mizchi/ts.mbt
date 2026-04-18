@@ -364,7 +364,7 @@ async test "parser: compare es5 interface fields" {
       ]
       let missing : Array[String] = []
       for name in expected {
-        if not(fields.contains(name)) {
+        if !fields.contains(name) {
           missing.push(name)
         }
       }

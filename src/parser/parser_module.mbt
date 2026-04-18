@@ -19,7 +19,7 @@ fn Parser::expect_from(self : Parser) -> Unit raise ParseError {
 
 ///|
 fn Parser::parse_import_specifiers(self : Parser) -> Unit raise ParseError {
-  while not(self.check(RBrace)) {
+  while !self.check(RBrace) {
     let _ = self.parse_binding_ident()
     if self.match_(As) || self.match_ident("as") {
       let _ = self.parse_binding_ident()
@@ -46,7 +46,7 @@ fn Parser::parse_named_imports(
   self : Parser,
 ) -> Array[(String, String)] raise ParseError {
   let items : Array[(String, String)] = []
-  while not(self.check(RBrace)) {
+  while !self.check(RBrace) {
     let imported = self.parse_binding_ident()
     let local_name = if self.match_(As) || self.match_ident("as") {
       self.parse_binding_ident()
@@ -70,7 +70,7 @@ fn Parser::parse_named_exports(
   self : Parser,
 ) -> Array[(String, String)] raise ParseError {
   let items : Array[(String, String)] = []
-  while not(self.check(RBrace)) {
+  while !self.check(RBrace) {
     let local_name = self.parse_binding_ident()
     let export_name = if self.match_(As) || self.match_ident("as") {
       self.parse_binding_ident()
@@ -164,7 +164,7 @@ fn Parser::parse_import_decl(
   let mut default_binding : String? = None
   let mut namespace_binding : String? = None
   let named_bindings : Array[(String, String)] = []
-  if not(self.check(Star)) && not(self.check(LBrace)) {
+  if !self.check(Star) && !self.check(LBrace) {
     default_binding = Some(self.parse_binding_ident())
     if self.match_(Comma) {
       // continue to namespace/named
@@ -183,7 +183,7 @@ fn Parser::parse_import_decl(
     }
   }
   if self.match_(Star) {
-    if not(self.match_(As) || self.match_ident("as")) {
+    if !(self.match_(As) || self.match_ident("as")) {
       raise ParseError("Expected 'as' in import namespace")
     }
     namespace_binding = Some(self.parse_binding_ident())
@@ -349,7 +349,7 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
     _ => ()
   }
   if self.match_(Star) {
-    if not(self.match_(As) || self.match_ident("as")) {
+    if !(self.match_(As) || self.match_ident("as")) {
       raise ParseError("Expected 'as' in import namespace")
     }
     let _ = self.parse_binding_ident()
@@ -466,7 +466,7 @@ pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
   let funcs : Array[@ast.TsFunc] = []
   let interfaces : Array[@ast.TsInterface] = []
   let imports : Array[@ast.TsImport] = []
-  while not(self.check(Eof)) {
+  while !self.check(Eof) {
     if self.check(Function) {
       funcs.push(self.parse_function())
     } else if self.check(Interface) {
@@ -530,7 +530,7 @@ pub fn Parser::parse_module_block(
   let imports : Array[@ast.TsImportDecl] = []
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
-  while not(self.check(Eof)) {
+  while !self.check(Eof) {
     if self.check(Import) {
       imports.push(self.parse_import_decl())
       continue
@@ -593,7 +593,7 @@ pub fn parse_block_from_source(
 ) -> @ast.TsBlock raise ParseError {
   let parser = Parser::from_source(source)
   let stmts : Array[@ast.TsStmt] = []
-  while not(parser.check(Eof)) {
+  while !parser.check(Eof) {
     stmts.push(parser.parse_stmt())
   }
   { stmts, }
@@ -613,7 +613,7 @@ pub fn parse_block_from_source_strict(
     trimmed.has_prefix("'use strict';")
   let parser = Parser::new_with_strict(tokens, inherit_strict || source_strict)
   let stmts : Array[@ast.TsStmt] = []
-  while not(parser.check(Eof)) {
+  while !parser.check(Eof) {
     stmts.push(parser.parse_stmt())
   }
   { stmts, }

@@ -471,11 +471,11 @@ fn find_captured_in_expr(
   match expr {
     @ast.TsExpr::Var(name) =>
       // If variable is not a local parameter, it's captured from outer scope
-      if not(local_params.contains(name)) {
+      if !local_params.contains(name) {
         match info.lifetimes.get(name) {
           Some(lifetime) => {
             lifetime.is_captured = true
-            if not(info.captured_vars.contains(name)) {
+            if !info.captured_vars.contains(name) {
               info.captured_vars.push(name)
             }
           }

@@ -1,4 +1,6 @@
 import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/string",
   "mizchi/wasmx/core" @core,
   "mizchi/wasmx/encode" @encode,
   "mizchi/ts/ast" @ast,

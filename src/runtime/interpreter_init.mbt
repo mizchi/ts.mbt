@@ -119,12 +119,7 @@ fn extract_function_name(native_name : String) -> String {
   }
   // Handle prototype[...] patterns
   match native_name.find("[") {
-    Some(bracket_idx) =>
-      try {
-        return native_name[bracket_idx:].to_string()
-      } catch {
-        _ => ()
-      }
+    Some(bracket_idx) => return native_name[bracket_idx:].to_string()
     None => ()
   }
   // Handle "Foo.bar" -> "bar" (find last dot)
@@ -135,11 +130,7 @@ fn extract_function_name(native_name : String) -> String {
     }
   }
   if last_dot >= 0 {
-    try {
-      return native_name[last_dot + 1:].to_string()
-    } catch {
-      _ => ()
-    }
+    return native_name[last_dot + 1:].to_string()
   }
   native_name
 }

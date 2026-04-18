@@ -36,7 +36,7 @@ fn JSInterpreter::maybe_set_function_name(
   }
   match value {
     Function(_) =>
-      if not(self.has_own_prop(value, "name")) {
+      if !self.has_own_prop(value, "name") {
         self.set_function_name(value, name)
       } else {
         match js_get_prop(value, "name") {
@@ -51,7 +51,7 @@ fn JSInterpreter::maybe_set_function_name(
       match js_get_prop(value, "__class_name") {
         String(class_name) =>
           if class_name.length() > 0 {
-            if not(self.has_own_prop(value, "name")) {
+            if !self.has_own_prop(value, "name") {
               let _ = js_set_prop(value, "name", String(class_name))
             }
           } else {
@@ -60,7 +60,7 @@ fn JSInterpreter::maybe_set_function_name(
               Bool(b) => b
               _ => false
             }
-            if not(has_name_prop) && not(self.has_own_prop(value, "name")) {
+            if !has_name_prop && !self.has_own_prop(value, "name") {
               let _ = js_set_prop(value, "name", String(name))
             }
           }
@@ -180,7 +180,7 @@ fn JSInterpreter::assign_ident(
     let _ = self.set_error_kind("TypeError", "Assignment to constant variable")
     return
   }
-  if not(env.set(name, value)) {
+  if !env.set(name, value) {
     if env.has("__strict__") {
       let _ = self.set_error_kind("ReferenceError", name + " is not defined")
     } else {
@@ -436,14 +436,14 @@ fn JSInterpreter::assign_array_pattern_gen(
                 @ast.TsBinding::Target(target_expr) =>
                   self.eval_assignment_target_gen(target_expr, env, prepared => {
                     if self.peek_error() is Some(_) {
-                      if not(done) {
+                      if !done {
                         self.iterator_close_on_error(iterator)
                       }
                       self.pop_active_iterator()
                       GenValue::Value(Undefined)
                     } else {
                       let rest_items : Array[JSValue] = []
-                      while not(done) {
+                      while !done {
                         let val = next_value()
                         if done {
                           break
@@ -460,7 +460,7 @@ fn JSInterpreter::assign_array_pattern_gen(
                         let rest_val = js_array_from(rest_items)
                         self.assign_prepared_target(prepared, rest_val, env)
                         if self.peek_error() is Some(_) {
-                          if not(done) {
+                          if !done {
                             self.iterator_close_on_error(iterator)
                           }
                           self.pop_active_iterator()
@@ -474,7 +474,7 @@ fn JSInterpreter::assign_array_pattern_gen(
                   })
                 _ => {
                   let rest_items : Array[JSValue] = []
-                  while not(done) {
+                  while !done {
                     let val = next_value()
                     if done {
                       break
@@ -493,7 +493,7 @@ fn JSInterpreter::assign_array_pattern_gen(
                       self.assign_pattern_gen(rest_binding, rest_val, env),
                       _unused => {
                         if self.peek_error() is Some(_) {
-                          if not(done) {
+                          if !done {
                             self.iterator_close_on_error(iterator)
                           }
                           self.pop_active_iterator()
@@ -511,7 +511,7 @@ fn JSInterpreter::assign_array_pattern_gen(
         } else {
           match pattern.items[index] {
             None => {
-              if not(done) {
+              if !done {
                 let _ = next_value()
               }
               process_index(index + 1)
@@ -543,7 +543,7 @@ fn JSInterpreter::assign_array_pattern_gen(
                 }
                 gen_bind(self.assign_pattern_gen(elem.binding, v, env), _unused => {
                   if self.peek_error() is Some(_) {
-                    if not(done) {
+                    if !done {
                       self.iterator_close_on_error(iterator)
                     }
                     self.pop_active_iterator()
@@ -616,10 +616,10 @@ fn JSInterpreter::assign_object_pattern_gen(
           match value {
             Object(map) =>
               for prop in map.props {
-                if not(prop.enumerable) {
+                if !prop.enumerable {
                   continue
                 }
-                if not(contains_key(used_keys, prop.key)) {
+                if !contains_key(used_keys, prop.key) {
                   let val = self.eval_prop_value(JSValue::Object(map), prop)
                   let _ = js_set_prop(rest_obj, prop.key, val)
                 }
@@ -627,13 +627,13 @@ fn JSInterpreter::assign_object_pattern_gen(
             Array(arr) => {
               for i, item in arr.items {
                 let key = i.to_string()
-                if not(contains_key(used_keys, key)) && arr.present[i] {
+                if !contains_key(used_keys, key) && arr.present[i] {
                   let _ = js_set_prop(rest_obj, key, item)
                 }
               }
               for prop in arr.props {
-                if not(contains_key(used_keys, prop.key)) {
-                  if not(prop.enumerable) {
+                if !contains_key(used_keys, prop.key) {
+                  if !prop.enumerable {
                     continue
                   }
                   let val = self.eval_prop_value(JSValue::Array(arr), prop)
@@ -643,8 +643,8 @@ fn JSInterpreter::assign_object_pattern_gen(
             }
             Function(closure) =>
               for prop in closure.props {
-                if not(contains_key(used_keys, prop.key)) {
-                  if not(prop.enumerable) {
+                if !contains_key(used_keys, prop.key) {
+                  if !prop.enumerable {
                     continue
                   }
                   let val = self.eval_prop_value(
@@ -737,7 +737,7 @@ fn JSInterpreter::bind_array_pattern(
       }
       for item in pattern.items {
         match item {
-          None => if not(done) { let _ = next_value() }
+          None => if !done { let _ = next_value() }
           Some(elem) => {
             let mut val = if done { JSValue::Undefined } else { next_value() }
             let mut used_default = false
@@ -765,7 +765,7 @@ fn JSInterpreter::bind_array_pattern(
         None => ()
         Some(rest_binding) => {
           let rest_items : Array[JSValue] = []
-          while not(done) {
+          while !done {
             let val = next_value()
             if done {
               break
@@ -776,7 +776,7 @@ fn JSInterpreter::bind_array_pattern(
           self.bind_pattern(rest_binding, rest_val, env)
         }
       }
-      if not(done) {
+      if !done {
         let _ = self.generator_return(gen_id, Undefined)
       }
     }
@@ -804,7 +804,7 @@ fn JSInterpreter::bind_array_pattern(
           for item in pattern.items {
             match item {
               None => {
-                if not(done) {
+                if !done {
                   let _ = next_value()
                 }
                 match self.peek_error() {
@@ -842,7 +842,7 @@ fn JSInterpreter::bind_array_pattern(
                 self.bind_pattern(elem.binding, val, env)
                 match self.peek_error() {
                   Some(_) => {
-                    if not(done) {
+                    if !done {
                       self.iterator_close(iterator)
                     }
                     return
@@ -856,7 +856,7 @@ fn JSInterpreter::bind_array_pattern(
             None => ()
             Some(rest_binding) => {
               let rest_items : Array[JSValue] = []
-              while not(done) {
+              while !done {
                 let val = next_value()
                 match self.peek_error() {
                   Some(_) => return
@@ -871,7 +871,7 @@ fn JSInterpreter::bind_array_pattern(
               self.bind_pattern(rest_binding, rest_val, env)
               match self.peek_error() {
                 Some(_) => {
-                  if not(done) {
+                  if !done {
                     self.iterator_close(iterator)
                   }
                   return
@@ -880,7 +880,7 @@ fn JSInterpreter::bind_array_pattern(
               }
             }
           }
-          if not(done) {
+          if !done {
             self.iterator_close(iterator)
             match self.peek_error() {
               Some(_) => return
@@ -933,7 +933,7 @@ fn JSInterpreter::init_array_pattern(
       }
       for item in pattern.items {
         match item {
-          None => if not(done) { let _ = next_value() }
+          None => if !done { let _ = next_value() }
           Some(elem) => {
             let mut val = if done { JSValue::Undefined } else { next_value() }
             let mut used_default = false
@@ -961,7 +961,7 @@ fn JSInterpreter::init_array_pattern(
         None => ()
         Some(rest_binding) => {
           let rest_items : Array[JSValue] = []
-          while not(done) {
+          while !done {
             let val = next_value()
             if done {
               break
@@ -972,7 +972,7 @@ fn JSInterpreter::init_array_pattern(
           self.init_pattern(rest_binding, rest_val, env, is_const)
         }
       }
-      if not(done) {
+      if !done {
         let _ = self.generator_return(gen_id, Undefined)
       }
     }
@@ -1000,7 +1000,7 @@ fn JSInterpreter::init_array_pattern(
           for item in pattern.items {
             match item {
               None => {
-                if not(done) {
+                if !done {
                   let _ = next_value()
                 }
                 match self.peek_error() {
@@ -1038,7 +1038,7 @@ fn JSInterpreter::init_array_pattern(
                 self.init_pattern(elem.binding, val, env, is_const)
                 match self.peek_error() {
                   Some(_) => {
-                    if not(done) {
+                    if !done {
                       self.iterator_close(iterator)
                     }
                     return
@@ -1052,7 +1052,7 @@ fn JSInterpreter::init_array_pattern(
             None => ()
             Some(rest_binding) => {
               let rest_items : Array[JSValue] = []
-              while not(done) {
+              while !done {
                 let val = next_value()
                 match self.peek_error() {
                   Some(_) => return
@@ -1067,7 +1067,7 @@ fn JSInterpreter::init_array_pattern(
               self.init_pattern(rest_binding, rest_val, env, is_const)
               match self.peek_error() {
                 Some(_) => {
-                  if not(done) {
+                  if !done {
                     self.iterator_close(iterator)
                   }
                   return
@@ -1076,7 +1076,7 @@ fn JSInterpreter::init_array_pattern(
               }
             }
           }
-          if not(done) {
+          if !done {
             self.iterator_close(iterator)
             match self.peek_error() {
               Some(_) => return
@@ -1128,7 +1128,7 @@ fn JSInterpreter::assign_array_pattern(
       }
       for item in pattern.items {
         match item {
-          None => if not(done) { let _ = next_value() }
+          None => if !done { let _ = next_value() }
           Some(elem) => {
             let mut val = if done { JSValue::Undefined } else { next_value() }
             let mut used_default = false
@@ -1156,7 +1156,7 @@ fn JSInterpreter::assign_array_pattern(
         None => ()
         Some(rest_binding) => {
           let rest_items : Array[JSValue] = []
-          while not(done) {
+          while !done {
             let val = next_value()
             if done {
               break
@@ -1192,7 +1192,7 @@ fn JSInterpreter::assign_array_pattern(
           for item in pattern.items {
             match item {
               None => {
-                if not(done) {
+                if !done {
                   let _ = next_value()
                 }
                 match self.peek_error() {
@@ -1230,7 +1230,7 @@ fn JSInterpreter::assign_array_pattern(
                 self.assign_pattern(elem.binding, val, env)
                 match self.peek_error() {
                   Some(_) => {
-                    if not(done) {
+                    if !done {
                       self.iterator_close_on_error(iterator)
                     }
                     return
@@ -1249,7 +1249,7 @@ fn JSInterpreter::assign_array_pattern(
                     target_expr, env,
                   )
                   if self.peek_error() is Some(_) {
-                    if not(done) {
+                    if !done {
                       self.iterator_close_on_error(iterator)
                     }
                     return
@@ -1257,7 +1257,7 @@ fn JSInterpreter::assign_array_pattern(
                   match prepared {
                     Some(target) => {
                       let rest_items : Array[JSValue] = []
-                      while not(done) {
+                      while !done {
                         let val = next_value()
                         match self.peek_error() {
                           Some(_) => return
@@ -1272,7 +1272,7 @@ fn JSInterpreter::assign_array_pattern(
                       self.assign_prepared_target(target, rest_val, env)
                       match self.peek_error() {
                         Some(_) => {
-                          if not(done) {
+                          if !done {
                             self.iterator_close_on_error(iterator)
                           }
                           return
@@ -1281,7 +1281,7 @@ fn JSInterpreter::assign_array_pattern(
                       }
                     }
                     None => {
-                      if not(done) {
+                      if !done {
                         self.iterator_close_on_error(iterator)
                       }
                       return
@@ -1290,7 +1290,7 @@ fn JSInterpreter::assign_array_pattern(
                 }
                 _ => {
                   let rest_items : Array[JSValue] = []
-                  while not(done) {
+                  while !done {
                     let val = next_value()
                     match self.peek_error() {
                       Some(_) => return
@@ -1305,7 +1305,7 @@ fn JSInterpreter::assign_array_pattern(
                   self.assign_pattern(rest_binding, rest_val, env)
                   match self.peek_error() {
                     Some(_) => {
-                      if not(done) {
+                      if !done {
                         self.iterator_close_on_error(iterator)
                       }
                       return
@@ -1378,10 +1378,10 @@ fn JSInterpreter::bind_object_pattern(
       match value {
         Object(map) =>
           for prop in map.props {
-            if not(prop.enumerable) {
+            if !prop.enumerable {
               continue
             }
-            if not(contains_key(used_keys, prop.key)) {
+            if !contains_key(used_keys, prop.key) {
               let val = self.eval_prop_value(JSValue::Object(map), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
             }
@@ -1389,13 +1389,13 @@ fn JSInterpreter::bind_object_pattern(
         Array(arr) => {
           for i, item in arr.items {
             let key = i.to_string()
-            if not(contains_key(used_keys, key)) && arr.present[i] {
+            if !contains_key(used_keys, key) && arr.present[i] {
               let _ = js_set_prop(rest_obj, key, item)
             }
           }
           for prop in arr.props {
-            if not(contains_key(used_keys, prop.key)) {
-              if not(prop.enumerable) {
+            if !contains_key(used_keys, prop.key) {
+              if !prop.enumerable {
                 continue
               }
               let val = self.eval_prop_value(JSValue::Array(arr), prop)
@@ -1405,8 +1405,8 @@ fn JSInterpreter::bind_object_pattern(
         }
         Function(closure) =>
           for prop in closure.props {
-            if not(contains_key(used_keys, prop.key)) {
-              if not(prop.enumerable) {
+            if !contains_key(used_keys, prop.key) {
+              if !prop.enumerable {
                 continue
               }
               let val = self.eval_prop_value(JSValue::Function(closure), prop)
@@ -1470,10 +1470,10 @@ fn JSInterpreter::init_object_pattern(
       match value {
         Object(map) =>
           for prop in map.props {
-            if not(prop.enumerable) {
+            if !prop.enumerable {
               continue
             }
-            if not(contains_key(used_keys, prop.key)) {
+            if !contains_key(used_keys, prop.key) {
               let val = self.eval_prop_value(JSValue::Object(map), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
             }
@@ -1481,13 +1481,13 @@ fn JSInterpreter::init_object_pattern(
         Array(arr) => {
           for i, item in arr.items {
             let key = i.to_string()
-            if not(contains_key(used_keys, key)) && arr.present[i] {
+            if !contains_key(used_keys, key) && arr.present[i] {
               let _ = js_set_prop(rest_obj, key, item)
             }
           }
           for prop in arr.props {
-            if not(contains_key(used_keys, prop.key)) {
-              if not(prop.enumerable) {
+            if !contains_key(used_keys, prop.key) {
+              if !prop.enumerable {
                 continue
               }
               let val = self.eval_prop_value(JSValue::Array(arr), prop)
@@ -1497,8 +1497,8 @@ fn JSInterpreter::init_object_pattern(
         }
         Function(closure) =>
           for prop in closure.props {
-            if not(contains_key(used_keys, prop.key)) {
-              if not(prop.enumerable) {
+            if !contains_key(used_keys, prop.key) {
+              if !prop.enumerable {
                 continue
               }
               let val = self.eval_prop_value(JSValue::Function(closure), prop)
@@ -1561,10 +1561,10 @@ fn JSInterpreter::assign_object_pattern(
       match value {
         Object(map) =>
           for prop in map.props {
-            if not(prop.enumerable) {
+            if !prop.enumerable {
               continue
             }
-            if not(contains_key(used_keys, prop.key)) {
+            if !contains_key(used_keys, prop.key) {
               let val = self.eval_prop_value(JSValue::Object(map), prop)
               let _ = js_set_prop(rest_obj, prop.key, val)
             }
@@ -1572,13 +1572,13 @@ fn JSInterpreter::assign_object_pattern(
         Array(arr) => {
           for i, item in arr.items {
             let key = i.to_string()
-            if not(contains_key(used_keys, key)) && arr.present[i] {
+            if !contains_key(used_keys, key) && arr.present[i] {
               let _ = js_set_prop(rest_obj, key, item)
             }
           }
           for prop in arr.props {
-            if not(contains_key(used_keys, prop.key)) {
-              if not(prop.enumerable) {
+            if !contains_key(used_keys, prop.key) {
+              if !prop.enumerable {
                 continue
               }
               let val = self.eval_prop_value(JSValue::Array(arr), prop)
@@ -1588,8 +1588,8 @@ fn JSInterpreter::assign_object_pattern(
         }
         Function(closure) =>
           for prop in closure.props {
-            if not(contains_key(used_keys, prop.key)) {
-              if not(prop.enumerable) {
+            if !contains_key(used_keys, prop.key) {
+              if !prop.enumerable {
                 continue
               }
               let val = self.eval_prop_value(JSValue::Function(closure), prop)

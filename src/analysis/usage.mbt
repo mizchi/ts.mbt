@@ -7,7 +7,7 @@ pub(all) enum UseKind {
   Read // x (read value)
   Write // x = ... (assign)
   ReadWrite // x += 1 (read then write)
-} derive(Show, Eq)
+} derive(Eq, Debug)
 
 ///|
 /// A single reference to a symbol.
@@ -16,7 +16,7 @@ pub(all) struct SymbolRef {
   kind : UseKind
   in_closure : Bool // Is this use inside a nested function/arrow?
   scope_depth : Int // Depth of scope at use site
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Usage information for a single symbol.
@@ -36,7 +36,7 @@ pub(all) struct UsageInfo {
   mut drop_points : Array[SourceLoc]
   // Last use location (for linear/affine analysis)
   mut last_use : SourceLoc?
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Create new UsageInfo for a symbol.
@@ -64,13 +64,13 @@ pub fn UsageInfo::new(
 ///|
 /// Check if this symbol is used linearly (exactly once after declaration).
 pub fn UsageInfo::is_linear(self : UsageInfo) -> Bool {
-  self.read_count == 1 && self.write_count == 0 && not(self.is_captured)
+  self.read_count == 1 && self.write_count == 0 && !self.is_captured
 }
 
 ///|
 /// Check if this symbol is affine (at most once after declaration).
 pub fn UsageInfo::is_affine(self : UsageInfo) -> Bool {
-  self.read_count <= 1 && self.write_count == 0 && not(self.is_captured)
+  self.read_count <= 1 && self.write_count == 0 && !self.is_captured
 }
 
 ///|
@@ -82,7 +82,7 @@ pub fn UsageInfo::is_unused(self : UsageInfo) -> Bool {
 ///|
 /// Check if symbol can be dropped immediately after last use.
 pub fn UsageInfo::can_drop_at_last_use(self : UsageInfo) -> Bool {
-  not(self.is_captured) && not(self.is_escaped) && self.last_use is Some(_)
+  !self.is_captured && !self.is_escaped && self.last_use is Some(_)
 }
 
 ///|

@@ -702,7 +702,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
 // / argument
 fn Parser::parse_args(self : Parser) -> Array[@ast.TsExpr] raise ParseError {
   let args : Array[@ast.TsExpr] = []
-  if not(self.check(RParen)) {
+  if !self.check(RParen) {
     if self.match_ellipsis() {
       args.push(Spread(self.parse_assignment()))
     } else {
@@ -803,14 +803,14 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
     Ident(name) =>
       if name == "async" &&
         self.peek_at(1).kind == Function &&
-        not(self.has_line_terminator_after()) {
+        !self.has_line_terminator_after() {
         let _ = self.advance()
         self.in_async = true
         let func = self.parse_function_expr()
         self.in_async = false
         @ast.TsExpr::FuncExpr(func)
       } else if name == "async" &&
-        not(self.has_line_terminator_after()) &&
+        !self.has_line_terminator_after() &&
         self.is_async_arrow_function() {
         // async arrow function: async (params) => body or async x => body
         let _ = self.advance()
@@ -936,7 +936,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       // arrayliteral: [1, 2, 3]
       let _ = self.advance()
       let elements : Array[@ast.TsExpr] = []
-      while not(self.check(RBracket)) {
+      while !self.check(RBracket) {
         if self.match_ellipsis() {
           elements.push(Spread(self.parse_assignment()))
           if self.match_(Comma) {
@@ -1172,7 +1172,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       let fields : Array[(String, @ast.TsExpr)] = []
       let mut spread_idx = 0
       let mut computed_idx = 0
-      if not(self.check(RBrace)) {
+      if !self.check(RBrace) {
         if self.match_ellipsis() {
           let spread_expr = self.parse_assignment()
           fields.push(("@@spread:" + spread_idx.to_string(), spread_expr))
@@ -1248,10 +1248,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           let mut prop_key = key
           let value = if is_ident_key &&
             (prop_key == "get" || prop_key == "set") &&
-            not(self.check(Colon)) &&
-            not(self.check(LParen)) &&
-            not(self.check(Comma)) &&
-            not(self.check(RBrace)) {
+            !self.check(Colon) &&
+            !self.check(LParen) &&
+            !self.check(Comma) &&
+            !self.check(RBrace) {
             let mut acc_computed_key : @ast.TsExpr? = None
             let acc_key = if self.match_(LBracket) {
               let key_expr = self.parse_assignment()
@@ -1466,10 +1466,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           let mut prop_key = key
           let value = if is_ident_key &&
             (prop_key == "get" || prop_key == "set") &&
-            not(self.check(Colon)) &&
-            not(self.check(LParen)) &&
-            not(self.check(Comma)) &&
-            not(self.check(RBrace)) {
+            !self.check(Colon) &&
+            !self.check(LParen) &&
+            !self.check(Comma) &&
+            !self.check(RBrace) {
             let mut acc_computed_key : @ast.TsExpr? = None
             let acc_key = if self.match_(LBracket) {
               let key_expr = self.parse_assignment()
@@ -1659,7 +1659,7 @@ fn Parser::is_async_arrow_function(self : Parser) -> Bool {
     let _ = self.advance() // consume 'async'
     let _ = self.advance() // consume '('
     let mut paren_depth = 1
-    while paren_depth > 0 && not(self.check(Eof)) {
+    while paren_depth > 0 && !self.check(Eof) {
       match self.peek().kind {
         LParen => paren_depth += 1
         RParen => paren_depth -= 1
@@ -1672,7 +1672,7 @@ fn Parser::is_async_arrow_function(self : Parser) -> Bool {
         self.check(Colon) &&
         ({
           // Skip type annotation: (): ReturnType =>
-          while not(self.check(Arrow)) && not(self.check(Eof)) {
+          while !self.check(Arrow) && !self.check(Eof) {
             let _ = self.advance()
           }
           self.check(Arrow)

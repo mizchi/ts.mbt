@@ -66,10 +66,10 @@ fn CFGBuilder::new_block(self : CFGBuilder) -> Int {
 
 ///|
 fn CFGBuilder::add_edge(self : CFGBuilder, from : Int, to : Int) -> Unit {
-  if not(self.blocks[from].successors.contains(to)) {
+  if !self.blocks[from].successors.contains(to) {
     self.blocks[from].successors.push(to)
   }
-  if not(self.blocks[to].predecessors.contains(from)) {
+  if !self.blocks[to].predecessors.contains(from) {
     self.blocks[to].predecessors.push(from)
   }
 }
@@ -93,7 +93,7 @@ pub fn build_cfg(func : @ast.TsFunc) -> CFG {
   // Find dead blocks
   let dead_blocks : Array[Int] = []
   for block in builder.blocks {
-    if not(block.is_reachable) {
+    if !block.is_reachable {
       dead_blocks.push(block.id)
     }
   }
@@ -157,12 +157,12 @@ fn build_stmt_cfg(
       }
       // Create merge block
       let merge_id = builder.new_block()
-      if not(builder.blocks[then_end].is_terminal) {
+      if !builder.blocks[then_end].is_terminal {
         builder.add_edge(then_end, merge_id)
       }
       match else_block {
         Some(_) =>
-          if not(builder.blocks[else_end].is_terminal) {
+          if !builder.blocks[else_end].is_terminal {
             builder.add_edge(else_end, merge_id)
           }
         None => builder.add_edge(cond_block, merge_id)
@@ -258,7 +258,7 @@ fn build_stmt_cfg(
         for s in case_.body.stmts {
           build_stmt_cfg(builder, s, exits)
         }
-        if not(builder.blocks[builder.current_block_id].is_terminal) {
+        if !builder.blocks[builder.current_block_id].is_terminal {
           builder.add_edge(builder.current_block_id, exit_id)
         }
       }
@@ -301,7 +301,7 @@ fn mark_reachable(blocks : Array[BasicBlock], entry : Int) -> Unit {
     }
     blocks[id].is_reachable = true
     for succ in blocks[id].successors {
-      if not(blocks[succ].is_reachable) {
+      if !blocks[succ].is_reachable {
         worklist.push(succ)
       }
     }

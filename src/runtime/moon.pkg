@@ -1,5 +1,7 @@
 import {
+  "moonbitlang/core/debug",
   "moonbitlang/core/math",
+  "moonbitlang/core/string",
   "moonbitlang/core/strconv",
   "moonbitlang/regexp",
   "mizchi/ts/ast" @ast,

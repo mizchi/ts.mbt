@@ -2,12 +2,94 @@
 // Uses WasmtimeCli by default for faster execution in CI
 
 ///|
-test "compile_to_wasm: generates valid wasm binary" {
+fn compile_to_wasm(source : String) -> Bytes raise CompileError {
+  experimental_compile_to_wasm(source)
+}
+
+///|
+fn compile(source : String) -> @core.Module raise CompileError {
+  experimental_compile(source)
+}
+
+///|
+fn compile_module(ts_module : @ast.TsModule) -> @core.Module raise CodeGenError {
+  experimental_compile_module(ts_module)
+}
+
+///|
+fn compile_module_gc(
+  ts_module : @ast.TsModule,
+) -> @core.Module raise CodeGenError {
+  experimental_compile_module_gc(ts_module)
+}
+
+///|
+fn analyze_and_compile(source : String) -> @core.Module raise CodeGenError {
+  experimental_analyze_and_compile(source)
+}
+
+///|
+fn transform_to_state_machine(
+  func : @ast.TsFunc,
+  analysis : @analysis.GeneratorAnalysis,
+) -> GenStateMachine {
+  experimental_transform_to_state_machine(func, analysis)
+}
+
+///|
+fn compile_generator(
+  sm : GenStateMachine,
+  state_struct_type_idx : UInt,
+) -> GeneratorWasmCode {
+  experimental_compile_generator(sm, state_struct_type_idx)
+}
+
+///|
+fn compile_arrow_func(
+  params : Array[@ast.TsParam],
+  body : @ast.TsArrowBody,
+  outer_scope : Array[String],
+  ctx : ClosureCodegenCtx,
+) -> ClosureWasmCode? {
+  experimental_compile_arrow_func(params, body, outer_scope, ctx)
+}
+
+///|
+fn compile_func_expr(
+  func : @ast.TsFunc,
+  outer_scope : Array[String],
+  ctx : ClosureCodegenCtx,
+) -> ClosureWasmCode? {
+  experimental_compile_func_expr(func, outer_scope, ctx)
+}
+
+///|
+fn analyze_lifted_vars(
+  block : @ast.TsBlock,
+  params : Array[String],
+) -> LiftedVarsInfo {
+  experimental_analyze_lifted_vars(block, params)
+}
+
+///|
+fn compile_func_body_with_env(
+  block : @ast.TsBlock,
+  params : Array[@ast.TsParam],
+  lifted_info : LiftedVarsInfo,
+  env_type_idx : UInt,
+) -> FuncWithEnvCode {
+  experimental_compile_func_body_with_env(
+    block, params, lifted_info, env_type_idx,
+  )
+}
+
+///|
+test "experimental_compile_to_wasm: generates valid wasm binary" {
   let src =
     #|function add(a: number, b: number): number {
     #|  return a + b;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
 
   // Wasm magic numbercheck: 0x00 0x61 0x73 0x6D (= "\0asm")
   assert_eq(wasm[0], b'\x00')
@@ -24,7 +106,7 @@ test "compile_to_wasm: generates valid wasm binary" {
 }
 
 ///|
-test "compile_to_wasm: factorial" {
+test "experimental_compile_to_wasm: factorial" {
   let src =
     #|function factorial(n: number): number {
     #|  if (n <= 1) {
@@ -32,23 +114,23 @@ test "compile_to_wasm: factorial" {
     #|  }
     #|  return n * factorial(n - 1);
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_eq(wasm[0], b'\x00')
   assert_eq(wasm[1], b'\x61')
   assert_run_f64(wasm, "factorial", [5.0], 120.0)
 }
 
 ///|
-test "compile: convenience function" {
+test "experimental_compile: convenience function" {
   let src =
     #|function double(x: number): number {
     #|  return x * 2;
     #|}
-  let wasm_module = compile(src)
+  let wasm_module = experimental_compile(src)
   assert_eq(wasm_module.funcs.length(), 1)
   assert_eq(wasm_module.exports.length(), 1)
   assert_eq(wasm_module.codes.length(), 1)
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "double", [21.0], 42.0)
 }
 
@@ -58,7 +140,7 @@ test "codegen: constant function" {
     #|function answer(): number {
     #|  return 42;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "answer", [], 42.0)
 }
 
@@ -68,7 +150,7 @@ test "codegen: add function" {
     #|function add(a: number, b: number): number {
     #|  return a + b;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "add", [3.0, 5.0], 8.0)
 }
 
@@ -78,7 +160,7 @@ test "codegen: arithmetic" {
     #|function calc(a: number, b: number): number {
     #|  return (a + b) * (a - b);
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   // (5 + 3) * (5 - 3) = 8 * 2 = 16
   assert_run_f64(wasm, "calc", [5.0, 3.0], 16.0)
 }
@@ -91,7 +173,7 @@ test "codegen: local variable" {
     #|  let y: number = 20;
     #|  return x + y;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "test", [], 30.0)
 }
 
@@ -105,7 +187,7 @@ test "codegen: if-else" {
     #|    return b;
     #|  }
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "max", [10.0, 5.0], 10.0)
   assert_run_f64(wasm, "max", [3.0, 7.0], 7.0)
 }
@@ -119,7 +201,7 @@ test "codegen: recursive factorial" {
     #|  }
     #|  return n * factorial(n - 1);
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "factorial", [5.0], 120.0)
 }
 
@@ -135,7 +217,7 @@ test "codegen: while loop" {
     #|  }
     #|  return total;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   // sum(10) = 1+2+...+10 = 55
   assert_run_f64(wasm, "sum", [10.0], 55.0)
 }
@@ -149,7 +231,7 @@ test "codegen: multiple functions" {
     #|function quadruple(x: number): number {
     #|  return double(double(x));
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "quadruple", [5.0], 20.0)
 }
 
@@ -165,7 +247,7 @@ test "codegen: int type operations" {
     #|  }
     #|  return total;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   // sum_int(10) = 1+2+...+10 = 55
   assert_run_i32(wasm, "sum_int", [10.0], 55)
 }
@@ -179,7 +261,7 @@ test "codegen: int factorial" {
     #|  }
     #|  return n * factorial_int(n - 1);
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_i32(wasm, "factorial_int", [5.0], 120)
 }
 
@@ -190,7 +272,7 @@ test "codegen: array literal and access" {
     #|  let arr: number[] = [1.0, 2.0, 3.0];
     #|  return arr[0] + arr[1] + arr[2];
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "sum_array", [], 6.0)
 }
 
@@ -201,7 +283,7 @@ test "codegen: array with new" {
     #|  let arr: int[] = new Array<int>(5);
     #|  return arr.length;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_i32(wasm, "array_length", [], 5)
 }
 
@@ -215,7 +297,7 @@ test "codegen: array assignment" {
     #|  arr[2] = 30;
     #|  return arr[0] + arr[1] + arr[2];
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_i32(wasm, "array_set", [], 60)
 }
 
@@ -232,7 +314,7 @@ test "codegen: struct creation and field access" {
     #|  p.y = 20.0;
     #|  return p.x + p.y;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_f64(wasm, "createPoint", [], 30.0)
 }
 
@@ -247,7 +329,7 @@ test "codegen: struct with int fields" {
     #|  c.count = 42;
     #|  return c.count;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_i32(wasm, "testCounter", [], 42)
 }
 
@@ -262,7 +344,7 @@ test "codegen: object literal with computed key" {
     #|  let p: Point = { ["x"]: a, y: b };
     #|  return p.x + p.y;
     #|}
-  let wasm = compile_to_wasm(src)
+  let wasm = experimental_compile_to_wasm(src)
   assert_run_i32(wasm, "makePoint", [2.0, 5.0], 7)
 }
 
@@ -1310,7 +1392,7 @@ test "generator_codegen: try-catch generates TryTable wasm" {
 }
 
 ///|
-test "compile_aot_group: generator with helper functions" {
+test "experimental_compile_aot_group: generator with helper functions" {
   let src =
     #|function double(x) { return x * 2; }
     #|function triple(x) { return x * 3; }
@@ -1324,14 +1406,14 @@ test "compile_aot_group: generator with helper functions" {
   let groups = @analysis.find_aot_groups(ts_module, graph)
   assert_eq(groups.length(), 1)
   let group = groups[0]
-  match compile_aot_group(group, ts_module, 0U) {
+  match experimental_compile_aot_group(group, ts_module, 0U) {
     Some(code) => assert_eq(code.funcs.length(), 4)
     None => assert_true(false)
   }
 }
 
 ///|
-test "compile_aot_group: helper function calls in generator" {
+test "experimental_compile_aot_group: helper function calls in generator" {
   let src =
     #|function add(a, b) { return a + b; }
     #|function* sum(n) {
@@ -1350,7 +1432,7 @@ test "compile_aot_group: helper function calls in generator" {
   assert_eq(groups.length(), 1)
   let group = groups[0]
   assert_false(group.external_calls.contains("add"))
-  match compile_aot_group(group, ts_module, 0U) {
+  match experimental_compile_aot_group(group, ts_module, 0U) {
     Some(code) => {
       assert_eq(code.funcs.length(), 3)
       match code.func_map.get("add") {
@@ -1365,7 +1447,7 @@ test "compile_aot_group: helper function calls in generator" {
 // ============ Closure codegen tests ============
 
 ///|
-test "compile_arrow_func: no captures" {
+test "experimental_compile_arrow_func: no captures" {
   let params : Array[@ast.TsParam] = [
     {
       name: "x",

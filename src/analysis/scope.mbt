@@ -441,11 +441,11 @@ fn analyze_stmt_bindings(ctx : AnalysisCtx, stmt : @ast.TsStmt) -> Unit {
     }
     @ast.TsStmt::Label(_, inner_stmt) => analyze_stmt_bindings(ctx, inner_stmt)
     @ast.TsStmt::Break(label) =>
-      if not(ctx.in_loop) && not(ctx.in_switch) && label is None {
+      if !ctx.in_loop && !ctx.in_switch && label is None {
         ctx.add_error(SyntaxError, "Illegal break statement", 0)
       }
     @ast.TsStmt::Continue(label) =>
-      if not(ctx.in_loop) && label is None {
+      if !ctx.in_loop && label is None {
         ctx.add_error(SyntaxError, "Illegal continue statement", 0)
       }
     @ast.TsStmt::Empty | @ast.TsStmt::Debugger => ()

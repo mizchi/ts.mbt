@@ -140,7 +140,7 @@ fn collect_calls_in_expr(expr : @ast.TsExpr, calls : Array[String]) -> Unit {
   match expr {
     @ast.TsExpr::Call(name, args) => {
       // Direct function call
-      if not(calls.contains(name)) {
+      if !calls.contains(name) {
         calls.push(name)
       }
       for arg in args {
@@ -229,7 +229,7 @@ fn try_build_aot_group(
 
   // Check if all reachable functions are AOT-compilable
   for name in reachable {
-    if not(is_function_aot_compatible(ts_module, name)) {
+    if !is_function_aot_compatible(ts_module, name) {
       return None
     }
   }
@@ -283,7 +283,7 @@ fn has_external_callers(
   match graph.callers.get(name) {
     Some(callers) =>
       for caller in callers {
-        if not(group.contains(caller)) {
+        if !group.contains(caller) {
           return true
         }
       }
@@ -316,7 +316,7 @@ fn is_func_body_aot_compatible(func : @ast.TsFunc) -> Bool {
 ///|
 fn is_block_aot_compatible(block : @ast.TsBlock) -> Bool {
   for stmt in block.stmts {
-    if not(is_stmt_aot_compatible(stmt)) {
+    if !is_stmt_aot_compatible(stmt) {
       return false
     }
   }
@@ -328,7 +328,7 @@ fn is_stmt_aot_compatible(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     @ast.TsStmt::With(_, _) => false // with statement not compatible
     @ast.TsStmt::If(_, then_block, else_block) => {
-      if not(is_block_aot_compatible(then_block)) {
+      if !is_block_aot_compatible(then_block) {
         return false
       }
       match else_block {
@@ -343,11 +343,11 @@ fn is_stmt_aot_compatible(stmt : @ast.TsStmt) -> Bool {
     @ast.TsStmt::ForOf(_, _, _, _, body)
     | @ast.TsStmt::ForIn(_, _, _, _, body) => is_block_aot_compatible(body)
     @ast.TsStmt::Try(try_block, _, catch_block, finally_block) => {
-      if not(is_block_aot_compatible(try_block)) {
+      if !is_block_aot_compatible(try_block) {
         return false
       }
       match catch_block {
-        Some(cb) => if not(is_block_aot_compatible(cb)) { return false }
+        Some(cb) => if !is_block_aot_compatible(cb) { return false }
         None => ()
       }
       match finally_block {
@@ -357,7 +357,7 @@ fn is_stmt_aot_compatible(stmt : @ast.TsStmt) -> Bool {
     }
     @ast.TsStmt::Switch(_, cases) => {
       for c in cases {
-        if not(is_block_aot_compatible(c.body)) {
+        if !is_block_aot_compatible(c.body) {
           return false
         }
       }

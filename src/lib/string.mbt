@@ -64,17 +64,13 @@ pub fn trim_string(s : String, mode : String) -> String {
       end = end - 1
     }
   }
-  s[start:end].to_string() catch {
-    _ => ""
-  }
+  s[start:end].to_string()
 }
 
 ///|
 pub fn string_char_at(s : String, idx : Int) -> String {
   if idx >= 0 && idx < s.length() {
-    s[idx:idx + 1].to_string() catch {
-      _ => ""
-    }
+    s[idx:idx + 1].to_string()
   } else {
     ""
   }
@@ -127,7 +123,7 @@ pub fn string_index_of(s : String, search : String, start_idx : Int) -> Int {
   let end_idx = s.length() - search_len + 1
   let mut i = start
   while i < end_idx {
-    if (s[i:i + search_len].to_string() catch { _ => "" }) == search {
+    if s[i:i + search_len].to_string() == search {
       return i
     }
     i = i + 1
@@ -153,7 +149,7 @@ pub fn string_last_index_of(s : String, search : String, pos : Int) -> Int {
     i = 0
   }
   while i >= 0 {
-    if (s[i:i + search_len].to_string() catch { _ => "" }) == search {
+    if s[i:i + search_len].to_string() == search {
       return i
     }
     if i == 0 {
@@ -181,7 +177,7 @@ pub fn string_starts_with(s : String, search : String, pos : Int) -> Bool {
   } else if p + search_len > s.length() {
     false
   } else {
-    (s[p:p + search_len].to_string() catch { _ => "" }) == search
+    s[p:p + search_len].to_string() == search
   }
 }
 
@@ -201,7 +197,7 @@ pub fn string_ends_with(s : String, search : String, end_pos : Int) -> Bool {
     false
   } else {
     let start = ep - search_len
-    (s[start:ep].to_string() catch { _ => "" }) == search
+    s[start:ep].to_string() == search
   }
 }
 
@@ -214,7 +210,7 @@ pub fn string_at(s : String, idx : Int) -> String? {
   if i < 0 || i >= s.length() {
     None
   } else {
-    Some(s[i:i + 1].to_string() catch { _ => "" })
+    Some(s[i:i + 1].to_string())
   }
 }
 
@@ -244,9 +240,7 @@ pub fn string_slice(s : String, start : Int, end : Int) -> String {
   if st >= en {
     ""
   } else {
-    s[st:en].to_string() catch {
-      _ => ""
-    }
+    s[st:en].to_string()
   }
 }
 
@@ -272,9 +266,7 @@ pub fn string_substring(s : String, start : Int, end : Int) -> String {
     st = en
     en = tmp
   }
-  s[st:en].to_string() catch {
-    _ => ""
-  }
+  s[st:en].to_string()
 }
 
 ///|
@@ -297,7 +289,7 @@ pub fn string_pad_start(
       sb.write_string(pad)
       filled = filled + pad.length()
     } else {
-      sb.write_string(pad[0:remaining].to_string() catch { _ => "" })
+      sb.write_string(pad[0:remaining].to_string())
       filled = fill_len
     }
   }
@@ -322,7 +314,7 @@ pub fn string_pad_end(s : String, target_len : Int, pad_str : String) -> String 
       sb.write_string(pad)
       filled = filled + pad.length()
     } else {
-      sb.write_string(pad[0:remaining].to_string() catch { _ => "" })
+      sb.write_string(pad[0:remaining].to_string())
       filled = fill_len
     }
   }

@@ -534,7 +534,7 @@ pub fn JSInterpreter::eval_expr(
               }
               // In strict mode, deleting non-configurable property throws TypeError
               let result = js_delete_prop(obj, prop)
-              if not(result) && env.has("__strict__") {
+              if !result && env.has("__strict__") {
                 let _ = self.set_error_kind(
                   "TypeError",
                   "Cannot delete property '\{prop}' of #<Object>",
@@ -577,7 +577,7 @@ pub fn JSInterpreter::eval_expr(
               }
               // In strict mode, deleting non-configurable property throws TypeError
               let result = js_delete_prop(obj, key)
-              if not(result) && env.has("__strict__") {
+              if !result && env.has("__strict__") {
                 let _ = self.set_error_kind(
                   "TypeError",
                   "Cannot delete property '\{key}' of #<Object>",
@@ -1003,7 +1003,7 @@ pub fn JSInterpreter::eval_expr(
           }
         } else if key.has_prefix("@@get:") || key.has_prefix("@@set:") {
           let is_get = key.has_prefix("@@get:")
-          let raw_key = (key[6:] catch { _ => "" }).to_string()
+          let raw_key = key[6:].to_string()
           // Check if this is a computed accessor key
           let (real_key, func_val) = if raw_key.has_prefix("@@computed:") {
             match val_expr {
@@ -1158,7 +1158,7 @@ pub fn JSInterpreter::eval_expr(
         @ast.TsExpr::Var(name) => {
           // Check if variable exists before reading
           let global_obj = self.global_env.get("globalThis")
-          if not(env.has(name)) && not(js_has_prop(global_obj, name)) {
+          if !env.has(name) && !js_has_prop(global_obj, name) {
             let _ = self.set_error_kind(
               "ReferenceError",
               name + " is not defined",
@@ -1182,7 +1182,7 @@ pub fn JSInterpreter::eval_expr(
                 current
               }
             @ast.TsCompoundOp::OrAssign =>
-              if not(current.to_boolean()) {
+              if !current.to_boolean() {
                 let val = self.eval_expr(right, env)
                 self.assign_ident(name, val, env)
                 val
@@ -1221,7 +1221,7 @@ pub fn JSInterpreter::eval_expr(
                 current
               }
             @ast.TsCompoundOp::OrAssign =>
-              if not(current.to_boolean()) {
+              if !current.to_boolean() {
                 let val = self.eval_expr(right, env)
                 self.set_prop_value(obj, prop, val, strict=is_strict)
                 val
@@ -1299,7 +1299,7 @@ pub fn JSInterpreter::eval_expr(
                 current
               }
             @ast.TsCompoundOp::OrAssign =>
-              if not(current.to_boolean()) {
+              if !current.to_boolean() {
                 let val = self.eval_expr(right, env)
                 match obj {
                   Array(_) | Object(_) | Function(_) =>
@@ -1542,7 +1542,7 @@ fn JSInterpreter::eval_expr_gen(
   expr : @ast.TsExpr,
   env : JSEnv,
 ) -> GenValue {
-  if not(expr_has_yield(expr)) {
+  if !expr_has_yield(expr) {
     return GenValue::Value(self.eval_expr(expr, env))
   }
   match expr {
@@ -2232,7 +2232,7 @@ fn JSInterpreter::exec_while_for_eval(
       Some(err) => return (Some(err), Undefined)
       None => ()
     }
-    if not(cond_val.to_boolean()) {
+    if !cond_val.to_boolean() {
       return (None, v)
     }
     // Create a new block scope for the loop body (ES6 block scoping)
@@ -2327,7 +2327,7 @@ fn JSInterpreter::exec_do_while_for_eval(
       Some(err) => return (Some(err), Undefined)
       None => ()
     }
-    if not(cond_val.to_boolean()) {
+    if !cond_val.to_boolean() {
       return (None, v)
     }
   }
@@ -2367,7 +2367,7 @@ fn JSInterpreter::exec_for_for_eval(
           Some(err) => return (Some(err), Undefined)
           None => ()
         }
-        if not(cond_val.to_boolean()) {
+        if !cond_val.to_boolean() {
           return (None, v)
         }
       }
@@ -2439,7 +2439,7 @@ fn JSInterpreter::exec_while_for_eval_labeled(
       Some(err) => return (Some(err), Undefined)
       None => ()
     }
-    if not(cond_val.to_boolean()) {
+    if !cond_val.to_boolean() {
       return (None, v)
     }
     // Create a new block scope for the loop body (ES6 block scoping)
@@ -2551,7 +2551,7 @@ fn JSInterpreter::exec_do_while_for_eval_labeled(
       Some(err) => return (Some(err), Undefined)
       None => ()
     }
-    if not(cond_val.to_boolean()) {
+    if !cond_val.to_boolean() {
       return (None, v)
     }
   }
@@ -2593,7 +2593,7 @@ fn JSInterpreter::exec_for_for_eval_labeled(
           Some(err) => return (Some(err), Undefined)
           None => ()
         }
-        if not(cond_val.to_boolean()) {
+        if !cond_val.to_boolean() {
           return (None, v)
         }
       }
@@ -2952,7 +2952,7 @@ fn JSInterpreter::apply_for_of_binding(
     @ast.TsForOfKind::Var =>
       match binding {
         @ast.TsBinding::Ident(name) =>
-          if not(env.set(name, value)) {
+          if !env.set(name, value) {
             env.define_var(name, value)
           }
         _ => self.bind_pattern(binding, value, env)
@@ -2975,7 +2975,7 @@ fn JSInterpreter::collect_for_in_keys(
     seen : Array[String],
     key : String,
   ) -> Unit {
-    if not(contains_key(seen, key)) {
+    if !contains_key(seen, key) {
       keys.push(key)
       seen.push(key)
     }
@@ -3119,7 +3119,7 @@ fn JSInterpreter::exec_do_while_loop(
       Some(err) => return Some(err)
       None => ()
     }
-    if not(cond_val.to_boolean()) {
+    if !cond_val.to_boolean() {
       break
     }
   }
@@ -3488,7 +3488,7 @@ fn JSInterpreter::exec_for_of_loop(
               Some(err) => return Some(err)
               None => ()
             }
-            let char_str = s[idx:idx + 1].to_string() catch { _ => "" }
+            let char_str = s[idx:idx + 1].to_string()
 
             // ES6: Create per-iteration environment for let/const
             let iter_env = create_iter_env(
@@ -3910,7 +3910,7 @@ pub fn JSInterpreter::exec_stmt(
     @ast.TsStmt::CompoundAssign(name, op, val_expr) => {
       // Check if variable exists before reading
       let global_obj = self.global_env.get("globalThis")
-      if not(env.has(name)) && not(js_has_prop(global_obj, name)) {
+      if !env.has(name) && !js_has_prop(global_obj, name) {
         let _ = self.set_error_kind("ReferenceError", name + " is not defined")
         return Some(Undefined)
       }
@@ -3934,7 +3934,7 @@ pub fn JSInterpreter::exec_stmt(
           }
         @ast.TsCompoundOp::OrAssign =>
           // x ||= y: only assign if x is falsy
-          if not(current.to_boolean()) {
+          if !current.to_boolean() {
             let val = self.eval_expr(val_expr, env)
             match self.peek_error() {
               Some(err) => return Some(err)
@@ -3992,7 +3992,7 @@ pub fn JSInterpreter::exec_stmt(
         None => ()
       }
       if prop.has_prefix("@@define:") {
-        let real_key = (prop[9:] catch { _ => "" }).to_string()
+        let real_key = prop[9:].to_string()
         // ES6 14.5.14: It is a Syntax Error if PropName of ClassElement is "prototype"
         // Check if this is a static method named "prototype" on a function/class
         if real_key == "prototype" {
@@ -4034,7 +4034,7 @@ pub fn JSInterpreter::exec_stmt(
         }
 
         let is_get = prop.has_prefix("@@get:")
-        let real_key = (prop[6:] catch { _ => "" }).to_string()
+        let real_key = prop[6:].to_string()
         // ES6 14.5.14: It is a Syntax Error if PropName of ClassElement is "prototype"
         // Check if this is a static accessor named "prototype" on a function/class
         if real_key == "prototype" {
@@ -4131,7 +4131,7 @@ fn JSInterpreter::hoist_stmt(
       let names : Array[String] = []
       collect_binding_names(binding, names)
       for name in names {
-        if not(env.has(name)) {
+        if !env.has(name) {
           env.define_var(name, Undefined)
           match env.parent {
             None => {
@@ -4153,7 +4153,7 @@ fn JSInterpreter::hoist_stmt(
         _ => false
       }
       for name in names {
-        if not(env.has_local(name)) {
+        if !env.has_local(name) {
           env.define_uninitialized(name, is_const)
           match env.parent {
             None => {
@@ -4198,7 +4198,7 @@ fn JSInterpreter::hoist_stmt(
         collect_binding_names(binding, names)
         let is_const = kind == @ast.TsForOfKind::Const
         for name in names {
-          if not(env.has(name)) {
+          if !env.has(name) {
             match kind {
               @ast.TsForOfKind::Var => env.define_var(name, Undefined)
               @ast.TsForOfKind::Let | @ast.TsForOfKind::Const =>
@@ -4224,7 +4224,7 @@ fn JSInterpreter::hoist_stmt(
         collect_binding_names(binding, names)
         let is_const = kind == @ast.TsForOfKind::Const
         for name in names {
-          if not(env.has(name)) {
+          if !env.has(name) {
             match kind {
               @ast.TsForOfKind::Var => env.define_var(name, Undefined)
               @ast.TsForOfKind::Let | @ast.TsForOfKind::Const =>
@@ -4249,7 +4249,7 @@ fn JSInterpreter::hoist_stmt(
         collect_binding_names(binding, names)
         let is_const = kind == @ast.TsForOfKind::Const
         for name in names {
-          if not(env.has(name)) {
+          if !env.has(name) {
             match kind {
               @ast.TsForOfKind::Var => env.define_var(name, Undefined)
               @ast.TsForOfKind::Let | @ast.TsForOfKind::Const =>
@@ -4308,7 +4308,7 @@ fn JSInterpreter::hoist_block_var_only(
         let names : Array[String] = []
         collect_binding_names(binding, names)
         for name in names {
-          if not(env.has(name)) {
+          if !env.has(name) {
             env.define_var(name, Undefined)
           }
         }
@@ -4334,7 +4334,7 @@ fn JSInterpreter::hoist_block_lexical(
         collect_binding_names(binding, names)
         for name in names {
           // Always create local binding for let (shadowing is intended)
-          if not(env.has_local(name)) {
+          if !env.has_local(name) {
             env.define_uninitialized(name, false)
           }
         }
@@ -4344,7 +4344,7 @@ fn JSInterpreter::hoist_block_lexical(
         collect_binding_names(binding, names)
         for name in names {
           // Always create local binding for const (shadowing is intended)
-          if not(env.has_local(name)) {
+          if !env.has_local(name) {
             env.define_uninitialized(name, true)
           }
         }
@@ -4389,7 +4389,7 @@ fn apply_cached_lexical_names(
 ) -> Unit {
   for pair in names {
     let (name, is_const) = pair
-    if not(env.has_local(name)) {
+    if !env.has_local(name) {
       env.define_uninitialized(name, is_const)
     }
   }
@@ -4420,7 +4420,7 @@ fn JSInterpreter::hoist_var_stmt_to_local(
       collect_binding_names(binding, names)
       for name in names {
         // Always define locally, even if parent has same name
-        if not(env.has_local(name)) {
+        if !env.has_local(name) {
           env.define_var(name, Undefined)
         }
       }
@@ -4704,7 +4704,7 @@ pub fn JSInterpreter::call_function(
       if closure.is_strict {
         call_env.define_var("__strict__", Bool(true))
       }
-      if not(closure.is_arrow) {
+      if !closure.is_arrow {
         if closure.is_strict {
           call_env.define_var("this", this_arg)
         } else {
@@ -4805,7 +4805,7 @@ pub fn JSInterpreter::call_function(
             _ => ()
           }
           let result = if name == "Promise" {
-            if not(new_target.is_undefined()) {
+            if !new_target.is_undefined() {
               self.promise_construct_with_instance(this_arg, args)
             } else {
               self.call_native(name, this_arg, args)

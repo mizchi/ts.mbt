@@ -7,15 +7,15 @@ import {
 }
 
 // Values
-pub fn compile_module_aot(@ast.TsModule) -> AOTCompilationResult
+pub fn experimental_compile_module_aot(@ast.TsModule) -> AOTCompilationResult
 
-pub fn compile_module_to_wasm(@ast.TsModule) -> AOTCompiledModule raise AOTError
+pub fn experimental_compile_module_to_wasm(@ast.TsModule) -> AOTCompiledModule raise AOTError
 
-pub fn create_aot_runtime(@ast.TsModule) -> AOTRuntime raise AOTError
+pub fn experimental_create_aot_runtime(@ast.TsModule) -> AOTRuntime raise AOTError
 
-pub fn get_compilation_info(@ast.TsModule) -> (Int, Int, Array[String], Array[String])
+pub fn experimental_get_compilation_info(@ast.TsModule) -> (Int, Int, Array[String], Array[String])
 
-pub fn is_function_compilable(@ast.TsFunc) -> Bool
+pub fn experimental_is_function_compilable(@ast.TsFunc) -> Bool
 
 // Errors
 pub suberror AOTError {

@@ -127,7 +127,7 @@ pub suberror AOTError {
 
 ///|
 /// Compile a module to a single wasm module with all compilable functions.
-pub fn compile_module_to_wasm(
+pub fn experimental_compile_module_to_wasm(
   mod : @ast.TsModule,
 ) -> AOTCompiledModule raise AOTError {
   // Get all compilable functions
@@ -146,7 +146,7 @@ pub fn compile_module_to_wasm(
     imports: mod.imports,
   }
   // Compile to wasm-gc
-  let wasm_module = @codegen.compile_module_gc(compile_mod) catch {
+  let wasm_module = @codegen.experimental_compile_module_gc(compile_mod) catch {
     e => raise AOTError::CodeGenError(e.to_string())
   }
   // Encode to bytes
@@ -168,7 +168,9 @@ pub fn compile_module_to_wasm(
 
 ///|
 /// Create an AOT runtime from a TypeScript module.
-pub fn create_aot_runtime(mod : @ast.TsModule) -> AOTRuntime raise AOTError {
-  let compiled = compile_module_to_wasm(mod)
+pub fn experimental_create_aot_runtime(
+  mod : @ast.TsModule,
+) -> AOTRuntime raise AOTError {
+  let compiled = experimental_compile_module_to_wasm(mod)
   AOTRuntime::new(compiled)
 }

@@ -78,7 +78,7 @@ pub fn check_func_aot_compatible(func : @ast.TsFunc) -> String? {
   // Check for generator-specific issues
   if func.is_generator {
     let analysis = analyze_generator(func)
-    if not(analysis.compilable) {
+    if !analysis.compilable {
       return analysis.not_compilable_reason
     }
   }
@@ -369,7 +369,7 @@ fn check_arrow_func_aot(
 ) -> String? {
   // Analyze the closure with empty outer scope (conservative)
   let info = analyze_arrow_func(params, body, [])
-  if not(info.compilable) {
+  if !info.compilable {
     return info.not_compilable_reason
   }
   // Mutable captures are now supported (Phase 3)
@@ -392,7 +392,7 @@ fn check_func_expr_aot(func : @ast.TsFunc) -> String? {
   }
   // Analyze the closure with empty outer scope (conservative)
   let info = analyze_func_expr(func, [])
-  if not(info.compilable) {
+  if !info.compilable {
     return info.not_compilable_reason
   }
   // Mutable captures are now supported (Phase 3)

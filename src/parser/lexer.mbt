@@ -121,7 +121,7 @@ pub enum TokenKind {
   Declare // declare (externalimport)
   Null // null
   Eof
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 // /
@@ -129,7 +129,7 @@ pub struct Token {
   kind : TokenKind
   pos : Int // position
   has_newline_before : Bool // true if there was a newline before this token
-} derive(Show)
+} derive(Debug)
 
 ///|
 fn write_codepoint(buf : StringBuilder, code : Int) -> Unit {
@@ -149,7 +149,7 @@ pub struct Lexer {
   mut pending : Array[Token]
   mut pending_index : Int
   mut newline_before_next : Bool // Set when whitespace skipping encounters a newline
-} derive(Show)
+} derive(Debug)
 
 ///|
 // / 161( advance )
@@ -445,7 +445,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
             None => break
           }
         }
-        if not(has_digit) {
+        if !has_digit {
           value = 0
         }
         let mut is_bigint = false
@@ -482,7 +482,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
             _ => break
           }
         }
-        if not(has_digit) {
+        if !has_digit {
           value = 0
         }
         let mut is_bigint = false
@@ -549,7 +549,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
             _ => break
           }
         }
-        if not(has_digit) {
+        if !has_digit {
           value = 0
         }
         let mut is_bigint = false
@@ -613,10 +613,10 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
         } else if c == '_' {
           has_sep = true
           let _ = self.advance()
-        } else if c == '.' && not(has_dot) && not(has_exp) {
+        } else if c == '.' && !has_dot && !has_exp {
           has_dot = true
           let _ = self.advance()
-        } else if (c == 'e' || c == 'E') && not(has_exp) {
+        } else if (c == 'e' || c == 'E') && !has_exp {
           has_exp = true
           let _ = self.advance()
           match self.peek() {
@@ -637,13 +637,9 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
   }
   let raw = if is_bigint {
     let end = if self.pos > start { self.pos - 1 } else { self.pos }
-    self.src[start:end].to_string() catch {
-      _ => ""
-    }
+    self.src[start:end].to_string()
   } else {
-    self.src[start:self.pos].to_string() catch {
-      _ => ""
-    }
+    self.src[start:self.pos].to_string()
   }
   let s = if has_sep {
     let cleaned = StringBuilder::new()
@@ -662,7 +658,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
   } else if has_dot || has_exp {
     // Double
     try {
-      let d = @strconv.parse_double(s)
+      let d = @string.parse_double(s)
       Number(d)
     } catch {
       // Overflow to Infinity for very large numbers
@@ -673,7 +669,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
     // JavaScript numbers are IEEE 754 doubles which can represent integers up to 2^53
     // MoonBit Int is 32-bit signed, so max is 2147483647
     try {
-      let d = @strconv.parse_double(s)
+      let d = @string.parse_double(s)
       // Check if the value fits in 32-bit signed integer
       if d >= -2147483648.0 && d <= 2147483647.0 && d == d.trunc() {
         Int(d.to_int())
@@ -1152,9 +1148,7 @@ fn Lexer::scan_template_expr_source(self : Lexer) -> String {
     }
   }
   let end = if self.pos > 0 { self.pos - 1 } else { 0 }
-  self.src[start:end].to_string() catch {
-    _ => ""
-  }
+  self.src[start:end].to_string()
 }
 
 ///|
@@ -1644,7 +1638,7 @@ fn Lexer::scan_regex(self : Lexer) -> TokenKind {
         } else if c == ']' {
           in_class = false
         }
-        if c == '/' && not(in_class) {
+        if c == '/' && !in_class {
           break
         }
         buf.write_char(c)
@@ -1699,7 +1693,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
       self.pending = []
       self.pending_index = 0
     }
-    self.allow_regex = not(token_can_end_expr(tok.kind))
+    self.allow_regex = !token_can_end_expr(tok.kind)
     return tok
   }
   self.skip_whitespace()
@@ -2039,7 +2033,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
         }
         _ => Eof // statement
       }
-      self.allow_regex = not(token_can_end_expr(kind))
+      self.allow_regex = !token_can_end_expr(kind)
       { kind, pos, has_newline_before: has_newline }
     }
   }

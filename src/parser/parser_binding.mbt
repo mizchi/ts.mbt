@@ -181,7 +181,7 @@ fn Parser::parse_binding_array(
   let _ = self.expect(LBracket)
   let items : Array[@ast.TsBindingElem?] = []
   let mut rest : @ast.TsBinding? = None
-  while not(self.check(RBracket)) {
+  while !self.check(RBracket) {
     if self.match_(Ellipsis) {
       let rest_binding = self.parse_binding_pattern()
       rest = Some(rest_binding)
@@ -268,7 +268,7 @@ fn Parser::parse_binding_object(
   let _ = self.expect(LBrace)
   let props : Array[@ast.TsObjectBindingProp] = []
   let mut rest : String? = None
-  if not(self.check(RBrace)) {
+  if !self.check(RBrace) {
     while true {
       if self.match_(Ellipsis) {
         let name = self.parse_binding_ident()
@@ -368,7 +368,7 @@ fn Parser::parse_assignment_binding_array(
   let _ = self.expect(LBracket)
   let items : Array[@ast.TsBindingElem?] = []
   let mut rest : @ast.TsBinding? = None
-  while not(self.check(RBracket)) {
+  while !self.check(RBracket) {
     if self.match_(Ellipsis) {
       let rest_binding = self.parse_assignment_binding_pattern()
       rest = Some(rest_binding)
@@ -402,7 +402,7 @@ fn Parser::parse_assignment_binding_object(
   let _ = self.expect(LBrace)
   let props : Array[@ast.TsObjectBindingProp] = []
   let mut rest : String? = None
-  if not(self.check(RBrace)) {
+  if !self.check(RBrace) {
     while true {
       if self.match_(Ellipsis) {
         let name = self.parse_binding_ident()
