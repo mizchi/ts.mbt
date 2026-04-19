@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+env:
+  WASMTIME_VERSION: 43.0.1
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -20,7 +23,15 @@ jobs:
 
       - name: Install wasmtime
         run: |
-          curl https://wasmtime.dev/install.sh -sSf | bash
+          set -eux
+          version="v${WASMTIME_VERSION}"
+          asset="wasmtime-${version}-x86_64-linux.tar.xz"
+          url="https://github.com/bytecodealliance/wasmtime/releases/download/${version}/${asset}"
+          tmp_dir="$(mktemp -d)"
+          curl -fsSL "$url" -o "$tmp_dir/wasmtime.tar.xz"
+          tar -xJf "$tmp_dir/wasmtime.tar.xz" -C "$tmp_dir"
+          mkdir -p "$HOME/.wasmtime/bin"
+          install "$tmp_dir/wasmtime-${version}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/wasmtime"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
       - name: Moon update
