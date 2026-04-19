@@ -798,6 +798,38 @@ async test "emit_moonbit_decl_text handles package exports subpath entry" {
 }
 
 ///|
+async test "emit_moonbit_decl_text handles package exports wildcard subpath entry" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/pattern-package-entry.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type PatternOptions"))
+  assert_true(actual.contains("declare pub fn createPattern("))
+}
+
+///|
+async test "emit_moonbit_decl_text handles package exports array fallback wildcard subpath entry" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/pattern-array-package-entry.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type ArrayPatternOptions"))
+  assert_true(actual.contains("declare pub fn createArrayPattern("))
+}
+
+///|
 async test "emit_moonbit_js_ffi_texts handles node-like ambient entry" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/node-like-entry.d.ts", "./runtime/node-like.js",

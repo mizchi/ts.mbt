@@ -8,6 +8,7 @@ priv enum ModuleResolutionMode {
 priv enum JsonFieldValue {
   String(String)
   Object(String)
+  Array(String)
   Other
 }
 
@@ -129,7 +130,7 @@ fn scan_json_value(src : String, start : Int) -> (JsonFieldValue, Int) {
   }
   if c == '[' {
     let end_ = scan_json_compound(src, i, '[', ']')
-    return (Other, end_)
+    return (Array(src[i:end_].to_string()), end_)
   }
   let mut end_ = i
   while end_ < src.length() {
@@ -240,6 +241,34 @@ fn parse_json_string_array(src : String) -> Array[String] {
     i = next
   }
   items
+}
+
+///|
+fn parse_json_array_values(src : String) -> Array[JsonFieldValue] {
+  let values : Array[JsonFieldValue] = []
+  let mut i = skip_json_space(src, 0)
+  if i >= src.length() || char_at(src, i) != '[' {
+    return values
+  }
+  i += 1
+  while i < src.length() {
+    i = skip_json_space(src, i)
+    if i >= src.length() {
+      break
+    }
+    let c = char_at(src, i)
+    if c == ']' {
+      return values
+    }
+    if c == ',' {
+      i += 1
+      continue
+    }
+    let (value, next) = scan_json_value(src, i)
+    values.push(value)
+    i = next
+  }
+  values
 }
 
 ///|
@@ -689,11 +718,12 @@ fn resolve_conditional_mapping_targets(
   mode : ModuleResolutionMode,
 ) -> Array[String] {
   match find_json_field(mapping_obj, specifier) {
-    Some(value) =>
-      match select_export_target(value, mode) {
-        Some(target) => return [target]
-        None => ()
+    Some(value) => {
+      let targets = select_export_targets(value, mode)
+      if targets.length() > 0 {
+        return targets
       }
+    }
     None => ()
   }
   let parts = split_slash_parts(specifier)
@@ -705,20 +735,26 @@ fn resolve_conditional_mapping_targets(
     let pattern = join_slash_parts(parts, 0, cut) + "/*"
     let capture = join_slash_parts(parts, cut, parts.length())
     match find_json_field(mapping_obj, pattern) {
-      Some(value) =>
-        match select_export_target(value, mode) {
-          Some(target) => return [apply_single_wildcard(target, capture)]
-          None => ()
+      Some(value) => {
+        let resolved : Array[String] = []
+        for target in select_export_targets(value, mode) {
+          resolved.push(apply_single_wildcard(target, capture))
         }
+        if resolved.length() > 0 {
+          return resolved
+        }
+      }
       None => ()
     }
   }
   match find_json_field(mapping_obj, "*") {
-    Some(value) =>
-      match select_export_target(value, mode) {
-        Some(target) => [apply_single_wildcard(target, specifier)]
-        None => []
+    Some(value) => {
+      let resolved : Array[String] = []
+      for target in select_export_targets(value, mode) {
+        resolved.push(apply_single_wildcard(target, specifier))
       }
+      resolved
+    }
     None => []
   }
 }
@@ -764,12 +800,21 @@ fn exports_subpath_key(subpath : String) -> String {
 }
 
 ///|
-fn select_export_target(
+fn select_export_targets(
   value : JsonFieldValue,
   mode : ModuleResolutionMode,
-) -> String? {
+) -> Array[String] {
   match value {
-    String(path) => Some(path)
+    String(path) => [path]
+    Array(items_src) => {
+      let targets : Array[String] = []
+      for item in parse_json_array_values(items_src) {
+        for target in select_export_targets(item, mode) {
+          push_unique(targets, target)
+        }
+      }
+      targets
+    }
     Object(obj) => {
       let preferred = match mode {
         Types => ["types", "import", "default", "require", "node"]
@@ -777,17 +822,18 @@ fn select_export_target(
       }
       for key in preferred {
         match find_json_field(obj, key) {
-          Some(inner) =>
-            match select_export_target(inner, mode) {
-              Some(path) => return Some(path)
-              None => ()
+          Some(inner) => {
+            let targets = select_export_targets(inner, mode)
+            if targets.length() > 0 {
+              return targets
             }
+          }
           None => ()
         }
       }
-      None
+      []
     }
-    Other => None
+    Other => []
   }
 }
 
@@ -796,22 +842,28 @@ fn resolve_exports_target(
   package_json : String,
   subpath : String,
   mode : ModuleResolutionMode,
-) -> String? {
+) -> Array[String] {
   match find_json_field(package_json, "exports") {
-    Some(String(path)) => if subpath == "" { Some(path) } else { None }
+    Some(String(path)) => if subpath == "" { [path] } else { [] }
+    Some(Array(items_src)) =>
+      if subpath == "" {
+        select_export_targets(Array(items_src), mode)
+      } else {
+        []
+      }
     Some(Object(obj)) => {
       let key = exports_subpath_key(subpath)
       match find_json_field(obj, key) {
-        Some(value) => select_export_target(value, mode)
+        Some(value) => select_export_targets(value, mode)
         None =>
           if subpath == "" {
-            select_export_target(Object(obj), mode)
+            select_export_targets(Object(obj), mode)
           } else {
-            None
+            resolve_conditional_mapping_targets(obj, key, mode)
           }
       }
     }
-    _ => None
+    _ => []
   }
 }
 
@@ -930,6 +982,21 @@ async fn resolve_package_imports_specifier(
   specifier : String,
   mode : ModuleResolutionMode,
 ) -> String? {
+  let seen : Array[String] = []
+  resolve_package_imports_specifier_inner(base_path, specifier, mode, seen)
+}
+
+///|
+async fn resolve_package_imports_specifier_inner(
+  base_path : String,
+  specifier : String,
+  mode : ModuleResolutionMode,
+  seen : Array[String],
+) -> String? {
+  if seen.contains(specifier) {
+    return None
+  }
+  seen.push(specifier)
   match read_nearest_package_json(base_path) {
     Some((package_root, package_json)) =>
       match find_json_field(package_json, "imports") {
@@ -940,6 +1007,30 @@ async fn resolve_package_imports_specifier(
           for target in targets {
             if target.has_prefix("./") || target.has_prefix("../") {
               match resolve_package_target(package_root, target, mode) {
+                Some(path) => return Some(path)
+                None => ()
+              }
+            } else if target.has_prefix("/") {
+              match resolve_path_like(normalize_path(target), mode) {
+                Some(path) => return Some(path)
+                None => ()
+              }
+            } else if target.has_prefix("#") {
+              let package_base = normalize_path(
+                join_path(package_root, "package.json"),
+              )
+              match
+                resolve_package_imports_specifier_inner(
+                  package_base, target, mode, seen,
+                ) {
+                Some(path) => return Some(path)
+                None => ()
+              }
+            } else {
+              let package_base = normalize_path(
+                join_path(package_root, "package.json"),
+              )
+              match resolve_module_specifier(package_base, target, mode) {
                 Some(path) => return Some(path)
                 None => ()
               }
@@ -976,13 +1067,11 @@ async fn resolve_package_entry(
   let package_json = read_package_json(package_root)
   match package_json {
     Some(pkg) => {
-      match resolve_exports_target(pkg, subpath, mode) {
-        Some(target) =>
-          match resolve_package_target(package_root, target, mode) {
-            Some(path) => return Some(path)
-            None => ()
-          }
-        None => ()
+      for target in resolve_exports_target(pkg, subpath, mode) {
+        match resolve_package_target(package_root, target, mode) {
+          Some(path) => return Some(path)
+          None => ()
+        }
       }
       if subpath == "" {
         let preferred_fields = match mode {

@@ -375,6 +375,50 @@ async test "analysis: emit MoonBit declarations through package exports subpath"
 }
 
 ///|
+async test "analysis: emit MoonBit declarations through package exports wildcard subpath" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/pattern-package-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type PatternOptions"))
+  assert_true(actual.contains("declare pub type PatternResult"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createPattern(options : PatternOptions) -> PatternResult",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit declarations through package exports array fallback wildcard subpath" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/pattern-array-package-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type ArrayPatternOptions"))
+  assert_true(actual.contains("declare pub type ArrayPatternResult"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createArrayPattern(options : ArrayPatternOptions) -> ArrayPatternResult",
+    ),
+  )
+}
+
+///|
 async test "analysis: emit MoonBit declarations through package barrel reexports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/barrel-package-entry.d.ts",

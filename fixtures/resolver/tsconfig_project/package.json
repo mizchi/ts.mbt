@@ -5,6 +5,20 @@
       "types": "./types/config.d.ts",
       "default": "./src/config.ts"
     },
+    "#pkg-exact": {
+      "types": "pkg-import-target",
+      "default": "pkg-import-target"
+    },
+    "#pkg-chain": "#pkg-exact",
+    "#pkg-array": {
+      "types": ["./types/missing-config.d.ts", "pkg-import-target"],
+      "default": ["./src/missing-config.ts", "pkg-import-target"]
+    },
+    "#pkg-pattern/*": {
+      "types": "pkg-exports-pattern/*",
+      "default": "pkg-exports-pattern/*"
+    },
+    "#pkg-pattern-chain/*": "#pkg-pattern/*",
     "#internal/*": {
       "types": "./types/*.d.ts",
       "default": "./src/internal/*.ts"

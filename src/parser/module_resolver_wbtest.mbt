@@ -132,6 +132,58 @@ async test "parser: resolver uses package imports in types mode" {
 }
 
 ///|
+async test "parser: resolver uses package imports for external package targets" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "#pkg-exact",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-import-target/dist/index.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses package imports for external package targets in runtime mode" {
+  let resolved = resolve_runtime_module_specifier(
+    resolver_tsconfig_base_path, "#pkg-exact",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-import-target/dist/index.js",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver follows package imports alias chains" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "#pkg-chain",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-import-target/dist/index.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses package imports array fallback" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "#pkg-array",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-import-target/dist/index.d.ts",
+    ),
+  )
+}
+
+///|
 async test "parser: resolver uses package imports pattern in runtime mode" {
   let resolved = resolve_runtime_module_specifier(
     resolver_tsconfig_base_path, "#internal/helper",
@@ -139,6 +191,32 @@ async test "parser: resolver uses package imports pattern in runtime mode" {
   assert_eq(
     resolved,
     Some("fixtures/resolver/tsconfig_project/src/internal/helper.ts"),
+  )
+}
+
+///|
+async test "parser: resolver follows package imports wildcard alias chains" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "#pkg-pattern-chain/util",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-exports-pattern/dist/util.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses package imports patterns for external package targets" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "#pkg-pattern/util",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-exports-pattern/dist/util.d.ts",
+    ),
   )
 }
 
@@ -151,6 +229,58 @@ async test "parser: resolver uses typesVersions for typed subpaths" {
     resolved,
     Some(
       "fixtures/resolver/tsconfig_project/node_modules/pkg-types-versions/ts5/feature/index.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses exports wildcard patterns in types mode" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "pkg-exports-pattern/util",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-exports-pattern/dist/util.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses exports wildcard patterns in runtime mode" {
+  let resolved = resolve_runtime_module_specifier(
+    resolver_tsconfig_base_path, "pkg-exports-pattern/util",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-exports-pattern/dist/util.js",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses exports array fallback wildcard patterns in types mode" {
+  let resolved = resolve_type_module_specifier(
+    resolver_nested_base_path, "pkg-exports-array/feature/util",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/project/node_modules/pkg-exports-array/dist/feature/util.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses exports array fallback wildcard patterns in runtime mode" {
+  let resolved = resolve_runtime_module_specifier(
+    resolver_nested_base_path, "pkg-exports-array/feature/util",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/project/node_modules/pkg-exports-array/dist/feature/util.js",
     ),
   )
 }

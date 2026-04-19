@@ -8,6 +8,12 @@ let semantics_conflict_entry_path : String = "fixtures/resolver/project/src/grap
 let semantics_subpath_type_entry_path : String = "fixtures/resolver/project/types/subpath-package-entry.d.ts"
 
 ///|
+let semantics_pattern_type_entry_path : String = "fixtures/resolver/project/types/pattern-package-entry.d.ts"
+
+///|
+let semantics_pattern_array_type_entry_path : String = "fixtures/resolver/project/types/pattern-array-package-entry.d.ts"
+
+///|
 let semantics_barrel_type_entry_path : String = "fixtures/resolver/project/types/barrel-package-entry.d.ts"
 
 ///|
@@ -142,6 +148,62 @@ async test "analysis: resolve type export surface through package exports subpat
       assert_eq(export_.local_name, Some("runFeature"))
     }
     None => fail("expected executeFeature export")
+  }
+}
+
+///|
+async test "analysis: resolve type export surface through package exports wildcard subpath" {
+  let exports = resolve_type_export_surface(semantics_pattern_type_entry_path)
+  match find_resolved_export(exports, "PatternOptions") {
+    Some(export_) => {
+      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_eq(
+        export_.source_path,
+        "fixtures/resolver/project/node_modules/pkg-exports-pattern/dist/feature/util.d.ts",
+      )
+      assert_eq(export_.local_name, Some("PatternOptions"))
+    }
+    None => fail("expected PatternOptions export")
+  }
+  match find_resolved_export(exports, "createPattern") {
+    Some(export_) => {
+      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_eq(
+        export_.source_path,
+        "fixtures/resolver/project/node_modules/pkg-exports-pattern/dist/feature/util.d.ts",
+      )
+      assert_eq(export_.local_name, Some("buildPattern"))
+    }
+    None => fail("expected createPattern export")
+  }
+}
+
+///|
+async test "analysis: resolve type export surface through package exports array fallback wildcard subpath" {
+  let exports = resolve_type_export_surface(
+    semantics_pattern_array_type_entry_path,
+  )
+  match find_resolved_export(exports, "ArrayPatternOptions") {
+    Some(export_) => {
+      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_eq(
+        export_.source_path,
+        "fixtures/resolver/project/node_modules/pkg-exports-array/dist/feature/util.d.ts",
+      )
+      assert_eq(export_.local_name, Some("ArrayPatternOptions"))
+    }
+    None => fail("expected ArrayPatternOptions export")
+  }
+  match find_resolved_export(exports, "createArrayPattern") {
+    Some(export_) => {
+      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_eq(
+        export_.source_path,
+        "fixtures/resolver/project/node_modules/pkg-exports-array/dist/feature/util.d.ts",
+      )
+      assert_eq(export_.local_name, Some("buildArrayPattern"))
+    }
+    None => fail("expected createArrayPattern export")
   }
 }
 
