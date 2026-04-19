@@ -28,12 +28,12 @@ async test "analysis: emit MoonBit JS FFI bundle for function reexports" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "import * as __ts_mbt_mod from \"./runtime/mod.js\";",
+      "import { render as __ts_mbt_import_render } from \"./runtime/mod.js\";",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_render = __ts_mbt_mod.render;",
+      "export const __ts_mbt_render = __ts_mbt_import_render;",
     ),
   )
 }
@@ -59,7 +59,7 @@ async test "analysis: emit MoonBit JS FFI bundle for namespace exports" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_get_shapes = () => __ts_mbt_mod.shapes;",
+      "export const __ts_mbt_get_shapes = () => __ts_mbt_import_shapes;",
     ),
   )
 }
@@ -114,12 +114,12 @@ async test "analysis: emit MoonBit JS FFI bundle for typed value exports" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_get_version = () => __ts_mbt_mod.version;",
+      "export const __ts_mbt_get_version = () => __ts_mbt_import_version;",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_get_build_number = () => __ts_mbt_mod.buildNumber;",
+      "export const __ts_mbt_get_build_number = () => __ts_mbt_import_build_number;",
     ),
   )
 }
@@ -144,7 +144,7 @@ async test "analysis: emit MoonBit JS FFI bundle falls back to Any getter for un
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_get_ready = () => __ts_mbt_mod.ready;",
+      "export const __ts_mbt_get_ready = () => __ts_mbt_import_ready;",
     ),
   )
 }
@@ -180,17 +180,17 @@ async test "analysis: emit MoonBit JS FFI bundle for exported classes" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_new_counter = (initial) => new __ts_mbt_mod.Counter(initial);",
+      "export const __ts_mbt_new_counter = (initial) => new __ts_mbt_import_counter(initial);",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_counter_inc = (self, delta) => self.inc(delta);",
+      "export const __ts_mbt_counter_inc = (self, delta) => self.inc(delta);",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_counter_from = (seed) => __ts_mbt_mod.Counter.from(seed);",
+      "export const __ts_mbt_counter_from = (seed) => __ts_mbt_import_counter.from(seed);",
     ),
   )
 }
@@ -217,7 +217,7 @@ async test "analysis: emit MoonBit JS FFI bundle for abstract classes without co
   assert_false(bundle.ffi_mbt.contains("pub extern \"js\" fn new_shape("))
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_shape_area = (self) => self.area();",
+      "export const __ts_mbt_shape_area = (self) => self.area();",
     ),
   )
 }
@@ -264,22 +264,22 @@ async test "analysis: emit MoonBit JS FFI bundle for exported class properties" 
   assert_false(bundle.ffi_mbt.contains("set_counter_state_version"))
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_get_counter_state_current = (self) => self.current;",
+      "export const __ts_mbt_get_counter_state_current = (self) => self.current;",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_set_counter_state_label = (self, value) => (self.label = value);",
+      "export const __ts_mbt_set_counter_state_label = (self, value) => (self.label = value);",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_get_counter_state_version = () => __ts_mbt_mod.CounterState.version;",
+      "export const __ts_mbt_get_counter_state_version = () => __ts_mbt_import_counter_state.version;",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_set_counter_state_step = (value) => (__ts_mbt_mod.CounterState.step = value);",
+      "export const __ts_mbt_set_counter_state_step = (value) => (__ts_mbt_import_counter_state.step = value);",
     ),
   )
 }
@@ -312,7 +312,7 @@ async test "analysis: emit MoonBit JS FFI bundle with unresolved external librar
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_parse_user = __ts_mbt_mod.parseUser;",
+      "export const __ts_mbt_parse_user = __ts_mbt_import_parse_user;",
     ),
   )
 }
@@ -339,7 +339,7 @@ async test "analysis: emit MoonBit JS FFI bundle with resolved bare-package type
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_parse_user = __ts_mbt_mod.parseUser;",
+      "export const __ts_mbt_parse_user = __ts_mbt_import_parse_user;",
     ),
   )
 }
@@ -365,7 +365,7 @@ async test "analysis: emit MoonBit JS FFI bundle with minimal opaque bare-packag
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_parse_value = __ts_mbt_mod.parseValue;",
+      "export const __ts_mbt_parse_value = __ts_mbt_import_parse_value;",
     ),
   )
 }
@@ -398,7 +398,7 @@ async test "analysis: emit MoonBit JS FFI bundle with resolved mixed imports as 
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_parse_user = __ts_mbt_mod.parseUser;",
+      "export const __ts_mbt_parse_user = __ts_mbt_import_parse_user;",
     ),
   )
 }
@@ -583,14 +583,14 @@ async test "analysis: emit MoonBit JS FFI bundle collapse overloads by generated
   assert_eq(
     count_occurrences_in_ffi_output(
       bundle.bridge_js,
-      "globalThis.__ts_mbt_make_counter =",
+      "export const __ts_mbt_make_counter =",
     ),
     1,
   )
   assert_eq(
     count_occurrences_in_ffi_output(
       bundle.bridge_js,
-      "globalThis.__ts_mbt_counter_value =",
+      "export const __ts_mbt_counter_value =",
     ),
     1,
   )
@@ -617,7 +617,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported functi
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_scale_point = __ts_mbt_mod.scalePoint;",
+      "export const __ts_mbt_scale_point = __ts_mbt_import_scale_point;",
     ),
   )
 }
@@ -644,7 +644,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime tsx exported funct
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_render_badge = __ts_mbt_mod.renderBadge;",
+      "export const __ts_mbt_render_badge = __ts_mbt_import_render_badge;",
     ),
   )
 }
@@ -670,7 +670,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported const 
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_scale_arrow_point = __ts_mbt_mod.scaleArrowPoint;",
+      "export const __ts_mbt_scale_arrow_point = __ts_mbt_import_scale_arrow_point;",
     ),
   )
 }
@@ -716,7 +716,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts function reexpo
   assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn scale_point("))
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_scale_point = __ts_mbt_mod.scalePoint;",
+      "export const __ts_mbt_scale_point = __ts_mbt_import_scale_point;",
     ),
   )
 }
@@ -741,7 +741,12 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime default exported f
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_default = __ts_mbt_mod.default;",
+      "export const __ts_mbt_default = __ts_mbt_import_default;",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import __ts_mbt_import_default from \"./runtime/runtime-default-function.js\";",
     ),
   )
 }
@@ -772,12 +777,12 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime default exported c
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_new_default = (initial) => new __ts_mbt_mod.default(initial);",
+      "export const __ts_mbt_new_default = (initial) => new __ts_mbt_import_default(initial);",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_default_inc = (self, delta) => self.inc(delta);",
+      "export const __ts_mbt_default_inc = (self, delta) => self.inc(delta);",
     ),
   )
 }
@@ -802,7 +807,7 @@ async test "analysis: emit MoonBit JS FFI bundle from namespace export assignmen
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_get_default = () => __ts_mbt_mod.default;",
+      "export const __ts_mbt_get_default = () => __ts_mbt_import_default;",
     ),
   )
 }

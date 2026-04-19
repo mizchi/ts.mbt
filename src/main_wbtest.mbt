@@ -123,7 +123,17 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
-      "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge",
+      "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
+    ),
+  )
+  assert_true(
+    lines.contains(
+      "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
+    ),
+  )
+  assert_true(
+    lines.contains(
+      "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
     ),
   )
   assert_true(
@@ -287,7 +297,90 @@ async test "emit_moonbit_js_ffi_texts generates ffi and bridge snippets" {
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn render("))
-  assert_true(bundle.bridge_js.contains("globalThis.__ts_mbt_render"))
+  assert_true(bundle.bridge_js.contains("export const __ts_mbt_render"))
+}
+
+///|
+async test "emit_moonbit_bridge_texts generates decl, ffi, and bridge snippets" {
+  let bundle = emit_moonbit_bridge_texts(
+    "fixtures/resolver/project/types/runtime-function-entry.ts", "./runtime/runtime-function.js",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_eq(
+    bundle.entry_path,
+    "fixtures/resolver/project/types/runtime-function-entry.ts",
+  )
+  assert_eq(bundle.module_spec, "./runtime/runtime-function.js")
+  assert_true(
+    bundle.decl_mbt.contains(
+      "declare pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint",
+    ),
+  )
+  assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn scale_point("))
+  assert_true(bundle.bridge_js.contains("export const __ts_mbt_scale_point"))
+}
+
+///|
+async test "emit_moonbit_bridge_package_texts generates a compileable package bundle" {
+  let bundle = emit_moonbit_bridge_package_texts(
+    "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(bundle.moon_pkg_json.contains("\"path\": \"mizchi/js/core\""))
+  assert_true(bundle.bridge_mbti.contains("declare pub fn get_default()"))
+  assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
+  assert_true(bundle.bridge_js.contains("export const __ts_mbt_get_default"))
+}
+
+///|
+async test "emit_moonbit_bridge_package writes package files to output dir" {
+  let root = wbtest_tmp_project_benchmark_root("bridge_package")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_moonbit_bridge_package(
+    "fixtures/resolver/project/types/runtime-function-entry.ts", "./runtime/runtime-function.js",
+    root,
+  )
+  let pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  assert_eq(pkg_json, "{}")
+  assert_true(bridge_mbti.contains("declare pub fn scalePoint("))
+  assert_true(bridge_mbt.contains("pub extern \"js\" fn scale_point("))
+  assert_true(bridge_js.contains("export const __ts_mbt_scale_point"))
+  let _ = try? @fs.rmdir(root, recursive=true)
 }
 
 ///|
@@ -441,7 +534,7 @@ async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry" {
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn parse_user("))
-  assert_true(bundle.bridge_js.contains("globalThis.__ts_mbt_parse_user"))
+  assert_true(bundle.bridge_js.contains("export const __ts_mbt_parse_user"))
 }
 
 ///|
@@ -463,7 +556,7 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts exported functions" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_scale_point = __ts_mbt_mod.scalePoint;",
+      "export const __ts_mbt_scale_point = __ts_mbt_import_scale_point;",
     ),
   )
 }
@@ -487,7 +580,7 @@ async test "emit_moonbit_js_ffi_texts handles runtime tsx exported functions" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_render_badge = __ts_mbt_mod.renderBadge;",
+      "export const __ts_mbt_render_badge = __ts_mbt_import_render_badge;",
     ),
   )
 }
@@ -511,7 +604,7 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts exported const arrow fu
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_scale_arrow_point = __ts_mbt_mod.scaleArrowPoint;",
+      "export const __ts_mbt_scale_arrow_point = __ts_mbt_import_scale_arrow_point;",
     ),
   )
 }
@@ -555,7 +648,7 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts function reexports" {
   assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn scale_point("))
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_scale_point = __ts_mbt_mod.scalePoint;",
+      "export const __ts_mbt_scale_point = __ts_mbt_import_scale_point;",
     ),
   )
 }
@@ -596,7 +689,7 @@ async test "emit_moonbit_js_ffi_texts handles runtime default exported classes" 
   )
   assert_true(
     bundle.bridge_js.contains(
-      "globalThis.__ts_mbt_new_default = (initial) => new __ts_mbt_mod.default(initial);",
+      "export const __ts_mbt_new_default = (initial) => new __ts_mbt_import_default(initial);",
     ),
   )
 }
@@ -629,7 +722,7 @@ async test "emit_moonbit_js_ffi_texts handles export assignment declarations" {
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn get_default()"))
-  assert_true(bundle.bridge_js.contains("globalThis.__ts_mbt_get_default"))
+  assert_true(bundle.bridge_js.contains("export const __ts_mbt_get_default"))
 }
 
 ///|
@@ -684,7 +777,7 @@ async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry from
     assert_true(entry_path.has_prefix("/tmp/"))
     assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn parse_user("))
     assert_true(bundle.ffi_mbt.contains("#external\ntype Result"))
-    assert_true(bundle.bridge_js.contains("globalThis.__ts_mbt_parse_user"))
+    assert_true(bundle.bridge_js.contains("export const __ts_mbt_parse_user"))
   })
 }
 
@@ -717,5 +810,5 @@ async test "emit_moonbit_js_ffi_texts handles node-like ambient entry" {
     }
   }
   assert_true(bundle.ffi_mbt.contains("#external\ntype NodeJsProcessEnv"))
-  assert_true(bundle.bridge_js.contains("globalThis.__ts_mbt_has_env"))
+  assert_true(bundle.bridge_js.contains("export const __ts_mbt_has_env"))
 }

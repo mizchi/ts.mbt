@@ -51,7 +51,7 @@ async fn main_async() -> Unit {
     }
     "emit-moonbit-js-ffi" => {
       if args.length() < 4 {
-        println("Error: expected <dts-entry> <module-spec>")
+        println("Error: expected <entry> <module-spec>")
         return
       }
       let file_path = args[2]
@@ -69,6 +69,42 @@ async fn main_async() -> Unit {
       emit_moonbit_js_ffi(
         file_path, module_spec, ffi_output_path, bridge_output_path,
       )
+    }
+    "emit-moonbit-bridge" => {
+      if args.length() < 4 {
+        println("Error: expected <ts-entry> <module-spec>")
+        return
+      }
+      let file_path = args[2]
+      let module_spec = args[3]
+      let decl_output_path = if args.length() >= 5 {
+        Some(args[4])
+      } else {
+        None
+      }
+      let ffi_output_path = if args.length() >= 6 {
+        Some(args[5])
+      } else {
+        None
+      }
+      let bridge_output_path = if args.length() >= 7 {
+        Some(args[6])
+      } else {
+        None
+      }
+      emit_moonbit_bridge(
+        file_path, module_spec, decl_output_path, ffi_output_path, bridge_output_path,
+      )
+    }
+    "emit-moonbit-bridge-package" => {
+      if args.length() < 5 {
+        println("Error: expected <ts-entry> <module-spec> <out-dir>")
+        return
+      }
+      let file_path = args[2]
+      let module_spec = args[3]
+      let output_dir = args[4]
+      emit_moonbit_bridge_package(file_path, module_spec, output_dir)
     }
     "benchmark-project" => {
       if args.length() < 3 {
@@ -134,8 +170,10 @@ fn command_help_lines() -> Array[String] {
   [
     "  run <file>           Run a TypeScript/JavaScript file", "  experimental-emit-gc <file> [out] Emit experimental wasm-gc binary (default: out.wasm)",
     "  test262 <path>       Run test262 tests (file or directory)", "  experimental-analyze <file> Analyze experimental AOT compilability of functions",
-    "  experimental-aot-check <file> Alias for experimental-analyze", "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from TypeScript declarations",
-    "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge",
+    "  experimental-aot-check <file> Alias for experimental-analyze", "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from a TypeScript entrypoint",
+    "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
+    "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
+    "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
     "  benchmark-project <root> [limit] Benchmark local TS/.d.ts corpus coverage",
     "  benchmark-corpora [limit] Benchmark built-in local and optional real-world corpora",
   ]
@@ -284,11 +322,156 @@ async fn emit_moonbit_js_ffi(
 }
 
 ///|
+async fn emit_moonbit_bridge(
+  file_path : String,
+  module_spec : String,
+  decl_output_path : String?,
+  ffi_output_path : String?,
+  bridge_output_path : String?,
+) -> Unit {
+  let bundle = emit_moonbit_bridge_texts(file_path, module_spec) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  match decl_output_path {
+    Some(path) => {
+      let _ = @fs.write_file(
+        path,
+        string_to_bytes(bundle.decl_mbt),
+        create=0o644,
+      ) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote MoonBit declarations to \{path}")
+    }
+    None => {
+      println("=== bridge.mbti ===")
+      println(bundle.decl_mbt)
+    }
+  }
+  match ffi_output_path {
+    Some(path) => {
+      let _ = @fs.write_file(
+        path,
+        string_to_bytes(bundle.ffi_mbt),
+        create=0o644,
+      ) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote MoonBit JS FFI stubs to \{path}")
+    }
+    None => {
+      println("=== bridge.mbt ===")
+      println(bundle.ffi_mbt)
+    }
+  }
+  match bridge_output_path {
+    Some(path) => {
+      let _ = @fs.write_file(
+        path,
+        string_to_bytes(bundle.bridge_js),
+        create=0o644,
+      ) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote JS bridge to \{path}")
+    }
+    None => {
+      println("=== bridge.js ===")
+      println(bundle.bridge_js)
+    }
+  }
+}
+
+///|
+async fn emit_moonbit_bridge_package(
+  file_path : String,
+  module_spec : String,
+  output_dir : String,
+) -> Unit {
+  let bundle = emit_moonbit_bridge_package_texts(file_path, module_spec) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  if !@fs.exists(output_dir) {
+    let _ = @fs.mkdir(output_dir, permission=0o755) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+  }
+  let files = [
+    ("moon.pkg.json", bundle.moon_pkg_json),
+    ("bridge.mbti", bundle.bridge_mbti),
+    ("bridge.mbt", bundle.bridge_mbt),
+    ("bridge.js", bundle.bridge_js),
+  ]
+  for file in files {
+    let (name, content) = file
+    let path = join_output_path(output_dir, name)
+    let _ = @fs.write_file(path, string_to_bytes(content), create=0o644) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+  }
+  println("Wrote MoonBit bridge package to \{output_dir}")
+}
+
+///|
 async fn emit_moonbit_js_ffi_texts(
   file_path : String,
   module_spec : String,
 ) -> @analysis.MoonBitJsFfiBundle raise @analysis.ModuleGraphError {
   @analysis.emit_moonbit_js_ffi_bundle_from_entry_path(file_path, module_spec)
+}
+
+///|
+async fn emit_moonbit_bridge_texts(
+  file_path : String,
+  module_spec : String,
+) -> @analysis.MoonBitTsBridgeBundle raise @analysis.ModuleGraphError {
+  @analysis.emit_moonbit_ts_bridge_bundle_from_entry_path(
+    file_path, module_spec,
+  )
+}
+
+///|
+async fn emit_moonbit_bridge_package_texts(
+  file_path : String,
+  module_spec : String,
+) -> @analysis.MoonBitTsBridgePackageBundle raise @analysis.ModuleGraphError {
+  @analysis.emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    file_path, module_spec,
+  )
+}
+
+///|
+fn join_output_path(base : String, child : String) -> String {
+  if base.has_suffix("/") {
+    base + child
+  } else {
+    base + "/" + child
+  }
 }
 
 ///|

@@ -93,6 +93,10 @@ pub async fn emit_moonbit_decl_from_entry_path(String) -> String raise ModuleGra
 
 pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(String, String) -> MoonBitJsFfiBundle raise ModuleGraphError
 
+pub async fn emit_moonbit_ts_bridge_bundle_from_entry_path(String, String) -> MoonBitTsBridgeBundle raise ModuleGraphError
+
+pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(String, String) -> MoonBitTsBridgePackageBundle raise ModuleGraphError
+
 pub fn eval_const(@ast.TsExpr) -> ConstValue
 
 pub fn find_aot_groups(@ast.TsModule, CallGraph) -> Array[AOTGroup]
@@ -499,6 +503,23 @@ pub struct ModuleGraph {
 
 pub struct MoonBitJsFfiBundle {
   ffi_mbt : String
+  bridge_js : String
+} derive(@debug.Debug)
+
+pub struct MoonBitTsBridgeBundle {
+  entry_path : String
+  module_spec : String
+  decl_mbt : String
+  ffi_mbt : String
+  bridge_js : String
+} derive(@debug.Debug)
+
+pub struct MoonBitTsBridgePackageBundle {
+  entry_path : String
+  module_spec : String
+  moon_pkg_json : String
+  bridge_mbti : String
+  bridge_mbt : String
   bridge_js : String
 } derive(@debug.Debug)
 
