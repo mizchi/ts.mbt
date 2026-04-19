@@ -496,25 +496,23 @@ fn render_bridge_import_line(
     if import_.is_default {
       default_import = Some(import_.local_name)
     } else {
-      named_imports.push(
-        "\{import_.imported_name} as \{import_.local_name}",
-      )
+      named_imports.push("\{import_.imported_name} as \{import_.local_name}")
     }
   }
   if named_imports.is_empty() {
     match default_import {
-      Some(default_binding) => Some(
-        "import \{default_binding} from \"\{module_spec}\";",
-      )
+      Some(default_binding) =>
+        Some("import \{default_binding} from \"\{module_spec}\";")
       None => None
     }
   } else {
     named_imports.sort()
     let named_clause = "{ " + named_imports.join(", ") + " }"
     match default_import {
-      Some(default_binding) => Some(
-        "import \{default_binding}, \{named_clause} from \"\{module_spec}\";",
-      )
+      Some(default_binding) =>
+        Some(
+          "import \{default_binding}, \{named_clause} from \"\{module_spec}\";",
+        )
       None => Some("import \{named_clause} from \"\{module_spec}\";")
     }
   }
@@ -809,10 +807,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         class_.name,
       )
       let getter_access = if class_property.is_static {
-        ffi_js_access(
-          class_access,
-          class_property.name,
-        )
+        ffi_js_access(class_access, class_property.name)
       } else {
         ffi_js_access("self", class_property.name)
       }
@@ -829,10 +824,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           class_property.name,
         )
         let setter_target = if class_property.is_static {
-          ffi_js_access(
-            class_access,
-            class_property.name,
-          )
+          ffi_js_access(class_access, class_property.name)
         } else {
           ffi_js_access("self", class_property.name)
         }
@@ -871,10 +863,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       }
       let args_str = args.join(", ")
       let method_access = if class_method.is_static {
-        ffi_js_access(
-          class_access,
-          class_method.name,
-        )
+        ffi_js_access(class_access, class_method.name)
       } else {
         ffi_js_access("self", class_method.name)
       }
