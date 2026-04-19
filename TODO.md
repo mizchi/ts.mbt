@@ -13,6 +13,17 @@
   - Covered by the `/tmp/ts_mbt_neverthrow_like_*` regression tests in `src/main_wbtest.mbt`, which exercise `emit_moonbit_decl_text` / `emit_moonbit_js_ffi_texts` against a pnpm-style temp project layout.
 - [ ] Minimize a fixture from the actual `neverthrow` package if more parser coverage is needed beyond the graph-resolution fix.
 
+## TS Bridge Constraints
+
+- [x] Prefer direct `#module("...")` imports when the runtime `moduleSpec` is non-relative.
+  - Works for bare specifiers, `node:*`, and rooted specifiers like `/src/api/client.ts`.
+  - This now covers top-level function exports, instance methods/properties, and class constructors.
+- [x] Keep `bridge.js` fallback for relative module specs like `./client.js` and `../client.js`.
+  - MoonBit currently rejects relative paths in `#module("...")`.
+- [x] Keep wrappers for static members / value exports / namespace exports for now.
+  - `= "Counter.from"` / `= "Counter.version"` style dotted import names compile poorly in the current JS backend.
+  - `#module(...)` combined with inline `#|` JS also does not lower correctly for imported module bindings in the current backend.
+
 ## Codegen Type Mismatch Bugs
 
 wasmtime's stricter validation exposed these pre-existing codegen bugs. The generated WASM has type mismatches that need to be fixed.

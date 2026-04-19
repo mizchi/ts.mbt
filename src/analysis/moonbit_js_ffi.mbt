@@ -179,6 +179,36 @@ fn ffi_namespace_getter_name(export_name : String) -> String {
 }
 
 ///|
+fn ffi_escape_moonbit_string(s : String) -> String {
+  let mut result = ""
+  for c in s {
+    if c == '\\' {
+      result += "\\\\"
+    } else if c == '"' {
+      result += "\\\""
+    } else {
+      result += c.to_string()
+    }
+  }
+  result
+}
+
+///|
+fn ffi_direct_module_decl(module_spec : String, decl : String) -> String {
+  "#module(\"" + ffi_escape_moonbit_string(module_spec) + "\")\n" + decl
+}
+
+///|
+fn ffi_can_use_direct_module(module_spec : String) -> Bool {
+  // MoonBit #module currently rejects relative specifiers like ./foo or ../foo.
+  // Use direct module imports only for bare/node:/rooted specifiers and keep
+  // the generated bridge.js fallback for relative runtime paths.
+  module_spec != "" &&
+  !module_spec.has_prefix("./") &&
+  !module_spec.has_prefix("../")
+}
+
+///|
 fn push_unique_ffi_section(
   seen_binding_names : Array[String],
   ffi_sections : Array[String],
@@ -225,6 +255,28 @@ fn ffi_import_decl_to_moonbit(
 }
 
 ///|
+fn ffi_import_decl_to_moonbit_direct(
+  state : MoonBitJsFfiState,
+  import_ : @ast.TsImport,
+  module_spec : String,
+) -> String {
+  let params : Array[String] = []
+  for item in import_.params {
+    let (name, type_) = item
+    let param_name = ffi_sanitize_identifier(name, "arg")
+    let param_type = ffi_type_name(state, type_)
+    params.push("\{param_name} : \{param_type}")
+  }
+  let return_type = ffi_type_name(state, import_.return_type)
+  let fn_name = ffi_to_snake_case(import_.name)
+  let params_str = params.join(", ")
+  ffi_direct_module_decl(
+    module_spec,
+    "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{import_.name}\"",
+  )
+}
+
+///|
 fn ffi_func_decl_to_moonbit(
   state : MoonBitJsFfiState,
   func : @ast.TsFunc,
@@ -247,6 +299,35 @@ fn ffi_func_decl_to_moonbit(
   let fn_name = ffi_to_snake_case(func.name)
   let params_str = params.join(", ")
   "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{ffi_binding_name(func.name)}\""
+}
+
+///|
+fn ffi_func_decl_to_moonbit_direct(
+  state : MoonBitJsFfiState,
+  func : @ast.TsFunc,
+  module_spec : String,
+) -> String {
+  let params : Array[String] = []
+  let mut next_index = 0
+  for param in func.params {
+    let param_name = if param.name == "" {
+      let generated = "arg" + next_index.to_string()
+      next_index += 1
+      generated
+    } else {
+      param.name
+    }
+    let safe_name = ffi_sanitize_identifier(param_name, "arg")
+    let safe_type = ffi_type_name(state, param.type_)
+    params.push("\{safe_name} : \{safe_type}")
+  }
+  let return_type = ffi_type_name(state, func.return_type)
+  let fn_name = ffi_to_snake_case(func.name)
+  let params_str = params.join(", ")
+  ffi_direct_module_decl(
+    module_spec,
+    "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{func.name}\"",
+  )
 }
 
 ///|
@@ -336,12 +417,52 @@ fn ffi_class_constructor_decl_to_moonbit(
 }
 
 ///|
+fn ffi_class_constructor_decl_to_moonbit_direct(
+  state : MoonBitJsFfiState,
+  class_ : @ast.TsClassDecl,
+  module_spec : String,
+) -> String? {
+  if !class_.is_constructible {
+    return None
+  }
+  let params : Array[String] = []
+  let args : Array[String] = []
+  match class_.constructor_params {
+    Some(constructor_params) =>
+      for param in constructor_params {
+        let (name, type_) = param
+        let safe_name = ffi_sanitize_identifier(name, "arg")
+        let safe_type = ffi_type_name(state, type_)
+        params.push("\{safe_name} : \{safe_type}")
+        args.push(safe_name)
+      }
+    None => ()
+  }
+  let ctor_params = params.join(", ")
+  let ctor_args = args.join(", ")
+  let class_type_name = ffi_class_type_name(class_.name)
+  let ctor_name = ffi_to_snake_case(class_.name)
+  let extern_decl = ffi_direct_module_decl(
+    module_spec,
+    "extern \"js\" fn \{class_type_name}::new(\{ctor_params}) -> \{class_type_name} = \"\{class_.name}\"",
+  )
+  let wrapper_call = if ctor_args == "" {
+    "\{class_type_name}::new()"
+  } else {
+    "\{class_type_name}::new(\{ctor_args})"
+  }
+  let wrapper_decl = "pub fn new_\{ctor_name}(\{ctor_params}) -> \{class_type_name} {\n  \{wrapper_call}\n}"
+  Some(extern_decl + "\n\n" + wrapper_decl)
+}
+
+///|
 fn ffi_class_method_decl_to_moonbit(
   state : MoonBitJsFfiState,
   class_ : @ast.TsClassDecl,
   class_method : @ast.TsClassMethodDecl,
 ) -> String {
   let params : Array[String] = []
+  let js_args : Array[String] = []
   if !class_method.is_static {
     params.push("self : \{ffi_class_type_name(class_.name)}")
   }
@@ -349,6 +470,7 @@ fn ffi_class_method_decl_to_moonbit(
     let (name, type_) = param
     let safe_name = ffi_sanitize_identifier(name, "arg")
     let safe_type = ffi_type_name(state, type_)
+    js_args.push(safe_name)
     params.push("\{safe_name} : \{safe_type}")
   }
   let return_type = ffi_type_name(state, class_method.return_type)
@@ -360,7 +482,20 @@ fn ffi_class_method_decl_to_moonbit(
     class_.name,
     class_method.name,
   )
-  "pub extern \"js\" fn \{fn_name}(\{method_params}) -> \{return_type} = \"\{binding_name}\""
+  if class_method.is_static {
+    "pub extern \"js\" fn \{fn_name}(\{method_params}) -> \{return_type} = \"\{binding_name}\""
+  } else {
+    let js_params : Array[String] = ["self"]
+    for arg in js_args {
+      js_params.push(arg)
+    }
+    let js_param_list = js_params.join(", ")
+    let js_call = ffi_js_access("self", class_method.name) +
+      "(" +
+      js_args.join(", ") +
+      ")"
+    "pub extern \"js\" fn \{fn_name}(\{method_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
+  }
 }
 
 ///|
@@ -383,7 +518,12 @@ fn ffi_class_property_getter_decl_to_moonbit(
   )
   let return_type = ffi_type_name(state, class_property.type_)
   let getter_params = params.join(", ")
-  "pub extern \"js\" fn \{fn_name}(\{getter_params}) -> \{return_type} = \"\{binding_name}\""
+  if class_property.is_static {
+    "pub extern \"js\" fn \{fn_name}(\{getter_params}) -> \{return_type} = \"\{binding_name}\""
+  } else {
+    let js_get = ffi_js_access("self", class_property.name)
+    "pub extern \"js\" fn \{fn_name}(\{getter_params}) -> \{return_type} =\n  #| (self) => \{js_get}"
+  }
 }
 
 ///|
@@ -410,9 +550,16 @@ fn ffi_class_property_setter_decl_to_moonbit(
     class_property.name,
   )
   let setter_params = params.join(", ")
-  Some(
-    "pub extern \"js\" fn \{fn_name}(\{setter_params}) -> Unit = \"\{binding_name}\"",
-  )
+  if class_property.is_static {
+    Some(
+      "pub extern \"js\" fn \{fn_name}(\{setter_params}) -> Unit = \"\{binding_name}\"",
+    )
+  } else {
+    let js_set = ffi_js_access("self", class_property.name)
+    Some(
+      "pub extern \"js\" fn \{fn_name}(\{setter_params}) -> Unit =\n  #| (self, value) => (\{js_set} = value)",
+    )
+  }
 }
 
 ///|
@@ -710,13 +857,16 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
 
   for class_ in classes {
     ffi_sections.push(ffi_class_type_decl(class_.name))
-    match ffi_class_constructor_decl_to_moonbit(state, class_) {
+    let class_ctor_binding = ffi_class_ctor_binding_name(class_.name)
+    let class_ctor_section = if ffi_can_use_direct_module(module_spec) {
+      ffi_class_constructor_decl_to_moonbit_direct(state, class_, module_spec)
+    } else {
+      ffi_class_constructor_decl_to_moonbit(state, class_)
+    }
+    match class_ctor_section {
       Some(decl) =>
         push_unique_ffi_section(
-          seen_ffi_binding_names,
-          ffi_sections,
-          ffi_class_ctor_binding_name(class_.name),
-          decl,
+          seen_ffi_binding_names, ffi_sections, class_ctor_binding, decl,
         )
       None => ()
     }
@@ -759,44 +909,49 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       )
     }
     handled_export_names.push(class_.name)
-    match class_.constructor_params {
-      Some(constructor_params) if class_.is_constructible => {
-        let args : Array[String] = []
-        for param in constructor_params {
-          let (param_name, _) = param
-          args.push(ffi_sanitize_identifier(param_name, "arg"))
+    if !ffi_can_use_direct_module(module_spec) {
+      match class_.constructor_params {
+        Some(constructor_params) if class_.is_constructible => {
+          let args : Array[String] = []
+          for param in constructor_params {
+            let (param_name, _) = param
+            args.push(ffi_sanitize_identifier(param_name, "arg"))
+          }
+          let params_str = args.join(", ")
+          let class_access = ensure_bridge_import(
+            seen_bridge_import_keys,
+            bridge_imports,
+            class_.name,
+          )
+          let ctor_binding_name = ffi_class_ctor_binding_name(class_.name)
+          push_unique_bridge_binding(
+            seen_bridge_binding_names,
+            bridge_lines,
+            ctor_binding_name,
+            "export const \{ctor_binding_name} = (\{params_str}) => new \{class_access}(\{params_str});",
+          )
         }
-        let params_str = args.join(", ")
-        let class_access = ensure_bridge_import(
-          seen_bridge_import_keys,
-          bridge_imports,
-          class_.name,
-        )
-        let ctor_binding_name = ffi_class_ctor_binding_name(class_.name)
-        push_unique_bridge_binding(
-          seen_bridge_binding_names,
-          bridge_lines,
-          ctor_binding_name,
-          "export const \{ctor_binding_name} = (\{params_str}) => new \{class_access}(\{params_str});",
-        )
+        None if class_.is_constructible => {
+          let class_access = ensure_bridge_import(
+            seen_bridge_import_keys,
+            bridge_imports,
+            class_.name,
+          )
+          let ctor_binding_name = ffi_class_ctor_binding_name(class_.name)
+          push_unique_bridge_binding(
+            seen_bridge_binding_names,
+            bridge_lines,
+            ctor_binding_name,
+            "export const \{ctor_binding_name} = () => new \{class_access}();",
+          )
+        }
+        _ => ()
       }
-      None if class_.is_constructible => {
-        let class_access = ensure_bridge_import(
-          seen_bridge_import_keys,
-          bridge_imports,
-          class_.name,
-        )
-        let ctor_binding_name = ffi_class_ctor_binding_name(class_.name)
-        push_unique_bridge_binding(
-          seen_bridge_binding_names,
-          bridge_lines,
-          ctor_binding_name,
-          "export const \{ctor_binding_name} = () => new \{class_access}();",
-        )
-      }
-      _ => ()
     }
     for class_property in class_.properties {
+      if !class_property.is_static {
+        continue
+      }
       let getter_binding = ffi_class_property_getter_binding_name(
         class_.name,
         class_property.name,
@@ -842,6 +997,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       }
     }
     for class_method in class_.methods {
+      if !class_method.is_static {
+        continue
+      }
       let args : Array[String] = []
       for param in class_method.params {
         let (param_name, _) = param
@@ -881,36 +1039,54 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
 
   for import_ in imports {
-    let binding_name = ffi_binding_name(import_.name)
-    push_unique_ffi_section(
-      seen_ffi_binding_names,
-      ffi_sections,
-      binding_name,
-      ffi_import_decl_to_moonbit(state, import_),
-    )
-    push_unique_bridge_binding(
-      seen_bridge_binding_names,
-      bridge_lines,
-      binding_name,
-      "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, import_.name)};",
-    )
+    if ffi_can_use_direct_module(module_spec) {
+      push_unique_ffi_section(
+        seen_ffi_binding_names,
+        ffi_sections,
+        "direct_import:" + import_.name,
+        ffi_import_decl_to_moonbit_direct(state, import_, module_spec),
+      )
+    } else {
+      let binding_name = ffi_binding_name(import_.name)
+      push_unique_ffi_section(
+        seen_ffi_binding_names,
+        ffi_sections,
+        binding_name,
+        ffi_import_decl_to_moonbit(state, import_),
+      )
+      push_unique_bridge_binding(
+        seen_bridge_binding_names,
+        bridge_lines,
+        binding_name,
+        "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, import_.name)};",
+      )
+    }
     handled_export_names.push(import_.name)
   }
 
   for func in funcs {
-    let binding_name = ffi_binding_name(func.name)
-    push_unique_ffi_section(
-      seen_ffi_binding_names,
-      ffi_sections,
-      binding_name,
-      ffi_func_decl_to_moonbit(state, func),
-    )
-    push_unique_bridge_binding(
-      seen_bridge_binding_names,
-      bridge_lines,
-      binding_name,
-      "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, func.name)};",
-    )
+    if ffi_can_use_direct_module(module_spec) {
+      push_unique_ffi_section(
+        seen_ffi_binding_names,
+        ffi_sections,
+        "direct_func:" + func.name,
+        ffi_func_decl_to_moonbit_direct(state, func, module_spec),
+      )
+    } else {
+      let binding_name = ffi_binding_name(func.name)
+      push_unique_ffi_section(
+        seen_ffi_binding_names,
+        ffi_sections,
+        binding_name,
+        ffi_func_decl_to_moonbit(state, func),
+      )
+      push_unique_bridge_binding(
+        seen_bridge_binding_names,
+        bridge_lines,
+        binding_name,
+        "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, func.name)};",
+      )
+    }
     handled_export_names.push(func.name)
   }
 
