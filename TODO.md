@@ -1,5 +1,17 @@
 # TODO
 
+## Parser / Semantics Real-World Gaps
+
+### Current bug
+- [x] `emit-moonbit-decl` / `emit-moonbit-js-ffi` should not resolve non-exported opaque type imports.
+  - Symptom: an entry like `import { ResultAsync, type Result } from "neverthrow"` crashed when the package actually existed under `/tmp/.../node_modules`.
+  - Cause: `load_type_module_graph` eagerly resolved every import specifier even when the imported binding was never exported or re-exported from the entry surface.
+  - Fix direction: keep re-exports / exported imports in the graph, but leave plain opaque imports unresolved.
+
+### Remaining work
+- [ ] Add a stable end-to-end regression harness for the external `/tmp/tsmbt-realworld-check` repro instead of relying on ad-hoc local verification.
+- [ ] Minimize a fixture from the actual `neverthrow` package if more parser coverage is needed beyond the graph-resolution fix.
+
 ## Codegen Type Mismatch Bugs
 
 wasmtime's stricter validation exposed these pre-existing codegen bugs. The generated WASM has type mismatches that need to be fixed.

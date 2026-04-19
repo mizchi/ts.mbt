@@ -70,6 +70,32 @@ pub(all) struct TsBlock {
 } derive(@debug.Debug)
 pub impl Show for TsBlock
 
+pub(all) struct TsClassDecl {
+  name : String
+  constructor_params : Array[(String, TsType)]?
+  properties : Array[TsClassPropertyDecl]
+  methods : Array[TsClassMethodDecl]
+  is_abstract : Bool
+  is_constructible : Bool
+} derive(@debug.Debug)
+pub impl Show for TsClassDecl
+
+pub(all) struct TsClassMethodDecl {
+  name : String
+  params : Array[(String, TsType)]
+  return_type : TsType
+  is_static : Bool
+} derive(@debug.Debug)
+pub impl Show for TsClassMethodDecl
+
+pub(all) struct TsClassPropertyDecl {
+  name : String
+  type_ : TsType
+  is_static : Bool
+  is_readonly : Bool
+} derive(@debug.Debug)
+pub impl Show for TsClassPropertyDecl
+
 pub(all) enum TsCompoundOp {
   AddAssign
   SubAssign
@@ -182,6 +208,8 @@ pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
   imports : Array[TsImport]
+  values : Array[TsValueDecl]
+  classes : Array[TsClassDecl]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 
@@ -303,6 +331,12 @@ pub(all) enum TsUnaryOp {
   PostDec
 } derive(Eq, @debug.Debug)
 pub impl Show for TsUnaryOp
+
+pub(all) struct TsValueDecl {
+  name : String
+  type_ : TsType
+} derive(@debug.Debug)
+pub impl Show for TsValueDecl
 
 pub(all) struct TypedExpr {
   expr : TsExpr

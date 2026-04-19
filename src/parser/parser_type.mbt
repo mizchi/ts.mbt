@@ -21,10 +21,83 @@ fn Parser::is_ident(self : Parser) -> Bool {
 }
 
 ///|
+fn Parser::is_function_type_param_name_start(self : Parser) -> Bool {
+  match self.peek().kind {
+    Ident(_)
+    | NumberType
+    | BooleanType
+    | StringType
+    | VoidType
+    | IntType
+    | Type
+    | Of
+    | In
+    | From
+    | Delete => true
+    _ => false
+  }
+}
+
+///|
+fn Parser::parse_paren_or_function_type(
+  self : Parser,
+) -> @ast.TsType raise ParseError {
+  let saved_pos = self.pos
+  let _ = self.expect(LParen)
+  if self.match_(RParen) {
+    if self.match_(Arrow) {
+      return Func([], self.parse_type())
+    }
+    return Any
+  }
+
+  let param_types : Array[@ast.TsType] = []
+  let mut can_be_function_type = true
+  while true {
+    let _ = self.match_ellipsis()
+    if !self.is_function_type_param_name_start() {
+      can_be_function_type = false
+      break
+    }
+    let _ = self.advance()
+    let _ = self.match_(Question)
+    if !self.match_(Colon) {
+      can_be_function_type = false
+      break
+    }
+    param_types.push(self.parse_type())
+    if self.match_(Comma) {
+      continue
+    }
+    break
+  }
+  if can_be_function_type && self.match_(RParen) && self.match_(Arrow) {
+    return Func(param_types, self.parse_type())
+  }
+
+  self.pos = saved_pos
+  let _ = self.expect(LParen)
+  let inner = self.parse_type()
+  let _ = self.expect(RParen)
+  inner
+}
+
+///|
 /// Parse a single type (not including union/intersection)
 fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
   let tok = self.peek()
   let base_type : @ast.TsType = match tok.kind {
+    Lt => {
+      self.skip_type_args()
+      if self.check(LParen) {
+        self.skip_paren_type()
+      }
+      if self.check(Arrow) {
+        let _ = self.advance()
+        let _ = self.parse_type()
+      }
+      Any
+    }
     NumberType => {
       let _ = self.advance()
       Number
@@ -96,14 +169,48 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       Any
     }
     // Parenthesized type or function type: (T) or (x: T) => U
-    LParen => {
-      self.skip_paren_type()
-      Any
-    }
+    LParen => self.parse_paren_or_function_type()
     // typeof T
     Typeof => {
       let _ = self.advance()
       self.skip_typeof_operand()
+      Any
+    }
+    // import("...").Type
+    Import => {
+      let _ = self.advance()
+      if self.check(LParen) {
+        let _ = self.advance()
+        if self.check(Str("")) {
+          let _ = self.advance()
+        } else if self.peek().kind is Str(_) {
+          let _ = self.advance()
+        }
+        let _ = self.expect(RParen)
+        while self.check(Dot) {
+          let _ = self.advance()
+          match self.peek().kind {
+            Ident(_)
+            | NumberType
+            | BooleanType
+            | StringType
+            | VoidType
+            | Type
+            | New
+            | Extends
+            | Import
+            | Export
+            | From
+            | As => {
+              let _ = self.advance()
+            }
+            _ => break
+          }
+        }
+        if self.check(Lt) {
+          self.skip_type_args()
+        }
+      }
       Any
     }
     // Constructor type: new (...args: T) => U
@@ -169,14 +276,30 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       self.skip_asserts_clause()
       Any
     }
+    Const => {
+      let _ = self.advance()
+      Any
+    }
+    Type => {
+      let _ = self.advance()
+      Named("type")
+    }
     // Ident or generic type: Foo, Array<T>
     Ident(name) => {
       let _ = self.advance()
+      let mut full_name = name
+      while self.check(Dot) && self.peek_at(1).kind is Ident(_) {
+        let _ = self.advance()
+        match self.advance().kind {
+          Ident(next_name) => full_name = full_name + "." + next_name
+          _ => ()
+        }
+      }
       // Check for generic type arguments <T, U>
       if self.check(Lt) {
         self.skip_type_args()
       }
-      Named(name)
+      Named(full_name)
     }
     _ => raise ParseError("Expected type, got \{tok.kind}")
   }
@@ -225,22 +348,47 @@ fn Parser::parse_postfix_type(
 }
 
 ///|
-/// Parse full type including union/intersection
-fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
+fn Parser::parse_type_operand(self : Parser) -> @ast.TsType raise ParseError {
   let base = self.parse_primary_type()
-  // Union type: T | U
-  if self.check(Pipe) {
-    while self.match_(Pipe) {
-      let _ = self.parse_primary_type()
-    }
-    return Any // Return Any for union types
+  if self.match_ident("is") {
+    let _ = self.parse_type()
+    return Boolean
   }
-  // Intersection type: T & U
   if self.check(Amp) {
     while self.match_(Amp) {
       let _ = self.parse_primary_type()
     }
     return Any
+  }
+  base
+}
+
+///|
+/// Parse full type including union/intersection
+fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
+  if self.check(Pipe) {
+    let _ = self.advance()
+    let _ = self.parse_type_operand()
+    while self.match_(Pipe) {
+      let _ = self.parse_type_operand()
+    }
+    return Any
+  }
+  if self.check(Amp) {
+    let _ = self.advance()
+    let _ = self.parse_type_operand()
+    while self.match_(Amp) {
+      let _ = self.parse_type_operand()
+    }
+    return Any
+  }
+  let base = self.parse_type_operand()
+  // Union type: T | U
+  if self.check(Pipe) {
+    while self.match_(Pipe) {
+      let _ = self.parse_type_operand()
+    }
+    return Any // Return Any for union types
   }
   base
 }
@@ -317,8 +465,109 @@ fn Parser::skip_paren_type(self : Parser) -> Unit raise ParseError {
 }
 
 ///|
+/// Skip a type annotation until the top-level arrow of an arrow function.
+fn Parser::skip_type_until_arrow(self : Parser) -> Unit {
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut brace_depth = 0
+  let mut angle_depth = 0
+  while !self.check(Eof) {
+    match self.peek().kind {
+      Arrow if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 &&
+        angle_depth == 0 => break
+      LParen => {
+        paren_depth += 1
+        let _ = self.advance()
+      }
+      RParen => {
+        if paren_depth == 0 {
+          break
+        }
+        paren_depth -= 1
+        let _ = self.advance()
+      }
+      LBracket => {
+        bracket_depth += 1
+        let _ = self.advance()
+      }
+      RBracket => {
+        if bracket_depth == 0 {
+          break
+        }
+        bracket_depth -= 1
+        let _ = self.advance()
+      }
+      LBrace => {
+        brace_depth += 1
+        let _ = self.advance()
+      }
+      RBrace => {
+        if brace_depth == 0 {
+          break
+        }
+        brace_depth -= 1
+        let _ = self.advance()
+      }
+      Lt => {
+        angle_depth += 1
+        let _ = self.advance()
+      }
+      Gt => {
+        if angle_depth > 0 {
+          angle_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      GtGt => {
+        angle_depth = if angle_depth >= 2 { angle_depth - 2 } else { 0 }
+        let _ = self.advance()
+      }
+      GtGtGt => {
+        angle_depth = if angle_depth >= 3 { angle_depth - 3 } else { 0 }
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
 /// Skip typeof operand
-fn Parser::skip_typeof_operand(self : Parser) -> Unit {
+fn Parser::skip_typeof_operand(self : Parser) -> Unit raise ParseError {
+  if self.check(Import) {
+    let _ = self.advance()
+    if self.check(LParen) {
+      self.skip_paren_type()
+    }
+    while self.check(Dot) {
+      let _ = self.advance()
+      match self.peek().kind {
+        Ident(_)
+        | NumberType
+        | BooleanType
+        | StringType
+        | VoidType
+        | Type
+        | New
+        | Extends
+        | Import
+        | Export
+        | From
+        | As => {
+          let _ = self.advance()
+        }
+        _ => break
+      }
+    }
+    if self.check(Lt) {
+      self.skip_type_args()
+    }
+    return
+  }
   // Skip qualified name: x.y.z
   while self.is_ident() {
     let _ = self.advance()

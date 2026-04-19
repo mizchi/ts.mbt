@@ -354,11 +354,49 @@ pub(all) struct TsImport {
 } derive(Debug)
 
 ///|
+// / ambient value declaration
+pub(all) struct TsValueDecl {
+  name : String
+  type_ : TsType
+} derive(Debug)
+
+///|
+// / class property declaration
+pub(all) struct TsClassPropertyDecl {
+  name : String
+  type_ : TsType
+  is_static : Bool
+  is_readonly : Bool
+} derive(Debug)
+
+///|
+// / class method declaration
+pub(all) struct TsClassMethodDecl {
+  name : String
+  params : Array[(String, TsType)]
+  return_type : TsType
+  is_static : Bool
+} derive(Debug)
+
+///|
+// / class declaration
+pub(all) struct TsClassDecl {
+  name : String
+  constructor_params : Array[(String, TsType)]?
+  properties : Array[TsClassPropertyDecl]
+  methods : Array[TsClassMethodDecl]
+  is_abstract : Bool
+  is_constructible : Bool
+} derive(Debug)
+
+///|
 // / ()
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
   imports : Array[TsImport] // externalimport
+  values : Array[TsValueDecl] // ambient value declarations
+  classes : Array[TsClassDecl] // ambient class declarations
 } derive(Debug)
 
 ///|

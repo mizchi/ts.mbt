@@ -59,6 +59,31 @@ test "lexer: tokenize function" {
 }
 
 ///|
+test "lexer: tokenize slash after type keyword assertion as division" {
+  let lexer = Lexer::new("length as any as number / factor")
+  let tokens = lexer.tokenize()
+  assert_eq(tokens[0].kind, Ident("length"))
+  assert_eq(tokens[1].kind, As)
+  assert_eq(tokens[2].kind, Ident("any"))
+  assert_eq(tokens[3].kind, As)
+  assert_eq(tokens[4].kind, NumberType)
+  assert_eq(tokens[5].kind, Slash)
+  assert_eq(tokens[6].kind, Ident("factor"))
+}
+
+///|
+test "lexer: tokenize slash after non-null assertion as division" {
+  let lexer = Lexer::new("state.width! / 2")
+  let tokens = lexer.tokenize()
+  assert_eq(tokens[0].kind, Ident("state"))
+  assert_eq(tokens[1].kind, Dot)
+  assert_eq(tokens[2].kind, Ident("width"))
+  assert_eq(tokens[3].kind, Bang)
+  assert_eq(tokens[4].kind, Slash)
+  assert_eq(tokens[5].kind, Int(2))
+}
+
+///|
 test "parser: parse simple expr" {
   let parser = Parser::from_source("1 + 2")
   let expr = parser.parse_expr()
@@ -703,6 +728,289 @@ test "parser: parse declare function" {
 }
 
 ///|
+test "parser: parse export declare function in module" {
+  let parser = Parser::from_source(
+    "export declare function draw(point: number): void;",
+  )
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.imports.length(), 1)
+  assert_eq(module_.imports[0].name, "draw")
+  assert_eq(module_.imports[0].params.length(), 1)
+}
+
+///|
+test "parser: parse declare const in module" {
+  let parser = Parser::from_source(
+    "declare const version: string; declare let count: number;",
+  )
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 2)
+  assert_eq(module_.values[0].name, "version")
+  assert_eq(module_.values[0].type_, String_)
+  assert_eq(module_.values[1].name, "count")
+  assert_eq(module_.values[1].type_, Number)
+}
+
+///|
+test "parser: parse module block export metadata for interface and declare function" {
+  let src =
+    #|export interface Point {
+    #|  x: number;
+    #|}
+    #|
+    #|export declare function draw(point: Point): void;
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 2)
+  assert_eq(module_.exports[0].local_name, "Point")
+  assert_eq(module_.exports[0].export_name, "Point")
+  assert_eq(module_.exports[1].local_name, "draw")
+  assert_eq(module_.exports[1].export_name, "draw")
+}
+
+///|
+test "parser: parse module block export metadata for declare const" {
+  let src =
+    #|declare const localVersion: string;
+    #|export { localVersion as version };
+    #|export declare const buildNumber: number;
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 2)
+  assert_eq(module_.exports[0].local_name, "localVersion")
+  assert_eq(module_.exports[0].export_name, "version")
+  assert_eq(module_.exports[1].local_name, "buildNumber")
+  assert_eq(module_.exports[1].export_name, "buildNumber")
+}
+
+///|
+test "parser: parse declare class in module" {
+  let src =
+    #|declare class Counter {
+    #|  constructor(initial: number);
+    #|  inc(delta: number): number;
+    #|  value(): number;
+    #|  static from(seed: number): Counter;
+    #|}
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let class_ = module_.classes[0]
+  assert_eq(class_.name, "Counter")
+  assert_false(class_.is_abstract)
+  match class_.constructor_params {
+    Some(params) => assert_eq(params.length(), 1)
+    None => fail("expected constructor params")
+  }
+  assert_eq(class_.methods.length(), 3)
+  assert_eq(class_.methods[0].name, "inc")
+  assert_false(class_.methods[0].is_static)
+  assert_eq(class_.methods[1].name, "value")
+  assert_eq(class_.methods[2].name, "from")
+  assert_true(class_.methods[2].is_static)
+}
+
+///|
+test "parser: parse module block export metadata for declare class" {
+  let src =
+    #|export declare class Counter {
+    #|  constructor(initial: number);
+    #|  inc(delta: number): number;
+    #|}
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].local_name, "Counter")
+  assert_eq(module_.exports[0].export_name, "Counter")
+}
+
+///|
+test "parser: skip export type alias in module block" {
+  let src =
+    #|export type Status = "ok" | "err";
+    #|export interface User {
+    #|  name: string;
+    #|}
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].local_name, "User")
+  assert_eq(module_.exports[0].export_name, "User")
+}
+
+///|
+test "parser: parse abstract declare class in module" {
+  let src =
+    #|declare abstract class Shape {
+    #|  area(): number;
+    #|}
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let class_ = module_.classes[0]
+  assert_true(class_.is_abstract)
+  assert_false(class_.is_constructible)
+}
+
+///|
+test "parser: parse declare class properties in module" {
+  let src =
+    #|declare class CounterState {
+    #|  readonly current: number;
+    #|  label: string;
+    #|  static readonly version: string;
+    #|  static step: number;
+    #|}
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let class_ = module_.classes[0]
+  assert_eq(class_.properties.length(), 4)
+  assert_eq(class_.properties[0].name, "current")
+  assert_true(class_.properties[0].is_readonly)
+  assert_false(class_.properties[0].is_static)
+  assert_eq(class_.properties[1].name, "label")
+  assert_false(class_.properties[1].is_readonly)
+  assert_eq(class_.properties[2].name, "version")
+  assert_true(class_.properties[2].is_static)
+  assert_true(class_.properties[2].is_readonly)
+  assert_eq(class_.properties[3].name, "step")
+  assert_true(class_.properties[3].is_static)
+  assert_false(class_.properties[3].is_readonly)
+}
+
+///|
+test "parser: parse qualified ambient type references in module" {
+  let src =
+    #|export interface RuntimeConfig {
+    #|  env: NodeJS.ProcessEnv;
+    #|  cwd: string;
+    #|}
+    #|export declare class NodeRunner {
+    #|  readonly env: NodeJS.ProcessEnv;
+    #|  cwd: string;
+    #|  constructor(env: NodeJS.ProcessEnv);
+    #|}
+    #|export declare function hasEnv(env: NodeJS.ProcessEnv, key: string): boolean;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].fields[0].1, Named("NodeJS.ProcessEnv"))
+  assert_eq(module_.classes.length(), 1)
+  assert_eq(module_.classes[0].properties[0].type_, Named("NodeJS.ProcessEnv"))
+  match module_.classes[0].constructor_params {
+    Some(params) => assert_eq(params[0].1, Named("NodeJS.ProcessEnv"))
+    None => fail("expected constructor params")
+  }
+  assert_eq(module_.imports.length(), 1)
+  assert_eq(module_.imports[0].params[0].1, Named("NodeJS.ProcessEnv"))
+}
+
+///|
+test "parser: parse named imports with inline type modifier" {
+  let src =
+    #|import { ResultAsync, type Result } from "neverthrow";
+    #|export declare function parseUser(input: string): Result<string, Error>;
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.imports.length(), 1)
+  let import_decl = module_.imports[0]
+  assert_eq(import_decl.module_spec, "neverthrow")
+  assert_eq(import_decl.named_bindings.length(), 2)
+  assert_eq(import_decl.named_bindings[0], ("ResultAsync", "ResultAsync"))
+  assert_eq(import_decl.named_bindings[1], ("Result", "Result"))
+}
+
+///|
+test "parser: parse local interface declaration inside function block" {
+  let src =
+    #|function analyze(): number {
+    #|  interface PackageResult {
+    #|    file: string;
+    #|  }
+    #|  return 1;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+  let body = module_.funcs[0].body
+  assert_eq(body.stmts.length(), 2)
+}
+
+///|
+test "parser: parse class type predicate methods as boolean returns" {
+  let src =
+    #|declare class Ok<T, E> {
+    #|  isOk(): this is Ok<T, E>;
+    #|  isErr(): this is Err<T, E>;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let class_ = module_.classes[0]
+  assert_eq(class_.methods.length(), 2)
+  assert_eq(class_.methods[0].return_type, Boolean)
+  assert_eq(class_.methods[1].return_type, Boolean)
+}
+
+///|
 test "parser: parse module with imports" {
   let src =
     #|declare function log(msg: string): void;
@@ -730,6 +1038,1195 @@ test "parser: parse module with import/export" {
   let m = parser.parse_module()
   assert_eq(m.funcs.length(), 1)
   assert_eq(m.funcs[0].name, "foo")
+}
+
+///|
+test "parser: parse generic function declaration in ts module" {
+  let src =
+    #|function withResolver<T>(value?: T): Promise<T> {
+    #|  return promise;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+  assert_eq(module_.funcs[0].name, "withResolver")
+}
+
+///|
+test "parser: skip const enum declaration in ts module block" {
+  let src =
+    #|export const enum ReactiveFlags {
+    #|  None = 0,
+    #|  Watching = 2,
+    #|}
+    #|export function current(): number {
+    #|  return ReactiveFlags.None;
+    #|}
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].export_name, "current")
+}
+
+///|
+test "parser: parse function overload signature in ts module" {
+  let src =
+    #|export function signal<T>(): {
+    #|  (): T | undefined;
+    #|  (value: T | undefined): void;
+    #|};
+    #|export function signal<T>(initialValue?: T): {
+    #|  (): T | undefined;
+    #|  (value: T | undefined): void;
+    #|} {
+    #|  return signalOper;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 2)
+  assert_eq(module_.funcs[0].name, "signal")
+  assert_eq(module_.funcs[1].name, "signal")
+}
+
+///|
+test "parser: parse semicolon-less ambient declarations in dts module" {
+  let src =
+    #|declare const coreMap: Record<string, Uint8Array>
+    #|declare const corePkgs: string[]
+    #|declare function getLoadPkgsParams(
+    #|  target?: "wasm-gc" | "wasm" | "js",
+    #|): [importPath: string, mi: Uint8Array][]
+    #|
+    #|export { coreMap, getLoadPkgsParams }
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 2)
+  assert_eq(module_.imports.length(), 1)
+}
+
+///|
+test "parser: parse typeof import type annotation" {
+  let src =
+    #|function isObjectOrNullableUnion(
+    #|  ts: typeof import("typescript"),
+    #|): boolean {
+    #|  return true;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+}
+
+///|
+test "parser: parse typeof import qualified type annotation" {
+  let src =
+    #|let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Let(@ast.TsBinding::Ident("registerPreActionHooks"), _, _) => ()
+    _ => fail("expected let declaration with typeof import qualified type")
+  }
+}
+
+///|
+test "parser: parse generic function type parameter annotation" {
+  let src =
+    #|async function buildDispatchInboundContextCapture(
+    #|  importOriginal: <T extends Record<string, unknown>>() => Promise<T>,
+    #|) {
+    #|  return await importOriginal<typeof import("./dispatch.js")>();
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse arrow with function return type annotation" {
+  let src =
+    #|const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) => {
+    #|  return createVerboseGate(params, (level) => level !== "off");
+    #|};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("createShouldEmitToolResult"), _, _) => ()
+    _ => fail("expected const declaration with function return type annotation")
+  }
+}
+
+///|
+test "parser: parse module export const declaration without initializer" {
+  let src =
+    #|export const runNodeWatchedPaths: string[];
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 1)
+  assert_eq(module_.values[0].name, "runNodeWatchedPaths")
+}
+
+///|
+test "parser: parse module block export const declaration without initializer" {
+  let src =
+    #|export const runNodeWatchedPaths: string[];
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].export_name, "runNodeWatchedPaths")
+}
+
+///|
+test "parser: parse bare import type annotation" {
+  let src =
+    #|function resolveSections(
+    #|  sections: import("./resource-resolver.js").PieceSections,
+    #|): void {
+    #|  return;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+}
+
+///|
+test "parser: parse new expression with multiple generic type args" {
+  match parse_expr_from("new Map<string, string>()") {
+    New("Map", args) => assert_eq(args.length(), 0)
+    _ => fail("expected generic New(Map), got different expression")
+  }
+}
+
+///|
+test "parser: parse new expression with private constructor property and type args" {
+  match parse_expr_from("new this.#mapCtor<string, DataValue>()") {
+    NewExpr(_, args) => assert_eq(args.length(), 0)
+    _ => fail("expected NewExpr with private constructor property")
+  }
+}
+
+///|
+test "parser: parse generic call with array type arg" {
+  match parse_expr_from("signal<number[]>([])") {
+    Call("signal", args) => assert_eq(args.length(), 1)
+    _ => fail("expected generic call expression")
+  }
+}
+
+///|
+test "parser: parse as const assertion" {
+  let stmt = parse_stmt_from("const pair = [promise, resolve!] as const;")
+  match stmt {
+    Const(@ast.TsBinding::Ident("pair"), _, _) => ()
+    _ => fail("expected const declaration with as const assertion")
+  }
+}
+
+///|
+test "parser: parse as type assertion in expression" {
+  let stmt = parse_stmt_from(
+    "const link = (moonPkg.link as Record<string, unknown>) || {};",
+  )
+  match stmt {
+    Const(@ast.TsBinding::Ident("link"), _, _) => ()
+    _ => fail("expected const declaration with as-cast expression")
+  }
+}
+
+///|
+test "parser: parse as assertion before logical or" {
+  let src =
+    #|const displayName: string | undefined = (step as Record<string, unknown>).persona_name as string
+    #|  || undefined;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("displayName"), _, _) => ()
+    _ => fail("expected const declaration with as assertion before logical or")
+  }
+}
+
+///|
+test "parser: parse leading pipe union in as assertion" {
+  let src =
+    #|const snapshot = props.hello?.snapshot as
+    #|  | {
+    #|      uptimeMs?: number;
+    #|      policy?: { tickIntervalMs?: number };
+    #|      authMode?: "none" | "token" | "password" | "trusted-proxy";
+    #|    }
+    #|  | undefined;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("snapshot"), _, _) => ()
+    _ => fail("expected const declaration with leading-pipe union assertion")
+  }
+}
+
+///|
+test "parser: parse as cast inside callback call argument" {
+  let src =
+    #|if ([...normalizedTypes].every((v) => ["string", "number", "boolean"].includes(v as string))) {
+    #|  const ok = true;
+    #|}
+  let stmt = Parser::from_source(src).parse_stmt()
+  match stmt {
+    If(_, _, _) => ()
+    _ => fail("expected if statement with as-cast in callback argument")
+  }
+}
+
+///|
+test "parser: parse typed catch binding" {
+  let stmt = parse_stmt_from(
+    "try { risky(); } catch (error: unknown) { console.error(error); }",
+  )
+  match stmt {
+    Try(_, Some(@ast.TsBinding::Ident("error")), Some(catch_block), None) =>
+      assert_eq(catch_block.stmts.length(), 1)
+    _ => fail("expected try/catch with typed binding")
+  }
+}
+
+///|
+test "parser: parse non-null assertion postfix" {
+  let src =
+    #|const name = moduleName.split("/").pop()!;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("name"), _, _) => ()
+    _ => fail("expected const declaration with postfix non-null assertion")
+  }
+}
+
+///|
+test "parser: parse non-null assertion before property access" {
+  let stmt = parse_stmt_from("link = stack!.value;")
+  match stmt {
+    Expr(AssignExpr("link", PropAccess(Var("stack"), "value"))) => ()
+    _ => fail("expected property access after non-null assertion")
+  }
+}
+
+///|
+test "parser: parse non-null assertion after call before compound assign" {
+  let stmt = parse_stmt_from(
+    "getActiveSub()!.flags &= ~ReactiveFlags.RecursedCheck;",
+  )
+  match stmt {
+    Expr(
+      CompoundAssignExpr(
+        PropAccess(Call("getActiveSub", _), "flags"),
+        BitAndAssign,
+        _
+      )
+    ) => ()
+    _ => fail("expected compound assign on call()!.prop")
+  }
+}
+
+///|
+test "parser: parse arrow function with type predicate return annotation" {
+  let src =
+    #|const types = ast.sigs.filter((sig): sig is Foo => sig.ok);
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("types"), _, _) => ()
+    _ => fail("expected const declaration with typed arrow predicate")
+  }
+}
+
+///|
+test "parser: parse real-world chain with destructuring and typed filter predicate" {
+  let src =
+    #|function getTypes(ast: Mbti): TypeSig[] {
+    #|  return ast.sigs
+    #|    .map(([sig]) => sig)
+    #|    .filter((sig): sig is { $tag: "Type"; 0: TypeSig } => sig.$tag === "Type")
+    #|    .map((sig) => sig[0]);
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+}
+
+///|
+test "parser: parse real-world object literal with arrow properties" {
+  let src =
+    #|function createCompilerHost(filename: string): void {
+    #|  const compilerHost: ts.CompilerHost = {
+    #|    getSourceFile: (name) =>
+    #|      name === filename ? sourceFile : undefined,
+    #|    getDefaultLibFileName: () => "lib.d.ts",
+    #|    writeFile: () => {},
+    #|  };
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+}
+
+///|
+test "parser: parse object literal async method shorthand" {
+  let src =
+    #|const factory = {
+    #|  async create() {
+    #|    return moon;
+    #|  },
+    #|};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("factory"), _, _) => ()
+    _ => fail("expected object literal with async method shorthand")
+  }
+}
+
+///|
+test "parser: parse object literal async method with typed signature" {
+  let src =
+    #|const fs = {
+    #|  async readFile(uri: URI): Promise<Uint8Array> {
+    #|    return Deno.readFileSync(uri.path);
+    #|  },
+    #|};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("fs"), _, _) => ()
+    _ => fail("expected object literal with typed async method")
+  }
+}
+
+///|
+test "parser: parse satisfies expression" {
+  let src =
+    #|const params = {
+    #|  capabilities: {},
+    #|} satisfies lsp.InitializeParams;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("params"), _, _) => ()
+    _ => fail("expected const declaration with satisfies expression")
+  }
+}
+
+///|
+test "parser: parse object literal shorthand with keyword-like property name" {
+  let stmt = parse_stmt_from("const blob = new Blob([], { type });")
+  match stmt {
+    Const(@ast.TsBinding::Ident("blob"), _, _) => ()
+    _ => fail("expected object literal shorthand with keyword-like key")
+  }
+}
+
+///|
+test "parser: import named binding named type" {
+  let src =
+    #|import { type } from "./type.js";
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.imports.length(), 1)
+}
+
+///|
+test "parser: parse exported namespace declaration" {
+  let src =
+    #|export namespace JSX {
+    #|  export type A = string;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 0)
+}
+
+///|
+test "parser: parse export import alias declaration" {
+  let src =
+    #|export import flakySuite = testUtils.flakySuite;
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+}
+
+///|
+test "parser: skip plain namespace declaration in module block" {
+  let src =
+    #|namespace Samples {
+    #|  export class EventCounter {
+    #|    count = 0;
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 0)
+}
+
+///|
+test "parser: parse interface extends nested generic object type" {
+  let src =
+    #|export interface Context<T> extends FC<PropsWithChildren<{ value: T }>> {
+    #|  Provider: FC<PropsWithChildren<{ value: T }>>
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+}
+
+///|
+test "parser: parse object literal method with generic type params" {
+  let src =
+    #|const testContext = {
+    #|  add<T extends IDisposable>(o: T): T {
+    #|    return store.add(o);
+    #|  }
+    #|};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("testContext"), _, _) => ()
+    _ => fail("expected const declaration with generic object method")
+  }
+}
+
+///|
+test "parser: parse async generator computed object method" {
+  let src =
+    #|const asyncIterable = {
+    #|  async *[Symbol.asyncIterator]() {
+    #|    yield "a";
+    #|  }
+    #|};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("asyncIterable"), _, _) => ()
+    _ => fail("expected const declaration with async generator computed method")
+  }
+}
+
+///|
+test "parser: parse anonymous class expression with implements clause" {
+  let src =
+    #|const deserializer = new class implements IViewDeserializer<ISerializableView> {
+    #|  fromJSON(): ISerializableView {
+    #|    return view;
+    #|  }
+    #|};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("deserializer"), _, _) => ()
+    _ =>
+      fail("expected const declaration with anonymous class implements clause")
+  }
+}
+
+///|
+test "parser: parse object literal arrow value with type keyword param name" {
+  let src =
+    #|const result = transform(source, { data: string => string + string }, strings => strings.join());
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("result"), _, _) => ()
+    _ => fail("expected const declaration with type-keyword arrow parameter")
+  }
+}
+
+///|
+test "parser: parse angle bracket type assertion when jsx disabled" {
+  let src =
+    #|function check(str: unknown) {
+    #|  return strings.containsUppercaseCharacter(<string>str);
+    #|}
+  let module_ = Parser::from_source_with_jsx(src, false).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse decorated class method" {
+  let src =
+    #|class Foo {
+    #|  @memoize
+    #|  answer() {
+    #|    return 42;
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse decorated export class" {
+  let src =
+    #|@customElement("x-app")
+    #|export class App extends LitElement {}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+  assert_eq(module_.exports.length(), 1)
+}
+
+///|
+test "parser: parse class field definite assignment assertion" {
+  let src =
+    #|class QueueProtocol {
+    #|  other!: QueueProtocol;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse declared class field" {
+  let src =
+    #|class EventDeliveryQueuePrivate {
+    #|  declare _isEventDeliveryQueue: true;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse constructor parameter property named type" {
+  let src =
+    #|class ProtocolMessage {
+    #|  constructor(public readonly type: ProtocolMessageType) {}
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse parameter named of" {
+  let src =
+    #|class Color {
+    #|  static getLighterColor(of: Color, relative: Color): Color {
+    #|    return of;
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse class extends parenthesized expression base" {
+  let src =
+    #|class Root extends (SignalWatcher(LitElement) as typeof LitElement) {}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse jsx self closing element expression" {
+  let src =
+    #|function renderView() {
+    #|  return <Style />;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse jsx fragment with nested children" {
+  let src =
+    #|function App() {
+    #|  return (
+    #|    <>
+    #|      <div>{state}</div>
+    #|      <Style nonce="1234" />
+    #|    </>
+    #|  );
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse jsx text with apostrophe" {
+  let src =
+    #|function App() {
+    #|  return (
+    #|    <TreeItemLayout> Test doesn't have run info. Rename ↵ </TreeItemLayout>
+    #|  );
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse tsx callback prop with destructured second parameter" {
+  let src =
+    #|export const CurrentRunPicker = () => {
+    #|  return (
+    #|    <Dialog
+    #|      open={isRenameDialogOpen}
+    #|      onOpenChange={(_, { open }) => setIsRenameDialogOpen(open)}
+    #|    >
+    #|      <DialogSurface />
+    #|    </Dialog>
+    #|  );
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+  assert_eq(module_.exports.length(), 1)
+}
+
+///|
+test "parser: parse tsx conditional fragment branch with mapped children" {
+  let src =
+    #|function TestView() {
+    #|  return (
+    #|    <Tree>
+    #|      {
+    #|        items === undefined
+    #|          ? (
+    #|              <TreeItem itemType='leaf'>
+    #|                <TreeItemLayout>Missing</TreeItemLayout>
+    #|              </TreeItem>
+    #|            )
+    #|          : <>
+    #|              {items.map((run, idx) => {
+    #|                const key = `${idx}`;
+    #|                return (
+    #|                  <div key={key} ref={el => refs.current[idx] = el!}>
+    #|                    <TreeItem
+    #|                      itemType='branch'
+    #|                      open={open[idx]}
+    #|                      onOpenChange={() => updateNth(idx, !open[idx])}
+    #|                    >
+    #|                      <TreeItemLayout
+    #|                        iconBefore={run.score === undefined ? undefined : <Badge>{run.score}</Badge>}
+    #|                      >
+    #|                        Test Run # {idx + 1}
+    #|                      </TreeItemLayout>
+    #|                    </TreeItem>
+    #|                  </div>
+    #|                );
+    #|              })}
+    #|            </>
+    #|      }
+    #|    </Tree>
+    #|  );
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse real-world exported tsx observer with mapped option children" {
+  let src =
+    #|type Props = {
+    #|  simulationRunsProvider: SimulationRunsProvider;
+    #|  outputFolderName: string;
+    #|  onChange: (selected: string | undefined) => void;
+    #|  disabled?: boolean;
+    #|};
+    #|
+    #|export const CurrentRunPicker = mobxlite.observer(({ simulationRunsProvider, onChange, disabled, outputFolderName }: Props) => {
+    #|  const [isRenameDialogOpen, setIsRenameDialogOpen] = React.useState(false);
+    #|  const [newName, setNewName] = React.useState('');
+    #|  const [runToRename, setRunToRename] = React.useState<string>('');
+    #|
+    #|  const handleRenameClick = (runName: string) => {
+    #|    setRunToRename(runName);
+    #|    setNewName(runName);
+    #|    setIsRenameDialogOpen(true);
+    #|  };
+    #|
+    #|  return (
+    #|    <div className={styles.root}>
+    #|      <Dropdown
+    #|        selectedOptions={[outputFolderName]}
+    #|        onOptionSelect={(_e: SelectionEvents, { optionValue }: OptionOnSelectData) => onChange(optionValue)}
+    #|      >
+    #|        {simulationRunsProvider.runs.map((run) => (
+    #|          <Option key={run.name} value={run.name} text={run.friendlyName}>
+    #|            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+    #|              <span>{run.friendlyName}</span>
+    #|              <Button
+    #|                icon={<Edit16Regular />}
+    #|                onClick={(e) => {
+    #|                  e.stopPropagation();
+    #|                  handleRenameClick(run.name);
+    #|                }}
+    #|              >Rename ↵</Button>
+    #|            </div>
+    #|          </Option>
+    #|        ))}
+    #|      </Dropdown>
+    #|      <Dialog open={isRenameDialogOpen} onOpenChange={(_, { open }) => setIsRenameDialogOpen(open)}>
+    #|        <DialogSurface />
+    #|      </Dialog>
+    #|    </div>
+    #|  );
+    #|});
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+  assert_eq(module_.exports.length(), 1)
+}
+
+///|
+test "parser: parse real-world exported tsx tree view with ternary fragment branch" {
+  let src =
+    #|type Props = {
+    #|  test: ISimulationTest;
+    #|  runner: SimulationRunner;
+    #|  runnerOptions: RunnerOptions;
+    #|  nesExternalOptions: NesExternalOptions;
+    #|  testSource: TestSourceValue;
+    #|  displayOptions: DisplayOptions;
+    #|};
+    #|
+    #|export const TestView = mobxlite.observer(({ test, runner, runnerOptions, nesExternalOptions, testSource, displayOptions }: Props) => {
+    #|  const [isTestRunOpen, setIsTestRunOpen] = React.useState(new Array(test.runnerStatus?.runs.length).fill(test.runnerStatus?.runs.length === 1 ? true : false));
+    #|  const testItemRefs = React.useRef<HTMLDivElement[]>([]);
+    #|
+    #|  const updateNth = (n: number, value: boolean) => {
+    #|    const copy = Array.from(isTestRunOpen);
+    #|    copy[n] = value;
+    #|    setIsTestRunOpen(copy);
+    #|  };
+    #|
+    #|  return (
+    #|    <TreeItem itemType={'branch'} className='test-runs-container'>
+    #|      <TreeItemLayout
+    #|        iconBefore={<StatusIcon runner={runner} runnerOptions={runnerOptions} nesExternalOptions={nesExternalOptions} testSource={testSource} test={test} />}
+    #|        iconAfter={test.runnerStatus && <RunsSummaryBadge runs={test.runnerStatus.runs} />}
+    #|      >
+    #|        <Text>{test.suiteName ? test.name.replace(test.suiteName, '') : test.name}</Text>
+    #|      </TreeItemLayout>
+    #|      <Tree>
+    #|        {
+    #|          test.runnerStatus === undefined
+    #|            ? (
+    #|                <TreeItem itemType='leaf'>
+    #|                  <TreeItemLayout> Test doesn't have run info. </TreeItemLayout>
+    #|                </TreeItem>
+    #|              )
+    #|            : <>
+    #|                {test.runnerStatus.runs.map((run, idx) => {
+    #|                  const key = `${test.name}-${idx}`;
+    #|                  return (
+    #|                    <div key={key} ref={el => testItemRefs.current[idx] = el!}>
+    #|                      <TreeItem
+    #|                        itemType='branch'
+    #|                        open={isTestRunOpen[idx]}
+    #|                        onOpenChange={() => updateNth(idx, !isTestRunOpen[idx])}
+    #|                      >
+    #|                        <TreeItemLayout
+    #|                          iconBefore={run.explicitScore === undefined ? undefined : <Badge>{run.explicitScore}</Badge>}
+    #|                          iconAfter={<RunSummaryBadge run={run} baseline={test.baseline?.runs[idx]} />}
+    #|                        >
+    #|                          Test Run # {idx + 1}
+    #|                        </TreeItemLayout>
+    #|                      </TreeItem>
+    #|                    </div>
+    #|                  );
+    #|                })}
+    #|              </>
+    #|        }
+    #|      </Tree>
+    #|    </TreeItem>
+    #|  );
+    #|});
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+  assert_eq(module_.exports.length(), 1)
+}
+
+///|
+test "parser: parse tsx tag with nested self-closing reference and jsx arrow child" {
+  let src =
+    #|function renderMatch() {
+    #|  return <Tag name='match' attrs={{
+    #|    path: this.promptPathRepresentationService.getFilePath(uri),
+    #|    line: rangeInDocument.start.line + 1,
+    #|  }}>
+    #|    <references value={[new PromptReference(new Location(this.props.uri, rangeInDocument), undefined, { isFromTool: true })]} />
+    #|    {toPreviewLines.map((line, i) =>
+    #|      <TextChunk priority={FIND_FILES_START_PRIORITY - Math.abs(i - center)}>
+    #|        {line}
+    #|      </TextChunk>
+    #|    )}
+    #|  </Tag>;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse tsx conditional fragments with markdown-like text and br tags" {
+  let src =
+    #|function renderMemoryPrompt() {
+    #|  return <Tag name='memoryInstructions'>
+    #|    As you work, consult your memory files to build on previous experience. When you encounter a mistake that seems like it could be common, check your memory for relevant notes — and if nothing is written yet, record what you learned.<br />
+    #|    <br />
+    #|    <Tag name='memoryScopes'>
+    #|      Memory is organized into the scopes defined below:<br />
+    #|      {enableMemoryTool && <>- **User memory** (`/memories/`): Persistent notes that survive across all workspaces and conversations.<br /></>}
+    #|      {enableCopilotMemory && <>- **Repository memory** (`/memories/repo/`): Repository-scoped facts stored via Copilot.<br /></>}
+    #|    </Tag>
+    #|  </Tag>;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse tsx expression with comment apostrophe inside braces" {
+  let src =
+    #|function render() {
+    #|  return <>
+    #|    {items.flatMap(result => {
+    #|      // don't lose brace sync inside jsx source scanner
+    #|      return result.ranges.map(rangeInfo => <FindMatch uri={result.uri} />);
+    #|    })}
+    #|  </>;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse tsx conditional fragment with apostrophe text" {
+  let src =
+    #|function render() {
+    #|  return <Tag>
+    #|    {enabled && <>If you're here, use `/memories/repo/`.<br /></>}
+    #|  </Tag>;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: allow ASI before delete statement" {
+  let src =
+    #|function f() {
+    #|  expect(aborted).toBeTruthy()
+    #|  delete global.Bun
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: skip block-local type alias without semicolon" {
+  let src =
+    #|function f() {
+    #|  type Expected = MiddlewareHandler<any, string, {}, Response>
+    #|  type _verify = Expect<Equal<Expected, typeof middleware>>
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: skip callback-local type alias without semicolon" {
+  let src =
+    #|it('x', async () => {
+    #|  const middleware = createMiddleware(async (c, next) => {
+    #|    await next()
+    #|  })
+    #|  type Expected = MiddlewareHandler<any, string, {}, Response>
+    #|  type _verify = Expect<Equal<Expected, typeof middleware>>
+    #|})
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse nested template literal inside template expression" {
+  let src =
+    #|function shellQuote(value: string): string {
+    #|  return `'${value.replace(/'/g, `"'"`)}'`;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+}
+
+///|
+test "parser: skip plain enum declaration in statement position" {
+  let src =
+    #|enum FileType {
+    #|  Unknown = 0,
+    #|}
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Empty => ()
+    _ => fail("expected enum declaration to be skipped")
+  }
+}
+
+///|
+test "parser: skip plain enum declaration in ts module block" {
+  let src =
+    #|enum FileType {
+    #|  Unknown = 0,
+    #|  File = 1,
+    #|}
+    #|const value = 1;
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 0)
+}
+
+///|
+test "parser: parse class implements clause" {
+  let src =
+    #|class MFS implements RemoteFileSystem {
+    #|  constructor() {}
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse constructor parameter properties" {
+  let src =
+    #|class Runner {
+    #|  constructor(
+    #|    private readonly deps: RunnerDeps,
+    #|    protected name?: string,
+    #|  ) {}
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse interface field named number" {
+  let src =
+    #|export interface GitHubIssue {
+    #|  number: number;
+    #|  title: string;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+}
+
+///|
+test "parser: parse export async function in module block" {
+  let src =
+    #|export async function detect(): Promise<void> {
+    #|  return;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+  assert_eq(module_.exports.length(), 1)
+}
+
+///|
+test "parser: parse class optional field and generic method" {
+  let src =
+    #|class Store {
+    #|  private currentSessionId?: string;
+    #|  private withLock<T>(fn: () => T): T {
+    #|    return fn();
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
 }
 
 ///|
@@ -768,6 +2265,571 @@ test "parser: parse let without type annotation" {
     Let(@ast.TsBinding::Ident("x"), Any, IntLit(42)) => ()
     _ => fail("unexpected result: \{stmt}")
   }
+}
+
+///|
+test "parser: parse tagged template with nested html property binding" {
+  let src =
+    #|const view = html`${options.map((value) => {
+    #|  const checked = selectedSet.has(normalizeQueryText(value));
+    #|  return html`
+    #|    <label class="usage-filter-option">
+    #|      <input .checked=${checked} />
+    #|      <span>${value}</span>
+    #|    </label>
+    #|  `;
+    #|})}`;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("view"), _, _) => ()
+    _ => fail("expected const declaration with nested html property binding")
+  }
+}
+
+///|
+test "parser: parse tagged template with iife and nested html" {
+  let src =
+    #|const chart = html`${(() => {
+    #|  const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
+    #|  return segments.map(
+    #|    (seg) => html`<div style="height: ${(seg.value / total) * 100}%"></div>`,
+    #|  );
+    #|})()}`;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("chart"), _, _) => ()
+    _ => fail("expected const declaration with template-expression iife")
+  }
+}
+
+///|
+test "parser: parse ternary branch with parenthesized as cast" {
+  let src =
+    #|const obj =
+    #|  fallback && typeof fallback === "object" && !Array.isArray(fallback)
+    #|    ? (fallback as Record<string, unknown>)
+    #|    : {};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("obj"), _, _) => ()
+    _ => fail("expected const declaration with ternary as-cast branch")
+  }
+}
+
+///|
+test "parser: parse tagged template event callback with checked cast" {
+  let src =
+    #|const view = html`
+    #|  <input
+    #|    @change=${(e: Event) => onPatch(path, (e.target as HTMLInputElement).checked)}
+    #|  />
+    #|`;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("view"), _, _) => ()
+    _ => fail("expected const declaration with checked cast callback")
+  }
+}
+
+///|
+test "parser: parse tagged template event callback with union literal cast" {
+  let src =
+    #|const view = html`
+    #|  <select
+    #|    @change=${(e: Event) =>
+    #|      props.onTimeZoneChange((e.target as HTMLSelectElement).value as "local" | "utc")}
+    #|  ></select>
+    #|`;
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("view"), _, _) => ()
+    _ => fail("expected const declaration with union-literal cast callback")
+  }
+}
+
+///|
+test "parser: parse chained filter with type predicate and call body" {
+  let src =
+    #|const recentEntries = recentSessions
+    #|  .map((key) => sessionMap.get(key))
+    #|  .filter((entry): entry is UsageSessionEntry => Boolean(entry));
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("recentEntries"), _, _) => ()
+    _ => fail("expected const declaration with chained type-predicate filter")
+  }
+}
+
+///|
+test "parser: parse ternary parenthesized optional chain before later arrow" {
+  let src =
+    #|const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
+    #|const later = props.items.map((item) => item);
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("valA"), _, _) => ()
+    _ => fail("expected const declaration with ternary optional-chain branch")
+  }
+}
+
+///|
+test "parser: parse ternary parenthesized as cast before later arrow" {
+  let src =
+    #|const obj =
+    #|  cond
+    #|    ? (fallback as Record<string, unknown>)
+    #|    : {};
+    #|const later = entries.map((entry) => entry);
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("obj"), _, _) => ()
+    _ =>
+      fail(
+        "expected const declaration with ternary as-cast branch before later arrow",
+      )
+  }
+}
+
+///|
+test "parser: parse ternary parenthesized call before later arrow" {
+  let src =
+    #|const label =
+    #|  stats.durationCount > 0
+    #|    ? (formatDurationCompact(stats.avgDurationMs, { spaced: true }) ?? "—")
+    #|    : "—";
+    #|const later = values.map((value) => value);
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("label"), _, _) => ()
+    _ =>
+      fail(
+        "expected const declaration with ternary call branch before later arrow",
+      )
+  }
+}
+
+///|
+test "parser: parse import with json attributes" {
+  let src =
+    #|import rawConfig from "./tool-display.json" with { type: "json" };
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.imports.length(), 1)
+}
+
+///|
+test "parser: parse generic arrow function const initializer" {
+  let src =
+    #|const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
+    #|  sessions: TSession[],
+    #|  query: string,
+    #|): UsageQueryResult<TSession> => {
+    #|  return { sessions, warnings: [] };
+    #|};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("filterSessionsByQuery"), _, _) => ()
+    _ => fail("expected const declaration with generic arrow initializer")
+  }
+}
+
+///|
+test "parser: parse definite assignment assertion in let declaration" {
+  let src = "let onClosed!: () => void;"
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Let(@ast.TsBinding::Ident("onClosed"), _, _) => ()
+    _ => fail("expected let declaration with definite assignment assertion")
+  }
+}
+
+///|
+test "parser: parse method chain starting on next line" {
+  let src =
+    #|program
+    #|  .command("message")
+    #|  .command("send")
+    #|  .action(async () => {});
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Expr(_) => ()
+    _ => fail("expected expression statement with multiline method chain")
+  }
+}
+
+///|
+test "parser: parse contextual keyword variable reference from" {
+  let src =
+    #|const from = "user";
+    #|const payload = { from };
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("from"), _, _) => ()
+    _ => fail("expected const declaration using contextual keyword identifier")
+  }
+}
+
+///|
+test "parser: parse generic class declaration" {
+  let src =
+    #|class DirectoryCache<T> {
+    #|  private readonly cache = new Map<string, T>();
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse class extends generic base" {
+  let src =
+    #|class ExecApprovalActionRow extends Row<Button> {
+    #|  constructor() {}
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse class extends qualified base" {
+  let src =
+    #|class MockModelRegistry extends actual.ModelRegistry {
+    #|  constructor() {}
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse async generic arrow function initializer" {
+  let src =
+    #|const withTimeout = async <T>(
+    #|  work: Promise<T>,
+    #|  fallback: T,
+    #|): Promise<T> => {
+    #|  return fallback;
+    #|};
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("withTimeout"), _, _) => ()
+    _ => fail("expected const declaration with async generic arrow initializer")
+  }
+}
+
+///|
+test "parser: parse multiline type predicate with union after is" {
+  let src =
+    #|const cred = profiles.find(
+    #|  (
+    #|    profile,
+    #|  ): profile is
+    #|    | { type: "api_key"; provider: string; key: string }
+    #|    | { type: "token"; provider: string; token: string } =>
+    #|    profile?.type === "api_key" || profile?.type === "token",
+    #|);
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    Const(@ast.TsBinding::Ident("cred"), _, _) => ()
+    _ => fail("expected const declaration with multiline union type predicate")
+  }
+}
+
+///|
+test "parser: parse abstract class modifiers and abstract method signatures" {
+  let src =
+    #|abstract class MemoryManagerSyncOps {
+    #|  protected abstract readonly cfg: OpenClawConfig;
+    #|  protected abstract sync(params?: {
+    #|    reason?: string;
+    #|    force?: boolean;
+    #|  }): Promise<void>;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse parameter named override and optional override" {
+  let src =
+    #|function mergeRecord<T>(
+    #|  base?: Record<string, T>,
+    #|  override?: Record<string, T>,
+    #|): Record<string, T> | undefined {
+    #|  return override;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse for loop with parenthesized bitwise condition" {
+  let src =
+    #|for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--) {
+    #|  expMask >>= 1;
+    #|}
+  let stmt = parse_stmt_from(src)
+  match stmt {
+    For(Some(_), Some(_), Some(_), _) => ()
+    _ => fail("expected for statement with bounded condition parsing")
+  }
+}
+
+///|
+test "parser: parse nested shift expression after for loop" {
+  let src =
+    #|function linearToMulaw(sample: number): number {
+    #|  for (let i = 0; i < 1; i++) {
+    #|  }
+    #|  const mantissa = (sample >> (1 + 3));
+    #|  return mantissa;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse generator iife return call" {
+  let src =
+    #|function chunkAudio(audio: Buffer, chunkSize = 160): Generator<Buffer, void, unknown> {
+    #|  return (function* () {
+    #|    for (let i = 0; i < audio.length; i += chunkSize) {
+    #|      yield audio.subarray(i, Math.min(i + chunkSize, audio.length));
+    #|    }
+    #|  })();
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: while statement does not consume following complex if" {
+  let src =
+    #|while (index < input.length && (input[index] === " " || input[index] === "\t")) {
+    #|  index += 1;
+    #|}
+    #|if (input.slice(index, index + 9).toLowerCase() === "arguments") {
+    #|  index += 9;
+    #|}
+    #|const lastOpen = openMatches[openMatches.length - 1];
+    #|const lastClose = closeMatches[closeMatches.length - 1];
+    #|if (lastClose && lastClose.index > (lastOpen.index ?? -1)) {
+    #|  return closed;
+    #|}
+  let parser = Parser::from_source(src)
+  parser.in_function = true
+  parser.in_iteration = true
+  let stmt = parser.parse_stmt() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  match stmt {
+    While(_, _) => ()
+    _ => fail("expected while statement")
+  }
+  assert_eq(parser.peek().kind, If)
+}
+
+///|
+test "parser: block does not consume following complex if" {
+  let src =
+    #|{
+    #|  index += 1;
+    #|}
+    #|if (lastClose && lastClose.index > (lastOpen.index ?? -1)) {
+    #|  return closed;
+    #|}
+  let parser = Parser::from_source(src)
+  parser.in_function = true
+  let block = parser.parse_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(block.stmts.length(), 1)
+  assert_eq(parser.peek().kind, If)
+}
+
+///|
+test "parser: iteration block does not consume following complex if" {
+  let src =
+    #|{
+    #|  index += 1;
+    #|}
+    #|if (input.slice(index, index + 9).toLowerCase() === "arguments") {
+    #|  index += 9;
+    #|}
+    #|const lastOpen = openMatches[openMatches.length - 1];
+    #|const lastClose = closeMatches[closeMatches.length - 1];
+    #|if (lastClose && lastClose.index > (lastOpen.index ?? -1)) {
+    #|  return closed;
+    #|}
+  let parser = Parser::from_source(src)
+  parser.in_function = true
+  parser.in_iteration = true
+  let block = parser.parse_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(block.stmts.length(), 1)
+  assert_eq(parser.peek().kind, If)
+}
+
+///|
+test "parser: parse openclaw thinking helpers module block" {
+  let src =
+    #|export function formatReasoningMessage(text: string): string {
+    #|  const trimmed = text.trim();
+    #|  if (!trimmed) {
+    #|    return "";
+    #|  }
+    #|  const italicLines = trimmed
+    #|    .split("\n")
+    #|    .map((line) => (line ? `_${line}_` : line))
+    #|    .join("\n");
+    #|  return `Reasoning:\n${italicLines}`;
+    #|}
+    #|
+    #|type ThinkTaggedSplitBlock =
+    #|  | { type: "thinking"; thinking: string }
+    #|  | { type: "text"; text: string };
+    #|
+    #|export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
+    #|  const trimmedStart = text.trimStart();
+    #|  if (!trimmedStart.startsWith("<")) {
+    #|    return null;
+    #|  }
+    #|  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+    #|  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+    #|  if (!openRe.test(trimmedStart)) {
+    #|    return null;
+    #|  }
+    #|  if (!closeRe.test(text)) {
+    #|    return null;
+    #|  }
+    #|
+    #|  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+    #|  let inThinking = false;
+    #|  let cursor = 0;
+    #|  let thinkingStart = 0;
+    #|  const blocks: ThinkTaggedSplitBlock[] = [];
+    #|
+    #|  const pushText = (value: string) => {
+    #|    if (!value) {
+    #|      return;
+    #|    }
+    #|    blocks.push({ type: "text", text: value });
+    #|  };
+    #|  const pushThinking = (value: string) => {
+    #|    const cleaned = value.trim();
+    #|    if (!cleaned) {
+    #|      return;
+    #|    }
+    #|    blocks.push({ type: "thinking", thinking: cleaned });
+    #|  };
+    #|
+    #|  for (const match of text.matchAll(scanRe)) {
+    #|    const index = match.index ?? 0;
+    #|    const isClose = Boolean(match[1]?.includes("/"));
+    #|
+    #|    if (!inThinking && !isClose) {
+    #|      pushText(text.slice(cursor, index));
+    #|      thinkingStart = index + match[0].length;
+    #|      inThinking = true;
+    #|      continue;
+    #|    }
+    #|
+    #|    if (inThinking && isClose) {
+    #|      pushThinking(text.slice(thinkingStart, index));
+    #|      cursor = index + match[0].length;
+    #|      inThinking = false;
+    #|    }
+    #|  }
+    #|
+    #|  if (inThinking) {
+    #|    return null;
+    #|  }
+    #|  pushText(text.slice(cursor));
+    #|
+    #|  const hasThinking = blocks.some((b) => b.type === "thinking");
+    #|  if (!hasThinking) {
+    #|    return null;
+    #|  }
+    #|  return blocks;
+    #|}
+    #|
+    #|export function extractThinkingFromTaggedStream(text: string): string {
+    #|  if (!text) {
+    #|    return "";
+    #|  }
+    #|  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+    #|  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+    #|  const openMatches = [...text.matchAll(openRe)];
+    #|  if (openMatches.length === 0) {
+    #|    return "";
+    #|  }
+    #|  const closeMatches = [...text.matchAll(closeRe)];
+    #|  const lastOpen = openMatches[openMatches.length - 1];
+    #|  const lastClose = closeMatches[closeMatches.length - 1];
+    #|  if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
+    #|    return "";
+    #|  }
+    #|  const start = (lastOpen.index ?? 0) + lastOpen[0].length;
+    #|  return text.slice(start).trim();
+    #|}
+    #|
+    #|export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
+    #|  return toolName ? "" : undefined;
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.block.stmts.length(), 4)
 }
 
 ///|
@@ -1083,4 +3145,494 @@ test "parser: ast patterns binding" {
     @ast.TsBinding::Target(PropAccess(Var("obj"), "x")) => ()
     _ => fail("expected target binding")
   }
+}
+
+///|
+test "parser: parse nested generic angle bracket type assertion when jsx disabled" {
+  let src = "const value = <CancelablePromise<T>>new class { cancel() {} };"
+  let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+    e => fail("expected nested generic type assertion to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("value"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse tuple angle bracket type assertion inside parens when jsx disabled" {
+  let src = "const arr = (<[K, V][]>values).slice(0);"
+  let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+    e => fail("expected tuple type assertion to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("arr"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse asserted equality expression" {
+  match parse_expr_from("this._state as AutorunState === AutorunState.stale") {
+    BinOp(
+      BinEq,
+      PropAccess(Var("this"), "_state"),
+      PropAccess(Var("AutorunState"), "stale")
+    ) => ()
+    expr => fail("expected asserted equality, got \{expr}")
+  }
+}
+
+///|
+test "parser: parse declare class method with destructured parameter" {
+  let src = "declare class Renderer { code({ text, lang, escaped }: Tokens.Code): string; }"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e =>
+      fail("expected declare class with destructured parameter to parse: \{e}")
+  }
+  assert_eq(module_.classes.length(), 1)
+  let class_ = module_.classes[0]
+  assert_eq(class_.methods.length(), 1)
+  let method_ = class_.methods[0]
+  assert_eq(method_.name, "code")
+  assert_eq(method_.params.length(), 1)
+}
+
+///|
+test "parser: parse constructor parameter decorator" {
+  let src = "class App { constructor(@IInstantiationService private readonly service: IInstantiationService) {} }"
+  let stmt = Parser::from_source(src).parse_stmt() catch {
+    e => fail("expected constructor parameter decorator to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("App"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse anonymous class extending generic call expression" {
+  let src = "const vm = new class extends mock<IViewModel>() { override onDidChange() {} };"
+  let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+    e => fail("expected class extends generic call expression to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("vm"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse class generic method named get" {
+  let src = "class Options { public get<T extends EditorOption>(id: T): T { return id; } }"
+  let stmt = Parser::from_source(src).parse_stmt() catch {
+    e => fail("expected generic class method named get to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("Options"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse property access with true identifier" {
+  let expr = Parser::from_source("ContextKeyExpr.true()").parse_expr() catch {
+    e => fail("expected property access with true identifier to parse: \{e}")
+  }
+  match expr {
+    MethodCall(Var("ContextKeyExpr"), "true", args) =>
+      assert_eq(args.length(), 0)
+    expr => fail("expected method call on .true, got \{expr}")
+  }
+}
+
+///|
+test "parser: parse function declaration named boolean" {
+  let func = Parser::from_source(
+    "function boolean(value: unknown, defaultValue: boolean): boolean { return Boolean(value); }",
+  ).parse_function() catch {
+    e => fail("expected function named boolean to parse: \{e}")
+  }
+  assert_eq(func.name, "boolean")
+  assert_eq(func.params.length(), 2)
+}
+
+///|
+test "parser: parse class static method named string" {
+  let src = "class EditorStringOption { public static string(value: unknown, defaultValue: string): string { return value as string; } }"
+  let stmt = Parser::from_source(src).parse_stmt() catch {
+    e => fail("expected class static method named string to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("EditorStringOption"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse class getter without parens" {
+  let src = "class TestProvider { override get capabilities(): FileSystemProviderCapabilities { return caps; } }"
+  let stmt = Parser::from_source(src).parse_stmt() catch {
+    e => fail("expected class getter without parens to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("TestProvider"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse parameter type with union member intersection" {
+  let func = Parser::from_source(
+    "function toFileStat(stat: IStat | { type: FileType } & Partial<IStat>): void {}",
+  ).parse_function() catch {
+    e =>
+      fail("expected union member intersection parameter type to parse: \{e}")
+  }
+  assert_eq(func.name, "toFileStat")
+  assert_eq(func.params.length(), 1)
+}
+
+///|
+test "parser: parse class field named readonly" {
+  let src = "class TestProvider { private readonly: boolean = false; }"
+  let stmt = Parser::from_source(src).parse_stmt() catch {
+    e => fail("expected class field named readonly to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("TestProvider"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse class static method named false" {
+  let src = "class ContextKeyExpr { public static false(): ContextKeyExpression { return value; } }"
+  let stmt = Parser::from_source(src).parse_stmt() catch {
+    e => fail("expected class static method named false to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("ContextKeyExpr"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse instantiation expression as call argument" {
+  let src = "const widget = createInstance(PostEditWidget<T>, editor, range);"
+  let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+    e => fail("expected instantiation expression argument to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("widget"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse nested instantiation expression with multiple type args" {
+  let src = "const tree = createInstance(WorkbenchObjectTree<IQuickPickElement, void>, container);"
+  let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+    e =>
+      fail(
+        "expected nested instantiation expression with multiple type args to parse: \{e}",
+      )
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("tree"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse asserted logical or chain" {
+  match
+    parse_expr_from(
+      "node.name?.value as string || node.value?.value as string || ''",
+    ) {
+    BinOp(Or, _, _) => ()
+    expr => fail("expected logical-or chain after assertions, got \{expr}")
+  }
+}
+
+///|
+test "parser: parse object literal generic set method" {
+  let stmt = Parser::from_source_with_jsx(
+    "const rpc = { set<T, R extends T>(identifier: ProxyIdentifier<T>, value: R): R { return value; } };",
+    false,
+  ).parse_stmt() catch {
+    e => fail("expected object literal generic set method to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("rpc"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse object literal async delete method" {
+  let stmt = Parser::from_source_with_jsx(
+    "const fs = { async delete(uri: Uri): Promise<void> { return value; } };", false,
+  ).parse_stmt() catch {
+    e => fail("expected object literal async delete method to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("fs"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse class static method named of" {
+  let stmt = Parser::from_source(
+    "class Range { static of(obj: Range): Range { return obj; } }",
+  ).parse_stmt() catch {
+    e => fail("expected class static method named of to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("Range"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse object literal property named null" {
+  let stmt = Parser::from_source_with_jsx(
+    "const variables = { null: null, empty: '' };", false,
+  ).parse_stmt() catch {
+    e => fail("expected object literal property named null to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("variables"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse object literal generic getProxy method" {
+  let stmt = Parser::from_source_with_jsx(
+    "const rpc = { getProxy<T>(): T { return thing; } };", false,
+  ).parse_stmt() catch {
+    e => fail("expected object literal generic getProxy method to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("rpc"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse class readonly set function type field" {
+  let stmt = Parser::from_source(
+    "class Rpc { readonly set: <T, R extends T>(identifier: ProxyIdentifier<T>, instance: R) => R; }",
+  ).parse_stmt() catch {
+    e => fail("expected readonly set function type field to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("Rpc"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse object literal async arrow with keyword param" {
+  let stmt = Parser::from_source_with_jsx(
+    "const service = { getDiscoveryInfo: async type => emptyDiscoveryInfo(type) };",
+    false,
+  ).parse_stmt() catch {
+    e => fail("expected async arrow with keyword param to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("service"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse type predicate with keyword identifier" {
+  let func = Parser::from_source(
+    "function isValidPromptType(type: string): type is PromptsType { return true; }",
+  ).parse_function() catch {
+    e => fail("expected type predicate with keyword identifier to parse: \{e}")
+  }
+  assert_eq(func.name, "isValidPromptType")
+}
+
+///|
+test "parser: parse optional chaining generic call" {
+  let expr = Parser::from_source_with_jsx(
+    "(e.target as HTMLElement)?.closest?.<HTMLElement>(selector)", false,
+  ).parse_expr() catch {
+    e => fail("expected optional chaining generic call to parse: \{e}")
+  }
+  match expr {
+    CallExpr(_, _) | MethodCall(_, _, _) => ()
+    expr => fail("expected optional chaining generic call, got \{expr}")
+  }
+}
+
+///|
+test "parser: parse interface field named debugger" {
+  let module_ = Parser::from_source(
+    "export interface IGuessedDebugger { debugger: IDebugger; }",
+  ).parse_module() catch {
+    e => fail("expected interface field named debugger to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 1)
+}
+
+///|
+test "parser: parse vscode single proxy rpc object literal" {
+  let stmt = Parser::from_source_with_jsx(
+    "const rpc = { _serviceBrand: undefined, remoteAuthority: null!, getProxy<T>(): T { return thing; }, set<T, R extends T>(identifier: ProxyIdentifier<T>, value: R): R { return value; }, dispose: undefined! };",
+    false,
+  ).parse_stmt() catch {
+    e => fail("expected vscode rpc object literal to parse: \{e}")
+  }
+  match stmt {
+    Const(@ast.TsBinding::Ident("rpc"), _, _) => ()
+    _ => fail("expected const statement")
+  }
+}
+
+///|
+test "parser: parse method call with object literal argument" {
+  let parser = Parser::from_source_with_jsx(
+    "module = module.with({ path: ensureSuffix(module.path, '.js') });", false,
+  )
+  let stmt = parser.parse_stmt() catch {
+    e =>
+      fail("expected method call with object literal argument to parse: \{e}")
+  }
+  if parser.peek().kind != Eof {
+    fail("expected EOF, got stmt=\{stmt} next=\{parser.peek().kind}")
+  }
+}
+
+///|
+test "parser: parse interface optional readonly field name" {
+  let module_ = Parser::from_source(
+    "export interface IDetachedXTermOptions { readonly?: boolean; }",
+  ).parse_module() catch {
+    e => fail("expected readonly field name in interface to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 1)
+}
+
+///|
+test "parser: parse const declaration with function type annotation" {
+  let module_ = Parser::from_source(
+    "export const scaleArrowPoint: (point: RuntimeArrowPoint, factor: number) => RuntimeArrowPoint = (point, factor) => point;",
+  ).parse_module_block() catch {
+    e => fail("expected const declaration with function type annotation: \{e}")
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.block.stmts.length(), 1)
+}
+
+///|
+test "parser: parse angle bracket assertion before empty array literal" {
+  let expr = Parser::from_source_with_jsx(
+    "<Array<MenuItemAction | SubmenuItemAction | string>>[]", false,
+  ).parse_expr() catch {
+    e =>
+      fail(
+        "expected angle bracket assertion before array literal to parse: \{e}",
+      )
+  }
+  match expr {
+    ArrayLit(_) => ()
+    _ => ()
+  }
+}
+
+///|
+test "parser: parse vscode async generic class method" {
+  let src =
+    #|class ExtHostExtensionService {
+    #|  protected async _loadCommonJSModule<T extends object | undefined>(extension: IExtensionDescription | null, module: URI, activationTimesBuilder: ExtensionActivationTimesBuilder): Promise<T> {
+    #|    module = module.with({ path: ensureSuffix(module.path, '.js') });
+    #|    const extensionId = extension?.identifier.value;
+    #|    const browserUri = URI.revive(await this._mainThreadExtensionsProxy.$asBrowserUri(module));
+    #|    const response = await fetch(browserUri.toString(true));
+    #|  }
+    #|}
+  let stmt = Parser::from_source_with_jsx(src, false).parse_stmt() catch {
+    e => fail("expected vscode async generic class method to parse: \{e}")
+  }
+  match stmt {
+    Let(@ast.TsBinding::Ident("ExtHostExtensionService"), _, _) => ()
+    _ => fail("expected class declaration lowering")
+  }
+}
+
+///|
+test "parser: parse module tolerates top-level implementation classes" {
+  let src =
+    #|interface ResourceMapKeyFn {
+    #|  (resource: URI): string;
+    #|}
+    #|
+    #|class ResourceMapEntry<T> {
+    #|  constructor(readonly uri: URI, readonly value: T) { }
+    #|}
+    #|
+    #|abstract class Cache<K, V> {
+    #|  abstract trim(newSize: number): void;
+    #|}
+    #|
+    #|export interface PublicStyle {
+    #|  id: string;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected module with top-level classes to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 2)
+}
+
+///|
+test "parser: parse runtime default exported classes into module classes" {
+  let src =
+    #|export default class Counter {
+    #|  count: number
+    #|
+    #|  constructor(initial: number) {
+    #|    this.count = initial
+    #|  }
+    #|
+    #|  inc(delta: number): number {
+    #|    return this.count + delta
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e =>
+      fail("expected runtime default class to parse into module classes: \{e}")
+  }
+  assert_eq(module_.classes.length(), 1)
+  assert_eq(module_.classes[0].name, "Counter")
+  assert_eq(module_.classes[0].methods.length(), 1)
+}
+
+///|
+test "parser: parse top-level runtime classes for default reexports" {
+  let src =
+    #|class RuntimeGreeter {
+    #|  constructor(label: string) {
+    #|    this.label = label
+    #|  }
+    #|
+    #|  greet(name: string): string {
+    #|    return `${this.label}, ${name}`
+    #|  }
+    #|}
+    #|
+    #|export default RuntimeGreeter
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e =>
+      fail(
+        "expected top-level runtime class to be kept for default reexport: \{e}",
+      )
+  }
+  assert_eq(module_.classes.length(), 1)
+  assert_eq(module_.classes[0].name, "RuntimeGreeter")
 }

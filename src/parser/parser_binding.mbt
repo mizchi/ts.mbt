@@ -79,9 +79,21 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
       let _ = self.advance()
       "from"
     }
+    Delete => {
+      let _ = self.advance()
+      "delete"
+    }
     As => {
       let _ = self.advance()
       "as"
+    }
+    Of => {
+      let _ = self.advance()
+      "of"
+    }
+    In => {
+      let _ = self.advance()
+      "in"
     }
     k => raise ParseError("Expected identifier, got \{k}")
   }

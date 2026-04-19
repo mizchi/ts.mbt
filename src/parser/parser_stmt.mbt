@@ -11,10 +11,31 @@ priv enum VarKind {
 }
 
 ///|
+fn Parser::is_namespace_decl_start(self : Parser) -> Bool {
+  match self.peek().kind {
+    Ident(name) =>
+      match name {
+        "global" => self.peek_at(1).kind == LBrace
+        "namespace" | "module" =>
+          match self.peek_at(1).kind {
+            Ident(_) | Str(_) | LBrace => true
+            _ => false
+          }
+        _ => false
+      }
+    _ => false
+  }
+}
+
+///|
 // / statement
 pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
   let tok = self.peek()
   match tok.kind {
+    At => {
+      self.skip_decorator()
+      self.parse_stmt()
+    }
     Var => self.parse_var()
     Let =>
       if self.is_let_identifier_expr_start() {
@@ -22,10 +43,37 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       } else {
         self.parse_let()
       }
-    Const => self.parse_const()
+    Const =>
+      match self.peek_at(1).kind {
+        Ident(name) if name == "enum" => {
+          self.skip_declaration_block()
+          Empty
+        }
+        _ => self.parse_const()
+      }
     Return => self.parse_return()
     Throw => self.parse_throw()
     Class => self.parse_class_decl()
+    Ident("abstract") if self.peek_at(1).kind == Class => {
+      let _ = self.advance()
+      self.parse_class_decl_with_abstract(true)
+    }
+    Interface => {
+      let _ = self.parse_interface()
+      Empty
+    }
+    Type => {
+      self.skip_type_alias()
+      Empty
+    }
+    _ if self.is_namespace_decl_start() => {
+      self.skip_declaration_block()
+      Empty
+    }
+    Ident(name) if name == "enum" => {
+      self.skip_declaration_block()
+      Empty
+    }
     If => self.parse_if()
     Switch => self.parse_switch()
     With => self.parse_with()
@@ -223,6 +271,10 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
   if self.match_(Catch) {
     if self.match_(LParen) {
       let binding = self.parse_binding_pattern()
+      if self.check(Colon) {
+        let _ = self.advance()
+        let _ = self.parse_type()
+      }
       let _ = self.expect(RParen)
       catch_binding = Some(binding)
     }
@@ -243,9 +295,7 @@ fn Parser::parse_try(self : Parser) -> @ast.TsStmt raise ParseError {
 // / if statement
 fn Parser::parse_if(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(If)
-  let _ = self.expect(LParen)
-  let cond = self.parse_expr()
-  let _ = self.expect(RParen)
+  let cond = self.parse_parenthesized_expr()
   let then_block = self.parse_block_or_stmt_no_lexical()
   let else_block : @ast.TsBlock? = if self.match_(Else) {
     if self.check(If) {
@@ -264,9 +314,7 @@ fn Parser::parse_if(self : Parser) -> @ast.TsStmt raise ParseError {
 // / while statement
 fn Parser::parse_while(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(While)
-  let _ = self.expect(LParen)
-  let cond = self.parse_expr()
-  let _ = self.expect(RParen)
+  let cond = self.parse_parenthesized_expr()
   // Set iteration context for body
   let prev_iteration = self.in_iteration
   self.in_iteration = true
@@ -285,9 +333,7 @@ fn Parser::parse_do_while(self : Parser) -> @ast.TsStmt raise ParseError {
   let body = self.parse_block_or_stmt_no_lexical()
   self.in_iteration = prev_iteration
   let _ = self.expect(While)
-  let _ = self.expect(LParen)
-  let cond = self.parse_expr()
-  let _ = self.expect(RParen)
+  let cond = self.parse_parenthesized_expr()
   self.consume_semicolon()
   DoWhile(cond, body)
 }
@@ -295,9 +341,7 @@ fn Parser::parse_do_while(self : Parser) -> @ast.TsStmt raise ParseError {
 ///|
 fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(Switch)
-  let _ = self.expect(LParen)
-  let expr = self.parse_expr()
-  let _ = self.expect(RParen)
+  let expr = self.parse_parenthesized_expr()
   let _ = self.expect(LBrace)
   // Set switch context for case bodies
   let prev_switch = self.in_switch
@@ -326,9 +370,7 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
 ///|
 fn Parser::parse_with(self : Parser) -> @ast.TsStmt raise ParseError {
   let _ = self.expect(With)
-  let _ = self.expect(LParen)
-  let obj_expr = self.parse_expr()
-  let _ = self.expect(RParen)
+  let obj_expr = self.parse_parenthesized_expr()
   let body = self.parse_block_or_stmt_no_lexical()
   With(obj_expr, body)
 }
@@ -468,7 +510,7 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         return ForOf(@ast.TsForOfKind::Assign, binding, Number, iterable, body)
       }
     }
-    let expr = self.parse_expr()
+    let expr = self.parse_expr_until_top_level(Semicolon)
     let stmt : @ast.TsStmt = if self.match_(Eq) {
       let value = self.parse_expr()
       match expr {
@@ -587,7 +629,7 @@ fn Parser::parse_for_rest(
   let cond : @ast.TsExpr? = if self.check(Semicolon) {
     None
   } else {
-    Some(self.parse_expr())
+    Some(self.parse_expr_until_top_level(Semicolon))
   }
   let _ = self.expect(Semicolon)
 
@@ -595,7 +637,7 @@ fn Parser::parse_for_rest(
   let update : @ast.TsStmt? = if self.check(RParen) {
     None
   } else {
-    let expr = self.parse_expr()
+    let expr = self.parse_expr_until_top_level(RParen)
     if self.match_(Eq) {
       let value = self.parse_expr()
       match expr {
@@ -905,6 +947,9 @@ fn Parser::is_disallowed_lexical_stmt_start(
 
 ///|
 fn Parser::parse_var_decl_type(self : Parser) -> @ast.TsType raise ParseError {
+  if self.match_(Bang) {
+    // Definite assignment assertion: let value!: Type;
+  }
   if self.check(Colon) {
     let _ = self.advance()
     self.parse_type()

@@ -75,3 +75,8 @@ pub impl Show for ConstValue with output(self, logger) {
 pub impl Show for InlineRecommendation with output(self, logger) {
   write_debug_show(logger, self)
 }
+
+///|
+pub impl Show for ResolvedExportKind with output(self, logger) {
+  write_debug_show(logger, self)
+}

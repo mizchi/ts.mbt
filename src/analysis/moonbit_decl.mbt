@@ -1,0 +1,864 @@
+///|
+priv struct DeclModuleInfo {
+  record : ResolvedModuleRecord
+  module_ : @ast.TsModule
+}
+
+///|
+fn is_declaration_path(path : String) -> Bool {
+  path.has_suffix(".d.ts") ||
+  path.has_suffix(".d.mts") ||
+  path.has_suffix(".d.cts")
+}
+
+///|
+priv struct ExportedInterfaceDecl {
+  source_path : String
+  local_name : String
+  export_name : String
+  iface : @ast.TsInterface
+}
+
+///|
+priv struct ExportedImportDecl {
+  source_path : String
+  export_name : String
+  import_ : @ast.TsImport
+}
+
+///|
+priv struct ExportedFuncDecl {
+  source_path : String
+  export_name : String
+  func : @ast.TsFunc
+}
+
+///|
+priv struct ExportedValueDecl {
+  source_path : String
+  export_name : String
+  value : @ast.TsValueDecl
+}
+
+///|
+priv struct ExportedClassDecl {
+  source_path : String
+  local_name : String
+  export_name : String
+  class_ : @ast.TsClassDecl
+}
+
+///|
+priv enum ResolvedDecl {
+  Interface(ExportedInterfaceDecl)
+  Import(ExportedImportDecl)
+  Function(ExportedFuncDecl)
+  Value(ExportedValueDecl)
+  Class(ExportedClassDecl)
+  Unsupported(String, String)
+  Missing
+}
+
+///|
+fn decl_key(source_path : String, local_name : String) -> String {
+  source_path + "\n" + local_name
+}
+
+///|
+async fn load_decl_module_info(
+  record : ResolvedModuleRecord,
+) -> DeclModuleInfo raise ModuleGraphError {
+  let content = @fs.read_file(record.path).text() catch {
+    e => raise ReadError("Failed to read module '\{record.path}': \{e}")
+  }
+  let parser = @parser.Parser::from_source(content)
+  let module_ = parser.parse_module() catch {
+    @parser.ParseError(msg) =>
+      if is_declaration_path(record.path) {
+        raise ParseError(
+          "Failed to parse declarations in '\{record.path}': \{msg}",
+        )
+      } else {
+        { funcs: [], interfaces: [], imports: [], values: [], classes: [] }
+      }
+  }
+  { record, module_ }
+}
+
+///|
+async fn build_decl_module_map(
+  graph : ModuleGraph,
+) -> Map[String, DeclModuleInfo] raise ModuleGraphError {
+  let modules : Map[String, DeclModuleInfo] = {}
+  for record in graph.modules {
+    modules[record.path] = load_decl_module_info(record)
+  }
+  modules
+}
+
+///|
+fn find_interface_decl(
+  module_ : @ast.TsModule,
+  name : String,
+) -> @ast.TsInterface? {
+  for iface in module_.interfaces {
+    if iface.name == name {
+      return Some(iface)
+    }
+  }
+  None
+}
+
+///|
+fn find_import_decl(module_ : @ast.TsModule, name : String) -> @ast.TsImport? {
+  for import_ in module_.imports {
+    if import_.name == name {
+      return Some(import_)
+    }
+  }
+  None
+}
+
+///|
+fn find_func_decl(module_ : @ast.TsModule, name : String) -> @ast.TsFunc? {
+  for func in module_.funcs {
+    if func.name == name {
+      return Some(func)
+    }
+  }
+  None
+}
+
+///|
+fn merge_func_param_types(
+  params : Array[@ast.TsParam],
+  declared_type : @ast.TsType,
+) -> Array[@ast.TsParam] {
+  let declared_params = match declared_type {
+    @ast.TsType::Func(param_types, _) => Some(param_types)
+    _ => None
+  }
+  let merged : Array[@ast.TsParam] = []
+  for index, param in params {
+    let next_type = match declared_params {
+      Some(param_types) if index < param_types.length() &&
+        param.type_ == @ast.TsType::Any => param_types[index]
+      _ => param.type_
+    }
+    merged.push({
+      name: param.name,
+      binding: param.binding,
+      is_rest: param.is_rest,
+      type_: next_type,
+      default: param.default,
+    })
+  }
+  merged
+}
+
+///|
+fn infer_func_return_type(
+  func : @ast.TsFunc,
+  declared_type : @ast.TsType,
+) -> @ast.TsType {
+  if func.return_type != @ast.TsType::Any {
+    return func.return_type
+  }
+  match declared_type {
+    @ast.TsType::Func(_, return_type) => return_type
+    _ => @ast.TsType::Any
+  }
+}
+
+///|
+fn synthesize_func_from_expr(
+  local_name : String,
+  declared_type : @ast.TsType,
+  expr : @ast.TsExpr,
+) -> @ast.TsFunc? {
+  match expr {
+    @ast.TsExpr::FuncExpr(func) =>
+      Some({
+        name: local_name,
+        params: merge_func_param_types(func.params, declared_type),
+        return_type: infer_func_return_type(func, declared_type),
+        body: func.body,
+        is_generator: func.is_generator,
+        is_async: func.is_async,
+      })
+    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+      let normalized_params = merge_func_param_types(params, declared_type)
+      let normalized_body = match body {
+        @ast.TsArrowBody::ArrowExpr(expr) =>
+          @ast.TsBlock::{ stmts: [@ast.TsStmt::Return(Some(expr))] }
+        @ast.TsArrowBody::ArrowBlock(block) => block
+      }
+      let return_type = match declared_type {
+        @ast.TsType::Func(_, next_return_type) => next_return_type
+        _ => @ast.TsType::Any
+      }
+      Some({
+        name: local_name,
+        params: normalized_params,
+        return_type,
+        body: normalized_body,
+        is_generator: false,
+        is_async,
+      })
+    }
+    _ => None
+  }
+}
+
+///|
+fn find_func_decl_from_stmts(
+  stmts : Array[@ast.TsStmt],
+  name : String,
+) -> @ast.TsFunc? {
+  for stmt in stmts {
+    match stmt {
+      @ast.TsStmt::Let(@ast.TsBinding::Ident(local_name), declared_type, expr)
+      | @ast.TsStmt::Const(
+        @ast.TsBinding::Ident(local_name),
+        declared_type,
+        expr
+      )
+      | @ast.TsStmt::Var(@ast.TsBinding::Ident(local_name), declared_type, expr) =>
+        if local_name == name {
+          match synthesize_func_from_expr(local_name, declared_type, expr) {
+            Some(func) => return Some(func)
+            None => ()
+          }
+        }
+      @ast.TsStmt::Block(block) =>
+        match find_func_decl_from_stmts(block.stmts, name) {
+          Some(func) => return Some(func)
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+fn find_value_decl(module_ : @ast.TsModule, name : String) -> @ast.TsValueDecl? {
+  for value in module_.values {
+    if value.name == name {
+      return Some(value)
+    }
+  }
+  None
+}
+
+///|
+fn find_class_decl(module_ : @ast.TsModule, name : String) -> @ast.TsClassDecl? {
+  for class_ in module_.classes {
+    if class_.name == name {
+      return Some(class_)
+    }
+  }
+  None
+}
+
+///|
+fn find_resolved_export_by_name(
+  exports : Array[ResolvedExport],
+  export_name : String,
+) -> ResolvedExport? {
+  for export_ in exports {
+    if export_.export_name == export_name {
+      return Some(export_)
+    }
+  }
+  None
+}
+
+///|
+fn get_export_surface_for_path(
+  path : String,
+  graph : ModuleGraph,
+  surface_cache : Map[String, Array[ResolvedExport]],
+) -> Array[ResolvedExport] {
+  match surface_cache.get(path) {
+    Some(exports) => exports
+    None => {
+      let exports = resolve_export_surface({
+        entry_path: path,
+        modules: graph.modules,
+      })
+      surface_cache[path] = exports
+      exports
+    }
+  }
+}
+
+///|
+fn resolve_decl_from_export_name(
+  export_name : String,
+  path : String,
+  target_export_name : String,
+  graph : ModuleGraph,
+  modules : Map[String, DeclModuleInfo],
+  surface_cache : Map[String, Array[ResolvedExport]],
+  visiting : Array[String],
+) -> ResolvedDecl {
+  let exports = get_export_surface_for_path(path, graph, surface_cache)
+  match find_resolved_export_by_name(exports, target_export_name) {
+    Some(export_) =>
+      match export_.kind {
+        Ambiguous =>
+          Unsupported(
+            export_name, "ambiguous re-export surface is widened to JSValue.",
+          )
+        Namespace =>
+          Unsupported(export_name, "namespace export is widened to JSValue.")
+        _ =>
+          match export_.local_name {
+            Some(local_name) =>
+              resolve_decl_from_local_name(
+                export_name,
+                export_.source_path,
+                local_name,
+                graph,
+                modules,
+                surface_cache,
+                visiting,
+              )
+            None => Missing
+          }
+      }
+    None => Missing
+  }
+}
+
+///|
+fn resolve_decl_from_local_name(
+  export_name : String,
+  source_path : String,
+  local_name : String,
+  graph : ModuleGraph,
+  modules : Map[String, DeclModuleInfo],
+  surface_cache : Map[String, Array[ResolvedExport]],
+  visiting : Array[String],
+) -> ResolvedDecl {
+  let key = decl_key(source_path, local_name)
+  if visiting.contains(key) {
+    return Missing
+  }
+  visiting.push(key)
+  let result = match modules.get(source_path) {
+    Some(info) =>
+      match find_interface_decl(info.module_, local_name) {
+        Some(iface) =>
+          Interface({ source_path, local_name, export_name, iface })
+        None =>
+          match find_import_decl(info.module_, local_name) {
+            Some(import_) => Import({ source_path, export_name, import_ })
+            None => {
+              let stmt_func = find_func_decl_from_stmts(
+                info.record.module_block.block.stmts,
+                local_name,
+              )
+              match find_func_decl(info.module_, local_name) {
+                Some(func) => Function({ source_path, export_name, func })
+                None =>
+                  match stmt_func {
+                    Some(func) => Function({ source_path, export_name, func })
+                    None =>
+                      match find_value_decl(info.module_, local_name) {
+                        Some(value) =>
+                          Value({ source_path, export_name, value })
+                        None =>
+                          match find_class_decl(info.module_, local_name) {
+                            Some(class_) =>
+                              Class({
+                                source_path,
+                                local_name,
+                                export_name,
+                                class_,
+                              })
+                            None => {
+                              let mut resolved : ResolvedDecl = Missing
+                              for
+                                i, import_decl in info.record.module_block.imports {
+                                let edge = info.record.imports[i]
+                                if edge.resolved_path == "" {
+                                  continue
+                                }
+                                for binding in import_decl.named_bindings {
+                                  let (imported_name, imported_local_name) = binding
+                                  if imported_local_name == local_name {
+                                    resolved = resolve_decl_from_export_name(
+                                      export_name,
+                                      edge.resolved_path,
+                                      imported_name,
+                                      graph,
+                                      modules,
+                                      surface_cache,
+                                      visiting,
+                                    )
+                                    break
+                                  }
+                                }
+                                match resolved {
+                                  Missing => ()
+                                  _ => break
+                                }
+                                match import_decl.default_binding {
+                                  Some(imported_local_name) =>
+                                    if imported_local_name == local_name {
+                                      resolved = resolve_decl_from_export_name(
+                                        export_name,
+                                        edge.resolved_path,
+                                        "default",
+                                        graph,
+                                        modules,
+                                        surface_cache,
+                                        visiting,
+                                      )
+                                    }
+                                  None => ()
+                                }
+                                match resolved {
+                                  Missing => ()
+                                  _ => break
+                                }
+                                match import_decl.namespace_binding {
+                                  Some(imported_local_name) =>
+                                    if imported_local_name == local_name {
+                                      resolved = Unsupported(
+                                        export_name, "namespace export is widened to JSValue.",
+                                      )
+                                    }
+                                  None => ()
+                                }
+                                match resolved {
+                                  Missing => ()
+                                  _ => break
+                                }
+                              }
+                              resolved
+                            }
+                          }
+                      }
+                  }
+              }
+            }
+          }
+      }
+    None => Missing
+  }
+  let _ = visiting.pop()
+  result
+}
+
+///|
+fn collect_exported_decls(
+  graph : ModuleGraph,
+  export_surface : Array[ResolvedExport],
+  modules : Map[String, DeclModuleInfo],
+) -> (
+  Array[ExportedInterfaceDecl],
+  Array[ExportedImportDecl],
+  Array[ExportedFuncDecl],
+  Array[ExportedValueDecl],
+  Array[ExportedClassDecl],
+  Array[String],
+) {
+  let interfaces : Array[ExportedInterfaceDecl] = []
+  let imports : Array[ExportedImportDecl] = []
+  let funcs : Array[ExportedFuncDecl] = []
+  let values : Array[ExportedValueDecl] = []
+  let classes : Array[ExportedClassDecl] = []
+  let notes : Array[String] = []
+  let surface_cache : Map[String, Array[ResolvedExport]] = {}
+  for export_ in export_surface {
+    match export_.kind {
+      Namespace => {
+        notes.push(
+          "///|\n/// Unsupported export \{export_.export_name}: namespace export is widened to JSValue.",
+        )
+        continue
+      }
+      Ambiguous => {
+        notes.push(
+          "///|\n/// Unsupported export \{export_.export_name}: ambiguous re-export surface is widened to JSValue.",
+        )
+        continue
+      }
+      _ => ()
+    }
+    let local_name = match export_.local_name {
+      Some(local_name) => local_name
+      None => continue
+    }
+    let visiting : Array[String] = []
+    match
+      resolve_decl_from_local_name(
+        export_.export_name,
+        export_.source_path,
+        local_name,
+        graph,
+        modules,
+        surface_cache,
+        visiting,
+      ) {
+      Interface(exported) => interfaces.push(exported)
+      Import(exported) => imports.push(exported)
+      Function(exported) => funcs.push(exported)
+      Value(exported) => values.push(exported)
+      Class(exported) => classes.push(exported)
+      Unsupported(name, reason) =>
+        notes.push("///|\n/// Unsupported export \{name}: \{reason}")
+      Missing => ()
+    }
+  }
+  (interfaces, imports, funcs, values, classes, notes)
+}
+
+///|
+fn build_canonical_type_name_map(
+  interfaces : Array[ExportedInterfaceDecl],
+  classes : Array[ExportedClassDecl],
+) -> Map[String, String] {
+  let canonical : Map[String, String] = {}
+  for exported in interfaces {
+    let key = decl_key(exported.source_path, exported.local_name)
+    match canonical.get(key) {
+      Some(existing) =>
+        if existing != exported.local_name &&
+          exported.export_name == exported.local_name {
+          canonical[key] = exported.export_name
+        }
+      None => canonical[key] = exported.export_name
+    }
+  }
+  for exported in classes {
+    let key = decl_key(exported.source_path, exported.local_name)
+    match canonical.get(key) {
+      Some(existing) =>
+        if existing != exported.local_name &&
+          exported.export_name == exported.local_name {
+          canonical[key] = exported.export_name
+        }
+      None => canonical[key] = exported.export_name
+    }
+  }
+  canonical
+}
+
+///|
+fn resolve_imported_type_origin(
+  info : DeclModuleInfo,
+  name : String,
+) -> (String, String)? {
+  for i, import_decl in info.record.module_block.imports {
+    let resolved_edge = info.record.imports[i]
+    for binding in import_decl.named_bindings {
+      let (imported_name, local_name) = binding
+      if local_name == name {
+        return Some((resolved_edge.resolved_path, imported_name))
+      }
+    }
+    match import_decl.default_binding {
+      Some(local_name) =>
+        if local_name == name {
+          return Some((resolved_edge.resolved_path, "default"))
+        }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+fn resolve_exported_type_name(
+  info : DeclModuleInfo,
+  name : String,
+  canonical_types : Map[String, String],
+) -> String? {
+  let local_key = decl_key(info.record.path, name)
+  match canonical_types.get(local_key) {
+    Some(export_name) => return Some(export_name)
+    None => ()
+  }
+  match resolve_imported_type_origin(info, name) {
+    Some((source_path, imported_name)) =>
+      canonical_types.get(decl_key(source_path, imported_name))
+    None => None
+  }
+}
+
+///|
+fn rewrite_type_refs(
+  info : DeclModuleInfo,
+  type_ : @ast.TsType,
+  canonical_types : Map[String, String],
+) -> @ast.TsType {
+  match type_ {
+    Named(name) =>
+      match resolve_exported_type_name(info, name, canonical_types) {
+        Some(export_name) => Named(export_name)
+        None => type_
+      }
+    Array(inner) => Array(rewrite_type_refs(info, inner, canonical_types))
+    Tuple(items) => {
+      let next_items : Array[@ast.TsType] = []
+      for item in items {
+        next_items.push(rewrite_type_refs(info, item, canonical_types))
+      }
+      Tuple(next_items)
+    }
+    Object(fields) => {
+      let next_fields : Array[(@ast.TsType, @ast.TsType)] = []
+      for field in fields {
+        let (key_type, value_type) = field
+        next_fields.push(
+          (
+            rewrite_type_refs(info, key_type, canonical_types),
+            rewrite_type_refs(info, value_type, canonical_types),
+          ),
+        )
+      }
+      Object(next_fields)
+    }
+    Struct(name, fields) => {
+      let next_name = match
+        resolve_exported_type_name(info, name, canonical_types) {
+        Some(export_name) => export_name
+        None => name
+      }
+      let next_fields : Array[(String, @ast.TsType)] = []
+      for field in fields {
+        let (field_name, field_type) = field
+        next_fields.push(
+          (field_name, rewrite_type_refs(info, field_type, canonical_types)),
+        )
+      }
+      Struct(next_name, next_fields)
+    }
+    Func(params, return_type) => {
+      let next_params : Array[@ast.TsType] = []
+      for param in params {
+        next_params.push(rewrite_type_refs(info, param, canonical_types))
+      }
+      Func(next_params, rewrite_type_refs(info, return_type, canonical_types))
+    }
+    Union(types) => {
+      let next_types : Array[@ast.TsType] = []
+      for item in types {
+        next_types.push(rewrite_type_refs(info, item, canonical_types))
+      }
+      Union(next_types)
+    }
+    Intersection(types) => {
+      let next_types : Array[@ast.TsType] = []
+      for item in types {
+        next_types.push(rewrite_type_refs(info, item, canonical_types))
+      }
+      Intersection(next_types)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn clone_exported_interface(
+  exported : ExportedInterfaceDecl,
+  info : DeclModuleInfo,
+  canonical_types : Map[String, String],
+) -> @ast.TsInterface {
+  let fields : Array[(String, @ast.TsType)] = []
+  for field in exported.iface.fields {
+    let (field_name, field_type) = field
+    fields.push(
+      (field_name, rewrite_type_refs(info, field_type, canonical_types)),
+    )
+  }
+  { name: exported.export_name, fields }
+}
+
+///|
+fn clone_exported_import(
+  exported : ExportedImportDecl,
+  info : DeclModuleInfo,
+  canonical_types : Map[String, String],
+) -> @ast.TsImport {
+  let params : Array[(String, @ast.TsType)] = []
+  for param in exported.import_.params {
+    let (param_name, param_type) = param
+    params.push(
+      (param_name, rewrite_type_refs(info, param_type, canonical_types)),
+    )
+  }
+  {
+    name: exported.export_name,
+    module_: exported.import_.module_,
+    params,
+    return_type: rewrite_type_refs(
+      info,
+      exported.import_.return_type,
+      canonical_types,
+    ),
+  }
+}
+
+///|
+fn clone_exported_func(
+  exported : ExportedFuncDecl,
+  info : DeclModuleInfo,
+  canonical_types : Map[String, String],
+) -> @ast.TsFunc {
+  let params : Array[@ast.TsParam] = []
+  for param in exported.func.params {
+    params.push({
+      name: param.name,
+      binding: param.binding,
+      is_rest: param.is_rest,
+      type_: rewrite_type_refs(info, param.type_, canonical_types),
+      default: param.default,
+    })
+  }
+  {
+    name: exported.export_name,
+    params,
+    return_type: rewrite_type_refs(
+      info,
+      exported.func.return_type,
+      canonical_types,
+    ),
+    body: exported.func.body,
+    is_generator: exported.func.is_generator,
+    is_async: exported.func.is_async,
+  }
+}
+
+///|
+fn clone_exported_value(
+  exported : ExportedValueDecl,
+  info : DeclModuleInfo,
+  canonical_types : Map[String, String],
+) -> @ast.TsValueDecl {
+  {
+    name: exported.export_name,
+    type_: rewrite_type_refs(info, exported.value.type_, canonical_types),
+  }
+}
+
+///|
+fn clone_exported_class(
+  exported : ExportedClassDecl,
+  info : DeclModuleInfo,
+  canonical_types : Map[String, String],
+) -> @ast.TsClassDecl {
+  let properties : Array[@ast.TsClassPropertyDecl] = []
+  for class_property in exported.class_.properties {
+    properties.push({
+      name: class_property.name,
+      type_: rewrite_type_refs(info, class_property.type_, canonical_types),
+      is_static: class_property.is_static,
+      is_readonly: class_property.is_readonly,
+    })
+  }
+  let methods : Array[@ast.TsClassMethodDecl] = []
+  for class_method in exported.class_.methods {
+    let params : Array[(String, @ast.TsType)] = []
+    for param in class_method.params {
+      let (param_name, param_type) = param
+      params.push(
+        (param_name, rewrite_type_refs(info, param_type, canonical_types)),
+      )
+    }
+    methods.push({
+      name: class_method.name,
+      params,
+      return_type: rewrite_type_refs(
+        info,
+        class_method.return_type,
+        canonical_types,
+      ),
+      is_static: class_method.is_static,
+    })
+  }
+  let constructor_params = match exported.class_.constructor_params {
+    Some(params) => {
+      let next_params : Array[(String, @ast.TsType)] = []
+      for param in params {
+        let (param_name, param_type) = param
+        next_params.push(
+          (param_name, rewrite_type_refs(info, param_type, canonical_types)),
+        )
+      }
+      Some(next_params)
+    }
+    None => None
+  }
+  {
+    name: exported.export_name,
+    constructor_params,
+    properties,
+    methods,
+    is_abstract: exported.class_.is_abstract,
+    is_constructible: exported.class_.is_constructible,
+  }
+}
+
+///|
+pub async fn emit_moonbit_decl_from_entry_path(
+  entry_path : String,
+) -> String raise ModuleGraphError {
+  let graph = load_type_module_graph(entry_path)
+  let export_surface = resolve_export_surface(graph)
+  let modules = build_decl_module_map(graph)
+  let (
+    exported_interfaces,
+    exported_imports,
+    exported_funcs,
+    _,
+    exported_classes,
+    notes,
+  ) = collect_exported_decls(graph, export_surface, modules)
+  let canonical_types = build_canonical_type_name_map(
+    exported_interfaces, exported_classes,
+  )
+  let interfaces : Array[@ast.TsInterface] = []
+  for exported in exported_interfaces {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        interfaces.push(
+          clone_exported_interface(exported, info, canonical_types),
+        )
+      None => ()
+    }
+  }
+  let imports : Array[@ast.TsImport] = []
+  for exported in exported_imports {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        imports.push(clone_exported_import(exported, info, canonical_types))
+      None => ()
+    }
+  }
+  let funcs : Array[@ast.TsFunc] = []
+  for exported in exported_funcs {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        funcs.push(clone_exported_func(exported, info, canonical_types))
+      None => ()
+    }
+  }
+  let classes : Array[@ast.TsClassDecl] = []
+  for exported in exported_classes {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        classes.push(clone_exported_class(exported, info, canonical_types))
+      None => ()
+    }
+  }
+  @parser.emit_moonbit_decl_with_sections(
+    { funcs, interfaces, imports, values: [], classes },
+    notes,
+    notes.length() > 0,
+  )
+}

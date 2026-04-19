@@ -111,6 +111,7 @@ pub enum TokenKind {
   Colon // :
   Semicolon // ;
   Dot // .
+  At // @
 
   // (add)
   New // new
@@ -150,6 +151,15 @@ pub struct Lexer {
   mut pending_index : Int
   mut newline_before_next : Bool // Set when whitespace skipping encounters a newline
 } derive(Debug)
+
+///|
+fn is_word_like_char(c : Char) -> Bool {
+  (c >= 'a' && c <= 'z') ||
+  (c >= 'A' && c <= 'Z') ||
+  (c >= '0' && c <= '9') ||
+  c == '_' ||
+  c == '$'
+}
 
 ///|
 // / 161( advance )
@@ -1130,25 +1140,228 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
 fn Lexer::scan_template_expr_source(self : Lexer) -> String {
   let start = self.pos
   let mut depth = 1
+  let mut prev_sig : Char? = Some('{')
   while depth > 0 {
     match self.peek() {
       None => break
       Some(c) => {
         let _ = self.advance()
         match c {
-          '{' => depth += 1
-          '}' => depth -= 1
-          '\'' | '"' => self.skip_string_body(c)
+          '{' => {
+            depth += 1
+            prev_sig = Some('{')
+          }
+          '}' => {
+            depth -= 1
+            prev_sig = Some('}')
+          }
+          '\'' | '"' => {
+            self.skip_string_body(c)
+            prev_sig = Some('s')
+          }
           '`' => {
             let _ = self.scan_template()
+            prev_sig = Some('s')
           }
-          _ => ()
+          '/' =>
+            match self.peek() {
+              Some('/') => {
+                let _ = self.advance()
+                while true {
+                  match self.peek() {
+                    Some('\n')
+                    | Some('\r')
+                    | Some('\u2028')
+                    | Some('\u2029')
+                    | None => break
+                    _ => {
+                      let _ = self.advance()
+                    }
+                  }
+                }
+              }
+              Some('*') => {
+                let _ = self.advance()
+                while true {
+                  match self.peek() {
+                    None => break
+                    Some('*') if self.peek_next() == Some('/') => {
+                      let _ = self.advance()
+                      let _ = self.advance()
+                      break
+                    }
+                    _ => {
+                      let _ = self.advance()
+                    }
+                  }
+                }
+              }
+              _ =>
+                if (match prev_sig {
+                    None => true
+                    Some(prev) =>
+                      prev == '(' ||
+                      prev == '[' ||
+                      prev == '{' ||
+                      prev == ',' ||
+                      prev == ':' ||
+                      prev == ';' ||
+                      prev == '=' ||
+                      prev == '!' ||
+                      prev == '?' ||
+                      prev == '+' ||
+                      prev == '-' ||
+                      prev == '*' ||
+                      prev == '%' ||
+                      prev == '^' ||
+                      prev == '&' ||
+                      prev == '|' ||
+                      prev == '<' ||
+                      prev == '>'
+                  }) {
+                  self.skip_regex_body()
+                  prev_sig = Some('r')
+                } else {
+                  prev_sig = Some('/')
+                }
+            }
+          ' ' | '\t' | '\n' | '\r' | '\u2028' | '\u2029' => ()
+          _ => prev_sig = Some(c)
         }
       }
     }
   }
   let end = if self.pos > 0 { self.pos - 1 } else { 0 }
   self.src[start:end].to_string()
+}
+
+///|
+fn Lexer::skip_regex_body(self : Lexer) -> Unit {
+  let mut escaped = false
+  let mut in_class = false
+  while true {
+    match self.peek() {
+      None => break
+      Some(c) => {
+        let _ = self.advance()
+        if escaped {
+          escaped = false
+          continue
+        }
+        match c {
+          '\\' => escaped = true
+          '[' => in_class = true
+          ']' => in_class = false
+          '/' => if !in_class { break }
+          _ => ()
+        }
+      }
+    }
+  }
+  while true {
+    match self.peek() {
+      Some(c) if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') => {
+        let _ = self.advance()
+      }
+      _ => break
+    }
+  }
+}
+
+///|
+fn Lexer::skip_template_expr(self : Lexer) -> Unit {
+  let mut depth = 1
+  let mut prev_sig : Char? = Some('{')
+  while depth > 0 {
+    match self.peek() {
+      None => break
+      Some(c) => {
+        let _ = self.advance()
+        match c {
+          '{' => {
+            depth += 1
+            prev_sig = Some('{')
+          }
+          '}' => {
+            depth -= 1
+            prev_sig = Some('}')
+          }
+          '\'' | '"' => {
+            self.skip_string_body(c)
+            prev_sig = Some('s')
+          }
+          '`' => {
+            let _ = self.scan_template()
+            prev_sig = Some('s')
+          }
+          '/' =>
+            match self.peek() {
+              Some('/') => {
+                let _ = self.advance()
+                while true {
+                  match self.peek() {
+                    Some('\n')
+                    | Some('\r')
+                    | Some('\u2028')
+                    | Some('\u2029')
+                    | None => break
+                    _ => {
+                      let _ = self.advance()
+                    }
+                  }
+                }
+              }
+              Some('*') => {
+                let _ = self.advance()
+                while true {
+                  match self.peek() {
+                    None => break
+                    Some('*') if self.peek_next() == Some('/') => {
+                      let _ = self.advance()
+                      let _ = self.advance()
+                      break
+                    }
+                    _ => {
+                      let _ = self.advance()
+                    }
+                  }
+                }
+              }
+              _ =>
+                if (match prev_sig {
+                    None => true
+                    Some(prev) =>
+                      prev == '(' ||
+                      prev == '[' ||
+                      prev == '{' ||
+                      prev == ',' ||
+                      prev == ':' ||
+                      prev == ';' ||
+                      prev == '=' ||
+                      prev == '!' ||
+                      prev == '?' ||
+                      prev == '+' ||
+                      prev == '-' ||
+                      prev == '*' ||
+                      prev == '%' ||
+                      prev == '^' ||
+                      prev == '&' ||
+                      prev == '|' ||
+                      prev == '<' ||
+                      prev == '>'
+                  }) {
+                  self.skip_regex_body()
+                  prev_sig = Some('r')
+                } else {
+                  prev_sig = Some('/')
+                }
+            }
+          ' ' | '\t' | '\n' | '\r' | '\u2028' | '\u2029' => ()
+          _ => prev_sig = Some(c)
+        }
+      }
+    }
+  }
 }
 
 ///|
@@ -1570,31 +1783,9 @@ fn Lexer::scan_template(self : Lexer) -> TokenKind {
   Str(buf.to_string())
 }
 
-///|
-// / ${ ... }
-fn Lexer::skip_template_expr(self : Lexer) -> Unit {
-  let mut depth = 1
-  while depth > 0 {
-    match self.peek() {
-      None => break
-      Some(c) => {
-        let _ = self.advance()
-        match c {
-          '{' => depth += 1
-          '}' => depth -= 1
-          '\'' | '"' => self.skip_string_body(c)
-          '`' => {
-            let _ = self.scan_template()
-          }
-          _ => ()
-        }
-      }
-    }
-  }
-}
+// / string()
 
 ///|
-// / string()
 fn Lexer::skip_string_body(self : Lexer, quote : Char) -> Unit {
   while true {
     match self.peek() {
@@ -1673,6 +1864,11 @@ fn token_can_end_expr(kind : TokenKind) -> Bool {
     | Regex(_, _)
     | Ident(_)
     | PrivateIdent(_)
+    | NumberType
+    | BooleanType
+    | StringType
+    | IntType
+    | Type
     | Null
     | RParen
     | RBracket
@@ -1680,6 +1876,14 @@ fn token_can_end_expr(kind : TokenKind) -> Bool {
     | PlusPlus
     | MinusMinus => true
     _ => false
+  }
+}
+
+///|
+fn next_allow_regex(current_allow_regex : Bool, kind : TokenKind) -> Bool {
+  match kind {
+    Bang => current_allow_regex
+    _ => !token_can_end_expr(kind)
   }
 }
 
@@ -1693,7 +1897,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
       self.pending = []
       self.pending_index = 0
     }
-    self.allow_regex = !token_can_end_expr(tok.kind)
+    self.allow_regex = next_allow_regex(self.allow_regex, tok.kind)
     return tok
   }
   self.skip_whitespace()
@@ -1835,7 +2039,9 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
             _ => Star
           }
         '/' =>
-          if self.allow_regex {
+          if self.allow_regex &&
+            !(self.pos >= 2 &&
+            self.src[self.pos - 2].to_int().unsafe_to_char() == '<') {
             self.scan_regex()
           } else {
             match self.peek() {
@@ -2004,6 +2210,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
         ',' => Comma
         ':' => Colon
         ';' => Semicolon
+        '@' => At
         '.' =>
           match self.peek() {
             Some('0'..='9') => {
@@ -2021,19 +2228,36 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
               }
             _ => Dot
           }
-        '"' | '\'' => {
-          // stringliteral
-          let quote = c
-          self.scan_string(quote)
+        '"' => self.scan_string('"')
+        '\'' => {
+          let prev = if pos > 0 {
+            Some(self.src[pos - 1].to_int().unsafe_to_char())
+          } else {
+            None
+          }
+          let next = self.peek()
+          let prev_is_word = match prev {
+            Some(ch) => is_word_like_char(ch)
+            None => false
+          }
+          let next_is_word = match next {
+            Some(ch) => is_word_like_char(ch)
+            None => false
+          }
+          if prev_is_word && next_is_word {
+            Ident("'")
+          } else {
+            self.scan_string('\'')
+          }
         }
         '`' => {
           // literal
           self.enqueue_template_tokens(pos)
           return self.next_token()
         }
-        _ => Eof // statement
+        _ => Ident(c.to_string())
       }
-      self.allow_regex = !token_can_end_expr(kind)
+      self.allow_regex = next_allow_regex(self.allow_regex, kind)
       { kind, pos, has_newline_before: has_newline }
     }
   }

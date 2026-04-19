@@ -7,7 +7,7 @@ priv enum ClassKey {
 ///|
 priv enum ClassElement {
   Method(Bool, ClassKey, String?, @ast.TsFunc)
-  Field(Bool, ClassKey, @ast.TsExpr?)
+  Field(Bool, ClassKey, @ast.TsType, @ast.TsExpr?)
   StaticBlock(@ast.TsBlock)
 }
 
@@ -20,10 +20,116 @@ fn class_key_name(key : ClassKey) -> String {
 }
 
 ///|
+fn is_public_runtime_class_member_name(name : String) -> Bool {
+  !name.has_prefix("#") && !name.contains("__#") && name != "<computed>"
+}
+
+///|
+fn runtime_class_param_name(param : @ast.TsParam, index : Int) -> String {
+  if param.name != "" {
+    return param.name
+  }
+  match param.binding {
+    Some(@ast.TsBinding::Ident(name)) => name
+    _ => "arg" + index.to_string()
+  }
+}
+
+///|
+fn build_runtime_class_decl(
+  name : String,
+  ctor_opt : @ast.TsFunc?,
+  elements : Array[ClassElement],
+  is_abstract : Bool,
+) -> @ast.TsClassDecl {
+  let properties : Array[@ast.TsClassPropertyDecl] = []
+  let methods : Array[@ast.TsClassMethodDecl] = []
+  let constructor_params = match ctor_opt {
+    Some(ctor) => {
+      let params : Array[(String, @ast.TsType)] = []
+      for index, param in ctor.params {
+        params.push((runtime_class_param_name(param, index), param.type_))
+      }
+      Some(params)
+    }
+    None => None
+  }
+  for element in elements {
+    match element {
+      Field(is_static, Name(field_name), field_type, _) =>
+        if is_public_runtime_class_member_name(field_name) {
+          upsert_class_property(properties, {
+            name: field_name,
+            type_: field_type,
+            is_static,
+            is_readonly: false,
+          })
+        }
+      Method(is_static, Name(method_name), accessor_kind, func) =>
+        if is_public_runtime_class_member_name(method_name) {
+          match accessor_kind {
+            Some("get") =>
+              upsert_class_property(properties, {
+                name: method_name,
+                type_: func.return_type,
+                is_static,
+                is_readonly: true,
+              })
+            Some("set") => {
+              let setter_type = if func.params.length() > 0 {
+                func.params[0].type_
+              } else {
+                @ast.TsType::Any
+              }
+              upsert_class_property(properties, {
+                name: method_name,
+                type_: setter_type,
+                is_static,
+                is_readonly: false,
+              })
+            }
+            _ => {
+              let params : Array[(String, @ast.TsType)] = []
+              for index, param in func.params {
+                params.push(
+                  (runtime_class_param_name(param, index), param.type_),
+                )
+              }
+              methods.push({
+                name: method_name,
+                params,
+                return_type: func.return_type,
+                is_static,
+              })
+            }
+          }
+        }
+      _ => ()
+    }
+  }
+  {
+    name,
+    constructor_params,
+    properties,
+    methods,
+    is_abstract,
+    is_constructible: !is_abstract,
+  }
+}
+
+///|
+fn Parser::take_last_runtime_class_decl(self : Parser) -> @ast.TsClassDecl? {
+  let result = self.last_runtime_class_decl
+  self.last_runtime_class_decl = None
+  result
+}
+
+///|
 fn has_static_private_elements(elements : Array[ClassElement]) -> Bool {
   for element in elements {
     match element {
-      Field(is_static, Name(name), _) | Method(is_static, Name(name), _, _) =>
+      Field(is_static, Name(name), _, _)
+      | Method(is_static, Name(name), _, _) =>
         // Check for static private members
         if is_static && (name.has_prefix("#") || name.contains("__#")) {
           return true
@@ -38,7 +144,8 @@ fn has_static_private_elements(elements : Array[ClassElement]) -> Bool {
 fn has_instance_private_elements(elements : Array[ClassElement]) -> Bool {
   for element in elements {
     match element {
-      Field(is_static, Name(name), _) | Method(is_static, Name(name), _, _) =>
+      Field(is_static, Name(name), _, _)
+      | Method(is_static, Name(name), _, _) =>
         // Check for instance (non-static) private members
         if !is_static && (name.has_prefix("#") || name.contains("__#")) {
           return true
@@ -64,6 +171,39 @@ fn class_key_expr(key : ClassKey) -> @ast.TsExpr {
     Name(name) => @ast.TsExpr::StringLit(name)
     Computed(expr) => expr
   }
+}
+
+///|
+fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
+  let start = self.pos
+  if self.check(LParen) {
+    let _ = self.parse_expr()
+    return "<expr-base>"
+  }
+  let mut full_name = match self.advance().kind {
+    Ident(n) => n
+    k => raise ParseError("Expected base class name, got \{k}")
+  }
+  while self.check(Dot) {
+    let _ = self.advance()
+    match self.advance().kind {
+      Ident(n) => full_name = full_name + "." + n
+      k => raise ParseError("Expected base class name, got \{k}")
+    }
+  }
+  let mut is_expr_base = self.check(LParen) || self.check(LBracket)
+  if !is_expr_base && self.check(Lt) {
+    let saved = self.pos
+    self.skip_type_args()
+    is_expr_base = self.check(LParen) || self.check(LBracket)
+    self.pos = saved
+  }
+  if is_expr_base {
+    self.pos = start
+    let _ = self.parse_expr()
+    return "<expr-base>"
+  }
+  full_name
 }
 
 ///|
@@ -109,6 +249,7 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
     Default => "default"
     Do => "do"
     In => "in"
+    Of => "of"
     Case => "case"
     VoidType => "void"
     With => "with"
@@ -123,6 +264,13 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
     Extends => "extends"
     From => "from"
     As => "as"
+    NumberType => "number"
+    BooleanType => "boolean"
+    StringType => "string"
+    IntType => "int"
+    Bool(true) => "true"
+    Bool(false) => "false"
+    Null => "null"
     // Note: static, this, super, true, false, null, get, set, of, async, await
     // are handled as Ident tokens with special names, not separate TokenKind
     k => raise ParseError("Expected method name, got \{k}")
@@ -131,11 +279,70 @@ fn Parser::parse_class_method_key(self : Parser) -> ClassKey raise ParseError {
 }
 
 ///|
+fn Parser::can_consume_class_modifier(self : Parser) -> Bool {
+  match self.peek_at(1).kind {
+    Colon | LParen | Lt | Eq | Semicolon | RBrace | Question | Bang => false
+    _ => true
+  }
+}
+
+///|
 fn Parser::is_super_call_stmt(_self : Parser, stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Expr(Call("super", _)) => true
     Expr(CallExpr(@ast.TsExpr::Var("super"), _)) => true
     _ => false
+  }
+}
+
+///|
+fn Parser::skip_decorator(self : Parser) -> Unit {
+  let _ = self.match_(At)
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut brace_depth = 0
+  while !self.check(Eof) {
+    if paren_depth == 0 &&
+      bracket_depth == 0 &&
+      brace_depth == 0 &&
+      self.peek().has_newline_before {
+      break
+    }
+    match self.peek().kind {
+      LParen => {
+        paren_depth += 1
+        let _ = self.advance()
+      }
+      RParen => {
+        if paren_depth > 0 {
+          paren_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      LBracket => {
+        bracket_depth += 1
+        let _ = self.advance()
+      }
+      RBracket => {
+        if bracket_depth > 0 {
+          bracket_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      LBrace => {
+        brace_depth += 1
+        let _ = self.advance()
+      }
+      RBrace => {
+        if brace_depth > 0 {
+          brace_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
   }
 }
 
@@ -200,6 +407,9 @@ fn Parser::parse_class_body(
   let mut ctor : @ast.TsFunc? = None
   let elements : Array[ClassElement] = []
   while !self.check(RBrace) && !self.check(Eof) {
+    while self.check(At) {
+      self.skip_decorator()
+    }
     if self.match_(Semicolon) {
       continue
     }
@@ -211,7 +421,7 @@ fn Parser::parse_class_body(
       has_modifier = false
       match self.peek().kind {
         Ident(n) if n == "static" =>
-          if self.peek_at(1).kind != LParen {
+          if self.can_consume_class_modifier() {
             let _ = self.advance()
             is_static = true
             has_modifier = true
@@ -224,11 +434,27 @@ fn Parser::parse_class_body(
             }
           }
         Ident(n) if n == "async" =>
-          if self.peek_at(1).kind != LParen {
+          if self.can_consume_class_modifier() {
             let _ = self.advance()
             is_async_method = true
             has_modifier = true
           }
+        Ident(n) if n == "public" ||
+          n == "private" ||
+          n == "protected" ||
+          n == "readonly" ||
+          n == "abstract" ||
+          n == "override" ||
+          n == "declare" ||
+          n == "accessor" =>
+          if self.can_consume_class_modifier() {
+            let _ = self.advance()
+            has_modifier = true
+          }
+        Declare => {
+          let _ = self.advance()
+          has_modifier = true
+        }
         _ => ()
       }
     }
@@ -237,7 +463,10 @@ fn Parser::parse_class_body(
     }
     let mut accessor_kind : String? = None
     match self.peek().kind {
-      Ident(n) if (n == "get" || n == "set") && self.peek_at(1).kind != LParen => {
+      Ident(n) if (n == "get" || n == "set") &&
+        self.peek_at(1).kind != LParen &&
+        self.peek_at(1).kind != Lt &&
+        self.peek_at(1).kind != Colon => {
         let _ = self.advance()
         accessor_kind = Some(n)
       }
@@ -246,26 +475,45 @@ fn Parser::parse_class_body(
     let is_generator = self.match_(Star)
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
-    if self.check(LParen) {
-      let _ = self.expect(LParen)
-      let params = self.parse_params()
-      let _ = self.expect(RParen)
+    let _ = self.match_(Question)
+    let _ = self.match_(Bang)
+    if self.check(Lt) {
+      self.skip_type_params()
+    }
+    let is_getter_without_parens = match accessor_kind {
+      Some(kind) => kind == "get" && !self.check(LParen)
+      None => false
+    }
+    if self.check(LParen) || is_getter_without_parens {
+      let params = if self.check(LParen) {
+        let _ = self.expect(LParen)
+        let params = self.parse_params()
+        let _ = self.expect(RParen)
+        params
+      } else {
+        []
+      }
       let return_type = if self.check(Colon) {
         let _ = self.advance()
         self.parse_type()
       } else {
         Any
       }
-      // Save and set function context for method body
-      let prev_generator = self.in_generator
-      let prev_function = self.in_function
-      if is_generator {
-        self.in_generator = true
+      let body = if self.match_(Semicolon) {
+        @ast.TsBlock::{ stmts: [] }
+      } else {
+        // Save and set function context for method body
+        let prev_generator = self.in_generator
+        let prev_function = self.in_function
+        if is_generator {
+          self.in_generator = true
+        }
+        self.in_function = true
+        let body = self.parse_block()
+        self.in_generator = prev_generator
+        self.in_function = prev_function
+        body
       }
-      self.in_function = true
-      let body = self.parse_block()
-      self.in_generator = prev_generator
-      self.in_function = prev_function
       let func : @ast.TsFunc = {
         name: method_name,
         params,
@@ -280,8 +528,10 @@ fn Parser::parse_class_body(
         elements.push(Method(is_static, key, accessor_kind, func))
       }
     } else {
-      if self.match_(Colon) {
-        let _ = self.parse_type()
+      let field_type = if self.match_(Colon) {
+        self.parse_type()
+      } else {
+        @ast.TsType::Any
       }
       let init : @ast.TsExpr? = if self.match_(Eq) {
         Some(self.parse_assignment())
@@ -289,7 +539,7 @@ fn Parser::parse_class_body(
         None
       }
       let _ = self.match_(Semicolon)
-      elements.push(Field(is_static, key, init))
+      elements.push(Field(is_static, key, field_type, init))
     }
   }
   let _ = self.expect(RBrace)
@@ -299,20 +549,29 @@ fn Parser::parse_class_body(
 
 ///|
 fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
+  self.last_runtime_class_decl = None
   let _ = self.expect(Class)
   let mut class_name = ""
   let _ = match self.peek().kind {
-    Ident(n) => {
+    Ident(n) if n != "implements" => {
       class_name = n
       self.advance()
     }
     _ => { kind: Eof, pos: 0, has_newline_before: false }
   }
+  if self.check(Lt) {
+    self.skip_type_params()
+  }
   let mut base : String? = None
   if self.match_(Extends) {
-    base = match self.advance().kind {
-      Ident(n) => Some(n)
-      k => raise ParseError("Expected base class name, got \{k}")
+    base = Some(self.parse_class_base_name())
+    if self.check(Lt) {
+      self.skip_type_args()
+    }
+  }
+  if self.match_ident("implements") {
+    while !self.check(LBrace) && !self.check(Eof) {
+      let _ = self.advance()
     }
   }
   // Generate unique brand ID for private fields
@@ -343,6 +602,18 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     None => ()
   }
   let tmp_name = if class_name == "" { "<anon>" } else { class_name }
+  self.last_runtime_class_decl = Some(
+    build_runtime_class_decl(
+      if class_name == "" {
+        "<class>"
+      } else {
+        class_name
+      },
+      ctor_opt,
+      elements,
+      false,
+    ),
+  )
   let instance_assigns : Array[@ast.TsStmt] = []
   let has_instance_private = has_instance_private_elements(elements)
   let has_static_private = has_static_private_elements(elements)
@@ -359,7 +630,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // First pass: collect all computed keys and generate temp variables
   for element in elements {
     match element {
-      Field(_, key, _) | Method(_, key, _, _) =>
+      Field(_, key, _, _) | Method(_, key, _, _) =>
         match key {
           Name(_) => key_temps.push(None)
           Computed(key_expr) => {
@@ -379,7 +650,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   // Second pass: generate instance field assignments (for non-static fields)
   for idx, element in elements {
     match element {
-      Field(is_static, key, init_opt) =>
+      Field(is_static, key, _, init_opt) =>
         if !is_static {
           let init = match init_opt {
             Some(expr) => expr
@@ -659,7 +930,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
       }
-      Field(is_static, key, init_opt) => {
+      Field(is_static, key, _, init_opt) => {
         let init = match init_opt {
           Some(expr) => expr
           None => @ast.TsExpr::Var("undefined")
@@ -729,17 +1000,29 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
 }
 
 ///|
-fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
+fn Parser::parse_class_decl_with_abstract(
+  self : Parser,
+  is_abstract : Bool,
+) -> @ast.TsStmt raise ParseError {
+  self.last_runtime_class_decl = None
   let _ = self.expect(Class)
   let name = match self.advance().kind {
     Ident(n) => n
     _ => "<class>"
   }
+  if self.check(Lt) {
+    self.skip_type_params()
+  }
   let mut base : String? = None
   if self.match_(Extends) {
-    base = match self.advance().kind {
-      Ident(n) => Some(n)
-      k => raise ParseError("Expected base class name, got \{k}")
+    base = Some(self.parse_class_base_name())
+    if self.check(Lt) {
+      self.skip_type_args()
+    }
+  }
+  if self.match_ident("implements") {
+    while !self.check(LBrace) && !self.check(Eof) {
+      let _ = self.advance()
     }
   }
   // Generate unique brand ID for private fields
@@ -750,6 +1033,9 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
   self.current_class_brand = Some(brand)
   let (ctor_opt, elements) = self.parse_class_body()
   self.current_class_brand = prev_brand
+  self.last_runtime_class_decl = Some(
+    build_runtime_class_decl(name, ctor_opt, elements, is_abstract),
+  )
   let instance_assigns : Array[@ast.TsStmt] = []
   let has_instance_private = has_instance_private_elements(elements)
   let has_static_private = has_static_private_elements(elements)
@@ -766,7 +1052,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
   // First pass: collect all computed keys and generate temp variables
   for element in elements {
     match element {
-      Field(_, key, _) | Method(_, key, _, _) =>
+      Field(_, key, _, _) | Method(_, key, _, _) =>
         match key {
           Name(_) => key_temps.push(None)
           Computed(key_expr) => {
@@ -786,7 +1072,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
   // Second pass: generate instance field assignments (for non-static fields)
   for idx, element in elements {
     match element {
-      Field(is_static, key, init_opt) =>
+      Field(is_static, key, _, init_opt) =>
         if !is_static {
           let init = match init_opt {
             Some(expr) => expr
@@ -1066,7 +1352,7 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
           }
         }
       }
-      Field(is_static, key, init_opt) => {
+      Field(is_static, key, _, init_opt) => {
         let init = match init_opt {
           Some(expr) => expr
           None => @ast.TsExpr::Var("undefined")
@@ -1143,4 +1429,9 @@ fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
     )
     Let(@ast.TsBinding::Ident(name), Any, iife)
   }
+}
+
+///|
+fn Parser::parse_class_decl(self : Parser) -> @ast.TsStmt raise ParseError {
+  self.parse_class_decl_with_abstract(false)
 }

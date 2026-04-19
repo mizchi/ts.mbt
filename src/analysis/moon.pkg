@@ -1,5 +1,10 @@
 import {
+  "moonbitlang/async/fs",
   "moonbitlang/core/debug",
   "mizchi/ts/ast" @ast,
   "mizchi/ts/parser" @parser,
 }
+
+import {
+  "moonbitlang/async",
+} for "wbtest"

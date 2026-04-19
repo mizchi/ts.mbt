@@ -20,8 +20,10 @@ pub struct Parser {
   mut in_switch : Bool // for break validation (break works in switch too)
   labels : Array[String] // for labeled break/continue validation
   src : String
+  allow_jsx : Bool
   mut class_id : Int // for private field brand generation
   mut current_class_brand : String? // brand ID of current class being parsed
+  mut last_runtime_class_decl : @ast.TsClassDecl?
 } derive(Debug)
 
 ///|
@@ -35,6 +37,15 @@ pub fn Parser::new_with_strict(
   tokens : Array[Token],
   in_strict : Bool,
 ) -> Parser {
+  Parser::new_with_strict_and_jsx(tokens, in_strict, true)
+}
+
+///|
+pub fn Parser::new_with_strict_and_jsx(
+  tokens : Array[Token],
+  in_strict : Bool,
+  allow_jsx : Bool,
+) -> Parser {
   {
     tokens,
     pos: 0,
@@ -47,14 +58,21 @@ pub fn Parser::new_with_strict(
     in_switch: false,
     labels: [],
     src: "",
+    allow_jsx,
     class_id: 0,
     current_class_brand: None,
+    last_runtime_class_decl: None,
   }
 }
 
 ///|
 // / create
 pub fn Parser::from_source(src : String) -> Parser {
+  Parser::from_source_with_jsx(src, true)
+}
+
+///|
+pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   let lexer = Lexer::new(src)
   let tokens = lexer.tokenize()
   let trimmed = src.trim_start()
@@ -72,8 +90,10 @@ pub fn Parser::from_source(src : String) -> Parser {
     in_switch: false,
     labels: [],
     src,
+    allow_jsx,
     class_id: 0,
     current_class_brand: None,
+    last_runtime_class_decl: None,
   }
 }
 
@@ -131,26 +151,26 @@ fn Parser::peek_at(self : Parser, offset : Int) -> Token {
 ///|
 // / functioncheck (currentposition `(` )
 fn Parser::is_arrow_function(self : Parser) -> Bool {
-  // () =>
-  if self.peek_at(1).kind == RParen && self.peek_at(2).kind == Arrow {
+  let temp = { ..self, pos: self.pos + 1 }
+  let params_ok = try {
+    let _ = temp.parse_params()
+    temp.check(RParen)
+  } catch {
+    _ => false
+  }
+  if !params_ok {
+    return false
+  }
+  let _ = temp.advance()
+  if temp.check(Arrow) {
     return true
   }
-  // (ident) => (ident: type) => parameter
-  // simplecheck: ( ) , =>
-  let mut i = 1
-  let mut depth = 1
-  while depth > 0 && i < 100 {
-    let tok = self.peek_at(i)
-    match tok.kind {
-      LParen => depth += 1
-      RParen => depth -= 1
-      Eof => break
-      _ => ()
-    }
-    i += 1
+  if !temp.check(Colon) {
+    return false
   }
-  // i-1 ) position, i )
-  self.peek_at(i).kind == Arrow
+  let _ = temp.advance()
+  temp.skip_type_until_arrow()
+  temp.check(Arrow)
 }
 
 ///|
@@ -192,6 +212,9 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
     | Debugger
     | Import
     | Export
+    | Declare
+    | Interface
+    | Type
     | Try
     | Throw
     | Function
@@ -211,6 +234,7 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
     | Plus
     | Minus
     | Bang
+    | Delete
     | Typeof
     | Regex(_, _) => return
     _ => ()

@@ -1,11 +1,18 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "mizchi/ts"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 
 // Errors
 
 // Types and methods
+type ProjectBenchmarkFailure derive(@debug.Debug)
+
+type ProjectBenchmarkResult derive(@debug.Debug)
 
 // Type aliases
 

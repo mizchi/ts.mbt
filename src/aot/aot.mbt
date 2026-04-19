@@ -55,7 +55,13 @@ pub fn experimental_compile_module_aot(
 /// Returns the wasm bytes and function index on success, None on failure.
 fn compile_single_function(func : @ast.TsFunc) -> (Bytes, UInt)? {
   // Create a minimal module with just this function
-  let mod : @ast.TsModule = { funcs: [func], interfaces: [], imports: [] }
+  let mod : @ast.TsModule = {
+    funcs: [func],
+    interfaces: [],
+    imports: [],
+    values: [],
+    classes: [],
+  }
   try {
     let wasm_module = @codegen.experimental_compile_module_gc(mod)
     // Encode the module to bytes

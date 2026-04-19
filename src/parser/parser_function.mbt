@@ -3,11 +3,103 @@
 // ============================================
 
 ///|
+fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
+  while self.match_(At) {
+    let _ = self.parse_binding_ident()
+    while self.match_(Dot) {
+      let _ = self.parse_binding_ident()
+    }
+    if self.check(Lt) {
+      self.skip_type_args()
+    }
+    if self.check(LParen) {
+      let _ = self.advance()
+      let mut paren_depth = 1
+      let mut brace_depth = 0
+      let mut bracket_depth = 0
+      while paren_depth > 0 && !self.check(Eof) {
+        match self.peek().kind {
+          LParen => {
+            paren_depth += 1
+            let _ = self.advance()
+          }
+          RParen => {
+            paren_depth -= 1
+            let _ = self.advance()
+          }
+          LBrace => {
+            brace_depth += 1
+            let _ = self.advance()
+          }
+          RBrace => {
+            if brace_depth > 0 {
+              brace_depth -= 1
+            }
+            let _ = self.advance()
+          }
+          LBracket => {
+            bracket_depth += 1
+            let _ = self.advance()
+          }
+          RBracket => {
+            if bracket_depth > 0 {
+              bracket_depth -= 1
+            }
+            let _ = self.advance()
+          }
+          _ => {
+            let _ = self.advance()
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+fn Parser::skip_param_modifiers(self : Parser) -> Unit {
+  let mut has_modifier = true
+  while has_modifier {
+    has_modifier = false
+    match self.peek().kind {
+      Ident(name) if name == "public" ||
+        name == "private" ||
+        name == "protected" ||
+        name == "readonly" ||
+        name == "override" =>
+        match self.peek_at(1).kind {
+          Ident(_)
+          | PrivateIdent(_)
+          | LBrace
+          | LBracket
+          | Yield
+          | NumberType
+          | BooleanType
+          | StringType
+          | VoidType
+          | IntType
+          | Type
+          | Of
+          | In => {
+            let _ = self.advance()
+            has_modifier = true
+          }
+          _ => ()
+        }
+      _ => ()
+    }
+  }
+}
+
+///|
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
+  self.skip_param_decorators()
+  self.skip_param_modifiers()
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
+  let _ = self.match_(Question)
   // type ()
   let type_ = if self.check(Colon) {
     let _ = self.advance()
@@ -79,10 +171,8 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
   let is_async = self.in_async
-  let name = match self.advance().kind {
-    Ident(n) => n
-    k => raise ParseError("Expected function name, got \{k}")
-  }
+  let name = self.parse_binding_ident()
+  self.skip_type_params()
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
@@ -92,6 +182,17 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     self.parse_type()
   } else {
     Any // type Any
+  }
+  if self.check(Semicolon) {
+    let _ = self.advance()
+    return {
+      name,
+      params,
+      return_type,
+      body: { stmts: [] },
+      is_generator,
+      is_async,
+    }
   }
   // Save and set function context (new function scope resets iteration/switch/labels context)
   let prev_generator = self.in_generator
@@ -138,12 +239,29 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = match self.peek().kind {
-    Ident(n) => {
-      let _ = self.advance()
-      n
-    }
+    Ident(_)
+    | Yield
+    | NumberType
+    | BooleanType
+    | StringType
+    | VoidType
+    | IntType
+    | Type
+    | Let
+    | Switch
+    | Case
+    | Default
+    | With
+    | Debugger
+    | Import
+    | Export
+    | From
+    | As
+    | Of
+    | In => self.parse_binding_ident()
     _ => "<anon>"
   }
+  self.skip_type_params()
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
@@ -233,9 +351,51 @@ fn Parser::skip_extends_clause(self : Parser) -> Unit {
     return
   }
   let _ = self.advance() // consume extends
-  // Parse comma-separated type references until { or EOF
-  while !self.check(LBrace) && !self.check(Eof) {
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut angle_depth = 0
+  while !self.check(Eof) {
     match self.peek().kind {
+      LBrace if paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 =>
+        break
+      LParen => {
+        paren_depth += 1
+        let _ = self.advance()
+      }
+      RParen => {
+        if paren_depth > 0 {
+          paren_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      LBracket => {
+        bracket_depth += 1
+        let _ = self.advance()
+      }
+      RBracket => {
+        if bracket_depth > 0 {
+          bracket_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      Lt => {
+        angle_depth += 1
+        let _ = self.advance()
+      }
+      Gt => {
+        if angle_depth > 0 {
+          angle_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      GtGt => {
+        angle_depth = if angle_depth >= 2 { angle_depth - 2 } else { 0 }
+        let _ = self.advance()
+      }
+      GtGtGt => {
+        angle_depth = if angle_depth >= 3 { angle_depth - 3 } else { 0 }
+        let _ = self.advance()
+      }
       Comma => {
         let _ = self.advance()
       }
@@ -243,6 +403,61 @@ fn Parser::skip_extends_clause(self : Parser) -> Unit {
         let _ = self.advance()
       }
     }
+  }
+}
+
+///|
+fn Parser::can_consume_interface_readonly_modifier(self : Parser) -> Bool {
+  if !self.check(Ident("readonly")) {
+    return false
+  }
+  match self.peek_at(1).kind {
+    Ident(_)
+    | Str(_)
+    | Int(_)
+    | Number(_)
+    | LBracket
+    | New
+    | Finally
+    | Try
+    | Catch
+    | Throw
+    | Delete
+    | Debugger
+    | Type
+    | In
+    | Of
+    | For
+    | From
+    | With
+    | Typeof
+    | Return
+    | If
+    | Else
+    | While
+    | Do
+    | Switch
+    | Case
+    | Default
+    | Break
+    | Continue
+    | Extends
+    | Class
+    | Function
+    | Var
+    | Let
+    | Const
+    | StringType
+    | NumberType
+    | BooleanType
+    | VoidType
+    | Import
+    | Export
+    | As
+    | Yield
+    | Instanceof
+    | Declare => true
+    _ => false
   }
 }
 
@@ -264,7 +479,7 @@ pub fn Parser::parse_interface(
   let fields : Array[(String, @ast.TsType)] = []
   while !self.check(RBrace) && !self.check(Eof) {
     // Skip readonly modifier
-    if self.check(Ident("readonly")) {
+    if self.can_consume_interface_readonly_modifier() {
       let _ = self.advance()
     }
     // Parse field/method name
@@ -326,6 +541,10 @@ pub fn Parser::parse_interface(
       Delete => {
         let _ = self.advance()
         "delete"
+      }
+      Debugger => {
+        let _ = self.advance()
+        "debugger"
       }
       Type => {
         let _ = self.advance()
@@ -418,6 +637,22 @@ pub fn Parser::parse_interface(
       Const => {
         let _ = self.advance()
         "const"
+      }
+      StringType => {
+        let _ = self.advance()
+        "string"
+      }
+      NumberType => {
+        let _ = self.advance()
+        "number"
+      }
+      BooleanType => {
+        let _ = self.advance()
+        "boolean"
+      }
+      VoidType => {
+        let _ = self.advance()
+        "void"
       }
       Import => {
         let _ = self.advance()
@@ -555,6 +790,9 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
         let _ = self.advance()
       }
       RBrace => {
+        if brace_depth == 0 && angle_depth <= 0 {
+          break
+        }
         brace_depth -= 1
         let _ = self.advance()
         if brace_depth < 0 {
@@ -648,83 +886,7 @@ pub fn Parser::parse_declare_function(
   while !self.check(RParen) && !self.check(Eof) {
     // Handle rest parameter: ...name
     let _ = self.match_ellipsis()
-    // Handle parameter name (can be identifier, keyword, or destructuring pattern)
-    let param_name = match self.peek().kind {
-      Ident(n) => {
-        let _ = self.advance()
-        n
-      }
-      // Type keywords can be used as parameter names
-      StringType => {
-        let _ = self.advance()
-        "string"
-      }
-      NumberType => {
-        let _ = self.advance()
-        "number"
-      }
-      BooleanType => {
-        let _ = self.advance()
-        "boolean"
-      }
-      VoidType => {
-        let _ = self.advance()
-        "void"
-      }
-      // Other keywords that can be parameter names
-      Type => {
-        let _ = self.advance()
-        "type"
-      }
-      New => {
-        let _ = self.advance()
-        "new"
-      }
-      Delete => {
-        let _ = self.advance()
-        "delete"
-      }
-      Typeof => {
-        let _ = self.advance()
-        "typeof"
-      }
-      In => {
-        let _ = self.advance()
-        "in"
-      }
-      Of => {
-        let _ = self.advance()
-        "of"
-      }
-      From => {
-        let _ = self.advance()
-        "from"
-      }
-      As => {
-        let _ = self.advance()
-        "as"
-      }
-      LBrace | LBracket => {
-        // Destructuring: { a, b } or [ a, b ]
-        let open_tok = self.peek().kind
-        let close_tok : TokenKind = match open_tok {
-          LBrace => RBrace
-          _ => RBracket
-        }
-        let _ = self.advance()
-        let mut depth = 1
-        while depth > 0 && !self.check(Eof) {
-          if self.peek().kind == open_tok {
-            depth += 1
-          } else if self.peek().kind == close_tok {
-            depth -= 1
-          }
-          let _ = self.advance()
-        }
-        "<destructured>"
-      }
-      k => raise ParseError("Expected parameter name, got \{k}")
-    }
+    let param_name = self.parse_declare_param_name()
     // Handle optional parameter: name?
     let _ = self.match_(Question)
     // Type annotation is optional
@@ -744,6 +906,390 @@ pub fn Parser::parse_declare_function(
   // return valuetype
   let _ = self.expect(Colon)
   let return_type = self.parse_type()
-  let _ = self.expect(Semicolon)
+  self.consume_semicolon()
   { name, module_: "env", params, return_type }
+}
+
+///|
+fn Parser::parse_declare_param_name(self : Parser) -> String raise ParseError {
+  match self.peek().kind {
+    Ident(n) => {
+      let _ = self.advance()
+      n
+    }
+    StringType => {
+      let _ = self.advance()
+      "string"
+    }
+    NumberType => {
+      let _ = self.advance()
+      "number"
+    }
+    BooleanType => {
+      let _ = self.advance()
+      "boolean"
+    }
+    VoidType => {
+      let _ = self.advance()
+      "void"
+    }
+    Type => {
+      let _ = self.advance()
+      "type"
+    }
+    New => {
+      let _ = self.advance()
+      "new"
+    }
+    Delete => {
+      let _ = self.advance()
+      "delete"
+    }
+    Typeof => {
+      let _ = self.advance()
+      "typeof"
+    }
+    In => {
+      let _ = self.advance()
+      "in"
+    }
+    Of => {
+      let _ = self.advance()
+      "of"
+    }
+    From => {
+      let _ = self.advance()
+      "from"
+    }
+    As => {
+      let _ = self.advance()
+      "as"
+    }
+    LBrace | LBracket => {
+      let open_tok = self.peek().kind
+      let close_tok : TokenKind = match open_tok {
+        LBrace => RBrace
+        _ => RBracket
+      }
+      let _ = self.advance()
+      let mut depth = 1
+      while depth > 0 && !self.check(Eof) {
+        if self.peek().kind == open_tok {
+          depth += 1
+        } else if self.peek().kind == close_tok {
+          depth -= 1
+        }
+        let _ = self.advance()
+      }
+      "<destructured>"
+    }
+    k => raise ParseError("Expected parameter name, got \{k}")
+  }
+}
+
+///|
+fn Parser::parse_declare_values(
+  self : Parser,
+) -> Array[@ast.TsValueDecl] raise ParseError {
+  let values : Array[@ast.TsValueDecl] = []
+  let name = self.parse_binding_ident()
+  let type_ = self.parse_var_decl_type()
+  values.push({ name, type_ })
+  while self.match_(Comma) {
+    let next_name = self.parse_binding_ident()
+    let next_type = self.parse_var_decl_type()
+    values.push({ name: next_name, type_: next_type })
+  }
+  self.consume_semicolon()
+  values
+}
+
+///|
+fn Parser::parse_declare_signature_params(
+  self : Parser,
+) -> Array[(String, @ast.TsType)] raise ParseError {
+  let _ = self.expect(LParen)
+  let params : Array[(String, @ast.TsType)] = []
+  while !self.check(RParen) && !self.check(Eof) {
+    let _ = self.match_ellipsis()
+    let param_name = self.parse_declare_param_name()
+    let _ = self.match_(Question)
+    let param_type = if self.check(Colon) {
+      let _ = self.advance()
+      self.parse_type()
+    } else {
+      @ast.TsType::Any
+    }
+    params.push((param_name, param_type))
+    if self.check(Comma) {
+      let _ = self.advance()
+    }
+  }
+  let _ = self.expect(RParen)
+  params
+}
+
+///|
+fn Parser::parse_declare_class_member_name(
+  self : Parser,
+) -> String? raise ParseError {
+  if self.match_(LBracket) {
+    let mut depth = 1
+    while depth > 0 && !self.check(Eof) {
+      match self.peek().kind {
+        LBracket => {
+          depth += 1
+          let _ = self.advance()
+        }
+        RBracket => {
+          depth -= 1
+          let _ = self.advance()
+        }
+        _ => {
+          let _ = self.advance()
+        }
+      }
+    }
+    return None
+  }
+  let name = match self.advance().kind {
+    Ident(n) => n
+    PrivateIdent(n) => "#" + n
+    Str(s) => s
+    Number(n) => "\{n}"
+    Int(n) => "\{n}"
+    Return => "return"
+    If => "if"
+    Else => "else"
+    For => "for"
+    While => "while"
+    Break => "break"
+    Continue => "continue"
+    Function => "function"
+    Try => "try"
+    Catch => "catch"
+    Finally => "finally"
+    Throw => "throw"
+    Yield => "yield"
+    Type => "type"
+    Let => "let"
+    Const => "const"
+    Var => "var"
+    Class => "class"
+    New => "new"
+    Default => "default"
+    Do => "do"
+    In => "in"
+    Case => "case"
+    VoidType => "void"
+    With => "with"
+    Switch => "switch"
+    Typeof => "typeof"
+    Delete => "delete"
+    Export => "export"
+    Import => "import"
+    Debugger => "debugger"
+    Interface => "interface"
+    Instanceof => "instanceof"
+    Extends => "extends"
+    From => "from"
+    As => "as"
+    k => raise ParseError("Expected class member name, got \{k}")
+  }
+  Some(name)
+}
+
+///|
+fn Parser::skip_declare_class_heritage(self : Parser) -> Unit {
+  while !self.check(LBrace) && !self.check(Eof) {
+    let _ = self.advance()
+  }
+}
+
+///|
+fn upsert_class_property(
+  properties : Array[@ast.TsClassPropertyDecl],
+  property : @ast.TsClassPropertyDecl,
+) -> Unit {
+  for i in 0..<properties.length() {
+    let existing = properties[i]
+    if existing.name == property.name &&
+      existing.is_static == property.is_static {
+      let merged_type = match existing.type_ {
+        Any => property.type_
+        _ => existing.type_
+      }
+      properties[i] = {
+        name: existing.name,
+        type_: merged_type,
+        is_static: existing.is_static,
+        is_readonly: existing.is_readonly && property.is_readonly,
+      }
+      return
+    }
+  }
+  properties.push(property)
+}
+
+///|
+fn Parser::parse_declare_class(
+  self : Parser,
+  is_abstract : Bool,
+) -> @ast.TsClassDecl raise ParseError {
+  let _ = self.expect(Class)
+  let name = self.parse_binding_ident()
+  if self.check(Lt) {
+    self.skip_type_params()
+  }
+  self.skip_declare_class_heritage()
+  let _ = self.expect(LBrace)
+  let properties : Array[@ast.TsClassPropertyDecl] = []
+  let methods : Array[@ast.TsClassMethodDecl] = []
+  let mut constructor_params : Array[(String, @ast.TsType)]? = None
+  let mut saw_public_constructor = false
+  let mut saw_nonpublic_constructor = false
+  while !self.check(RBrace) && !self.check(Eof) {
+    if self.match_(Semicolon) {
+      continue
+    }
+    let mut is_static = false
+    let mut is_readonly = false
+    let mut is_public = true
+    let mut has_modifier = true
+    while has_modifier {
+      has_modifier = false
+      match self.peek().kind {
+        Ident(mod) if mod == "static" ||
+          mod == "readonly" ||
+          mod == "override" ||
+          mod == "abstract" ||
+          mod == "declare" ||
+          mod == "accessor" ||
+          mod == "public" ||
+          mod == "private" ||
+          mod == "protected" => {
+          let _ = self.advance()
+          if mod == "static" {
+            is_static = true
+          }
+          if mod == "readonly" {
+            is_readonly = true
+          }
+          if mod == "private" || mod == "protected" {
+            is_public = false
+          }
+          has_modifier = true
+        }
+        _ => ()
+      }
+    }
+    let mut accessor_kind : String? = None
+    match self.peek().kind {
+      Ident(n) if (n == "get" || n == "set") &&
+        self.peek_at(1).kind != LParen &&
+        self.peek_at(1).kind != Lt &&
+        self.peek_at(1).kind != Colon => {
+        let _ = self.advance()
+        accessor_kind = Some(n)
+      }
+      _ => ()
+    }
+    let member_name = self.parse_declare_class_member_name()
+    let _ = self.match_(Question)
+    if self.check(Lt) {
+      self.skip_type_params()
+    }
+    if self.check(LParen) {
+      let params = self.parse_declare_signature_params()
+      let return_type = if self.check(Colon) {
+        let _ = self.advance()
+        self.parse_type()
+      } else {
+        @ast.TsType::Any
+      }
+      self.consume_semicolon()
+      match member_name {
+        Some(member_name) =>
+          match accessor_kind {
+            Some("get") if is_public =>
+              upsert_class_property(properties, {
+                name: member_name,
+                type_: return_type,
+                is_static,
+                is_readonly: true,
+              })
+            Some("set") if is_public => {
+              let setter_type = if params.length() > 0 {
+                let (_, type_) = params[0]
+                type_
+              } else {
+                @ast.TsType::Any
+              }
+              upsert_class_property(properties, {
+                name: member_name,
+                type_: setter_type,
+                is_static,
+                is_readonly: false,
+              })
+            }
+            _ =>
+              if member_name == "constructor" &&
+                !is_static &&
+                accessor_kind is None {
+                if is_public {
+                  constructor_params = Some(params)
+                  saw_public_constructor = true
+                } else {
+                  saw_nonpublic_constructor = true
+                }
+              } else if is_public {
+                methods.push({
+                  name: member_name,
+                  params,
+                  return_type,
+                  is_static,
+                })
+              }
+          }
+        None => ()
+      }
+      continue
+    }
+    let mut property_type = @ast.TsType::Any
+    if self.match_(Colon) {
+      property_type = self.parse_type()
+    }
+    let _ = self.match_(Eq)
+    if !self.check(Semicolon) && !self.check(RBrace) {
+      let _ = self.parse_assignment()
+    }
+    self.consume_semicolon()
+    match member_name {
+      Some(member_name) if is_public && accessor_kind is None =>
+        upsert_class_property(properties, {
+          name: member_name,
+          type_: property_type,
+          is_static,
+          is_readonly,
+        })
+      _ => ()
+    }
+  }
+  let _ = self.expect(RBrace)
+  let _ = self.match_(Semicolon)
+  let is_constructible = if saw_public_constructor {
+    !is_abstract
+  } else if saw_nonpublic_constructor {
+    false
+  } else {
+    !is_abstract
+  }
+  {
+    name,
+    constructor_params,
+    properties,
+    methods,
+    is_abstract,
+    is_constructible,
+  }
 }

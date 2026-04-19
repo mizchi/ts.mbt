@@ -49,6 +49,64 @@ async fn main_async() -> Unit {
       let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
       emit_moonbit_decl(file_path, output_path)
     }
+    "emit-moonbit-js-ffi" => {
+      if args.length() < 4 {
+        println("Error: expected <dts-entry> <module-spec>")
+        return
+      }
+      let file_path = args[2]
+      let module_spec = args[3]
+      let ffi_output_path = if args.length() >= 5 {
+        Some(args[4])
+      } else {
+        None
+      }
+      let bridge_output_path = if args.length() >= 6 {
+        Some(args[5])
+      } else {
+        None
+      }
+      emit_moonbit_js_ffi(
+        file_path, module_spec, ffi_output_path, bridge_output_path,
+      )
+    }
+    "benchmark-project" => {
+      if args.length() < 3 {
+        println("Error: expected <root>")
+        return
+      }
+      let root = args[2]
+      let limit = if args.length() >= 4 {
+        match parse_project_benchmark_limit(args[3]) {
+          Some(limit) => limit
+          None => {
+            println(
+              "Error: invalid limit '\{args[3]}', expected non-negative integer",
+            )
+            return
+          }
+        }
+      } else {
+        benchmark_project_default_limit()
+      }
+      run_project_benchmark(root, limit)
+    }
+    "benchmark-corpora" => {
+      let limit = if args.length() >= 3 {
+        match parse_project_benchmark_limit(args[2]) {
+          Some(limit) => limit
+          None => {
+            println(
+              "Error: invalid limit '\{args[2]}', expected non-negative integer",
+            )
+            return
+          }
+        }
+      } else {
+        benchmark_project_default_limit()
+      }
+      run_benchmark_corpora(limit)
+    }
     _ => {
       println("Unknown command: \{command}")
       print_usage()
@@ -77,6 +135,9 @@ fn command_help_lines() -> Array[String] {
     "  run <file>           Run a TypeScript/JavaScript file", "  experimental-emit-gc <file> [out] Emit experimental wasm-gc binary (default: out.wasm)",
     "  test262 <path>       Run test262 tests (file or directory)", "  experimental-analyze <file> Analyze experimental AOT compilability of functions",
     "  experimental-aot-check <file> Alias for experimental-analyze", "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from TypeScript declarations",
+    "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge",
+    "  benchmark-project <root> [limit] Benchmark local TS/.d.ts corpus coverage",
+    "  benchmark-corpora [limit] Benchmark built-in local and optional real-world corpora",
   ]
 }
 
@@ -138,15 +199,11 @@ async fn experimental_analyze_aot(file_path : String) -> Unit {
 
 ///|
 async fn emit_moonbit_decl(file_path : String, output_path : String?) -> Unit {
-  let content = @fs.read_file(file_path).text() catch {
-    e => {
-      println("Error reading file: \{e}")
-      return
-    }
-  }
-  let emitted = @parser.emit_moonbit_decl_from_source(content) catch {
-    e => {
-      println("Parse error: \{e}")
+  let emitted = emit_moonbit_decl_text(file_path) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      println("Emit error: \{msg}")
       return
     }
   }
@@ -162,6 +219,76 @@ async fn emit_moonbit_decl(file_path : String, output_path : String?) -> Unit {
     }
     None => println(emitted)
   }
+}
+
+///|
+async fn emit_moonbit_decl_text(
+  file_path : String,
+) -> String raise @analysis.ModuleGraphError {
+  @analysis.emit_moonbit_decl_from_entry_path(file_path)
+}
+
+///|
+async fn emit_moonbit_js_ffi(
+  file_path : String,
+  module_spec : String,
+  ffi_output_path : String?,
+  bridge_output_path : String?,
+) -> Unit {
+  let bundle = emit_moonbit_js_ffi_texts(file_path, module_spec) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  match ffi_output_path {
+    Some(path) => {
+      let _ = @fs.write_file(
+        path,
+        string_to_bytes(bundle.ffi_mbt),
+        create=0o644,
+      ) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote MoonBit JS FFI stubs to \{path}")
+    }
+    None => {
+      println("=== ffi.mbt ===")
+      println(bundle.ffi_mbt)
+    }
+  }
+  match bridge_output_path {
+    Some(path) => {
+      let _ = @fs.write_file(
+        path,
+        string_to_bytes(bundle.bridge_js),
+        create=0o644,
+      ) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote JS bridge to \{path}")
+    }
+    None => {
+      println("=== bridge.js ===")
+      println(bundle.bridge_js)
+    }
+  }
+}
+
+///|
+async fn emit_moonbit_js_ffi_texts(
+  file_path : String,
+  module_spec : String,
+) -> @analysis.MoonBitJsFfiBundle raise @analysis.ModuleGraphError {
+  @analysis.emit_moonbit_js_ffi_bundle_from_entry_path(file_path, module_spec)
 }
 
 ///|
@@ -265,62 +392,6 @@ fn join_path(base : String, name : String) -> String {
 }
 
 ///|
-fn normalize_path(path : String) -> String {
-  let is_abs = path.has_prefix("/")
-  let parts : Array[String] = []
-  for part_view in path.split("/") {
-    let part = part_view.to_string()
-    if part == "" {
-      if is_abs && parts.length() == 0 {
-        parts.push("")
-      }
-      continue
-    }
-    if part == "." {
-      continue
-    }
-    if part == ".." {
-      if parts.length() > 0 {
-        let last = parts[parts.length() - 1]
-        if last != "" && last != ".." {
-          let _ = parts.pop()
-          continue
-        }
-      }
-      parts.push("..")
-    } else {
-      parts.push(part)
-    }
-  }
-  if parts.length() == 0 {
-    return if is_abs { "/" } else { "." }
-  }
-  if parts.length() == 1 && parts[0] == "" {
-    return "/"
-  }
-  let mut result = parts[0]
-  if result == "" {
-    result = "/"
-  }
-  for i in 1..<parts.length() {
-    if result == "/" {
-      result = result + parts[i]
-    } else {
-      result = result + "/" + parts[i]
-    }
-  }
-  result
-}
-
-///|
-fn dirname(path : String) -> String {
-  match path.rev_find("/") {
-    Some(idx) => path[:idx].to_string()
-    None => "."
-  }
-}
-
-///|
 fn is_fixture_path(path : String) -> Bool {
   path.contains("_FIXTURE.js")
 }
@@ -362,17 +433,20 @@ fn module_cache_set(
 }
 
 ///|
-fn resolve_module_path(base_path : String, spec : String) -> String {
-  let candidate = if spec.has_prefix("./") || spec.has_prefix("../") {
-    join_path(dirname(base_path), spec)
-  } else {
-    spec
+async fn resolve_module_path(
+  base_path : String,
+  spec : String,
+) -> String raise @parser.ParseError {
+  let resolved = @parser.resolve_runtime_module_specifier(base_path, spec) catch {
+    _ => None
   }
-  let normalized = normalize_path(candidate)
-  if normalized.has_suffix(".js") || normalized.has_suffix(".mjs") {
-    return normalized
+  match resolved {
+    Some(path) => path
+    None =>
+      raise @parser.ParseError::ParseError(
+        "Failed to resolve module specifier '\{spec}' from '\{base_path}'",
+      )
   }
-  normalized + ".js"
 }
 
 ///|

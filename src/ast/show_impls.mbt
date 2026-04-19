@@ -102,6 +102,26 @@ pub impl Show for TsImport with output(self, logger) {
 }
 
 ///|
+pub impl Show for TsValueDecl with output(self, logger) {
+  write_debug_show(logger, self)
+}
+
+///|
+pub impl Show for TsClassPropertyDecl with output(self, logger) {
+  write_debug_show(logger, self)
+}
+
+///|
+pub impl Show for TsClassMethodDecl with output(self, logger) {
+  write_debug_show(logger, self)
+}
+
+///|
+pub impl Show for TsClassDecl with output(self, logger) {
+  write_debug_show(logger, self)
+}
+
+///|
 pub impl Show for TsModule with output(self, logger) {
   write_debug_show(logger, self)
 }

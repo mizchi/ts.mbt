@@ -23,6 +23,14 @@ fmt:
 info:
     moon info
 
+# Benchmark a local TypeScript project corpus
+benchmark-project root limit="200":
+    moon run src -- benchmark-project {{root}} {{limit}}
+
+# Benchmark built-in corpora (repo fixtures + optional local checkouts)
+benchmark-corpora limit="200":
+    moon run src -- benchmark-corpora {{limit}}
+
 # Full CI check
 ci: fmt check test
 

@@ -9,6 +9,247 @@ pub fn Parser::parse_expr(self : Parser) -> @ast.TsExpr raise ParseError {
 }
 
 ///|
+fn Parser::parse_asserted_exponent(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  if self.match_(StarStar) {
+    let right = self.parse_exponent()
+    BinOp(Pow, left, right)
+  } else {
+    left
+  }
+}
+
+///|
+fn Parser::consume_trailing_assertions(self : Parser) -> Bool raise ParseError {
+  let mut had_assertion = false
+  while self.match_(As) ||
+        self.match_ident("as") ||
+        self.match_ident("satisfies") {
+    had_assertion = true
+    let _ = self.parse_type()
+  }
+  had_assertion
+}
+
+///|
+fn Parser::parse_asserted_multiplicative(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_exponent(left)
+  while true {
+    if self.match_(Star) {
+      let right = self.parse_exponent()
+      left = BinOp(Mul, left, right)
+    } else if self.match_(Slash) {
+      let right = self.parse_exponent()
+      left = BinOp(Div, left, right)
+    } else if self.match_(Percent) {
+      let right = self.parse_exponent()
+      left = BinOp(Mod, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_additive(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_multiplicative(left)
+  while true {
+    if self.match_(Plus) {
+      let right = self.parse_multiplicative()
+      left = BinOp(Add, left, right)
+    } else if self.match_(Minus) {
+      let right = self.parse_multiplicative()
+      left = BinOp(Sub, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_shift(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_additive(left)
+  while true {
+    if self.match_(LtLt) {
+      let right = self.parse_additive()
+      left = BinOp(Shl, left, right)
+    } else if self.match_(GtGt) {
+      let right = self.parse_additive()
+      left = BinOp(Shr, left, right)
+    } else if self.match_(GtGtGt) {
+      let right = self.parse_additive()
+      left = BinOp(UShr, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_comparison(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_shift(left)
+  while true {
+    if self.match_(Lt) {
+      let right = self.parse_shift()
+      left = BinOp(BinLt, left, right)
+    } else if self.match_(Le) {
+      let right = self.parse_shift()
+      left = BinOp(BinLe, left, right)
+    } else if self.match_(Gt) {
+      let right = self.parse_shift()
+      left = BinOp(BinGt, left, right)
+    } else if self.match_(Ge) {
+      let right = self.parse_shift()
+      left = BinOp(BinGe, left, right)
+    } else if self.match_(Instanceof) {
+      let right = self.parse_shift()
+      left = BinOp(Instanceof, left, right)
+    } else if self.match_(In) {
+      let right = self.parse_shift()
+      left = BinOp(In, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_equality(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_comparison(left)
+  while true {
+    if self.match_(EqEqEq) {
+      let right = self.parse_comparison()
+      left = BinOp(BinEq, left, right)
+    } else if self.match_(BangEqEq) {
+      let right = self.parse_comparison()
+      left = BinOp(BinNe, left, right)
+    } else if self.match_(EqEq) {
+      let right = self.parse_comparison()
+      left = BinOp(AbstractEq, left, right)
+    } else if self.match_(BangEq) {
+      let right = self.parse_comparison()
+      left = BinOp(AbstractNe, left, right)
+    } else {
+      break
+    }
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_bit_and(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_equality(left)
+  while self.match_(Amp) {
+    let right = self.parse_equality()
+    left = BinOp(BitAnd, left, right)
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_bit_xor(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_bit_and(left)
+  while self.match_(Caret) {
+    let right = self.parse_bit_and()
+    left = BinOp(BitXor, left, right)
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_bit_or(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_bit_xor(left)
+  while self.match_(Pipe) {
+    let right = self.parse_bit_xor()
+    left = BinOp(BitOr, left, right)
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_and(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_bit_or(left)
+  while self.match_(AmpAmp) {
+    let right = self.parse_bit_or()
+    left = BinOp(And, left, right)
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_or(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let mut left = self.parse_asserted_and(left)
+  while self.check(PipePipe) || self.check(QuestionQuestion) {
+    if self.match_(PipePipe) {
+      let mut right = self.parse_and()
+      if self.consume_trailing_assertions() {
+        right = self.parse_asserted_and(right)
+      }
+      left = BinOp(Or, left, right)
+    } else if self.match_(QuestionQuestion) {
+      let mut right = self.parse_and()
+      if self.consume_trailing_assertions() {
+        right = self.parse_asserted_and(right)
+      }
+      left = BinOp(Coalesce, left, right)
+    }
+  }
+  left
+}
+
+///|
+fn Parser::parse_asserted_ternary(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> @ast.TsExpr raise ParseError {
+  let cond = self.parse_asserted_or(left)
+  if self.match_(Question) {
+    let then_expr = self.parse_assignment()
+    let _ = self.expect(Colon)
+    let else_expr = self.parse_assignment()
+    Cond(cond, then_expr, else_expr)
+  } else {
+    cond
+  }
+}
+
+///|
 // / operator
 fn Parser::parse_comma(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_assignment()
@@ -29,7 +270,17 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
     let right = self.parse_assignment()
     return AssignPattern(pattern, right)
   }
-  let left = self.parse_ternary()
+  let mut left = self.parse_ternary()
+  let mut had_assertion = false
+  while self.match_(As) ||
+        self.match_ident("as") ||
+        self.match_ident("satisfies") {
+    had_assertion = true
+    let _ = self.parse_type()
+  }
+  if had_assertion {
+    left = self.parse_asserted_ternary(left)
+  }
   if self.check(Eq) {
     match left {
       Var(name) => {
@@ -209,6 +460,187 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
 }
 
 ///|
+fn Parser::parse_object_method_value(
+  self : Parser,
+  name : String,
+  is_generator : Bool,
+  is_async : Bool,
+) -> @ast.TsExpr raise ParseError {
+  self.skip_type_params()
+  let _ = self.expect(LParen)
+  let params = self.parse_params()
+  let _ = self.expect(RParen)
+  let return_type = if self.check(Colon) {
+    let _ = self.advance()
+    self.parse_type()
+  } else {
+    Any
+  }
+  let prev_generator = self.in_generator
+  let prev_function = self.in_function
+  let prev_async = self.in_async
+  if is_generator {
+    self.in_generator = true
+  }
+  self.in_function = true
+  self.in_async = is_async
+  let body = self.parse_block()
+  self.in_generator = prev_generator
+  self.in_function = prev_function
+  self.in_async = prev_async
+  @ast.TsExpr::FuncExpr({
+    name,
+    params,
+    return_type,
+    body,
+    is_generator,
+    is_async,
+  })
+}
+
+///|
+fn Parser::parse_object_member_name(
+  self : Parser,
+  computed_idx : Int,
+) -> (String, Bool, @ast.TsExpr?, Int) raise ParseError {
+  if self.match_(LBracket) {
+    let key_expr = self.parse_assignment()
+    let _ = self.expect(RBracket)
+    return (
+      "@@computed:" + computed_idx.to_string(),
+      true,
+      Some(key_expr),
+      computed_idx + 1,
+    )
+  }
+  match self.peek().kind {
+    Str(s) => {
+      let _ = self.advance()
+      (s, false, None, computed_idx)
+    }
+    Int(i) => {
+      let _ = self.advance()
+      (i.to_string(), false, None, computed_idx)
+    }
+    Number(n) => {
+      let _ = self.advance()
+      (n.to_string(), false, None, computed_idx)
+    }
+    _ => (self.parse_binding_ident(), false, None, computed_idx)
+  }
+}
+
+///|
+fn Parser::parse_property_name_token(self : Parser) -> String raise ParseError {
+  match self.advance().kind {
+    Ident(name) => name
+    PrivateIdent(name) => {
+      let private_name = "#" + name
+      match self.current_class_brand {
+        Some(brand) => mangle_private_name(private_name, brand)
+        None => private_name
+      }
+    }
+    Return => "return"
+    If => "if"
+    Else => "else"
+    For => "for"
+    While => "while"
+    Switch => "switch"
+    Case => "case"
+    Default => "default"
+    With => "with"
+    Debugger => "debugger"
+    Import => "import"
+    Export => "export"
+    From => "from"
+    As => "as"
+    Break => "break"
+    Continue => "continue"
+    Function => "function"
+    Do => "do"
+    Try => "try"
+    Catch => "catch"
+    Finally => "finally"
+    Throw => "throw"
+    Delete => "delete"
+    Yield => "yield"
+    Let => "let"
+    Const => "const"
+    Var => "var"
+    New => "new"
+    Typeof => "typeof"
+    Of => "of"
+    In => "in"
+    Class => "class"
+    Declare => "declare"
+    Interface => "interface"
+    Instanceof => "instanceof"
+    NumberType => "number"
+    BooleanType => "boolean"
+    StringType => "string"
+    VoidType => "void"
+    IntType => "int"
+    Type => "type"
+    Extends => "extends"
+    Bool(true) => "true"
+    Bool(false) => "false"
+    Null => "null"
+    k => raise ParseError("Expected property name, got \{k}")
+  }
+}
+
+///|
+fn Parser::parse_single_param_arrow(
+  self : Parser,
+  name : String,
+) -> @ast.TsExpr raise ParseError {
+  let _ = self.expect(Arrow)
+  let body = if self.check(LBrace) {
+    let prev_function = self.in_function
+    let prev_iteration = self.in_iteration
+    let prev_switch = self.in_switch
+    let prev_labels : Array[String] = []
+    for label in self.labels {
+      prev_labels.push(label)
+    }
+    self.in_function = true
+    self.in_iteration = false
+    self.in_switch = false
+    while self.labels.length() > 0 {
+      let _ = self.labels.pop()
+    }
+    let block = self.parse_block()
+    self.in_function = prev_function
+    self.in_iteration = prev_iteration
+    self.in_switch = prev_switch
+    while self.labels.length() > 0 {
+      let _ = self.labels.pop()
+    }
+    for label in prev_labels {
+      self.labels.push(label)
+    }
+    @ast.TsArrowBody::ArrowBlock(block)
+  } else {
+    let expr = self.parse_assignment()
+    ArrowExpr(expr)
+  }
+  ArrowFunc(
+    [
+      {
+        name,
+        binding: Some(@ast.TsBinding::Ident(name)),
+        is_rest: false,
+        type_: Any,
+        default: None,
+      },
+    ],
+    body,
+    false,
+  )
+}
+
+///|
 fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
   let saved_pos = self.pos
   let saved_gen = self.in_generator
@@ -229,9 +661,9 @@ fn Parser::is_destructuring_assignment_start(self : Parser) -> Bool {
 fn Parser::parse_ternary(self : Parser) -> @ast.TsExpr raise ParseError {
   let cond = self.parse_or()
   if self.match_(Question) {
-    let then_expr = self.parse_expr()
+    let then_expr = self.parse_assignment()
     let _ = self.expect(Colon)
-    let else_expr = self.parse_expr()
+    let else_expr = self.parse_assignment()
     Cond(cond, then_expr, else_expr)
   } else {
     cond
@@ -513,15 +945,594 @@ fn Parser::parse_postfix(self : Parser) -> @ast.TsExpr raise ParseError {
 }
 
 ///|
+fn is_instantiation_expr_target(expr : @ast.TsExpr) -> Bool {
+  let is_upper_initial = fn(name : String) -> Bool {
+    if name.length() == 0 {
+      return false
+    }
+    let c = name[0].to_int().unsafe_to_char()
+    c >= 'A' && c <= 'Z'
+  }
+  match expr {
+    Var(name) => is_upper_initial(name)
+    PropAccess(_, prop) => is_upper_initial(prop)
+    _ => false
+  }
+}
+
+///|
+fn Parser::try_skip_call_type_args(self : Parser, expr : @ast.TsExpr) -> Bool {
+  if !self.check(Lt) {
+    return false
+  }
+  let saved_pos = self.pos
+  self.skip_type_args()
+  if self.check(LParen) {
+    return true
+  }
+  if is_instantiation_expr_target(expr) &&
+    (
+      self.check(Comma) ||
+      self.check(Comma) ||
+      self.check(RParen) ||
+      self.check(RBracket) ||
+      self.check(RBrace) ||
+      self.check(Semicolon) ||
+      self.check(Colon) ||
+      self.check(Dot) ||
+      self.check(Question) ||
+      self.check(Eof)
+    ) {
+    return true
+  }
+  self.pos = saved_pos
+  false
+}
+
+///|
+fn Parser::parse_parenthesized_expr(
+  self : Parser,
+) -> @ast.TsExpr raise ParseError {
+  if self.peek_at(1).kind == Lt {
+    let temp = { ..self, pos: self.pos + 1 }
+    if temp.is_jsx_element_start() {
+      temp.skip_jsx_element()
+      if temp.check(RParen) {
+        self.pos = temp.pos + 1
+        return Var("__jsx__")
+      }
+    }
+  }
+  let start = self.pos
+  let mut depth = 1
+  let mut end_idx = -1
+  let mut i = start + 1
+  while i < self.tokens.length() {
+    match self.tokens[i].kind {
+      LParen => depth += 1
+      RParen => {
+        depth -= 1
+        if depth == 0 {
+          end_idx = i
+          break
+        }
+      }
+      Eof => break
+      _ => ()
+    }
+    i += 1
+  }
+  if end_idx < 0 {
+    raise ParseError("Expected RParen, got Eof")
+  }
+
+  let inner_tokens : Array[Token] = []
+  for i in (start + 1)..<end_idx {
+    inner_tokens.push(self.tokens[i])
+  }
+  inner_tokens.push({
+    kind: Eof,
+    pos: self.tokens[end_idx].pos,
+    has_newline_before: false,
+  })
+
+  let temp = {
+    ..Parser::new_with_strict_and_jsx(
+      inner_tokens,
+      self.in_strict,
+      self.allow_jsx,
+    ),
+    src: self.src,
+  }
+  temp.in_generator = self.in_generator
+  temp.in_async = self.in_async
+  temp.in_function = self.in_function
+  temp.in_iteration = self.in_iteration
+  temp.in_switch = self.in_switch
+  temp.class_id = self.class_id
+  temp.current_class_brand = self.current_class_brand
+  for label in self.labels {
+    temp.labels.push(label)
+  }
+
+  let expr = temp.parse_expr()
+  if !temp.check(Eof) {
+    raise ParseError("Expected RParen, got \{temp.peek().kind}")
+  }
+  self.pos = end_idx + 1
+  expr
+}
+
+///|
+fn Parser::parse_expr_until_top_level(
+  self : Parser,
+  terminator : TokenKind,
+) -> @ast.TsExpr raise ParseError {
+  let start = self.pos
+  let mut paren_depth = 0
+  let mut brace_depth = 0
+  let mut bracket_depth = 0
+  let mut end_idx = -1
+  let mut i = start
+  while i < self.tokens.length() {
+    let tok = self.tokens[i]
+    match tok.kind {
+      Eof => break
+      k if k == terminator &&
+        paren_depth == 0 &&
+        brace_depth == 0 &&
+        bracket_depth == 0 => {
+        end_idx = i
+        break
+      }
+      LParen => paren_depth += 1
+      RParen => if paren_depth > 0 { paren_depth -= 1 }
+      LBrace => brace_depth += 1
+      RBrace => if brace_depth > 0 { brace_depth -= 1 }
+      LBracket => bracket_depth += 1
+      RBracket => if bracket_depth > 0 { bracket_depth -= 1 }
+      _ => ()
+    }
+    i += 1
+  }
+  if end_idx < 0 {
+    raise ParseError("Expected \{terminator}, got Eof")
+  }
+
+  let inner_tokens : Array[Token] = []
+  for i in start..<end_idx {
+    inner_tokens.push(self.tokens[i])
+  }
+  inner_tokens.push({
+    kind: Eof,
+    pos: self.tokens[end_idx].pos,
+    has_newline_before: false,
+  })
+
+  let temp = {
+    ..Parser::new_with_strict_and_jsx(
+      inner_tokens,
+      self.in_strict,
+      self.allow_jsx,
+    ),
+    src: self.src,
+  }
+  temp.in_generator = self.in_generator
+  temp.in_async = self.in_async
+  temp.in_function = self.in_function
+  temp.in_iteration = self.in_iteration
+  temp.in_switch = self.in_switch
+  temp.class_id = self.class_id
+  temp.current_class_brand = self.current_class_brand
+  for label in self.labels {
+    temp.labels.push(label)
+  }
+
+  let expr = temp.parse_expr()
+  if !temp.check(Eof) {
+    raise ParseError("Expected \{terminator}, got \{temp.peek().kind}")
+  }
+  self.pos = end_idx
+  expr
+}
+
+///|
+fn Parser::is_jsx_element_start(self : Parser) -> Bool {
+  if !self.check(Lt) {
+    return false
+  }
+  match self.peek_at(1).kind {
+    Ident(_) | Gt => true
+    _ => false
+  }
+}
+
+///|
+fn Parser::skip_braced_tokens(self : Parser) -> Unit {
+  if !self.check(LBrace) {
+    return
+  }
+  let _ = self.advance()
+  let mut depth = 1
+  while depth > 0 && !self.check(Eof) {
+    match self.peek().kind {
+      LBrace => {
+        depth += 1
+        let _ = self.advance()
+      }
+      RBrace => {
+        depth -= 1
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
+fn Parser::skip_jsx_element_tokens(self : Parser) -> Unit {
+  let mut depth = 0
+  while !self.check(Eof) {
+    if self.check(LBrace) {
+      self.skip_braced_tokens()
+      continue
+    }
+    if self.check(Lt) {
+      let _ = self.advance()
+      if self.match_(Slash) {
+        while !self.check(Eof) && !self.check(Gt) {
+          if self.check(LBrace) {
+            self.skip_braced_tokens()
+          } else {
+            let _ = self.advance()
+          }
+        }
+        let _ = self.match_(Gt)
+        if depth > 0 {
+          depth -= 1
+        }
+        if depth == 0 {
+          break
+        }
+        continue
+      }
+      if self.match_(Gt) {
+        depth += 1
+        continue
+      }
+      depth += 1
+      while !self.check(Eof) {
+        if self.check(LBrace) {
+          self.skip_braced_tokens()
+        } else if self.check(Slash) && self.peek_at(1).kind == Gt {
+          let _ = self.advance()
+          let _ = self.advance()
+          depth -= 1
+          break
+        } else if self.match_(Gt) {
+          break
+        } else {
+          let _ = self.advance()
+        }
+      }
+      if depth == 0 {
+        break
+      }
+      continue
+    }
+    let _ = self.advance()
+  }
+}
+
+///|
+fn Parser::advance_to_source_pos(self : Parser, source_pos : Int) -> Unit {
+  while self.pos < self.tokens.length() &&
+        self.tokens[self.pos].pos < source_pos {
+    self.pos += 1
+  }
+}
+
+///|
+fn Parser::scan_type_assertion_source_end(
+  self : Parser,
+  start : Int,
+) -> Int raise ParseError {
+  let mut i = start
+  let mut depth = 0
+  while i < self.src.length() {
+    let ch = self.src[i].to_int().unsafe_to_char()
+    if ch == '/' &&
+      i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '/' {
+      i = self.skip_source_line_comment(i)
+      continue
+    } else if ch == '/' &&
+      i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '*' {
+      i = self.skip_source_block_comment(i)
+      continue
+    } else if ch == '"' ||
+      ch == '`' ||
+      (ch == '\'' && !self.is_source_word_apostrophe(i)) {
+      let quote = ch
+      i += 1
+      while i < self.src.length() {
+        let inner = self.src[i].to_int().unsafe_to_char()
+        if inner == '\\' {
+          i += 2
+          continue
+        }
+        if inner == quote {
+          break
+        }
+        i += 1
+      }
+    } else if ch == '<' {
+      depth += 1
+    } else if ch == '>' {
+      let is_arrow_close = i > 0 &&
+        self.src[i - 1].to_int().unsafe_to_char() == '='
+      if !is_arrow_close {
+        depth -= 1
+        if depth == 0 {
+          return i + 1
+        }
+      }
+    }
+    i += 1
+  }
+  raise ParseError("Unterminated type assertion")
+}
+
+///|
+fn Parser::scan_jsx_source_end(self : Parser, start : Int) -> Int {
+  let mut i = start
+  let mut depth = 0
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == '{' {
+      i = self.skip_jsx_braces_in_source(i)
+      continue
+    }
+    if c != '<' {
+      i += 1
+      continue
+    }
+    if i + 2 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '/' &&
+      self.src[i + 2].to_int().unsafe_to_char() == '>' {
+      i += 3
+      if depth > 0 {
+        depth -= 1
+      }
+      if depth == 0 {
+        break
+      }
+      continue
+    }
+    if i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '>' {
+      depth += 1
+      i += 2
+      continue
+    }
+    if i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '/' {
+      i += 2
+      while i < self.src.length() &&
+            self.src[i].to_int().unsafe_to_char() != '>' {
+        i += 1
+      }
+      if i < self.src.length() {
+        i += 1
+      }
+      if depth > 0 {
+        depth -= 1
+      }
+      if depth == 0 {
+        break
+      }
+      continue
+    }
+
+    depth += 1
+    i += 1
+    let mut quote : Char? = None
+    while i < self.src.length() {
+      let inner = self.src[i].to_int().unsafe_to_char()
+      match quote {
+        Some(q) => {
+          if inner == '\\' {
+            i += 2
+            continue
+          }
+          if inner == q {
+            quote = None
+          }
+          i += 1
+        }
+        None =>
+          if inner == '"' || inner == '\'' || inner == '`' {
+            quote = Some(inner)
+            i += 1
+          } else if inner == '{' {
+            i = self.skip_jsx_braces_in_source(i)
+          } else if inner == '/' &&
+            i + 1 < self.src.length() &&
+            self.src[i + 1].to_int().unsafe_to_char() == '>' {
+            i += 2
+            depth -= 1
+            break
+          } else if inner == '>' {
+            i += 1
+            break
+          } else {
+            i += 1
+          }
+      }
+    }
+    if depth == 0 {
+      break
+    }
+  }
+  i
+}
+
+///|
+fn Parser::try_skip_parenthesized_jsx_expr(self : Parser) -> Bool {
+  if self.src.length() == 0 || !self.check(LParen) {
+    return false
+  }
+  let mut i = self.peek().pos + 1
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  if i >= self.src.length() || self.src[i].to_int().unsafe_to_char() != '<' {
+    return false
+  }
+  let jsx_end = self.scan_jsx_source_end(i)
+  let mut j = jsx_end
+  while j < self.src.length() {
+    let c = self.src[j].to_int().unsafe_to_char()
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      j += 1
+    } else {
+      break
+    }
+  }
+  if j < self.src.length() && self.src[j].to_int().unsafe_to_char() == ')' {
+    self.advance_to_source_pos(j + 1)
+    return true
+  }
+  false
+}
+
+///|
+fn Parser::is_source_word_char(_self : Parser, c : Char) -> Bool {
+  (c >= 'a' && c <= 'z') ||
+  (c >= 'A' && c <= 'Z') ||
+  (c >= '0' && c <= '9') ||
+  c == '_'
+}
+
+///|
+fn Parser::is_source_word_apostrophe(self : Parser, idx : Int) -> Bool {
+  if idx <= 0 || idx + 1 >= self.src.length() {
+    return false
+  }
+  let prev = self.src[idx - 1].to_int().unsafe_to_char()
+  let next = self.src[idx + 1].to_int().unsafe_to_char()
+  self.is_source_word_char(prev) && self.is_source_word_char(next)
+}
+
+///|
+fn Parser::skip_source_line_comment(self : Parser, idx : Int) -> Int {
+  let mut i = idx + 2
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    i += 1
+    if c == '\n' || c == '\r' {
+      break
+    }
+  }
+  i
+}
+
+///|
+fn Parser::skip_source_block_comment(self : Parser, idx : Int) -> Int {
+  let mut i = idx + 2
+  while i + 1 < self.src.length() {
+    if self.src[i].to_int().unsafe_to_char() == '*' &&
+      self.src[i + 1].to_int().unsafe_to_char() == '/' {
+      return i + 2
+    }
+    i += 1
+  }
+  self.src.length()
+}
+
+///|
+fn Parser::skip_jsx_braces_in_source(self : Parser, idx : Int) -> Int {
+  let mut i = idx + 1
+  let mut depth = 1
+  let mut quote : Char? = None
+  while i < self.src.length() && depth > 0 {
+    let c = self.src[i].to_int().unsafe_to_char()
+    match quote {
+      Some(q) => {
+        if c == '\\' {
+          i += 2
+          continue
+        }
+        if c == q {
+          quote = None
+        }
+        i += 1
+      }
+      None =>
+        if c == '/' &&
+          i + 1 < self.src.length() &&
+          self.src[i + 1].to_int().unsafe_to_char() == '/' {
+          i = self.skip_source_line_comment(i)
+        } else if c == '/' &&
+          i + 1 < self.src.length() &&
+          self.src[i + 1].to_int().unsafe_to_char() == '*' {
+          i = self.skip_source_block_comment(i)
+        } else if c == '"' ||
+          c == '`' ||
+          (c == '\'' && !self.is_source_word_apostrophe(i)) {
+          quote = Some(c)
+          i += 1
+        } else if c == '{' {
+          depth += 1
+          i += 1
+        } else if c == '}' {
+          depth -= 1
+          i += 1
+        } else {
+          i += 1
+        }
+    }
+  }
+  i
+}
+
+///|
+fn Parser::skip_jsx_element(self : Parser) -> Unit {
+  if self.src.length() == 0 {
+    self.skip_jsx_element_tokens()
+    return
+  }
+  let i = self.scan_jsx_source_end(self.peek().pos)
+  self.advance_to_source_pos(i)
+}
+
+///|
 // / function, array, property, method
 fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_primary()
 
   // operatorcheck
   while true {
+    if self.match_(Bang) {
+      continue
+    }
+    if self.try_skip_call_type_args(expr) {
+      continue
+    }
     if self.check(Question) && self.peek_at(1).kind == Dot {
       let _ = self.advance()
       let _ = self.advance()
+      if self.try_skip_call_type_args(expr) {
+        continue
+      }
       match self.peek().kind {
         LBracket => {
           let _ = self.advance()
@@ -543,59 +1554,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
           continue
         }
         _ => {
-          let prop = match self.advance().kind {
-            Ident(name) => name
-            PrivateIdent(name) => {
-              let private_name = "#" + name
-              match self.current_class_brand {
-                Some(brand) => mangle_private_name(private_name, brand)
-                None => private_name
-              }
-            }
-            Return => "return"
-            If => "if"
-            Else => "else"
-            For => "for"
-            While => "while"
-            Switch => "switch"
-            Case => "case"
-            Default => "default"
-            With => "with"
-            Debugger => "debugger"
-            Import => "import"
-            Export => "export"
-            From => "from"
-            As => "as"
-            Break => "break"
-            Continue => "continue"
-            Function => "function"
-            Do => "do"
-            Try => "try"
-            Catch => "catch"
-            Finally => "finally"
-            Throw => "throw"
-            Delete => "delete"
-            Yield => "yield"
-            Let => "let"
-            Const => "const"
-            Var => "var"
-            New => "new"
-            Typeof => "typeof"
-            Of => "of"
-            In => "in"
-            Class => "class"
-            Declare => "declare"
-            Interface => "interface"
-            Instanceof => "instanceof"
-            NumberType => "number"
-            BooleanType => "boolean"
-            StringType => "string"
-            VoidType => "void"
-            IntType => "int"
-            Type => "type"
-            Extends => "extends"
-            k => raise ParseError("Expected property name, got \{k}")
-          }
+          let prop = self.parse_property_name_token()
           expr = PropAccess(expr, prop)
           continue
         }
@@ -620,59 +1579,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
     } else if self.check(Dot) {
       // property
       let _ = self.advance()
-      let prop = match self.advance().kind {
-        Ident(name) => name
-        PrivateIdent(name) => {
-          let private_name = "#" + name
-          match self.current_class_brand {
-            Some(brand) => mangle_private_name(private_name, brand)
-            None => private_name
-          }
-        }
-        Return => "return"
-        If => "if"
-        Else => "else"
-        For => "for"
-        While => "while"
-        Switch => "switch"
-        Case => "case"
-        Default => "default"
-        With => "with"
-        Debugger => "debugger"
-        Import => "import"
-        Export => "export"
-        From => "from"
-        As => "as"
-        Break => "break"
-        Continue => "continue"
-        Function => "function"
-        Do => "do"
-        Try => "try"
-        Catch => "catch"
-        Finally => "finally"
-        Throw => "throw"
-        Delete => "delete"
-        Yield => "yield"
-        Let => "let"
-        Const => "const"
-        Var => "var"
-        New => "new"
-        Typeof => "typeof"
-        Of => "of"
-        In => "in"
-        Class => "class"
-        Declare => "declare"
-        Interface => "interface"
-        Instanceof => "instanceof"
-        NumberType => "number"
-        BooleanType => "boolean"
-        StringType => "string"
-        VoidType => "void"
-        IntType => "int"
-        Type => "type"
-        Extends => "extends"
-        k => raise ParseError("Expected property name, got \{k}")
-      }
+      let prop = self.parse_property_name_token()
       expr = PropAccess(expr, prop)
     } else {
       // Check for tagged template literal
@@ -723,11 +1630,141 @@ fn Parser::parse_args(self : Parser) -> Array[@ast.TsExpr] raise ParseError {
 }
 
 ///|
+fn Parser::is_generic_arrow_function(self : Parser) -> Bool {
+  if !self.check(Lt) {
+    return false
+  }
+  let temp = { ..self }
+  temp.skip_type_args()
+  if !temp.check(LParen) {
+    return false
+  }
+  temp.is_arrow_function()
+}
+
+///|
+fn Parser::parse_generic_arrow_function(
+  self : Parser,
+) -> @ast.TsExpr raise ParseError {
+  self.skip_type_args()
+  let _ = self.expect(LParen)
+  let params = self.parse_params()
+  let _ = self.expect(RParen)
+  if self.check(Colon) {
+    let _ = self.advance()
+    self.skip_type_until_arrow()
+  }
+  let _ = self.expect(Arrow)
+  let body = if self.check(LBrace) {
+    let prev_function = self.in_function
+    let prev_iteration = self.in_iteration
+    let prev_switch = self.in_switch
+    let prev_labels : Array[String] = []
+    for label in self.labels {
+      prev_labels.push(label)
+    }
+    self.in_function = true
+    self.in_iteration = false
+    self.in_switch = false
+    while self.labels.length() > 0 {
+      let _ = self.labels.pop()
+    }
+    let block = self.parse_block()
+    self.in_function = prev_function
+    self.in_iteration = prev_iteration
+    self.in_switch = prev_switch
+    while self.labels.length() > 0 {
+      let _ = self.labels.pop()
+    }
+    for label in prev_labels {
+      self.labels.push(label)
+    }
+    @ast.TsArrowBody::ArrowBlock(block)
+  } else {
+    let expr = self.parse_assignment()
+    ArrowExpr(expr)
+  }
+  ArrowFunc(params, body, false)
+}
+
+///|
+fn Parser::parse_angle_bracket_type_assertion(
+  self : Parser,
+) -> @ast.TsExpr raise ParseError {
+  if self.src == "" {
+    return self.parse_angle_bracket_type_assertion_with_tokens()
+  }
+  let saved_pos = self.pos
+  self.parse_angle_bracket_type_assertion_with_tokens() catch {
+    _ => {
+      self.pos = saved_pos
+      self.parse_angle_bracket_type_assertion_from_source()
+    }
+  }
+}
+
+///|
+fn Parser::parse_angle_bracket_type_assertion_from_source(
+  self : Parser,
+) -> @ast.TsExpr raise ParseError {
+  let start_pos = self.peek().pos
+  let end_pos = self.scan_type_assertion_source_end(start_pos)
+  let type_start = start_pos + 1
+  let type_end = if end_pos - 1 <= self.src.length() {
+    end_pos - 1
+  } else {
+    self.src.length()
+  }
+  if type_start > self.src.length() {
+    raise ParseError("Expected Gt, got \{self.peek().kind}")
+  }
+  if type_end < type_start {
+    raise ParseError("Expected Gt, got \{self.peek().kind}")
+  }
+  let type_src = self.src[type_start:type_end].to_string()
+  let type_parser = Parser::from_source_with_jsx(type_src, false)
+  let _ = type_parser.parse_type()
+  self.advance_to_source_pos(end_pos)
+  self.parse_unary()
+}
+
+///|
+fn Parser::parse_angle_bracket_type_assertion_with_tokens(
+  self : Parser,
+) -> @ast.TsExpr raise ParseError {
+  let _ = self.expect(Lt)
+  let _ = self.parse_type()
+  if !self.match_(Gt) {
+    let prev_kind = if self.pos > 0 {
+      self.tokens[self.pos - 1].kind
+    } else {
+      Eof
+    }
+    match prev_kind {
+      GtGt | GtGtGt => ()
+      _ => raise ParseError("Expected Gt, got \{self.peek().kind}")
+    }
+  }
+  self.parse_unary()
+}
+
+///|
 // / expression (literal, variable, , array, new)
 fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
   let tok = self.peek()
   match tok.kind {
     Class => self.parse_class_stub()
+    Lt =>
+      if self.is_generic_arrow_function() {
+        self.parse_generic_arrow_function()
+      } else if !self.allow_jsx {
+        self.parse_angle_bracket_type_assertion()
+      } else if self.is_jsx_element_start() {
+        self.skip_jsx_element()
+        Var("__jsx__")
+      } else {
+        raise ParseError("Unexpected token: Lt")
+      }
     Number(n) => {
       let _ = self.advance()
       NumberLit(n)
@@ -751,30 +1788,94 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       let _ = self.advance()
       BoolLit(b)
     }
-    NumberType => {
-      let _ = self.advance()
-      Var("number")
-    }
-    BooleanType => {
-      let _ = self.advance()
-      Var("boolean")
-    }
-    StringType => {
-      let _ = self.advance()
-      Var("string")
-    }
-    VoidType => {
-      let _ = self.advance()
-      Var("void")
-    }
-    IntType => {
-      let _ = self.advance()
-      Var("int")
-    }
-    Type => {
-      let _ = self.advance()
-      Var("type")
-    }
+    NumberType =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("number")
+      } else {
+        let _ = self.advance()
+        Var("number")
+      }
+    BooleanType =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("boolean")
+      } else {
+        let _ = self.advance()
+        Var("boolean")
+      }
+    StringType =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("string")
+      } else {
+        let _ = self.advance()
+        Var("string")
+      }
+    VoidType =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("void")
+      } else {
+        let _ = self.advance()
+        Var("void")
+      }
+    IntType =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("int")
+      } else {
+        let _ = self.advance()
+        Var("int")
+      }
+    Type =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("type")
+      } else {
+        let _ = self.advance()
+        Var("type")
+      }
+    From =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("from")
+      } else {
+        let _ = self.advance()
+        Var("from")
+      }
+    Of =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("of")
+      } else {
+        let _ = self.advance()
+        Var("of")
+      }
+    In =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("in")
+      } else {
+        let _ = self.advance()
+        Var("in")
+      }
+    Delete =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("delete")
+      } else {
+        let _ = self.advance()
+        Var("delete")
+      }
+    Debugger =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("debugger")
+      } else {
+        let _ = self.advance()
+        Var("debugger")
+      }
     Str(s) => {
       let _ = self.advance()
       StringLit(s)
@@ -809,6 +1910,12 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         let func = self.parse_function_expr()
         self.in_async = false
         @ast.TsExpr::FuncExpr(func)
+      } else if name == "async" &&
+        self.peek_at(1).kind == Lt &&
+        !self.has_line_terminator_after() &&
+        self.is_async_arrow_function() {
+        let _ = self.advance()
+        self.parse_async_arrow_function()
       } else if name == "async" &&
         !self.has_line_terminator_after() &&
         self.is_async_arrow_function() {
@@ -874,6 +1981,10 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         let _ = self.advance()
         Var("let")
       }
+    As => {
+      let _ = self.advance()
+      Var("as")
+    }
     PrivateIdent(name) => {
       let _ = self.advance()
       let private_name = "#" + name
@@ -884,12 +1995,119 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       Var(mangled)
     }
     LParen =>
-      // functioncheck
-      if self.is_arrow_function() {
+      if self.try_skip_parenthesized_jsx_expr() {
+        Var("__jsx__")
+        // functioncheck
+      } else if self.peek_at(1).kind == Lt {
+        let temp = { ..self, pos: self.pos + 1 }
+        if temp.is_jsx_element_start() {
+          temp.skip_jsx_element()
+          if temp.check(RParen) {
+            self.pos = temp.pos + 1
+            Var("__jsx__")
+          } else if self.is_arrow_function() {
+            // function: (params) => body
+            let _ = self.advance() // (
+            let params = self.parse_params()
+            let _ = self.expect(RParen)
+            if self.check(Colon) {
+              let _ = self.advance()
+              self.skip_type_until_arrow()
+            }
+            let _ = self.expect(Arrow)
+            // : blockexpression
+            let body = if self.check(LBrace) {
+              // Save and set function context for arrow block body
+              let prev_function = self.in_function
+              let prev_iteration = self.in_iteration
+              let prev_switch = self.in_switch
+              // Save labels and clear for new function scope
+              let prev_labels : Array[String] = []
+              for label in self.labels {
+                prev_labels.push(label)
+              }
+              self.in_function = true
+              self.in_iteration = false
+              self.in_switch = false
+              while self.labels.length() > 0 {
+                let _ = self.labels.pop()
+              }
+              let block = self.parse_block()
+              self.in_function = prev_function
+              self.in_iteration = prev_iteration
+              self.in_switch = prev_switch
+              // Restore labels
+              while self.labels.length() > 0 {
+                let _ = self.labels.pop()
+              }
+              for label in prev_labels {
+                self.labels.push(label)
+              }
+              @ast.TsArrowBody::ArrowBlock(block)
+            } else {
+              let expr = self.parse_assignment()
+              ArrowExpr(expr)
+            }
+            ArrowFunc(params, body, false)
+          } else {
+            self.parse_parenthesized_expr()
+          }
+        } else if self.is_arrow_function() {
+          // function: (params) => body
+          let _ = self.advance() // (
+          let params = self.parse_params()
+          let _ = self.expect(RParen)
+          if self.check(Colon) {
+            let _ = self.advance()
+            self.skip_type_until_arrow()
+          }
+          let _ = self.expect(Arrow)
+          // : blockexpression
+          let body = if self.check(LBrace) {
+            // Save and set function context for arrow block body
+            let prev_function = self.in_function
+            let prev_iteration = self.in_iteration
+            let prev_switch = self.in_switch
+            // Save labels and clear for new function scope
+            let prev_labels : Array[String] = []
+            for label in self.labels {
+              prev_labels.push(label)
+            }
+            self.in_function = true
+            self.in_iteration = false
+            self.in_switch = false
+            while self.labels.length() > 0 {
+              let _ = self.labels.pop()
+            }
+            let block = self.parse_block()
+            self.in_function = prev_function
+            self.in_iteration = prev_iteration
+            self.in_switch = prev_switch
+            // Restore labels
+            while self.labels.length() > 0 {
+              let _ = self.labels.pop()
+            }
+            for label in prev_labels {
+              self.labels.push(label)
+            }
+            @ast.TsArrowBody::ArrowBlock(block)
+          } else {
+            let expr = self.parse_assignment()
+            ArrowExpr(expr)
+          }
+          ArrowFunc(params, body, false)
+        } else {
+          self.parse_parenthesized_expr()
+        }
+      } else if self.is_arrow_function() {
         // function: (params) => body
         let _ = self.advance() // (
         let params = self.parse_params()
         let _ = self.expect(RParen)
+        if self.check(Colon) {
+          let _ = self.advance()
+          self.skip_type_until_arrow()
+        }
         let _ = self.expect(Arrow)
         // : blockexpression
         let body = if self.check(LBrace) {
@@ -927,10 +2145,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         ArrowFunc(params, body, false)
       } else {
         // regularexpression
-        let _ = self.advance()
-        let expr = self.parse_expr()
-        let _ = self.expect(RParen)
-        expr
+        self.parse_parenthesized_expr()
       }
     LBracket => {
       // arrayliteral: [1, 2, 3]
@@ -969,52 +2184,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       // new expression: new Array<number>(10)
       let _ = self.advance()
       if self.match_(Dot) {
-        let prop = match self.advance().kind {
-          Ident(n) => n
-          Return => "return"
-          If => "if"
-          Else => "else"
-          For => "for"
-          While => "while"
-          Switch => "switch"
-          Case => "case"
-          Default => "default"
-          With => "with"
-          Debugger => "debugger"
-          Import => "import"
-          Export => "export"
-          From => "from"
-          As => "as"
-          Break => "break"
-          Continue => "continue"
-          Function => "function"
-          Do => "do"
-          Try => "try"
-          Catch => "catch"
-          Finally => "finally"
-          Throw => "throw"
-          Delete => "delete"
-          Yield => "yield"
-          Let => "let"
-          Const => "const"
-          Var => "var"
-          New => "new"
-          Typeof => "typeof"
-          Of => "of"
-          In => "in"
-          Class => "class"
-          Declare => "declare"
-          Interface => "interface"
-          Instanceof => "instanceof"
-          NumberType => "number"
-          BooleanType => "boolean"
-          StringType => "string"
-          VoidType => "void"
-          IntType => "int"
-          Type => "type"
-          Extends => "extends"
-          k => raise ParseError("Expected property name, got \{k}")
-        }
+        let prop = self.parse_property_name_token()
         return PropAccess(Var("new"), prop)
       }
       let mut type_name = ""
@@ -1031,6 +2201,13 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           while self.match_(Dot) {
             let part = match self.advance().kind {
               Ident(n) => n
+              PrivateIdent(name) => {
+                let private_name = "#" + name
+                match self.current_class_brand {
+                  Some(brand) => mangle_private_name(private_name, brand)
+                  None => private_name
+                }
+              }
               // Allow reserved words as property names (e.g., Symbol.for)
               For => "for"
               Return => "return"
@@ -1081,9 +2258,8 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           }
           callee_expr = Some(expr)
           // typeparameter (simpleimplementation)
-          if self.match_(Lt) {
-            let _ = self.parse_type()
-            let _ = self.expect(Gt)
+          if self.check(Lt) {
+            self.skip_type_args()
           }
         }
         NumberType => {
@@ -1180,6 +2356,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         } else {
           // field
           let mut is_ident_key = false
+          let mut is_shorthand_key = false
           let mut is_computed_key = false
           let mut computed_key_expr : @ast.TsExpr? = None
           let is_generator = self.match_(Star)
@@ -1195,53 +2372,192 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             match self.advance().kind {
               Ident(n) => {
                 is_ident_key = true
+                is_shorthand_key = true
                 n
               }
               Str(s) => s
               Int(i) => i.to_string()
               Number(n) => n.to_string()
-              Yield => "yield"
-              Return => "return"
-              If => "if"
-              Else => "else"
-              For => "for"
-              While => "while"
-              Switch => "switch"
-              Case => "case"
-              Default => "default"
-              With => "with"
-              Debugger => "debugger"
-              Import => "import"
-              Export => "export"
-              From => "from"
-              As => "as"
-              Break => "break"
-              Continue => "continue"
-              Function => "function"
-              Do => "do"
-              Try => "try"
-              Catch => "catch"
-              Finally => "finally"
-              Throw => "throw"
-              Delete => "delete"
-              Let => "let"
-              Const => "const"
-              Var => "var"
-              New => "new"
-              Typeof => "typeof"
-              Of => "of"
-              In => "in"
-              Declare => "declare"
-              Interface => "interface"
-              Class => "class"
-              Instanceof => "instanceof"
-              NumberType => "number"
-              BooleanType => "boolean"
-              StringType => "string"
-              VoidType => "void"
-              IntType => "int"
-              Type => "type"
-              Extends => "extends"
+              Yield => {
+                is_shorthand_key = true
+                "yield"
+              }
+              Return => {
+                is_shorthand_key = true
+                "return"
+              }
+              If => {
+                is_shorthand_key = true
+                "if"
+              }
+              Else => {
+                is_shorthand_key = true
+                "else"
+              }
+              For => {
+                is_shorthand_key = true
+                "for"
+              }
+              While => {
+                is_shorthand_key = true
+                "while"
+              }
+              Switch => {
+                is_shorthand_key = true
+                "switch"
+              }
+              Case => {
+                is_shorthand_key = true
+                "case"
+              }
+              Default => {
+                is_shorthand_key = true
+                "default"
+              }
+              With => {
+                is_shorthand_key = true
+                "with"
+              }
+              Debugger => {
+                is_shorthand_key = true
+                "debugger"
+              }
+              Import => {
+                is_shorthand_key = true
+                "import"
+              }
+              Export => {
+                is_shorthand_key = true
+                "export"
+              }
+              From => {
+                is_shorthand_key = true
+                "from"
+              }
+              As => {
+                is_shorthand_key = true
+                "as"
+              }
+              Break => {
+                is_shorthand_key = true
+                "break"
+              }
+              Continue => {
+                is_shorthand_key = true
+                "continue"
+              }
+              Function => {
+                is_shorthand_key = true
+                "function"
+              }
+              Do => {
+                is_shorthand_key = true
+                "do"
+              }
+              Try => {
+                is_shorthand_key = true
+                "try"
+              }
+              Catch => {
+                is_shorthand_key = true
+                "catch"
+              }
+              Finally => {
+                is_shorthand_key = true
+                "finally"
+              }
+              Throw => {
+                is_shorthand_key = true
+                "throw"
+              }
+              Delete => {
+                is_shorthand_key = true
+                "delete"
+              }
+              Let => {
+                is_shorthand_key = true
+                "let"
+              }
+              Const => {
+                is_shorthand_key = true
+                "const"
+              }
+              Var => {
+                is_shorthand_key = true
+                "var"
+              }
+              New => {
+                is_shorthand_key = true
+                "new"
+              }
+              Typeof => {
+                is_shorthand_key = true
+                "typeof"
+              }
+              Of => {
+                is_shorthand_key = true
+                "of"
+              }
+              In => {
+                is_shorthand_key = true
+                "in"
+              }
+              Declare => {
+                is_shorthand_key = true
+                "declare"
+              }
+              Interface => {
+                is_shorthand_key = true
+                "interface"
+              }
+              Class => {
+                is_shorthand_key = true
+                "class"
+              }
+              Instanceof => {
+                is_shorthand_key = true
+                "instanceof"
+              }
+              NumberType => {
+                is_shorthand_key = true
+                "number"
+              }
+              BooleanType => {
+                is_shorthand_key = true
+                "boolean"
+              }
+              StringType => {
+                is_shorthand_key = true
+                "string"
+              }
+              VoidType => {
+                is_shorthand_key = true
+                "void"
+              }
+              IntType => {
+                is_shorthand_key = true
+                "int"
+              }
+              Bool(true) => {
+                is_shorthand_key = true
+                "true"
+              }
+              Bool(false) => {
+                is_shorthand_key = true
+                "false"
+              }
+              Null => {
+                is_shorthand_key = true
+                "null"
+              }
+              Type => {
+                is_shorthand_key = true
+                "type"
+              }
+              Extends => {
+                is_shorthand_key = true
+                "extends"
+              }
               k => raise ParseError("Expected property name, got \{k}")
             }
           }
@@ -1250,6 +2566,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             (prop_key == "get" || prop_key == "set") &&
             !self.check(Colon) &&
             !self.check(LParen) &&
+            !self.check(Lt) &&
             !self.check(Comma) &&
             !self.check(RBrace) {
             let mut acc_computed_key : @ast.TsExpr? = None
@@ -1343,38 +2660,31 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               is_generator: false,
               is_async: false,
             })
+          } else if is_ident_key &&
+            prop_key == "async" &&
+            !self.check(Colon) &&
+            !self.check(Comma) &&
+            !self.check(RBrace) {
+            let async_is_generator = self.match_(Star)
+            let (
+              async_name,
+              async_is_computed,
+              async_computed_expr,
+              next_computed_idx,
+            ) = self.parse_object_member_name(computed_idx)
+            prop_key = async_name
+            is_computed_key = async_is_computed
+            computed_key_expr = async_computed_expr
+            computed_idx = next_computed_idx
+            self.parse_object_method_value(prop_key, async_is_generator, true)
           } else if self.match_(Colon) {
             self.parse_assignment()
           } else if is_ident_key && self.match_(Eq) {
             self.parse_assignment()
-          } else if self.check(LParen) {
-            let _ = self.expect(LParen)
-            let params = self.parse_params()
-            let _ = self.expect(RParen)
-            let return_type = if self.check(Colon) {
-              let _ = self.advance()
-              self.parse_type()
-            } else {
-              Any
-            }
-            let prev_generator = self.in_generator
-            let prev_function = self.in_function
-            if is_generator {
-              self.in_generator = true
-            }
-            self.in_function = true
-            let body = self.parse_block()
-            self.in_generator = prev_generator
-            self.in_function = prev_function
-            @ast.TsExpr::FuncExpr({
-              name: prop_key,
-              params,
-              return_type,
-              body,
-              is_generator,
-              is_async: false,
-            })
-          } else if is_ident_key && (self.check(Comma) || self.check(RBrace)) {
+          } else if self.check(LParen) || self.check(Lt) {
+            self.parse_object_method_value(prop_key, is_generator, false)
+          } else if is_shorthand_key &&
+            (self.check(Comma) || self.check(RBrace)) {
             Var(prop_key)
           } else {
             raise ParseError("Expected Colon, got \{self.peek().kind}")
@@ -1398,6 +2708,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             continue
           }
           let mut is_ident_key = false
+          let mut is_shorthand_key = false
           let mut is_computed_key = false
           let mut computed_key_expr : @ast.TsExpr? = None
           let is_generator = self.match_(Star)
@@ -1413,53 +2724,192 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             match self.advance().kind {
               Ident(n) => {
                 is_ident_key = true
+                is_shorthand_key = true
                 n
               }
               Str(s) => s
               Int(i) => i.to_string()
               Number(n) => n.to_string()
-              Return => "return"
-              If => "if"
-              Else => "else"
-              For => "for"
-              While => "while"
-              Switch => "switch"
-              Case => "case"
-              Default => "default"
-              With => "with"
-              Debugger => "debugger"
-              Import => "import"
-              Export => "export"
-              From => "from"
-              As => "as"
-              Break => "break"
-              Continue => "continue"
-              Function => "function"
-              Do => "do"
-              Try => "try"
-              Catch => "catch"
-              Finally => "finally"
-              Throw => "throw"
-              Delete => "delete"
-              Yield => "yield"
-              Let => "let"
-              Const => "const"
-              Var => "var"
-              New => "new"
-              Typeof => "typeof"
-              Of => "of"
-              In => "in"
-              Declare => "declare"
-              Interface => "interface"
-              Class => "class"
-              Instanceof => "instanceof"
-              NumberType => "number"
-              BooleanType => "boolean"
-              StringType => "string"
-              VoidType => "void"
-              IntType => "int"
-              Type => "type"
-              Extends => "extends"
+              Return => {
+                is_shorthand_key = true
+                "return"
+              }
+              If => {
+                is_shorthand_key = true
+                "if"
+              }
+              Else => {
+                is_shorthand_key = true
+                "else"
+              }
+              For => {
+                is_shorthand_key = true
+                "for"
+              }
+              While => {
+                is_shorthand_key = true
+                "while"
+              }
+              Switch => {
+                is_shorthand_key = true
+                "switch"
+              }
+              Case => {
+                is_shorthand_key = true
+                "case"
+              }
+              Default => {
+                is_shorthand_key = true
+                "default"
+              }
+              With => {
+                is_shorthand_key = true
+                "with"
+              }
+              Debugger => {
+                is_shorthand_key = true
+                "debugger"
+              }
+              Import => {
+                is_shorthand_key = true
+                "import"
+              }
+              Export => {
+                is_shorthand_key = true
+                "export"
+              }
+              From => {
+                is_shorthand_key = true
+                "from"
+              }
+              As => {
+                is_shorthand_key = true
+                "as"
+              }
+              Break => {
+                is_shorthand_key = true
+                "break"
+              }
+              Continue => {
+                is_shorthand_key = true
+                "continue"
+              }
+              Function => {
+                is_shorthand_key = true
+                "function"
+              }
+              Do => {
+                is_shorthand_key = true
+                "do"
+              }
+              Try => {
+                is_shorthand_key = true
+                "try"
+              }
+              Catch => {
+                is_shorthand_key = true
+                "catch"
+              }
+              Finally => {
+                is_shorthand_key = true
+                "finally"
+              }
+              Throw => {
+                is_shorthand_key = true
+                "throw"
+              }
+              Delete => {
+                is_shorthand_key = true
+                "delete"
+              }
+              Yield => {
+                is_shorthand_key = true
+                "yield"
+              }
+              Let => {
+                is_shorthand_key = true
+                "let"
+              }
+              Const => {
+                is_shorthand_key = true
+                "const"
+              }
+              Var => {
+                is_shorthand_key = true
+                "var"
+              }
+              New => {
+                is_shorthand_key = true
+                "new"
+              }
+              Typeof => {
+                is_shorthand_key = true
+                "typeof"
+              }
+              Of => {
+                is_shorthand_key = true
+                "of"
+              }
+              In => {
+                is_shorthand_key = true
+                "in"
+              }
+              Declare => {
+                is_shorthand_key = true
+                "declare"
+              }
+              Interface => {
+                is_shorthand_key = true
+                "interface"
+              }
+              Class => {
+                is_shorthand_key = true
+                "class"
+              }
+              Instanceof => {
+                is_shorthand_key = true
+                "instanceof"
+              }
+              NumberType => {
+                is_shorthand_key = true
+                "number"
+              }
+              BooleanType => {
+                is_shorthand_key = true
+                "boolean"
+              }
+              StringType => {
+                is_shorthand_key = true
+                "string"
+              }
+              VoidType => {
+                is_shorthand_key = true
+                "void"
+              }
+              IntType => {
+                is_shorthand_key = true
+                "int"
+              }
+              Bool(true) => {
+                is_shorthand_key = true
+                "true"
+              }
+              Bool(false) => {
+                is_shorthand_key = true
+                "false"
+              }
+              Null => {
+                is_shorthand_key = true
+                "null"
+              }
+              Type => {
+                is_shorthand_key = true
+                "type"
+              }
+              Extends => {
+                is_shorthand_key = true
+                "extends"
+              }
               k => raise ParseError("Expected property name, got \{k}")
             }
           }
@@ -1468,6 +2918,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             (prop_key == "get" || prop_key == "set") &&
             !self.check(Colon) &&
             !self.check(LParen) &&
+            !self.check(Lt) &&
             !self.check(Comma) &&
             !self.check(RBrace) {
             let mut acc_computed_key : @ast.TsExpr? = None
@@ -1561,38 +3012,31 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               is_generator: false,
               is_async: false,
             })
+          } else if is_ident_key &&
+            prop_key == "async" &&
+            !self.check(Colon) &&
+            !self.check(Comma) &&
+            !self.check(RBrace) {
+            let async_is_generator = self.match_(Star)
+            let (
+              async_name,
+              async_is_computed,
+              async_computed_expr,
+              next_computed_idx,
+            ) = self.parse_object_member_name(computed_idx)
+            prop_key = async_name
+            is_computed_key = async_is_computed
+            computed_key_expr = async_computed_expr
+            computed_idx = next_computed_idx
+            self.parse_object_method_value(prop_key, async_is_generator, true)
           } else if self.match_(Colon) {
             self.parse_assignment()
           } else if is_ident_key && self.match_(Eq) {
             self.parse_assignment()
-          } else if self.check(LParen) {
-            let _ = self.expect(LParen)
-            let params = self.parse_params()
-            let _ = self.expect(RParen)
-            let return_type = if self.check(Colon) {
-              let _ = self.advance()
-              self.parse_type()
-            } else {
-              Any
-            }
-            let prev_generator = self.in_generator
-            let prev_function = self.in_function
-            if is_generator {
-              self.in_generator = true
-            }
-            self.in_function = true
-            let body = self.parse_block()
-            self.in_generator = prev_generator
-            self.in_function = prev_function
-            @ast.TsExpr::FuncExpr({
-              name: prop_key,
-              params,
-              return_type,
-              body,
-              is_generator,
-              is_async: false,
-            })
-          } else if is_ident_key && (self.check(Comma) || self.check(RBrace)) {
+          } else if self.check(LParen) || self.check(Lt) {
+            self.parse_object_method_value(prop_key, is_generator, false)
+          } else if is_shorthand_key &&
+            (self.check(Comma) || self.check(RBrace)) {
             Var(prop_key)
           } else {
             raise ParseError("Expected Colon, got \{self.peek().kind}")
@@ -1647,39 +3091,49 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
 // / Check if this is an async arrow function
 fn Parser::is_async_arrow_function(self : Parser) -> Bool {
   // Check for async identifier => ... (single parameter without parens)
-  if self.peek_at(1).kind is Ident(_) {
-    // Could be: async x => ...
-    // Look for => after the identifier
-    return self.peek_at(2).kind == Arrow
+  match self.peek_at(1).kind {
+    Ident(_)
+    | NumberType
+    | BooleanType
+    | StringType
+    | VoidType
+    | IntType
+    | Type
+    | Of
+    | In
+    | From
+    | Delete => return self.peek_at(2).kind == Arrow
+    _ => ()
+  }
+  if self.peek_at(1).kind == Lt {
+    let temp = { ..self, pos: self.pos + 1 }
+    temp.skip_type_args()
+    if !temp.check(LParen) {
+      return false
+    }
+    return temp.is_arrow_function()
   }
   // Check for async (params) => ...
   if self.peek_at(1).kind == LParen {
-    // Save position and scan to find matching ) and =>
-    let save_pos = self.pos
-    let _ = self.advance() // consume 'async'
-    let _ = self.advance() // consume '('
-    let mut paren_depth = 1
-    while paren_depth > 0 && !self.check(Eof) {
-      match self.peek().kind {
-        LParen => paren_depth += 1
-        RParen => paren_depth -= 1
-        _ => ()
+    let temp = { ..self, pos: self.pos + 2 }
+    return try {
+      let _ = temp.parse_params()
+      if !temp.check(RParen) {
+        return false
       }
-      let _ = self.advance()
+      let _ = temp.advance()
+      if temp.check(Arrow) {
+        return true
+      }
+      if !temp.check(Colon) {
+        return false
+      }
+      let _ = temp.advance()
+      temp.skip_type_until_arrow()
+      temp.check(Arrow)
+    } catch {
+      _ => false
     }
-    let is_arrow = self.check(Arrow) ||
-      (
-        self.check(Colon) &&
-        ({
-          // Skip type annotation: (): ReturnType =>
-          while !self.check(Arrow) && !self.check(Eof) {
-            let _ = self.advance()
-          }
-          self.check(Arrow)
-        })
-      )
-    self.pos = save_pos
-    return is_arrow
   }
   false
 }
@@ -1690,59 +3144,74 @@ fn Parser::parse_async_arrow_function(
   self : Parser,
 ) -> @ast.TsExpr raise ParseError {
   // Check for single parameter without parens: async x => ...
-  if self.peek().kind is Ident(_) && self.peek_at(1).kind == Arrow {
-    let name = match self.advance().kind {
-      Ident(n) => n
+  if self.peek_at(1).kind == Arrow {
+    let name = match self.peek().kind {
+      Ident(_)
+      | NumberType
+      | BooleanType
+      | StringType
+      | VoidType
+      | IntType
+      | Type
+      | Of
+      | In
+      | From
+      | Delete => self.parse_binding_ident()
       _ => "<anon>"
     }
-    let _ = self.expect(Arrow)
-    let prev_async = self.in_async
-    self.in_async = true
-    let body = if self.check(LBrace) {
-      let prev_function = self.in_function
-      let prev_iteration = self.in_iteration
-      let prev_switch = self.in_switch
-      let prev_labels : Array[String] = []
-      for label in self.labels {
-        prev_labels.push(label)
+    if name != "<anon>" {
+      let _ = self.expect(Arrow)
+      let prev_async = self.in_async
+      self.in_async = true
+      let body = if self.check(LBrace) {
+        let prev_function = self.in_function
+        let prev_iteration = self.in_iteration
+        let prev_switch = self.in_switch
+        let prev_labels : Array[String] = []
+        for label in self.labels {
+          prev_labels.push(label)
+        }
+        self.in_function = true
+        self.in_iteration = false
+        self.in_switch = false
+        while self.labels.length() > 0 {
+          let _ = self.labels.pop()
+        }
+        let block = self.parse_block()
+        self.in_function = prev_function
+        self.in_iteration = prev_iteration
+        self.in_switch = prev_switch
+        while self.labels.length() > 0 {
+          let _ = self.labels.pop()
+        }
+        for label in prev_labels {
+          self.labels.push(label)
+        }
+        @ast.TsArrowBody::ArrowBlock(block)
+      } else {
+        let expr = self.parse_assignment()
+        ArrowExpr(expr)
       }
-      self.in_function = true
-      self.in_iteration = false
-      self.in_switch = false
-      while self.labels.length() > 0 {
-        let _ = self.labels.pop()
-      }
-      let block = self.parse_block()
-      self.in_function = prev_function
-      self.in_iteration = prev_iteration
-      self.in_switch = prev_switch
-      while self.labels.length() > 0 {
-        let _ = self.labels.pop()
-      }
-      for label in prev_labels {
-        self.labels.push(label)
-      }
-      @ast.TsArrowBody::ArrowBlock(block)
-    } else {
-      let expr = self.parse_assignment()
-      ArrowExpr(expr)
+      self.in_async = prev_async
+      return ArrowFunc(
+        [
+          {
+            name,
+            binding: Some(@ast.TsBinding::Ident(name)),
+            is_rest: false,
+            type_: Any,
+            default: None,
+          },
+        ],
+        body,
+        true, // is_async = true
+      )
     }
-    self.in_async = prev_async
-    return ArrowFunc(
-      [
-        {
-          name,
-          binding: Some(@ast.TsBinding::Ident(name)),
-          is_rest: false,
-          type_: Any,
-          default: None,
-        },
-      ],
-      body,
-      true, // is_async = true
-    )
   }
 
+  if self.check(Lt) {
+    self.skip_type_args()
+  }
   // Parse with parentheses: async (params) => body
   let _ = self.expect(LParen)
   let params = self.parse_params()
@@ -1750,7 +3219,7 @@ fn Parser::parse_async_arrow_function(
   // Skip optional return type annotation
   if self.check(Colon) {
     let _ = self.advance()
-    let _ = self.parse_type()
+    self.skip_type_until_arrow()
   }
   let _ = self.expect(Arrow)
   let prev_async = self.in_async
