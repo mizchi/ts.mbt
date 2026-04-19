@@ -86,17 +86,26 @@ fn scan_json_compound(
       i = next
       continue
     }
-    if c == '[' {
-      i = scan_json_compound(src, i, '[', ']')
-      continue
-    }
     if c == open {
       depth += 1
-    } else if c == close {
+      i += 1
+      continue
+    }
+    if c == close {
       depth -= 1
       if depth == 0 {
         return i + 1
       }
+      i += 1
+      continue
+    }
+    if c == '{' {
+      i = scan_json_compound(src, i, '{', '}')
+      continue
+    }
+    if c == '[' {
+      i = scan_json_compound(src, i, '[', ']')
+      continue
     }
     i += 1
   }
@@ -131,6 +140,34 @@ fn scan_json_value(src : String, start : Int) -> (JsonFieldValue, Int) {
     end_ += 1
   }
   (Other, end_)
+}
+
+///|
+fn scan_json_value_end(src : String, start : Int) -> Int {
+  let i = skip_json_space(src, start)
+  if i >= src.length() {
+    return i
+  }
+  let c = char_at(src, i)
+  if c == '"' {
+    let (_, next) = json_parse_string(src, i)
+    return next
+  }
+  if c == '{' {
+    return scan_json_compound(src, i, '{', '}')
+  }
+  if c == '[' {
+    return scan_json_compound(src, i, '[', ']')
+  }
+  let mut end_ = i
+  while end_ < src.length() {
+    let cur = char_at(src, end_)
+    if cur == ',' || cur == '}' {
+      break
+    }
+    end_ += 1
+  }
+  end_
 }
 
 ///|
@@ -170,6 +207,210 @@ fn find_json_field(src : String, name : String) -> JsonFieldValue? {
     i = value_end
   }
   None
+}
+
+///|
+fn parse_json_string_array(src : String) -> Array[String] {
+  let items : Array[String] = []
+  let mut i = skip_json_space(src, 0)
+  if i >= src.length() || char_at(src, i) != '[' {
+    return items
+  }
+  i += 1
+  while i < src.length() {
+    i = skip_json_space(src, i)
+    if i >= src.length() {
+      break
+    }
+    let c = char_at(src, i)
+    if c == ']' {
+      return items
+    }
+    if c == ',' {
+      i += 1
+      continue
+    }
+    if c == '"' {
+      let (value, next) = json_parse_string(src, i)
+      items.push(value)
+      i = next
+      continue
+    }
+    let (_, next) = scan_json_value(src, i)
+    i = next
+  }
+  items
+}
+
+///|
+fn find_object_field_value_range(
+  src : String,
+  object_start : Int,
+  object_end : Int,
+  field_name : String,
+) -> (Int, Int)? {
+  let mut i = skip_json_space(src, object_start)
+  if i >= object_end || char_at(src, i) != '{' {
+    return None
+  }
+  i += 1
+  while i < object_end {
+    i = skip_json_space(src, i)
+    if i >= object_end {
+      break
+    }
+    let c = char_at(src, i)
+    if c == '}' {
+      break
+    }
+    if c == ',' {
+      i += 1
+      continue
+    }
+    if c != '"' {
+      i += 1
+      continue
+    }
+    let (key, next) = json_parse_string(src, i)
+    i = skip_json_space(src, next)
+    if i >= object_end || char_at(src, i) != ':' {
+      continue
+    }
+    i += 1
+    let value_start = skip_json_space(src, i)
+    let value_end = scan_json_value_end(src, value_start)
+    if key == field_name {
+      return Some((value_start, value_end))
+    }
+    i = value_end
+  }
+  None
+}
+
+///|
+fn find_named_object_range(src : String, field_name : String) -> (Int, Int)? {
+  match find_object_field_value_range(src, 0, src.length(), field_name) {
+    Some((start, end_)) =>
+      if char_at(src, start) == '{' {
+        Some((start, end_))
+      } else {
+        None
+      }
+    None => None
+  }
+}
+
+///|
+fn find_named_object_range_in_object(
+  src : String,
+  object_start : Int,
+  object_end : Int,
+  field_name : String,
+) -> (Int, Int)? {
+  match
+    find_object_field_value_range(src, object_start, object_end, field_name) {
+    Some((start, end_)) =>
+      if char_at(src, start) == '{' {
+        Some((start, end_))
+      } else {
+        None
+      }
+    None => None
+  }
+}
+
+///|
+fn parse_json_string_at(src : String, start : Int) -> String? {
+  if start >= src.length() || char_at(src, start) != '"' {
+    return None
+  }
+  let (value, _) = json_parse_string(src, start)
+  Some(value)
+}
+
+///|
+fn parse_json_string_array_at(
+  src : String,
+  start : Int,
+  end_ : Int,
+) -> Array[String] {
+  if start >= end_ || char_at(src, start) != '[' {
+    return []
+  }
+  parse_json_string_array(src[start:end_].to_string())
+}
+
+///|
+fn parse_string_targets_from_range(
+  src : String,
+  start : Int,
+  end_ : Int,
+) -> Array[String] {
+  if start >= end_ {
+    return []
+  }
+  let c = char_at(src, start)
+  if c == '"' {
+    match parse_json_string_at(src, start) {
+      Some(value) => [value]
+      None => []
+    }
+  } else if c == '[' {
+    parse_json_string_array_at(src, start, end_)
+  } else {
+    []
+  }
+}
+
+///|
+fn resolve_string_array_mapping_in_object(
+  src : String,
+  object_start : Int,
+  object_end : Int,
+  specifier : String,
+) -> Array[String] {
+  match
+    find_object_field_value_range(src, object_start, object_end, specifier) {
+    Some((start, end_)) => {
+      let exact = parse_string_targets_from_range(src, start, end_)
+      if exact.length() > 0 {
+        return exact
+      }
+    }
+    None => ()
+  }
+  let parts = split_slash_parts(specifier)
+  for i in 0..<parts.length() {
+    let cut = parts.length() - 1 - i
+    if cut <= 0 {
+      continue
+    }
+    let pattern = join_slash_parts(parts, 0, cut) + "/*"
+    let capture = join_slash_parts(parts, cut, parts.length())
+    match
+      find_object_field_value_range(src, object_start, object_end, pattern) {
+      Some((start, end_)) => {
+        let resolved : Array[String] = []
+        for item in parse_string_targets_from_range(src, start, end_) {
+          resolved.push(apply_single_wildcard(item, capture))
+        }
+        if resolved.length() > 0 {
+          return resolved
+        }
+      }
+      None => ()
+    }
+  }
+  match find_object_field_value_range(src, object_start, object_end, "*") {
+    Some((start, end_)) => {
+      let resolved : Array[String] = []
+      for item in parse_string_targets_from_range(src, start, end_) {
+        resolved.push(apply_single_wildcard(item, specifier))
+      }
+      resolved
+    }
+    None => []
+  }
 }
 
 ///|
@@ -228,6 +469,43 @@ fn normalize_path(path : String) -> String {
     } else {
       result = result + "/" + parts[i]
     }
+  }
+  result
+}
+
+///|
+fn apply_single_wildcard(pattern : String, replacement : String) -> String {
+  match pattern.find("*") {
+    Some(idx) => {
+      let prefix = if idx == 0 { "" } else { pattern[:idx].to_string() }
+      let suffix = if idx + 1 >= pattern.length() {
+        ""
+      } else {
+        pattern[idx + 1:pattern.length()].to_string()
+      }
+      prefix + replacement + suffix
+    }
+    None => pattern
+  }
+}
+
+///|
+fn split_slash_parts(path : String) -> Array[String] {
+  let parts : Array[String] = []
+  for part in path.split("/") {
+    parts.push(part.to_string())
+  }
+  parts
+}
+
+///|
+fn join_slash_parts(parts : Array[String], start : Int, end_ : Int) -> String {
+  if start >= end_ {
+    return ""
+  }
+  let mut result = parts[start]
+  for i in (start + 1)..<end_ {
+    result = result + "/" + parts[i]
   }
   result
 }
@@ -385,6 +663,67 @@ async fn resolve_as_file(
 }
 
 ///|
+async fn find_nearest_ancestor_file(
+  base_path : String,
+  file_name : String,
+) -> String? {
+  let mut current = dirname(normalize_path(base_path))
+  while true {
+    let candidate = normalize_path(join_path(current, file_name))
+    if file_exists(candidate) {
+      return Some(candidate)
+    }
+    let parent = dirname(current)
+    if parent == current {
+      break
+    }
+    current = parent
+  }
+  None
+}
+
+///|
+fn resolve_conditional_mapping_targets(
+  mapping_obj : String,
+  specifier : String,
+  mode : ModuleResolutionMode,
+) -> Array[String] {
+  match find_json_field(mapping_obj, specifier) {
+    Some(value) =>
+      match select_export_target(value, mode) {
+        Some(target) => return [target]
+        None => ()
+      }
+    None => ()
+  }
+  let parts = split_slash_parts(specifier)
+  for i in 0..<parts.length() {
+    let cut = parts.length() - 1 - i
+    if cut <= 0 {
+      continue
+    }
+    let pattern = join_slash_parts(parts, 0, cut) + "/*"
+    let capture = join_slash_parts(parts, cut, parts.length())
+    match find_json_field(mapping_obj, pattern) {
+      Some(value) =>
+        match select_export_target(value, mode) {
+          Some(target) => return [apply_single_wildcard(target, capture)]
+          None => ()
+        }
+      None => ()
+    }
+  }
+  match find_json_field(mapping_obj, "*") {
+    Some(value) =>
+      match select_export_target(value, mode) {
+        Some(target) => [apply_single_wildcard(target, specifier)]
+        None => []
+      }
+    None => []
+  }
+}
+
+///|
 fn split_package_specifier(specifier : String) -> (String, String) {
   let parts : Array[String] = []
   for part in specifier.split("/") {
@@ -477,6 +816,27 @@ fn resolve_exports_target(
 }
 
 ///|
+fn resolve_types_versions_targets(
+  package_json : String,
+  subpath : String,
+) -> Array[String] {
+  match find_named_object_range(package_json, "typesVersions") {
+    Some((versions_start, versions_end)) =>
+      match
+        find_named_object_range_in_object(
+          package_json, versions_start, versions_end, "*",
+        ) {
+        Some((selector_start, selector_end)) =>
+          resolve_string_array_mapping_in_object(
+            package_json, selector_start, selector_end, subpath,
+          )
+        None => []
+      }
+    _ => []
+  }
+}
+
+///|
 async fn read_package_json(package_root : String) -> String? {
   let canonical_root = @fs.realpath(package_root) catch { _ => package_root }
   let path = normalize_path(join_path(canonical_root, "package.json"))
@@ -484,6 +844,113 @@ async fn read_package_json(package_root : String) -> String? {
     return None
   }
   Some(@fs.read_file(path).text() catch { _ => return None })
+}
+
+///|
+async fn read_nearest_package_json(base_path : String) -> (String, String)? {
+  match find_nearest_ancestor_file(base_path, "package.json") {
+    Some(package_json_path) => {
+      let package_root = dirname(package_json_path)
+      let package_json = @fs.read_file(package_json_path).text() catch {
+        _ => return None
+      }
+      Some((package_root, package_json))
+    }
+    None => None
+  }
+}
+
+///|
+async fn resolve_tsconfig_specifier(
+  base_path : String,
+  specifier : String,
+  mode : ModuleResolutionMode,
+) -> String? {
+  match find_nearest_ancestor_file(base_path, "tsconfig.json") {
+    Some(tsconfig_path) => {
+      let tsconfig_dir = dirname(tsconfig_path)
+      let tsconfig_src = @fs.read_file(tsconfig_path).text() catch {
+        _ => return None
+      }
+      match find_named_object_range(tsconfig_src, "compilerOptions") {
+        Some((compiler_start, compiler_end)) => {
+          let mut base_dir = ""
+          match
+            find_object_field_value_range(
+              tsconfig_src, compiler_start, compiler_end, "baseUrl",
+            ) {
+            Some((start, _)) =>
+              match parse_json_string_at(tsconfig_src, start) {
+                Some(base_url) =>
+                  base_dir = normalize_path(join_path(tsconfig_dir, base_url))
+                None => ()
+              }
+            None => ()
+          }
+          match
+            find_named_object_range_in_object(
+              tsconfig_src, compiler_start, compiler_end, "paths",
+            ) {
+            Some((paths_start, paths_end)) => {
+              let targets = resolve_string_array_mapping_in_object(
+                tsconfig_src, paths_start, paths_end, specifier,
+              )
+              for target in targets {
+                let candidate = if base_dir == "" {
+                  normalize_path(join_path(tsconfig_dir, target))
+                } else {
+                  normalize_path(join_path(base_dir, target))
+                }
+                match resolve_path_like(candidate, mode) {
+                  Some(path) => return Some(path)
+                  None => ()
+                }
+              }
+            }
+            None => ()
+          }
+          if base_dir != "" {
+            return resolve_path_like(
+              normalize_path(join_path(base_dir, specifier)),
+              mode,
+            )
+          }
+          None
+        }
+        None => None
+      }
+    }
+    None => None
+  }
+}
+
+///|
+async fn resolve_package_imports_specifier(
+  base_path : String,
+  specifier : String,
+  mode : ModuleResolutionMode,
+) -> String? {
+  match read_nearest_package_json(base_path) {
+    Some((package_root, package_json)) =>
+      match find_json_field(package_json, "imports") {
+        Some(Object(imports_obj)) => {
+          let targets = resolve_conditional_mapping_targets(
+            imports_obj, specifier, mode,
+          )
+          for target in targets {
+            if target.has_prefix("./") || target.has_prefix("../") {
+              match resolve_package_target(package_root, target, mode) {
+                Some(path) => return Some(path)
+                None => ()
+              }
+            }
+          }
+          None
+        }
+        _ => None
+      }
+    None => None
+  }
 }
 
 ///|
@@ -531,6 +998,17 @@ async fn resolve_package_entry(
               }
             _ => ()
           }
+        }
+      } else {
+        match mode {
+          Types =>
+            for target in resolve_types_versions_targets(pkg, subpath) {
+              match resolve_package_target(package_root, target, mode) {
+                Some(path) => return Some(path)
+                None => ()
+              }
+            }
+          Runtime => ()
         }
       }
     }
@@ -615,6 +1093,13 @@ async fn resolve_module_specifier(
   }
   if specifier.has_prefix("/") {
     return resolve_path_like(normalize_path(specifier), mode)
+  }
+  if specifier.has_prefix("#") {
+    return resolve_package_imports_specifier(normalized_base, specifier, mode)
+  }
+  match resolve_tsconfig_specifier(normalized_base, specifier, mode) {
+    Some(path) => return Some(path)
+    None => ()
   }
   resolve_bare_specifier(normalized_base, specifier, mode)
 }

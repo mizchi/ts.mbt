@@ -20,6 +20,12 @@ let semantics_opaque_package_type_entry_path : String = "fixtures/resolver/proje
 let semantics_unresolved_bare_reexport_entry_path : String = "fixtures/resolver/project/types/unresolved-bare-reexport-entry.d.ts"
 
 ///|
+let semantics_export_equals_entry_path : String = "fixtures/resolver/project/types/export-equals-entry.d.ts"
+
+///|
+let semantics_import_equals_entry_path : String = "fixtures/resolver/project/types/import-equals-entry.d.ts"
+
+///|
 fn find_resolved_export(
   exports : Array[ResolvedExport],
   name : String,
@@ -224,5 +230,31 @@ async test "analysis: unresolved bare reexports do not fail type export surface 
       assert_eq(export_.local_name, Some("createOptions"))
     }
     None => fail("expected createOptions export")
+  }
+}
+
+///|
+async test "analysis: resolve type export surface from namespace export assignment" {
+  let exports = resolve_type_export_surface(semantics_export_equals_entry_path)
+  match find_resolved_export(exports, "default") {
+    Some(export_) => {
+      assert_eq(export_.source_path, semantics_export_equals_entry_path)
+      assert_eq(export_.local_name, Some("semver"))
+      assert_eq(export_.kind, ResolvedExportKind::Local)
+    }
+    None => fail("expected default export")
+  }
+}
+
+///|
+async test "analysis: resolve type export surface from import-equals export assignment" {
+  let exports = resolve_type_export_surface(semantics_import_equals_entry_path)
+  match find_resolved_export(exports, "default") {
+    Some(export_) => {
+      assert_eq(export_.source_path, semantics_import_equals_entry_path)
+      assert_eq(export_.local_name, Some("pkg"))
+      assert_eq(export_.kind, ResolvedExportKind::Local)
+    }
+    None => fail("expected default export")
   }
 }

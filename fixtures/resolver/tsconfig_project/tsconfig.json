@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "baseUrl": "src",
+    "paths": {
+      "@lib/*": ["lib/*"],
+      "@exact": ["generated/exact.ts"]
+    }
+  }
+}

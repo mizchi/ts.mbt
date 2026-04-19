@@ -5,6 +5,9 @@ let resolver_base_path : String = "fixtures/resolver/project/src/app.ts"
 let resolver_nested_base_path : String = "fixtures/resolver/project/src/nested/deep/app.ts"
 
 ///|
+let resolver_tsconfig_base_path : String = "fixtures/resolver/tsconfig_project/src/app.ts"
+
+///|
 async test "parser: resolver prefers relative file before directory index" {
   let resolved = resolve_type_module_specifier(resolver_base_path, "./local")
   assert_eq(resolved, Some("fixtures/resolver/project/src/local.ts"))
@@ -91,6 +94,76 @@ async test "parser: resolver supports neverthrow-like pnpm packages" {
     resolved,
     Some(
       "fixtures/resolver/project/node_modules/neverthrow-like/dist/index.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses tsconfig paths aliases" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "@lib/util",
+  )
+  assert_eq(
+    resolved,
+    Some("fixtures/resolver/tsconfig_project/src/lib/util.ts"),
+  )
+}
+
+///|
+async test "parser: resolver uses tsconfig baseUrl fallback" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "shared/tool",
+  )
+  assert_eq(
+    resolved,
+    Some("fixtures/resolver/tsconfig_project/src/shared/tool.ts"),
+  )
+}
+
+///|
+async test "parser: resolver uses package imports in types mode" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "#config",
+  )
+  assert_eq(
+    resolved,
+    Some("fixtures/resolver/tsconfig_project/types/config.d.ts"),
+  )
+}
+
+///|
+async test "parser: resolver uses package imports pattern in runtime mode" {
+  let resolved = resolve_runtime_module_specifier(
+    resolver_tsconfig_base_path, "#internal/helper",
+  )
+  assert_eq(
+    resolved,
+    Some("fixtures/resolver/tsconfig_project/src/internal/helper.ts"),
+  )
+}
+
+///|
+async test "parser: resolver uses typesVersions for typed subpaths" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "pkg-types-versions/feature",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-types-versions/ts5/feature/index.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver uses typesVersions wildcard mappings" {
+  let resolved = resolve_type_module_specifier(
+    resolver_tsconfig_base_path, "pkg-types-versions/legacy/util",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/tsconfig_project/node_modules/pkg-types-versions/ts5/legacy/util.d.ts",
     ),
   )
 }

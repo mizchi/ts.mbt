@@ -390,6 +390,45 @@ async test "emit_moonbit_decl_text handles runtime ts exported const arrow funct
 }
 
 ///|
+async test "emit_moonbit_decl_text handles runtime ts exported untyped const arrow functions" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(
+    actual.contains("declare pub fn doubleValue(value : Double) -> Double"),
+  )
+  assert_true(
+    actual.contains("declare pub fn greetValue(name : String) -> String"),
+  )
+}
+
+///|
+async test "emit_moonbit_decl_text handles runtime ts function reexports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-function-reexport-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(
+    actual.contains(
+      "declare pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint",
+    ),
+  )
+}
+
+///|
 async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/neverthrow-like-entry.d.ts", "./runtime/neverthrow-like.js",
@@ -478,6 +517,50 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts exported const arrow fu
 }
 
 ///|
+async test "emit_moonbit_js_ffi_texts handles runtime ts exported untyped const arrow functions" {
+  let bundle = emit_moonbit_js_ffi_texts(
+    "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts", "./runtime/runtime-untyped-arrow.js",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn double_value(value : Double) -> Double = \"__ts_mbt_double_value\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn greet_value(name : String) -> String = \"__ts_mbt_greet_value\"",
+    ),
+  )
+}
+
+///|
+async test "emit_moonbit_js_ffi_texts handles runtime ts function reexports" {
+  let bundle = emit_moonbit_js_ffi_texts(
+    "fixtures/resolver/project/types/runtime-function-reexport-entry.ts", "./runtime/runtime-function-reexport.js",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn scale_point("))
+  assert_true(
+    bundle.bridge_js.contains(
+      "globalThis.__ts_mbt_scale_point = __ts_mbt_mod.scalePoint;",
+    ),
+  )
+}
+
+///|
 async test "emit_moonbit_decl_text handles runtime default exported classes" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-default-class-entry.ts",
@@ -516,6 +599,37 @@ async test "emit_moonbit_js_ffi_texts handles runtime default exported classes" 
       "globalThis.__ts_mbt_new_default = (initial) => new __ts_mbt_mod.default(initial);",
     ),
   )
+}
+
+///|
+async test "emit_moonbit_decl_text handles export assignment declarations" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/export-equals-entry.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
+}
+
+///|
+async test "emit_moonbit_js_ffi_texts handles export assignment declarations" {
+  let bundle = emit_moonbit_js_ffi_texts(
+    "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn get_default()"))
+  assert_true(bundle.bridge_js.contains("globalThis.__ts_mbt_get_default"))
 }
 
 ///|

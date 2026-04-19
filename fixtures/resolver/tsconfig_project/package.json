@@ -1,0 +1,13 @@
+{
+  "name": "fixture-tsconfig-project",
+  "imports": {
+    "#config": {
+      "types": "./types/config.d.ts",
+      "default": "./src/config.ts"
+    },
+    "#internal/*": {
+      "types": "./types/*.d.ts",
+      "default": "./src/internal/*.ts"
+    }
+  }
+}

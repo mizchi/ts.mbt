@@ -113,6 +113,55 @@ fn Parser::parse_declare_class_with_optional_abstract(
 }
 
 ///|
+fn Parser::parse_namespace_decl_value(self : Parser) -> @ast.TsValueDecl? {
+  let keyword = match self.peek().kind {
+    Ident(name) if name == "namespace" || name == "module" || name == "global" =>
+      name
+    _ => return None
+  }
+  let _ = self.advance()
+  if keyword == "global" {
+    self.skip_declaration_block()
+    return None
+  }
+  let value : @ast.TsValueDecl? = match self.peek().kind {
+    Ident(name) => {
+      let _ = self.advance()
+      Some({ name, type_: @ast.TsType::Any })
+    }
+    _ => None
+  }
+  self.skip_declaration_block()
+  value
+}
+
+///|
+fn Parser::parse_import_equals_decl(
+  self : Parser,
+  local_name : String,
+) -> @ast.TsImportDecl raise ParseError {
+  let _ = self.expect(Eq)
+  let module_spec = if self.match_ident("require") {
+    let _ = self.expect(LParen)
+    let spec = self.expect_str_literal()
+    let _ = self.expect(RParen)
+    spec
+  } else {
+    self.skip_until_semicolon()
+    ""
+  }
+  self.consume_semicolon()
+  {
+    module_spec,
+    default_binding: None,
+    namespace_binding: Some(local_name),
+    named_bindings: [],
+    side_effect_only: false,
+    type_only: false,
+  }
+}
+
+///|
 fn collect_decl_names_from_stmt(
   stmt : @ast.TsStmt,
   names : Array[String],
@@ -188,6 +237,14 @@ fn Parser::parse_import_decl(
   let mut default_binding : String? = None
   let mut namespace_binding : String? = None
   let named_bindings : Array[(String, String)] = []
+  match self.peek().kind {
+    Ident(_) =>
+      if !type_only && self.peek_at(1).kind == Eq {
+        let local_name = self.parse_binding_ident()
+        return self.parse_import_equals_decl(local_name)
+      }
+    _ => ()
+  }
   if !self.check(Star) && !self.check(LBrace) {
     default_binding = Some(self.parse_binding_ident())
     if self.match_(Comma) {
@@ -251,6 +308,20 @@ fn Parser::parse_export_decl_for_module(
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
   let _ = self.expect(Export)
+  if self.match_(Eq) {
+    let expr = self.parse_expr()
+    let local_name = match expr {
+      @ast.TsExpr::Var(name) => name
+      _ => {
+        let temp = self.next_temp("__export_default__")
+        stmts.push(Const(@ast.TsBinding::Ident(temp), Any, expr))
+        temp
+      }
+    }
+    exports.push({ local_name, export_name: "default" })
+    self.consume_semicolon()
+    return (stmts, exports, reexports)
+  }
   if self.match_(Default) || self.match_ident("default") {
     if self.match_ident("async") && self.check(Function) {
       self.in_async = true
@@ -440,7 +511,11 @@ fn Parser::parse_export_decl_for_module(
           name == "global" ||
           name == "enum" ||
           name == "class" {
-          self.skip_declaration_block()
+          match self.parse_namespace_decl_value() {
+            Some(value) =>
+              exports.push({ local_name: value.name, export_name: value.name })
+            None => self.skip_declaration_block()
+          }
           return (stmts, exports, reexports)
         }
       _ => ()
@@ -451,7 +526,11 @@ fn Parser::parse_export_decl_for_module(
       name == "module" ||
       name == "global" ||
       name == "enum" => {
-      self.skip_declaration_block()
+      match self.parse_namespace_decl_value() {
+        Some(value) =>
+          exports.push({ local_name: value.name, export_name: value.name })
+        None => self.skip_declaration_block()
+      }
       return (stmts, exports, reexports)
     }
     Ident(name) if name == "abstract" && self.peek_at(1).kind == Class => {
@@ -508,6 +587,14 @@ fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
       let _ = self.advance()
       self.skip_import_attributes()
       self.consume_semicolon()
+      return
+    }
+    _ => ()
+  }
+  match self.peek().kind {
+    Ident(_) if self.peek_at(1).kind == Eq => {
+      let local_name = self.parse_binding_ident()
+      let _ = self.parse_import_equals_decl(local_name)
       return
     }
     _ => ()
@@ -599,6 +686,11 @@ fn Parser::parse_export_stmt(
   classes : Array[@ast.TsClassDecl],
 ) -> Unit raise ParseError {
   let _ = self.expect(Export)
+  if self.match_(Eq) {
+    let _ = self.parse_expr()
+    self.consume_semicolon()
+    return
+  }
   if self.match_(Default) || self.match_ident("default") {
     if self.match_ident("async") && self.check(Function) {
       self.in_async = true
@@ -713,7 +805,10 @@ fn Parser::parse_export_stmt(
           name == "global" ||
           name == "enum" ||
           name == "class" {
-          self.skip_declaration_block()
+          match self.parse_namespace_decl_value() {
+            Some(value) => values.push(value)
+            None => self.skip_declaration_block()
+          }
         } else {
           ()
         }
@@ -755,7 +850,10 @@ fn Parser::parse_export_stmt(
     _ => false
   }
   if is_namespace_like_export {
-    self.skip_declaration_block()
+    match self.parse_namespace_decl_value() {
+      Some(value) => values.push(value)
+      None => self.skip_declaration_block()
+    }
     return
   }
   if self.check(Class) {
@@ -847,8 +945,10 @@ pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
             name == "global" ||
             name == "enum" ||
             name == "class" {
-            // Skip namespace/module/global/enum/class declaration
-            self.skip_declaration_block()
+            match self.parse_namespace_decl_value() {
+              Some(value) => values.push(value)
+              None => self.skip_declaration_block()
+            }
           } else {
             raise ParseError("Unexpected identifier after declare: \{name}")
           }
@@ -862,7 +962,10 @@ pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
       // Skip type alias at top level
       self.skip_type_alias()
     } else if self.is_namespace_decl_start() {
-      self.skip_declaration_block()
+      match self.parse_namespace_decl_value() {
+        Some(value) => values.push(value)
+        None => self.skip_declaration_block()
+      }
     } else if (match self.peek().kind {
         Ident(name) => name == "enum"
         _ => false

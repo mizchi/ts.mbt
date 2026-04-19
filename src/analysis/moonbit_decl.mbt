@@ -157,6 +157,133 @@ fn merge_func_param_types(
 }
 
 ///|
+fn find_param_type(params : Array[@ast.TsParam], name : String) -> @ast.TsType? {
+  for param in params {
+    if param.name == name {
+      return Some(param.type_)
+    }
+  }
+  None
+}
+
+///|
+fn infer_numeric_result_type(
+  left : @ast.TsExpr,
+  right : @ast.TsExpr,
+  params : Array[@ast.TsParam],
+) -> @ast.TsType {
+  let left_type = infer_decl_expr_type(left, params)
+  let right_type = infer_decl_expr_type(right, params)
+  let left_is_number = left_type == @ast.TsType::Number ||
+    left_type == @ast.TsType::Int
+  let right_is_number = right_type == @ast.TsType::Number ||
+    right_type == @ast.TsType::Int
+  if !left_is_number || !right_is_number {
+    return @ast.TsType::Any
+  }
+  if left_type == @ast.TsType::Int && right_type == @ast.TsType::Int {
+    @ast.TsType::Int
+  } else {
+    @ast.TsType::Number
+  }
+}
+
+///|
+fn infer_decl_expr_type(
+  expr : @ast.TsExpr,
+  params : Array[@ast.TsParam],
+) -> @ast.TsType {
+  match expr {
+    @ast.TsExpr::NumberLit(_) => @ast.TsType::Number
+    @ast.TsExpr::IntLit(_) => @ast.TsType::Int
+    @ast.TsExpr::BoolLit(_) => @ast.TsType::Boolean
+    @ast.TsExpr::StringLit(_) | @ast.TsExpr::TemplateLiteral(_, _) =>
+      @ast.TsType::String_
+    @ast.TsExpr::NullLit => @ast.TsType::Null
+    @ast.TsExpr::Var(name) =>
+      match find_param_type(params, name) {
+        Some(type_) => type_
+        None => @ast.TsType::Any
+      }
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Not, _) => @ast.TsType::Boolean
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Neg, inner) =>
+      match infer_decl_expr_type(inner, params) {
+        @ast.TsType::Int => @ast.TsType::Int
+        @ast.TsType::Number => @ast.TsType::Number
+        _ => @ast.TsType::Number
+      }
+    @ast.TsExpr::BinOp(op, left, right) =>
+      match op {
+        @ast.TsBinOp::Add =>
+          if infer_decl_expr_type(left, params) == @ast.TsType::String_ ||
+            infer_decl_expr_type(right, params) == @ast.TsType::String_ {
+            @ast.TsType::String_
+          } else {
+            infer_numeric_result_type(left, right, params)
+          }
+        @ast.TsBinOp::Sub
+        | @ast.TsBinOp::Mul
+        | @ast.TsBinOp::Div
+        | @ast.TsBinOp::Mod
+        | @ast.TsBinOp::Pow => infer_numeric_result_type(left, right, params)
+        @ast.TsBinOp::BinEq
+        | @ast.TsBinOp::BinNe
+        | @ast.TsBinOp::AbstractEq
+        | @ast.TsBinOp::AbstractNe
+        | @ast.TsBinOp::BinLt
+        | @ast.TsBinOp::BinLe
+        | @ast.TsBinOp::BinGt
+        | @ast.TsBinOp::BinGe
+        | @ast.TsBinOp::Instanceof
+        | @ast.TsBinOp::In => @ast.TsType::Boolean
+        @ast.TsBinOp::And | @ast.TsBinOp::Or | @ast.TsBinOp::Coalesce => {
+          let left_type = infer_decl_expr_type(left, params)
+          let right_type = infer_decl_expr_type(right, params)
+          if left_type == right_type {
+            left_type
+          } else {
+            @ast.TsType::Any
+          }
+        }
+        _ => @ast.TsType::Any
+      }
+    @ast.TsExpr::Cond(_, then_, else_) => {
+      let then_type = infer_decl_expr_type(then_, params)
+      let else_type = infer_decl_expr_type(else_, params)
+      if then_type == else_type {
+        then_type
+      } else {
+        @ast.TsType::Any
+      }
+    }
+    _ => @ast.TsType::Any
+  }
+}
+
+///|
+fn infer_block_return_type(
+  block : @ast.TsBlock,
+  params : Array[@ast.TsParam],
+) -> @ast.TsType {
+  for i in 0..<block.stmts.length() {
+    let index = block.stmts.length() - 1 - i
+    match block.stmts[index] {
+      @ast.TsStmt::Return(Some(expr)) =>
+        return infer_decl_expr_type(expr, params)
+      @ast.TsStmt::Return(None) => return @ast.TsType::Void
+      @ast.TsStmt::Block(inner) => {
+        let inner_type = infer_block_return_type(inner, params)
+        if inner_type != @ast.TsType::Any {
+          return inner_type
+        }
+      }
+      _ => ()
+    }
+  }
+  @ast.TsType::Any
+}
+
+///|
 fn infer_func_return_type(
   func : @ast.TsFunc,
   declared_type : @ast.TsType,
@@ -166,7 +293,7 @@ fn infer_func_return_type(
   }
   match declared_type {
     @ast.TsType::Func(_, return_type) => return_type
-    _ => @ast.TsType::Any
+    _ => infer_block_return_type(func.body, func.params)
   }
 }
 
@@ -195,7 +322,13 @@ fn synthesize_func_from_expr(
       }
       let return_type = match declared_type {
         @ast.TsType::Func(_, next_return_type) => next_return_type
-        _ => @ast.TsType::Any
+        _ =>
+          match body {
+            @ast.TsArrowBody::ArrowExpr(expr) =>
+              infer_decl_expr_type(expr, normalized_params)
+            @ast.TsArrowBody::ArrowBlock(block) =>
+              infer_block_return_type(block, normalized_params)
+          }
       }
       Some({
         name: local_name,
@@ -427,9 +560,14 @@ fn resolve_decl_from_local_name(
                                 match import_decl.namespace_binding {
                                   Some(imported_local_name) =>
                                     if imported_local_name == local_name {
-                                      resolved = Unsupported(
-                                        export_name, "namespace export is widened to JSValue.",
-                                      )
+                                      resolved = Value({
+                                        source_path,
+                                        export_name,
+                                        value: {
+                                          name: local_name,
+                                          type_: @ast.TsType::Any,
+                                        },
+                                      })
                                     }
                                   None => ()
                                 }
@@ -815,7 +953,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     exported_interfaces,
     exported_imports,
     exported_funcs,
-    _,
+    exported_values,
     exported_classes,
     notes,
   ) = collect_exported_decls(graph, export_surface, modules)
@@ -856,8 +994,16 @@ pub async fn emit_moonbit_decl_from_entry_path(
       None => ()
     }
   }
+  let values : Array[@ast.TsValueDecl] = []
+  for exported in exported_values {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        values.push(clone_exported_value(exported, info, canonical_types))
+      None => ()
+    }
+  }
   @parser.emit_moonbit_decl_with_sections(
-    { funcs, interfaces, imports, values: [], classes },
+    { funcs, interfaces, imports, values, classes },
     notes,
     notes.length() > 0,
   )

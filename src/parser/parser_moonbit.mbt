@@ -154,6 +154,16 @@ fn import_decl_to_moonbit(
 }
 
 ///|
+fn value_decl_to_moonbit(
+  state : MoonBitDeclState,
+  value : @ast.TsValueDecl,
+) -> String {
+  let return_type = moonbit_type_name(state, value.type_)
+  let fn_name = "get_" + to_snake_case(value.name)
+  "///|\ndeclare pub fn \{fn_name}() -> \{return_type}"
+}
+
+///|
 fn func_decl_to_moonbit(state : MoonBitDeclState, func : @ast.TsFunc) -> String {
   let params : Array[String] = []
   let mut next_index = 0
@@ -359,17 +369,16 @@ pub fn emit_moonbit_decl_with_sections(
   let sections : Array[String] = [
     "///|\n/// Generated from TypeScript declarations by mizchi/ts/parser.\n/// Complex or unsupported TypeScript types are widened to JSValue.",
   ]
-  if state.needs_jsvalue || force_jsvalue {
-    sections.push("///|\ndeclare pub type JSValue")
-  }
-  for section in extra_sections {
-    sections.push(section)
-  }
-  for section in interface_sections {
-    sections.push(section)
-  }
-  for section in class_sections {
-    sections.push(section)
+  let value_sections : Array[String] = []
+  let seen_value_binding_names : Array[String] = []
+  for value in module_.values {
+    let fn_name = "get_" + to_snake_case(value.name)
+    push_unique_decl_section(
+      seen_value_binding_names,
+      value_sections,
+      fn_name,
+      value_decl_to_moonbit(state, value),
+    )
   }
   let func_sections : Array[String] = []
   let seen_func_binding_names : Array[String] = []
@@ -387,8 +396,23 @@ pub fn emit_moonbit_decl_with_sections(
     referenced.push(moonbit_type_identifier(name, "OpaqueType"))
   }
   referenced.sort()
+  if state.needs_jsvalue || force_jsvalue {
+    sections.push("///|\ndeclare pub type JSValue")
+  }
+  for section in extra_sections {
+    sections.push(section)
+  }
+  for section in interface_sections {
+    sections.push(section)
+  }
+  for section in class_sections {
+    sections.push(section)
+  }
   for name in referenced {
     sections.push("///|\ndeclare pub type \{name}")
+  }
+  for section in value_sections {
+    sections.push(section)
   }
   for section in func_sections {
     sections.push(section)

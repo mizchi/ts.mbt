@@ -548,6 +548,48 @@ async test "analysis: emit MoonBit declarations from runtime ts exported const a
 }
 
 ///|
+async test "analysis: emit MoonBit declarations from runtime ts exported untyped const arrow functions" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    actual.contains("declare pub fn doubleValue(value : Double) -> Double"),
+  )
+  assert_true(
+    actual.contains("declare pub fn greetValue(name : String) -> String"),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit declarations from runtime ts function reexports" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/runtime-function-reexport-entry.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RuntimePoint"))
+  assert_true(
+    actual.contains(
+      "declare pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint",
+    ),
+  )
+}
+
+///|
 async test "analysis: emit MoonBit declarations from runtime default exported functions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts",
@@ -590,4 +632,38 @@ async test "analysis: emit MoonBit declarations from runtime default exported cl
   assert_true(
     actual.contains("declare pub fn default_from(seed : Double) -> Default"),
   )
+}
+
+///|
+async test "analysis: emit MoonBit declarations from namespace export assignment" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-equals-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type JSValue"))
+  assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from import-equals export assignment" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/import-equals-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type JSValue"))
+  assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
 }

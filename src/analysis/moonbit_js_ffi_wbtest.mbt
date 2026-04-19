@@ -676,6 +676,52 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported const 
 }
 
 ///|
+async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported untyped const arrow functions" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts", "./runtime/runtime-untyped-arrow.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn double_value(value : Double) -> Double = \"__ts_mbt_double_value\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn greet_value(name : String) -> String = \"__ts_mbt_greet_value\"",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from runtime ts function reexports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-function-reexport-entry.ts", "./runtime/runtime-function-reexport.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn scale_point("))
+  assert_true(
+    bundle.bridge_js.contains(
+      "globalThis.__ts_mbt_scale_point = __ts_mbt_mod.scalePoint;",
+    ),
+  )
+}
+
+///|
 async test "analysis: emit MoonBit JS FFI bundle from runtime default exported functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts", "./runtime/runtime-default-function.js",
@@ -732,6 +778,31 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime default exported c
   assert_true(
     bundle.bridge_js.contains(
       "globalThis.__ts_mbt_default_inc = (self, delta) => self.inc(delta);",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from namespace export assignment" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_default() -> @js.Any = \"__ts_mbt_get_default\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "globalThis.__ts_mbt_get_default = () => __ts_mbt_mod.default;",
     ),
   )
 }

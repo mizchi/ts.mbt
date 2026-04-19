@@ -802,6 +802,34 @@ test "parser: parse module block export metadata for declare const" {
 }
 
 ///|
+test "parser: parse import equals require in module block" {
+  let src = "import semver = require(\"pkg-types\");"
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.imports.length(), 1)
+  assert_eq(module_.imports[0].module_spec, "pkg-types")
+  assert_eq(module_.imports[0].namespace_binding, Some("semver"))
+}
+
+///|
+test "parser: parse export assignment in module block" {
+  let src = "declare namespace semver { const version: string; } export = semver;"
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].local_name, "semver")
+  assert_eq(module_.exports[0].export_name, "default")
+}
+
+///|
 test "parser: parse declare class in module" {
   let src =
     #|declare class Counter {
@@ -831,6 +859,22 @@ test "parser: parse declare class in module" {
   assert_eq(class_.methods[1].name, "value")
   assert_eq(class_.methods[2].name, "from")
   assert_true(class_.methods[2].is_static)
+}
+
+///|
+test "parser: parse declare namespace in module as value declaration" {
+  let parser = Parser::from_source(
+    "declare namespace semver { const version: string; } export = semver;",
+  )
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 1)
+  assert_eq(module_.values[0].name, "semver")
+  assert_eq(module_.values[0].type_, Any)
 }
 
 ///|
@@ -1484,7 +1528,9 @@ test "parser: parse exported namespace declaration" {
       return
     }
   }
-  assert_eq(module_.exports.length(), 0)
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].local_name, "JSX")
+  assert_eq(module_.exports[0].export_name, "JSX")
 }
 
 ///|
