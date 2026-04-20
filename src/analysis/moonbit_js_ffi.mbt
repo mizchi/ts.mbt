@@ -237,6 +237,16 @@ fn push_unique_bridge_binding(
 }
 
 ///|
+fn ffi_bridge_function_line(
+  binding_name : String,
+  params : Array[String],
+  expr : String,
+) -> String {
+  let params_str = params.join(", ")
+  "export function \{binding_name}(\{params_str}) { return \{expr}; }"
+}
+
+///|
 fn ffi_import_decl_to_moonbit(
   state : MoonBitJsFfiState,
   import_ : @ast.TsImport,
@@ -587,6 +597,59 @@ fn ffi_is_js_ident(name : String) -> Bool {
 }
 
 ///|
+fn ffi_is_js_reserved_word(name : String) -> Bool {
+  match name {
+    "break"
+    | "case"
+    | "catch"
+    | "class"
+    | "const"
+    | "continue"
+    | "debugger"
+    | "default"
+    | "delete"
+    | "do"
+    | "else"
+    | "export"
+    | "extends"
+    | "finally"
+    | "for"
+    | "function"
+    | "if"
+    | "import"
+    | "in"
+    | "instanceof"
+    | "new"
+    | "return"
+    | "super"
+    | "switch"
+    | "this"
+    | "throw"
+    | "try"
+    | "typeof"
+    | "var"
+    | "void"
+    | "while"
+    | "with"
+    | "yield"
+    | "let"
+    | "enum"
+    | "await"
+    | "implements"
+    | "package"
+    | "protected"
+    | "static"
+    | "interface"
+    | "private"
+    | "public"
+    | "null"
+    | "true"
+    | "false" => true
+    _ => false
+  }
+}
+
+///|
 fn ffi_js_access(base : String, export_name : String) -> String {
   if ffi_is_js_ident(export_name) {
     base + "." + export_name
@@ -597,7 +660,14 @@ fn ffi_js_access(base : String, export_name : String) -> String {
 
 ///|
 fn ffi_bridge_import_local_name(export_name : String) -> String {
-  "__ts_mbt_import_" + ffi_to_snake_case(export_name)
+  if export_name == "default" {
+    "default_"
+  } else if ffi_is_js_ident(export_name) &&
+    !ffi_is_js_reserved_word(export_name) {
+    export_name
+  } else {
+    "bridge_" + ffi_to_snake_case(export_name)
+  }
 }
 
 ///|
@@ -607,6 +677,25 @@ fn ffi_bridge_import_key(export_name : String) -> String {
   } else {
     "named:" + export_name
   }
+}
+
+///|
+fn ffi_bridge_reexport_line(
+  module_spec : String,
+  export_name : String,
+  binding_name : String,
+) -> String? {
+  if export_name == "default" {
+    return Some(
+      "export { default as \{binding_name} } from \"\{module_spec}\";",
+    )
+  }
+  if ffi_is_js_ident(export_name) {
+    return Some(
+      "export { \{export_name} as \{binding_name} } from \"\{module_spec}\";",
+    )
+  }
+  None
 }
 
 ///|
@@ -642,6 +731,8 @@ fn render_bridge_import_line(
   for import_ in bridge_imports {
     if import_.is_default {
       default_import = Some(import_.local_name)
+    } else if import_.imported_name == import_.local_name {
+      named_imports.push(import_.imported_name)
     } else {
       named_imports.push("\{import_.imported_name} as \{import_.local_name}")
     }
@@ -846,7 +937,13 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       seen_bridge_binding_names,
       bridge_lines,
       getter_binding_name,
-      "export const \{getter_binding_name} = () => \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, export_name)};",
+      ffi_bridge_function_line(
+        getter_binding_name,
+        [],
+        ensure_bridge_import(
+          seen_bridge_import_keys, bridge_imports, export_name,
+        ),
+      ),
     )
   }
 
@@ -928,7 +1025,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
             seen_bridge_binding_names,
             bridge_lines,
             ctor_binding_name,
-            "export const \{ctor_binding_name} = (\{params_str}) => new \{class_access}(\{params_str});",
+            ffi_bridge_function_line(
+              ctor_binding_name,
+              args,
+              "new \{class_access}(\{params_str})",
+            ),
           )
         }
         None if class_.is_constructible => {
@@ -942,7 +1043,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
             seen_bridge_binding_names,
             bridge_lines,
             ctor_binding_name,
-            "export const \{ctor_binding_name} = () => new \{class_access}();",
+            ffi_bridge_function_line(
+              ctor_binding_name,
+              [],
+              "new \{class_access}()",
+            ),
           )
         }
         _ => ()
@@ -961,38 +1066,28 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         bridge_imports,
         class_.name,
       )
-      let getter_access = if class_property.is_static {
-        ffi_js_access(class_access, class_property.name)
-      } else {
-        ffi_js_access("self", class_property.name)
-      }
-      let getter_params = if class_property.is_static { "" } else { "self" }
+      let getter_access = ffi_js_access(class_access, class_property.name)
       push_unique_bridge_binding(
         seen_bridge_binding_names,
         bridge_lines,
         getter_binding,
-        "export const \{getter_binding} = (\{getter_params}) => \{getter_access};",
+        ffi_bridge_function_line(getter_binding, [], getter_access),
       )
       if !class_property.is_readonly {
         let setter_binding = ffi_class_property_setter_binding_name(
           class_.name,
           class_property.name,
         )
-        let setter_target = if class_property.is_static {
-          ffi_js_access(class_access, class_property.name)
-        } else {
-          ffi_js_access("self", class_property.name)
-        }
-        let setter_params = if class_property.is_static {
-          "value"
-        } else {
-          "self, value"
-        }
+        let setter_target = ffi_js_access(class_access, class_property.name)
         push_unique_bridge_binding(
           seen_bridge_binding_names,
           bridge_lines,
           setter_binding,
-          "export const \{setter_binding} = (\{setter_params}) => (\{setter_target} = value);",
+          ffi_bridge_function_line(
+            setter_binding,
+            ["value"],
+            "(\{setter_target} = value)",
+          ),
         )
       }
     }
@@ -1010,21 +1105,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         bridge_imports,
         class_.name,
       )
-      let params = if class_method.is_static {
-        args.join(", ")
-      } else {
-        let with_self : Array[String] = ["self"]
-        for arg in args {
-          with_self.push(arg)
-        }
-        with_self.join(", ")
-      }
       let args_str = args.join(", ")
-      let method_access = if class_method.is_static {
-        ffi_js_access(class_access, class_method.name)
-      } else {
-        ffi_js_access("self", class_method.name)
-      }
+      let method_access = ffi_js_access(class_access, class_method.name)
       let binding_name = ffi_class_method_binding_name(
         class_.name,
         class_method.name,
@@ -1033,7 +1115,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         seen_bridge_binding_names,
         bridge_lines,
         binding_name,
-        "export const \{binding_name} = (\{params}) => \{method_access}(\{args_str});",
+        ffi_bridge_function_line(
+          binding_name,
+          args,
+          "\{method_access}(\{args_str})",
+        ),
       )
     }
   }
@@ -1054,12 +1140,19 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         binding_name,
         ffi_import_decl_to_moonbit(state, import_),
       )
-      push_unique_bridge_binding(
-        seen_bridge_binding_names,
-        bridge_lines,
-        binding_name,
-        "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, import_.name)};",
-      )
+      match ffi_bridge_reexport_line(module_spec, import_.name, binding_name) {
+        Some(reexport_line) =>
+          push_unique_bridge_binding(
+            seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
+          )
+        None =>
+          push_unique_bridge_binding(
+            seen_bridge_binding_names,
+            bridge_lines,
+            binding_name,
+            "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, import_.name)};",
+          )
+      }
     }
     handled_export_names.push(import_.name)
   }
@@ -1080,12 +1173,19 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         binding_name,
         ffi_func_decl_to_moonbit(state, func),
       )
-      push_unique_bridge_binding(
-        seen_bridge_binding_names,
-        bridge_lines,
-        binding_name,
-        "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, func.name)};",
-      )
+      match ffi_bridge_reexport_line(module_spec, func.name, binding_name) {
+        Some(reexport_line) =>
+          push_unique_bridge_binding(
+            seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
+          )
+        None =>
+          push_unique_bridge_binding(
+            seen_bridge_binding_names,
+            bridge_lines,
+            binding_name,
+            "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, func.name)};",
+          )
+      }
     }
     handled_export_names.push(func.name)
   }
@@ -1102,7 +1202,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       seen_bridge_binding_names,
       bridge_lines,
       getter_name,
-      "export const \{getter_name} = () => \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, value.name)};",
+      ffi_bridge_function_line(
+        getter_name,
+        [],
+        ensure_bridge_import(
+          seen_bridge_import_keys,
+          bridge_imports,
+          value.name,
+        ),
+      ),
     )
     handled_export_names.push(value.name)
   }
@@ -1129,7 +1237,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       seen_bridge_binding_names,
       bridge_lines,
       getter_name,
-      "export const \{getter_name} = () => \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, export_.export_name)};",
+      ffi_bridge_function_line(
+        getter_name,
+        [],
+        ensure_bridge_import(
+          seen_bridge_import_keys,
+          bridge_imports,
+          export_.export_name,
+        ),
+      ),
     )
   }
 

@@ -46,5 +46,5 @@ async test "analysis: emit MoonBit TS bridge package bundle adds js import when 
   assert_true(bundle.moon_pkg_json.contains("\"alias\": \"js\""))
   assert_true(bundle.bridge_mbti.contains("declare pub fn get_default()"))
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
-  assert_true(bundle.bridge_js.contains("export const __ts_mbt_get_default"))
+  assert_true(bundle.bridge_js.contains("export function __ts_mbt_get_default"))
 }

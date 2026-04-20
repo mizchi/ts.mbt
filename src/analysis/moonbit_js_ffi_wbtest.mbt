@@ -50,7 +50,7 @@ async test "analysis: emit MoonBit JS FFI bundle for namespace exports" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_get_shapes = () => __ts_mbt_import_shapes;",
+      "export function __ts_mbt_get_shapes() { return shapes; }",
     ),
   )
 }
@@ -105,12 +105,12 @@ async test "analysis: emit MoonBit JS FFI bundle for typed value exports" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_get_version = () => __ts_mbt_import_version;",
+      "export function __ts_mbt_get_version() { return version; }",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_get_build_number = () => __ts_mbt_import_build_number;",
+      "export function __ts_mbt_get_build_number() { return buildNumber; }",
     ),
   )
 }
@@ -135,7 +135,7 @@ async test "analysis: emit MoonBit JS FFI bundle falls back to Any getter for un
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_get_ready = () => __ts_mbt_import_ready;",
+      "export function __ts_mbt_get_ready() { return ready; }",
     ),
   )
 }
@@ -171,13 +171,13 @@ async test "analysis: emit MoonBit JS FFI bundle for exported classes" {
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_new_counter = (initial) => new __ts_mbt_import_counter(initial);",
+      "export function __ts_mbt_new_counter(initial) { return new Counter(initial); }",
     ),
   )
   assert_false(bundle.bridge_js.contains("__ts_mbt_counter_inc"))
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_counter_from = (seed) => __ts_mbt_import_counter.from(seed);",
+      "export function __ts_mbt_counter_from(seed) { return Counter.from(seed); }",
     ),
   )
 }
@@ -249,12 +249,12 @@ async test "analysis: emit MoonBit JS FFI bundle for exported class properties" 
   assert_false(bundle.bridge_js.contains("__ts_mbt_set_counter_state_label"))
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_get_counter_state_version = () => __ts_mbt_import_counter_state.version;",
+      "export function __ts_mbt_get_counter_state_version() { return CounterState.version; }",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_set_counter_state_step = (value) => (__ts_mbt_import_counter_state.step = value);",
+      "export function __ts_mbt_set_counter_state_step(value) { return (CounterState.step = value); }",
     ),
   )
 }
@@ -542,7 +542,7 @@ async test "analysis: emit MoonBit JS FFI bundle collapse overloads by generated
   assert_eq(
     count_occurrences_in_ffi_output(
       bundle.bridge_js,
-      "export const __ts_mbt_make_counter =",
+      "export { makeCounter as __ts_mbt_make_counter } from \"./runtime/overload.js\";",
     ),
     1,
   )
@@ -575,6 +575,31 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported functi
     ),
   )
   assert_false(bundle.bridge_js.contains("__ts_mbt_scale_point"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for relative runtime functions" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-function-entry.ts", "./runtime/runtime-function.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn scale_point(point : RuntimePoint, factor : Double) -> RuntimePoint = \"__ts_mbt_scale_point\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export { scalePoint as __ts_mbt_scale_point } from \"./runtime/runtime-function.js\";",
+    ),
+  )
 }
 
 ///|
@@ -686,6 +711,31 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime default exported f
 }
 
 ///|
+async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for relative default functions" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-default-function-entry.ts", "./runtime/runtime-default-function.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn default(label : String) -> String = \"__ts_mbt_default\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export { default as __ts_mbt_default } from \"./runtime/runtime-default-function.js\";",
+    ),
+  )
+}
+
+///|
 async test "analysis: emit MoonBit JS FFI bundle from runtime default exported classes" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-class-entry.ts", "/runtime/runtime-default-class.js",
@@ -738,7 +788,7 @@ async test "analysis: emit MoonBit JS FFI bundle from namespace export assignmen
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_get_default = () => __ts_mbt_import_default;",
+      "export function __ts_mbt_get_default() { return default_; }",
     ),
   )
 }

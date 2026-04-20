@@ -341,7 +341,7 @@ async test "emit_moonbit_bridge_package_texts generates a compileable package bu
   assert_true(bundle.moon_pkg_json.contains("\"path\": \"mizchi/js/core\""))
   assert_true(bundle.bridge_mbti.contains("declare pub fn get_default()"))
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
-  assert_true(bundle.bridge_js.contains("export const __ts_mbt_get_default"))
+  assert_true(bundle.bridge_js.contains("export function __ts_mbt_get_default"))
 }
 
 ///|
@@ -709,7 +709,7 @@ async test "emit_moonbit_js_ffi_texts handles export assignment declarations" {
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn get_default()"))
-  assert_true(bundle.bridge_js.contains("export const __ts_mbt_get_default"))
+  assert_true(bundle.bridge_js.contains("export function __ts_mbt_get_default"))
 }
 
 ///|
