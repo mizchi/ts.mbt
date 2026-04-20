@@ -49,6 +49,15 @@ async fn main_async() -> Unit {
       let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
       emit_moonbit_decl(file_path, output_path)
     }
+    "normalize-moonbit-dts" => {
+      if args.length() < 3 {
+        println("Error: no file specified")
+        return
+      }
+      let file_path = args[2]
+      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
+      emit_typescript_decl(file_path, output_path)
+    }
     "emit-moonbit-js-ffi" => {
       if args.length() < 4 {
         println("Error: expected <entry> <module-spec>")
@@ -171,6 +180,7 @@ fn command_help_lines() -> Array[String] {
     "  run <file>           Run a TypeScript/JavaScript file", "  experimental-emit-gc <file> [out] Emit experimental wasm-gc binary (default: out.wasm)",
     "  test262 <path>       Run test262 tests (file or directory)", "  experimental-analyze <file> Analyze experimental AOT compilability of functions",
     "  experimental-aot-check <file> Alias for experimental-analyze", "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from a TypeScript entrypoint",
+    "  normalize-moonbit-dts <file> [out] Normalize MoonBit-generated TypeScript declarations into clearer .d.ts output",
     "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
     "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
@@ -264,6 +274,42 @@ async fn emit_moonbit_decl_text(
   file_path : String,
 ) -> String raise @analysis.ModuleGraphError {
   @analysis.emit_moonbit_decl_from_entry_path(file_path)
+}
+
+///|
+async fn emit_typescript_decl(
+  file_path : String,
+  output_path : String?,
+) -> Unit {
+  let emitted = emit_typescript_decl_text(file_path) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  match output_path {
+    Some(path) => {
+      let _ = @fs.write_file(path, string_to_bytes(emitted), create=0o644) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote normalized TypeScript declarations to \{path}")
+    }
+    None => println(emitted)
+  }
+}
+
+///|
+async fn emit_typescript_decl_text(
+  file_path : String,
+) -> String raise @analysis.ModuleGraphError {
+  @analysis.normalize_moonbit_generated_typescript_decl_from_entry_path(
+    file_path,
+  )
 }
 
 ///|

@@ -189,6 +189,8 @@ pub fn narrow_type_negated(@ast.TsType, String) -> @ast.TsType
 
 pub fn needs_gc(@ast.TsType) -> Bool
 
+pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String) -> String raise ModuleGraphError
+
 pub fn parse_and_analyze(String) -> AnalysisResult[@ast.TypedModule]
 
 pub fn register_lexical_declarations(AnalysisCtx, @ast.TsBlock) -> Unit

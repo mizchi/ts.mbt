@@ -138,6 +138,11 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
+      "  normalize-moonbit-dts <file> [out] Normalize MoonBit-generated TypeScript declarations into clearer .d.ts output",
+    ),
+  )
+  assert_true(
+    lines.contains(
       "  benchmark-project <root> [limit] Benchmark local TS/.d.ts corpus coverage",
     ),
   )
@@ -157,6 +162,20 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
     ),
   )
   assert_false(lines.contains("  aot-check <file>     Alias for analyze"))
+}
+
+///|
+async test "emit_typescript_decl_text normalizes MoonBit generated d.ts" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/app.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(actual.contains("x: number"))
+  assert_true(actual.contains("): string;"))
+  assert_false(actual.contains("MoonBit.Double"))
 }
 
 ///|
