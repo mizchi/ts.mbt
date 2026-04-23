@@ -23,6 +23,7 @@ priv struct ExportedInterfaceDecl {
 priv struct ExportedImportDecl {
   source_path : String
   export_name : String
+  source_export_name : String
   import_ : @ast.TsImport
 }
 
@@ -30,6 +31,7 @@ priv struct ExportedImportDecl {
 priv struct ExportedFuncDecl {
   source_path : String
   export_name : String
+  source_export_name : String
   func : @ast.TsFunc
 }
 
@@ -37,6 +39,7 @@ priv struct ExportedFuncDecl {
 priv struct ExportedValueDecl {
   source_path : String
   export_name : String
+  source_export_name : String
   value : @ast.TsValueDecl
 }
 
@@ -45,7 +48,16 @@ priv struct ExportedClassDecl {
   source_path : String
   local_name : String
   export_name : String
+  source_export_name : String
   class_ : @ast.TsClassDecl
+}
+
+///|
+priv struct ExportedConstValueSet {
+  values : Map[String, @ast.TsExpr]
+  explicit_names : Array[String]
+  star_names : Array[String]
+  ambiguous_names : Array[String]
 }
 
 ///|
@@ -67,12 +79,14 @@ fn decl_key(source_path : String, local_name : String) -> String {
 ///|
 async fn load_decl_module_info(
   record : ResolvedModuleRecord,
+  seeded_const_values : Map[String, @ast.TsExpr],
 ) -> DeclModuleInfo raise ModuleGraphError {
   let content = @fs.read_file(record.path).text() catch {
     e => raise ReadError("Failed to read module '\{record.path}': \{e}")
   }
-  let parser = @parser.Parser::from_source(content)
-  let module_ = parser.parse_module() catch {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    content, seeded_const_values,
+  ) catch {
     @parser.ParseError(msg) =>
       if is_declaration_path(record.path) {
         raise ParseError(
@@ -86,12 +100,237 @@ async fn load_decl_module_info(
 }
 
 ///|
+async fn build_direct_exported_const_value_map(
+  record : ResolvedModuleRecord,
+) -> Map[String, @ast.TsExpr] raise ModuleGraphError {
+  let content = @fs.read_file(record.path).text() catch {
+    e => raise ReadError("Failed to read module '\{record.path}': \{e}")
+  }
+  @parser.collect_exported_const_values_from_source(content, {}) catch {
+    @parser.ParseError(msg) =>
+      raise ParseError(
+        "Failed to parse exported const values from '\{record.path}': \{msg}",
+      )
+  }
+}
+
+///|
+fn new_exported_const_value_set(
+  direct_values : Map[String, @ast.TsExpr],
+) -> ExportedConstValueSet {
+  let explicit_names : Array[String] = []
+  for entry in direct_values {
+    explicit_names.push(entry.0)
+  }
+  { values: direct_values, explicit_names, star_names: [], ambiguous_names: [] }
+}
+
+///|
+fn exported_const_value_expr(
+  set : ExportedConstValueSet,
+  export_name : String,
+) -> @ast.TsExpr? {
+  if set.explicit_names.contains(export_name) {
+    return set.values.get(export_name)
+  }
+  if set.ambiguous_names.contains(export_name) {
+    return None
+  }
+  set.values.get(export_name)
+}
+
+///|
+fn exported_const_namespace_expr(set : ExportedConstValueSet) -> @ast.TsExpr {
+  let props : Array[(String, @ast.TsExpr)] = []
+  for entry in set.values {
+    let export_name = entry.0
+    match exported_const_value_expr(set, export_name) {
+      Some(expr) => props.push((export_name, expr))
+      None => ()
+    }
+  }
+  @ast.TsExpr::ObjectLit(props)
+}
+
+///|
+fn build_record_map(graph : ModuleGraph) -> Map[String, ResolvedModuleRecord] {
+  let records : Map[String, ResolvedModuleRecord] = {}
+  for record in graph.modules {
+    records[record.path] = record
+  }
+  records
+}
+
+///|
+async fn build_exported_const_value_map_for_path(
+  path : String,
+  records : Map[String, ResolvedModuleRecord],
+  cache : Map[String, ExportedConstValueSet],
+  visiting : Array[String],
+) -> ExportedConstValueSet raise ModuleGraphError {
+  match cache.get(path) {
+    Some(exported_const_values) => return exported_const_values
+    None => ()
+  }
+  if visiting.contains(path) {
+    return {
+      values: {},
+      explicit_names: [],
+      star_names: [],
+      ambiguous_names: [],
+    }
+  }
+  let record = match records.get(path) {
+    Some(record) => record
+    None =>
+      return {
+        values: {},
+        explicit_names: [],
+        star_names: [],
+        ambiguous_names: [],
+      }
+  }
+  visiting.push(path)
+  let exported_const_values = new_exported_const_value_set(
+    build_direct_exported_const_value_map(record),
+  )
+  for reexport in record.reexports {
+    match reexport.kind {
+      @ast.TsReExportKind::Named(items) => {
+        let dep_exported_const_values = build_exported_const_value_map_for_path(
+          reexport.resolved_path,
+          records,
+          cache,
+          visiting,
+        )
+        for item in items {
+          let (imported_name, export_name) = item
+          match
+            exported_const_value_expr(dep_exported_const_values, imported_name) {
+            Some(expr) => {
+              exported_const_values.values[export_name] = expr
+              if !exported_const_values.explicit_names.contains(export_name) {
+                exported_const_values.explicit_names.push(export_name)
+              }
+            }
+            None => ()
+          }
+        }
+      }
+      @ast.TsReExportKind::All => {
+        let dep_exported_const_values = build_exported_const_value_map_for_path(
+          reexport.resolved_path,
+          records,
+          cache,
+          visiting,
+        )
+        for entry in dep_exported_const_values.values {
+          let export_name = entry.0
+          if export_name == "default" {
+            continue
+          }
+          match
+            exported_const_value_expr(dep_exported_const_values, export_name) {
+            Some(expr) =>
+              if exported_const_values.explicit_names.contains(export_name) ||
+                exported_const_values.ambiguous_names.contains(export_name) {
+                continue
+              } else if exported_const_values.star_names.contains(export_name) {
+                if !exported_const_values.ambiguous_names.contains(export_name) {
+                  exported_const_values.ambiguous_names.push(export_name)
+                }
+              } else {
+                exported_const_values.values[export_name] = expr
+                exported_const_values.star_names.push(export_name)
+              }
+            None => ()
+          }
+        }
+      }
+      @ast.TsReExportKind::Namespace(_) => ()
+    }
+  }
+  cache[path] = exported_const_values
+  let _ = visiting.pop()
+  exported_const_values
+}
+
+///|
+async fn build_exported_const_value_map_by_path(
+  graph : ModuleGraph,
+) -> Map[String, ExportedConstValueSet] raise ModuleGraphError {
+  let records = build_record_map(graph)
+  let cache : Map[String, ExportedConstValueSet] = {}
+  let visiting : Array[String] = []
+  for record in graph.modules {
+    cache[record.path] = build_exported_const_value_map_for_path(
+      record.path,
+      records,
+      cache,
+      visiting,
+    )
+  }
+  cache
+}
+
+///|
+fn build_imported_const_seed(
+  record : ResolvedModuleRecord,
+  exported_const_values_by_path : Map[String, ExportedConstValueSet],
+) -> Map[String, @ast.TsExpr] {
+  let seeded_const_values : Map[String, @ast.TsExpr] = {}
+  for i, import_decl in record.module_block.imports {
+    let resolved_edge = record.imports[i]
+    if import_decl.type_only ||
+      import_decl.side_effect_only ||
+      resolved_edge.resolved_path == "" {
+      continue
+    }
+    match exported_const_values_by_path.get(resolved_edge.resolved_path) {
+      Some(exported_const_values) => {
+        match import_decl.default_binding {
+          Some(local_name) =>
+            match exported_const_value_expr(exported_const_values, "default") {
+              Some(expr) => seeded_const_values[local_name] = expr
+              None => ()
+            }
+          None => ()
+        }
+        match import_decl.namespace_binding {
+          Some(local_name) =>
+            seeded_const_values[local_name] = exported_const_namespace_expr(
+              exported_const_values,
+            )
+          None => ()
+        }
+        for binding in import_decl.named_bindings {
+          let (imported_name, local_name) = binding
+          match
+            exported_const_value_expr(exported_const_values, imported_name) {
+            Some(expr) => seeded_const_values[local_name] = expr
+            None => ()
+          }
+        }
+      }
+      None => ()
+    }
+  }
+  seeded_const_values
+}
+
+///|
 async fn build_decl_module_map(
   graph : ModuleGraph,
 ) -> Map[String, DeclModuleInfo] raise ModuleGraphError {
+  let exported_const_values_by_path = build_exported_const_value_map_by_path(
+    graph,
+  )
   let modules : Map[String, DeclModuleInfo] = {}
   for record in graph.modules {
-    modules[record.path] = load_decl_module_info(record)
+    let seeded_const_values = build_imported_const_seed(
+      record, exported_const_values_by_path,
+    )
+    modules[record.path] = load_decl_module_info(record, seeded_const_values)
   }
   modules
 }
@@ -453,6 +692,7 @@ fn resolve_decl_from_export_name(
                 export_name,
                 export_.source_path,
                 local_name,
+                export_.source_export_name,
                 graph,
                 modules,
                 surface_cache,
@@ -470,6 +710,7 @@ fn resolve_decl_from_local_name(
   export_name : String,
   source_path : String,
   local_name : String,
+  source_export_name : String,
   graph : ModuleGraph,
   modules : Map[String, DeclModuleInfo],
   surface_cache : Map[String, Array[ResolvedExport]],
@@ -487,21 +728,39 @@ fn resolve_decl_from_local_name(
           Interface({ source_path, local_name, export_name, iface })
         None =>
           match find_import_decl(info.module_, local_name) {
-            Some(import_) => Import({ source_path, export_name, import_ })
+            Some(import_) =>
+              Import({ source_path, export_name, source_export_name, import_ })
             None => {
               let stmt_func = find_func_decl_from_stmts(
                 info.record.module_block.block.stmts,
                 local_name,
               )
               match find_func_decl(info.module_, local_name) {
-                Some(func) => Function({ source_path, export_name, func })
+                Some(func) =>
+                  Function({
+                    source_path,
+                    export_name,
+                    source_export_name,
+                    func,
+                  })
                 None =>
                   match stmt_func {
-                    Some(func) => Function({ source_path, export_name, func })
+                    Some(func) =>
+                      Function({
+                        source_path,
+                        export_name,
+                        source_export_name,
+                        func,
+                      })
                     None =>
                       match find_value_decl(info.module_, local_name) {
                         Some(value) =>
-                          Value({ source_path, export_name, value })
+                          Value({
+                            source_path,
+                            export_name,
+                            source_export_name,
+                            value,
+                          })
                         None =>
                           match find_class_decl(info.module_, local_name) {
                             Some(class_) =>
@@ -509,6 +768,7 @@ fn resolve_decl_from_local_name(
                                 source_path,
                                 local_name,
                                 export_name,
+                                source_export_name,
                                 class_,
                               })
                             None => {
@@ -563,6 +823,7 @@ fn resolve_decl_from_local_name(
                                       resolved = Value({
                                         source_path,
                                         export_name,
+                                        source_export_name,
                                         value: {
                                           name: local_name,
                                           type_: @ast.TsType::Any,
@@ -637,6 +898,7 @@ fn collect_exported_decls(
         export_.export_name,
         export_.source_path,
         local_name,
+        export_.source_export_name,
         graph,
         modules,
         surface_cache,

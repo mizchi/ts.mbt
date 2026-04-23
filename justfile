@@ -23,6 +23,97 @@ fmt:
 info:
     moon info
 
+# Verify emitted TypeScript declarations from pkg.generated.mbti files
+verify-mbti-dts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ROOT="_build/mbti_tscheck"
+    TS_ROOT="$ROOT/mizchi/ts"
+    WASMX_ROOT="$ROOT/mizchi/wasmx"
+    MOONBIT_ROOT="$ROOT/moonbitlang/core"
+
+    rm -rf "$ROOT"
+    mkdir -p "$TS_ROOT" "$WASMX_ROOT" "$MOONBIT_ROOT"
+
+    moon run src -- emit-typescript-from-mbti src/ast/pkg.generated.mbti "$TS_ROOT/ast.d.ts" >/dev/null
+    moon run src -- emit-typescript-from-mbti src/parser/pkg.generated.mbti "$TS_ROOT/parser.d.ts" >/dev/null
+    moon run src -- emit-typescript-from-mbti src/analysis/pkg.generated.mbti "$TS_ROOT/analysis.d.ts" >/dev/null
+    moon run src -- emit-typescript-from-mbti src/runtime/pkg.generated.mbti "$TS_ROOT/runtime.d.ts" >/dev/null
+    moon run src -- emit-typescript-from-mbti src/codegen/pkg.generated.mbti "$TS_ROOT/codegen.d.ts" >/dev/null
+    moon run src -- emit-typescript-from-mbti src/aot/pkg.generated.mbti "$TS_ROOT/aot.d.ts" >/dev/null
+    moon run src -- emit-typescript-from-mbti src/checker/pkg.generated.mbti "$TS_ROOT/checker.d.ts" >/dev/null
+    moon run src -- emit-typescript-from-mbti src/pkg.generated.mbti "$TS_ROOT/root.d.ts" >/dev/null
+
+    cat <<'EOF' > "$MOONBIT_ROOT/debug.d.ts"
+    export interface Debug {}
+    EOF
+
+    cat <<'EOF' > "$MOONBIT_ROOT/json.d.ts"
+    export interface ToJson {}
+    EOF
+
+    cat <<'EOF' > "$MOONBIT_ROOT/bigint.d.ts"
+    export interface BigInt {}
+    EOF
+
+    cat <<'EOF' > "$WASMX_ROOT/core.d.ts"
+    export interface Code {}
+    export interface FuncType {}
+    export interface Module {}
+    export interface TypeDef {}
+    EOF
+
+    cat <<'EOF' > "$WASMX_ROOT/encode.d.ts"
+    export interface ModuleEncodeResult {}
+    EOF
+
+    cat <<'EOF' > "$WASMX_ROOT/parse.d.ts"
+    export interface ModuleParseResult {}
+    EOF
+
+    cat <<'EOF' > "$WASMX_ROOT/runtime.d.ts"
+    export interface Instance {}
+    export interface Runtime {}
+    export interface Value {}
+    EOF
+
+    cat <<'EOF' > "$ROOT/tsconfig.json"
+    {
+      "compilerOptions": {
+        "strict": true,
+        "noEmit": true,
+        "module": "esnext",
+        "moduleResolution": "bundler",
+        "baseUrl": ".",
+        "lib": ["es2020"]
+      },
+      "files": [
+        "mizchi/ts/ast.d.ts",
+        "mizchi/ts/parser.d.ts",
+        "mizchi/ts/analysis.d.ts",
+        "mizchi/ts/runtime.d.ts",
+        "mizchi/ts/codegen.d.ts",
+        "mizchi/ts/aot.d.ts",
+        "mizchi/ts/checker.d.ts",
+        "mizchi/ts/root.d.ts",
+        "moonbitlang/core/debug.d.ts",
+        "moonbitlang/core/json.d.ts",
+        "moonbitlang/core/bigint.d.ts",
+        "mizchi/wasmx/core.d.ts",
+        "mizchi/wasmx/encode.d.ts",
+        "mizchi/wasmx/parse.d.ts",
+        "mizchi/wasmx/runtime.d.ts"
+      ]
+    }
+    EOF
+
+    pnpm exec tsc -p "$ROOT/tsconfig.json" --pretty false
+
+# Verify fixture-generated TypeScript and MoonBit outputs end-to-end
+verify-generated-fixtures:
+    bash scripts/verify_generated_fixtures.sh
+
 # Benchmark a local TypeScript project corpus
 benchmark-project root limit="200":
     moon run src -- benchmark-project {{root}} {{limit}}
@@ -32,7 +123,7 @@ benchmark-corpora limit="200":
     moon run src -- benchmark-corpora {{limit}}
 
 # Full CI check
-ci: fmt check test
+ci: fmt check test verify-mbti-dts verify-generated-fixtures
 
 # Update dependencies
 update:

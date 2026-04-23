@@ -52,6 +52,7 @@ pub enum ResolvedExportKind {
 ///|
 pub struct ResolvedExport {
   export_name : String
+  source_export_name : String
   source_path : String
   local_name : String?
   kind : ResolvedExportKind
@@ -268,6 +269,7 @@ fn clone_export_with_name(
 ) -> ResolvedExport {
   {
     export_name,
+    source_export_name: export_.source_export_name,
     source_path: export_.source_path,
     local_name: export_.local_name,
     kind,
@@ -302,6 +304,7 @@ fn upsert_explicit_export(
       } else {
         exports[idx] = {
           export_name: export_.export_name,
+          source_export_name: export_.source_export_name,
           source_path: existing.source_path,
           local_name: None,
           kind: Ambiguous,
@@ -329,6 +332,7 @@ fn merge_star_export(
             existing.local_name != export_.local_name {
             exports[idx] = {
               export_name: export_.export_name,
+              source_export_name: export_.source_export_name,
               source_path: existing.source_path,
               local_name: None,
               kind: Ambiguous,
@@ -364,6 +368,7 @@ fn resolve_export_surface_from_map(
   for spec in record.module_block.exports {
     upsert_explicit_export(exports, {
       export_name: spec.export_name,
+      source_export_name: spec.export_name,
       source_path: path,
       local_name: Some(spec.local_name),
       kind: Local,
@@ -400,6 +405,7 @@ fn resolve_export_surface_from_map(
       @ast.TsReExportKind::Namespace(name) =>
         upsert_explicit_export(exports, {
           export_name: name,
+          source_export_name: name,
           source_path: reexport.resolved_path,
           local_name: None,
           kind: Namespace,

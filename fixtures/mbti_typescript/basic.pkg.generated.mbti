@@ -1,0 +1,66 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/sample"
+
+import {
+  "mizchi/ts/ast",
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn[T] identity(T) -> T
+pub fn[T : @debug.Debug] debug_identity(T) -> T
+
+pub fn wrap_pair(String, Int) -> (String, Int)
+
+// Errors
+pub suberror ParseError {
+  InvalidFormat(String)
+  Overflow(Int, String)
+}
+pub impl Show for ParseError
+pub impl Eq for ParseError
+
+// Types and methods
+pub struct Box[T] {
+  value : T
+}
+pub fn[T] Box::unwrap(Self[T]) -> T
+pub fn[T, U] Box::map(Self[T], (T) -> U) -> Box[U]
+pub fn[T] Box::new(T) -> Self[T]
+pub fn[T : @debug.Debug] Box::show_value(Self[T]) -> String
+
+pub enum Result[T, E] {
+  Ok(T)
+  Err(E)
+}
+pub fn[T, E] Result::is_ok(Self[T, E]) -> Bool
+
+pub struct TypedModuleHolder {
+  module : @ast.TsModule
+}
+
+pub(all) enum InternalThing[T] {
+  Hidden(T)
+}
+pub impl Eq for InternalThing[T]
+pub impl Hash for InternalThing[T]
+
+// Type aliases
+pub type Identity[T] = T
+
+pub type MaybeString = String?
+pub fn MaybeString::is_empty(Self) -> Bool
+pub impl Show for MaybeString
+pub impl Hash for MaybeString
+pub impl @json.ToJson for MaybeString
+
+// Traits
+pub impl[T : @debug.Debug] Show for Box[T]
+pub impl Eq for Box[T]
+pub impl Hash for Box[T]
+pub impl Comparable[Self[T]] for Box[T]
+
+pub enum DerivedStatus {
+  Ready
+} derive(Eq, @debug.Debug)

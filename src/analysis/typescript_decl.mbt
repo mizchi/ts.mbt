@@ -4,6 +4,44 @@ priv struct TypeScriptDeclNormalizationState {
 }
 
 ///|
+priv struct TypeScriptDeclImportRules {
+  ns_alias : String
+  module_spec : String
+  rules : TypeScriptDeclNormalizationRules
+}
+
+///|
+priv struct InterfaceExpansion {
+  name : String
+  type_params : Array[String]
+  extends_refs : Array[String]
+  body : String
+}
+
+///|
+priv struct TypeScriptDeclNormalizationRules {
+  primitive_aliases : Array[(String, String)]
+  fixed_array_aliases : Array[String]
+  unboxed_option_aliases : Array[String]
+  unboxed_option_as_int_aliases : Array[String]
+  generic_alias_expansions : Array[(String, Array[String], String)]
+  interface_expansions : Array[InterfaceExpansion]
+}
+
+///|
+
+///| `normalize-moonbit-dts` is a readability pass for MoonBit-generated `.d.ts`.
+
+///| It can borrow limited compatibility checks from `src/checker`, but it is not
+
+///| intended to reimplement the full TypeScript checker.
+
+///|
+fn char_at(s : String, idx : Int) -> Char {
+  s[idx].to_int().unsafe_to_char()
+}
+
+///|
 fn is_ascii_letter(c : Char) -> Bool {
   (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
@@ -27,15 +65,92 @@ fn push_unique_string(items : Array[String], value : String) -> Unit {
 }
 
 ///|
-fn moonbit_primitive_alias_replacement(name : String) -> String? {
-  match name {
-    "Unit" => Some("undefined")
-    "Bool" => Some("boolean")
-    "Int" | "UInt" | "Char" | "Byte" | "Float" | "Double" => Some("number")
-    "String" => Some("string")
-    "Bytes" => Some("Uint8Array")
-    _ => None
+fn default_normalization_rules() -> TypeScriptDeclNormalizationRules {
+  {
+    primitive_aliases: [
+      ("Unit", "undefined"),
+      ("Bool", "boolean"),
+      ("Int", "number"),
+      ("UInt", "number"),
+      ("Char", "number"),
+      ("Byte", "number"),
+      ("Float", "number"),
+      ("Double", "number"),
+      ("Int64", "bigint"),
+      ("UInt64", "bigint"),
+      ("String", "string"),
+      ("Bytes", "Uint8Array"),
+    ],
+    fixed_array_aliases: ["FixedArray"],
+    unboxed_option_aliases: ["UnboxedOption"],
+    unboxed_option_as_int_aliases: ["UnboxedOptionAsInt"],
+    generic_alias_expansions: [],
+    interface_expansions: [],
   }
+}
+
+///|
+fn push_unique_alias(items : Array[String], value : String) -> Unit {
+  if items.contains(value) {
+    return
+  }
+  items.push(value)
+}
+
+///|
+fn push_unique_primitive_alias(
+  items : Array[(String, String)],
+  name : String,
+  replacement : String,
+) -> Unit {
+  for item in items {
+    let (item_name, _) = item
+    if item_name == name {
+      return
+    }
+  }
+  items.push((name, replacement))
+}
+
+///|
+fn primitive_alias_replacement(
+  rules : TypeScriptDeclNormalizationRules,
+  name : String,
+) -> String? {
+  for item in rules.primitive_aliases {
+    let (alias_name, replacement) = item
+    if alias_name == name {
+      return Some(replacement)
+    }
+  }
+  None
+}
+
+///|
+fn find_generic_alias_expansion(
+  rules : TypeScriptDeclNormalizationRules,
+  name : String,
+) -> (Array[String], String)? {
+  for item in rules.generic_alias_expansions {
+    let (alias_name, type_params, rhs) = item
+    if alias_name == name {
+      return Some((type_params, rhs))
+    }
+  }
+  None
+}
+
+///|
+fn find_interface_expansion(
+  rules : TypeScriptDeclNormalizationRules,
+  name : String,
+) -> InterfaceExpansion? {
+  for item in rules.interface_expansions {
+    if item.name == name {
+      return Some(item)
+    }
+  }
+  None
 }
 
 ///|
@@ -73,52 +188,910 @@ fn parse_moonbit_namespace_import_line(line : String) -> (String, String)? {
 }
 
 ///|
-fn take_identifier_prefix(segment : String) -> String {
+fn parse_named_type_import_line(line : String) -> (Array[String], String)? {
+  let trimmed = line.trim().to_string()
+  let prefix = "import type {"
+  if !trimmed.has_prefix(prefix) {
+    return None
+  }
+  let part_list : Array[String] = []
+  for part in trimmed.split(" from ") {
+    part_list.push(part.to_string())
+  }
+  if part_list.length() != 2 {
+    return None
+  }
+  let names_src = part_list[0][prefix.length():].trim().to_string()
+  if !names_src.has_suffix("}") {
+    return None
+  }
+  let raw_names = names_src[:names_src.length() - 1].trim().to_string()
+  let names : Array[String] = []
+  if raw_names != "" {
+    for part in raw_names.split(",") {
+      let name = part.trim().to_string()
+      if name != "" && !names.contains(name) {
+        names.push(name)
+      }
+    }
+  }
+  let mut module_spec = part_list[1].trim().to_string()
+  if module_spec.has_suffix(";") {
+    module_spec = module_spec[:module_spec.length() - 1].to_string()
+  }
+  if module_spec.length() >= 2 &&
+    (
+      (module_spec.has_prefix("\"") && module_spec.has_suffix("\"")) ||
+      (module_spec.has_prefix("'") && module_spec.has_suffix("'"))
+    ) {
+    module_spec = module_spec[1:module_spec.length() - 1].to_string()
+  }
+  if module_spec == "" {
+    return None
+  }
+  Some((names, module_spec))
+}
+
+///|
+fn collect_moonbit_namespace_imports(
+  source : String,
+) -> Array[(String, String)] {
+  let imports : Array[(String, String)] = []
+  for line_view in source.split("\n") {
+    match parse_moonbit_namespace_import_line(line_view.to_string()) {
+      Some(parsed) => {
+        let (ns_alias, module_spec) = parsed
+        let mut already_seen = false
+        for item in imports {
+          let (existing_alias, existing_module_spec) = item
+          if existing_alias == ns_alias && existing_module_spec == module_spec {
+            already_seen = true
+            break
+          }
+        }
+        if !already_seen {
+          imports.push(parsed)
+        }
+      }
+      None => ()
+    }
+  }
+  imports
+}
+
+///|
+fn has_prefix_at(source : String, prefix : String, start : Int) -> Bool {
+  start + prefix.length() <= source.length() &&
+  source[start:start + prefix.length()].to_string() == prefix
+}
+
+///|
+fn take_identifier_at(source : String, start : Int) -> (String, Int) {
+  let mut i = start
   let mut result = ""
-  for c in segment {
+  while i < source.length() {
+    let c = char_at(source, i)
     if result == "" {
       if !is_ascii_letter(c) && c != '_' && c != '$' {
-        return ""
+        return ("", start)
       }
     } else if !is_ident_char(c) {
-      return result
+      return (result, i)
     }
     result += c.to_string()
+    i += 1
+  }
+  (result, i)
+}
+
+///|
+fn split_top_level_type_args(source : String) -> Array[String] {
+  let args : Array[String] = []
+  let mut start = 0
+  let mut angle = 0
+  let mut paren = 0
+  let mut bracket = 0
+  let mut brace = 0
+  for i = 0; i < source.length(); i = i + 1 {
+    let c = char_at(source, i)
+    match c {
+      '<' => angle += 1
+      '>' => if i == 0 || char_at(source, i - 1) != '=' { angle -= 1 }
+      '(' => paren += 1
+      ')' => paren -= 1
+      '[' => bracket += 1
+      ']' => bracket -= 1
+      '{' => brace += 1
+      '}' => brace -= 1
+      ',' if angle == 0 && paren == 0 && bracket == 0 && brace == 0 => {
+        args.push(source[start:i].trim().to_string())
+        start = i + 1
+      }
+      _ => ()
+    }
+  }
+  args.push(source[start:source.length()].trim().to_string())
+  args
+}
+
+///|
+fn strip_ascii_space(source : String) -> String {
+  let buf = StringBuilder::new()
+  for c in source {
+    if c != ' ' && c != '\n' && c != '\r' && c != '\t' {
+      buf.write_char(c)
+    }
+  }
+  buf.to_string()
+}
+
+///|
+fn compact_ascii_space(source : String) -> String {
+  let buf = StringBuilder::new()
+  let mut last_was_space = false
+  for c in source {
+    let is_space = c == ' ' || c == '\n' || c == '\r' || c == '\t'
+    if is_space {
+      if !last_was_space {
+        buf.write_char(' ')
+      }
+      last_was_space = true
+    } else {
+      buf.write_char(c)
+      last_was_space = false
+    }
+  }
+  buf.to_string().trim().to_string()
+}
+
+///|
+fn strip_block_comments(source : String) -> String {
+  let buf = StringBuilder::new()
+  let mut i = 0
+  while i < source.length() {
+    if i + 1 < source.length() &&
+      char_at(source, i) == '/' &&
+      char_at(source, i + 1) == '*' {
+      i += 2
+      while i + 1 < source.length() &&
+            !(char_at(source, i) == '*' && char_at(source, i + 1) == '/') {
+        i += 1
+      }
+      if i + 1 < source.length() {
+        i += 2
+      }
+      continue
+    }
+    buf.write_char(char_at(source, i))
+    i += 1
+  }
+  buf.to_string()
+}
+
+///|
+fn strip_leading_union_bar(source : String) -> String {
+  let trimmed = source.trim().to_string()
+  if trimmed.has_prefix("|") {
+    trimmed[1:trimmed.length()].trim().to_string()
+  } else {
+    trimmed
+  }
+}
+
+///|
+fn next_non_space_index(source : String, start : Int) -> Int {
+  let mut i = start
+  while i < source.length() {
+    let c = char_at(source, i)
+    if c != ' ' && c != '\n' && c != '\r' && c != '\t' {
+      return i
+    }
+    i += 1
+  }
+  source.length()
+}
+
+///|
+fn normalize_path(path : String) -> String {
+  let is_abs = path.has_prefix("/")
+  let parts : Array[String] = []
+  for part_view in path.split("/") {
+    let part = part_view.to_string()
+    if part == "" {
+      if is_abs && parts.length() == 0 {
+        parts.push("")
+      }
+      continue
+    }
+    if part == "." {
+      continue
+    }
+    if part == ".." {
+      if parts.length() > 0 {
+        let last = parts[parts.length() - 1]
+        if last != "" && last != ".." {
+          let _ = parts.pop()
+          continue
+        }
+      }
+      parts.push("..")
+    } else {
+      parts.push(part)
+    }
+  }
+  if parts.length() == 0 {
+    return if is_abs { "/" } else { "." }
+  }
+  if parts.length() == 1 && parts[0] == "" {
+    return "/"
+  }
+  let mut result = parts[0]
+  if result == "" {
+    result = "/"
+  }
+  for i in 1..<parts.length() {
+    if result == "/" {
+      result = result + parts[i]
+    } else {
+      result = result + "/" + parts[i]
+    }
   }
   result
+}
+
+///|
+fn dirname(path : String) -> String {
+  let normalized = normalize_path(path)
+  match normalized.rev_find("/") {
+    Some(0) => "/"
+    Some(idx) => normalized[:idx].to_string()
+    None => "."
+  }
+}
+
+///|
+fn join_path(base : String, name : String) -> String {
+  if base == "." || base == "" {
+    name
+  } else if base.has_suffix("/") {
+    base + name
+  } else {
+    base + "/" + name
+  }
+}
+
+///|
+fn parse_export_type_alias_line(
+  line : String,
+) -> (String, Array[String], String)? {
+  let prefix = "export type "
+  if !line.has_prefix(prefix) {
+    return None
+  }
+  match line.find("=") {
+    Some(eq_idx) => {
+      let left = line[prefix.length():eq_idx].trim().to_string()
+      let mut right = line[eq_idx + 1:line.length()].trim().to_string()
+      if right.has_suffix(";") {
+        right = right[:right.length() - 1].trim().to_string()
+      }
+      match left.find("<") {
+        Some(lt_idx) if left.has_suffix(">") => {
+          let name = left[:lt_idx].trim().to_string()
+          let params_src = left[lt_idx + 1:left.length() - 1].to_string()
+          let params = split_top_level_type_args(params_src)
+          Some((name, params, right))
+        }
+        _ => Some((left, [], right))
+      }
+    }
+    None => None
+  }
+}
+
+///|
+fn collect_export_type_alias_blocks(source : String) -> Array[String] {
+  let blocks : Array[String] = []
+  let current : Array[String] = []
+  let mut collecting = false
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut brace_depth = 0
+  let mut angle_depth = 0
+  for line_view in source.split("\n") {
+    let line = line_view.to_string()
+    let trimmed = line.trim().to_string()
+    if !collecting {
+      if trimmed.has_prefix("export type ") {
+        current.push(line)
+        collecting = true
+        for i = 0; i < line.length(); i = i + 1 {
+          let c = char_at(line, i)
+          match c {
+            '(' => paren_depth += 1
+            ')' => paren_depth -= 1
+            '[' => bracket_depth += 1
+            ']' => bracket_depth -= 1
+            '{' => brace_depth += 1
+            '}' => brace_depth -= 1
+            '<' => angle_depth += 1
+            '>' => if i == 0 || char_at(line, i - 1) != '=' { angle_depth -= 1 }
+            ';' if paren_depth == 0 &&
+              bracket_depth == 0 &&
+              brace_depth == 0 &&
+              angle_depth == 0 => {
+              blocks.push(current.join("\n"))
+              current.clear()
+              collecting = false
+              paren_depth = 0
+              bracket_depth = 0
+              brace_depth = 0
+              angle_depth = 0
+              break
+            }
+            _ => ()
+          }
+        }
+      }
+      continue
+    }
+    current.push(line)
+    for i = 0; i < line.length(); i = i + 1 {
+      let c = char_at(line, i)
+      match c {
+        '(' => paren_depth += 1
+        ')' => paren_depth -= 1
+        '[' => bracket_depth += 1
+        ']' => bracket_depth -= 1
+        '{' => brace_depth += 1
+        '}' => brace_depth -= 1
+        '<' => angle_depth += 1
+        '>' => if i == 0 || char_at(line, i - 1) != '=' { angle_depth -= 1 }
+        ';' if paren_depth == 0 &&
+          bracket_depth == 0 &&
+          brace_depth == 0 &&
+          angle_depth == 0 => {
+          blocks.push(current.join("\n"))
+          current.clear()
+          collecting = false
+          paren_depth = 0
+          bracket_depth = 0
+          brace_depth = 0
+          angle_depth = 0
+          break
+        }
+        _ => ()
+      }
+    }
+  }
+  blocks
+}
+
+///|
+fn count_char(source : String, target : Char) -> Int {
+  let mut count = 0
+  for c in source {
+    if c == target {
+      count += 1
+    }
+  }
+  count
+}
+
+///|
+fn collect_export_interface_blocks(source : String) -> Array[String] {
+  let blocks : Array[String] = []
+  let current : Array[String] = []
+  let mut collecting = false
+  let mut brace_depth = 0
+  let mut seen_open = false
+  for line_view in source.split("\n") {
+    let line = line_view.to_string()
+    let trimmed = line.trim().to_string()
+    if !collecting {
+      if trimmed.has_prefix("export interface ") {
+        current.push(line)
+        collecting = true
+        let opens = count_char(line, '{')
+        let closes = count_char(line, '}')
+        brace_depth = opens - closes
+        seen_open = opens > 0
+        if seen_open && brace_depth <= 0 {
+          blocks.push(current.join("\n"))
+          current.clear()
+          collecting = false
+          brace_depth = 0
+          seen_open = false
+        }
+      }
+      continue
+    }
+    current.push(line)
+    let opens = count_char(line, '{')
+    let closes = count_char(line, '}')
+    brace_depth += opens - closes
+    if opens > 0 {
+      seen_open = true
+    }
+    if seen_open && brace_depth <= 0 {
+      blocks.push(current.join("\n"))
+      current.clear()
+      collecting = false
+      brace_depth = 0
+      seen_open = false
+    }
+  }
+  blocks
+}
+
+///|
+fn substitute_type_params(
+  source : String,
+  type_params : Array[String],
+  type_args : Array[String],
+) -> String {
+  let buf = StringBuilder::new()
+  let mut i = 0
+  while i < source.length() {
+    let c = char_at(source, i)
+    if !is_ascii_letter(c) && c != '_' && c != '$' {
+      buf.write_char(c)
+      i += 1
+      continue
+    }
+    let (ident, end_) = take_identifier_at(source, i)
+    let mut replaced = None
+    for idx = 0; idx < type_params.length(); idx = idx + 1 {
+      if type_params[idx] == ident && idx < type_args.length() {
+        replaced = Some(type_args[idx])
+        break
+      }
+    }
+    match replaced {
+      Some(value) => buf.write_string(value)
+      None => buf.write_string(ident)
+    }
+    i = end_
+  }
+  buf.to_string()
+}
+
+///|
+fn normalize_object_type_body(source : String) -> String {
+  source.replace(old="; }", new=" }")
+}
+
+///|
+fn render_intersection_types(parts : Array[String]) -> String {
+  let normalized_parts : Array[String] = []
+  for part in parts {
+    let trimmed = part.trim().to_string()
+    if trimmed != "" && !normalized_parts.contains(trimmed) {
+      normalized_parts.push(trimmed)
+    }
+  }
+  if normalized_parts.length() == 0 {
+    "{}"
+  } else {
+    normalized_parts.join(" & ")
+  }
+}
+
+///|
+fn parse_export_interface_block(block : String) -> InterfaceExpansion? {
+  let normalized = compact_ascii_space(strip_block_comments(block))
+  let prefix = "export interface "
+  if !normalized.has_prefix(prefix) {
+    return None
+  }
+  match normalized.find("{") {
+    Some(open_idx) =>
+      match normalized.rev_find("}") {
+        Some(close_idx) if close_idx > open_idx => {
+          let header_src = normalized[prefix.length():open_idx]
+            .trim()
+            .to_string()
+          let body = normalize_object_type_body(
+            normalized[open_idx:close_idx + 1].to_string(),
+          )
+          let extends_keyword = " extends "
+          let (header, extends_refs) = match header_src.find(extends_keyword) {
+            Some(extends_idx) => {
+              let base_header = header_src[:extends_idx].trim().to_string()
+              let parents_src = header_src[extends_idx +
+                extends_keyword.length():header_src.length()]
+                .trim()
+                .to_string()
+              let parents = if parents_src == "" {
+                []
+              } else {
+                split_top_level_type_args(parents_src)
+              }
+              (base_header, parents)
+            }
+            None => (header_src, [])
+          }
+          match header.find("<") {
+            Some(lt_idx) if header.has_suffix(">") => {
+              let name = header[:lt_idx].trim().to_string()
+              let params_src = header[lt_idx + 1:header.length() - 1].to_string()
+              let params = split_top_level_type_args(params_src)
+              Some({ name, type_params: params, extends_refs, body })
+            }
+            _ => Some({ name: header, type_params: [], extends_refs, body })
+          }
+        }
+        _ => None
+      }
+    None => None
+  }
+}
+
+///|
+fn expand_interface_expansion_body(
+  expansion : InterfaceExpansion,
+  type_args : Array[String],
+  rules : TypeScriptDeclNormalizationRules,
+) -> String {
+  let expanded_parts : Array[String] = []
+  for extends_ref in expansion.extends_refs {
+    let substituted_ref = substitute_type_params(
+      extends_ref,
+      expansion.type_params,
+      type_args,
+    )
+    let parent_body = expand_known_alias_refs(substituted_ref, rules)
+      .trim()
+      .to_string()
+    if parent_body != "" {
+      expanded_parts.push(parent_body)
+    }
+  }
+  expanded_parts.push(
+    expand_known_alias_refs(
+      substitute_type_params(expansion.body, expansion.type_params, type_args),
+      rules,
+    ),
+  )
+  if @checker.can_merge_object_shapes(expanded_parts) {
+    expand_known_alias_refs(@checker.merge_object_shapes(expanded_parts), rules)
+  } else {
+    render_intersection_types(expanded_parts)
+  }
+}
+
+///|
+fn expand_known_alias_refs(
+  source : String,
+  rules : TypeScriptDeclNormalizationRules,
+) -> String {
+  let buf = StringBuilder::new()
+  let mut i = 0
+  while i < source.length() {
+    let c = char_at(source, i)
+    if !is_ascii_letter(c) && c != '_' && c != '$' {
+      buf.write_char(c)
+      i += 1
+      continue
+    }
+    let (ident, end_) = take_identifier_at(source, i)
+    if end_ < source.length() && char_at(source, end_) == '<' {
+      match find_matching_type_args_end(source, end_) {
+        Some(args_end) => {
+          let args_src = source[end_ + 1:args_end - 1].to_string()
+          let normalized_args : Array[String] = []
+          for arg in split_top_level_type_args(args_src) {
+            normalized_args.push(expand_known_alias_refs(arg, rules))
+          }
+          if rules.fixed_array_aliases.contains(ident) &&
+            normalized_args.length() == 1 {
+            buf.write_string("Array<\{normalized_args[0]}>")
+          } else if rules.unboxed_option_aliases.contains(ident) &&
+            normalized_args.length() == 1 {
+            buf.write_string("\{normalized_args[0]} | undefined")
+          } else if rules.unboxed_option_as_int_aliases.contains(ident) &&
+            normalized_args.length() == 1 {
+            buf.write_string("\{normalized_args[0]} | -1")
+          } else {
+            match find_generic_alias_expansion(rules, ident) {
+              Some(expansion) => {
+                let (type_params, rhs) = expansion
+                if type_params.length() == normalized_args.length() {
+                  let expanded = expand_known_alias_refs(
+                    substitute_type_params(rhs, type_params, normalized_args),
+                    rules,
+                  )
+                  let next_idx = next_non_space_index(source, args_end)
+                  if next_idx < source.length() &&
+                    char_at(source, next_idx) == '[' {
+                    buf.write_string("(" + expanded + ")")
+                  } else {
+                    buf.write_string(expanded)
+                  }
+                } else {
+                  buf.write_string(ident)
+                  buf.write_string("<")
+                  buf.write_string(normalized_args.join(", "))
+                  buf.write_string(">")
+                }
+              }
+              None =>
+                match find_interface_expansion(rules, ident) {
+                  Some(expansion) =>
+                    if expansion.type_params.length() ==
+                      normalized_args.length() {
+                      buf.write_string(
+                        expand_interface_expansion_body(
+                          expansion, normalized_args, rules,
+                        ),
+                      )
+                    } else {
+                      buf.write_string(ident)
+                      buf.write_string("<")
+                      buf.write_string(normalized_args.join(", "))
+                      buf.write_string(">")
+                    }
+                  None => {
+                    buf.write_string(ident)
+                    buf.write_string("<")
+                    buf.write_string(normalized_args.join(", "))
+                    buf.write_string(">")
+                  }
+                }
+            }
+          }
+          i = args_end
+          continue
+        }
+        None => ()
+      }
+    }
+    match find_generic_alias_expansion(rules, ident) {
+      Some((type_params, rhs)) if type_params.length() == 0 =>
+        buf.write_string(expand_known_alias_refs(rhs, rules))
+      _ =>
+        match find_interface_expansion(rules, ident) {
+          Some(expansion) if expansion.type_params.length() == 0 =>
+            buf.write_string(
+              expand_interface_expansion_body(expansion, [], rules),
+            )
+          _ =>
+            match primitive_alias_replacement(rules, ident) {
+              Some(replacement) => buf.write_string(replacement)
+              None => buf.write_string(ident)
+            }
+        }
+    }
+    i = end_
+  }
+  buf.to_string()
+}
+
+///|
+fn parse_normalization_rules_from_moonbit_decl(
+  moonbit_decl : String,
+) -> TypeScriptDeclNormalizationRules {
+  let rules = default_normalization_rules()
+  for block in collect_export_type_alias_blocks(moonbit_decl) {
+    let line = compact_ascii_space(strip_block_comments(block))
+    match parse_export_type_alias_line(line) {
+      Some((name, type_params, rhs)) => {
+        let compact_rhs = strip_ascii_space(rhs)
+        match type_params {
+          [] =>
+            if compact_rhs == "undefined" ||
+              compact_rhs == "boolean" ||
+              compact_rhs == "number" ||
+              compact_rhs == "string" ||
+              compact_rhs == "Uint8Array" {
+              push_unique_primitive_alias(rules.primitive_aliases, name, rhs)
+            } else if compact_rhs.has_prefix("bigint") {
+              push_unique_primitive_alias(
+                rules.primitive_aliases,
+                name,
+                "bigint",
+              )
+            }
+          [type_param] =>
+            if compact_rhs == type_param + "[]" {
+              push_unique_alias(rules.fixed_array_aliases, name)
+            } else if compact_rhs.contains(type_param) &&
+              compact_rhs.contains("|undefined") {
+              push_unique_alias(rules.unboxed_option_aliases, name)
+            } else if compact_rhs.contains(type_param) &&
+              compact_rhs.contains("|-1") {
+              push_unique_alias(rules.unboxed_option_as_int_aliases, name)
+            }
+          _ => ()
+        }
+        if !rules.fixed_array_aliases.contains(name) &&
+          !rules.unboxed_option_aliases.contains(name) &&
+          !rules.unboxed_option_as_int_aliases.contains(name) {
+          rules.generic_alias_expansions.push(
+            (
+              name,
+              type_params,
+              normalize_object_type_body(strip_leading_union_bar(rhs)),
+            ),
+          )
+        }
+      }
+      None => ()
+    }
+  }
+  for block in collect_export_interface_blocks(moonbit_decl) {
+    match parse_export_interface_block(block) {
+      Some(expansion) => rules.interface_expansions.push(expansion)
+      _ => ()
+    }
+  }
+  rules
+}
+
+///|
+fn resolve_imported_decl_path(
+  entry_path : String,
+  module_spec : String,
+) -> String? {
+  if module_spec.has_prefix("./") || module_spec.has_prefix("../") {
+    Some(normalize_path(join_path(dirname(entry_path), module_spec)))
+  } else {
+    None
+  }
+}
+
+///|
+fn find_matching_type_args_end(source : String, start : Int) -> Int? {
+  let mut angle = 0
+  let mut paren = 0
+  let mut bracket = 0
+  let mut brace = 0
+  for i = start; i < source.length(); i = i + 1 {
+    let c = char_at(source, i)
+    match c {
+      '<' => angle += 1
+      '>' =>
+        if i == 0 || char_at(source, i - 1) != '=' {
+          angle -= 1
+          if angle == 0 && paren == 0 && bracket == 0 && brace == 0 {
+            return Some(i + 1)
+          }
+        }
+      '(' => paren += 1
+      ')' => paren -= 1
+      '[' => bracket += 1
+      ']' => bracket -= 1
+      '{' => brace += 1
+      '}' => brace -= 1
+      _ => ()
+    }
+  }
+  None
 }
 
 ///|
 fn replace_prefixed_type_refs(
   source : String,
   ns_alias : String,
+  rules : TypeScriptDeclNormalizationRules,
   state : TypeScriptDeclNormalizationState,
 ) -> String {
   let prefix = ns_alias + "."
-  let mut rebuilt = ""
-  let mut first = true
-  for part_view in source.split(prefix) {
-    let segment = part_view.to_string()
-    if first {
-      rebuilt += segment
-      first = false
+  let buf = StringBuilder::new()
+  let mut i = 0
+  while i < source.length() {
+    if !has_prefix_at(source, prefix, i) {
+      buf.write_char(char_at(source, i))
+      i += 1
       continue
     }
-    let type_name = take_identifier_prefix(segment)
+    let (type_name, after_name) = take_identifier_at(
+      source,
+      i + prefix.length(),
+    )
     if type_name == "" {
-      rebuilt += prefix + segment
+      buf.write_char(char_at(source, i))
+      i += 1
       continue
     }
-    match moonbit_primitive_alias_replacement(type_name) {
-      Some(replacement) =>
-        rebuilt += replacement + segment[type_name.length():].to_string()
-      None => {
-        push_unique_string(state.named_imports, type_name)
-        rebuilt += type_name + segment[type_name.length():].to_string()
+    if after_name < source.length() && char_at(source, after_name) == '<' {
+      match find_matching_type_args_end(source, after_name) {
+        Some(end_) => {
+          let args_src = source[after_name + 1:end_ - 1].to_string()
+          let normalized_args : Array[String] = []
+          for arg in split_top_level_type_args(args_src) {
+            normalized_args.push(
+              replace_prefixed_type_refs(arg, ns_alias, rules, state),
+            )
+          }
+          if rules.fixed_array_aliases.contains(type_name) &&
+            normalized_args.length() == 1 {
+            buf.write_string("Array<\{normalized_args[0]}>")
+          } else if rules.unboxed_option_aliases.contains(type_name) &&
+            normalized_args.length() == 1 {
+            buf.write_string("\{normalized_args[0]} | undefined")
+          } else if rules.unboxed_option_as_int_aliases.contains(type_name) &&
+            normalized_args.length() == 1 {
+            buf.write_string("\{normalized_args[0]} | -1")
+          } else {
+            match find_generic_alias_expansion(rules, type_name) {
+              Some(expansion) => {
+                let (type_params, rhs) = expansion
+                if type_params.length() == normalized_args.length() {
+                  let expanded = expand_known_alias_refs(
+                    substitute_type_params(rhs, type_params, normalized_args),
+                    rules,
+                  )
+                  let next_idx = next_non_space_index(source, end_)
+                  if next_idx < source.length() &&
+                    char_at(source, next_idx) == '[' {
+                    buf.write_string("(" + expanded + ")")
+                  } else {
+                    buf.write_string(expanded)
+                  }
+                } else {
+                  push_unique_string(state.named_imports, type_name)
+                  buf.write_string(type_name)
+                  buf.write_string("<")
+                  buf.write_string(normalized_args.join(", "))
+                  buf.write_string(">")
+                }
+              }
+              _ =>
+                match find_interface_expansion(rules, type_name) {
+                  Some(expansion) =>
+                    if expansion.type_params.length() ==
+                      normalized_args.length() {
+                      buf.write_string(
+                        expand_interface_expansion_body(
+                          expansion, normalized_args, rules,
+                        ),
+                      )
+                    } else {
+                      push_unique_string(state.named_imports, type_name)
+                      buf.write_string(type_name)
+                      buf.write_string("<")
+                      buf.write_string(normalized_args.join(", "))
+                      buf.write_string(">")
+                    }
+                  None => {
+                    push_unique_string(state.named_imports, type_name)
+                    buf.write_string(type_name)
+                    buf.write_string("<")
+                    buf.write_string(normalized_args.join(", "))
+                    buf.write_string(">")
+                  }
+                }
+            }
+          }
+          i = end_
+          continue
+        }
+        None => ()
       }
     }
+    match find_generic_alias_expansion(rules, type_name) {
+      Some((type_params, rhs)) if type_params.length() == 0 =>
+        buf.write_string(expand_known_alias_refs(rhs, rules))
+      _ =>
+        match find_interface_expansion(rules, type_name) {
+          Some(expansion) if expansion.type_params.length() == 0 =>
+            buf.write_string(
+              expand_interface_expansion_body(expansion, [], rules),
+            )
+          _ =>
+            match primitive_alias_replacement(rules, type_name) {
+              Some(replacement) => buf.write_string(replacement)
+              None => {
+                push_unique_string(state.named_imports, type_name)
+                buf.write_string(type_name)
+              }
+            }
+        }
+    }
+    i = after_name
   }
-  rebuilt
+  buf.to_string()
 }
 
 ///|
@@ -169,31 +1142,70 @@ fn rebuild_moonbit_imports(
 }
 
 ///|
-fn normalize_moonbit_generated_typescript_decl_text(source : String) -> String {
-  let mut import_alias : (String, String)? = None
+fn merge_named_type_imports(source : String) -> String {
+  let rebuilt : Array[String] = []
+  let module_order : Array[String] = []
+  let module_names : Array[Array[String]] = []
+  let module_positions : Array[Int] = []
   for line_view in source.split("\n") {
     let line = line_view.to_string()
-    match parse_moonbit_namespace_import_line(line) {
-      Some(parsed) => {
-        import_alias = Some(parsed)
-        break
+    match parse_named_type_import_line(line) {
+      Some((names, module_spec)) => {
+        let mut found_idx = None
+        for idx = 0; idx < module_order.length(); idx = idx + 1 {
+          if module_order[idx] == module_spec {
+            found_idx = Some(idx)
+            break
+          }
+        }
+        match found_idx {
+          Some(idx) =>
+            for name in names {
+              push_unique_string(module_names[idx], name)
+            }
+          None => {
+            module_order.push(module_spec)
+            module_names.push(names)
+            module_positions.push(rebuilt.length())
+            rebuilt.push("")
+          }
+        }
       }
-      None => ()
+      None => rebuilt.push(line)
     }
   }
-  match import_alias {
-    Some((ns_alias, module_spec)) => {
-      let state = { named_imports: [] }
-      let normalized = replace_prefixed_type_refs(source, ns_alias, state)
-      rebuild_moonbit_imports(
-        normalized,
-        ns_alias,
-        module_spec,
-        state.named_imports,
-      )
-    }
-    None => source
+  for idx = 0; idx < module_order.length(); idx = idx + 1 {
+    rebuilt[module_positions[idx]] = "import type { " +
+      module_names[idx].join(", ") +
+      " } from \"" +
+      module_order[idx] +
+      "\";"
   }
+  rebuilt.join("\n")
+}
+
+///|
+fn normalize_moonbit_generated_typescript_decl_text(
+  source : String,
+  import_rules : Array[TypeScriptDeclImportRules],
+) -> String {
+  let mut normalized = source
+  for import_rule in import_rules {
+    let state = { named_imports: [] }
+    normalized = replace_prefixed_type_refs(
+      normalized,
+      import_rule.ns_alias,
+      import_rule.rules,
+      state,
+    )
+    normalized = rebuild_moonbit_imports(
+      normalized,
+      import_rule.ns_alias,
+      import_rule.module_spec,
+      state.named_imports,
+    )
+  }
+  merge_named_type_imports(normalized)
 }
 
 ///|
@@ -206,7 +1218,23 @@ pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(
         "Failed to read TypeScript declaration entry '\{entry_path}': \{e}",
       )
   }
-  let normalized = normalize_moonbit_generated_typescript_decl_text(content)
+  let import_rules : Array[TypeScriptDeclImportRules] = []
+  for parsed in collect_moonbit_namespace_imports(content) {
+    let (ns_alias, module_spec) = parsed
+    let rules = match resolve_imported_decl_path(entry_path, module_spec) {
+      Some(moonbit_decl_path) =>
+        parse_normalization_rules_from_moonbit_decl(
+          @fs.read_file(moonbit_decl_path).text() catch {
+            _ => ""
+          },
+        )
+      None => default_normalization_rules()
+    }
+    import_rules.push({ ns_alias, module_spec, rules })
+  }
+  let normalized = normalize_moonbit_generated_typescript_decl_text(
+    content, import_rules,
+  )
   let parser = @parser.Parser::from_source(normalized)
   let _ = parser.parse_module() catch {
     @parser.ParseError(msg) =>

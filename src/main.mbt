@@ -58,6 +58,15 @@ async fn main_async() -> Unit {
       let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
       emit_typescript_decl(file_path, output_path)
     }
+    "emit-typescript-from-mbti" => {
+      if args.length() < 3 {
+        println("Error: no file specified")
+        return
+      }
+      let file_path = args[2]
+      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
+      emit_typescript_decl_from_mbti(file_path, output_path)
+    }
     "emit-moonbit-js-ffi" => {
       if args.length() < 4 {
         println("Error: expected <entry> <module-spec>")
@@ -181,6 +190,7 @@ fn command_help_lines() -> Array[String] {
     "  test262 <path>       Run test262 tests (file or directory)", "  experimental-analyze <file> Analyze experimental AOT compilability of functions",
     "  experimental-aot-check <file> Alias for experimental-analyze", "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from a TypeScript entrypoint",
     "  normalize-moonbit-dts <file> [out] Normalize MoonBit-generated TypeScript declarations into clearer .d.ts output",
+    "  emit-typescript-from-mbti <file> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
     "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
     "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
@@ -310,6 +320,39 @@ async fn emit_typescript_decl_text(
   @analysis.normalize_moonbit_generated_typescript_decl_from_entry_path(
     file_path,
   )
+}
+
+///|
+async fn emit_typescript_decl_from_mbti(
+  file_path : String,
+  output_path : String?,
+) -> Unit {
+  let emitted = emit_typescript_decl_from_mbti_text(file_path) catch {
+    @analysis.MbtiTypescriptDeclError::ReadError(msg)
+    | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  match output_path {
+    Some(path) => {
+      let _ = @fs.write_file(path, string_to_bytes(emitted), create=0o644) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote TypeScript declarations to \{path}")
+    }
+    None => println(emitted)
+  }
+}
+
+///|
+async fn emit_typescript_decl_from_mbti_text(
+  file_path : String,
+) -> String raise @analysis.MbtiTypescriptDeclError {
+  @analysis.emit_typescript_decl_from_mbti_path(file_path)
 }
 
 ///|
@@ -464,10 +507,16 @@ async fn emit_moonbit_bridge_package(
       }
     }
   }
+  let output_dir_realpath = @fs.realpath(output_dir) catch { _ => output_dir }
+  let bridge_js_output_path = join_output_path(output_dir_realpath, "bridge.js")
+  let bridge_mbt = rewrite_bridge_package_module_path(
+    bundle.bridge_mbt,
+    bridge_js_output_path,
+  )
   let files = [
     ("moon.pkg.json", bundle.moon_pkg_json),
     ("bridge.mbti", bundle.bridge_mbti),
-    ("bridge.mbt", bundle.bridge_mbt),
+    ("bridge.mbt", bridge_mbt),
     ("bridge.js", bundle.bridge_js),
   ]
   for file in files {
@@ -481,6 +530,45 @@ async fn emit_moonbit_bridge_package(
     }
   }
   println("Wrote MoonBit bridge package to \{output_dir}")
+}
+
+///|
+fn escape_moonbit_module_path(path : String) -> String {
+  let mut escaped = ""
+  for c in path {
+    if c == '\\' {
+      escaped += "\\\\"
+    } else if c == '"' {
+      escaped += "\\\""
+    } else {
+      escaped += c.to_string()
+    }
+  }
+  escaped
+}
+
+///|
+fn bridge_binding_needs_generated_module(line : String) -> Bool {
+  line.contains("pub extern \"js\" fn ") && line.contains(" = \"__ts_mbt_")
+}
+
+///|
+fn rewrite_bridge_package_module_path(
+  bridge_mbt : String,
+  bridge_js_path : String,
+) -> String {
+  let rewritten : Array[String] = []
+  let module_decl = "#module(\"" +
+    escape_moonbit_module_path(bridge_js_path) +
+    "\")"
+  for line_view in bridge_mbt.split("\n") {
+    let line = line_view.to_string()
+    if bridge_binding_needs_generated_module(line) {
+      rewritten.push(module_decl)
+    }
+    rewritten.push(line)
+  }
+  rewritten.join("\n")
 }
 
 ///|

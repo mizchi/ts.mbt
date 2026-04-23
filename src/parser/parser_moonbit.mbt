@@ -104,6 +104,10 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     String_ => "String"
     Void => "Unit"
     Array(inner) => "Array[" + moonbit_type_name(state, inner) + "]"
+    Struct(name, _) => {
+      mark_referenced_type(state, name)
+      moonbit_type_identifier(name, "OpaqueType")
+    }
     Named("Array") | Named("ReadonlyArray") => {
       state.needs_jsvalue = true
       "Array[JSValue]"

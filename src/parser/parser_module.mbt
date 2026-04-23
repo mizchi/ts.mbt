@@ -178,6 +178,1229 @@ fn collect_decl_names_from_stmt(
 }
 
 ///|
+fn collect_static_const_exprs_from_stmt(
+  stmt : @ast.TsStmt,
+  const_values : Map[String, @ast.TsExpr],
+) -> Unit {
+  match stmt {
+    Const(binding, _, init) =>
+      collect_static_const_exprs_from_binding(binding, init, const_values)
+    Block(block) =>
+      for inner in block.stmts {
+        collect_static_const_exprs_from_stmt(inner, const_values)
+      }
+    _ => ()
+  }
+}
+
+///|
+fn collect_static_local_exprs_from_stmt(
+  stmt : @ast.TsStmt,
+  const_values : Map[String, @ast.TsExpr],
+) -> Unit {
+  match stmt {
+    Const(binding, _, init) | Let(binding, _, init) =>
+      collect_static_const_exprs_from_binding(binding, init, const_values)
+    Block(block) =>
+      for inner in block.stmts {
+        collect_static_local_exprs_from_stmt(inner, const_values)
+      }
+    _ => ()
+  }
+}
+
+///|
+fn value_decl_static_return_expr_from_block_with_depth(
+  block : @ast.TsBlock,
+  const_values : Map[String, @ast.TsExpr],
+  depth : Int,
+) -> @ast.TsExpr? {
+  if depth <= 0 {
+    return None
+  }
+  let local_const_values : Map[String, @ast.TsExpr] = {}
+  for entry in const_values {
+    local_const_values[entry.0] = entry.1
+  }
+  for stmt in block.stmts {
+    match stmt {
+      @ast.TsStmt::Const(_, _, _) | @ast.TsStmt::Let(_, _, _) =>
+        collect_static_local_exprs_from_stmt(stmt, local_const_values)
+      @ast.TsStmt::Return(Some(expr)) =>
+        return value_decl_static_resolve_expr_with_depth(
+          expr,
+          local_const_values,
+          depth - 1,
+        )
+      @ast.TsStmt::Return(None) => return None
+      @ast.TsStmt::Empty => ()
+      _ => return None
+    }
+  }
+  None
+}
+
+///|
+fn value_decl_static_resolve_expr_with_depth(
+  expr : @ast.TsExpr,
+  const_values : Map[String, @ast.TsExpr],
+  depth : Int,
+) -> @ast.TsExpr? {
+  if depth <= 0 {
+    return None
+  }
+  match expr {
+    @ast.TsExpr::ArrayLit(items) => {
+      let resolved_items : Array[@ast.TsExpr] = []
+      for item in items {
+        match item {
+          @ast.TsExpr::ArrayHole => resolved_items.push(item)
+          _ =>
+            match
+              value_decl_static_resolve_expr_with_depth(
+                item,
+                const_values,
+                depth - 1,
+              ) {
+              Some(value) => resolved_items.push(value)
+              None => return None
+            }
+        }
+      }
+      Some(@ast.TsExpr::ArrayLit(resolved_items))
+    }
+    @ast.TsExpr::ObjectLit(props) => {
+      let resolved_props : Array[(String, @ast.TsExpr)] = []
+      for prop in props {
+        let (key, value) = prop
+        match
+          value_decl_static_resolve_expr_with_depth(
+            value,
+            const_values,
+            depth - 1,
+          ) {
+          Some(next_value) => resolved_props.push((key, next_value))
+          None => return None
+        }
+      }
+      Some(@ast.TsExpr::ObjectLit(resolved_props))
+    }
+    @ast.TsExpr::Var(name) =>
+      match const_values.get(name) {
+        Some(value) =>
+          value_decl_static_resolve_expr_with_depth(
+            value,
+            const_values,
+            depth - 1,
+          )
+        None => Some(expr)
+      }
+    @ast.TsExpr::CallExpr(callee, args) =>
+      if args.length() != 0 {
+        None
+      } else {
+        match
+          value_decl_static_zero_arg_call_result_expr_with_depth(
+            callee,
+            const_values,
+            depth - 1,
+          ) {
+          Some(value) =>
+            value_decl_static_resolve_expr_with_depth(
+              value,
+              const_values,
+              depth - 1,
+            )
+          None => None
+        }
+      }
+    _ => Some(expr)
+  }
+}
+
+///|
+fn value_decl_static_zero_arg_call_result_expr_with_depth(
+  callee : @ast.TsExpr,
+  const_values : Map[String, @ast.TsExpr],
+  depth : Int,
+) -> @ast.TsExpr? {
+  if depth <= 0 {
+    return None
+  }
+  match callee {
+    @ast.TsExpr::ArrowFunc(params, body, is_async) =>
+      if params.length() != 0 || is_async {
+        None
+      } else {
+        match body {
+          @ast.TsArrowBody::ArrowExpr(expr) =>
+            value_decl_static_resolve_expr_with_depth(
+              expr,
+              const_values,
+              depth - 1,
+            )
+          @ast.TsArrowBody::ArrowBlock(block) =>
+            value_decl_static_return_expr_from_block_with_depth(
+              block,
+              const_values,
+              depth - 1,
+            )
+        }
+      }
+    @ast.TsExpr::FuncExpr(func) =>
+      if func.params.length() != 0 || func.is_async || func.is_generator {
+        None
+      } else {
+        value_decl_static_return_expr_from_block_with_depth(
+          func.body,
+          const_values,
+          depth - 1,
+        )
+      }
+    @ast.TsExpr::Var(name) =>
+      match const_values.get(name) {
+        Some(value) =>
+          value_decl_static_zero_arg_call_result_expr_with_depth(
+            value,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn value_decl_static_object_prop_expr_with_depth(
+  expr : @ast.TsExpr,
+  key : String,
+  const_values : Map[String, @ast.TsExpr],
+  depth : Int,
+) -> @ast.TsExpr? {
+  if depth <= 0 {
+    return None
+  }
+  match expr {
+    @ast.TsExpr::ObjectLit(props) => {
+      for prop in props {
+        if prop.0 == key {
+          return Some(prop.1)
+        }
+      }
+      None
+    }
+    @ast.TsExpr::Var(name) =>
+      match const_values.get(name) {
+        Some(value) =>
+          value_decl_static_object_prop_expr_with_depth(
+            value,
+            key,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    @ast.TsExpr::CallExpr(callee, args) =>
+      if args.length() != 0 {
+        None
+      } else {
+        match
+          value_decl_static_zero_arg_call_result_expr_with_depth(
+            callee,
+            const_values,
+            depth - 1,
+          ) {
+          Some(value) =>
+            value_decl_static_object_prop_expr_with_depth(
+              value,
+              key,
+              const_values,
+              depth - 1,
+            )
+          None => None
+        }
+      }
+    @ast.TsExpr::PropAccess(target, prop) =>
+      match
+        value_decl_static_object_prop_expr_with_depth(
+          target,
+          prop,
+          const_values,
+          depth - 1,
+        ) {
+        Some(value) =>
+          value_decl_static_object_prop_expr_with_depth(
+            value,
+            key,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    @ast.TsExpr::IndexAccess(target, index_expr) =>
+      match
+        value_decl_static_key_from_expr_with_depth(
+          index_expr,
+          const_values,
+          depth - 1,
+        ) {
+        Some(index_key) =>
+          match value_decl_parse_nonnegative_int_string(index_key) {
+            Some(index) =>
+              match
+                value_decl_static_array_item_expr_with_depth(
+                  target,
+                  index,
+                  const_values,
+                  depth - 1,
+                ) {
+                Some(value) =>
+                  value_decl_static_object_prop_expr_with_depth(
+                    value,
+                    key,
+                    const_values,
+                    depth - 1,
+                  )
+                None =>
+                  match
+                    value_decl_static_object_prop_expr_with_depth(
+                      target,
+                      index_key,
+                      const_values,
+                      depth - 1,
+                    ) {
+                    Some(value) =>
+                      value_decl_static_object_prop_expr_with_depth(
+                        value,
+                        key,
+                        const_values,
+                        depth - 1,
+                      )
+                    None => None
+                  }
+              }
+            None =>
+              match
+                value_decl_static_object_prop_expr_with_depth(
+                  target,
+                  index_key,
+                  const_values,
+                  depth - 1,
+                ) {
+                Some(value) =>
+                  value_decl_static_object_prop_expr_with_depth(
+                    value,
+                    key,
+                    const_values,
+                    depth - 1,
+                  )
+                None => None
+              }
+          }
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn value_decl_parse_nonnegative_int_string(text : String) -> Int? {
+  if text == "" {
+    return None
+  }
+  let mut value = 0
+  for c in text {
+    if !value_decl_is_ascii_digit(c) {
+      return None
+    }
+    value = value * 10 + (c.to_int() - '0'.to_int())
+  }
+  Some(value)
+}
+
+///|
+fn value_decl_static_object_prop_expr(
+  expr : @ast.TsExpr,
+  key : String,
+  const_values : Map[String, @ast.TsExpr],
+) -> @ast.TsExpr? {
+  value_decl_static_object_prop_expr_with_depth(expr, key, const_values, 16)
+}
+
+///|
+fn value_decl_static_array_item_expr_with_depth(
+  expr : @ast.TsExpr,
+  index : Int,
+  const_values : Map[String, @ast.TsExpr],
+  depth : Int,
+) -> @ast.TsExpr? {
+  if depth <= 0 {
+    return None
+  }
+  match expr {
+    @ast.TsExpr::ArrayLit(items) =>
+      match items.get(index) {
+        Some(item) =>
+          match item {
+            @ast.TsExpr::ArrayHole | @ast.TsExpr::Spread(_) => None
+            _ => Some(item)
+          }
+        None => None
+      }
+    @ast.TsExpr::Var(name) =>
+      match const_values.get(name) {
+        Some(value) =>
+          value_decl_static_array_item_expr_with_depth(
+            value,
+            index,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    @ast.TsExpr::CallExpr(callee, args) =>
+      if args.length() != 0 {
+        None
+      } else {
+        match
+          value_decl_static_zero_arg_call_result_expr_with_depth(
+            callee,
+            const_values,
+            depth - 1,
+          ) {
+          Some(value) =>
+            value_decl_static_array_item_expr_with_depth(
+              value,
+              index,
+              const_values,
+              depth - 1,
+            )
+          None => None
+        }
+      }
+    @ast.TsExpr::PropAccess(target, prop) =>
+      match
+        value_decl_static_object_prop_expr_with_depth(
+          target,
+          prop,
+          const_values,
+          depth - 1,
+        ) {
+        Some(value) =>
+          value_decl_static_array_item_expr_with_depth(
+            value,
+            index,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    @ast.TsExpr::IndexAccess(target, index_expr) =>
+      match
+        value_decl_static_key_from_expr_with_depth(
+          index_expr,
+          const_values,
+          depth - 1,
+        ) {
+        Some(index_key) =>
+          match value_decl_parse_nonnegative_int_string(index_key) {
+            Some(inner_index) =>
+              match
+                value_decl_static_array_item_expr_with_depth(
+                  target,
+                  inner_index,
+                  const_values,
+                  depth - 1,
+                ) {
+                Some(value) =>
+                  value_decl_static_array_item_expr_with_depth(
+                    value,
+                    index,
+                    const_values,
+                    depth - 1,
+                  )
+                None =>
+                  match
+                    value_decl_static_object_prop_expr_with_depth(
+                      target,
+                      index_key,
+                      const_values,
+                      depth - 1,
+                    ) {
+                    Some(value) =>
+                      value_decl_static_array_item_expr_with_depth(
+                        value,
+                        index,
+                        const_values,
+                        depth - 1,
+                      )
+                    None => None
+                  }
+              }
+            None =>
+              match
+                value_decl_static_object_prop_expr_with_depth(
+                  target,
+                  index_key,
+                  const_values,
+                  depth - 1,
+                ) {
+                Some(value) =>
+                  value_decl_static_array_item_expr_with_depth(
+                    value,
+                    index,
+                    const_values,
+                    depth - 1,
+                  )
+                None => None
+              }
+          }
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn value_decl_static_array_item_expr(
+  expr : @ast.TsExpr,
+  index : Int,
+  const_values : Map[String, @ast.TsExpr],
+) -> @ast.TsExpr? {
+  value_decl_static_array_item_expr_with_depth(expr, index, const_values, 16)
+}
+
+///|
+fn value_decl_static_array_rest_expr_with_depth(
+  expr : @ast.TsExpr,
+  start_index : Int,
+  const_values : Map[String, @ast.TsExpr],
+  depth : Int,
+) -> @ast.TsExpr? {
+  if depth <= 0 {
+    return None
+  }
+  match expr {
+    @ast.TsExpr::ArrayLit(items) => {
+      let rest_items : Array[@ast.TsExpr] = []
+      for i, item in items {
+        if i < start_index {
+          continue
+        }
+        match item {
+          @ast.TsExpr::Spread(_) => return None
+          _ => rest_items.push(item)
+        }
+      }
+      Some(@ast.TsExpr::ArrayLit(rest_items))
+    }
+    @ast.TsExpr::Var(name) =>
+      match const_values.get(name) {
+        Some(value) =>
+          value_decl_static_array_rest_expr_with_depth(
+            value,
+            start_index,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    @ast.TsExpr::CallExpr(callee, args) =>
+      if args.length() != 0 {
+        None
+      } else {
+        match
+          value_decl_static_zero_arg_call_result_expr_with_depth(
+            callee,
+            const_values,
+            depth - 1,
+          ) {
+          Some(value) =>
+            value_decl_static_array_rest_expr_with_depth(
+              value,
+              start_index,
+              const_values,
+              depth - 1,
+            )
+          None => None
+        }
+      }
+    _ => None
+  }
+}
+
+///|
+fn value_decl_static_array_rest_expr(
+  expr : @ast.TsExpr,
+  start_index : Int,
+  const_values : Map[String, @ast.TsExpr],
+) -> @ast.TsExpr? {
+  value_decl_static_array_rest_expr_with_depth(
+    expr, start_index, const_values, 16,
+  )
+}
+
+///|
+fn value_decl_static_object_rest_expr_with_depth(
+  expr : @ast.TsExpr,
+  obj_binding : @ast.TsObjectBinding,
+  const_values : Map[String, @ast.TsExpr],
+  depth : Int,
+) -> @ast.TsExpr? {
+  if depth <= 0 {
+    return None
+  }
+  match expr {
+    @ast.TsExpr::ObjectLit(props) => {
+      let excluded_keys : Array[String] = []
+      for prop in obj_binding.props {
+        match prop.key_expr {
+          Some(key_expr) =>
+            match value_decl_static_key_from_expr(key_expr, const_values) {
+              Some(key) => excluded_keys.push(key)
+              None => return None
+            }
+          None => excluded_keys.push(prop.key)
+        }
+      }
+      let rest_props : Array[(String, @ast.TsExpr)] = []
+      for prop in props {
+        if !excluded_keys.contains(prop.0) {
+          rest_props.push(prop)
+        }
+      }
+      Some(@ast.TsExpr::ObjectLit(rest_props))
+    }
+    @ast.TsExpr::Var(name) =>
+      match const_values.get(name) {
+        Some(value) =>
+          value_decl_static_object_rest_expr_with_depth(
+            value,
+            obj_binding,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    @ast.TsExpr::CallExpr(callee, args) =>
+      if args.length() != 0 {
+        None
+      } else {
+        match
+          value_decl_static_zero_arg_call_result_expr_with_depth(
+            callee,
+            const_values,
+            depth - 1,
+          ) {
+          Some(value) =>
+            value_decl_static_object_rest_expr_with_depth(
+              value,
+              obj_binding,
+              const_values,
+              depth - 1,
+            )
+          None => None
+        }
+      }
+    _ => None
+  }
+}
+
+///|
+fn value_decl_static_object_rest_expr(
+  expr : @ast.TsExpr,
+  obj_binding : @ast.TsObjectBinding,
+  const_values : Map[String, @ast.TsExpr],
+) -> @ast.TsExpr? {
+  value_decl_static_object_rest_expr_with_depth(
+    expr, obj_binding, const_values, 16,
+  )
+}
+
+///|
+fn collect_static_const_exprs_from_binding(
+  binding : @ast.TsBinding,
+  init : @ast.TsExpr,
+  const_values : Map[String, @ast.TsExpr],
+) -> Unit {
+  match binding {
+    @ast.TsBinding::Ident(name) => const_values[name] = init
+    @ast.TsBinding::Array(arr_binding) => {
+      for i, item in arr_binding.items {
+        match item {
+          Some(elem) => {
+            let init_expr = match
+              value_decl_static_array_item_expr(init, i, const_values) {
+              Some(expr) => Some(expr)
+              None => elem.default
+            }
+            match init_expr {
+              Some(expr) =>
+                collect_static_const_exprs_from_binding(
+                  elem.binding,
+                  expr,
+                  const_values,
+                )
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match arr_binding.rest {
+        Some(rest) =>
+          match
+            value_decl_static_array_rest_expr(
+              init,
+              arr_binding.items.length(),
+              const_values,
+            ) {
+            Some(expr) =>
+              collect_static_const_exprs_from_binding(rest, expr, const_values)
+            None => ()
+          }
+        None => ()
+      }
+    }
+    @ast.TsBinding::Object(obj_binding) => {
+      for prop in obj_binding.props {
+        let init_expr = match prop.key_expr {
+          Some(key_expr) =>
+            match value_decl_static_key_from_expr(key_expr, const_values) {
+              Some(key) =>
+                value_decl_static_object_prop_expr(init, key, const_values)
+              None => None
+            }
+          None =>
+            value_decl_static_object_prop_expr(init, prop.key, const_values)
+        }
+        match init_expr {
+          Some(expr) =>
+            collect_static_const_exprs_from_binding(
+              prop.binding,
+              expr,
+              const_values,
+            )
+          None =>
+            match prop.default {
+              Some(default) =>
+                collect_static_const_exprs_from_binding(
+                  prop.binding,
+                  default,
+                  const_values,
+                )
+              None => ()
+            }
+        }
+      }
+      match obj_binding.rest {
+        Some(rest_name) =>
+          match
+            value_decl_static_object_rest_expr(init, obj_binding, const_values) {
+            Some(expr) => const_values[rest_name] = expr
+            None => ()
+          }
+        None => ()
+      }
+    }
+    @ast.TsBinding::Target(_) => ()
+  }
+}
+
+///|
+fn collect_value_decls_from_stmt(
+  stmt : @ast.TsStmt,
+  values : Array[@ast.TsValueDecl],
+  const_values : Map[String, @ast.TsExpr],
+) -> Unit {
+  match stmt {
+    Var(binding, type_, init)
+    | Let(binding, type_, init)
+    | Const(binding, type_, init) =>
+      collect_value_decls_from_binding(
+        binding,
+        type_,
+        Some(init),
+        values,
+        const_values,
+      )
+    Block(block) =>
+      for inner in block.stmts {
+        collect_value_decls_from_stmt(inner, values, const_values)
+      }
+    _ => ()
+  }
+}
+
+///|
+fn value_decl_infer_type_from_expr(expr : @ast.TsExpr) -> @ast.TsType {
+  match expr {
+    @ast.TsExpr::NumberLit(_) => @ast.TsType::Number
+    @ast.TsExpr::IntLit(_) => @ast.TsType::Int
+    @ast.TsExpr::BoolLit(_) => @ast.TsType::Boolean
+    @ast.TsExpr::StringLit(_) => @ast.TsType::String_
+    @ast.TsExpr::NullLit => @ast.TsType::Null
+    @ast.TsExpr::ArrayLit(items) => {
+      let item_types : Array[@ast.TsType] = []
+      for item in items {
+        match item {
+          @ast.TsExpr::ArrayHole => item_types.push(@ast.TsType::Any)
+          _ => item_types.push(value_decl_infer_type_from_expr(item))
+        }
+      }
+      @ast.TsType::Tuple(item_types)
+    }
+    @ast.TsExpr::ObjectLit(props) => {
+      let prop_types : Array[(@ast.TsType, @ast.TsType)] = []
+      for prop in props {
+        let (key, value) = prop
+        prop_types.push(
+          (@ast.TsType::Literal(key), value_decl_infer_type_from_expr(value)),
+        )
+      }
+      @ast.TsType::Object(prop_types)
+    }
+    _ => @ast.TsType::Any
+  }
+}
+
+///|
+fn value_decl_is_ascii_letter(c : Char) -> Bool {
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+///|
+fn value_decl_is_ascii_digit(c : Char) -> Bool {
+  c >= '0' && c <= '9'
+}
+
+///|
+fn value_decl_to_upper_ascii(c : Char) -> Char {
+  if c >= 'a' && c <= 'z' {
+    (c.to_int() - 32).unsafe_to_char()
+  } else {
+    c
+  }
+}
+
+///|
+fn value_decl_struct_name(name : String) -> String {
+  let mut result = ""
+  let mut capitalize_next = true
+  for c in name {
+    if value_decl_is_ascii_letter(c) || value_decl_is_ascii_digit(c) {
+      if capitalize_next {
+        result += value_decl_to_upper_ascii(c).to_string()
+        capitalize_next = false
+      } else {
+        result += c.to_string()
+      }
+    } else {
+      capitalize_next = true
+    }
+  }
+  if result == "" {
+    "GeneratedStruct"
+  } else {
+    result
+  }
+}
+
+///|
+fn value_decl_resolve_type(
+  type_ : @ast.TsType,
+  init : @ast.TsExpr?,
+) -> @ast.TsType {
+  if type_ != @ast.TsType::Any {
+    return type_
+  }
+  match init {
+    Some(expr) => value_decl_infer_type_from_expr(expr)
+    None => @ast.TsType::Any
+  }
+}
+
+///|
+fn value_decl_static_key_from_expr_with_depth(
+  expr : @ast.TsExpr,
+  const_values : Map[String, @ast.TsExpr],
+  depth : Int,
+) -> String? {
+  if depth <= 0 {
+    return None
+  }
+  match expr {
+    @ast.TsExpr::StringLit(key) => Some(key)
+    @ast.TsExpr::IntLit(key) => Some(key.to_string())
+    @ast.TsExpr::BigIntLit(key) => Some(key)
+    @ast.TsExpr::BoolLit(key) => Some(if key { "true" } else { "false" })
+    @ast.TsExpr::NullLit => Some("null")
+    @ast.TsExpr::PropAccess(target, prop) =>
+      match
+        value_decl_static_object_prop_expr_with_depth(
+          target,
+          prop,
+          const_values,
+          depth - 1,
+        ) {
+        Some(value) =>
+          value_decl_static_key_from_expr_with_depth(
+            value,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    @ast.TsExpr::IndexAccess(target, index_expr) =>
+      match
+        value_decl_static_key_from_expr_with_depth(
+          index_expr,
+          const_values,
+          depth - 1,
+        ) {
+        Some(key) =>
+          match value_decl_parse_nonnegative_int_string(key) {
+            Some(index) =>
+              match
+                value_decl_static_array_item_expr_with_depth(
+                  target,
+                  index,
+                  const_values,
+                  depth - 1,
+                ) {
+                Some(value) =>
+                  value_decl_static_key_from_expr_with_depth(
+                    value,
+                    const_values,
+                    depth - 1,
+                  )
+                None =>
+                  match
+                    value_decl_static_object_prop_expr_with_depth(
+                      target,
+                      key,
+                      const_values,
+                      depth - 1,
+                    ) {
+                    Some(value) =>
+                      value_decl_static_key_from_expr_with_depth(
+                        value,
+                        const_values,
+                        depth - 1,
+                      )
+                    None => None
+                  }
+              }
+            None =>
+              match
+                value_decl_static_object_prop_expr_with_depth(
+                  target,
+                  key,
+                  const_values,
+                  depth - 1,
+                ) {
+                Some(value) =>
+                  value_decl_static_key_from_expr_with_depth(
+                    value,
+                    const_values,
+                    depth - 1,
+                  )
+                None => None
+              }
+          }
+        None => None
+      }
+    @ast.TsExpr::Var(name) =>
+      match const_values.get(name) {
+        Some(value) =>
+          value_decl_static_key_from_expr_with_depth(
+            value,
+            const_values,
+            depth - 1,
+          )
+        None => None
+      }
+    @ast.TsExpr::NumberLit(key) =>
+      if key.to_int().to_double() == key {
+        Some(key.to_int().to_string())
+      } else {
+        Some(key.to_string())
+      }
+    @ast.TsExpr::TemplateLiteral(cooked_parts, exprs) => {
+      if cooked_parts.length() != exprs.length() + 1 {
+        return None
+      }
+      let mut key = ""
+      for i, part in cooked_parts {
+        key += part
+        match exprs.get(i) {
+          Some(expr) =>
+            match
+              value_decl_static_key_from_expr_with_depth(
+                expr,
+                const_values,
+                depth - 1,
+              ) {
+              Some(segment) => key += segment
+              None => return None
+            }
+          None => ()
+        }
+      }
+      Some(key)
+    }
+    @ast.TsExpr::BinOp(@ast.TsBinOp::Add, left, right) =>
+      match (left, right) {
+        (@ast.TsExpr::StringLit(_), _)
+        | (@ast.TsExpr::TemplateLiteral(_, _), _)
+        | (_, @ast.TsExpr::StringLit(_))
+        | (_, @ast.TsExpr::TemplateLiteral(_, _)) =>
+          match
+            (
+              value_decl_static_key_from_expr_with_depth(
+                left,
+                const_values,
+                depth - 1,
+              ),
+              value_decl_static_key_from_expr_with_depth(
+                right,
+                const_values,
+                depth - 1,
+              ),
+            ) {
+            (Some(left_key), Some(right_key)) => Some(left_key + right_key)
+            _ => None
+          }
+        (@ast.TsExpr::IntLit(left_num), @ast.TsExpr::IntLit(right_num)) =>
+          Some((left_num + right_num).to_string())
+        (@ast.TsExpr::NumberLit(left_num), @ast.TsExpr::NumberLit(right_num)) =>
+          Some((left_num + right_num).to_string())
+        (@ast.TsExpr::IntLit(left_num), @ast.TsExpr::NumberLit(right_num)) =>
+          Some((left_num.to_double() + right_num).to_string())
+        (@ast.TsExpr::NumberLit(left_num), @ast.TsExpr::IntLit(right_num)) =>
+          Some((left_num + right_num.to_double()).to_string())
+        _ => None
+      }
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Plus, inner) =>
+      match inner {
+        @ast.TsExpr::IntLit(num) => Some(num.to_string())
+        @ast.TsExpr::NumberLit(num) => Some(num.to_string())
+        _ => None
+      }
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => Some("undefined")
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Neg, inner) =>
+      match inner {
+        @ast.TsExpr::IntLit(num) => Some((-num).to_string())
+        @ast.TsExpr::NumberLit(num) => Some((-num).to_string())
+        @ast.TsExpr::BigIntLit(num) => Some("-" + num)
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn value_decl_static_key_from_expr(
+  expr : @ast.TsExpr,
+  const_values : Map[String, @ast.TsExpr],
+) -> String? {
+  value_decl_static_key_from_expr_with_depth(expr, const_values, 16)
+}
+
+///|
+fn value_decl_object_prop_type(
+  type_ : @ast.TsType,
+  key : String,
+) -> @ast.TsType {
+  match type_ {
+    @ast.TsType::Object(props) => {
+      for prop in props {
+        match prop.0 {
+          @ast.TsType::Literal(prop_key) if prop_key == key => return prop.1
+          _ => ()
+        }
+      }
+      @ast.TsType::Any
+    }
+    @ast.TsType::Struct(_, fields) => {
+      for field in fields {
+        if field.0 == key {
+          return field.1
+        }
+      }
+      @ast.TsType::Any
+    }
+    _ => @ast.TsType::Any
+  }
+}
+
+///|
+fn value_decl_array_item_type(type_ : @ast.TsType, index : Int) -> @ast.TsType {
+  match type_ {
+    @ast.TsType::Tuple(items) =>
+      match items.get(index) {
+        Some(item_type) => item_type
+        None => @ast.TsType::Any
+      }
+    @ast.TsType::Array(item_type) => item_type
+    _ => @ast.TsType::Any
+  }
+}
+
+///|
+fn value_decl_tuple_rest_item_type(
+  items : Array[@ast.TsType],
+  start_index : Int,
+) -> @ast.TsType {
+  let mut rest_item_type = @ast.TsType::Any
+  let mut found = false
+  for i, item_type in items {
+    if i < start_index {
+      continue
+    }
+    if !found {
+      rest_item_type = item_type
+      found = true
+      continue
+    }
+    if rest_item_type != item_type {
+      return @ast.TsType::Any
+    }
+  }
+  if found {
+    rest_item_type
+  } else {
+    @ast.TsType::Any
+  }
+}
+
+///|
+fn value_decl_array_rest_type(
+  type_ : @ast.TsType,
+  start_index : Int,
+) -> @ast.TsType {
+  match type_ {
+    @ast.TsType::Tuple(items) =>
+      @ast.TsType::Array(value_decl_tuple_rest_item_type(items, start_index))
+    @ast.TsType::Array(item_type) => @ast.TsType::Array(item_type)
+    _ => @ast.TsType::Any
+  }
+}
+
+///|
+fn value_decl_object_rest_struct_type(
+  type_ : @ast.TsType,
+  obj_binding : @ast.TsObjectBinding,
+  rest_name : String,
+  const_values : Map[String, @ast.TsExpr],
+) -> @ast.TsType {
+  let excluded_keys : Array[String] = []
+  for prop in obj_binding.props {
+    match prop.key_expr {
+      Some(key_expr) =>
+        match value_decl_static_key_from_expr(key_expr, const_values) {
+          Some(key) => excluded_keys.push(key)
+          None => return @ast.TsType::Any
+        }
+      None => excluded_keys.push(prop.key)
+    }
+  }
+  let fields : Array[(String, @ast.TsType)] = []
+  match type_ {
+    @ast.TsType::Object(props) =>
+      for prop in props {
+        match prop.0 {
+          @ast.TsType::Literal(key) =>
+            if !excluded_keys.contains(key) {
+              fields.push((key, prop.1))
+            }
+          _ => ()
+        }
+      }
+    @ast.TsType::Struct(_, struct_fields) =>
+      for field in struct_fields {
+        let (field_name, field_type) = field
+        if !excluded_keys.contains(field_name) {
+          fields.push((field_name, field_type))
+        }
+      }
+    _ => return @ast.TsType::Any
+  }
+  @ast.TsType::Struct(value_decl_struct_name(rest_name), fields)
+}
+
+///|
+fn collect_value_decls_from_binding(
+  binding : @ast.TsBinding,
+  type_ : @ast.TsType,
+  init : @ast.TsExpr?,
+  values : Array[@ast.TsValueDecl],
+  const_values : Map[String, @ast.TsExpr],
+) -> Unit {
+  let source_type = value_decl_resolve_type(type_, init)
+  match binding {
+    @ast.TsBinding::Ident(name) => values.push({ name, type_: source_type })
+    @ast.TsBinding::Array(arr_binding) => {
+      for i, item in arr_binding.items {
+        match item {
+          Some(elem) =>
+            collect_value_decls_from_binding(
+              elem.binding,
+              value_decl_array_item_type(source_type, i),
+              None,
+              values,
+              const_values,
+            )
+          None => ()
+        }
+      }
+      match arr_binding.rest {
+        Some(rest) =>
+          collect_value_decls_from_binding(
+            rest,
+            value_decl_array_rest_type(source_type, arr_binding.items.length()),
+            None,
+            values,
+            const_values,
+          )
+        None => ()
+      }
+    }
+    @ast.TsBinding::Object(obj_binding) => {
+      for prop in obj_binding.props {
+        let prop_type = match prop.key_expr {
+          Some(key_expr) =>
+            match value_decl_static_key_from_expr(key_expr, const_values) {
+              Some(key) => value_decl_object_prop_type(source_type, key)
+              None => @ast.TsType::Any
+            }
+          None => value_decl_object_prop_type(source_type, prop.key)
+        }
+        collect_value_decls_from_binding(
+          prop.binding,
+          prop_type,
+          None,
+          values,
+          const_values,
+        )
+      }
+      match obj_binding.rest {
+        Some(rest_name) =>
+          values.push({
+            name: rest_name,
+            type_: value_decl_object_rest_struct_type(
+              source_type, obj_binding, rest_name, const_values,
+            ),
+          })
+        None => ()
+      }
+    }
+    @ast.TsBinding::Target(_) => ()
+  }
+}
+
+///|
 fn collect_binding_names(
   binding : @ast.TsBinding,
   names : Array[String],
@@ -303,6 +1526,7 @@ fn Parser::skip_import_attributes(self : Parser) -> Unit {
 ///|
 fn Parser::parse_export_decl_for_module(
   self : Parser,
+  const_values : Map[String, @ast.TsExpr],
 ) -> (Array[@ast.TsStmt], Array[@ast.TsExportSpec], Array[@ast.TsReExportSpec]) raise ParseError {
   let stmts : Array[@ast.TsStmt] = []
   let exports : Array[@ast.TsExportSpec] = []
@@ -372,10 +1596,22 @@ fn Parser::parse_export_decl_for_module(
       self.consume_semicolon()
       return (stmts, exports, reexports)
     }
-    let temp = self.next_temp("__export_default__")
     let expr = self.parse_expr()
-    stmts.push(Const(@ast.TsBinding::Ident(temp), Any, expr))
-    exports.push({ local_name: temp, export_name: "default" })
+    let local_name = match expr {
+      @ast.TsExpr::Var(name) => name
+      _ => {
+        let temp = self.next_temp("__export_default__")
+        let stmt = @ast.TsStmt::Const(
+          @ast.TsBinding::Ident(temp),
+          @ast.TsType::Any,
+          expr,
+        )
+        collect_static_const_exprs_from_stmt(stmt, const_values)
+        stmts.push(stmt)
+        temp
+      }
+    }
+    exports.push({ local_name, export_name: "default" })
     self.consume_semicolon()
     return (stmts, exports, reexports)
   }
@@ -561,6 +1797,7 @@ fn Parser::parse_export_decl_for_module(
     }
     let stmt = self.parse_stmt()
     stmts.push(stmt)
+    collect_static_const_exprs_from_stmt(stmt, const_values)
     let names : Array[String] = []
     collect_decl_names_from_stmt(stmt, names)
     for name in names {
@@ -684,6 +1921,7 @@ fn Parser::parse_export_stmt(
   imports : Array[@ast.TsImport],
   values : Array[@ast.TsValueDecl],
   classes : Array[@ast.TsClassDecl],
+  const_values : Map[String, @ast.TsExpr],
 ) -> Unit raise ParseError {
   let _ = self.expect(Export)
   if self.match_(Eq) {
@@ -881,7 +2119,9 @@ fn Parser::parse_export_stmt(
       }
       return
     }
-    let _ = self.parse_stmt()
+    let stmt = self.parse_stmt()
+    collect_static_const_exprs_from_stmt(stmt, const_values)
+    collect_value_decls_from_stmt(stmt, values, const_values)
     return
   }
   raise ParseError("Unsupported export statement")
@@ -890,13 +2130,19 @@ fn Parser::parse_export_stmt(
 ///|
 
 ///|
-// /
-pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
+fn Parser::parse_module_with_seeded_const_values(
+  self : Parser,
+  seeded_const_values : Map[String, @ast.TsExpr],
+) -> @ast.TsModule raise ParseError {
   let funcs : Array[@ast.TsFunc] = []
   let interfaces : Array[@ast.TsInterface] = []
   let imports : Array[@ast.TsImport] = []
   let values : Array[@ast.TsValueDecl] = []
   let classes : Array[@ast.TsClassDecl] = []
+  let const_values : Map[String, @ast.TsExpr] = {}
+  for entry in seeded_const_values {
+    const_values[entry.0] = entry.1
+  }
   while !self.check(Eof) {
     if self.check(Function) {
       funcs.push(self.parse_function())
@@ -957,7 +2203,9 @@ pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
     } else if self.check(Import) {
       self.parse_import_stmt()
     } else if self.check(Export) {
-      self.parse_export_stmt(funcs, interfaces, imports, values, classes)
+      self.parse_export_stmt(
+        funcs, interfaces, imports, values, classes, const_values,
+      )
     } else if self.check(Type) {
       // Skip type alias at top level
       self.skip_type_alias()
@@ -978,8 +2226,8 @@ pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
       }) {
       self.skip_declaration_block()
     } else if self.check(Const) {
-      // Skip const declarations at top level (e.g., const enum)
-      self.skip_until_semicolon()
+      let stmt = self.parse_stmt()
+      collect_static_const_exprs_from_stmt(stmt, const_values)
     } else {
       raise ParseError(
         "Expected function, interface, declare, import, or export declaration",
@@ -990,14 +2238,25 @@ pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
 }
 
 ///|
+// /
+pub fn Parser::parse_module(self : Parser) -> @ast.TsModule raise ParseError {
+  self.parse_module_with_seeded_const_values({})
+}
+
+///|
 // / module block (script with import/export)
-pub fn Parser::parse_module_block(
+fn Parser::parse_module_block_with_const_values(
   self : Parser,
-) -> @ast.TsModuleBlock raise ParseError {
+  seeded_const_values : Map[String, @ast.TsExpr],
+) -> (@ast.TsModuleBlock, Map[String, @ast.TsExpr]) raise ParseError {
   let stmts : Array[@ast.TsStmt] = []
   let imports : Array[@ast.TsImportDecl] = []
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
+  let const_values : Map[String, @ast.TsExpr] = {}
+  for entry in seeded_const_values {
+    const_values[entry.0] = entry.1
+  }
   while !self.check(Eof) {
     while self.check(At) {
       self.skip_decorator()
@@ -1007,7 +2266,9 @@ pub fn Parser::parse_module_block(
       continue
     }
     if self.check(Export) {
-      let (block_stmts, export_specs, reexport_specs) = self.parse_export_decl_for_module()
+      let (block_stmts, export_specs, reexport_specs) = self.parse_export_decl_for_module(
+        const_values,
+      )
       for stmt in block_stmts {
         stmts.push(stmt)
       }
@@ -1088,12 +2349,21 @@ pub fn Parser::parse_module_block(
       continue
     }
     if self.check(Const) {
-      self.skip_until_semicolon()
+      let stmt = self.parse_stmt()
+      collect_static_const_exprs_from_stmt(stmt, const_values)
       continue
     }
     stmts.push(self.parse_stmt())
   }
-  { block: { stmts, }, imports, exports, reexports }
+  ({ block: { stmts, }, imports, exports, reexports }, const_values)
+}
+
+///|
+pub fn Parser::parse_module_block(
+  self : Parser,
+) -> @ast.TsModuleBlock raise ParseError {
+  let (module_block, _) = self.parse_module_block_with_const_values({})
+  module_block
 }
 
 ///|
@@ -1169,4 +2439,32 @@ pub fn parse_module_block_from_source(
 ) -> @ast.TsModuleBlock raise ParseError {
   let parser = Parser::from_source(source)
   parser.parse_module_block()
+}
+
+///|
+pub fn parse_module_from_source_with_const_values(
+  source : String,
+  seeded_const_values : Map[String, @ast.TsExpr],
+) -> @ast.TsModule raise ParseError {
+  let parser = Parser::from_source(source)
+  parser.parse_module_with_seeded_const_values(seeded_const_values)
+}
+
+///|
+pub fn collect_exported_const_values_from_source(
+  source : String,
+  seeded_const_values : Map[String, @ast.TsExpr],
+) -> Map[String, @ast.TsExpr] raise ParseError {
+  let parser = Parser::from_source(source)
+  let (module_block, const_values) = parser.parse_module_block_with_const_values(
+    seeded_const_values,
+  )
+  let exported_const_values : Map[String, @ast.TsExpr] = {}
+  for export_ in module_block.exports {
+    match const_values.get(export_.local_name) {
+      Some(expr) => exported_const_values[export_.export_name] = expr
+      None => ()
+    }
+  }
+  exported_const_values
 }

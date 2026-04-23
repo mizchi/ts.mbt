@@ -143,6 +143,11 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
+      "  emit-typescript-from-mbti <file> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
+    ),
+  )
+  assert_true(
+    lines.contains(
       "  benchmark-project <root> [limit] Benchmark local TS/.d.ts corpus coverage",
     ),
   )
@@ -165,6 +170,85 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
 }
 
 ///|
+async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations from mbti" {
+  let actual = emit_typescript_decl_from_mbti_text(
+    "fixtures/mbti_typescript/basic.pkg.generated.mbti",
+  ) catch {
+    @analysis.MbtiTypescriptDeclError::ReadError(msg)
+    | @analysis.MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("Emit error: \{msg}")
+  }
+  assert_true(actual.contains("export function identity<T>(arg0: T): T;"))
+  assert_true(
+    actual.contains(
+      "export function debug_identity<T extends debug.Debug>(arg0: T): T;",
+    ),
+  )
+  assert_true(
+    actual.contains("import type * as json from \"moonbitlang/core/json\";"),
+  )
+  assert_true(actual.contains("export interface Show {"))
+  assert_true(actual.contains("export interface Eq<T> {"))
+  assert_true(actual.contains("export interface Hash {"))
+  assert_true(actual.contains("export interface Comparable<T0> {"))
+  assert_true(
+    actual.contains(
+      "export interface Box<T> extends Show, Eq<Box<T>>, Hash, Comparable<Box<T>> {",
+    ),
+  )
+  assert_true(actual.contains("unwrap(): T;"))
+  assert_true(actual.contains("map<U>(arg0: (arg0: T) => U): Box<U>;"))
+  assert_true(actual.contains("show_value(): string;"))
+  assert_true(actual.contains("function new_<T>(arg0: T): Box<T>;"))
+  assert_true(actual.contains("export type Result<T, E> ="))
+  assert_true(actual.contains("export interface ResultMethods<T, E> {"))
+  assert_true(actual.contains("module: ast.TsModule;"))
+  assert_true(actual.contains("export type InternalThing<T> ="))
+  assert_true(actual.contains("Eq<ParseError>"))
+  assert_true(actual.contains("Eq<InternalThing<T>> & Hash"))
+  assert_true(actual.contains("export interface MaybeStringMethods {"))
+  assert_true(
+    actual.contains(
+      "export type MaybeString = (string | undefined) & MaybeStringMethods & Show & Hash & json.ToJson;",
+    ),
+  )
+  assert_true(actual.contains("json.ToJson"))
+  assert_true(
+    actual.contains(
+      "export type DerivedStatus = ({ $tag: \"Ready\" }) & Eq<DerivedStatus>;",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_from_mbti_text keeps real analysis package output readable" {
+  let actual = emit_typescript_decl_from_mbti_text(
+    "src/analysis/pkg.generated.mbti",
+  ) catch {
+    @analysis.MbtiTypescriptDeclError::ReadError(msg)
+    | @analysis.MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("Emit error: \{msg}")
+  }
+  assert_true(actual.contains("export type AnalysisResult<T> ="))
+  assert_true(actual.contains("export interface AnalysisResultMethods<T> {"))
+  assert_true(actual.contains("Eq<AnalysisErrorKind>"))
+  assert_false(actual.contains("debug.Debug"))
+  assert_true(actual.contains("& Show;"))
+  assert_true(
+    actual.contains(
+      "export function analyze_null_guard(arg0: ast.TsExpr): [string, boolean] | undefined;",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "export function analyze_typeof_guard(arg0: ast.TsExpr): [string, string] | undefined;",
+    ),
+  )
+  assert_false(actual.contains("(String, Bool)?"))
+  assert_false(actual.contains("Self["))
+}
+
+///|
 async test "emit_typescript_decl_text normalizes MoonBit generated d.ts" {
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/app.d.ts",
@@ -176,6 +260,169 @@ async test "emit_typescript_decl_text normalizes MoonBit generated d.ts" {
   assert_true(actual.contains("x: number"))
   assert_true(actual.contains("): string;"))
   assert_false(actual.contains("MoonBit.Double"))
+}
+
+///|
+async test "emit_typescript_decl_text expands common MoonBit aliases from moonbit.d.ts" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/advanced.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(actual.contains("export type UserId = bigint;"))
+  assert_true(actual.contains("export type Scores = Array<number>;"))
+  assert_true(actual.contains("export type MaybeName = string | undefined;"))
+  assert_true(
+    actual.contains(
+      "): { $tag: 1; _0: string | undefined } | { $tag: 0; _0: bigint };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text expands nested MoonBit generic aliases" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/nested_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "): { value: { $tag: 1; _0: string } | { $tag: 0; _0: number } };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text expands interface-based MoonBit aliases" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/interface_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "): { value: { $tag: 1; _0: string } | { $tag: 0; _0: number }; ok: boolean };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text flattens interface extends aliases" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/interface_extends_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "): { value: { $tag: 1; _0: string } | { $tag: 0; _0: number }; kind: string; ok: boolean };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text keeps conflicting interface extends as intersections" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/interface_extends_conflict_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "export function conflicting_payload_result(): { value: string } & { value: number } & { ok: boolean };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text keeps identical inherited members flattened" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_member_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "export function shared_tagged_payload_result(): { kind: string; ok: boolean };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text keeps identical readonly inherited members flattened" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_readonly_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "export function shared_readonly_payload_result(): { readonly count: number; ok: boolean };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text keeps conflicting readonly members as intersections" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/interface_extends_conflicting_readonly_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "export function conflicting_readonly_payload_result(): { readonly count: number } & { count: number } & { ok: boolean };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text keeps identical optional members flattened" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_optional_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "export function shared_optional_payload_result(): { name?: string; ok: boolean };",
+    ),
+  )
+}
+
+///|
+async test "emit_typescript_decl_text keeps conflicting optional members as intersections" {
+  let actual = emit_typescript_decl_text(
+    "fixtures/typescript_decl/moonbit_generated/interface_extends_conflicting_optional_alias.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "export function conflicting_optional_payload_result(): { name?: string } & { name: string } & { ok: boolean };",
+    ),
+  )
 }
 
 ///|
@@ -407,6 +654,517 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
 }
 
 ///|
+async test "emit_moonbit_bridge_package rewrites relative runtime bridge to self-contained module path" {
+  let root = wbtest_tmp_project_benchmark_root("bridge_package_relative")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_moonbit_bridge_package(
+    "fixtures/resolver/project/types/runtime-function-entry.ts", "./runtime/runtime-function.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn scale_point(",
+    ),
+  )
+  assert_true(bridge_mbt.contains("= \"__ts_mbt_scale_point\""))
+  assert_true(
+    bridge_js.contains(
+      "export { scalePoint as __ts_mbt_scale_point } from \"./runtime/runtime-function.js\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites multiple relative generated bindings to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root("bridge_package_class_property")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_moonbit_bridge_package(
+    "fixtures/resolver/project/types/class-property-entry.d.ts", "./runtime/class-property.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_counter_state()",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_counter_state_version()",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn set_counter_state_step(value : Double) -> Unit = \"__ts_mbt_set_counter_state_step\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "pub extern \"js\" fn CounterState::get_counter_state_label(self : CounterState) -> String =",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites rooted class-property alias reexport generated bindings to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_class_property_reexport_rooted",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  let runtime_js_path = @fs.realpath(
+    "fixtures/bridge_smoke/runtime/class-property.js",
+  ) catch {
+    _ => "fixtures/bridge_smoke/runtime/class-property.js"
+  }
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/class-property-reexport-entry.d.ts", runtime_js_path,
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_state_version() -> String = \"__ts_mbt_get_runtime_state_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn set_runtime_state_step(value : Double) -> Unit = \"__ts_mbt_set_runtime_state_step\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains("import { CounterState } from \"\{runtime_js_path}\";"),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_new_runtime_state() { return new CounterState(); }",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_runtime_state_version() { return CounterState.version; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites bare class-property alias reexport generated bindings to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_class_property_reexport_bare",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/resolver/project/types/bare-class-property-entry.d.ts", "pkg-class-property",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_state_version() -> String = \"__ts_mbt_get_runtime_state_version\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains("import { CounterState } from \"pkg-class-property\";"),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_new_runtime_state() { return new CounterState(); }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package preserves js import metadata for relative widened exports" {
+  let root = wbtest_tmp_project_benchmark_root("bridge_package_export_equals")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_moonbit_bridge_package(
+    "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
+    root,
+  )
+  let pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(pkg_json.contains("\"path\": \"mizchi/js/core\""))
+  assert_true(pkg_json.contains("\"alias\": \"js\""))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_default() -> @js.Any = \"__ts_mbt_get_default\"",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites parent-relative default function bridge to self-contained module path" {
+  let root = wbtest_tmp_project_benchmark_root("bridge_package_parent_relative")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  let pkg_root = wbtest_join_path(root, "pkg")
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/default-function-entry.ts", "../runtime/default-function.js",
+    pkg_root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(pkg_root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(pkg_root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(pkg_root, "bridge.js")) catch {
+    _ => wbtest_join_path(pkg_root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn default(label : String) -> String = \"__ts_mbt_default\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export { default as __ts_mbt_default } from \"../runtime/default-function.js\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites bare default class alias reexport generated bindings to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_default_class_reexport_bare",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/resolver/project/types/bare-default-class-entry.d.ts", "pkg-default-class",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_counter(initial : Double) -> RuntimeCounter = \"__ts_mbt_new_runtime_counter\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn runtime_counter_from(seed : Double) -> RuntimeCounter = \"__ts_mbt_runtime_counter_from\"",
+    ),
+  )
+  assert_true(bridge_js.contains("import default_ from \"pkg-default-class\";"))
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_new_runtime_counter(initial) { return new default_(initial); }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites subpath class alias reexport generated bindings to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_class_property_reexport_subpath",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/resolver/project/types/subpath-class-entry.d.ts", "pkg-class-subpath/state",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_state_version() -> String = \"__ts_mbt_get_runtime_state_version\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { CounterState } from \"pkg-class-subpath/state\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites relative default class helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root("bridge_package_default_class")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/default-class-entry.ts", "./runtime/default-class.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_default(initial : Double) -> Default = \"__ts_mbt_new_default\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn default_from(seed : Double) -> Default = \"__ts_mbt_default_from\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "pub extern \"js\" fn Default::default_inc(self : Default, delta : Double) -> Double =",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_new_default(initial) { return new default_(initial); }",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_default_from(seed) { return default_.from(seed); }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites deep parent-relative mixed default class bridge to self-contained module path" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_default_class_mixed",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  let nested = wbtest_join_path(root, "nested")
+  @fs.mkdir(nested, permission=0o755)
+  let pkg_root = wbtest_join_path(nested, "pkg")
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/default-class-mixed-entry.ts", "../../runtime/default-class-mixed.js",
+    pkg_root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(pkg_root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(pkg_root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(pkg_root, "bridge.js")) catch {
+    _ => wbtest_join_path(pkg_root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_default(initial : Double) -> Default = \"__ts_mbt_new_default\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn surround(label : String, prefix : String) -> String = \"__ts_mbt_surround\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_version() -> String = \"__ts_mbt_get_version\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import default_, { version } from \"../../runtime/default-class-mixed.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export { surround as __ts_mbt_surround } from \"../../runtime/default-class-mixed.js\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package keeps aliased default reexports bound to original runtime exports" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_default_class_mixed_reexport",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  let nested = wbtest_join_path(root, "nested")
+  @fs.mkdir(nested, permission=0o755)
+  let pkg_root = wbtest_join_path(nested, "pkg")
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/default-class-mixed-reexport-entry.ts", "../../runtime/default-class-mixed.js",
+    pkg_root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(pkg_root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(pkg_root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(pkg_root, "bridge.js")) catch {
+    _ => wbtest_join_path(pkg_root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_counter(initial : Double) -> RuntimeCounter = \"__ts_mbt_new_runtime_counter\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn decorate(label : String, prefix : String) -> String = \"__ts_mbt_decorate\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import default_, { version } from \"../../runtime/default-class-mixed.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export { surround as __ts_mbt_decorate } from \"../../runtime/default-class-mixed.js\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
 async test "emit_moonbit_decl_text handles neverthrow-like package entry" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
@@ -545,6 +1303,661 @@ async test "emit_moonbit_decl_text handles runtime ts function reexports" {
 }
 
 ///|
+async test "emit_moonbit_decl_text handles runtime ts destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles nested and array-rest destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-destructured-nested-rest-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_head() -> Double"))
+  assert_true(actual.contains("declare pub fn get_tail() -> Array[Double]"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles object-rest destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-object-rest-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles computed-key destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles template-literal computed-key destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-template-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles concatenated computed-key destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-concat-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles primitive-literal computed-key destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-primitive-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_truthy() -> String"))
+  assert_true(actual.contains("declare pub fn get_nil_value() -> Double"))
+  assert_true(actual.contains("declare pub fn get_negative() -> Bool"))
+  assert_true(actual.contains("declare pub fn get_bigint_value() -> String"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles void-and-negative-bigint computed-key destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-void-bigint-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_undefined_value() -> String"))
+  assert_true(actual.contains("declare pub fn get_negative_bigint() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles const-reference computed-key destructured value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-const-ref-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles destructured-const-reference computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-destructured-const-ref-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles const-object-access computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-const-object-access-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles nested-const-object-access computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-nested-const-object-access-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles const-array-access computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-const-array-access-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles nested-const-array-access computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-nested-const-array-access-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles const-index-alias computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-const-index-alias-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles const-index-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-const-index-table-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles nested-index-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-nested-index-table-computed-destructured-value-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported namespace const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-namespace-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported default const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-default-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported inline default const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-inline-default-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported inline default const-table as const computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-inline-default-const-table-as-const-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported iife default const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-iife-default-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported iife local const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-iife-local-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported function iife local const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-function-iife-local-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported iife local let-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-iife-local-let-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported function iife local let-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-function-iife-local-let-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text widens imported reassigned local let-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-iife-reassigned-let-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_false(actual.contains("declare pub type RestMeta"))
+  assert_true(
+    actual.contains("declare pub fn get_runtime_version() -> JSValue"),
+  )
+  assert_true(actual.contains("declare pub fn get_build() -> JSValue"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> JSValue"))
+}
+
+///|
+async test "emit_moonbit_decl_text widens imported prop-mutated local let-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-iife-prop-mutated-let-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_false(actual.contains("declare pub type RestMeta"))
+  assert_true(
+    actual.contains("declare pub fn get_runtime_version() -> JSValue"),
+  )
+  assert_true(actual.contains("declare pub fn get_build() -> JSValue"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> JSValue"))
+}
+
+///|
+async test "emit_moonbit_decl_text widens imported index-mutated local let-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-function-iife-index-mutated-let-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_false(actual.contains("declare pub type RestMeta"))
+  assert_true(
+    actual.contains("declare pub fn get_runtime_version() -> JSValue"),
+  )
+  assert_true(actual.contains("declare pub fn get_build() -> JSValue"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> JSValue"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported reexported const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-reexported-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported chained const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-chained-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported star const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-star-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported deep star const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-deep-star-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text handles imported mixed barrel const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-mixed-barrel-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RestMeta"))
+  assert_true(actual.contains("declare pub fn get_runtime_version() -> String"))
+  assert_true(actual.contains("declare pub fn get_build() -> Double"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> RestMeta"))
+}
+
+///|
+async test "emit_moonbit_decl_text widens conflicting star const-table computed-key value exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-imported-conflicting-star-const-table-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_false(actual.contains("declare pub type RestMeta"))
+  assert_true(
+    actual.contains("declare pub fn get_runtime_version() -> JSValue"),
+  )
+  assert_true(actual.contains("declare pub fn get_build() -> JSValue"))
+  assert_true(actual.contains("declare pub fn get_rest_meta() -> JSValue"))
+}
+
+///|
 async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/neverthrow-like-entry.d.ts", "/runtime/neverthrow-like.js",
@@ -578,6 +1991,1965 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts exported functions" {
     ),
   )
   assert_false(bundle.bridge_js.contains("__ts_mbt_scale_point"))
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/destructured-value-entry.ts", "./runtime/destructured-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, runtimeVersion } from \"./runtime/destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_runtime_version() { return runtimeVersion; }",
+    ),
+  )
+  assert_true(
+    bridge_js.contains("export function __ts_mbt_get_build() { return build; }"),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites nested and array-rest destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_destructured_nested_rest_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/destructured-nested-rest-value-entry.ts", "./runtime/destructured-nested-rest-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_head() -> Double = \"__ts_mbt_get_head\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_tail() -> Array[Double] = \"__ts_mbt_get_tail\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { head, tail, build, runtimeVersion } from \"./runtime/destructured-nested-rest-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains("export function __ts_mbt_get_tail() { return tail; }"),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites object-rest destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_object_rest_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/object-rest-value-entry.ts", "./runtime/object-rest-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { version, restMeta } from \"./runtime/object-rest-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites computed-key destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/computed-destructured-value-entry.ts", "./runtime/computed-destructured-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites template-literal computed-key destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_template_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/template-computed-destructured-value-entry.ts", "./runtime/template-computed-destructured-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/template-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites concatenated computed-key destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_concat_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/concat-computed-destructured-value-entry.ts", "./runtime/concat-computed-destructured-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/concat-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites primitive-literal computed-key destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_primitive_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/primitive-computed-destructured-value-entry.ts", "./runtime/primitive-computed-destructured-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_truthy() -> String = \"__ts_mbt_get_truthy\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_nil_value() -> Double = \"__ts_mbt_get_nil_value\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_negative() -> Bool = \"__ts_mbt_get_negative\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_bigint_value() -> String = \"__ts_mbt_get_bigint_value\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { truthy, negative, nilValue, restMeta, bigintValue } from \"./runtime/primitive-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites void-and-negative-bigint computed-key destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_void_bigint_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/void-bigint-computed-destructured-value-entry.ts", "./runtime/void-bigint-computed-destructured-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_undefined_value() -> String = \"__ts_mbt_get_undefined_value\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_negative_bigint() -> Double = \"__ts_mbt_get_negative_bigint\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { restMeta, negativeBigint, undefinedValue } from \"./runtime/void-bigint-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites const-reference computed-key destructured value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_const_ref_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/const-ref-computed-destructured-value-entry.ts", "./runtime/const-ref-computed-destructured-value.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/const-ref-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites destructured-const-reference computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_destructured_const_ref_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/destructured-const-ref-computed-destructured-value-entry.ts",
+    "./runtime/destructured-const-ref-computed-destructured-value.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/destructured-const-ref-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites const-object-access computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_const_object_access_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/const-object-access-computed-destructured-value-entry.ts",
+    "./runtime/const-object-access-computed-destructured-value.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/const-object-access-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites nested-const-object-access computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_nested_const_object_access_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/nested-const-object-access-computed-destructured-value-entry.ts",
+    "./runtime/nested-const-object-access-computed-destructured-value.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/nested-const-object-access-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites const-array-access computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_const_array_access_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/const-array-access-computed-destructured-value-entry.ts",
+    "./runtime/const-array-access-computed-destructured-value.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/const-array-access-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites nested-const-array-access computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_nested_const_array_access_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/nested-const-array-access-computed-destructured-value-entry.ts",
+    "./runtime/nested-const-array-access-computed-destructured-value.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/nested-const-array-access-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites const-index-alias computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_const_index_alias_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/const-index-alias-computed-destructured-value-entry.ts",
+    "./runtime/const-index-alias-computed-destructured-value.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/const-index-alias-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites const-index-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_const_index_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/const-index-table-computed-destructured-value-entry.ts",
+    "./runtime/const-index-table-computed-destructured-value.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/const-index-table-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites nested-index-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_nested_index_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/nested-index-table-computed-destructured-value-entry.ts",
+    "./runtime/nested-index-table-computed-destructured-value.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/nested-index-table-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-const-table-entry.ts", "./runtime/imported-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported namespace const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_namespace_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-namespace-const-table-entry.ts", "./runtime/imported-namespace-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-namespace-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported default const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_default_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-default-const-table-entry.ts", "./runtime/imported-default-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-default-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported inline default const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_inline_default_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-inline-default-const-table-entry.ts", "./runtime/imported-inline-default-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-inline-default-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported inline default const-table as const computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_inline_default_const_table_as_const_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-inline-default-const-table-as-const-entry.ts",
+    "./runtime/imported-inline-default-const-table-as-const-entry.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-inline-default-const-table-as-const-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported iife default const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_iife_default_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-iife-default-const-table-entry.ts", "./runtime/imported-iife-default-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-iife-default-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported iife local const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_iife_local_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-iife-local-const-table-entry.ts", "./runtime/imported-iife-local-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-iife-local-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported function iife local const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_function_iife_local_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-function-iife-local-const-table-entry.ts", "./runtime/imported-function-iife-local-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-function-iife-local-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported iife local let-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_iife_local_let_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-iife-local-let-table-entry.ts", "./runtime/imported-iife-local-let-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-iife-local-let-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported function iife local let-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_function_iife_local_let_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-function-iife-local-let-table-entry.ts", "./runtime/imported-function-iife-local-let-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-function-iife-local-let-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package widens imported reassigned local let-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_iife_reassigned_let_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-iife-reassigned-let-table-entry.ts", "./runtime/imported-iife-reassigned-let-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_false(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-iife-reassigned-let-table-entry.js\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package widens imported prop-mutated local let-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_iife_prop_mutated_let_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-iife-prop-mutated-let-table-entry.ts", "./runtime/imported-iife-prop-mutated-let-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_false(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-iife-prop-mutated-let-table-entry.js\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package widens imported index-mutated local let-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_function_iife_index_mutated_let_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-function-iife-index-mutated-let-table-entry.ts",
+    "./runtime/imported-function-iife-index-mutated-let-table-entry.js", root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_false(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-function-iife-index-mutated-let-table-entry.js\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported reexported const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_reexported_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-reexported-const-table-entry.ts", "./runtime/imported-reexported-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-reexported-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported chained const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_chained_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-chained-const-table-entry.ts", "./runtime/imported-chained-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-chained-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported star const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_star_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-star-const-table-entry.ts", "./runtime/imported-star-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-star-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported deep star const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_deep_star_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-deep-star-const-table-entry.ts", "./runtime/imported-deep-star-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-deep-star-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package rewrites imported mixed barrel const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_mixed_barrel_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-mixed-barrel-const-table-entry.ts", "./runtime/imported-mixed-barrel-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-mixed-barrel-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+}
+
+///|
+async test "emit_moonbit_bridge_package widens conflicting star const-table computed-key value helpers to bridge.js" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_imported_conflicting_star_const_table_computed_destructured_value",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_bridge_package(
+    "fixtures/bridge_smoke/imported-conflicting-star-const-table-entry.ts", "./runtime/imported-conflicting-star-const-table-entry.js",
+    root,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
+    _ => wbtest_join_path(root, "bridge.js")
+  }
+  assert_false(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"./runtime/imported-conflicting-star-const-table-entry.js\";",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
 }
 
 ///|
@@ -691,13 +4063,19 @@ async test "emit_moonbit_js_ffi_texts handles runtime default exported classes" 
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "#module(\"/runtime/runtime-default-class.js\")\nextern \"js\" fn Default::new(initial : Double) -> Default = \"default\"",
+      "pub extern \"js\" fn new_default(initial : Double) -> Default = \"__ts_mbt_new_default\"",
     ),
   )
   assert_true(
-    bundle.ffi_mbt.contains("pub fn new_default(initial : Double) -> Default"),
+    bundle.bridge_js.contains(
+      "import default_ from \"/runtime/runtime-default-class.js\";",
+    ),
   )
-  assert_false(bundle.bridge_js.contains("__ts_mbt_new_default"))
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_default(initial) { return new default_(initial); }",
+    ),
+  )
 }
 
 ///|

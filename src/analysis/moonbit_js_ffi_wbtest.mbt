@@ -23,7 +23,7 @@ async test "analysis: emit MoonBit JS FFI bundle for function reexports" {
   assert_true(bundle.ffi_mbt.contains("pub struct PublicPoint"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "#module(\"/runtime/mod.js\")\npub extern \"js\" fn render(point : PublicPoint) -> PublicPoint = \"render\"",
+      "#module(\"/runtime/mod.js\")\npub extern \"js\" fn render(point : PublicPoint) -> PublicPoint = \"draw\"",
     ),
   )
   assert_false(bundle.bridge_js.contains("__ts_mbt_render"))
@@ -116,7 +116,7 @@ async test "analysis: emit MoonBit JS FFI bundle for typed value exports" {
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle falls back to Any getter for unresolved value exports" {
+async test "analysis: emit MoonBit JS FFI bundle infers literal runtime value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-value-entry.ts", "./runtime/value.js",
   ) catch {
@@ -130,7 +130,7 @@ async test "analysis: emit MoonBit JS FFI bundle falls back to Any getter for un
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_ready() -> @js.Any = \"__ts_mbt_get_ready\"",
+      "pub extern \"js\" fn get_ready() -> Bool = \"__ts_mbt_get_ready\"",
     ),
   )
   assert_true(
@@ -161,7 +161,7 @@ async test "analysis: emit MoonBit JS FFI bundle for exported classes" {
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn counter_inc(self : Counter, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
+      "pub extern \"js\" fn Counter::counter_inc(self : Counter, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
     ),
   )
   assert_true(
@@ -198,7 +198,7 @@ async test "analysis: emit MoonBit JS FFI bundle for abstract classes without co
   assert_true(bundle.ffi_mbt.contains("#external\ntype Shape"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn shape_area(self : Shape) -> Double =\n  #| (self) => self.area()",
+      "pub extern \"js\" fn Shape::shape_area(self : Shape) -> Double =\n  #| (self) => self.area()",
     ),
   )
   assert_false(bundle.ffi_mbt.contains("pub extern \"js\" fn new_shape("))
@@ -220,17 +220,17 @@ async test "analysis: emit MoonBit JS FFI bundle for exported class properties" 
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_counter_state_current(self : CounterState) -> Double =\n  #| (self) => self.current",
+      "pub extern \"js\" fn CounterState::get_counter_state_current(self : CounterState) -> Double =\n  #| (self) => self.current",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_counter_state_label(self : CounterState) -> String =\n  #| (self) => self.label",
+      "pub extern \"js\" fn CounterState::get_counter_state_label(self : CounterState) -> String =\n  #| (self) => self.label",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn set_counter_state_label(self : CounterState, value : String) -> Unit =\n  #| (self, value) => (self.label = value)",
+      "pub extern \"js\" fn CounterState::set_counter_state_label(self : CounterState, value : String) -> Unit =\n  #| (self, value) => (self.label = value)",
     ),
   )
   assert_true(
@@ -463,7 +463,7 @@ async test "analysis: emit MoonBit JS FFI bundle through package exports subpath
   assert_true(bundle.ffi_mbt.contains("pub struct FeatureResult"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "#module(\"/runtime/subpath-package.js\")\npub extern \"js\" fn execute_feature(options : FeatureOptions) -> FeatureResult = \"executeFeature\"",
+      "#module(\"/runtime/subpath-package.js\")\npub extern \"js\" fn execute_feature(options : FeatureOptions) -> FeatureResult = \"runFeature\"",
     ),
   )
 }
@@ -485,7 +485,7 @@ async test "analysis: emit MoonBit JS FFI bundle through package barrel reexport
   assert_true(bundle.ffi_mbt.contains("pub struct BarrelResult"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "#module(\"/runtime/barrel-package.js\")\npub extern \"js\" fn create_barrel(options : BarrelOptions) -> BarrelResult = \"createBarrel\"",
+      "#module(\"/runtime/barrel-package.js\")\npub extern \"js\" fn create_barrel(options : BarrelOptions) -> BarrelResult = \"buildBarrel\"",
     ),
   )
 }
@@ -535,7 +535,7 @@ async test "analysis: emit MoonBit JS FFI bundle collapse overloads by generated
   assert_eq(
     count_occurrences_in_ffi_output(
       bundle.ffi_mbt,
-      "pub extern \"js\" fn counter_value(",
+      "pub extern \"js\" fn Counter::counter_value(",
     ),
     1,
   )
@@ -690,6 +690,1701 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts function reexpo
 }
 
 ///|
+async test "analysis: emit MoonBit JS FFI bundle keeps direct class-property reexports bound to original runtime class" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/class-property-reexport-entry.d.ts", "/runtime/class-property.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype RuntimeState"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_state_version() -> String = \"__ts_mbt_get_runtime_state_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn set_runtime_state_step(value : Double) -> Unit = \"__ts_mbt_set_runtime_state_step\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_runtime_state() { return new CounterState(); }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_runtime_state_version() { return CounterState.version; }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_set_runtime_state_step(value) { return (CounterState.step = value); }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle keeps bare class-property reexports bound to package class" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/bare-class-property-entry.d.ts", "pkg-class-property",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype RuntimeState"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { CounterState } from \"pkg-class-property\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_runtime_state() { return new CounterState(); }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_runtime_state_version() { return CounterState.version; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle keeps bare default class reexports bound to package default export" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/bare-default-class-entry.d.ts", "pkg-default-class",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype RuntimeCounter"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_runtime_counter(initial : Double) -> RuntimeCounter = \"__ts_mbt_new_runtime_counter\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn runtime_counter_from(seed : Double) -> RuntimeCounter = \"__ts_mbt_runtime_counter_from\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_counter_version() -> String = \"__ts_mbt_get_runtime_counter_version\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains("import default_ from \"pkg-default-class\";"),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_runtime_counter(initial) { return new default_(initial); }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_runtime_counter_from(seed) { return default_.from(seed); }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_runtime_counter_version() { return default_.version; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle keeps subpath class reexports bound to package export" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/subpath-class-entry.d.ts", "pkg-class-subpath/state",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype RuntimeState"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_state_version() -> String = \"__ts_mbt_get_runtime_state_version\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { CounterState } from \"pkg-class-subpath/state\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_runtime_state() { return new CounterState(); }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles runtime ts destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-destructured-value-entry.ts", "/runtime/runtime-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, runtimeVersion } from \"/runtime/runtime-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_runtime_version() { return runtimeVersion; }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_build() { return build; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles nested and array-rest destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-destructured-nested-rest-value-entry.ts",
+    "/runtime/runtime-destructured-nested-rest-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_head() -> Double = \"__ts_mbt_get_head\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_tail() -> Array[Double] = \"__ts_mbt_get_tail\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { head, tail, build, runtimeVersion } from \"/runtime/runtime-destructured-nested-rest-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_tail() { return tail; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles object-rest destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-object-rest-value-entry.ts", "/runtime/runtime-object-rest-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  build : Double"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_version() -> String = \"__ts_mbt_get_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { version, restMeta } from \"/runtime/runtime-object-rest-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles computed-key destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-computed-destructured-value-entry.ts",
+    "/runtime/runtime-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles template-literal computed-key destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-template-computed-destructured-value-entry.ts",
+    "/runtime/runtime-template-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-template-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles concatenated computed-key destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-concat-computed-destructured-value-entry.ts",
+    "/runtime/runtime-concat-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-concat-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles primitive-literal computed-key destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-primitive-computed-destructured-value-entry.ts",
+    "/runtime/runtime-primitive-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_truthy() -> String = \"__ts_mbt_get_truthy\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_nil_value() -> Double = \"__ts_mbt_get_nil_value\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_negative() -> Bool = \"__ts_mbt_get_negative\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_bigint_value() -> String = \"__ts_mbt_get_bigint_value\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { truthy, negative, nilValue, restMeta, bigintValue } from \"/runtime/runtime-primitive-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles void-and-negative-bigint computed-key destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-void-bigint-computed-destructured-value-entry.ts",
+    "/runtime/runtime-void-bigint-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_undefined_value() -> String = \"__ts_mbt_get_undefined_value\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_negative_bigint() -> Double = \"__ts_mbt_get_negative_bigint\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { restMeta, negativeBigint, undefinedValue } from \"/runtime/runtime-void-bigint-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles const-reference computed-key destructured value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-const-ref-computed-destructured-value-entry.ts",
+    "/runtime/runtime-const-ref-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-const-ref-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles destructured-const-reference computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-destructured-const-ref-computed-destructured-value-entry.ts",
+    "/runtime/runtime-destructured-const-ref-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-destructured-const-ref-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles const-object-access computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-const-object-access-computed-destructured-value-entry.ts",
+    "/runtime/runtime-const-object-access-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-const-object-access-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles nested-const-object-access computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-nested-const-object-access-computed-destructured-value-entry.ts",
+    "/runtime/runtime-nested-const-object-access-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-nested-const-object-access-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles const-array-access computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-const-array-access-computed-destructured-value-entry.ts",
+    "/runtime/runtime-const-array-access-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-const-array-access-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles nested-const-array-access computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-nested-const-array-access-computed-destructured-value-entry.ts",
+    "/runtime/runtime-nested-const-array-access-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-nested-const-array-access-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles const-index-alias computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-const-index-alias-computed-destructured-value-entry.ts",
+    "/runtime/runtime-const-index-alias-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-const-index-alias-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles const-index-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-const-index-table-computed-destructured-value-entry.ts",
+    "/runtime/runtime-const-index-table-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-const-index-table-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles nested-index-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-nested-index-table-computed-destructured-value-entry.ts",
+    "/runtime/runtime-nested-index-table-computed-destructured-value.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-nested-index-table-computed-destructured-value.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-const-table-entry.ts", "/runtime/runtime-imported-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported namespace const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-namespace-const-table-entry.ts",
+    "/runtime/runtime-imported-namespace-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-namespace-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported default const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-default-const-table-entry.ts",
+    "/runtime/runtime-imported-default-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-default-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported inline default const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-inline-default-const-table-entry.ts",
+    "/runtime/runtime-imported-inline-default-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-inline-default-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported inline default const-table as const computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-inline-default-const-table-as-const-entry.ts",
+    "/runtime/runtime-imported-inline-default-const-table-as-const-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-inline-default-const-table-as-const-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported iife default const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-iife-default-const-table-entry.ts",
+    "/runtime/runtime-imported-iife-default-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-iife-default-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported iife local const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-iife-local-const-table-entry.ts",
+    "/runtime/runtime-imported-iife-local-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-iife-local-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported function iife local const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-function-iife-local-const-table-entry.ts",
+    "/runtime/runtime-imported-function-iife-local-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-function-iife-local-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported iife local let-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-iife-local-let-table-entry.ts",
+    "/runtime/runtime-imported-iife-local-let-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-iife-local-let-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported function iife local let-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-function-iife-local-let-table-entry.ts",
+    "/runtime/runtime-imported-function-iife-local-let-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-function-iife-local-let-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle widens imported reassigned local let-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-iife-reassigned-let-table-entry.ts",
+    "/runtime/runtime-imported-iife-reassigned-let-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_false(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-iife-reassigned-let-table-entry.js\";",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle widens imported prop-mutated local let-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-iife-prop-mutated-let-table-entry.ts",
+    "/runtime/runtime-imported-iife-prop-mutated-let-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_false(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-iife-prop-mutated-let-table-entry.js\";",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle widens imported index-mutated local let-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-function-iife-index-mutated-let-table-entry.ts",
+    "/runtime/runtime-imported-function-iife-index-mutated-let-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_false(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-function-iife-index-mutated-let-table-entry.js\";",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported reexported const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-reexported-const-table-entry.ts",
+    "/runtime/runtime-imported-reexported-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-reexported-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported chained const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-chained-const-table-entry.ts",
+    "/runtime/runtime-imported-chained-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-chained-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported star const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-star-const-table-entry.ts",
+    "/runtime/runtime-imported-star-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-star-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported deep star const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-deep-star-const-table-entry.ts",
+    "/runtime/runtime-imported-deep-star-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-deep-star-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle handles imported mixed barrel const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-mixed-barrel-const-table-entry.ts",
+    "/runtime/runtime-imported-mixed-barrel-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> Double = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-mixed-barrel-const-table-entry.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_rest_meta() { return restMeta; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle widens conflicting star const-table computed-key value exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-imported-conflicting-star-const-table-entry.ts",
+    "/runtime/runtime-imported-conflicting-star-const-table-entry.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_false(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import { build, restMeta, runtimeVersion } from \"/runtime/runtime-imported-conflicting-star-const-table-entry.js\";",
+    ),
+  )
+}
+
+///|
 async test "analysis: emit MoonBit JS FFI bundle from runtime default exported functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts", "/runtime/runtime-default-function.js",
@@ -736,6 +2431,31 @@ async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for relat
 }
 
 ///|
+async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for parent-relative default functions" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-default-function-entry.ts", "../runtime/runtime-default-function.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn default(label : String) -> String = \"__ts_mbt_default\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export { default as __ts_mbt_default } from \"../runtime/runtime-default-function.js\";",
+    ),
+  )
+}
+
+///|
 async test "analysis: emit MoonBit JS FFI bundle from runtime default exported classes" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-class-entry.ts", "/runtime/runtime-default-class.js",
@@ -751,21 +2471,169 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime default exported c
   assert_true(bundle.ffi_mbt.contains("#external\ntype Default"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "#module(\"/runtime/runtime-default-class.js\")\nextern \"js\" fn Default::new(initial : Double) -> Default = \"default\"",
+      "pub extern \"js\" fn new_default(initial : Double) -> Default = \"__ts_mbt_new_default\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub fn new_default(initial : Double) -> Default {\n  Default::new(initial)\n}",
+      "pub extern \"js\" fn Default::default_inc(self : Default, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
     ),
   )
   assert_true(
-    bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn default_inc(self : Default, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
+    bundle.bridge_js.contains(
+      "import default_ from \"/runtime/runtime-default-class.js\";",
     ),
   )
-  assert_false(bundle.bridge_js.contains("__ts_mbt_new_default"))
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_default(initial) { return new default_(initial); }",
+    ),
+  )
   assert_false(bundle.bridge_js.contains("__ts_mbt_default_inc"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle uses adapter helpers for relative default exported classes" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-default-class-entry.ts", "./runtime/runtime-default-class.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype Default"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_default(initial : Double) -> Default = \"__ts_mbt_new_default\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn Default::default_inc(self : Default, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn default_from(seed : Double) -> Default = \"__ts_mbt_default_from\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_default(initial) { return new default_(initial); }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_default_from(seed) { return default_.from(seed); }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle keeps mixed default class imports on one relative import line" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-default-class-mixed-entry.ts", "../../runtime/runtime-default-class-mixed.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype Default"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_default(initial : Double) -> Default = \"__ts_mbt_new_default\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn surround(label : String, prefix : String) -> String = \"__ts_mbt_surround\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_version() -> String = \"__ts_mbt_get_version\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import default_, { version } from \"../../runtime/runtime-default-class-mixed.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export { surround as __ts_mbt_surround } from \"../../runtime/runtime-default-class-mixed.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_default(initial) { return new default_(initial); }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_version() { return version; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle keeps aliased reexports bound to original runtime names" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-default-class-mixed-reexport-entry.ts",
+    "../../runtime/runtime-default-class-mixed.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype RuntimeCounter"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_runtime_counter(initial : Double) -> RuntimeCounter = \"__ts_mbt_new_runtime_counter\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn decorate(label : String, prefix : String) -> String = \"__ts_mbt_decorate\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import default_, { version } from \"../../runtime/runtime-default-class-mixed.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export { surround as __ts_mbt_decorate } from \"../../runtime/runtime-default-class-mixed.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_new_runtime_counter(initial) { return new default_(initial); }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_runtime_version() { return version; }",
+    ),
+  )
 }
 
 ///|

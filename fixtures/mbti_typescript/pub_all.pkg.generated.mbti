@@ -1,0 +1,23 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/sample"
+
+// Values
+pub fn analyze_truthiness_guard(String) -> (String, Bool)?
+
+// Errors
+
+// Types and methods
+pub(all) enum AnalysisResult[T] {
+  Ok(T, Array[String])
+  Err(Array[String])
+}
+pub fn[T] AnalysisResult::is_ok(Self[T]) -> Bool
+
+pub(all) enum AnalysisErrorKind {
+  SyntaxError
+  ReferenceError
+}
+
+// Type aliases
+
+// Traits

@@ -1237,6 +1237,933 @@ test "parser: parse module export const declaration without initializer" {
 }
 
 ///|
+test "parser: parse module export const declaration with initializer into values" {
+  let src =
+    #|export const version: string = "v2";
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 1)
+  assert_eq(module_.values[0].name, "version")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+}
+
+///|
+test "parser: parse module export const destructuring declaration into values" {
+  let src =
+    #|export const { version: runtimeVersion, build } = { version: "v3", build: 7.0 };
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 2)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+}
+
+///|
+test "parser: parse module export nested const destructuring declaration into values" {
+  let src =
+    #|export const { meta: { version: runtimeVersion, build } } = {
+    #|  meta: { version: "v3", build: 7.0 },
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 2)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+}
+
+///|
+test "parser: parse module export array rest destructuring declaration into values" {
+  let src =
+    #|export const [head, ...tail] = [1.0, 2.0, 3.0];
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 2)
+  assert_eq(module_.values[0].name, "head")
+  assert_eq(module_.values[0].type_, @ast.TsType::Number)
+  assert_eq(module_.values[1].name, "tail")
+  assert_eq(module_.values[1].type_, @ast.TsType::Array(@ast.TsType::Number))
+}
+
+///|
+test "parser: parse module export object rest destructuring declaration into values" {
+  let src =
+    #|export const { version, ...restMeta } = {
+    #|  version: "v3",
+    #|  build: 7.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 2)
+  assert_eq(module_.values[0].name, "version")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "restMeta")
+  assert_eq(
+    module_.values[1].type_,
+    @ast.TsType::Struct("RestMeta", [
+      ("build", @ast.TsType::Number),
+      ("enabled", @ast.TsType::Boolean),
+    ]),
+  )
+}
+
+///|
+test "parser: parse module export computed-key destructuring declaration into values" {
+  let src =
+    #|export const { ["version"]: runtimeVersion, ["build"]: build, ...restMeta } = {
+    #|  version: "v3",
+    #|  build: 7.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export template-literal computed-key destructuring declaration into values" {
+  let src =
+    #|export const { [`version`]: runtimeVersion, [`build`]: build, ...restMeta } = {
+    #|  version: "v3",
+    #|  build: 7.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export concatenated computed-key destructuring declaration into values" {
+  let src =
+    #|export const { ["ver" + "sion"]: runtimeVersion, ["bu" + "ild"]: build, ...restMeta } = {
+    #|  version: "v3",
+    #|  build: 7.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export primitive-literal computed-key destructuring declaration into values" {
+  let src =
+    #|export const { [true]: truthy, [null]: nilValue, [-1]: negative, [1n]: bigintValue, ...restMeta } = {
+    #|  "true": "yes",
+    #|  "null": 7.0,
+    #|  "-1": false,
+    #|  "1": "one",
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 5)
+  assert_eq(module_.values[0].name, "truthy")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "nilValue")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "negative")
+  assert_eq(module_.values[2].type_, @ast.TsType::Boolean)
+  assert_eq(module_.values[3].name, "bigintValue")
+  assert_eq(module_.values[3].type_, @ast.TsType::String_)
+  assert_eq(module_.values[4].name, "restMeta")
+  assert_eq(
+    module_.values[4].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export void-and-negative-bigint computed-key destructuring declaration into values" {
+  let src =
+    #|export const { [void 0]: undefinedValue, [-1n]: negativeBigint, ...restMeta } = {
+    #|  "undefined": "void",
+    #|  "-1": 9.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "undefinedValue")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "negativeBigint")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export const-reference computed-key destructuring declaration into values" {
+  let src =
+    #|const VERSION_KEY = "version";
+    #|const BUILD_KEY = "build";
+    #|export const { [VERSION_KEY]: runtimeVersion, [BUILD_KEY]: build, ...restMeta } = {
+    #|  version: "v3",
+    #|  build: 7.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export destructured-const-reference computed-key declaration into values" {
+  let src =
+    #|const { version: VERSION_KEY, build: BUILD_KEY } = {
+    #|  version: "version",
+    #|  build: "build",
+    #|};
+    #|export const { [VERSION_KEY]: runtimeVersion, [BUILD_KEY]: build, ...restMeta } = {
+    #|  version: "v4",
+    #|  build: 8.0,
+    #|  enabled: false,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export const-object-access computed-key declaration into values" {
+  let src =
+    #|const KEYS = {
+    #|  version: "version",
+    #|  build: "build",
+    #|};
+    #|export const {
+    #|  [KEYS.version]: runtimeVersion,
+    #|  [KEYS["build"]]: build,
+    #|  ...restMeta,
+    #|} = {
+    #|  version: "v5",
+    #|  build: 9.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export nested-const-object-access computed-key declaration into values" {
+  let src =
+    #|const KEYS = {
+    #|  nested: {
+    #|    version: "version",
+    #|    build: "build",
+    #|  },
+    #|};
+    #|export const {
+    #|  [KEYS.nested.version]: runtimeVersion,
+    #|  [KEYS.nested["build"]]: build,
+    #|  ...restMeta,
+    #|} = {
+    #|  version: "v6",
+    #|  build: 10.0,
+    #|  enabled: false,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export const-array-access computed-key declaration into values" {
+  let src =
+    #|const KEYS = ["version", "build"];
+    #|export const {
+    #|  [KEYS[0]]: runtimeVersion,
+    #|  [KEYS[1]]: build,
+    #|  ...restMeta,
+    #|} = {
+    #|  version: "v7",
+    #|  build: 11.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export nested-const-array-access computed-key declaration into values" {
+  let src =
+    #|const KEYS = {
+    #|  nested: ["version", "build"],
+    #|};
+    #|export const {
+    #|  [KEYS.nested[0]]: runtimeVersion,
+    #|  [KEYS.nested[1]]: build,
+    #|  ...restMeta,
+    #|} = {
+    #|  version: "v8",
+    #|  build: 12.0,
+    #|  enabled: false,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export const-index-alias computed-key declaration into values" {
+  let src =
+    #|const INDEX = 0;
+    #|const NEXT_INDEX = 1;
+    #|const KEYS = {
+    #|  nested: ["version", "build"],
+    #|};
+    #|export const {
+    #|  [KEYS.nested[INDEX]]: runtimeVersion,
+    #|  [KEYS.nested[NEXT_INDEX]]: build,
+    #|  ...restMeta,
+    #|} = {
+    #|  version: "v9",
+    #|  build: 13.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export const-index-table computed-key declaration into values" {
+  let src =
+    #|const INDEXES = [0, 1];
+    #|const KEYS = {
+    #|  nested: ["version", "build"],
+    #|};
+    #|export const {
+    #|  [KEYS.nested[INDEXES[0]]]: runtimeVersion,
+    #|  [KEYS.nested[INDEXES[1]]]: build,
+    #|  ...restMeta,
+    #|} = {
+    #|  version: "v10",
+    #|  build: 14.0,
+    #|  enabled: false,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module export nested-index-table computed-key declaration into values" {
+  let src =
+    #|const MATRIX = [[0, 1]];
+    #|const KEYS = {
+    #|  nested: ["version", "build"],
+    #|};
+    #|export const {
+    #|  [KEYS.nested[MATRIX[0][0]]]: runtimeVersion,
+    #|  [KEYS.nested[MATRIX[0][1]]]: build,
+    #|  ...restMeta,
+    #|} = {
+    #|  version: "v11",
+    #|  build: 15.0,
+    #|  enabled: true,
+    #|};
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse module with seeded imported const values into exports" {
+  let src =
+    #|export const {
+    #|  [KEYS.nested[INDEXES[0]]]: runtimeVersion,
+    #|  [KEYS.nested[INDEXES[1]]]: build,
+    #|  ...restMeta,
+    #|} = {
+    #|  version: "v12",
+    #|  build: 16.0,
+    #|  enabled: false,
+    #|};
+  let seeded_const_values : Map[String, @ast.TsExpr] = {
+    "INDEXES": @ast.TsExpr::ArrayLit([
+      @ast.TsExpr::IntLit(0),
+      @ast.TsExpr::IntLit(1),
+    ]),
+    "KEYS": @ast.TsExpr::ObjectLit([
+      (
+        "nested",
+        @ast.TsExpr::ArrayLit([
+          @ast.TsExpr::StringLit("version"),
+          @ast.TsExpr::StringLit("build"),
+        ]),
+      ),
+    ]),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: collect exported const values from source" {
+  let src =
+    #|const INDEXES = [0, 1];
+    #|const KEYS = {
+    #|  nested: ["version", "build"],
+    #|};
+    #|export { INDEXES, KEYS };
+  let exported_const_values = collect_exported_const_values_from_source(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  match exported_const_values.get("INDEXES") {
+    Some(@ast.TsExpr::ArrayLit(items)) => assert_eq(items.length(), 2)
+    _ => fail("expected INDEXES array literal")
+  }
+  match exported_const_values.get("KEYS") {
+    Some(@ast.TsExpr::ObjectLit(props)) => assert_eq(props.length(), 1)
+    _ => fail("expected KEYS object literal")
+  }
+}
+
+///|
+test "parser: collect default exported const value from source" {
+  let src =
+    #|const TABLES = {
+    #|  INDEXES: [0, 1],
+    #|  KEYS: {
+    #|    nested: ["version", "build"],
+    #|  },
+    #|};
+    #|export default TABLES;
+  let exported_const_values = collect_exported_const_values_from_source(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  match exported_const_values.get("default") {
+    Some(@ast.TsExpr::ObjectLit(props)) => assert_eq(props.length(), 2)
+    _ => fail("expected default object literal")
+  }
+}
+
+///|
+test "parser: collect inline default exported const value from source" {
+  let src =
+    #|export default {
+    #|  INDEXES: [0, 1],
+    #|  KEYS: {
+    #|    nested: ["version", "build"],
+    #|  },
+    #|};
+  let exported_const_values = collect_exported_const_values_from_source(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  match exported_const_values.get("default") {
+    Some(@ast.TsExpr::ObjectLit(props)) => assert_eq(props.length(), 2)
+    _ => fail("expected inline default object literal")
+  }
+}
+
+///|
+test "parser: collect inline default exported const value with as const from source" {
+  let src =
+    #|export default {
+    #|  INDEXES: [0, 1],
+    #|  KEYS: {
+    #|    nested: ["version", "build"],
+    #|  },
+    #|} as const;
+  let exported_const_values = collect_exported_const_values_from_source(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  match exported_const_values.get("default") {
+    Some(@ast.TsExpr::ObjectLit(props)) => assert_eq(props.length(), 2)
+    _ => fail("expected inline default as const object literal")
+  }
+}
+
+///|
+test "parser: parse computed-key destructuring with zero-arg iife const seed into values" {
+  let src =
+    #|export const {
+    #|  [tables.KEYS.nested[tables.INDEXES[0]]]: runtimeVersion,
+    #|  [tables.KEYS.nested[tables.INDEXES[1]]]: build,
+    #|  ...restMeta
+    #|} = {
+    #|  version: "v24",
+    #|  build: 28.0,
+    #|  enabled: true,
+    #|};
+  let seeded_const_values = {
+    "tables": parse_expr_from(
+      "(() => ({ INDEXES: [0, 1], KEYS: { nested: [\"version\", \"build\"] } }))()",
+    ),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].name, "runtimeVersion")
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].name, "build")
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(module_.values[2].name, "restMeta")
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse computed-key destructuring with block iife local const seed into values" {
+  let src =
+    #|export const {
+    #|  [tables.KEYS.nested[tables.INDEXES[0]]]: runtimeVersion,
+    #|  [tables.KEYS.nested[tables.INDEXES[1]]]: build,
+    #|  ...restMeta
+    #|} = {
+    #|  version: "v25",
+    #|  build: 29.0,
+    #|  enabled: false,
+    #|};
+  let seeded_const_values = {
+    "tables": parse_expr_from(
+      "(() => { const INDEXES = [0, 1]; const KEYS = { nested: [\"version\", \"build\"] }; const TABLES = { INDEXES, KEYS }; return TABLES; })()",
+    ),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse computed-key destructuring with function iife local const seed into values" {
+  let src =
+    #|export const {
+    #|  [tables.KEYS.nested[tables.INDEXES[0]]]: runtimeVersion,
+    #|  [tables.KEYS.nested[tables.INDEXES[1]]]: build,
+    #|  ...restMeta
+    #|} = {
+    #|  version: "v26",
+    #|  build: 30.0,
+    #|  enabled: true,
+    #|};
+  let seeded_const_values = {
+    "tables": parse_expr_from(
+      "(function() { const INDEXES = [0, 1]; const KEYS = { nested: [\"version\", \"build\"] }; const TABLES = { INDEXES, KEYS }; return TABLES; })()",
+    ),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse computed-key destructuring with block iife local let seed into values" {
+  let src =
+    #|export const {
+    #|  [tables.KEYS.nested[tables.INDEXES[0]]]: runtimeVersion,
+    #|  [tables.KEYS.nested[tables.INDEXES[1]]]: build,
+    #|  ...restMeta
+    #|} = {
+    #|  version: "v27",
+    #|  build: 31.0,
+    #|  enabled: false,
+    #|};
+  let seeded_const_values = {
+    "tables": parse_expr_from(
+      "(() => { let INDEXES = [0, 1]; let KEYS = { nested: [\"version\", \"build\"] }; let TABLES = { INDEXES, KEYS }; return TABLES; })()",
+    ),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: parse computed-key destructuring with function iife local let seed into values" {
+  let src =
+    #|export const {
+    #|  [tables.KEYS.nested[tables.INDEXES[0]]]: runtimeVersion,
+    #|  [tables.KEYS.nested[tables.INDEXES[1]]]: build,
+    #|  ...restMeta
+    #|} = {
+    #|  version: "v28",
+    #|  build: 32.0,
+    #|  enabled: true,
+    #|};
+  let seeded_const_values = {
+    "tables": parse_expr_from(
+      "(function() { let INDEXES = [0, 1]; let KEYS = { nested: [\"version\", \"build\"] }; let TABLES = { INDEXES, KEYS }; return TABLES; })()",
+    ),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].type_, @ast.TsType::String_)
+  assert_eq(module_.values[1].type_, @ast.TsType::Number)
+  assert_eq(
+    module_.values[2].type_,
+    @ast.TsType::Struct("RestMeta", [("enabled", @ast.TsType::Boolean)]),
+  )
+}
+
+///|
+test "parser: keep computed-key destructuring with reassigned local let seed conservative" {
+  let src =
+    #|export const {
+    #|  [tables.KEYS.nested[tables.INDEXES[0]]]: runtimeVersion,
+    #|  [tables.KEYS.nested[tables.INDEXES[1]]]: build,
+    #|  ...restMeta
+    #|} = {
+    #|  version: "v29",
+    #|  build: 33.0,
+    #|  enabled: false,
+    #|};
+  let seeded_const_values = {
+    "tables": parse_expr_from(
+      "(() => { let INDEXES = [0, 1]; let KEYS = { nested: [\"version\", \"build\"] }; KEYS = { nested: [\"version\", \"build\"] }; let TABLES = { INDEXES, KEYS }; return TABLES; })()",
+    ),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].type_, @ast.TsType::Any)
+  assert_eq(module_.values[1].type_, @ast.TsType::Any)
+  assert_eq(module_.values[2].type_, @ast.TsType::Any)
+}
+
+///|
+test "parser: keep computed-key destructuring with prop-mutated local let seed conservative" {
+  let src =
+    #|export const {
+    #|  [tables.KEYS.nested[tables.INDEXES[0]]]: runtimeVersion,
+    #|  [tables.KEYS.nested[tables.INDEXES[1]]]: build,
+    #|  ...restMeta
+    #|} = {
+    #|  version: "v30",
+    #|  build: 34.0,
+    #|  enabled: true,
+    #|};
+  let seeded_const_values = {
+    "tables": parse_expr_from(
+      "(() => { let INDEXES = [0, 1]; let KEYS = { nested: [\"version\", \"build\"] }; KEYS.nested = [\"version\", \"build\"]; let TABLES = { INDEXES, KEYS }; return TABLES; })()",
+    ),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].type_, @ast.TsType::Any)
+  assert_eq(module_.values[1].type_, @ast.TsType::Any)
+  assert_eq(module_.values[2].type_, @ast.TsType::Any)
+}
+
+///|
+test "parser: keep computed-key destructuring with index-mutated local let seed conservative" {
+  let src =
+    #|export const {
+    #|  [tables.KEYS.nested[tables.INDEXES[0]]]: runtimeVersion,
+    #|  [tables.KEYS.nested[tables.INDEXES[1]]]: build,
+    #|  ...restMeta
+    #|} = {
+    #|  version: "v31",
+    #|  build: 35.0,
+    #|  enabled: false,
+    #|};
+  let seeded_const_values = {
+    "tables": parse_expr_from(
+      "(function() { let INDEXES = [0, 1]; let KEYS = { nested: [\"version\", \"build\"] }; INDEXES[0] = 0; let TABLES = { INDEXES, KEYS }; return TABLES; })()",
+    ),
+  }
+  let module_ = parse_module_from_source_with_const_values(
+    src, seeded_const_values,
+  ) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.values.length(), 3)
+  assert_eq(module_.values[0].type_, @ast.TsType::Any)
+  assert_eq(module_.values[1].type_, @ast.TsType::Any)
+  assert_eq(module_.values[2].type_, @ast.TsType::Any)
+}
+
+///|
 test "parser: parse module block export const declaration without initializer" {
   let src =
     #|export const runNodeWatchedPaths: string[];

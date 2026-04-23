@@ -97,6 +97,8 @@ pub async fn emit_moonbit_ts_bridge_bundle_from_entry_path(String, String) -> Mo
 
 pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(String, String) -> MoonBitTsBridgePackageBundle raise ModuleGraphError
 
+pub async fn emit_typescript_decl_from_mbti_path(String) -> String raise MbtiTypescriptDeclError
+
 pub fn eval_const(@ast.TsExpr) -> ConstValue
 
 pub fn find_aot_groups(@ast.TsModule, CallGraph) -> Array[AOTGroup]
@@ -214,6 +216,11 @@ pub fn type_check_module(@ast.TsModule, String) -> TypeCheckResult
 pub fn union_types(@ast.TsType, @ast.TsType) -> @ast.TsType
 
 // Errors
+pub suberror MbtiTypescriptDeclError {
+  ReadError(String)
+  ParseError(String)
+} derive(@debug.Debug)
+
 pub(all) suberror ModuleGraphError {
   ReadError(String)
   ParseError(String)
@@ -589,6 +596,7 @@ pub(all) struct RefPoint {
 
 pub struct ResolvedExport {
   export_name : String
+  source_export_name : String
   source_path : String
   local_name : String?
   kind : ResolvedExportKind

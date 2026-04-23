@@ -7,6 +7,8 @@ import {
 }
 
 // Values
+pub fn collect_exported_const_values_from_source(String, Map[String, @ast.TsExpr]) -> Map[String, @ast.TsExpr] raise ParseError
+
 pub fn emit_moonbit_decl(@ast.TsModule) -> String
 
 pub fn emit_moonbit_decl_from_source(String) -> String raise ParseError
@@ -22,6 +24,8 @@ pub fn parse_expr_from_source(String) -> @ast.TsExpr? raise ParseError
 pub fn parse_expr_from_source_strict(String, Bool) -> @ast.TsExpr? raise ParseError
 
 pub fn parse_module_block_from_source(String) -> @ast.TsModuleBlock raise ParseError
+
+pub fn parse_module_from_source_with_const_values(String, Map[String, @ast.TsExpr]) -> @ast.TsModule raise ParseError
 
 pub async fn resolve_runtime_module_specifier(String, String) -> String?
 
@@ -59,12 +63,16 @@ pub struct Parser {
   mut in_switch : Bool
   labels : Array[String]
   src : String
+  allow_jsx : Bool
   mut class_id : Int
   mut current_class_brand : String?
+  mut last_runtime_class_decl : @ast.TsClassDecl?
 } derive(@debug.Debug)
 pub fn Parser::from_source(String) -> Self
+pub fn Parser::from_source_with_jsx(String, Bool) -> Self
 pub fn Parser::new(Array[Token]) -> Self
 pub fn Parser::new_with_strict(Array[Token], Bool) -> Self
+pub fn Parser::new_with_strict_and_jsx(Array[Token], Bool, Bool) -> Self
 pub fn Parser::parse_block(Self) -> @ast.TsBlock raise ParseError
 pub fn Parser::parse_declare_function(Self) -> @ast.TsImport raise ParseError
 pub fn Parser::parse_expr(Self) -> @ast.TsExpr raise ParseError
@@ -185,6 +193,7 @@ pub enum TokenKind {
   Colon
   Semicolon
   Dot
+  At
   New
   Interface
   Type

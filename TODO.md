@@ -24,6 +24,52 @@
   - `= "Counter.from"` / `= "Counter.version"` style dotted import names compile poorly in the current JS backend.
   - `#module(...)` combined with inline `#|` JS also does not lower correctly for imported module bindings in the current backend.
 
+## Normalized DTS Checker Scope
+
+- [x] Split object-shape compatibility checks into `src/checker`.
+  - `checker` currently exists to support `normalize-moonbit-dts`, not to become a full TypeScript checker.
+- [x] Keep the checker scope narrow.
+  - Current responsibility: decide whether object-like interface expansions can be flattened safely, or should fall back to intersections.
+  - Current coverage: duplicate properties, `readonly`, optional-property keys, and "do not merge methods / overload-like members".
+- [ ] Avoid growing `src/checker` into a full semantic checker unless a separate goal is explicitly chosen.
+  - If future work needs real TS semantics, define that as a separate milestone instead of quietly expanding the normalization helper.
+
+## Bridge Const-Table Batch Plan
+
+Reduce the need to pick one edge case at a time by shipping the next `default export const table` batch together and keeping the smoke rail in sync.
+
+### Batch scope
+
+- [x] `import * as tables from "./x"` where `x` exports a const table.
+- [x] `import tables from "./x"` where `x` re-exports a named `const TABLES`.
+- [x] `import tables from "./x"` where `x` directly `export default { ... }`.
+- [x] `import tables from "./x"` where `x` does `export default { ... } as const`.
+- [x] `import tables from "./x"` where `x` does `export default (() => ({ ... }))()`.
+- [x] `import tables from "./x"` where `x` does `export default (() => { const ...; return TABLES })()`.
+- [x] `import tables from "./x"` where `x` does `export default (function() { const ...; return TABLES })()`.
+
+### Acceptance rail
+
+- [x] Add parser regression proving exported const-value collection for each new default-export shape.
+- [x] Add decl / JS FFI / bridge-package regressions for each new shape.
+- [x] Add bridge smoke fixtures so `just verify-generated-fixtures` and `just ci` execute the generated package under JS.
+
+### Next batch: IIFE local let handling
+
+- [x] `import tables from "./x"` where `x` does `export default (() => { let ...; return TABLES })()`.
+- [x] `import tables from "./x"` where `x` does `export default (function() { let ...; return TABLES })()`.
+- [x] Keep local `let` mutation conservative: if the returned table depends on reassigned locals, widen instead of resolving statically.
+- [x] Add parser / decl / JS FFI / bridge-package regressions for the `let` cases.
+- [x] Add bridge smoke fixtures for positive `let` cases and the conservative widened case.
+
+### Next batch: IIFE local mutation conservative handling
+
+- [x] `import tables from "./x"` where `x` mutates `KEYS.nested` before returning the table.
+- [x] `import tables from "./x"` where `x` mutates `INDEXES[0]` before returning the table.
+- [x] Keep local property/index mutation conservative even when the final runtime value is unchanged.
+- [x] Add parser / decl / JS FFI / bridge-package regressions for the mutation cases.
+- [x] Add bridge smoke fixtures for the conservative widened mutation cases.
+
 ## Codegen Type Mismatch Bugs
 
 wasmtime's stricter validation exposed these pre-existing codegen bugs. The generated WASM has type mismatches that need to be fixed.

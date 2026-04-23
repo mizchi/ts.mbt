@@ -1,6 +1,7 @@
 import {
   "moonbitlang/async/fs",
   "moonbitlang/core/debug",
+  "mizchi/ts/checker" @checker,
   "mizchi/ts/ast" @ast,
   "mizchi/ts/parser" @parser,
 }
