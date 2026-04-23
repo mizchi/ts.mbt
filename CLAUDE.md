@@ -2,6 +2,26 @@
 
 TypeScript/JavaScript interpreter and compiler to WebAssembly, written in MoonBit.
 
+## Current Goals
+
+This project currently focuses on these three goals:
+
+1. Implement a TypeScript parser in MoonBit.
+2. Make TypeScript-to-MoonBit bridge types safe, mainly for `vite-plugin-moonbit`.
+3. Improve the TypeScript types emitted for MoonBit-generated code.
+
+These are the primary goals right now.
+
+- The parser / resolver / semantics / declaration tooling are first-class project areas.
+- Bridge generation and `.d.ts` normalization are part of the main product surface.
+- WebAssembly/codegen work still exists, but it is not the main goal unless explicitly stated.
+
+## Purpose Notes
+
+- `src/parser` is the foundation for parsing TypeScript/JavaScript and resolving module structure.
+- `src/analysis` contains the bridge-generation, declaration normalization, and shape-checking logic used to make TS-facing output safer and easier to consume.
+- `src/checker` is currently a narrow checker for declaration normalization support, not a full TypeScript checker.
+
 ## Project Structure
 
 ```
