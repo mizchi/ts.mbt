@@ -1,0 +1,14 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/pkg"
+
+import {
+  "demo/pkg/child",
+  "moonbitlang/core/debug",
+}
+
+pub struct Holder {
+  item : @child.Item
+}
+
+pub fn make(@child.Item) -> Holder
+pub fn[T : @debug.Debug] render(T) -> String

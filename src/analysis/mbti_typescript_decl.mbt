@@ -5,6 +5,18 @@ pub suberror MbtiTypescriptDeclError {
 } derive(@debug.Debug)
 
 ///|
+pub struct MbtiTypescriptPackageFile {
+  relative_path : String
+  content : String
+}
+
+///|
+pub struct MbtiTypescriptScaffoldBundle {
+  moon_pkg_json : String
+  files : Array[MbtiTypescriptPackageFile]
+}
+
+///|
 priv struct MbtiImportRef {
   alias_name : String
   ts_alias : String
@@ -429,6 +441,109 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
     }
   }
   imports
+}
+
+///|
+fn parse_mbti_package_name(source : String) -> String? {
+  for line_view in source.split("\n") {
+    let trimmed = line_view.trim().to_string()
+    if !trimmed.has_prefix("package \"") {
+      continue
+    }
+    let rest = trimmed["package \"".length():trimmed.length()].to_string()
+    match rest.find("\"") {
+      Some(end_idx) => {
+        let package_name = rest[:end_idx].to_string()
+        if package_name != "" {
+          return Some(package_name)
+        }
+      }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+fn mbti_join_path(base : String, child : String) -> String {
+  if base == "." || base == "" {
+    child
+  } else if base.has_suffix("/") {
+    base + child
+  } else {
+    base + "/" + child
+  }
+}
+
+///|
+fn mbti_dirname(path : String) -> String {
+  match path.rev_find("/") {
+    Some(0) => "/"
+    Some(idx) => path[:idx].to_string()
+    None => "."
+  }
+}
+
+///|
+fn mbti_local_package_segments(
+  root_package_name : String,
+  package_name : String,
+) -> Array[String]? {
+  if package_name == root_package_name {
+    return Some([])
+  }
+  let prefix = root_package_name + "/"
+  if !package_name.has_prefix(prefix) {
+    return None
+  }
+  let suffix = package_name[prefix.length():package_name.length()].to_string()
+  if suffix == "" {
+    return Some([])
+  }
+  let segments : Array[String] = []
+  for part_view in suffix.split("/") {
+    let part = part_view.to_string()
+    if part != "" {
+      segments.push(part)
+    }
+  }
+  Some(segments)
+}
+
+///|
+fn mbti_bundle_relative_path_from_segments(segments : Array[String]) -> String {
+  if segments.length() == 0 {
+    "index.d.ts"
+  } else {
+    segments.join("/") + "/index.d.ts"
+  }
+}
+
+///|
+fn mbti_relative_package_import_spec(
+  from_segments : Array[String],
+  to_segments : Array[String],
+) -> String {
+  let mut shared = 0
+  while shared < from_segments.length() &&
+        shared < to_segments.length() &&
+        from_segments[shared] == to_segments[shared] {
+    shared += 1
+  }
+  let parts : Array[String] = []
+  for _ in shared..<from_segments.length() {
+    parts.push("..")
+  }
+  for idx in shared..<to_segments.length() {
+    parts.push(to_segments[idx])
+  }
+  if parts.length() == 0 {
+    "."
+  } else if parts[0] == ".." {
+    parts.join("/")
+  } else {
+    "./" + parts.join("/")
+  }
 }
 
 ///|
@@ -1291,8 +1406,9 @@ fn filter_method_type_params(
 }
 
 ///|
-fn parse_mbti_to_typescript(
+fn parse_mbti_to_typescript_with_import_rewrites(
   source : String,
+  import_spec_rewrites : Map[String, String],
 ) -> String raise MbtiTypescriptDeclError {
   let imports = parse_mbti_imports(source)
   let used_aliases : Array[String] = []
@@ -1738,8 +1854,13 @@ fn parse_mbti_to_typescript(
   for alias_name in used_aliases {
     for import_ref in imports {
       if import_ref.alias_name == alias_name {
+        let import_spec = match
+          import_spec_rewrites.get(import_ref.module_spec) {
+          Some(rewritten) => rewritten
+          None => import_ref.module_spec
+        }
         import_lines.push(
-          "import type * as \{import_ref.ts_alias} from \"\{import_ref.module_spec}\";",
+          "import type * as \{import_ref.ts_alias} from \"\{import_spec}\";",
         )
         break
       }
@@ -1754,6 +1875,132 @@ fn parse_mbti_to_typescript(
     all_parts.push(decls.join("\n\n"))
   }
   all_parts.join("\n\n")
+}
+
+///|
+fn parse_mbti_to_typescript(
+  source : String,
+) -> String raise MbtiTypescriptDeclError {
+  parse_mbti_to_typescript_with_import_rewrites(source, {})
+}
+
+///|
+pub async fn emit_typescript_package_bundle_from_mbti_path(
+  root_file_path : String,
+) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError {
+  let root_source = @fs.read_file(root_file_path).text() catch {
+    e => raise MbtiTypescriptDeclError::ReadError("\{e}")
+  }
+  let root_package_name = match parse_mbti_package_name(root_source) {
+    Some(package_name) => package_name
+    None =>
+      raise MbtiTypescriptDeclError::ParseError(
+        "missing package declaration in \{root_file_path}",
+      )
+  }
+  let source_root_dir = mbti_dirname(root_file_path)
+  let package_sources : Map[String, String] = {}
+  let pending_packages : Array[String] = [root_package_name]
+  let ordered_packages : Array[String] = []
+  package_sources[root_package_name] = root_source
+  while pending_packages.length() > 0 {
+    let package_name = pending_packages[pending_packages.length() - 1]
+    let _ = pending_packages.pop()
+    if ordered_packages.contains(package_name) {
+      continue
+    }
+    let source = match package_sources.get(package_name) {
+      Some(source) => source
+      None =>
+        raise MbtiTypescriptDeclError::ParseError(
+          "missing loaded package source for \{package_name}",
+        )
+    }
+    ordered_packages.push(package_name)
+    for import_ref in parse_mbti_imports(source) {
+      match
+        mbti_local_package_segments(root_package_name, import_ref.module_spec) {
+        Some(target_segments) => {
+          if !package_sources.contains(import_ref.module_spec) {
+            let relative_pkg_path = if target_segments.length() == 0 {
+              "pkg.generated.mbti"
+            } else {
+              target_segments.join("/") + "/pkg.generated.mbti"
+            }
+            let target_file_path = mbti_join_path(
+              source_root_dir, relative_pkg_path,
+            )
+            let target_source = @fs.read_file(target_file_path).text() catch {
+              e => raise MbtiTypescriptDeclError::ReadError("\{e}")
+            }
+            package_sources[import_ref.module_spec] = target_source
+          }
+          if !ordered_packages.contains(import_ref.module_spec) &&
+            !pending_packages.contains(import_ref.module_spec) {
+            pending_packages.push(import_ref.module_spec)
+          }
+        }
+        None => ()
+      }
+    }
+  }
+  let files : Array[MbtiTypescriptPackageFile] = []
+  for package_name in ordered_packages {
+    let source = match package_sources.get(package_name) {
+      Some(source) => source
+      None =>
+        raise MbtiTypescriptDeclError::ParseError(
+          "missing emitted package source for \{package_name}",
+        )
+    }
+    let current_segments = match
+      mbti_local_package_segments(root_package_name, package_name) {
+      Some(segments) => segments
+      None =>
+        raise MbtiTypescriptDeclError::ParseError(
+          "package \{package_name} is outside root bundle \{root_package_name}",
+        )
+    }
+    let import_rewrites : Map[String, String] = {}
+    for import_ref in parse_mbti_imports(source) {
+      if import_ref.module_spec == package_name {
+        continue
+      }
+      match
+        mbti_local_package_segments(root_package_name, import_ref.module_spec) {
+        Some(target_segments) =>
+          import_rewrites[import_ref.module_spec] = mbti_relative_package_import_spec(
+            current_segments, target_segments,
+          )
+        None => ()
+      }
+    }
+    files.push({
+      relative_path: mbti_bundle_relative_path_from_segments(current_segments),
+      content: parse_mbti_to_typescript_with_import_rewrites(
+        source, import_rewrites,
+      ),
+    })
+  }
+  files
+}
+
+///|
+pub async fn emit_typescript_scaffold_bundle_from_mbti_path(
+  root_file_path : String,
+) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError {
+  let root_source = @fs.read_file(root_file_path).text() catch {
+    e => raise MbtiTypescriptDeclError::ReadError("\{e}")
+  }
+  let moon_pkg_json = emit_moonbit_js_link_config_from_mbti_source(root_source) catch {
+    MbtiJsLinkConfigError::ReadError(msg)
+    | MbtiJsLinkConfigError::ParseError(msg) =>
+      raise MbtiTypescriptDeclError::ParseError(msg)
+  }
+  {
+    moon_pkg_json,
+    files: emit_typescript_package_bundle_from_mbti_path(root_file_path),
+  }
 }
 
 ///|

@@ -185,3 +185,99 @@ async test "analysis: emit TypeScript declarations supports explicit import alia
     #|}
   assert_eq(actual, expected)
 }
+
+///|
+async test "analysis: emit MoonBit JS link config from mbti keeps only top-level free functions" {
+  let actual = emit_moonbit_js_link_config_from_mbti_path(
+    "fixtures/mbti_typescript/basic.pkg.generated.mbti",
+  ) catch {
+    MbtiJsLinkConfigError::ReadError(msg)
+    | MbtiJsLinkConfigError::ParseError(msg) =>
+      fail("MBTI JS link emit error: \{msg}")
+  }
+  let expected =
+    #|{
+    #|  "link": {
+    #|    "js": {
+    #|      "exports": [
+    #|        "identity",
+    #|        "debug_identity",
+    #|        "wrap_pair"
+    #|      ],
+    #|      "format": "esm"
+    #|    }
+    #|  }
+    #|}
+  assert_eq(actual, expected)
+}
+
+///|
+async test "analysis: emit MoonBit JS link config from mbti includes top-level async functions and excludes methods" {
+  let actual = emit_moonbit_js_link_config_from_mbti_path(
+    "fixtures/mbti_typescript/link_config_async.pkg.generated.mbti",
+  ) catch {
+    MbtiJsLinkConfigError::ReadError(msg)
+    | MbtiJsLinkConfigError::ParseError(msg) =>
+      fail("MBTI JS link emit error: \{msg}")
+  }
+  let expected =
+    #|{
+    #|  "link": {
+    #|    "js": {
+    #|      "exports": [
+    #|        "fetch_value",
+    #|        "transform"
+    #|      ],
+    #|      "format": "esm"
+    #|    }
+    #|  }
+    #|}
+  assert_eq(actual, expected)
+}
+
+///|
+async test "analysis: emit TypeScript package bundle from mbti rewrites local imports to sibling declarations" {
+  let files = emit_typescript_package_bundle_from_mbti_path(
+    "fixtures/mbti_typescript_package/pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI package bundle emit error: \{msg}")
+  }
+  assert_eq(files.length(), 2)
+  let mut root_content = ""
+  let mut child_content = ""
+  for file in files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    } else if file.relative_path == "child/index.d.ts" {
+      child_content = file.content
+    }
+  }
+  assert_true(root_content != "")
+  assert_true(child_content != "")
+  assert_true(root_content.contains("import type * as child from \"./child\";"))
+  assert_true(
+    root_content.contains(
+      "import type * as debug from \"moonbitlang/core/debug\";",
+    ),
+  )
+  assert_true(root_content.contains("item: child.Item;"))
+  assert_true(child_content.contains("export interface Item {"))
+  assert_false(root_content.contains("\"demo/pkg/child\""))
+}
+
+///|
+async test "analysis: emit TypeScript scaffold bundle from mbti combines autolink config and declaration files" {
+  let bundle = emit_typescript_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript_package/pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI scaffold bundle emit error: \{msg}")
+  }
+  assert_true(bundle.moon_pkg_json.contains("\"make\""))
+  assert_true(bundle.moon_pkg_json.contains("\"render\""))
+  assert_false(bundle.moon_pkg_json.contains("Holder::"))
+  assert_eq(bundle.files.length(), 2)
+}

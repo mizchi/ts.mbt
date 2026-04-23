@@ -1,0 +1,137 @@
+///|
+pub suberror MbtiJsLinkConfigError {
+  ReadError(String)
+  ParseError(String)
+} derive(@debug.Debug)
+
+///|
+fn mbti_js_link_char_at(s : String, idx : Int) -> Char {
+  s[idx].to_int().unsafe_to_char()
+}
+
+///|
+fn mbti_js_link_find_matching(
+  source : String,
+  open_idx : Int,
+  open_char : Char,
+  close_char : Char,
+) -> Int? {
+  let mut depth = 0
+  let mut idx = open_idx
+  while idx < source.length() {
+    let c = mbti_js_link_char_at(source, idx)
+    if c == open_char {
+      depth += 1
+    } else if c == close_char {
+      depth -= 1
+      if depth == 0 {
+        return Some(idx)
+      }
+    }
+    idx += 1
+  }
+  None
+}
+
+///|
+fn parse_mbti_public_function_name(
+  line : String,
+) -> String? raise MbtiJsLinkConfigError {
+  let trimmed = line.trim().to_string()
+  let mut rest = match trimmed {
+    _ if trimmed.has_prefix("pub async fn") =>
+      trimmed["pub async fn".length():trimmed.length()].to_string()
+    _ if trimmed.has_prefix("pub fn") =>
+      trimmed["pub fn".length():trimmed.length()].to_string()
+    _ => return None
+  }
+  if rest == "" {
+    return None
+  }
+  if rest.has_prefix("[") {
+    match mbti_js_link_find_matching(rest, 0, '[', ']') {
+      Some(close_idx) => rest = rest[close_idx + 1:rest.length()].to_string()
+      None =>
+        raise MbtiJsLinkConfigError::ParseError(
+          "unclosed type parameter list in mbti function: \{trimmed}",
+        )
+    }
+  }
+  let mut name_start = 0
+  while name_start < rest.length() &&
+        mbti_js_link_char_at(rest, name_start) == ' ' {
+    name_start += 1
+  }
+  match rest.find("(") {
+    Some(open_idx) if open_idx >= name_start => {
+      let raw_name = rest[name_start:open_idx].trim().to_string()
+      if raw_name == "" {
+        raise MbtiJsLinkConfigError::ParseError(
+          "missing function name in mbti declaration: \{trimmed}",
+        )
+      }
+      if raw_name.contains("::") {
+        None
+      } else {
+        Some(raw_name)
+      }
+    }
+    _ =>
+      raise MbtiJsLinkConfigError::ParseError(
+        "missing parameter list in mbti function: \{trimmed}",
+      )
+  }
+}
+
+///|
+fn collect_mbti_public_free_function_names(
+  source : String,
+) -> Array[String] raise MbtiJsLinkConfigError {
+  let names : Array[String] = []
+  for line in source.split("\n") {
+    match parse_mbti_public_function_name(line.to_string()) {
+      Some(name) => if !names.contains(name) { names.push(name) }
+      None => ()
+    }
+  }
+  names
+}
+
+///|
+fn render_moonbit_js_link_config(function_names : Array[String]) -> String {
+  let export_lines : Array[String] = []
+  for i = 0; i < function_names.length(); i = i + 1 {
+    let suffix = if i + 1 < function_names.length() { "," } else { "" }
+    export_lines.push("        \"\{function_names[i]}\"\{suffix}")
+  }
+  let lines = [
+    "{",
+    "  \"link\": {",
+    "    \"js\": {",
+    "      \"exports\": [",
+    export_lines.join("\n"),
+    "      ],",
+    "      \"format\": \"esm\"",
+    "    }",
+    "  }",
+    "}",
+  ]
+  lines.join("\n")
+}
+
+///|
+pub fn emit_moonbit_js_link_config_from_mbti_source(
+  source : String,
+) -> String raise MbtiJsLinkConfigError {
+  render_moonbit_js_link_config(collect_mbti_public_free_function_names(source))
+}
+
+///|
+pub async fn emit_moonbit_js_link_config_from_mbti_path(
+  file_path : String,
+) -> String raise MbtiJsLinkConfigError {
+  let source = @fs.read_file(file_path).text() catch {
+    e => raise MbtiJsLinkConfigError::ReadError("\{e}")
+  }
+  emit_moonbit_js_link_config_from_mbti_source(source)
+}

@@ -138,12 +138,32 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
+      "  emit-moonbit-scaffold-from-ts <file> <module-spec> <out-dir> Emit a MoonBit bridge scaffold from a TS entrypoint",
+    ),
+  )
+  assert_true(
+    lines.contains(
       "  normalize-moonbit-dts <file> [out] Normalize MoonBit-generated TypeScript declarations into clearer .d.ts output",
     ),
   )
   assert_true(
     lines.contains(
       "  emit-typescript-from-mbti <file> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
+    ),
+  )
+  assert_true(
+    lines.contains(
+      "  emit-js-link-config-from-mbti <file> [out] Emit MoonBit link.js.exports config from a .mbti interface",
+    ),
+  )
+  assert_true(
+    lines.contains(
+      "  emit-typescript-package-from-mbti <file> <out-dir> Emit a recursive TypeScript declaration package from a root .mbti interface",
+    ),
+  )
+  assert_true(
+    lines.contains(
+      "  emit-typescript-scaffold-from-mbti <file> <out-dir> Emit MoonBit autolink config and recursive TypeScript declarations together",
     ),
   )
   assert_true(
@@ -218,6 +238,62 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
       "export type DerivedStatus = ({ $tag: \"Ready\" }) & Eq<DerivedStatus>;",
     ),
   )
+}
+
+///|
+async test "emit_js_link_config_from_mbti_text emits MoonBit JS link config from mbti" {
+  let actual = emit_js_link_config_from_mbti_text(
+    "fixtures/mbti_typescript/basic.pkg.generated.mbti",
+  ) catch {
+    @analysis.MbtiJsLinkConfigError::ReadError(msg)
+    | @analysis.MbtiJsLinkConfigError::ParseError(msg) =>
+      fail("Emit error: \{msg}")
+  }
+  assert_true(actual.contains("\"identity\""))
+  assert_true(actual.contains("\"debug_identity\""))
+  assert_true(actual.contains("\"wrap_pair\""))
+  assert_false(actual.contains("Box::unwrap"))
+  assert_true(actual.contains("\"format\": \"esm\""))
+}
+
+///|
+async test "emit_typescript_package_from_mbti writes recursive declaration bundle" {
+  let root = wbtest_tmp_project_benchmark_root("mbti_typescript_package_bundle")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_typescript_package_from_mbti(
+    "fixtures/mbti_typescript_package/pkg.generated.mbti", root,
+  )
+  let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
+    e => fail("failed to read root index.d.ts: \{e}")
+  }
+  let child_decl = @fs.read_file(wbtest_join_path(root, "child/index.d.ts")).text() catch {
+    e => fail("failed to read child index.d.ts: \{e}")
+  }
+  assert_true(root_decl.contains("import type * as child from \"./child\";"))
+  assert_true(root_decl.contains("item: child.Item;"))
+  assert_true(child_decl.contains("export interface Item {"))
+}
+
+///|
+async test "emit_typescript_scaffold_from_mbti writes moon.pkg.json and declaration bundle" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "mbti_typescript_scaffold_bundle",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_typescript_scaffold_from_mbti(
+    "fixtures/mbti_typescript_package/pkg.generated.mbti", root,
+  )
+  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+    e => fail("failed to read moon.pkg.json: \{e}")
+  }
+  let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
+    e => fail("failed to read root index.d.ts: \{e}")
+  }
+  assert_true(moon_pkg_json.contains("\"make\""))
+  assert_true(moon_pkg_json.contains("\"render\""))
+  assert_true(root_decl.contains("import type * as child from \"./child\";"))
 }
 
 ///|
@@ -4162,6 +4238,44 @@ async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry from
     assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn parse_user("))
     assert_true(bundle.ffi_mbt.contains("#external\ntype Result"))
     assert_false(bundle.bridge_js.contains("__ts_mbt_parse_user"))
+  })
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles neverthrow-like package entry from tmp path" {
+  let root = wbtest_tmp_neverthrow_like_root("bridge_package")
+  @async.with_task_group(async fn(group) {
+    group.add_defer(async fn() { let _ = try? @fs.rmdir(root, recursive=true) })
+    let entry_path = wbtest_prepare_tmp_neverthrow_like_fixture(root) catch {
+      _ => {
+        fail("Failed to prepare tmp fixture")
+        return
+      }
+    }
+    let out_dir = wbtest_join_path(root, "bridge_pkg")
+    emit_moonbit_scaffold_from_ts(
+      entry_path, "/runtime/neverthrow-like.js", out_dir,
+    )
+    let bridge_mbti = @fs.read_file(wbtest_join_path(out_dir, "bridge.mbti")).text() catch {
+      e => {
+        fail("Read error: \{e}")
+        return
+      }
+    }
+    let bridge_mbt = @fs.read_file(wbtest_join_path(out_dir, "bridge.mbt")).text() catch {
+      e => {
+        fail("Read error: \{e}")
+        return
+      }
+    }
+    assert_true(entry_path.has_prefix("/tmp/"))
+    assert_true(bridge_mbti.contains("declare pub type Result"))
+    assert_true(bridge_mbti.contains("declare pub type ResultAsync"))
+    assert_true(
+      bridge_mbti.contains("declare pub fn parseUser(input : String) -> Result"),
+    )
+    assert_true(bridge_mbt.contains("pub extern \"js\" fn parse_user("))
+    assert_true(bridge_mbt.contains("pub extern \"js\" fn fetch_user("))
   })
 }
 

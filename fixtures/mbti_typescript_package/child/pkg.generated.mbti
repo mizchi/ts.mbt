@@ -1,0 +1,8 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/pkg/child"
+
+pub struct Item {
+  label : String
+}
+
+pub fn Item::new(String) -> Self

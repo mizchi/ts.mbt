@@ -13,6 +13,22 @@
   - Covered by the `/tmp/ts_mbt_neverthrow_like_*` regression tests in `src/main_wbtest.mbt`, which exercise `emit_moonbit_decl_text` / `emit_moonbit_js_ffi_texts` against a pnpm-style temp project layout.
 - [ ] Minimize a fixture from the actual `neverthrow` package if more parser coverage is needed beyond the graph-resolution fix.
 
+## MoonBit / TypeScript Package Bridge Plan
+
+Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces without hand-writing `link.js.exports`, and keep the reverse `TS -> MoonBit` path aligned around the same surface model.
+
+### Batch 1: MBTI autolink bootstrap
+
+- [x] Emit `link.js.exports` JSON config from `.mbti` top-level public free functions.
+- [x] Exclude methods / constructors / trait methods from the generated JS export surface.
+- [x] Add CLI coverage so the generated config can be written directly from `pkg.generated.mbti`.
+
+### Next batches
+
+- [x] Add a recursive `.mbti` resolver so generated `.d.ts` imports can be rewritten to generated sibling packages instead of raw MoonBit package specifiers.
+- [x] Add a high-level `MoonBit -> TS package scaffold` command that emits the autolink config and `.d.ts` bundle together.
+- [x] Align the reverse `TS -> MoonBit bridge package` flow on the same top-level export surface model and resolver assumptions.
+
 ## TS Bridge Constraints
 
 - [x] Prefer direct `#module("...")` imports when the runtime `moduleSpec` is non-relative.

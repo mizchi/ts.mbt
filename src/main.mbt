@@ -67,6 +67,33 @@ async fn main_async() -> Unit {
       let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
       emit_typescript_decl_from_mbti(file_path, output_path)
     }
+    "emit-js-link-config-from-mbti" => {
+      if args.length() < 3 {
+        println("Error: no file specified")
+        return
+      }
+      let file_path = args[2]
+      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
+      emit_js_link_config_from_mbti(file_path, output_path)
+    }
+    "emit-typescript-package-from-mbti" => {
+      if args.length() < 4 {
+        println("Error: expected <file> <out-dir>")
+        return
+      }
+      let file_path = args[2]
+      let output_dir = args[3]
+      emit_typescript_package_from_mbti(file_path, output_dir)
+    }
+    "emit-typescript-scaffold-from-mbti" => {
+      if args.length() < 4 {
+        println("Error: expected <file> <out-dir>")
+        return
+      }
+      let file_path = args[2]
+      let output_dir = args[3]
+      emit_typescript_scaffold_from_mbti(file_path, output_dir)
+    }
     "emit-moonbit-js-ffi" => {
       if args.length() < 4 {
         println("Error: expected <entry> <module-spec>")
@@ -123,6 +150,16 @@ async fn main_async() -> Unit {
       let module_spec = args[3]
       let output_dir = args[4]
       emit_moonbit_bridge_package(file_path, module_spec, output_dir)
+    }
+    "emit-moonbit-scaffold-from-ts" => {
+      if args.length() < 5 {
+        println("Error: expected <ts-entry> <module-spec> <out-dir>")
+        return
+      }
+      let file_path = args[2]
+      let module_spec = args[3]
+      let output_dir = args[4]
+      emit_moonbit_scaffold_from_ts(file_path, module_spec, output_dir)
     }
     "benchmark-project" => {
       if args.length() < 3 {
@@ -191,9 +228,13 @@ fn command_help_lines() -> Array[String] {
     "  experimental-aot-check <file> Alias for experimental-analyze", "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from a TypeScript entrypoint",
     "  normalize-moonbit-dts <file> [out] Normalize MoonBit-generated TypeScript declarations into clearer .d.ts output",
     "  emit-typescript-from-mbti <file> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
+    "  emit-js-link-config-from-mbti <file> [out] Emit MoonBit link.js.exports config from a .mbti interface",
+    "  emit-typescript-package-from-mbti <file> <out-dir> Emit a recursive TypeScript declaration package from a root .mbti interface",
+    "  emit-typescript-scaffold-from-mbti <file> <out-dir> Emit MoonBit autolink config and recursive TypeScript declarations together",
     "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
     "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
+    "  emit-moonbit-scaffold-from-ts <file> <module-spec> <out-dir> Emit a MoonBit bridge scaffold from a TS entrypoint",
     "  benchmark-project <root> [limit] Benchmark local TS/.d.ts corpus coverage",
     "  benchmark-corpora [limit] Benchmark built-in local and optional real-world corpora",
   ]
@@ -353,6 +394,168 @@ async fn emit_typescript_decl_from_mbti_text(
   file_path : String,
 ) -> String raise @analysis.MbtiTypescriptDeclError {
   @analysis.emit_typescript_decl_from_mbti_path(file_path)
+}
+
+///|
+async fn emit_js_link_config_from_mbti(
+  file_path : String,
+  output_path : String?,
+) -> Unit {
+  let emitted = emit_js_link_config_from_mbti_text(file_path) catch {
+    @analysis.MbtiJsLinkConfigError::ReadError(msg)
+    | @analysis.MbtiJsLinkConfigError::ParseError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  match output_path {
+    Some(path) => {
+      let _ = @fs.write_file(path, string_to_bytes(emitted), create=0o644) catch {
+        e => {
+          println("Write error: \{e}")
+          return
+        }
+      }
+      println("Wrote MoonBit JS link config to \{path}")
+    }
+    None => println(emitted)
+  }
+}
+
+///|
+async fn emit_js_link_config_from_mbti_text(
+  file_path : String,
+) -> String raise @analysis.MbtiJsLinkConfigError {
+  @analysis.emit_moonbit_js_link_config_from_mbti_path(file_path)
+}
+
+///|
+fn main_dirname(path : String) -> String {
+  match path.rev_find("/") {
+    Some(0) => "/"
+    Some(idx) => path[:idx].to_string()
+    None => "."
+  }
+}
+
+///|
+fn main_join_path(base : String, child : String) -> String {
+  if base == "." || base == "" {
+    child
+  } else if base.has_suffix("/") {
+    base + child
+  } else {
+    base + "/" + child
+  }
+}
+
+///|
+async fn ensure_dir_tree(path : String) -> Unit raise Error {
+  if path == "." || path == "" || @fs.exists(path) {
+    return
+  }
+  let parent = main_dirname(path)
+  if parent != path {
+    ensure_dir_tree(parent)
+  }
+  if !@fs.exists(path) {
+    @fs.mkdir(path, permission=0o755)
+  }
+}
+
+///|
+async fn emit_typescript_package_from_mbti(
+  file_path : String,
+  output_dir : String,
+) -> Unit {
+  let files = @analysis.emit_typescript_package_bundle_from_mbti_path(file_path) catch {
+    @analysis.MbtiTypescriptDeclError::ReadError(msg)
+    | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  let _ = ensure_dir_tree(output_dir) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  for file in files {
+    let output_path = main_join_path(output_dir, file.relative_path)
+    let parent_dir = main_dirname(output_path)
+    let _ = ensure_dir_tree(parent_dir) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+    let _ = @fs.write_file(
+      output_path,
+      string_to_bytes(file.content),
+      create=0o644,
+    ) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+  }
+  println("Wrote TypeScript declaration package to \{output_dir}")
+}
+
+///|
+async fn emit_typescript_scaffold_from_mbti(
+  file_path : String,
+  output_dir : String,
+) -> Unit {
+  let bundle = @analysis.emit_typescript_scaffold_bundle_from_mbti_path(
+    file_path,
+  ) catch {
+    @analysis.MbtiTypescriptDeclError::ReadError(msg)
+    | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  let _ = ensure_dir_tree(output_dir) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  let moon_pkg_path = main_join_path(output_dir, "moon.pkg.json")
+  let _ = @fs.write_file(
+    moon_pkg_path,
+    string_to_bytes(bundle.moon_pkg_json),
+    create=0o644,
+  ) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  for file in bundle.files {
+    let output_path = main_join_path(output_dir, file.relative_path)
+    let parent_dir = main_dirname(output_path)
+    let _ = ensure_dir_tree(parent_dir) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+    let _ = @fs.write_file(
+      output_path,
+      string_to_bytes(file.content),
+      create=0o644,
+    ) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+  }
+  println("Wrote TypeScript scaffold to \{output_dir}")
 }
 
 ///|
@@ -530,6 +733,15 @@ async fn emit_moonbit_bridge_package(
     }
   }
   println("Wrote MoonBit bridge package to \{output_dir}")
+}
+
+///|
+async fn emit_moonbit_scaffold_from_ts(
+  file_path : String,
+  module_spec : String,
+  output_dir : String,
+) -> Unit {
+  emit_moonbit_bridge_package(file_path, module_spec, output_dir)
 }
 
 ///|

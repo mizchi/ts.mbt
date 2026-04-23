@@ -93,11 +93,19 @@ pub async fn emit_moonbit_decl_from_entry_path(String) -> String raise ModuleGra
 
 pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(String, String) -> MoonBitJsFfiBundle raise ModuleGraphError
 
+pub async fn emit_moonbit_js_link_config_from_mbti_path(String) -> String raise MbtiJsLinkConfigError
+
+pub fn emit_moonbit_js_link_config_from_mbti_source(String) -> String raise MbtiJsLinkConfigError
+
 pub async fn emit_moonbit_ts_bridge_bundle_from_entry_path(String, String) -> MoonBitTsBridgeBundle raise ModuleGraphError
 
 pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(String, String) -> MoonBitTsBridgePackageBundle raise ModuleGraphError
 
 pub async fn emit_typescript_decl_from_mbti_path(String) -> String raise MbtiTypescriptDeclError
+
+pub async fn emit_typescript_package_bundle_from_mbti_path(String) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError
+
+pub async fn emit_typescript_scaffold_bundle_from_mbti_path(String) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
 
 pub fn eval_const(@ast.TsExpr) -> ConstValue
 
@@ -216,6 +224,11 @@ pub fn type_check_module(@ast.TsModule, String) -> TypeCheckResult
 pub fn union_types(@ast.TsType, @ast.TsType) -> @ast.TsType
 
 // Errors
+pub suberror MbtiJsLinkConfigError {
+  ReadError(String)
+  ParseError(String)
+} derive(@debug.Debug)
+
 pub suberror MbtiTypescriptDeclError {
   ReadError(String)
   ParseError(String)
@@ -504,6 +517,16 @@ pub(all) struct LoopInvariantInfo {
   modified_vars : Array[String]
 }
 pub fn LoopInvariantInfo::new() -> Self
+
+pub struct MbtiTypescriptPackageFile {
+  relative_path : String
+  content : String
+}
+
+pub struct MbtiTypescriptScaffoldBundle {
+  moon_pkg_json : String
+  files : Array[MbtiTypescriptPackageFile]
+}
 
 pub struct ModuleGraph {
   entry_path : String

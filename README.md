@@ -110,6 +110,62 @@ dynamic JS features. It currently uses wasm-gc for arrays and structs.
 - Object literals, closures (arrow/function expressions)
 - Dynamic call expressions
 
+## Package Bridge Scaffolds
+
+This repo now supports both directions of package scaffold generation.
+
+### MoonBit -> TypeScript
+
+Start from a root `pkg.generated.mbti` and emit:
+
+- `moon.pkg.json` with generated `link.js.exports`
+- recursive `.d.ts` files with local MoonBit package imports rewritten to sibling relative imports
+
+```bash
+moon run src -- emit-typescript-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg
+```
+
+Lower-level commands are also available:
+
+```bash
+# only link.js.exports JSON
+moon run src -- emit-js-link-config-from-mbti src/pkg.generated.mbti
+
+# only recursive .d.ts package
+moon run src -- emit-typescript-package-from-mbti src/pkg.generated.mbti out/ts-pkg
+
+# single .d.ts from one .mbti file without recursive rewrite
+moon run src -- emit-typescript-from-mbti src/pkg.generated.mbti
+```
+
+Current export model:
+
+- JS autolink is generated from top-level public free functions only.
+- Methods, constructors, and trait methods stay in the emitted `.d.ts`, but are not added to `link.js.exports`.
+- Recursive `.mbti` resolution only rewrites imports that stay under the same root package prefix. External imports remain bare specifiers.
+
+### TypeScript -> MoonBit
+
+Start from a TypeScript entrypoint and emit a MoonBit bridge scaffold:
+
+```bash
+moon run src -- emit-moonbit-scaffold-from-ts path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+```
+
+Lower-level commands are also available:
+
+```bash
+# full bridge package
+moon run src -- emit-moonbit-bridge-package path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+
+# inspect generated decl/ffi/bridge snippets without writing a package
+moon run src -- emit-moonbit-bridge path/to/entry.d.ts /runtime/module.js
+moon run src -- emit-moonbit-js-ffi path/to/entry.d.ts /runtime/module.js
+moon run src -- emit-moonbit-decl path/to/entry.d.ts
+```
+
+The TS -> MoonBit path resolves exported surface recursively through local package structure and package exports, but the generated MoonBit package still targets the exported top-level surface rather than arbitrary internal module state.
+
 ## Development
 
 ```bash

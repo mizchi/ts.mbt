@@ -1,0 +1,11 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/sample"
+
+pub async fn fetch_value(String) -> String
+pub fn transform(String) -> String
+
+pub struct Loader {
+  path : String
+}
+pub fn Loader::new(String) -> Self
+pub fn Loader::load(Self) -> String
