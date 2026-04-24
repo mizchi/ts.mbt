@@ -83,7 +83,14 @@ async fn main_async() -> Unit {
       }
       let file_path = args[2]
       let output_dir = args[3]
-      emit_typescript_package_from_mbti(file_path, output_dir)
+      let import_rewrite_path = if args.length() >= 5 {
+        Some(args[4])
+      } else {
+        None
+      }
+      emit_typescript_package_from_mbti(
+        file_path, output_dir, import_rewrite_path,
+      )
     }
     "emit-typescript-scaffold-from-mbti" => {
       if args.length() < 4 {
@@ -92,7 +99,14 @@ async fn main_async() -> Unit {
       }
       let file_path = args[2]
       let output_dir = args[3]
-      emit_typescript_scaffold_from_mbti(file_path, output_dir)
+      let import_rewrite_path = if args.length() >= 5 {
+        Some(args[4])
+      } else {
+        None
+      }
+      emit_typescript_scaffold_from_mbti(
+        file_path, output_dir, import_rewrite_path,
+      )
     }
     "emit-moonbit-js-ffi" => {
       if args.length() < 4 {
@@ -229,8 +243,8 @@ fn command_help_lines() -> Array[String] {
     "  normalize-moonbit-dts <file> [out] Normalize MoonBit-generated TypeScript declarations into clearer .d.ts output",
     "  emit-typescript-from-mbti <file> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
     "  emit-js-link-config-from-mbti <file> [out] Emit MoonBit link.js.exports config from a .mbti interface",
-    "  emit-typescript-package-from-mbti <file> <out-dir> Emit a recursive TypeScript declaration package from a root .mbti interface",
-    "  emit-typescript-scaffold-from-mbti <file> <out-dir> Emit MoonBit autolink config and recursive TypeScript declarations together",
+    "  emit-typescript-package-from-mbti <file> <out-dir> [import-rewrite-json] Emit a recursive TypeScript declaration package from a root .mbti interface",
+    "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit MoonBit autolink config and recursive TypeScript declarations together",
     "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
     "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
@@ -430,6 +444,34 @@ async fn emit_js_link_config_from_mbti_text(
 }
 
 ///|
+async fn load_typescript_import_rewrite_map(
+  import_rewrite_path : String?,
+) -> Map[String, String]? {
+  match import_rewrite_path {
+    Some(path) => {
+      let source = @fs.read_file(path).text() catch {
+        e => {
+          println(
+            "Emit error: failed to read import rewrite map '\{path}': \{e}",
+          )
+          return None
+        }
+      }
+      match @analysis.parse_typescript_import_rewrite_map_source(source) {
+        Some(rewrites) => Some(rewrites)
+        None => {
+          println(
+            "Emit error: invalid import rewrite map '\{path}', expected a JSON object of string-to-string entries",
+          )
+          None
+        }
+      }
+    }
+    None => Some({})
+  }
+}
+
+///|
 fn main_dirname(path : String) -> String {
   match path.rev_find("/") {
     Some(0) => "/"
@@ -467,8 +509,16 @@ async fn ensure_dir_tree(path : String) -> Unit raise Error {
 async fn emit_typescript_package_from_mbti(
   file_path : String,
   output_dir : String,
+  import_rewrite_path : String?,
 ) -> Unit {
-  let files = @analysis.emit_typescript_package_bundle_from_mbti_path(file_path) catch {
+  let import_rewrites = match
+    load_typescript_import_rewrite_map(import_rewrite_path) {
+    Some(rewrites) => rewrites
+    None => return
+  }
+  let files = @analysis.emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
+    file_path, import_rewrites,
+  ) catch {
     @analysis.MbtiTypescriptDeclError::ReadError(msg)
     | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
@@ -508,9 +558,15 @@ async fn emit_typescript_package_from_mbti(
 async fn emit_typescript_scaffold_from_mbti(
   file_path : String,
   output_dir : String,
+  import_rewrite_path : String?,
 ) -> Unit {
-  let bundle = @analysis.emit_typescript_scaffold_bundle_from_mbti_path(
-    file_path,
+  let import_rewrites = match
+    load_typescript_import_rewrite_map(import_rewrite_path) {
+    Some(rewrites) => rewrites
+    None => return
+  }
+  let bundle = @analysis.emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
+    file_path, import_rewrites,
   ) catch {
     @analysis.MbtiTypescriptDeclError::ReadError(msg)
     | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
@@ -528,6 +584,28 @@ async fn emit_typescript_scaffold_from_mbti(
   let _ = @fs.write_file(
     moon_pkg_path,
     string_to_bytes(bundle.moon_pkg_json),
+    create=0o644,
+  ) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  let package_json_path = main_join_path(output_dir, "package.json")
+  let _ = @fs.write_file(
+    package_json_path,
+    string_to_bytes(bundle.package_json),
+    create=0o644,
+  ) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  let diagnostics_path = main_join_path(output_dir, "AUTOLINK_DIAGNOSTICS.md")
+  let _ = @fs.write_file(
+    diagnostics_path,
+    string_to_bytes(bundle.autolink_diagnostics_md),
     create=0o644,
   ) catch {
     e => {
@@ -736,11 +814,53 @@ async fn emit_moonbit_bridge_package(
 }
 
 ///|
+fn scaffold_unsupported_export_text(
+  export_ : @analysis.ResolvedExport,
+) -> String {
+  let base = "\{export_.export_name} (ambiguous re-export"
+  if export_.ambiguous_source_paths.length() == 0 {
+    base + ")"
+  } else {
+    base + ": " + export_.ambiguous_source_paths.join(", ") + ")"
+  }
+}
+
+///|
+async fn ensure_moonbit_ts_scaffoldable(
+  file_path : String,
+) -> Unit raise @analysis.ModuleGraphError {
+  let graph = @analysis.load_type_module_graph(file_path)
+  let export_surface = @analysis.resolve_export_surface(graph)
+  let unsupported_exports : Array[String] = []
+  for export_ in export_surface {
+    match export_.kind {
+      @analysis.ResolvedExportKind::Ambiguous =>
+        unsupported_exports.push(scaffold_unsupported_export_text(export_))
+      _ => ()
+    }
+  }
+  if unsupported_exports.length() > 0 {
+    let unsupported_text = unsupported_exports.join(", ")
+    raise @analysis.ResolveError(
+      "TS bridge scaffold only supports unambiguous top-level exports; unsupported exports: \{unsupported_text}",
+    )
+  }
+}
+
+///|
 async fn emit_moonbit_scaffold_from_ts(
   file_path : String,
   module_spec : String,
   output_dir : String,
 ) -> Unit {
+  ensure_moonbit_ts_scaffoldable(file_path) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
   emit_moonbit_bridge_package(file_path, module_spec, output_dir)
 }
 
@@ -761,7 +881,7 @@ fn escape_moonbit_module_path(path : String) -> String {
 
 ///|
 fn bridge_binding_needs_generated_module(line : String) -> Bool {
-  line.contains("pub extern \"js\" fn ") && line.contains(" = \"__ts_mbt_")
+  line.contains("extern \"js\" fn ") && line.contains(" = \"__ts_mbt_")
 }
 
 ///|

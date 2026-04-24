@@ -57,7 +57,47 @@ pub struct ResolvedExport {
   local_name : String?
   kind : ResolvedExportKind
   via_path : String?
+  ambiguous_source_paths : Array[String]
 } derive(Debug)
+
+///|
+fn resolved_export_source_paths(export_ : ResolvedExport) -> Array[String] {
+  let paths : Array[String] = []
+  if export_.ambiguous_source_paths.length() > 0 {
+    for path in export_.ambiguous_source_paths {
+      if !paths.contains(path) {
+        paths.push(path)
+      }
+    }
+  } else if export_.source_path != "" {
+    paths.push(export_.source_path)
+  }
+  paths.sort()
+  paths
+}
+
+///|
+fn make_ambiguous_export(
+  existing : ResolvedExport,
+  incoming : ResolvedExport,
+) -> ResolvedExport {
+  let ambiguous_source_paths = resolved_export_source_paths(existing)
+  for path in resolved_export_source_paths(incoming) {
+    if !ambiguous_source_paths.contains(path) {
+      ambiguous_source_paths.push(path)
+    }
+  }
+  ambiguous_source_paths.sort()
+  {
+    export_name: existing.export_name,
+    source_export_name: existing.source_export_name,
+    source_path: existing.source_path,
+    local_name: None,
+    kind: Ambiguous,
+    via_path: None,
+    ambiguous_source_paths,
+  }
+}
 
 ///|
 async fn resolve_module_specifier_with_mode(
@@ -274,6 +314,7 @@ fn clone_export_with_name(
     local_name: export_.local_name,
     kind,
     via_path,
+    ambiguous_source_paths: export_.ambiguous_source_paths,
   }
 }
 
@@ -302,14 +343,7 @@ fn upsert_explicit_export(
         existing.local_name == export_.local_name {
         exports[idx] = export_
       } else {
-        exports[idx] = {
-          export_name: export_.export_name,
-          source_export_name: export_.source_export_name,
-          source_path: existing.source_path,
-          local_name: None,
-          kind: Ambiguous,
-          via_path: None,
-        }
+        exports[idx] = make_ambiguous_export(existing, export_)
       }
     }
     None => exports.push(export_)
@@ -326,18 +360,11 @@ fn merge_star_export(
       let existing = exports[idx]
       match existing.kind {
         Local | NamedReExport | Namespace => ()
-        Ambiguous => ()
+        Ambiguous => exports[idx] = make_ambiguous_export(existing, export_)
         StarReExport =>
           if existing.source_path != export_.source_path ||
             existing.local_name != export_.local_name {
-            exports[idx] = {
-              export_name: export_.export_name,
-              source_export_name: export_.source_export_name,
-              source_path: existing.source_path,
-              local_name: None,
-              kind: Ambiguous,
-              via_path: None,
-            }
+            exports[idx] = make_ambiguous_export(existing, export_)
           }
       }
     }
@@ -373,6 +400,7 @@ fn resolve_export_surface_from_map(
       local_name: Some(spec.local_name),
       kind: Local,
       via_path: None,
+      ambiguous_source_paths: [],
     })
   }
   let star_edges : Array[ResolvedReExportEdge] = []
@@ -410,6 +438,7 @@ fn resolve_export_surface_from_map(
           local_name: None,
           kind: Namespace,
           via_path: Some(path),
+          ambiguous_source_paths: [],
         })
       @ast.TsReExportKind::All => star_edges.push(reexport)
     }

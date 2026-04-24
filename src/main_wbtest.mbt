@@ -158,12 +158,12 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
-      "  emit-typescript-package-from-mbti <file> <out-dir> Emit a recursive TypeScript declaration package from a root .mbti interface",
+      "  emit-typescript-package-from-mbti <file> <out-dir> [import-rewrite-json] Emit a recursive TypeScript declaration package from a root .mbti interface",
     ),
   )
   assert_true(
     lines.contains(
-      "  emit-typescript-scaffold-from-mbti <file> <out-dir> Emit MoonBit autolink config and recursive TypeScript declarations together",
+      "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit MoonBit autolink config and recursive TypeScript declarations together",
     ),
   )
   assert_true(
@@ -262,7 +262,9 @@ async test "emit_typescript_package_from_mbti writes recursive declaration bundl
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
   emit_typescript_package_from_mbti(
-    "fixtures/mbti_typescript_package/pkg.generated.mbti", root,
+    "fixtures/mbti_typescript_package/pkg.generated.mbti",
+    root,
+    None,
   )
   let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
     e => fail("failed to read root index.d.ts: \{e}")
@@ -283,17 +285,80 @@ async test "emit_typescript_scaffold_from_mbti writes moon.pkg.json and declarat
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
   emit_typescript_scaffold_from_mbti(
-    "fixtures/mbti_typescript_package/pkg.generated.mbti", root,
+    "fixtures/mbti_typescript_package/pkg.generated.mbti",
+    root,
+    None,
   )
   let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
     e => fail("failed to read moon.pkg.json: \{e}")
+  }
+  let package_json = @fs.read_file(wbtest_join_path(root, "package.json")).text() catch {
+    e => fail("failed to read package.json: \{e}")
+  }
+  let diagnostics_md = @fs.read_file(
+    wbtest_join_path(root, "AUTOLINK_DIAGNOSTICS.md"),
+  ).text() catch {
+    e => fail("failed to read AUTOLINK_DIAGNOSTICS.md: \{e}")
   }
   let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
     e => fail("failed to read root index.d.ts: \{e}")
   }
   assert_true(moon_pkg_json.contains("\"make\""))
   assert_true(moon_pkg_json.contains("\"render\""))
+  assert_true(package_json.contains("\"name\": \"@demo/pkg\""))
+  assert_true(
+    package_json.contains("\"./child\": { \"types\": \"./child/index.d.ts\" }"),
+  )
+  assert_true(diagnostics_md.contains("Item::new"))
   assert_true(root_decl.contains("import type * as child from \"./child\";"))
+}
+
+///|
+async test "emit_typescript_package_from_mbti rewrites external imports from json map" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "mbti_typescript_package_bundle_rewrites",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_typescript_package_from_mbti(
+    "fixtures/mbti_typescript_package/pkg.generated.mbti",
+    root,
+    Some("fixtures/mbti_typescript_package/import-rewrites.json"),
+  )
+  let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
+    e => fail("failed to read rewritten root index.d.ts: \{e}")
+  }
+  assert_true(root_decl.contains("import type * as debug from \"demo-debug\";"))
+  assert_false(root_decl.contains("\"moonbitlang/core/debug\""))
+}
+
+///|
+async test "emit_typescript_scaffold_from_mbti rewrites external imports from json map" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "mbti_typescript_scaffold_bundle_rewrites",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_typescript_scaffold_from_mbti(
+    "fixtures/mbti_typescript_package/pkg.generated.mbti",
+    root,
+    Some("fixtures/mbti_typescript_package/import-rewrites.json"),
+  )
+  let package_json = @fs.read_file(wbtest_join_path(root, "package.json")).text() catch {
+    e => fail("failed to read rewritten scaffold package.json: \{e}")
+  }
+  let diagnostics_md = @fs.read_file(
+    wbtest_join_path(root, "AUTOLINK_DIAGNOSTICS.md"),
+  ).text() catch {
+    e => fail("failed to read rewritten scaffold AUTOLINK_DIAGNOSTICS.md: \{e}")
+  }
+  let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
+    e => fail("failed to read rewritten scaffold index.d.ts: \{e}")
+  }
+  assert_true(package_json.contains("\"name\": \"@demo/pkg\""))
+  assert_true(diagnostics_md.contains("Item::new"))
+  assert_true(root_decl.contains("import type * as debug from \"demo-debug\";"))
+  assert_false(root_decl.contains("\"moonbitlang/core/debug\""))
 }
 
 ///|
@@ -722,7 +787,12 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
   assert_true(bridge_mbti.contains("declare pub fn scalePoint("))
   assert_true(
     bridge_mbt.contains(
-      "#module(\"/runtime/runtime-function.js\")\npub extern \"js\" fn scale_point(",
+      "#module(\"/runtime/runtime-function.js\")\nextern \"js\" fn scale_point(",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint {\n  scale_point(point, factor)\n}",
     ),
   )
   assert_false(bridge_js.contains("__ts_mbt_scale_point"))
@@ -754,10 +824,14 @@ async test "emit_moonbit_bridge_package rewrites relative runtime bridge to self
   }
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn scale_point(",
+      "#module(\"\{bridge_js_path}\")\nextern \"js\" fn scale_point(point : RuntimePoint, factor : Double) -> RuntimePoint = \"__ts_mbt_scale_point\"",
     ),
   )
-  assert_true(bridge_mbt.contains("= \"__ts_mbt_scale_point\""))
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint {\n  scale_point(point, factor)\n}",
+    ),
+  )
   assert_true(
     bridge_js.contains(
       "export { scalePoint as __ts_mbt_scale_point } from \"./runtime/runtime-function.js\";",
@@ -2047,6 +2121,49 @@ async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry" {
   }
   assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn parse_user("))
   assert_false(bundle.bridge_js.contains("__ts_mbt_parse_user"))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles neverthrow-like package entry" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_package_neverthrow_like_fixture",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/neverthrow-like-entry.d.ts", "/runtime/neverthrow-like.js",
+    root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  assert_true(bridge_mbti.contains("declare pub type Result"))
+  assert_true(bridge_mbti.contains("declare pub type ResultAsync"))
+  assert_true(
+    bridge_mbti.contains("declare pub fn parseUser(input : String) -> Result"),
+  )
+  assert_true(bridge_mbt.contains("extern \"js\" fn parse_user("))
+  assert_true(bridge_mbt.contains("extern \"js\" fn fetch_user("))
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn parseUser(input : String) -> Result {\n  parse_user(input)\n}",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn fetchUser(id : String) -> ResultAsync {\n  fetch_user(id)\n}",
+    ),
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
 }
 
 ///|
@@ -4274,9 +4391,89 @@ async test "emit_moonbit_scaffold_from_ts handles neverthrow-like package entry 
     assert_true(
       bridge_mbti.contains("declare pub fn parseUser(input : String) -> Result"),
     )
-    assert_true(bridge_mbt.contains("pub extern \"js\" fn parse_user("))
-    assert_true(bridge_mbt.contains("pub extern \"js\" fn fetch_user("))
+    assert_true(bridge_mbt.contains("extern \"js\" fn parse_user("))
+    assert_true(bridge_mbt.contains("extern \"js\" fn fetch_user("))
+    assert_true(
+      bridge_mbt.contains(
+        "pub fn parseUser(input : String) -> Result {\n  parse_user(input)\n}",
+      ),
+    )
+    assert_true(
+      bridge_mbt.contains(
+        "pub fn fetchUser(id : String) -> ResultAsync {\n  fetch_user(id)\n}",
+      ),
+    )
   })
+}
+
+///|
+async test "ensure_moonbit_ts_scaffoldable allows namespace export surfaces" {
+  ensure_moonbit_ts_scaffoldable(
+    "fixtures/resolver/project/types/ns-entry.d.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Unexpected error: \{msg}")
+      return
+    }
+  }
+}
+
+///|
+async test "ensure_moonbit_ts_scaffoldable rejects ambiguous export surfaces" {
+  ensure_moonbit_ts_scaffoldable(
+    "fixtures/resolver/project/types/ambiguous-entry.d.ts",
+  ) catch {
+    @analysis.ResolveError(msg) => {
+      assert_true(msg.contains("ambiguous re-export"))
+      assert_true(msg.contains("Shared"))
+      assert_true(
+        msg.contains("fixtures/resolver/project/types/ambiguous-a.d.ts"),
+      )
+      assert_true(
+        msg.contains("fixtures/resolver/project/types/ambiguous-b.d.ts"),
+      )
+      return
+    }
+    @analysis.ReadError(msg) | @analysis.ParseError(msg) => {
+      fail("Unexpected error: \{msg}")
+      return
+    }
+  }
+  fail("Expected ambiguous scaffoldability check to fail")
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles namespace export surfaces" {
+  let root = wbtest_tmp_project_benchmark_root("bridge_scaffold_namespace")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  let bridge_js = @fs.read_file(wbtest_join_path(root, "bridge.js")).text() catch {
+    e => {
+      fail("Read error: \{e}")
+      return
+    }
+  }
+  assert_true(bridge_mbti.contains("declare pub type Shapes"))
+  assert_true(bridge_mbti.contains("declare pub fn get_shapes() -> Shapes"))
+  assert_true(bridge_mbt.contains("pub extern \"js\" fn get_shapes()"))
+  assert_true(bridge_js.contains("export function __ts_mbt_get_shapes()"))
+  let _ = try? @fs.rmdir(root, recursive=true)
 }
 
 ///|

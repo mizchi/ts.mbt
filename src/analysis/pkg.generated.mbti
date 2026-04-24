@@ -105,7 +105,11 @@ pub async fn emit_typescript_decl_from_mbti_path(String) -> String raise MbtiTyp
 
 pub async fn emit_typescript_package_bundle_from_mbti_path(String) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError
 
+pub async fn emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(String, Map[String, String]) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError
+
 pub async fn emit_typescript_scaffold_bundle_from_mbti_path(String) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
+
+pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(String, Map[String, String]) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
 
 pub fn eval_const(@ast.TsExpr) -> ConstValue
 
@@ -202,6 +206,8 @@ pub fn needs_gc(@ast.TsType) -> Bool
 pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String) -> String raise ModuleGraphError
 
 pub fn parse_and_analyze(String) -> AnalysisResult[@ast.TypedModule]
+
+pub fn parse_typescript_import_rewrite_map_source(String) -> Map[String, String]?
 
 pub fn register_lexical_declarations(AnalysisCtx, @ast.TsBlock) -> Unit
 
@@ -525,6 +531,8 @@ pub struct MbtiTypescriptPackageFile {
 
 pub struct MbtiTypescriptScaffoldBundle {
   moon_pkg_json : String
+  package_json : String
+  autolink_diagnostics_md : String
   files : Array[MbtiTypescriptPackageFile]
 }
 
@@ -624,6 +632,7 @@ pub struct ResolvedExport {
   local_name : String?
   kind : ResolvedExportKind
   via_path : String?
+  ambiguous_source_paths : Array[String]
 } derive(@debug.Debug)
 
 pub enum ResolvedExportKind {

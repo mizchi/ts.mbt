@@ -48,3 +48,56 @@ async test "analysis: emit MoonBit TS bridge package bundle adds js import when 
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
   assert_true(bundle.bridge_js.contains("export function __ts_mbt_get_default"))
 }
+
+///|
+async test "analysis: emit MoonBit TS bridge package bundle wraps camelCase exports" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "#module(\"/runtime/runtime-function.js\")\nextern \"js\" fn scale_point(point : RuntimePoint, factor : Double) -> RuntimePoint = \"scalePoint\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint {\n  scale_point(point, factor)\n}",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit TS bridge package bundle exposes namespace exports as opaque getters" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("declare pub type Shapes"))
+  assert_true(
+    bundle.bridge_mbti.contains("declare pub fn get_shapes() -> Shapes"),
+  )
+  assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_shapes()"))
+  assert_true(
+    bundle.bridge_js.contains("export function __ts_mbt_get_shapes()"),
+  )
+}

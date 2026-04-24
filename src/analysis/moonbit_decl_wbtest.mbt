@@ -92,8 +92,14 @@ async test "analysis: emit MoonBit declarations keeps ambiguous exports as JSVal
   assert_true(actual.contains("declare pub type JSValue"))
   assert_true(
     actual.contains(
-      "Unsupported export Shared: ambiguous re-export surface is widened to JSValue.",
+      "Unsupported export Shared: ambiguous re-export surface is widened to JSValue",
     ),
+  )
+  assert_true(
+    actual.contains("fixtures/resolver/project/types/ambiguous-a.d.ts"),
+  )
+  assert_true(
+    actual.contains("fixtures/resolver/project/types/ambiguous-b.d.ts"),
   )
 }
 

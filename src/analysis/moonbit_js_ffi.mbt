@@ -80,6 +80,16 @@ fn ffi_trim_underscores(name : String) -> String {
 }
 
 ///|
+fn ffi_ambiguous_export_message(export_ : ResolvedExport) -> String {
+  let base = "Unsupported export \{export_.export_name}: ambiguous re-export surface cannot be bound safely"
+  if export_.ambiguous_source_paths.length() == 0 {
+    base + "."
+  } else {
+    base + "; candidates: " + export_.ambiguous_source_paths.join(", ") + "."
+  }
+}
+
+///|
 fn ffi_to_snake_case(name : String) -> String {
   let mut result = ""
   let mut prev_is_lower_or_digit = false
@@ -918,30 +928,28 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
 
   let namespace_export_names : Array[String] = []
-  let ambiguous_export_names : Array[String] = []
+  let ambiguous_exports : Array[ResolvedExport] = []
   let handled_export_names : Array[String] = []
   for export_ in export_surface {
     match export_.kind {
       Namespace => namespace_export_names.push(export_.export_name)
-      Ambiguous => ambiguous_export_names.push(export_.export_name)
+      Ambiguous => ambiguous_exports.push(export_)
       _ => ()
     }
   }
   namespace_export_names.sort()
-  ambiguous_export_names.sort()
+  ambiguous_exports.sort_by(fn(lhs, rhs) {
+    lhs.export_name.compare(rhs.export_name)
+  })
 
-  for export_name in ambiguous_export_names {
-    let msg = "Unsupported export \{export_name}: ambiguous re-export surface cannot be bound safely."
+  for export_ in ambiguous_exports {
+    let msg = ffi_ambiguous_export_message(export_)
     ffi_sections.push("// " + msg)
     bridge_lines.push("// " + msg)
   }
 
   for export_name in namespace_export_names {
-    let (type_name, ffi_decl) = ffi_namespace_decl(export_name)
-    if !state.declared_type_names.contains(type_name) &&
-      !state.external_type_names.contains(type_name) {
-      state.external_type_names.push(type_name)
-    }
+    let (_, ffi_decl) = ffi_namespace_decl(export_name)
     let getter_binding_name = "__ts_mbt_get_" + ffi_to_snake_case(export_name)
     push_unique_ffi_section(
       seen_ffi_binding_names, ffi_sections, getter_binding_name, ffi_decl,

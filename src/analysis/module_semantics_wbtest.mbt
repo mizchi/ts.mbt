@@ -119,7 +119,19 @@ async test "analysis: resolve runtime export surface follows reexports and names
 async test "analysis: conflicting star exports are marked ambiguous" {
   let exports = resolve_runtime_export_surface(semantics_conflict_entry_path)
   match find_resolved_export(exports, "shared") {
-    Some(export_) => assert_eq(export_.kind, ResolvedExportKind::Ambiguous)
+    Some(export_) => {
+      assert_eq(export_.kind, ResolvedExportKind::Ambiguous)
+      assert_true(
+        export_.ambiguous_source_paths.contains(
+          "fixtures/resolver/project/src/graph/conflict-a.ts",
+        ),
+      )
+      assert_true(
+        export_.ambiguous_source_paths.contains(
+          "fixtures/resolver/project/src/graph/conflict-b.ts",
+        ),
+      )
+    }
     None => fail("expected shared export")
   }
 }

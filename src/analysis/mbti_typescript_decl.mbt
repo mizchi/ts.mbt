@@ -13,7 +13,27 @@ pub struct MbtiTypescriptPackageFile {
 ///|
 pub struct MbtiTypescriptScaffoldBundle {
   moon_pkg_json : String
+  package_json : String
+  autolink_diagnostics_md : String
   files : Array[MbtiTypescriptPackageFile]
+}
+
+///|
+pub fn parse_typescript_import_rewrite_map_source(
+  source : String,
+) -> Map[String, String]? {
+  let json = @json.parse(source) catch { _ => return None }
+  guard json is Object(members) else { return None }
+  let rewrites : Map[String, String] = {}
+  for pair in members {
+    let (module_spec, value) = pair
+    guard value is String(rewritten_spec) else { return None }
+    if module_spec == "" || rewritten_spec == "" {
+      return None
+    }
+    rewrites[module_spec] = rewritten_spec
+  }
+  Some(rewrites)
 }
 
 ///|
@@ -64,6 +84,13 @@ priv struct MbtiTypeAliasDecl {
 }
 
 ///|
+priv struct LoadedMbtiPackageSources {
+  root_package_name : String
+  ordered_packages : Array[String]
+  package_sources : Map[String, String]
+}
+
+///|
 priv struct MbtiImplDecl {
   trait_name : String
   owner_name : String
@@ -97,6 +124,15 @@ fn mbti_is_ascii_letter(c : Char) -> Bool {
 ///|
 fn mbti_is_ascii_digit(c : Char) -> Bool {
   c >= '0' && c <= '9'
+}
+
+///|
+fn mbti_ascii_lower_char(c : Char) -> Char {
+  if c >= 'A' && c <= 'Z' {
+    (c.to_int() + 32).unsafe_to_char()
+  } else {
+    c
+  }
 }
 
 ///|
@@ -444,6 +480,28 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
 }
 
 ///|
+fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
+  let members : Array[String] = []
+  for line_view in source.split("\n") {
+    let line = line_view.to_string()
+    match strip_mbti_public_prefix(line, "fn") {
+      Some(rest) =>
+        match rest.find("(") {
+          Some(open_idx) => {
+            let name = rest[:open_idx].trim().to_string()
+            if name.contains("::") && !members.contains(name) {
+              members.push(name)
+            }
+          }
+          None => ()
+        }
+      None => ()
+    }
+  }
+  members
+}
+
+///|
 fn parse_mbti_package_name(source : String) -> String? {
   for line_view in source.split("\n") {
     let trimmed = line_view.trim().to_string()
@@ -465,6 +523,40 @@ fn parse_mbti_package_name(source : String) -> String? {
 }
 
 ///|
+fn render_autolink_diagnostics_md(
+  ordered_packages : Array[String],
+  package_sources : Map[String, String],
+) -> String {
+  let lines : Array[String] = [
+    "# Autolink Diagnostics", "", "Public members omitted from link.js.exports because MoonBit JS autolink currently exports top-level public free functions only.",
+    "",
+  ]
+  let mut has_entries = false
+  for package_name in ordered_packages {
+    let source = match package_sources.get(package_name) {
+      Some(source) => source
+      None => continue
+    }
+    let omitted_members = collect_mbti_omitted_autolink_members(source)
+    if omitted_members.length() == 0 {
+      continue
+    }
+    has_entries = true
+    lines.push("## " + package_name)
+    lines.push("")
+    for omitted in omitted_members {
+      lines.push("- `" + omitted + "`")
+    }
+    lines.push("")
+  }
+  if !has_entries {
+    lines.push("No omitted public members were detected.")
+    lines.push("")
+  }
+  lines.join("\n")
+}
+
+///|
 fn mbti_join_path(base : String, child : String) -> String {
   if base == "." || base == "" {
     child
@@ -482,6 +574,69 @@ fn mbti_dirname(path : String) -> String {
     Some(idx) => path[:idx].to_string()
     None => "."
   }
+}
+
+///|
+async fn load_mbti_package_sources(
+  root_file_path : String,
+) -> LoadedMbtiPackageSources raise MbtiTypescriptDeclError {
+  let root_source = @fs.read_file(root_file_path).text() catch {
+    e => raise MbtiTypescriptDeclError::ReadError("\{e}")
+  }
+  let root_package_name = match parse_mbti_package_name(root_source) {
+    Some(package_name) => package_name
+    None =>
+      raise MbtiTypescriptDeclError::ParseError(
+        "missing package declaration in \{root_file_path}",
+      )
+  }
+  let source_root_dir = mbti_dirname(root_file_path)
+  let package_sources : Map[String, String] = {}
+  let pending_packages : Array[String] = [root_package_name]
+  let ordered_packages : Array[String] = []
+  package_sources[root_package_name] = root_source
+  while pending_packages.length() > 0 {
+    let package_name = pending_packages[pending_packages.length() - 1]
+    let _ = pending_packages.pop()
+    if ordered_packages.contains(package_name) {
+      continue
+    }
+    let source = match package_sources.get(package_name) {
+      Some(source) => source
+      None =>
+        raise MbtiTypescriptDeclError::ParseError(
+          "missing loaded package source for \{package_name}",
+        )
+    }
+    ordered_packages.push(package_name)
+    for import_ref in parse_mbti_imports(source) {
+      match
+        mbti_local_package_segments(root_package_name, import_ref.module_spec) {
+        Some(target_segments) => {
+          if !package_sources.contains(import_ref.module_spec) {
+            let relative_pkg_path = if target_segments.length() == 0 {
+              "pkg.generated.mbti"
+            } else {
+              target_segments.join("/") + "/pkg.generated.mbti"
+            }
+            let target_file_path = mbti_join_path(
+              source_root_dir, relative_pkg_path,
+            )
+            let target_source = @fs.read_file(target_file_path).text() catch {
+              e => raise MbtiTypescriptDeclError::ReadError("\{e}")
+            }
+            package_sources[import_ref.module_spec] = target_source
+          }
+          if !ordered_packages.contains(import_ref.module_spec) &&
+            !pending_packages.contains(import_ref.module_spec) {
+            pending_packages.push(import_ref.module_spec)
+          }
+        }
+        None => ()
+      }
+    }
+  }
+  { root_package_name, ordered_packages, package_sources }
 }
 
 ///|
@@ -517,6 +672,119 @@ fn mbti_bundle_relative_path_from_segments(segments : Array[String]) -> String {
   } else {
     segments.join("/") + "/index.d.ts"
   }
+}
+
+///|
+fn trim_edge_char(source : String, target : Char) -> String {
+  let mut start = 0
+  let mut end_ = source.length()
+  while start < end_ && mbti_char_at(source, start) == target {
+    start += 1
+  }
+  while end_ > start && mbti_char_at(source, end_ - 1) == target {
+    end_ -= 1
+  }
+  source[start:end_].to_string()
+}
+
+///|
+fn sanitize_npm_package_segment(segment : String, fallback : String) -> String {
+  let mut result = ""
+  for c in segment {
+    let normalized = mbti_ascii_lower_char(c)
+    if mbti_is_ascii_letter(normalized) ||
+      mbti_is_ascii_digit(normalized) ||
+      normalized == '-' ||
+      normalized == '_' ||
+      normalized == '.' {
+      result += normalized.to_string()
+    } else {
+      result += "-"
+    }
+  }
+  while result.contains("--") {
+    result = result.replace(old="--", new="-")
+  }
+  result = trim_edge_char(result, '-')
+  if result == "" {
+    fallback
+  } else {
+    result
+  }
+}
+
+///|
+fn mbti_root_package_npm_name(root_package_name : String) -> String {
+  let segments : Array[String] = []
+  for part_view in root_package_name.split("/") {
+    let part = part_view.to_string()
+    if part != "" {
+      segments.push(part)
+    }
+  }
+  if segments.length() == 0 {
+    return "moonbit-package"
+  }
+  if segments.length() == 1 {
+    return sanitize_npm_package_segment(segments[0], "moonbit-package")
+  }
+  let scope = sanitize_npm_package_segment(segments[0], "moonbit")
+  let pkg_parts : Array[String] = []
+  for idx in 1..<segments.length() {
+    pkg_parts.push(sanitize_npm_package_segment(segments[idx], "pkg"))
+  }
+  "@\{scope}/" + pkg_parts.join("-")
+}
+
+///|
+fn mbti_export_key_from_relative_path(relative_path : String) -> String? {
+  if relative_path == "index.d.ts" {
+    return Some(".")
+  }
+  if !relative_path.has_suffix("/index.d.ts") {
+    return None
+  }
+  let export_path = relative_path[:relative_path.length() -
+  "/index.d.ts".length()].to_string()
+  if export_path == "" {
+    Some(".")
+  } else {
+    Some("./" + export_path)
+  }
+}
+
+///|
+fn render_typescript_package_json(
+  root_package_name : String,
+  files : Array[MbtiTypescriptPackageFile],
+) -> String {
+  let package_name = mbti_root_package_npm_name(root_package_name)
+  let exports_lines : Array[String] = []
+  for file in files {
+    match mbti_export_key_from_relative_path(file.relative_path) {
+      Some(export_key) =>
+        exports_lines.push(
+          "    \"\{export_key}\": { \"types\": \"./\{file.relative_path}\" }",
+        )
+      None => ()
+    }
+  }
+  let lines : Array[String] = [
+    "{",
+    "  \"name\": \"\{package_name}\",",
+    "  \"version\": \"0.0.0\",",
+    "  \"type\": \"module\",",
+    "  \"sideEffects\": false,",
+    "  \"types\": \"./index.d.ts\",",
+    "  \"exports\": {",
+  ]
+  for idx in 0..<exports_lines.length() {
+    let suffix = if idx + 1 < exports_lines.length() { "," } else { "" }
+    lines.push(exports_lines[idx] + suffix)
+  }
+  lines.push("  }")
+  lines.push("}")
+  lines.join("\n")
 }
 
 ///|
@@ -1888,62 +2156,21 @@ fn parse_mbti_to_typescript(
 pub async fn emit_typescript_package_bundle_from_mbti_path(
   root_file_path : String,
 ) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError {
-  let root_source = @fs.read_file(root_file_path).text() catch {
-    e => raise MbtiTypescriptDeclError::ReadError("\{e}")
-  }
-  let root_package_name = match parse_mbti_package_name(root_source) {
-    Some(package_name) => package_name
-    None =>
-      raise MbtiTypescriptDeclError::ParseError(
-        "missing package declaration in \{root_file_path}",
-      )
-  }
-  let source_root_dir = mbti_dirname(root_file_path)
-  let package_sources : Map[String, String] = {}
-  let pending_packages : Array[String] = [root_package_name]
-  let ordered_packages : Array[String] = []
-  package_sources[root_package_name] = root_source
-  while pending_packages.length() > 0 {
-    let package_name = pending_packages[pending_packages.length() - 1]
-    let _ = pending_packages.pop()
-    if ordered_packages.contains(package_name) {
-      continue
-    }
-    let source = match package_sources.get(package_name) {
-      Some(source) => source
-      None =>
-        raise MbtiTypescriptDeclError::ParseError(
-          "missing loaded package source for \{package_name}",
-        )
-    }
-    ordered_packages.push(package_name)
-    for import_ref in parse_mbti_imports(source) {
-      match
-        mbti_local_package_segments(root_package_name, import_ref.module_spec) {
-        Some(target_segments) => {
-          if !package_sources.contains(import_ref.module_spec) {
-            let relative_pkg_path = if target_segments.length() == 0 {
-              "pkg.generated.mbti"
-            } else {
-              target_segments.join("/") + "/pkg.generated.mbti"
-            }
-            let target_file_path = mbti_join_path(
-              source_root_dir, relative_pkg_path,
-            )
-            let target_source = @fs.read_file(target_file_path).text() catch {
-              e => raise MbtiTypescriptDeclError::ReadError("\{e}")
-            }
-            package_sources[import_ref.module_spec] = target_source
-          }
-          if !ordered_packages.contains(import_ref.module_spec) &&
-            !pending_packages.contains(import_ref.module_spec) {
-            pending_packages.push(import_ref.module_spec)
-          }
-        }
-        None => ()
-      }
-    }
-  }
+  emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
+    root_file_path,
+    {},
+  )
+}
+
+///|
+pub async fn emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
+  root_file_path : String,
+  external_import_spec_rewrites : Map[String, String],
+) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError {
+  let loaded = load_mbti_package_sources(root_file_path)
+  let root_package_name = loaded.root_package_name
+  let ordered_packages = loaded.ordered_packages
+  let package_sources = loaded.package_sources
   let files : Array[MbtiTypescriptPackageFile] = []
   for package_name in ordered_packages {
     let source = match package_sources.get(package_name) {
@@ -1962,6 +2189,10 @@ pub async fn emit_typescript_package_bundle_from_mbti_path(
         )
     }
     let import_rewrites : Map[String, String] = {}
+    for pair in external_import_spec_rewrites {
+      let (module_spec, rewritten_spec) = pair
+      import_rewrites[module_spec] = rewritten_spec
+    }
     for import_ref in parse_mbti_imports(source) {
       if import_ref.module_spec == package_name {
         continue
@@ -1989,17 +2220,36 @@ pub async fn emit_typescript_package_bundle_from_mbti_path(
 pub async fn emit_typescript_scaffold_bundle_from_mbti_path(
   root_file_path : String,
 ) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError {
-  let root_source = @fs.read_file(root_file_path).text() catch {
-    e => raise MbtiTypescriptDeclError::ReadError("\{e}")
-  }
+  emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
+    root_file_path,
+    {},
+  )
+}
+
+///|
+pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
+  root_file_path : String,
+  external_import_spec_rewrites : Map[String, String],
+) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError {
+  let loaded = load_mbti_package_sources(root_file_path)
+  let root_source = loaded.package_sources[loaded.root_package_name]
+  let root_package_name = loaded.root_package_name
   let moon_pkg_json = emit_moonbit_js_link_config_from_mbti_source(root_source) catch {
     MbtiJsLinkConfigError::ReadError(msg)
     | MbtiJsLinkConfigError::ParseError(msg) =>
       raise MbtiTypescriptDeclError::ParseError(msg)
   }
+  let files = emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
+    root_file_path, external_import_spec_rewrites,
+  )
   {
     moon_pkg_json,
-    files: emit_typescript_package_bundle_from_mbti_path(root_file_path),
+    package_json: render_typescript_package_json(root_package_name, files),
+    autolink_diagnostics_md: render_autolink_diagnostics_md(
+      loaded.ordered_packages,
+      loaded.package_sources,
+    ),
+    files,
   }
 }
 

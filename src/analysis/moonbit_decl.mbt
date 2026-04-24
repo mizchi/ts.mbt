@@ -77,6 +77,21 @@ fn decl_key(source_path : String, local_name : String) -> String {
 }
 
 ///|
+fn decl_ambiguous_export_reason(
+  export_ : ResolvedExport,
+  base_reason : String,
+) -> String {
+  if export_.ambiguous_source_paths.length() == 0 {
+    base_reason + "."
+  } else {
+    base_reason +
+    "; candidates: " +
+    export_.ambiguous_source_paths.join(", ") +
+    "."
+  }
+}
+
+///|
 async fn load_decl_module_info(
   record : ResolvedModuleRecord,
   seeded_const_values : Map[String, @ast.TsExpr],
@@ -681,7 +696,10 @@ fn resolve_decl_from_export_name(
       match export_.kind {
         Ambiguous =>
           Unsupported(
-            export_name, "ambiguous re-export surface is widened to JSValue.",
+            export_name,
+            decl_ambiguous_export_reason(
+              export_, "ambiguous re-export surface is widened to JSValue",
+            ),
           )
         Namespace =>
           Unsupported(export_name, "namespace export is widened to JSValue.")
@@ -881,8 +899,11 @@ fn collect_exported_decls(
         continue
       }
       Ambiguous => {
+        let reason = decl_ambiguous_export_reason(
+          export_, "ambiguous re-export surface is widened to JSValue",
+        )
         notes.push(
-          "///|\n/// Unsupported export \{export_.export_name}: ambiguous re-export surface is widened to JSValue.",
+          "///|\n/// Unsupported export \{export_.export_name}: \{reason}",
         )
         continue
       }

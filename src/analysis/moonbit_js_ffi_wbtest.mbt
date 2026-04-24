@@ -43,6 +43,7 @@ async test "analysis: emit MoonBit JS FFI bundle for namespace exports" {
     }
   }
   assert_true(bundle.ffi_mbt.contains("#external\ntype Shapes"))
+  assert_eq(count_occurrences_in_ffi_output(bundle.ffi_mbt, "type Shapes"), 1)
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn get_shapes() -> Shapes = \"__ts_mbt_get_shapes\"",
@@ -70,12 +71,28 @@ async test "analysis: emit MoonBit JS FFI bundle keeps ambiguous exports as comm
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "Unsupported export Shared: ambiguous re-export surface cannot be bound safely.",
+      "Unsupported export Shared: ambiguous re-export surface cannot be bound safely",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains("fixtures/resolver/project/types/ambiguous-a.d.ts"),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains("fixtures/resolver/project/types/ambiguous-b.d.ts"),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "Unsupported export Shared: ambiguous re-export surface cannot be bound safely",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "Unsupported export Shared: ambiguous re-export surface cannot be bound safely.",
+      "fixtures/resolver/project/types/ambiguous-a.d.ts",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "fixtures/resolver/project/types/ambiguous-b.d.ts",
     ),
   )
 }

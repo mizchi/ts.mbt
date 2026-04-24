@@ -268,6 +268,43 @@ async test "analysis: emit TypeScript package bundle from mbti rewrites local im
 }
 
 ///|
+test "analysis: parse TypeScript import rewrite map source accepts string-object json" {
+  let rewrites = parse_typescript_import_rewrite_map_source(
+    "{\"moonbitlang/core/debug\":\"demo-debug\"}",
+  )
+  match rewrites {
+    Some(rewrites) => {
+      assert_eq(rewrites.length(), 1)
+      assert_eq(rewrites["moonbitlang/core/debug"], "demo-debug")
+    }
+    None => fail("Expected import rewrite map to parse")
+  }
+}
+
+///|
+async test "analysis: emit TypeScript package bundle from mbti rewrites external imports through configured map" {
+  let import_rewrites : Map[String, String] = {}
+  import_rewrites["moonbitlang/core/debug"] = "demo-debug"
+  let files = emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
+    "fixtures/mbti_typescript_package/pkg.generated.mbti", import_rewrites,
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI package bundle emit error: \{msg}")
+  }
+  let mut root_content = ""
+  for file in files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  assert_true(
+    root_content.contains("import type * as debug from \"demo-debug\";"),
+  )
+  assert_false(root_content.contains("\"moonbitlang/core/debug\""))
+}
+
+///|
 async test "analysis: emit TypeScript scaffold bundle from mbti combines autolink config and declaration files" {
   let bundle = emit_typescript_scaffold_bundle_from_mbti_path(
     "fixtures/mbti_typescript_package/pkg.generated.mbti",
@@ -279,5 +316,47 @@ async test "analysis: emit TypeScript scaffold bundle from mbti combines autolin
   assert_true(bundle.moon_pkg_json.contains("\"make\""))
   assert_true(bundle.moon_pkg_json.contains("\"render\""))
   assert_false(bundle.moon_pkg_json.contains("Holder::"))
+  assert_true(bundle.package_json.contains("\"name\": \"@demo/pkg\""))
+  assert_true(bundle.package_json.contains("\"types\": \"./index.d.ts\""))
+  assert_true(
+    bundle.package_json.contains("\".\": { \"types\": \"./index.d.ts\" }"),
+  )
+  assert_true(
+    bundle.package_json.contains(
+      "\"./child\": { \"types\": \"./child/index.d.ts\" }",
+    ),
+  )
+  assert_true(
+    bundle.autolink_diagnostics_md.contains(
+      "Public members omitted from link.js.exports",
+    ),
+  )
+  assert_true(bundle.autolink_diagnostics_md.contains("demo/pkg/child"))
+  assert_true(bundle.autolink_diagnostics_md.contains("Item::new"))
   assert_eq(bundle.files.length(), 2)
+}
+
+///|
+async test "analysis: emit TypeScript scaffold bundle from mbti rewrites external imports through configured map" {
+  let import_rewrites : Map[String, String] = {}
+  import_rewrites["moonbitlang/core/debug"] = "demo-debug"
+  let bundle = emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
+    "fixtures/mbti_typescript_package/pkg.generated.mbti", import_rewrites,
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI scaffold bundle emit error: \{msg}")
+  }
+  let mut root_content = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  assert_true(bundle.package_json.contains("\"name\": \"@demo/pkg\""))
+  assert_true(bundle.autolink_diagnostics_md.contains("Item::new"))
+  assert_true(
+    root_content.contains("import type * as debug from \"demo-debug\";"),
+  )
+  assert_false(root_content.contains("\"moonbitlang/core/debug\""))
 }
