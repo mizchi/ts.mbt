@@ -114,6 +114,10 @@ verify-mbti-dts:
 verify-generated-fixtures:
     bash scripts/verify_generated_fixtures.sh
 
+# Verify high-level MoonBit <-> TypeScript scaffold commands
+verify-scaffolds:
+    bash scripts/verify_scaffolds.sh
+
 # Benchmark a local TypeScript project corpus
 benchmark-project root limit="200":
     moon run src -- benchmark-project {{root}} {{limit}}
@@ -123,7 +127,7 @@ benchmark-corpora limit="200":
     moon run src -- benchmark-corpora {{limit}}
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-generated-fixtures
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures
 
 # Update dependencies
 update:

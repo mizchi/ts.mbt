@@ -119,10 +119,15 @@ This repo now supports both directions of package scaffold generation.
 Start from a root `pkg.generated.mbti` and emit:
 
 - `moon.pkg.json` with generated `link.js.exports`
+- `package.json` with `types` / `exports` metadata for the emitted declaration package
+- `AUTOLINK_DIAGNOSTICS.md` listing public methods/constructors omitted from `link.js.exports`
 - recursive `.d.ts` files with local MoonBit package imports rewritten to sibling relative imports
 
 ```bash
 moon run src -- emit-typescript-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg
+
+# optional: rewrite external MoonBit package imports to publishable TS specifiers
+moon run src -- emit-typescript-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg import-rewrites.json
 ```
 
 Lower-level commands are also available:
@@ -142,7 +147,10 @@ Current export model:
 
 - JS autolink is generated from top-level public free functions only.
 - Methods, constructors, and trait methods stay in the emitted `.d.ts`, but are not added to `link.js.exports`.
+- Scaffold output includes `AUTOLINK_DIAGNOSTICS.md` so omitted public members are explicit.
 - Recursive `.mbti` resolution only rewrites imports that stay under the same root package prefix. External imports remain bare specifiers.
+- `emit-typescript-package-from-mbti` and `emit-typescript-scaffold-from-mbti` accept an optional JSON object for external import rewrites, for example `{ "moonbitlang/core/debug": "demo-debug" }`.
+- Generated `package.json` names are derived from the MoonBit package path, for example `demo/pkg` -> `@demo/pkg` and `mizchi/ts/analysis` -> `@mizchi/ts-analysis`.
 
 ### TypeScript -> MoonBit
 
@@ -166,6 +174,10 @@ moon run src -- emit-moonbit-decl path/to/entry.d.ts
 
 The TS -> MoonBit path resolves exported surface recursively through local package structure and package exports, but the generated MoonBit package still targets the exported top-level surface rather than arbitrary internal module state.
 
+`emit-moonbit-scaffold-from-ts` is intentionally stricter than the lower-level decl/ffi emitters: it still rejects ambiguous re-export surfaces instead of generating a widened package scaffold.
+- Namespace exports are emitted as opaque getter-style bindings such as `get_shapes() -> Shapes`.
+- Generated bridge packages preserve camelCase top-level export names in their public MoonBit API, even when the internal JS extern binding is lowered to snake_case.
+
 ## Development
 
 ```bash
@@ -174,6 +186,9 @@ moon check --deny-warn
 
 # Run tests
 moon test --target native
+
+# Verify high-level scaffold commands end-to-end
+just verify-scaffolds
 
 # Format code
 moon fmt

@@ -11,7 +11,8 @@
 ### Remaining work
 - [x] Add a stable end-to-end regression harness for the external `/tmp/tsmbt-realworld-check` repro instead of relying on ad-hoc local verification.
   - Covered by the `/tmp/ts_mbt_neverthrow_like_*` regression tests in `src/main_wbtest.mbt`, which exercise `emit_moonbit_decl_text` / `emit_moonbit_js_ffi_texts` against a pnpm-style temp project layout.
-- [ ] Minimize a fixture from the actual `neverthrow` package if more parser coverage is needed beyond the graph-resolution fix.
+- [x] Minimize a fixture from the actual `neverthrow` package if more parser coverage is needed beyond the graph-resolution fix.
+  - Covered by `fixtures/resolver/project/types/neverthrow-like-entry.d.ts` plus the pnpm-style `fixtures/resolver/project/node_modules/neverthrow-like` fixture, and exercised through decl / JS FFI / scaffold generation.
 
 ## MoonBit / TypeScript Package Bridge Plan
 
@@ -28,6 +29,34 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
 - [x] Add a recursive `.mbti` resolver so generated `.d.ts` imports can be rewritten to generated sibling packages instead of raw MoonBit package specifiers.
 - [x] Add a high-level `MoonBit -> TS package scaffold` command that emits the autolink config and `.d.ts` bundle together.
 - [x] Align the reverse `TS -> MoonBit bridge package` flow on the same top-level export surface model and resolver assumptions.
+
+## Bridge / Scaffold Operational Hardening
+
+### P0
+
+- [x] Reject `namespace export` / `ambiguous re-export` surfaces from `emit-moonbit-scaffold-from-ts`.
+  - Keep low-level `emit-moonbit-decl` / `emit-moonbit-js-ffi` widening behavior for inspection, but stop generating package scaffolds from unsupported top-level surfaces.
+- [x] Add `just verify-scaffolds` and wire it into `just ci`.
+  - Acceptance: `emit-typescript-scaffold-from-mbti` is compiled with `tsc`, and `emit-moonbit-scaffold-from-ts` is compiled/tested with `moon check/test --target js`.
+- [x] Add external import rewrite mapping for `emit-typescript-scaffold-from-mbti`.
+  - `emit-typescript-package-from-mbti` / `emit-typescript-scaffold-from-mbti` now accept an optional JSON rewrite map and apply it before writing external `.d.ts` imports.
+
+### P1
+
+- [x] Generate publish-ready metadata for `MoonBit -> TS` scaffold output.
+  - `emit-typescript-scaffold-from-mbti` now writes `package.json` with `name`, `type`, `types`, and per-subpath `exports.types` entries alongside `moon.pkg.json` and `.d.ts` files.
+- [x] Decide how to handle methods / static members omitted from `link.js.exports`.
+  - For now the scaffold emits `AUTOLINK_DIAGNOSTICS.md` so omissions are explicit instead of silent. Facade mode remains a future opt-in if we need runnable wrappers later.
+
+### P2
+
+- [x] Minimize a stable real-world fixture from `neverthrow` if broader package-surface coverage is still needed.
+  - `just verify-scaffolds` now exercises the stable `neverthrow-like` fixture end-to-end, including generated MoonBit scaffold compile/test under JS.
+
+### P3
+
+- [x] Revisit broader `namespace export` support after the scaffold path is stable.
+  - `emit-moonbit-scaffold-from-ts` now accepts namespace exports and exposes them as opaque getter functions in the generated package. Ambiguous re-exports still fail fast.
 
 ## TS Bridge Constraints
 
