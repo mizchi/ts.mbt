@@ -127,6 +127,20 @@ pub fn emit_moonbit_js_link_config_from_mbti_source(
 }
 
 ///|
+pub fn emit_moonbit_js_link_config_from_mbti_source_with_extra_exports(
+  source : String,
+  extra_export_names : Array[String],
+) -> String raise MbtiJsLinkConfigError {
+  let function_names = collect_mbti_public_free_function_names(source)
+  for extra_name in extra_export_names {
+    if !function_names.contains(extra_name) {
+      function_names.push(extra_name)
+    }
+  }
+  render_moonbit_js_link_config(function_names)
+}
+
+///|
 pub async fn emit_moonbit_js_link_config_from_mbti_path(
   file_path : String,
 ) -> String raise MbtiJsLinkConfigError {

@@ -15,6 +15,7 @@ pub struct MbtiTypescriptScaffoldBundle {
   moon_pkg_json : String
   package_json : String
   autolink_diagnostics_md : String
+  autolink_facade_mbt : String
   files : Array[MbtiTypescriptPackageFile]
 }
 
@@ -112,6 +113,19 @@ priv struct MbtiMarkerTraitDecl {
 }
 
 ///|
+priv struct MbtiAutolinkFacadeDecl {
+  export_name : String
+  ts_decl : String
+  mbt_decl : String
+}
+
+///|
+priv struct MbtiRawFacadeParam {
+  name : String
+  ty_src : String
+}
+
+///|
 fn mbti_char_at(s : String, idx : Int) -> Char {
   s[idx].to_int().unsafe_to_char()
 }
@@ -124,6 +138,57 @@ fn mbti_is_ascii_letter(c : Char) -> Bool {
 ///|
 fn mbti_is_ascii_digit(c : Char) -> Bool {
   c >= '0' && c <= '9'
+}
+
+///|
+fn mbti_to_lower_ascii(c : Char) -> Char {
+  if c >= 'A' && c <= 'Z' {
+    (c.to_int() + 32).unsafe_to_char()
+  } else {
+    c
+  }
+}
+
+///|
+fn mbti_trim_underscores(name : String) -> String {
+  let mut start = 0
+  let mut end_ = name.length()
+  while start < end_ && mbti_char_at(name, start) == '_' {
+    start += 1
+  }
+  while end_ > start && mbti_char_at(name, end_ - 1) == '_' {
+    end_ -= 1
+  }
+  name[start:end_].to_string()
+}
+
+///|
+fn mbti_to_snake_case(name : String) -> String {
+  let mut result = ""
+  let mut prev_is_lower_or_digit = false
+  for c in name {
+    if c >= 'A' && c <= 'Z' {
+      if result != "" && prev_is_lower_or_digit {
+        result += "_"
+      }
+      result += mbti_to_lower_ascii(c).to_string()
+      prev_is_lower_or_digit = false
+    } else if mbti_is_ascii_letter(c) || mbti_is_ascii_digit(c) {
+      result += c.to_string()
+      prev_is_lower_or_digit = (c >= 'a' && c <= 'z') || mbti_is_ascii_digit(c)
+    } else {
+      if result != "" && !result.has_suffix("_") {
+        result += "_"
+      }
+      prev_is_lower_or_digit = false
+    }
+  }
+  let trimmed = mbti_trim_underscores(result)
+  if trimmed == "" {
+    "facade"
+  } else {
+    trimmed
+  }
 }
 
 ///|
@@ -480,6 +545,28 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
 }
 
 ///|
+fn collect_mbti_import_block_lines(source : String) -> Array[String] {
+  let imports : Array[String] = []
+  let mut collecting = false
+  for line_view in source.split("\n") {
+    let line = line_view.to_string()
+    let trimmed = line.trim().to_string()
+    if !collecting {
+      if trimmed == "import {" {
+        collecting = true
+        imports.push(line)
+      }
+      continue
+    }
+    imports.push(line)
+    if trimmed == "}" {
+      break
+    }
+  }
+  imports
+}
+
+///|
 fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
   let members : Array[String] = []
   for line_view in source.split("\n") {
@@ -554,6 +641,240 @@ fn render_autolink_diagnostics_md(
     lines.push("")
   }
   lines.join("\n")
+}
+
+///|
+fn replace_mbti_self_refs(source : String, owner_name : String) -> String {
+  source.replace(old="Self", new=owner_name)
+}
+
+///|
+fn parse_mbti_raw_facade_params(
+  source : String,
+  owner_name : String,
+) -> Array[MbtiRawFacadeParam]? {
+  let params : Array[MbtiRawFacadeParam] = []
+  let mut idx = 0
+  for raw in split_top_level_items(source) {
+    let trimmed = raw.trim().to_string()
+    if trimmed == "" {
+      continue
+    }
+    match trimmed.find(":") {
+      Some(colon_idx) => {
+        let raw_name = trimmed[:colon_idx].trim().to_string()
+        if raw_name.has_suffix("?") {
+          return None
+        }
+        let name = if idx == 0 && trimmed.has_prefix("Self") {
+          "self"
+        } else {
+          raw_name
+        }
+        let ty_src = replace_mbti_self_refs(
+          trimmed[colon_idx + 1:trimmed.length()].trim().to_string(),
+          owner_name,
+        )
+        params.push({ name, ty_src })
+      }
+      None => {
+        let name = if idx == 0 && trimmed.has_prefix("Self") {
+          "self"
+        } else {
+          "arg\{idx}"
+        }
+        let ty_src = replace_mbti_self_refs(trimmed, owner_name)
+        params.push({ name, ty_src })
+      }
+    }
+    idx += 1
+  }
+  Some(params)
+}
+
+///|
+fn render_mbt_facade_params(params : Array[MbtiRawFacadeParam]) -> String {
+  let rendered : Array[String] = []
+  for param in params {
+    rendered.push("\{param.name} : \{param.ty_src}")
+  }
+  rendered.join(", ")
+}
+
+///|
+fn render_mbt_facade_call_args(params : Array[MbtiRawFacadeParam]) -> String {
+  let args : Array[String] = []
+  for param in params {
+    args.push(param.name)
+  }
+  args.join(", ")
+}
+
+///|
+fn collect_root_mbti_local_type_params(
+  source : String,
+) -> Map[String, Array[MbtiTypeParam]] raise MbtiTypescriptDeclError {
+  let imports = parse_mbti_imports(source)
+  let used_aliases : Array[String] = []
+  let type_params_by_name : Map[String, Array[MbtiTypeParam]] = {}
+  let lines : Array[String] = []
+  for line in source.split("\n") {
+    lines.push(line.to_string())
+  }
+  let mut idx = 0
+  while idx < lines.length() {
+    let line = lines[idx]
+    let trimmed = line.trim().to_string()
+    if trimmed.has_prefix("pub struct ") ||
+      trimmed.has_prefix("pub(all) struct ") {
+      let (block, next_idx) = collect_brace_block(lines, idx)
+      let struct_decl = parse_struct_block_decl(block, imports, used_aliases)
+      type_params_by_name[struct_decl.name] = struct_decl.type_params
+      idx = next_idx
+      continue
+    }
+    if trimmed.has_prefix("pub enum ") || trimmed.has_prefix("pub(all) enum ") {
+      let (block, next_idx) = collect_brace_block(lines, idx)
+      let enum_decl = parse_enum_like_block_decl(
+        block, "enum", imports, used_aliases,
+      )
+      type_params_by_name[enum_decl.name] = enum_decl.type_params
+      idx = next_idx
+      continue
+    }
+    if trimmed.has_prefix("pub suberror ") ||
+      trimmed.has_prefix("pub(all) suberror ") {
+      let (block, next_idx) = collect_brace_block(lines, idx)
+      let enum_decl = parse_enum_like_block_decl(
+        block, "suberror", imports, used_aliases,
+      )
+      type_params_by_name[enum_decl.name] = enum_decl.type_params
+      idx = next_idx
+      continue
+    }
+    if trimmed.has_prefix("pub type ") || trimmed.has_prefix("pub(all) type ") {
+      let alias_decl = parse_type_alias_decl(trimmed, imports, used_aliases)
+      type_params_by_name[alias_decl.name] = alias_decl.type_params
+      idx += 1
+      continue
+    }
+    idx += 1
+  }
+  type_params_by_name
+}
+
+///|
+fn collect_mbti_root_autolink_facades(
+  source : String,
+) -> Array[MbtiAutolinkFacadeDecl] raise MbtiTypescriptDeclError {
+  let imports = parse_mbti_imports(source)
+  let used_aliases : Array[String] = []
+  let local_type_params = collect_root_mbti_local_type_params(source)
+  let local_free_function_names : Array[String] = []
+  let facades : Array[MbtiAutolinkFacadeDecl] = []
+  for line_view in source.split("\n") {
+    let trimmed = line_view.trim().to_string()
+    match parse_mbti_function_signature(trimmed, imports, used_aliases) {
+      Some(signature) => {
+        let (owner_name, fn_name, fn_type_params, params_src, return_src) = signature
+        match owner_name {
+          Some(owner_name) =>
+            match local_type_params.get(owner_name) {
+              Some(owner_type_params) => {
+                if owner_type_params.length() > 0 || fn_type_params.length() > 0 {
+                  continue
+                }
+                let owner_type_param_names = type_param_names(owner_type_params)
+                let params = parse_mbti_params(
+                  params_src,
+                  imports,
+                  used_aliases,
+                  Some(owner_name),
+                  owner_type_param_names,
+                )
+                let raw_params = match
+                  parse_mbti_raw_facade_params(params_src, owner_name) {
+                  Some(params) => params
+                  None => continue
+                }
+                let return_ty = translate_mbti_type(
+                  return_src,
+                  imports,
+                  used_aliases,
+                  Some(owner_name),
+                  owner_type_param_names,
+                )
+                let export_name = "\{mbti_to_snake_case(owner_name)}_\{mbti_to_snake_case(fn_name)}"
+                let mut unique_export_name = export_name
+                while local_free_function_names.contains(unique_export_name) ||
+                      facades.any(fn(facade) {
+                        facade.export_name == unique_export_name
+                      }) {
+                  unique_export_name += "_facade"
+                }
+                let rendered_ts_params = render_ts_params(params)
+                let facade_ts_decl = "export function \{unique_export_name}(\{rendered_ts_params}): \{return_ty};"
+                let rendered_mbt_params = render_mbt_facade_params(raw_params)
+                let rendered_mbt_return = replace_mbti_self_refs(
+                  return_src, owner_name,
+                )
+                let call_args = render_mbt_facade_call_args(raw_params)
+                let body_expr = if raw_params.length() > 0 &&
+                  raw_params[0].name == "self" {
+                  let tail_args : Array[String] = []
+                  for idx in 1..<raw_params.length() {
+                    tail_args.push(raw_params[idx].name)
+                  }
+                  if tail_args.length() == 0 {
+                    "self.\{fn_name}()"
+                  } else {
+                    let joined_tail_args = tail_args.join(", ")
+                    "self.\{fn_name}(\{joined_tail_args})"
+                  }
+                } else {
+                  "\{owner_name}::\{fn_name}(\{call_args})"
+                }
+                let facade_mbt_decl = "pub fn \{unique_export_name}(\{rendered_mbt_params}) -> \{rendered_mbt_return} {\n  \{body_expr}\n}"
+                facades.push({
+                  export_name: unique_export_name,
+                  ts_decl: facade_ts_decl,
+                  mbt_decl: facade_mbt_decl,
+                })
+              }
+              None => ()
+            }
+          None => local_free_function_names.push(fn_name)
+        }
+      }
+      None => ()
+    }
+  }
+  facades
+}
+
+///|
+fn render_autolink_facade_mbt(
+  source : String,
+  facades : Array[MbtiAutolinkFacadeDecl],
+) -> String {
+  if facades.length() == 0 {
+    return ""
+  }
+  let sections : Array[String] = []
+  let import_lines = collect_mbti_import_block_lines(source)
+  for line in import_lines {
+    sections.push(line)
+  }
+  if import_lines.length() > 0 {
+    sections.push("")
+  }
+  sections.push("///|")
+  sections.push("/// Auto-generated facade wrappers for JS autolink.")
+  for facade in facades {
+    sections.push("")
+    sections.push(facade.mbt_decl)
+  }
+  sections.join("\n")
 }
 
 ///|
@@ -2249,7 +2570,69 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
       loaded.ordered_packages,
       loaded.package_sources,
     ),
+    autolink_facade_mbt: "",
     files,
+  }
+}
+
+///|
+pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path(
+  root_file_path : String,
+) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError {
+  emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_rewrites(
+    root_file_path,
+    {},
+  )
+}
+
+///|
+pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_rewrites(
+  root_file_path : String,
+  external_import_spec_rewrites : Map[String, String],
+) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError {
+  let loaded = load_mbti_package_sources(root_file_path)
+  let root_source = loaded.package_sources[loaded.root_package_name]
+  let root_package_name = loaded.root_package_name
+  let facades = collect_mbti_root_autolink_facades(root_source)
+  let facade_export_names : Array[String] = []
+  let facade_ts_decls : Array[String] = []
+  for facade in facades {
+    facade_export_names.push(facade.export_name)
+    facade_ts_decls.push(facade.ts_decl)
+  }
+  let moon_pkg_json = emit_moonbit_js_link_config_from_mbti_source_with_extra_exports(
+    root_source, facade_export_names,
+  ) catch {
+    MbtiJsLinkConfigError::ReadError(msg)
+    | MbtiJsLinkConfigError::ParseError(msg) =>
+      raise MbtiTypescriptDeclError::ParseError(msg)
+  }
+  let files = emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
+    root_file_path, external_import_spec_rewrites,
+  )
+  let files_with_facades : Array[MbtiTypescriptPackageFile] = []
+  let rendered_facade_ts = facade_ts_decls.join("\n")
+  for file in files {
+    if file.relative_path == "index.d.ts" && rendered_facade_ts != "" {
+      files_with_facades.push({
+        relative_path: file.relative_path,
+        content: file.content + "\n\n" + rendered_facade_ts,
+      })
+    } else {
+      files_with_facades.push(file)
+    }
+  }
+  {
+    moon_pkg_json,
+    package_json: render_typescript_package_json(
+      root_package_name, files_with_facades,
+    ),
+    autolink_diagnostics_md: render_autolink_diagnostics_md(
+      loaded.ordered_packages,
+      loaded.package_sources,
+    ),
+    autolink_facade_mbt: render_autolink_facade_mbt(root_source, facades),
+    files: files_with_facades,
   }
 }
 

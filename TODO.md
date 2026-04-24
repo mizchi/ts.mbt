@@ -34,8 +34,8 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
 
 ### P0
 
-- [x] Reject `namespace export` / `ambiguous re-export` surfaces from `emit-moonbit-scaffold-from-ts`.
-  - Keep low-level `emit-moonbit-decl` / `emit-moonbit-js-ffi` widening behavior for inspection, but stop generating package scaffolds from unsupported top-level surfaces.
+- [x] Harden unsupported export handling in `emit-moonbit-scaffold-from-ts`.
+  - Namespace exports are supported as opaque getters, and ambiguous re-exports no longer block scaffold generation; they are widened/omitted consistently with the low-level emitters and reported in `SCAFFOLD_DIAGNOSTICS.md`.
 - [x] Add `just verify-scaffolds` and wire it into `just ci`.
   - Acceptance: `emit-typescript-scaffold-from-mbti` is compiled with `tsc`, and `emit-moonbit-scaffold-from-ts` is compiled/tested with `moon check/test --target js`.
 - [x] Add external import rewrite mapping for `emit-typescript-scaffold-from-mbti`.
@@ -46,7 +46,7 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
 - [x] Generate publish-ready metadata for `MoonBit -> TS` scaffold output.
   - `emit-typescript-scaffold-from-mbti` now writes `package.json` with `name`, `type`, `types`, and per-subpath `exports.types` entries alongside `moon.pkg.json` and `.d.ts` files.
 - [x] Decide how to handle methods / static members omitted from `link.js.exports`.
-  - For now the scaffold emits `AUTOLINK_DIAGNOSTICS.md` so omissions are explicit instead of silent. Facade mode remains a future opt-in if we need runnable wrappers later.
+  - The default scaffold still emits `AUTOLINK_DIAGNOSTICS.md` so omissions are explicit, and `emit-typescript-facade-scaffold-from-mbti` now provides an opt-in wrapper path for root-package local non-generic methods / constructors.
 
 ### P2
 
@@ -56,7 +56,7 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
 ### P3
 
 - [x] Revisit broader `namespace export` support after the scaffold path is stable.
-  - `emit-moonbit-scaffold-from-ts` now accepts namespace exports and exposes them as opaque getter functions in the generated package. Ambiguous re-exports still fail fast.
+  - `emit-moonbit-scaffold-from-ts` now accepts namespace exports and exposes them as opaque getter functions in the generated package. Ambiguous re-exports are emitted conservatively and surfaced in scaffold diagnostics instead of failing fast.
 
 ## TS Bridge Constraints
 
@@ -117,74 +117,9 @@ Reduce the need to pick one edge case at a time by shipping the next `default ex
 
 ## Codegen Type Mismatch Bugs
 
-wasmtime's stricter validation exposed these pre-existing codegen bugs. The generated WASM has type mismatches that need to be fixed.
-
-### 1. if-else statement (codegen_wbtest.mbt:99)
-- **Error**: `expected f64 but nothing on stack`
-- **Cause**: if-else branches don't properly leave a value on the stack
-- **Test code**:
-  ```typescript
-  function max(a: number, b: number): number {
-    if (a > b) {
-      return a;
-    } else {
-      return b;
-    }
-  }
-  ```
-
-### 2. int factorial (codegen_wbtest.mbt:174)
-- **Error**: `expected f64, found i32`
-- **Cause**: Type inference returning i32 when f64 expected
-- **Test code**:
-  ```typescript
-  function factorial(n: int): int {
-    if (n <= 1) { return 1; }
-    return n * factorial(n - 1);
-  }
-  ```
-
-### 3. js simple arithmetic (codegen_wbtest.mbt:396)
-- **Error**: `expected i32, found f64`
-- **Cause**: JavaScript-style inference returning f64 when i32 expected
-- **Test code**:
-  ```javascript
-  function add(a, b) { return a + b; }
-  ```
-
-### 4. typed module with nested scopes (codegen_wbtest.mbt:467)
-- **Error**: `expected f64, found i32`
-- **Cause**: Nested scope variable type inference incorrect
-- **Test code**: Function with nested blocks and type inference
-
-### 5. switch statement (codegen_wbtest.mbt:600)
-- **Error**: `expected i32 but nothing on stack`
-- **Cause**: switch cases don't properly return a value
-- **Test code**:
-  ```typescript
-  function grade(score: int): int {
-    switch (score) {
-      case 5: return 100;
-      case 4: return 80;
-      default: return 0;
-    }
-  }
-  ```
-
-### 6. switch with default only (codegen_wbtest.mbt:618)
-- **Error**: `expected i32 but nothing on stack`
-- **Cause**: Same issue as #5, default-only case
-
-### 7. do-while loop (codegen_wbtest.mbt:644)
-- **Error**: `expected f64, found i32`
-- **Cause**: Loop body type inference incorrect
-
-## Root Causes
-
-These bugs share common patterns:
-1. **Control flow statements** (if-else, switch) not ensuring all branches leave a value
-2. **Type inference** producing wrong types (i32 vs f64) in certain contexts
-3. **Return value handling** in block-based control structures
+- [x] Re-verify the historical wasmtime mismatch regressions against the current codegen.
+  - `src/codegen/codegen_wbtest.mbt` now passes end-to-end under the current wasmtime-backed runner, including the previously tracked `if-else`, `int factorial`, `js simple arithmetic`, `typed module with nested scopes`, `switch`, `switch default only`, and `do-while` cases.
+  - The old hand-maintained mismatch list was stale and has been retired in favor of the executable regression suite.
 
 ## Expansion Plan (easy + coverage mix)
 

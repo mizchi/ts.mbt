@@ -108,6 +108,22 @@ async fn main_async() -> Unit {
         file_path, output_dir, import_rewrite_path,
       )
     }
+    "emit-typescript-facade-scaffold-from-mbti" => {
+      if args.length() < 4 {
+        println("Error: expected <file> <out-dir>")
+        return
+      }
+      let file_path = args[2]
+      let output_dir = args[3]
+      let import_rewrite_path = if args.length() >= 5 {
+        Some(args[4])
+      } else {
+        None
+      }
+      emit_typescript_facade_scaffold_from_mbti(
+        file_path, output_dir, import_rewrite_path,
+      )
+    }
     "emit-moonbit-js-ffi" => {
       if args.length() < 4 {
         println("Error: expected <entry> <module-spec>")
@@ -245,6 +261,7 @@ fn command_help_lines() -> Array[String] {
     "  emit-js-link-config-from-mbti <file> [out] Emit MoonBit link.js.exports config from a .mbti interface",
     "  emit-typescript-package-from-mbti <file> <out-dir> [import-rewrite-json] Emit a recursive TypeScript declaration package from a root .mbti interface",
     "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit MoonBit autolink config and recursive TypeScript declarations together",
+    "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit scaffold files plus MoonBit autolink facade wrappers for omitted local methods",
     "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
     "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
@@ -637,6 +654,101 @@ async fn emit_typescript_scaffold_from_mbti(
 }
 
 ///|
+async fn emit_typescript_facade_scaffold_from_mbti(
+  file_path : String,
+  output_dir : String,
+  import_rewrite_path : String?,
+) -> Unit {
+  let import_rewrites = match
+    load_typescript_import_rewrite_map(import_rewrite_path) {
+    Some(rewrites) => rewrites
+    None => return
+  }
+  let bundle = @analysis.emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_rewrites(
+    file_path, import_rewrites,
+  ) catch {
+    @analysis.MbtiTypescriptDeclError::ReadError(msg)
+    | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
+      println("Emit error: \{msg}")
+      return
+    }
+  }
+  let _ = ensure_dir_tree(output_dir) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  let moon_pkg_path = main_join_path(output_dir, "moon.pkg.json")
+  let _ = @fs.write_file(
+    moon_pkg_path,
+    string_to_bytes(bundle.moon_pkg_json),
+    create=0o644,
+  ) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  let package_json_path = main_join_path(output_dir, "package.json")
+  let _ = @fs.write_file(
+    package_json_path,
+    string_to_bytes(bundle.package_json),
+    create=0o644,
+  ) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  let diagnostics_path = main_join_path(output_dir, "AUTOLINK_DIAGNOSTICS.md")
+  let _ = @fs.write_file(
+    diagnostics_path,
+    string_to_bytes(bundle.autolink_diagnostics_md),
+    create=0o644,
+  ) catch {
+    e => {
+      println("Write error: \{e}")
+      return
+    }
+  }
+  if bundle.autolink_facade_mbt != "" {
+    let facade_path = main_join_path(output_dir, "AUTOLINK_FACADE.mbt")
+    let _ = @fs.write_file(
+      facade_path,
+      string_to_bytes(bundle.autolink_facade_mbt),
+      create=0o644,
+    ) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+  }
+  for file in bundle.files {
+    let output_path = main_join_path(output_dir, file.relative_path)
+    let parent_dir = main_dirname(output_path)
+    let _ = ensure_dir_tree(parent_dir) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+    let _ = @fs.write_file(
+      output_path,
+      string_to_bytes(file.content),
+      create=0o644,
+    ) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+  }
+  println("Wrote TypeScript facade scaffold to \{output_dir}")
+}
+
+///|
 async fn emit_moonbit_js_ffi(
   file_path : String,
   module_spec : String,
@@ -826,9 +938,25 @@ fn scaffold_unsupported_export_text(
 }
 
 ///|
-async fn ensure_moonbit_ts_scaffoldable(
+fn render_moonbit_scaffold_diagnostics_md(
+  unsupported_exports : Array[String],
+) -> String {
+  let lines = [
+    "# Scaffold Diagnostics", "", "The generated MoonBit scaffold omitted or widened unsupported exports.",
+  ]
+  if unsupported_exports.length() > 0 {
+    lines.push("")
+    for item in unsupported_exports {
+      lines.push("- " + item)
+    }
+  }
+  lines.join("\n")
+}
+
+///|
+async fn collect_moonbit_ts_scaffold_unsupported_exports(
   file_path : String,
-) -> Unit raise @analysis.ModuleGraphError {
+) -> Array[String] raise @analysis.ModuleGraphError {
   let graph = @analysis.load_type_module_graph(file_path)
   let export_surface = @analysis.resolve_export_surface(graph)
   let unsupported_exports : Array[String] = []
@@ -839,12 +967,7 @@ async fn ensure_moonbit_ts_scaffoldable(
       _ => ()
     }
   }
-  if unsupported_exports.length() > 0 {
-    let unsupported_text = unsupported_exports.join(", ")
-    raise @analysis.ResolveError(
-      "TS bridge scaffold only supports unambiguous top-level exports; unsupported exports: \{unsupported_text}",
-    )
-  }
+  unsupported_exports
 }
 
 ///|
@@ -853,7 +976,9 @@ async fn emit_moonbit_scaffold_from_ts(
   module_spec : String,
   output_dir : String,
 ) -> Unit {
-  ensure_moonbit_ts_scaffoldable(file_path) catch {
+  let unsupported_exports = collect_moonbit_ts_scaffold_unsupported_exports(
+    file_path,
+  ) catch {
     @analysis.ReadError(msg)
     | @analysis.ParseError(msg)
     | @analysis.ResolveError(msg) => {
@@ -862,6 +987,25 @@ async fn emit_moonbit_scaffold_from_ts(
     }
   }
   emit_moonbit_bridge_package(file_path, module_spec, output_dir)
+  if unsupported_exports.length() > 0 {
+    let diagnostics_path = join_output_path(
+      output_dir, "SCAFFOLD_DIAGNOSTICS.md",
+    )
+    let diagnostics_md = render_moonbit_scaffold_diagnostics_md(
+      unsupported_exports,
+    )
+    let _ = @fs.write_file(
+      diagnostics_path,
+      string_to_bytes(diagnostics_md),
+      create=0o644,
+    ) catch {
+      e => {
+        println("Write error: \{e}")
+        return
+      }
+    }
+    println("Wrote scaffold diagnostics to \{diagnostics_path}")
+  }
 }
 
 ///|

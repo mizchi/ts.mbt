@@ -360,3 +360,65 @@ async test "analysis: emit TypeScript scaffold bundle from mbti rewrites externa
   )
   assert_false(root_content.contains("\"moonbitlang/core/debug\""))
 }
+
+///|
+async test "analysis: emit TypeScript facade scaffold bundle from mbti adds facade exports and wrapper source" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/link_config_async.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade scaffold bundle emit error: \{msg}")
+  }
+  assert_true(bundle.moon_pkg_json.contains("\"fetch_value\""))
+  assert_true(bundle.moon_pkg_json.contains("\"transform\""))
+  assert_true(bundle.moon_pkg_json.contains("\"loader_new\""))
+  assert_true(bundle.moon_pkg_json.contains("\"loader_load\""))
+  assert_true(
+    bundle.autolink_facade_mbt.contains(
+      "pub fn loader_new(arg0 : String) -> Loader {",
+    ),
+  )
+  assert_true(bundle.autolink_facade_mbt.contains("Loader::new(arg0)"))
+  assert_true(
+    bundle.autolink_facade_mbt.contains(
+      "pub fn loader_load(self : Loader) -> String {",
+    ),
+  )
+  assert_true(bundle.autolink_facade_mbt.contains("self.load()"))
+  let mut root_content = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  assert_true(
+    root_content.contains("export function loader_new(arg0: string): Loader;"),
+  )
+  assert_true(
+    root_content.contains("export function loader_load(self: Loader): string;"),
+  )
+}
+
+///|
+async test "analysis: emit TypeScript facade scaffold bundle keeps root imports in wrapper source" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript_facade_package/pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade scaffold bundle emit error: \{msg}")
+  }
+  assert_true(bundle.autolink_facade_mbt.contains("import {"))
+  assert_true(bundle.autolink_facade_mbt.contains("\"demo/facade/child\","))
+  assert_true(
+    bundle.autolink_facade_mbt.contains(
+      "pub fn loader_new(arg0 : @child.Item) -> Loader {",
+    ),
+  )
+  assert_true(
+    bundle.autolink_facade_mbt.contains(
+      "pub fn loader_load(self : Loader) -> @child.Item {",
+    ),
+  )
+}

@@ -168,6 +168,11 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
+      "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit scaffold files plus MoonBit autolink facade wrappers for omitted local methods",
+    ),
+  )
+  assert_true(
+    lines.contains(
       "  benchmark-project <root> [limit] Benchmark local TS/.d.ts corpus coverage",
     ),
   )
@@ -359,6 +364,66 @@ async test "emit_typescript_scaffold_from_mbti rewrites external imports from js
   assert_true(diagnostics_md.contains("Item::new"))
   assert_true(root_decl.contains("import type * as debug from \"demo-debug\";"))
   assert_false(root_decl.contains("\"moonbitlang/core/debug\""))
+}
+
+///|
+async test "emit_typescript_facade_scaffold_from_mbti writes facade wrapper file" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "mbti_typescript_facade_scaffold",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_typescript_facade_scaffold_from_mbti(
+    "fixtures/mbti_typescript/link_config_async.pkg.generated.mbti",
+    root,
+    None,
+  )
+  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+    e => fail("failed to read facade moon.pkg.json: \{e}")
+  }
+  let facade_mbt = @fs.read_file(wbtest_join_path(root, "AUTOLINK_FACADE.mbt")).text() catch {
+    e => fail("failed to read AUTOLINK_FACADE.mbt: \{e}")
+  }
+  let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
+    e => fail("failed to read facade index.d.ts: \{e}")
+  }
+  assert_true(moon_pkg_json.contains("\"loader_new\""))
+  assert_true(moon_pkg_json.contains("\"loader_load\""))
+  assert_true(facade_mbt.contains("pub fn loader_new(arg0 : String) -> Loader"))
+  assert_true(
+    facade_mbt.contains("pub fn loader_load(self : Loader) -> String"),
+  )
+  assert_true(
+    root_decl.contains("export function loader_new(arg0: string): Loader;"),
+  )
+  assert_true(
+    root_decl.contains("export function loader_load(self: Loader): string;"),
+  )
+}
+
+///|
+async test "emit_typescript_facade_scaffold_from_mbti keeps root imports in facade wrapper file" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "mbti_typescript_facade_scaffold_imports",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_typescript_facade_scaffold_from_mbti(
+    "fixtures/mbti_typescript_facade_package/pkg.generated.mbti",
+    root,
+    None,
+  )
+  let facade_mbt = @fs.read_file(wbtest_join_path(root, "AUTOLINK_FACADE.mbt")).text() catch {
+    e => fail("failed to read imported AUTOLINK_FACADE.mbt: \{e}")
+  }
+  assert_true(facade_mbt.contains("import {"))
+  assert_true(facade_mbt.contains("\"demo/facade/child\","))
+  assert_true(
+    facade_mbt.contains("pub fn loader_new(arg0 : @child.Item) -> Loader"),
+  )
+  assert_true(
+    facade_mbt.contains("pub fn loader_load(self : Loader) -> @child.Item"),
+  )
 }
 
 ///|
@@ -4407,8 +4472,8 @@ async test "emit_moonbit_scaffold_from_ts handles neverthrow-like package entry 
 }
 
 ///|
-async test "ensure_moonbit_ts_scaffoldable allows namespace export surfaces" {
-  ensure_moonbit_ts_scaffoldable(
+async test "collect_moonbit_ts_scaffold_unsupported_exports ignores namespace export surfaces" {
+  let unsupported = collect_moonbit_ts_scaffold_unsupported_exports(
     "fixtures/resolver/project/types/ns-entry.d.ts",
   ) catch {
     @analysis.ReadError(msg)
@@ -4418,30 +4483,46 @@ async test "ensure_moonbit_ts_scaffoldable allows namespace export surfaces" {
       return
     }
   }
+  assert_eq(unsupported.length(), 0)
 }
 
 ///|
-async test "ensure_moonbit_ts_scaffoldable rejects ambiguous export surfaces" {
-  ensure_moonbit_ts_scaffoldable(
-    "fixtures/resolver/project/types/ambiguous-entry.d.ts",
-  ) catch {
-    @analysis.ResolveError(msg) => {
-      assert_true(msg.contains("ambiguous re-export"))
-      assert_true(msg.contains("Shared"))
-      assert_true(
-        msg.contains("fixtures/resolver/project/types/ambiguous-a.d.ts"),
-      )
-      assert_true(
-        msg.contains("fixtures/resolver/project/types/ambiguous-b.d.ts"),
-      )
-      return
-    }
-    @analysis.ReadError(msg) | @analysis.ParseError(msg) => {
-      fail("Unexpected error: \{msg}")
-      return
-    }
+async test "emit_moonbit_scaffold_from_ts keeps ambiguous export surfaces as diagnostics" {
+  let root = wbtest_tmp_project_benchmark_root("bridge_scaffold_ambiguous")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/ambiguous-entry.d.ts", "./runtime/ambiguous.js",
+    root,
+  )
+  let diagnostics = @fs.read_file(
+    wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md"),
+  ).text() catch {
+    e => fail("failed to read SCAFFOLD_DIAGNOSTICS.md: \{e}")
   }
-  fail("Expected ambiguous scaffoldability check to fail")
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read ambiguous bridge.mbti: \{e}")
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => fail("failed to read ambiguous bridge.mbt: \{e}")
+  }
+  assert_true(diagnostics.contains("Shared (ambiguous re-export:"))
+  assert_true(
+    diagnostics.contains("fixtures/resolver/project/types/ambiguous-a.d.ts"),
+  )
+  assert_true(
+    diagnostics.contains("fixtures/resolver/project/types/ambiguous-b.d.ts"),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "Unsupported export Shared: ambiguous re-export surface is widened to JSValue",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "Unsupported export Shared: ambiguous re-export surface cannot be bound safely",
+    ),
+  )
 }
 
 ///|

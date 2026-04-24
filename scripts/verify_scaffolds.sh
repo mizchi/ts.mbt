@@ -47,6 +47,48 @@ EOF
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
 }
 
+verify_typescript_facade_scaffold_fixture() {
+  local root="_build/scaffold_mbti_to_ts_facade"
+
+  rm -rf "$root"
+  mkdir -p "$root"
+
+  moon run src -- emit-typescript-facade-scaffold-from-mbti \
+    fixtures/mbti_typescript_facade_package/pkg.generated.mbti \
+    "$root/out" >/dev/null
+
+  cat > "$root/tsconfig.json" <<'EOF'
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "lib": ["es2020"]
+  },
+  "files": [
+    "out/index.d.ts",
+    "out/child/index.d.ts"
+  ]
+}
+EOF
+
+  [ -f "$root/out/moon.pkg.json" ]
+  [ -f "$root/out/package.json" ]
+  [ -f "$root/out/AUTOLINK_DIAGNOSTICS.md" ]
+  [ -f "$root/out/AUTOLINK_FACADE.mbt" ]
+  grep -F '"loader_new"' "$root/out/moon.pkg.json" >/dev/null
+  grep -F '"loader_load"' "$root/out/moon.pkg.json" >/dev/null
+  grep -F 'import {' "$root/out/AUTOLINK_FACADE.mbt" >/dev/null
+  grep -F '"demo/facade/child",' "$root/out/AUTOLINK_FACADE.mbt" >/dev/null
+  grep -F 'pub fn loader_new(arg0 : @child.Item) -> Loader {' "$root/out/AUTOLINK_FACADE.mbt" >/dev/null
+  grep -F 'pub fn loader_load(self : Loader) -> @child.Item {' "$root/out/AUTOLINK_FACADE.mbt" >/dev/null
+  grep -F 'export function loader_new(arg0: child.Item): Loader;' "$root/out/index.d.ts" >/dev/null
+  grep -F 'export function loader_load(self: Loader): child.Item;' "$root/out/index.d.ts" >/dev/null
+  pnpm exec tsc -p "$root/tsconfig.json" --pretty false
+}
+
 verify_moonbit_scaffold_fixture() {
   local root="_build/scaffold_ts_to_moonbit"
   local fixture_path="$repo_root/fixtures/bridge_smoke/double-entry.d.ts"
@@ -156,34 +198,38 @@ EOF
   moon -C "$root" test --target js
 }
 
-verify_moonbit_scaffold_rejects_ambiguous_surface() {
+verify_moonbit_scaffold_handles_ambiguous_surface() {
   local root="_build/scaffold_ts_to_moonbit_ambiguous"
-  local output
 
   rm -rf "$root"
+  mkdir -p "$root"
 
-  output="$(
-    moon run src -- emit-moonbit-scaffold-from-ts \
-      fixtures/resolver/project/types/ambiguous-entry.d.ts \
-      ./runtime/ambiguous.js \
-      "$root" 2>&1 || true
-  )"
+  moon run src -- emit-moonbit-scaffold-from-ts \
+    fixtures/resolver/project/types/ambiguous-entry.d.ts \
+    ./runtime/ambiguous.js \
+    "$root" >/dev/null
 
-  printf '%s\n' "$output" | grep -F \
-    "unsupported exports: Shared (ambiguous re-export:" >/dev/null
-  printf '%s\n' "$output" | grep -F \
-    "fixtures/resolver/project/types/ambiguous-a.d.ts" >/dev/null
-  printf '%s\n' "$output" | grep -F \
-    "fixtures/resolver/project/types/ambiguous-b.d.ts" >/dev/null
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/scaffold_ts_to_moonbit_ambiguous",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
 
-  if [ -e "$root" ]; then
-    echo "Unsupported scaffold entry unexpectedly created output at $root" >&2
-    return 1
-  fi
+  [ -f "$root/SCAFFOLD_DIAGNOSTICS.md" ]
+  grep -F 'Shared (ambiguous re-export:' "$root/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  grep -F 'fixtures/resolver/project/types/ambiguous-a.d.ts' "$root/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  grep -F 'fixtures/resolver/project/types/ambiguous-b.d.ts' "$root/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  grep -F 'Unsupported export Shared: ambiguous re-export surface is widened to JSValue' "$root/bridge.mbti" >/dev/null
+  grep -F 'Unsupported export Shared: ambiguous re-export surface cannot be bound safely' "$root/bridge.mbt" >/dev/null
+  moon -C "$root" check --target js
 }
 
 verify_typescript_scaffold_fixture
+verify_typescript_facade_scaffold_fixture
 verify_moonbit_scaffold_fixture
 verify_moonbit_scaffold_external_package_fixture
 verify_moonbit_scaffold_namespace_fixture
-verify_moonbit_scaffold_rejects_ambiguous_surface
+verify_moonbit_scaffold_handles_ambiguous_surface
