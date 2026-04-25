@@ -940,6 +940,7 @@ test "find_compilable_functions: filters async/generator" {
     imports: [],
     values: [],
     classes: [],
+    namespaces: [],
   }
   let compilable = find_compilable_functions(mod)
   assert_eq(compilable.length(), 1)

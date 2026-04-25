@@ -640,6 +640,65 @@ async test "analysis: emit MoonBit declarations from runtime ts function reexpor
 }
 
 ///|
+async test "analysis: emit MoonBit declarations from runtime imported class exports" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/runtime-import-reexport-class-entry.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RuntimeImported"))
+  assert_true(
+    actual.contains(
+      "declare pub fn new_runtime_imported(_options : RuntimeImportedOptions) -> RuntimeImported",
+    ),
+  )
+  assert_true(actual.contains("declare pub type RuntimeImportedOptions"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from runtime imported class barrel exports" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/runtime-import-reexport-class-barrel-entry.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RuntimeImported"))
+  assert_true(
+    actual.contains(
+      "declare pub fn new_runtime_imported(_options : RuntimeImportedOptions) -> RuntimeImported",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit declarations from semicolonless runtime export type alias entry" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/runtime-semicolonless-export-type-alias-entry.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn greet(name : Name) -> Name"))
+}
+
+///|
 async test "analysis: emit MoonBit declarations from runtime default exported functions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts",
@@ -699,6 +758,71 @@ async test "analysis: emit MoonBit declarations from namespace export assignment
   }
   assert_true(actual.contains("declare pub type JSValue"))
   assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace assignment" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type Context"))
+  assert_true(
+    actual.contains("declare pub fn createContext(defaultValue : T) -> Context"),
+  )
+  assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace ambient members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-ambient-members-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn get_version() -> String"))
+  assert_true(actual.contains("declare pub type Component"))
+  assert_true(
+    actual.contains("declare pub fn useContext(context : Context) -> T"),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace hook tuple members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-hook-tuple-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type UseStateResult"))
+  assert_true(actual.contains("declare pub type UseTransitionResult"))
+  assert_true(
+    actual.contains(
+      "declare pub fn useState(initialState : S) -> UseStateResult",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn useTransition() -> UseTransitionResult"),
+  )
 }
 
 ///|

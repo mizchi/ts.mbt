@@ -2677,3 +2677,75 @@ async test "analysis: emit MoonBit JS FFI bundle from namespace export assignmen
     ),
   )
 }
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace assignment" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-entry.d.ts", "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_context(defaultValue : T) -> Context = \"__ts_mbt_create_context\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "import default_ from \"./runtime/react-like.js\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export const __ts_mbt_create_context = default_.createContext;",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace hook tuple members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-hook-tuple-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct UseStateResult"))
+  assert_true(bundle.ffi_mbt.contains("  _0 : S"))
+  assert_true(bundle.ffi_mbt.contains("  _1 : Dispatch"))
+  assert_true(bundle.ffi_mbt.contains("pub struct UseTransitionResult"))
+  assert_true(bundle.ffi_mbt.contains("  _0 : Bool"))
+  assert_true(bundle.ffi_mbt.contains("  _1 : TransitionFunction"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn use_state(initialState : S) -> UseStateResult = \"__ts_mbt_use_state\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn use_transition() -> UseTransitionResult = \"__ts_mbt_use_transition\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_use_state(initialState) { const tuple_ = default_.useState(initialState); return { _0: tuple_[0], _1: tuple_[1] }; }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_use_transition() { const tuple_ = default_.useTransition(); return { _0: tuple_[0], _1: tuple_[1] }; }",
+    ),
+  )
+}

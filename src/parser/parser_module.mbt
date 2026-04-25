@@ -113,7 +113,21 @@ fn Parser::parse_declare_class_with_optional_abstract(
 }
 
 ///|
-fn Parser::parse_namespace_decl_value(self : Parser) -> @ast.TsValueDecl? {
+fn empty_ts_module() -> @ast.TsModule {
+  {
+    funcs: [],
+    interfaces: [],
+    imports: [],
+    values: [],
+    classes: [],
+    namespaces: [],
+  }
+}
+
+///|
+fn Parser::parse_namespace_decl(
+  self : Parser,
+) -> (@ast.TsValueDecl?, @ast.TsNamespaceDecl?)? raise ParseError {
   let keyword = match self.peek().kind {
     Ident(name) if name == "namespace" || name == "module" || name == "global" =>
       name
@@ -122,17 +136,75 @@ fn Parser::parse_namespace_decl_value(self : Parser) -> @ast.TsValueDecl? {
   let _ = self.advance()
   if keyword == "global" {
     self.skip_declaration_block()
-    return None
+    return Some((None, None))
   }
-  let value : @ast.TsValueDecl? = match self.peek().kind {
+  let name = match self.peek().kind {
     Ident(name) => {
       let _ = self.advance()
-      Some({ name, type_: @ast.TsType::Any })
+      Some(name)
     }
     _ => None
   }
-  self.skip_declaration_block()
-  value
+  while self.match_(Dot) {
+    match self.peek().kind {
+      Ident(_) => {
+        let _ = self.advance()
+      }
+      _ => break
+    }
+  }
+  let value = match name {
+    Some(name) => {
+      let next_value : @ast.TsValueDecl = { name, type_: @ast.TsType::Any }
+      Some(next_value)
+    }
+    None => None
+  }
+  let namespace_ = match name {
+    Some(name) if self.check(LBrace) => {
+      let brace_start_pos = self.peek().pos
+      let _ = self.expect(LBrace)
+      let mut depth = 1
+      while depth > 0 {
+        let token = self.advance()
+        match token.kind {
+          LBrace => depth += 1
+          RBrace => depth -= 1
+          Eof => raise ParseError("Unterminated namespace declaration block")
+          _ => ()
+        }
+      }
+      let body_end_pos = self.tokens[self.pos - 1].pos
+      let body_source = if body_end_pos <= brace_start_pos + 1 {
+        ""
+      } else {
+        self.src[brace_start_pos + 1:body_end_pos].to_string()
+      }
+      let module_ = if body_source.trim() == "" {
+        empty_ts_module()
+      } else {
+        let parser = Parser::from_source(body_source)
+        parser.parse_module_with_seeded_const_values_internal({}, true)
+      }
+      let next_namespace : @ast.TsNamespaceDecl = { name, module_ }
+      Some(next_namespace)
+    }
+    _ => {
+      self.skip_declaration_block()
+      None
+    }
+  }
+  Some((value, namespace_))
+}
+
+///|
+fn Parser::parse_namespace_decl_value(
+  self : Parser,
+) -> @ast.TsValueDecl? raise ParseError {
+  match self.parse_namespace_decl() {
+    Some((value, _)) => value
+    None => None
+  }
 }
 
 ///|
@@ -1532,6 +1604,14 @@ fn Parser::parse_export_decl_for_module(
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
   let _ = self.expect(Export)
+  if self.match_(As) || self.match_ident("as") {
+    if self.match_ident("namespace") {
+      let _ = self.parse_binding_ident()
+      self.consume_semicolon()
+      return (stmts, exports, reexports)
+    }
+    raise ParseError("Unsupported export statement")
+  }
   if self.match_(Eq) {
     let expr = self.parse_expr()
     let local_name = match expr {
@@ -1544,6 +1624,19 @@ fn Parser::parse_export_decl_for_module(
     }
     exports.push({ local_name, export_name: "default" })
     self.consume_semicolon()
+    return (stmts, exports, reexports)
+  }
+  if self.match_(Type) || self.match_ident("type") {
+    if self.match_(LBrace) {
+      let _ = self.parse_named_exports()
+      let _ = self.expect(RBrace)
+      if self.match_(From) || self.match_ident("from") {
+        let _ = self.expect_str_literal()
+      }
+      self.consume_semicolon()
+      return (stmts, exports, reexports)
+    }
+    self.skip_type_alias()
     return (stmts, exports, reexports)
   }
   if self.match_(Default) || self.match_ident("default") {
@@ -1688,10 +1781,6 @@ fn Parser::parse_export_decl_for_module(
       _ => false
     }) {
     self.skip_declaration_block()
-    return (stmts, exports, reexports)
-  }
-  if self.check(Type) {
-    self.skip_type_alias()
     return (stmts, exports, reexports)
   }
   if (match self.peek().kind {
@@ -1921,9 +2010,31 @@ fn Parser::parse_export_stmt(
   imports : Array[@ast.TsImport],
   values : Array[@ast.TsValueDecl],
   classes : Array[@ast.TsClassDecl],
+  namespaces : Array[@ast.TsNamespaceDecl],
   const_values : Map[String, @ast.TsExpr],
 ) -> Unit raise ParseError {
   let _ = self.expect(Export)
+  if self.match_(As) || self.match_ident("as") {
+    if self.match_ident("namespace") {
+      let _ = self.parse_binding_ident()
+      self.consume_semicolon()
+      return
+    }
+    raise ParseError("Unsupported export statement")
+  }
+  if self.match_(Type) || self.match_ident("type") {
+    if self.match_(LBrace) {
+      let _ = self.parse_named_exports()
+      let _ = self.expect(RBrace)
+      if self.match_(From) || self.match_ident("from") {
+        let _ = self.expect_str_literal()
+      }
+      self.consume_semicolon()
+      return
+    }
+    self.skip_type_alias()
+    return
+  }
   if self.match_(Eq) {
     let _ = self.parse_expr()
     self.consume_semicolon()
@@ -2000,10 +2111,6 @@ fn Parser::parse_export_stmt(
       _ => false
     }) {
     self.skip_declaration_block()
-    return
-  }
-  if self.check(Type) {
-    self.skip_type_alias()
     return
   }
   match self.peek().kind {
@@ -2088,8 +2195,17 @@ fn Parser::parse_export_stmt(
     _ => false
   }
   if is_namespace_like_export {
-    match self.parse_namespace_decl_value() {
-      Some(value) => values.push(value)
+    match self.parse_namespace_decl() {
+      Some((value, namespace_)) => {
+        match value {
+          Some(value) => values.push(value)
+          None => ()
+        }
+        match namespace_ {
+          Some(namespace_) => namespaces.push(namespace_)
+          None => ()
+        }
+      }
       None => self.skip_declaration_block()
     }
     return
@@ -2130,15 +2246,17 @@ fn Parser::parse_export_stmt(
 ///|
 
 ///|
-fn Parser::parse_module_with_seeded_const_values(
+fn Parser::parse_module_with_seeded_const_values_internal(
   self : Parser,
   seeded_const_values : Map[String, @ast.TsExpr],
+  ambient_decls : Bool,
 ) -> @ast.TsModule raise ParseError {
   let funcs : Array[@ast.TsFunc] = []
   let interfaces : Array[@ast.TsInterface] = []
   let imports : Array[@ast.TsImport] = []
   let values : Array[@ast.TsValueDecl] = []
   let classes : Array[@ast.TsClassDecl] = []
+  let namespaces : Array[@ast.TsNamespaceDecl] = []
   let const_values : Map[String, @ast.TsExpr] = {}
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
@@ -2159,10 +2277,14 @@ fn Parser::parse_module_with_seeded_const_values(
         None => ()
       }
     } else if self.check(Class) {
-      let _ = self.parse_class_decl()
-      match self.take_last_runtime_class_decl() {
-        Some(class_) => classes.push(class_)
-        None => ()
+      if ambient_decls {
+        classes.push(self.parse_declare_class(false))
+      } else {
+        let _ = self.parse_class_decl()
+        match self.take_last_runtime_class_decl() {
+          Some(class_) => classes.push(class_)
+          None => ()
+        }
       }
     } else if self.check(Declare) {
       let _ = self.advance() // consume 'declare'
@@ -2191,8 +2313,17 @@ fn Parser::parse_module_with_seeded_const_values(
             name == "global" ||
             name == "enum" ||
             name == "class" {
-            match self.parse_namespace_decl_value() {
-              Some(value) => values.push(value)
+            match self.parse_namespace_decl() {
+              Some((value, namespace_)) => {
+                match value {
+                  Some(value) => values.push(value)
+                  None => ()
+                }
+                match namespace_ {
+                  Some(namespace_) => namespaces.push(namespace_)
+                  None => ()
+                }
+              }
               None => self.skip_declaration_block()
             }
           } else {
@@ -2204,14 +2335,23 @@ fn Parser::parse_module_with_seeded_const_values(
       self.parse_import_stmt()
     } else if self.check(Export) {
       self.parse_export_stmt(
-        funcs, interfaces, imports, values, classes, const_values,
+        funcs, interfaces, imports, values, classes, namespaces, const_values,
       )
     } else if self.check(Type) {
       // Skip type alias at top level
       self.skip_type_alias()
     } else if self.is_namespace_decl_start() {
-      match self.parse_namespace_decl_value() {
-        Some(value) => values.push(value)
+      match self.parse_namespace_decl() {
+        Some((value, namespace_)) => {
+          match value {
+            Some(value) => values.push(value)
+            None => ()
+          }
+          match namespace_ {
+            Some(namespace_) => namespaces.push(namespace_)
+            None => ()
+          }
+        }
         None => self.skip_declaration_block()
       }
     } else if (match self.peek().kind {
@@ -2225,16 +2365,36 @@ fn Parser::parse_module_with_seeded_const_values(
         _ => false
       }) {
       self.skip_declaration_block()
-    } else if self.check(Const) {
-      let stmt = self.parse_stmt()
-      collect_static_const_exprs_from_stmt(stmt, const_values)
+    } else if self.check(Let) || self.check(Const) || self.check(Var) {
+      if ambient_decls {
+        let _ = self.advance()
+        let parsed_values = self.parse_declare_values()
+        for value in parsed_values {
+          values.push(value)
+        }
+      } else if self.check(Const) {
+        let stmt = self.parse_stmt()
+        collect_static_const_exprs_from_stmt(stmt, const_values)
+      } else {
+        let _ = self.parse_stmt()
+      }
     } else {
       raise ParseError(
         "Expected function, interface, declare, import, or export declaration",
       )
     }
   }
-  { funcs, interfaces, imports, values, classes }
+  { funcs, interfaces, imports, values, classes, namespaces }
+}
+
+///|
+fn Parser::parse_module_with_seeded_const_values(
+  self : Parser,
+  seeded_const_values : Map[String, @ast.TsExpr],
+) -> @ast.TsModule raise ParseError {
+  self.parse_module_with_seeded_const_values_internal(
+    seeded_const_values, false,
+  )
 }
 
 ///|

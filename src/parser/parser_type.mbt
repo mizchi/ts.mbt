@@ -83,6 +83,41 @@ fn Parser::parse_paren_or_function_type(
 }
 
 ///|
+fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
+  let _ = self.expect(LBracket)
+  let items : Array[@ast.TsType] = []
+  if self.match_(RBracket) {
+    return Tuple(items)
+  }
+  while !self.check(Eof) {
+    let _ = self.match_ellipsis()
+    match self.peek().kind {
+      Ident(_) if self.peek_at(1).kind == Colon => {
+        let _ = self.advance()
+        let _ = self.expect(Colon)
+      }
+      Ident(_) if self.peek_at(1).kind == Question &&
+        self.peek_at(2).kind == Colon => {
+        let _ = self.advance()
+        let _ = self.advance()
+        let _ = self.expect(Colon)
+      }
+      _ => ()
+    }
+    items.push(self.parse_type())
+    if self.match_(Comma) {
+      if self.match_(RBracket) {
+        break
+      }
+      continue
+    }
+    let _ = self.expect(RBracket)
+    break
+  }
+  Tuple(items)
+}
+
+///|
 /// Parse a single type (not including union/intersection)
 fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
   let tok = self.peek()
@@ -164,10 +199,7 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       Any
     }
     // Tuple type: [T, U]
-    LBracket => {
-      self.skip_bracket_type()
-      Any
-    }
+    LBracket => self.parse_tuple_type()
     // Parenthesized type or function type: (T) or (x: T) => U
     LParen => self.parse_paren_or_function_type()
     // typeof T
@@ -405,28 +437,6 @@ fn Parser::skip_object_type(self : Parser) -> Unit {
         let _ = self.advance()
       }
       RBrace => {
-        depth -= 1
-        let _ = self.advance()
-      }
-      _ => {
-        let _ = self.advance()
-      }
-    }
-  }
-}
-
-///|
-/// Skip bracket type (tuple or indexed): [T, U] or [key: T]
-fn Parser::skip_bracket_type(self : Parser) -> Unit {
-  let _ = self.advance() // consume [
-  let mut depth = 1
-  while depth > 0 && !self.check(Eof) {
-    match self.peek().kind {
-      LBracket => {
-        depth += 1
-        let _ = self.advance()
-      }
-      RBracket => {
         depth -= 1
         let _ = self.advance()
       }

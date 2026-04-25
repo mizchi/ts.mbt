@@ -777,6 +777,30 @@ fn Parser::skip_until_semicolon(self : Parser) -> Unit {
 }
 
 ///|
+fn Parser::is_top_level_decl_start_token(self : Parser) -> Bool {
+  match self.peek().kind {
+    Var
+    | Let
+    | Const
+    | Class
+    | Import
+    | Export
+    | Declare
+    | Interface
+    | Type
+    | Function => true
+    Ident(name) =>
+      name == "abstract" ||
+      name == "namespace" ||
+      name == "module" ||
+      name == "global" ||
+      name == "enum" ||
+      name == "class"
+    _ => false
+  }
+}
+
+///|
 /// Skip type alias: type Name<T> = ...;
 fn Parser::skip_type_alias(self : Parser) -> Unit {
   let _ = self.advance() // consume 'type'
@@ -824,6 +848,10 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
         }
         let _ = self.advance()
       }
+      _ if brace_depth == 0 &&
+        angle_depth <= 0 &&
+        self.has_line_terminator_before() &&
+        self.is_top_level_decl_start_token() => break
       _ => {
         let _ = self.advance()
       }

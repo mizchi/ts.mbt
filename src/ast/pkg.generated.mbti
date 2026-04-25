@@ -210,6 +210,7 @@ pub(all) struct TsModule {
   imports : Array[TsImport]
   values : Array[TsValueDecl]
   classes : Array[TsClassDecl]
+  namespaces : Array[TsNamespaceDecl]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 
@@ -220,6 +221,11 @@ pub(all) struct TsModuleBlock {
   reexports : Array[TsReExportSpec]
 } derive(@debug.Debug)
 pub impl Show for TsModuleBlock
+
+pub(all) struct TsNamespaceDecl {
+  name : String
+  module_ : TsModule
+} derive(@debug.Debug)
 
 pub(all) struct TsObjectBinding {
   props : Array[TsObjectBindingProp]

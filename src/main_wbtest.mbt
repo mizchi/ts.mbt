@@ -1518,6 +1518,128 @@ async test "emit_moonbit_decl_text handles runtime ts function reexports" {
 }
 
 ///|
+async test "emit_moonbit_decl_text handles runtime ts imported class exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-import-reexport-class-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RuntimeImported"))
+  assert_true(
+    actual.contains(
+      "declare pub fn new_runtime_imported(_options : RuntimeImportedOptions) -> RuntimeImported",
+    ),
+  )
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles runtime ts imported class exports" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_runtime_import_reexport_class",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/runtime-import-reexport-class-entry.ts", "./runtime/runtime-import-reexport-class.js",
+    root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read runtime-import-reexport-class bridge.mbti: \{e}")
+  }
+  assert_true(bridge_mbti.contains("declare pub type RuntimeImported"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn new_runtime_imported(_options : RuntimeImportedOptions) -> RuntimeImported",
+    ),
+  )
+}
+
+///|
+async test "emit_moonbit_decl_text handles runtime ts imported class barrel exports" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-import-reexport-class-barrel-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type RuntimeImported"))
+  assert_true(
+    actual.contains(
+      "declare pub fn new_runtime_imported(_options : RuntimeImportedOptions) -> RuntimeImported",
+    ),
+  )
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles semicolonless runtime ts imported class barrel exports" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_runtime_import_reexport_class_barrel",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/runtime-import-reexport-class-barrel-entry.ts",
+    "./runtime/runtime-import-reexport-class.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read semicolonless runtime-import-reexport-class bridge.mbti: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub type RuntimeImported"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn new_runtime_imported(_options : RuntimeImportedOptions) -> RuntimeImported",
+    ),
+  )
+}
+
+///|
+async test "emit_moonbit_decl_text handles semicolonless runtime export type alias entry" {
+  let actual = emit_moonbit_decl_text(
+    "fixtures/resolver/project/types/runtime-semicolonless-export-type-alias-entry.ts",
+  ) catch {
+    @analysis.ReadError(msg)
+    | @analysis.ParseError(msg)
+    | @analysis.ResolveError(msg) => {
+      fail("Emit error: \{msg}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn greet(name : Name) -> Name"))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles semicolonless runtime export type alias entry" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_runtime_semicolonless_export_type_alias",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/runtime-semicolonless-export-type-alias-entry.ts",
+    "./runtime/runtime-semicolonless-export-type-alias.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read runtime-semicolonless-export-type-alias bridge.mbti: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub fn greet(name : Name) -> Name"))
+}
+
+///|
 async test "emit_moonbit_decl_text handles runtime ts destructured value exports" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-destructured-value-entry.ts",
@@ -4365,6 +4487,102 @@ async test "emit_moonbit_js_ffi_texts handles export assignment declarations" {
   }
   assert_true(bundle.ffi_mbt.contains("pub extern \"js\" fn get_default()"))
   assert_true(bundle.bridge_js.contains("export function __ts_mbt_get_default"))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace declarations" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-entry.d.ts", "./runtime/react-like.js",
+    root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read export-as-namespace bridge.mbti: \{e}")
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => fail("failed to read export-as-namespace bridge.mbt: \{e}")
+  }
+  assert_true(bridge_mbti.contains("declare pub type Context"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn createContext(defaultValue : T) -> Context",
+    ),
+  )
+  assert_true(bridge_mbti.contains("declare pub fn get_default() -> JSValue"))
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn createContext(defaultValue : T) -> Context {\n  create_context(defaultValue)\n}",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace ambient members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_ambient_members",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-ambient-members-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read export-as-namespace ambient bridge.mbti: \{e}")
+  }
+  assert_true(bridge_mbti.contains("declare pub fn get_version() -> String"))
+  assert_true(bridge_mbti.contains("declare pub type Component"))
+  assert_true(
+    bridge_mbti.contains("declare pub fn useContext(context : Context) -> T"),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_hook_tuple",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-hook-tuple-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read export-as-namespace hook tuple bridge.mbti: \{e}")
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => fail("failed to read export-as-namespace hook tuple bridge.mbt: \{e}")
+  }
+  assert_true(bridge_mbti.contains("declare pub type UseStateResult"))
+  assert_true(bridge_mbti.contains("declare pub type UseTransitionResult"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn useState(initialState : S) -> UseStateResult",
+    ),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn useTransition() -> UseTransitionResult",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn useState(initialState : S) -> UseStateResult {\n  use_state(initialState)\n}",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn useTransition() -> UseTransitionResult {\n  use_transition()\n}",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
 
 ///|

@@ -390,6 +390,12 @@ pub(all) struct TsClassDecl {
 } derive(Debug)
 
 ///|
+pub(all) struct TsNamespaceDecl {
+  name : String
+  module_ : TsModule
+} derive(Debug)
+
+///|
 // / ()
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
@@ -397,6 +403,7 @@ pub(all) struct TsModule {
   imports : Array[TsImport] // externalimport
   values : Array[TsValueDecl] // ambient value declarations
   classes : Array[TsClassDecl] // ambient class declarations
+  namespaces : Array[TsNamespaceDecl]
 } derive(Debug)
 
 ///|

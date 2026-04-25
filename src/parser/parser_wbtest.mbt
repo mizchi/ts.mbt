@@ -830,6 +830,159 @@ test "parser: parse export assignment in module block" {
 }
 
 ///|
+test "parser: parse export as namespace in module block" {
+  let src = "declare namespace ReactLike { function createContext<T>(defaultValue: T): Context<T>; interface Context<T> { value: T; } } export = ReactLike; export as namespace ReactLike;"
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].local_name, "ReactLike")
+  assert_eq(module_.exports[0].export_name, "default")
+}
+
+///|
+test "parser: parse namespace members in module" {
+  let src = "declare namespace ReactLike { function createContext<T>(defaultValue: T): Context<T>; interface Context<T> { value: T; } } export = ReactLike; export as namespace ReactLike;"
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  assert_eq(namespace_.name, "ReactLike")
+  assert_eq(namespace_.module_.funcs.length(), 1)
+  assert_eq(namespace_.module_.funcs[0].name, "createContext")
+  assert_eq(namespace_.module_.interfaces.length(), 1)
+  assert_eq(namespace_.module_.interfaces[0].name, "Context")
+}
+
+///|
+test "parser: parse ambient const and class inside namespace members in module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  const version: string;
+    #|  interface Context<T> { value: T; }
+    #|  class Component<P, S> {
+    #|    props: P;
+    #|    state: S;
+    #|  }
+    #|  function useContext<T>(context: Context<T>): T;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  assert_eq(namespace_.module_.values.length(), 1)
+  assert_eq(namespace_.module_.values[0].name, "version")
+  assert_eq(namespace_.module_.classes.length(), 1)
+  assert_eq(namespace_.module_.classes[0].name, "Component")
+  assert_eq(namespace_.module_.funcs.length(), 1)
+  assert_eq(namespace_.module_.funcs[0].name, "useContext")
+}
+
+///|
+test "parser: parse tuple return hook signatures inside namespace members in module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  type Dispatch<A> = (value: A) => void;
+    #|  type TransitionFunction = () => void;
+    #|  function useState<S>(initialState: S): [S, Dispatch<S>];
+    #|  function useTransition(): [boolean, TransitionFunction];
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  assert_eq(namespace_.module_.funcs.length(), 2)
+  assert_eq(namespace_.module_.funcs[0].name, "useState")
+  assert_eq(
+    namespace_.module_.funcs[0].return_type,
+    @ast.TsType::Tuple([@ast.TsType::Named("S"), @ast.TsType::Named("Dispatch")]),
+  )
+  assert_eq(namespace_.module_.funcs[1].name, "useTransition")
+  assert_eq(
+    namespace_.module_.funcs[1].return_type,
+    @ast.TsType::Tuple([
+      @ast.TsType::Boolean,
+      @ast.TsType::Named("TransitionFunction"),
+    ]),
+  )
+}
+
+///|
+test "parser: parse semicolonless export type reexport without swallowing following exports" {
+  let src =
+    #|import { RuntimeImported } from "./runtime-import-reexport-class-source.ts"
+    #|
+    #|export type { RuntimeImportedOptions } from "./runtime-import-reexport-class-source.ts"
+    #|export { RuntimeImported }
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].local_name, "RuntimeImported")
+  assert_eq(module_.exports[0].export_name, "RuntimeImported")
+}
+
+///|
+test "parser: parse semicolonless export type alias without swallowing following exports" {
+  let src =
+    #|export type Name = string
+    #|export function greet(name: Name): Name {
+    #|  return name
+    #|}
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].local_name, "greet")
+  assert_eq(module_.exports[0].export_name, "greet")
+}
+
+///|
+test "parser: parse semicolonless export type alias in full module" {
+  let src =
+    #|export type Name = string
+    #|export function greet(name: Name): Name {
+    #|  return name
+    #|}
+  let module_ = parse_module_from_source_with_const_values(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+  assert_eq(module_.funcs[0].name, "greet")
+}
+
+///|
 test "parser: parse declare class in module" {
   let src =
     #|declare class Counter {

@@ -146,6 +146,7 @@ pub fn experimental_compile_module_to_wasm(
     imports: mod.imports,
     values: mod.values,
     classes: mod.classes,
+    namespaces: mod.namespaces,
   }
   // Compile to wasm-gc
   let wasm_module = @codegen.experimental_compile_module_gc(compile_mod) catch {

@@ -61,6 +61,7 @@ fn compile_single_function(func : @ast.TsFunc) -> (Bytes, UInt)? {
     imports: [],
     values: [],
     classes: [],
+    namespaces: [],
   }
   try {
     let wasm_module = @codegen.experimental_compile_module_gc(mod)

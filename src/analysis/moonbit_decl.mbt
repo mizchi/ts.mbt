@@ -53,6 +53,12 @@ priv struct ExportedClassDecl {
 }
 
 ///|
+priv struct TupleResultInterfaceSpec {
+  export_name : String
+  iface : @ast.TsInterface
+}
+
+///|
 priv struct ExportedConstValueSet {
   values : Map[String, @ast.TsExpr]
   explicit_names : Array[String]
@@ -74,6 +80,112 @@ priv enum ResolvedDecl {
 ///|
 fn decl_key(source_path : String, local_name : String) -> String {
   source_path + "\n" + local_name
+}
+
+///|
+fn decl_is_ascii_letter(c : Char) -> Bool {
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+///|
+fn decl_is_ascii_digit(c : Char) -> Bool {
+  c >= '0' && c <= '9'
+}
+
+///|
+fn decl_to_lower_ascii(c : Char) -> Char {
+  if c >= 'A' && c <= 'Z' {
+    (c.to_int() + 32).unsafe_to_char()
+  } else {
+    c
+  }
+}
+
+///|
+fn decl_to_upper_ascii(c : Char) -> Char {
+  if c >= 'a' && c <= 'z' {
+    (c.to_int() - 32).unsafe_to_char()
+  } else {
+    c
+  }
+}
+
+///|
+fn decl_sanitize_identifier(name : String, fallback : String) -> String {
+  let mut result = ""
+  for c in name {
+    if decl_is_ascii_letter(c) || decl_is_ascii_digit(c) || c == '_' {
+      result += c.to_string()
+    } else {
+      result += "_"
+    }
+  }
+  if result == "" {
+    result = fallback
+  }
+  let first = result[0].unsafe_to_char()
+  if decl_is_ascii_digit(first) {
+    result = "_" + result
+  }
+  result
+}
+
+///|
+fn decl_trim_underscores(name : String) -> String {
+  let mut start = 0
+  let mut end_ = name.length()
+  while start < end_ && name[start].unsafe_to_char() == '_' {
+    start += 1
+  }
+  while end_ > start && name[end_ - 1].unsafe_to_char() == '_' {
+    end_ -= 1
+  }
+  name[start:end_].to_string()
+}
+
+///|
+fn decl_to_snake_case(name : String) -> String {
+  let mut result = ""
+  let mut prev_is_lower_or_digit = false
+  for c in name {
+    if c >= 'A' && c <= 'Z' {
+      if result != "" && prev_is_lower_or_digit {
+        result += "_"
+      }
+      result += decl_to_lower_ascii(c).to_string()
+      prev_is_lower_or_digit = false
+    } else if decl_is_ascii_letter(c) || decl_is_ascii_digit(c) {
+      result += c.to_string()
+      prev_is_lower_or_digit = (c >= 'a' && c <= 'z') || decl_is_ascii_digit(c)
+    } else {
+      if result != "" && !result.has_suffix("_") {
+        result += "_"
+      }
+      prev_is_lower_or_digit = false
+    }
+  }
+  decl_sanitize_identifier(decl_trim_underscores(result), "generated_name")
+}
+
+///|
+fn decl_to_pascal_case(name : String) -> String {
+  let snake = decl_to_snake_case(name)
+  let parts = snake.split("_")
+  let mut result = ""
+  for part_view in parts {
+    let part = part_view.to_string()
+    if part == "" {
+      continue
+    }
+    result += decl_to_upper_ascii(part[0].unsafe_to_char()).to_string() +
+      part[1:].to_string()
+  }
+  decl_sanitize_identifier(result, "OpaqueType")
+}
+
+///|
+fn tuple_result_interface_name(export_name : String) -> String {
+  decl_to_pascal_case(export_name) + "Result"
 }
 
 ///|
@@ -108,7 +220,14 @@ async fn load_decl_module_info(
           "Failed to parse declarations in '\{record.path}': \{msg}",
         )
       } else {
-        { funcs: [], interfaces: [], imports: [], values: [], classes: [] }
+        {
+          funcs: [],
+          interfaces: [],
+          imports: [],
+          values: [],
+          classes: [],
+          namespaces: [],
+        }
       }
   }
   { record, module_ }
@@ -368,6 +487,19 @@ fn find_import_decl(module_ : @ast.TsModule, name : String) -> @ast.TsImport? {
   for import_ in module_.imports {
     if import_.name == name {
       return Some(import_)
+    }
+  }
+  None
+}
+
+///|
+fn find_namespace_decl(
+  module_ : @ast.TsModule,
+  name : String,
+) -> @ast.TsNamespaceDecl? {
+  for namespace_ in module_.namespaces {
+    if namespace_.name == name {
+      return Some(namespace_)
     }
   }
   None
@@ -649,6 +781,87 @@ fn find_class_decl(module_ : @ast.TsModule, name : String) -> @ast.TsClassDecl? 
 }
 
 ///|
+fn namespace_member_runtime_export_name(
+  root_export_name : String,
+  member_name : String,
+) -> String {
+  root_export_name + "." + member_name
+}
+
+///|
+fn append_exported_namespace_members(
+  source_path : String,
+  runtime_root_export_name : String,
+  namespace_ : @ast.TsNamespaceDecl,
+  interfaces : Array[ExportedInterfaceDecl],
+  imports : Array[ExportedImportDecl],
+  funcs : Array[ExportedFuncDecl],
+  values : Array[ExportedValueDecl],
+  classes : Array[ExportedClassDecl],
+) -> Unit {
+  let nested_namespace_names : Array[String] = []
+  for nested in namespace_.module_.namespaces {
+    nested_namespace_names.push(nested.name)
+  }
+  for iface in namespace_.module_.interfaces {
+    interfaces.push({
+      source_path,
+      local_name: iface.name,
+      export_name: iface.name,
+      iface,
+    })
+  }
+  for import_ in namespace_.module_.imports {
+    imports.push({
+      source_path,
+      export_name: import_.name,
+      source_export_name: namespace_member_runtime_export_name(
+        runtime_root_export_name,
+        import_.name,
+      ),
+      import_,
+    })
+  }
+  for func in namespace_.module_.funcs {
+    funcs.push({
+      source_path,
+      export_name: func.name,
+      source_export_name: namespace_member_runtime_export_name(
+        runtime_root_export_name,
+        func.name,
+      ),
+      func,
+    })
+  }
+  for value in namespace_.module_.values {
+    if nested_namespace_names.contains(value.name) {
+      continue
+    }
+    values.push({
+      source_path,
+      export_name: value.name,
+      source_export_name: namespace_member_runtime_export_name(
+        runtime_root_export_name,
+        value.name,
+      ),
+      value,
+    })
+  }
+  for class_ in namespace_.module_.classes {
+    classes.push({
+      source_path,
+      local_name: class_.name,
+      export_name: class_.name,
+      source_export_name: namespace_member_runtime_export_name(
+        runtime_root_export_name,
+        class_.name,
+      ),
+      class_,
+    })
+  }
+}
+
+///|
 fn find_resolved_export_by_name(
   exports : Array[ResolvedExport],
   export_name : String,
@@ -913,6 +1126,26 @@ fn collect_exported_decls(
       Some(local_name) => local_name
       None => continue
     }
+    if export_.export_name == "default" {
+      match modules.get(export_.source_path) {
+        Some(info) =>
+          match find_namespace_decl(info.module_, local_name) {
+            Some(namespace_) =>
+              append_exported_namespace_members(
+                export_.source_path,
+                export_.export_name,
+                namespace_,
+                interfaces,
+                imports,
+                funcs,
+                values,
+                classes,
+              )
+            None => ()
+          }
+        None => ()
+      }
+    }
     let visiting : Array[String] = []
     match
       resolve_decl_from_local_name(
@@ -1085,6 +1318,78 @@ fn rewrite_type_refs(
 }
 
 ///|
+fn tuple_result_interface_spec(
+  export_name : String,
+  return_type : @ast.TsType,
+) -> TupleResultInterfaceSpec? {
+  match return_type {
+    Tuple(items) => {
+      let fields : Array[(String, @ast.TsType)] = []
+      for i, item in items {
+        fields.push(("_" + i.to_string(), item))
+      }
+      Some({
+        export_name,
+        iface: { name: tuple_result_interface_name(export_name), fields },
+      })
+    }
+    _ => None
+  }
+}
+
+///|
+fn normalize_tuple_result_interfaces(
+  exported_imports : Array[ExportedImportDecl],
+  exported_funcs : Array[ExportedFuncDecl],
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> Array[TupleResultInterfaceSpec] {
+  let specs : Array[TupleResultInterfaceSpec] = []
+  let seen_export_names : Array[String] = []
+  for exported in exported_imports {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        match
+          tuple_result_interface_spec(
+            exported.export_name,
+            rewrite_type_refs(
+              info,
+              exported.import_.return_type,
+              canonical_types,
+            ),
+          ) {
+          Some(spec) =>
+            if !seen_export_names.contains(spec.export_name) {
+              seen_export_names.push(spec.export_name)
+              specs.push(spec)
+            }
+          None => ()
+        }
+      None => ()
+    }
+  }
+  for exported in exported_funcs {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        match
+          tuple_result_interface_spec(
+            exported.export_name,
+            rewrite_type_refs(info, exported.func.return_type, canonical_types),
+          ) {
+          Some(spec) =>
+            if !seen_export_names.contains(spec.export_name) {
+              seen_export_names.push(spec.export_name)
+              specs.push(spec)
+            }
+          None => ()
+        }
+      None => ()
+    }
+  }
+  specs
+}
+
+///|
 fn clone_exported_interface(
   exported : ExportedInterfaceDecl,
   info : DeclModuleInfo,
@@ -1113,15 +1418,19 @@ fn clone_exported_import(
       (param_name, rewrite_type_refs(info, param_type, canonical_types)),
     )
   }
+  let return_type = rewrite_type_refs(
+    info,
+    exported.import_.return_type,
+    canonical_types,
+  )
   {
     name: exported.export_name,
     module_: exported.import_.module_,
     params,
-    return_type: rewrite_type_refs(
-      info,
-      exported.import_.return_type,
-      canonical_types,
-    ),
+    return_type: match return_type {
+      Tuple(_) => Named(tuple_result_interface_name(exported.export_name))
+      _ => return_type
+    },
   }
 }
 
@@ -1141,14 +1450,18 @@ fn clone_exported_func(
       default: param.default,
     })
   }
+  let return_type = rewrite_type_refs(
+    info,
+    exported.func.return_type,
+    canonical_types,
+  )
   {
     name: exported.export_name,
     params,
-    return_type: rewrite_type_refs(
-      info,
-      exported.func.return_type,
-      canonical_types,
-    ),
+    return_type: match return_type {
+      Tuple(_) => Named(tuple_result_interface_name(exported.export_name))
+      _ => return_type
+    },
     body: exported.func.body,
     is_generator: exported.func.is_generator,
     is_async: exported.func.is_async,
@@ -1243,6 +1556,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_classes,
   )
+  let tuple_result_interfaces = normalize_tuple_result_interfaces(
+    exported_imports, exported_funcs, modules, canonical_types,
+  )
   let interfaces : Array[@ast.TsInterface] = []
   for exported in exported_interfaces {
     match modules.get(exported.source_path) {
@@ -1252,6 +1568,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
         )
       None => ()
     }
+  }
+  for spec in tuple_result_interfaces {
+    interfaces.push(spec.iface)
   }
   let imports : Array[@ast.TsImport] = []
   for exported in exported_imports {
@@ -1286,7 +1605,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     }
   }
   @parser.emit_moonbit_decl_with_sections(
-    { funcs, interfaces, imports, values, classes },
+    { funcs, interfaces, imports, values, classes, namespaces: [] },
     notes,
     notes.length() > 0,
   )

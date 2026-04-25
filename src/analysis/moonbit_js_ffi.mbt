@@ -275,6 +275,49 @@ fn ffi_bridge_function_line(
 }
 
 ///|
+fn ffi_bridge_tuple_wrapper_line(
+  binding_name : String,
+  params : Array[String],
+  expr : String,
+  item_count : Int,
+) -> String {
+  let params_str = params.join(", ")
+  let fields : Array[String] = []
+  for i in 0..<item_count {
+    fields.push("_\{i}: tuple_[\{i}]")
+  }
+  let fields_str = fields.join(", ")
+  "export function \{binding_name}(\{params_str}) { const tuple_ = \{expr}; return { \{fields_str} }; }"
+}
+
+///|
+fn ffi_import_param_names(import_ : @ast.TsImport) -> Array[String] {
+  let params : Array[String] = []
+  for item in import_.params {
+    let (name, _) = item
+    params.push(ffi_sanitize_identifier(name, "arg"))
+  }
+  params
+}
+
+///|
+fn ffi_func_param_names(func : @ast.TsFunc) -> Array[String] {
+  let params : Array[String] = []
+  let mut next_index = 0
+  for param in func.params {
+    let param_name = if param.name == "" {
+      let generated = "arg" + next_index.to_string()
+      next_index += 1
+      generated
+    } else {
+      param.name
+    }
+    params.push(ffi_sanitize_identifier(param_name, "arg"))
+  }
+  params
+}
+
+///|
 fn ffi_import_decl_to_moonbit(
   state : MoonBitJsFfiState,
   import_ : @ast.TsImport,
@@ -676,6 +719,39 @@ fn ffi_bridge_import_key(export_name : String) -> String {
 }
 
 ///|
+fn ffi_runtime_export_root_name(runtime_export_name : String) -> String {
+  match runtime_export_name.find(".") {
+    Some(index) => runtime_export_name[:index].to_string()
+    None => runtime_export_name
+  }
+}
+
+///|
+fn ffi_runtime_export_member_names(
+  runtime_export_name : String,
+) -> Array[String] {
+  let members : Array[String] = []
+  match runtime_export_name.find(".") {
+    Some(index) => {
+      let suffix = runtime_export_name[index + 1:].to_string()
+      for part_view in suffix.split(".") {
+        let part = part_view.to_string()
+        if part != "" {
+          members.push(part)
+        }
+      }
+    }
+    None => ()
+  }
+  members
+}
+
+///|
+fn ffi_runtime_export_requires_bridge(runtime_export_name : String) -> Bool {
+  runtime_export_name.contains(".")
+}
+
+///|
 fn runtime_export_name_for(
   runtime_export_names : Map[String, String],
   public_name : String,
@@ -692,6 +768,9 @@ fn ffi_bridge_reexport_line(
   runtime_export_name : String,
   binding_name : String,
 ) -> String? {
+  if ffi_runtime_export_requires_bridge(runtime_export_name) {
+    return None
+  }
   if runtime_export_name == "default" {
     return Some(
       "export { default as \{binding_name} } from \"\{module_spec}\";",
@@ -723,6 +802,22 @@ fn ensure_bridge_import(
     is_default: export_name == "default",
   })
   local_name
+}
+
+///|
+fn ensure_bridge_runtime_access(
+  seen_import_keys : Array[String],
+  bridge_imports : Array[MoonBitBridgeImport],
+  runtime_export_name : String,
+) -> String {
+  let root_name = ffi_runtime_export_root_name(runtime_export_name)
+  let mut access = ensure_bridge_import(
+    seen_import_keys, bridge_imports, root_name,
+  )
+  for member_name in ffi_runtime_export_member_names(runtime_export_name) {
+    access = ffi_js_access(access, member_name)
+  }
+  access
 }
 
 ///|
@@ -869,9 +964,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_classes,
   )
+  let tuple_result_interfaces = normalize_tuple_result_interfaces(
+    exported_imports, exported_funcs, modules, canonical_types,
+  )
   let interfaces = normalize_interfaces_for_ffi(
     exported_interfaces, modules, canonical_types,
   )
+  for spec in tuple_result_interfaces {
+    interfaces.push(spec.iface)
+  }
   let imports = normalize_imports_for_ffi(
     exported_imports, modules, canonical_types,
   )
@@ -897,6 +998,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let class_runtime_export_names : Map[String, String] = {}
   for exported in exported_classes {
     class_runtime_export_names[exported.export_name] = exported.source_export_name
+  }
+  let tuple_result_field_counts : Map[String, Int] = {}
+  for spec in tuple_result_interfaces {
+    tuple_result_field_counts[spec.export_name] = spec.iface.fields.length()
   }
 
   let declared_type_names : Array[String] = []
@@ -1037,7 +1142,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           args.push(ffi_sanitize_identifier(param_name, "arg"))
         }
         let params_str = args.join(", ")
-        let class_access = ensure_bridge_import(
+        let class_access = ensure_bridge_runtime_access(
           seen_bridge_import_keys, bridge_imports, class_runtime_export_name,
         )
         let ctor_binding_name = ffi_class_ctor_binding_name(class_.name)
@@ -1053,7 +1158,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         )
       }
       None if class_.is_constructible => {
-        let class_access = ensure_bridge_import(
+        let class_access = ensure_bridge_runtime_access(
           seen_bridge_import_keys, bridge_imports, class_runtime_export_name,
         )
         let ctor_binding_name = ffi_class_ctor_binding_name(class_.name)
@@ -1078,7 +1183,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         class_.name,
         class_property.name,
       )
-      let class_access = ensure_bridge_import(
+      let class_access = ensure_bridge_runtime_access(
         seen_bridge_import_keys, bridge_imports, class_runtime_export_name,
       )
       let getter_access = ffi_js_access(class_access, class_property.name)
@@ -1115,7 +1220,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         let (param_name, _) = param
         args.push(ffi_sanitize_identifier(param_name, "arg"))
       }
-      let class_access = ensure_bridge_import(
+      let class_access = ensure_bridge_runtime_access(
         seen_bridge_import_keys, bridge_imports, class_runtime_export_name,
       )
       let args_str = args.join(", ")
@@ -1142,37 +1247,66 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       import_runtime_export_names,
       import_.name,
     )
-    if ffi_can_use_direct_module(module_spec) {
-      push_unique_ffi_section(
-        seen_ffi_binding_names,
-        ffi_sections,
-        "direct_import:" + import_.name,
-        ffi_import_decl_to_moonbit_direct(
-          state, import_, runtime_export_name, module_spec,
-        ),
-      )
-    } else {
-      let binding_name = ffi_binding_name(import_.name)
-      push_unique_ffi_section(
-        seen_ffi_binding_names,
-        ffi_sections,
-        binding_name,
-        ffi_import_decl_to_moonbit(state, import_),
-      )
-      match
-        ffi_bridge_reexport_line(module_spec, runtime_export_name, binding_name) {
-        Some(reexport_line) =>
-          push_unique_bridge_binding(
-            seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
-          )
-        None =>
-          push_unique_bridge_binding(
-            seen_bridge_binding_names,
-            bridge_lines,
-            binding_name,
-            "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, runtime_export_name)};",
-          )
+    match tuple_result_field_counts.get(import_.name) {
+      Some(item_count) => {
+        let binding_name = ffi_binding_name(import_.name)
+        let args = ffi_import_param_names(import_)
+        let args_str = args.join(", ")
+        let runtime_access = ensure_bridge_runtime_access(
+          seen_bridge_import_keys, bridge_imports, runtime_export_name,
+        )
+        let call_expr = "\{runtime_access}(\{args_str})"
+        push_unique_ffi_section(
+          seen_ffi_binding_names,
+          ffi_sections,
+          binding_name,
+          ffi_import_decl_to_moonbit(state, import_),
+        )
+        push_unique_bridge_binding(
+          seen_bridge_binding_names,
+          bridge_lines,
+          binding_name,
+          ffi_bridge_tuple_wrapper_line(
+            binding_name, args, call_expr, item_count,
+          ),
+        )
       }
+      None =>
+        if ffi_can_use_direct_module(module_spec) &&
+          !ffi_runtime_export_requires_bridge(runtime_export_name) {
+          push_unique_ffi_section(
+            seen_ffi_binding_names,
+            ffi_sections,
+            "direct_import:" + import_.name,
+            ffi_import_decl_to_moonbit_direct(
+              state, import_, runtime_export_name, module_spec,
+            ),
+          )
+        } else {
+          let binding_name = ffi_binding_name(import_.name)
+          push_unique_ffi_section(
+            seen_ffi_binding_names,
+            ffi_sections,
+            binding_name,
+            ffi_import_decl_to_moonbit(state, import_),
+          )
+          match
+            ffi_bridge_reexport_line(
+              module_spec, runtime_export_name, binding_name,
+            ) {
+            Some(reexport_line) =>
+              push_unique_bridge_binding(
+                seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
+              )
+            None =>
+              push_unique_bridge_binding(
+                seen_bridge_binding_names,
+                bridge_lines,
+                binding_name,
+                "export const \{binding_name} = \{ensure_bridge_runtime_access(seen_bridge_import_keys, bridge_imports, runtime_export_name)};",
+              )
+          }
+        }
     }
     handled_export_names.push(import_.name)
   }
@@ -1182,37 +1316,66 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       func_runtime_export_names,
       func.name,
     )
-    if ffi_can_use_direct_module(module_spec) {
-      push_unique_ffi_section(
-        seen_ffi_binding_names,
-        ffi_sections,
-        "direct_func:" + func.name,
-        ffi_func_decl_to_moonbit_direct(
-          state, func, runtime_export_name, module_spec,
-        ),
-      )
-    } else {
-      let binding_name = ffi_binding_name(func.name)
-      push_unique_ffi_section(
-        seen_ffi_binding_names,
-        ffi_sections,
-        binding_name,
-        ffi_func_decl_to_moonbit(state, func),
-      )
-      match
-        ffi_bridge_reexport_line(module_spec, runtime_export_name, binding_name) {
-        Some(reexport_line) =>
-          push_unique_bridge_binding(
-            seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
-          )
-        None =>
-          push_unique_bridge_binding(
-            seen_bridge_binding_names,
-            bridge_lines,
-            binding_name,
-            "export const \{binding_name} = \{ensure_bridge_import(seen_bridge_import_keys, bridge_imports, runtime_export_name)};",
-          )
+    match tuple_result_field_counts.get(func.name) {
+      Some(item_count) => {
+        let binding_name = ffi_binding_name(func.name)
+        let args = ffi_func_param_names(func)
+        let args_str = args.join(", ")
+        let runtime_access = ensure_bridge_runtime_access(
+          seen_bridge_import_keys, bridge_imports, runtime_export_name,
+        )
+        let call_expr = "\{runtime_access}(\{args_str})"
+        push_unique_ffi_section(
+          seen_ffi_binding_names,
+          ffi_sections,
+          binding_name,
+          ffi_func_decl_to_moonbit(state, func),
+        )
+        push_unique_bridge_binding(
+          seen_bridge_binding_names,
+          bridge_lines,
+          binding_name,
+          ffi_bridge_tuple_wrapper_line(
+            binding_name, args, call_expr, item_count,
+          ),
+        )
       }
+      None =>
+        if ffi_can_use_direct_module(module_spec) &&
+          !ffi_runtime_export_requires_bridge(runtime_export_name) {
+          push_unique_ffi_section(
+            seen_ffi_binding_names,
+            ffi_sections,
+            "direct_func:" + func.name,
+            ffi_func_decl_to_moonbit_direct(
+              state, func, runtime_export_name, module_spec,
+            ),
+          )
+        } else {
+          let binding_name = ffi_binding_name(func.name)
+          push_unique_ffi_section(
+            seen_ffi_binding_names,
+            ffi_sections,
+            binding_name,
+            ffi_func_decl_to_moonbit(state, func),
+          )
+          match
+            ffi_bridge_reexport_line(
+              module_spec, runtime_export_name, binding_name,
+            ) {
+            Some(reexport_line) =>
+              push_unique_bridge_binding(
+                seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
+              )
+            None =>
+              push_unique_bridge_binding(
+                seen_bridge_binding_names,
+                bridge_lines,
+                binding_name,
+                "export const \{binding_name} = \{ensure_bridge_runtime_access(seen_bridge_import_keys, bridge_imports, runtime_export_name)};",
+              )
+          }
+        }
     }
     handled_export_names.push(func.name)
   }
@@ -1251,7 +1414,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_bridge_function_line(
         getter_name,
         [],
-        ensure_bridge_import(
+        ensure_bridge_runtime_access(
           seen_bridge_import_keys, bridge_imports, runtime_export_name,
         ),
       ),
