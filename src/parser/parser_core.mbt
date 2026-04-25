@@ -11,6 +11,8 @@ pub(all) suberror ParseError {
 pub struct Parser {
   tokens : Array[Token]
   mut pos : Int
+  mut pending_gt : Int
+  mut pending_gt_pos : Int
   mut in_generator : Bool
   mut in_async : Bool
   mut temp_index : Int
@@ -49,6 +51,8 @@ pub fn Parser::new_with_strict_and_jsx(
   {
     tokens,
     pos: 0,
+    pending_gt: 0,
+    pending_gt_pos: 0,
     in_generator: false,
     in_async: false,
     temp_index: 0,
@@ -81,6 +85,8 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
   {
     tokens,
     pos: 0,
+    pending_gt: 0,
+    pending_gt_pos: 0,
     in_generator: false,
     in_async: false,
     temp_index: 0,
@@ -100,7 +106,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
 ///|
 // / currentget
 fn Parser::peek(self : Parser) -> Token {
-  if self.pos >= self.tokens.length() {
+  if self.pending_gt > 0 {
+    { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+  } else if self.pos >= self.tokens.length() {
     { kind: Eof, pos: 0, has_newline_before: false }
   } else {
     self.tokens[self.pos]
@@ -110,6 +118,10 @@ fn Parser::peek(self : Parser) -> Token {
 ///|
 // /
 fn Parser::advance(self : Parser) -> Token {
+  if self.pending_gt > 0 {
+    self.pending_gt -= 1
+    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+  }
   let tok = self.peek()
   if tok.kind != Eof {
     self.pos += 1
@@ -140,7 +152,10 @@ fn Parser::check(self : Parser, kind : TokenKind) -> Bool {
 ///|
 // / get
 fn Parser::peek_at(self : Parser, offset : Int) -> Token {
-  let idx = self.pos + offset
+  if offset < self.pending_gt {
+    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+  }
+  let idx = self.pos + offset - self.pending_gt
   if idx >= self.tokens.length() {
     { kind: Eof, pos: 0, has_newline_before: false }
   } else {

@@ -2723,14 +2723,29 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace hook t
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub struct UseStateResult"))
-  assert_true(bundle.ffi_mbt.contains("  _0 : S"))
-  assert_true(bundle.ffi_mbt.contains("  _1 : Dispatch"))
+  assert_true(bundle.ffi_mbt.contains("  state : S"))
+  assert_true(bundle.ffi_mbt.contains("  setState : Dispatch"))
+  assert_true(bundle.ffi_mbt.contains("pub struct UseReducerResult"))
+  assert_true(bundle.ffi_mbt.contains("  state : S"))
+  assert_true(bundle.ffi_mbt.contains("  dispatch : ActionDispatch"))
   assert_true(bundle.ffi_mbt.contains("pub struct UseTransitionResult"))
-  assert_true(bundle.ffi_mbt.contains("  _0 : Bool"))
-  assert_true(bundle.ffi_mbt.contains("  _1 : TransitionFunction"))
+  assert_true(bundle.ffi_mbt.contains("  isPending : Bool"))
+  assert_true(bundle.ffi_mbt.contains("  startTransition : TransitionFunction"))
+  assert_true(bundle.ffi_mbt.contains("pub struct UseOptimisticResult"))
+  assert_true(bundle.ffi_mbt.contains("  state : State"))
+  assert_true(bundle.ffi_mbt.contains("  dispatch : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("pub struct UseActionStateResult"))
+  assert_true(bundle.ffi_mbt.contains("  state : State"))
+  assert_true(bundle.ffi_mbt.contains("  dispatch : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  isPending : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn use_state(initialState : S) -> UseStateResult = \"__ts_mbt_use_state\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn use_reducer(reducer : @js.Any, initialState : S) -> UseReducerResult = \"__ts_mbt_use_reducer\"",
     ),
   )
   assert_true(
@@ -2739,13 +2754,315 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace hook t
     ),
   )
   assert_true(
-    bundle.bridge_js.contains(
-      "export function __ts_mbt_use_state(initialState) { const tuple_ = default_.useState(initialState); return { _0: tuple_[0], _1: tuple_[1] }; }",
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn use_optimistic(passthrough : State) -> UseOptimisticResult = \"__ts_mbt_use_optimistic\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn use_action_state(action : @js.Any, initialState : State, permalink : String) -> UseActionStateResult = \"__ts_mbt_use_action_state\"",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_use_transition() { const tuple_ = default_.useTransition(); return { _0: tuple_[0], _1: tuple_[1] }; }",
+      "export function __ts_mbt_use_state(initialState) { const tuple_ = default_.useState(initialState); return { state: tuple_[0], setState: tuple_[1] }; }",
     ),
   )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_use_reducer(reducer, initialState) { const tuple_ = default_.useReducer(reducer, initialState); return { state: tuple_[0], dispatch: tuple_[1] }; }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_use_transition() { const tuple_ = default_.useTransition(); return { isPending: tuple_[0], startTransition: tuple_[1] }; }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_use_optimistic(passthrough) { const tuple_ = default_.useOptimistic(passthrough); return { state: tuple_[0], dispatch: tuple_[1] }; }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_use_action_state(action, initialState, permalink) { const tuple_ = default_.useActionState(action, initialState, permalink); return { state: tuple_[0], dispatch: tuple_[1], isPending: tuple_[2] }; }",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace JSX namespace members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-jsx-entry.d.ts", "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct JsxElement"))
+  assert_true(bundle.ffi_mbt.contains("  kind : String"))
+  assert_true(bundle.ffi_mbt.contains("pub struct JsxIntrinsicElements"))
+  assert_true(bundle.ffi_mbt.contains("  badge : BadgeProps"))
+  assert_true(bundle.ffi_mbt.contains("pub struct JsxLibraryManagedAttributes"))
+  assert_true(bundle.ffi_mbt.contains("  props : P"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_element(tag : @js.Any) -> JsxElement = \"__ts_mbt_create_element\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export const __ts_mbt_create_element = default_.createElement;",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from exported JSX namespace members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/exported-jsx-namespace-entry.d.ts", "react/jsx-runtime",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct JsxElement"))
+  assert_true(bundle.ffi_mbt.contains("pub struct JsxIntrinsicElements"))
+  assert_true(bundle.ffi_mbt.contains("pub struct JsxLibraryManagedAttributes"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn jsx(tag : @js.Any, props : BadgeProps) -> JsxElement = \"jsx\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("fn get_jsx()"))
+  assert_false(bundle.bridge_js.contains("__ts_mbt_get_jsx"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace PropsWithChildren members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-props-with-children-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithChildren"))
+  assert_true(bundle.ffi_mbt.contains("  label : String"))
+  assert_true(bundle.ffi_mbt.contains("  children : ReactNode"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_badge(props : BadgePropsWithChildren) -> BadgePropsWithChildren = \"__ts_mbt_create_badge\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("pub type PropsWithChildren"))
+  assert_true(
+    bundle.bridge_js.contains(
+      "export const __ts_mbt_create_badge = default_.createBadge;",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace ComponentProps members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_badge(props : BadgeProps) -> BadgeProps = \"__ts_mbt_create_badge\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("pub type ComponentProps"))
+  assert_true(
+    bundle.bridge_js.contains(
+      "export const __ts_mbt_create_badge = default_.createBadge;",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace ComponentPropsWithoutRef members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_badge(props : BadgeProps) -> BadgeProps = \"__ts_mbt_create_badge\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("pub type ComponentPropsWithoutRef"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace ComponentPropsWithRef members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-with-ref-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithRef"))
+  assert_true(bundle.ffi_mbt.contains("  label : String"))
+  assert_true(bundle.ffi_mbt.contains("  ref : Ref"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_badge(props : BadgePropsWithRef) -> BadgePropsWithRef = \"__ts_mbt_create_badge\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("pub type ComponentPropsWithRef"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace nested PropsWithChildren members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-nested-props-with-children-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithChildren"))
+  assert_true(bundle.ffi_mbt.contains("  label : String"))
+  assert_true(bundle.ffi_mbt.contains("  children : ReactNode"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_badge(props : BadgePropsWithChildren) -> BadgePropsWithChildren = \"__ts_mbt_create_badge\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("pub type PropsWithChildren"))
+  assert_false(bundle.ffi_mbt.contains("pub type ComponentPropsWithoutRef"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace PropsWithoutRef and PropsWithRef members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-props-ref-alias-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
+  assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithChildren"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn strip_ref(props : BadgeProps) -> BadgeProps = \"__ts_mbt_strip_ref\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn keep_ref(props : BadgeProps) -> BadgeProps = \"__ts_mbt_keep_ref\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn nested() -> BadgePropsWithChildren = \"__ts_mbt_nested\"",
+    ) ||
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn nested(props : BadgePropsWithChildren) -> BadgePropsWithChildren = \"__ts_mbt_nested\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("pub type PropsWithoutRef"))
+  assert_false(bundle.ffi_mbt.contains("pub type PropsWithRef"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace optional React-like fields" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-optional-react-fields-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
+  assert_true(bundle.ffi_mbt.contains("  label : String"))
+  assert_true(bundle.ffi_mbt.contains("  children : ReactNode"))
+  assert_true(bundle.ffi_mbt.contains("  ref : Ref"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn render_badge(props : BadgeProps) -> BadgeProps = \"__ts_mbt_render_badge\"",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace inline PropsWithChildren members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-inline-props-with-children-entry.d.ts",
+    "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct LabelCountPropsWithChildren"))
+  assert_true(bundle.ffi_mbt.contains("  label : String"))
+  assert_true(bundle.ffi_mbt.contains("  count : Double"))
+  assert_true(bundle.ffi_mbt.contains("  children : ReactNode"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_badge(props : LabelCountPropsWithChildren) -> LabelCountPropsWithChildren = \"__ts_mbt_create_badge\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("pub type PropsWithChildren"))
 }

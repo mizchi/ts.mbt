@@ -29,6 +29,7 @@ pub(all) enum TsType {
   Intersection(Array[TsType]) // A & B
   // Type reference
   Named(String)
+  Applied(String, Array[TsType])
 } derive(Eq, Debug)
 
 ///|

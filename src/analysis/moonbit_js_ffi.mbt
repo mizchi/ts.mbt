@@ -142,7 +142,32 @@ fn ffi_mark_external_type(state : MoonBitJsFfiState, name : String) -> String {
 }
 
 ///|
+fn ffi_collapse_optional_like_union(type_ : @ast.TsType) -> @ast.TsType? {
+  match type_ {
+    Union(items) => {
+      let mut concrete : @ast.TsType? = None
+      for item in items {
+        match item {
+          Any => ()
+          _ =>
+            match concrete {
+              Some(_) => return None
+              None => concrete = Some(item)
+            }
+        }
+      }
+      concrete
+    }
+    _ => None
+  }
+}
+
+///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
+  match ffi_collapse_optional_like_union(type_) {
+    Some(collapsed) => return ffi_type_name(state, collapsed)
+    None => ()
+  }
   match type_ {
     Number => "Double"
     Int => "Int"
@@ -155,7 +180,10 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       state.needs_js_any = true
       "Array[@js.Any]"
     }
+    Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
+      "Array[" + ffi_type_name(state, inner) + "]"
     Named(name) => ffi_mark_external_type(state, name)
+    Applied(name, _) => ffi_mark_external_type(state, name)
     _ => {
       state.needs_js_any = true
       "@js.Any"
@@ -279,12 +307,12 @@ fn ffi_bridge_tuple_wrapper_line(
   binding_name : String,
   params : Array[String],
   expr : String,
-  item_count : Int,
+  field_names : Array[String],
 ) -> String {
   let params_str = params.join(", ")
   let fields : Array[String] = []
-  for i in 0..<item_count {
-    fields.push("_\{i}: tuple_[\{i}]")
+  for i, field_name in field_names {
+    fields.push("\{field_name}: tuple_[\{i}]")
   }
   let fields_str = fields.join(", ")
   "export function \{binding_name}(\{params_str}) { const tuple_ = \{expr}; return { \{fields_str} }; }"
@@ -869,7 +897,7 @@ fn normalize_interfaces_for_ffi(
     match modules.get(exported.source_path) {
       Some(info) =>
         interfaces.push(
-          clone_exported_interface(exported, info, canonical_types),
+          clone_exported_interface(exported, info, modules, canonical_types),
         )
       None => ()
     }
@@ -887,7 +915,9 @@ fn normalize_imports_for_ffi(
   for exported in exported_imports {
     match modules.get(exported.source_path) {
       Some(info) =>
-        imports.push(clone_exported_import(exported, info, canonical_types))
+        imports.push(
+          clone_exported_import(exported, info, modules, canonical_types),
+        )
       None => ()
     }
   }
@@ -904,7 +934,9 @@ fn normalize_funcs_for_ffi(
   for exported in exported_funcs {
     match modules.get(exported.source_path) {
       Some(info) =>
-        funcs.push(clone_exported_func(exported, info, canonical_types))
+        funcs.push(
+          clone_exported_func(exported, info, modules, canonical_types),
+        )
       None => ()
     }
   }
@@ -921,7 +953,9 @@ fn normalize_values_for_ffi(
   for exported in exported_values {
     match modules.get(exported.source_path) {
       Some(info) =>
-        values.push(clone_exported_value(exported, info, canonical_types))
+        values.push(
+          clone_exported_value(exported, info, modules, canonical_types),
+        )
       None => ()
     }
   }
@@ -938,7 +972,9 @@ fn normalize_classes_for_ffi(
   for exported in exported_classes {
     match modules.get(exported.source_path) {
       Some(info) =>
-        classes.push(clone_exported_class(exported, info, canonical_types))
+        classes.push(
+          clone_exported_class(exported, info, modules, canonical_types),
+        )
       None => ()
     }
   }
@@ -967,11 +1003,18 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let tuple_result_interfaces = normalize_tuple_result_interfaces(
     exported_imports, exported_funcs, modules, canonical_types,
   )
+  let react_utility_interfaces = normalize_react_utility_interfaces(
+    exported_interfaces, exported_imports, exported_funcs, exported_values, exported_classes,
+    modules, canonical_types,
+  )
   let interfaces = normalize_interfaces_for_ffi(
     exported_interfaces, modules, canonical_types,
   )
   for spec in tuple_result_interfaces {
     interfaces.push(spec.iface)
+  }
+  for iface in react_utility_interfaces {
+    interfaces.push(iface)
   }
   let imports = normalize_imports_for_ffi(
     exported_imports, modules, canonical_types,
@@ -999,9 +1042,13 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   for exported in exported_classes {
     class_runtime_export_names[exported.export_name] = exported.source_export_name
   }
-  let tuple_result_field_counts : Map[String, Int] = {}
+  let tuple_result_field_names : Map[String, Array[String]] = {}
   for spec in tuple_result_interfaces {
-    tuple_result_field_counts[spec.export_name] = spec.iface.fields.length()
+    let field_names : Array[String] = []
+    for field in spec.iface.fields {
+      field_names.push(field.0)
+    }
+    tuple_result_field_names[spec.export_name] = field_names
   }
 
   let declared_type_names : Array[String] = []
@@ -1037,7 +1084,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let handled_export_names : Array[String] = []
   for export_ in export_surface {
     match export_.kind {
-      Namespace => namespace_export_names.push(export_.export_name)
+      Namespace =>
+        match exported_local_namespace_decl(export_, modules) {
+          Some(_) => ()
+          None => namespace_export_names.push(export_.export_name)
+        }
       Ambiguous => ambiguous_exports.push(export_)
       _ => ()
     }
@@ -1247,8 +1298,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       import_runtime_export_names,
       import_.name,
     )
-    match tuple_result_field_counts.get(import_.name) {
-      Some(item_count) => {
+    match tuple_result_field_names.get(import_.name) {
+      Some(field_names) => {
         let binding_name = ffi_binding_name(import_.name)
         let args = ffi_import_param_names(import_)
         let args_str = args.join(", ")
@@ -1267,7 +1318,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           bridge_lines,
           binding_name,
           ffi_bridge_tuple_wrapper_line(
-            binding_name, args, call_expr, item_count,
+            binding_name, args, call_expr, field_names,
           ),
         )
       }
@@ -1316,8 +1367,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       func_runtime_export_names,
       func.name,
     )
-    match tuple_result_field_counts.get(func.name) {
-      Some(item_count) => {
+    match tuple_result_field_names.get(func.name) {
+      Some(field_names) => {
         let binding_name = ffi_binding_name(func.name)
         let args = ffi_func_param_names(func)
         let args_str = args.join(", ")
@@ -1336,7 +1387,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           bridge_lines,
           binding_name,
           ffi_bridge_tuple_wrapper_line(
-            binding_name, args, call_expr, item_count,
+            binding_name, args, call_expr, field_names,
           ),
         )
       }
@@ -1425,6 +1476,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   for export_ in export_surface {
     if export_.kind == Namespace || export_.kind == Ambiguous {
       continue
+    }
+    match exported_local_namespace_decl(export_, modules) {
+      Some(_) => continue
+      None => ()
     }
     if handled_export_names.contains(export_.export_name) {
       continue

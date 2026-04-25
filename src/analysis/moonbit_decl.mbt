@@ -59,6 +59,13 @@ priv struct TupleResultInterfaceSpec {
 }
 
 ///|
+priv struct ResolvedInterfaceOrigin {
+  info : DeclModuleInfo
+  export_name : String
+  iface : @ast.TsInterface
+}
+
+///|
 priv struct ExportedConstValueSet {
   values : Map[String, @ast.TsExpr]
   explicit_names : Array[String]
@@ -186,6 +193,27 @@ fn decl_to_pascal_case(name : String) -> String {
 ///|
 fn tuple_result_interface_name(export_name : String) -> String {
   decl_to_pascal_case(export_name) + "Result"
+}
+
+///|
+fn tuple_result_field_names(
+  export_name : String,
+  item_count : Int,
+) -> Array[String] {
+  match export_name {
+    "useState" if item_count == 2 => ["state", "setState"]
+    "useReducer" if item_count == 2 => ["state", "dispatch"]
+    "useTransition" if item_count == 2 => ["isPending", "startTransition"]
+    "useOptimistic" if item_count == 2 => ["state", "dispatch"]
+    "useActionState" if item_count == 3 => ["state", "dispatch", "isPending"]
+    _ => {
+      let names : Array[String] = []
+      for i in 0..<item_count {
+        names.push("_" + i.to_string())
+      }
+      names
+    }
+  }
 }
 
 ///|
@@ -483,6 +511,25 @@ fn find_interface_decl(
 }
 
 ///|
+fn find_interface_decl_recursive(
+  module_ : @ast.TsModule,
+  name : String,
+) -> @ast.TsInterface? {
+  match find_interface_decl(module_, name) {
+    Some(iface) => Some(iface)
+    None => {
+      for namespace_ in module_.namespaces {
+        match find_interface_decl_recursive(namespace_.module_, name) {
+          Some(iface) => return Some(iface)
+          None => ()
+        }
+      }
+      None
+    }
+  }
+}
+
+///|
 fn find_import_decl(module_ : @ast.TsModule, name : String) -> @ast.TsImport? {
   for import_ in module_.imports {
     if import_.name == name {
@@ -500,6 +547,25 @@ fn find_namespace_decl(
   for namespace_ in module_.namespaces {
     if namespace_.name == name {
       return Some(namespace_)
+    }
+  }
+  None
+}
+
+///|
+fn find_jsx_intrinsic_elements_decl(
+  module_ : @ast.TsModule,
+) -> @ast.TsInterface? {
+  for namespace_ in module_.namespaces {
+    if namespace_.name == "JSX" {
+      match find_interface_decl(namespace_.module_, "IntrinsicElements") {
+        Some(iface) => return Some(iface)
+        None => ()
+      }
+    }
+    match find_jsx_intrinsic_elements_decl(namespace_.module_) {
+      Some(iface) => return Some(iface)
+      None => ()
     }
   }
   None
@@ -789,9 +855,117 @@ fn namespace_member_runtime_export_name(
 }
 
 ///|
-fn append_exported_namespace_members(
+fn decl_to_camel_case(name : String) -> String {
+  let pascal = decl_to_pascal_case(name)
+  if pascal == "" {
+    return pascal
+  }
+  decl_to_lower_ascii(pascal[0].unsafe_to_char()).to_string() +
+  pascal[1:].to_string()
+}
+
+///|
+fn namespace_local_export_name(prefix : String, member_name : String) -> String {
+  if prefix == "" {
+    member_name
+  } else {
+    prefix + member_name
+  }
+}
+
+///|
+fn namespace_type_export_name(prefix : String, member_name : String) -> String {
+  if prefix == "" {
+    member_name
+  } else {
+    prefix + decl_to_pascal_case(member_name)
+  }
+}
+
+///|
+fn namespace_value_export_name(prefix : String, member_name : String) -> String {
+  if prefix == "" {
+    member_name
+  } else {
+    prefix + decl_to_pascal_case(member_name)
+  }
+}
+
+///|
+fn namespace_next_type_export_prefix(
+  prefix : String,
+  namespace_name : String,
+) -> String {
+  let segment = decl_to_pascal_case(namespace_name)
+  if prefix == "" {
+    segment
+  } else {
+    prefix + segment
+  }
+}
+
+///|
+fn namespace_next_value_export_prefix(
+  prefix : String,
+  namespace_name : String,
+) -> String {
+  if prefix == "" {
+    decl_to_camel_case(namespace_name)
+  } else {
+    prefix + decl_to_pascal_case(namespace_name)
+  }
+}
+
+///|
+fn append_exported_type_namespace_members_with_prefix(
   source_path : String,
-  runtime_root_export_name : String,
+  local_name_prefix : String,
+  type_export_prefix : String,
+  namespace_ : @ast.TsNamespaceDecl,
+  interfaces : Array[ExportedInterfaceDecl],
+) -> Unit {
+  for iface in namespace_.module_.interfaces {
+    interfaces.push({
+      source_path,
+      local_name: namespace_local_export_name(local_name_prefix, iface.name),
+      export_name: namespace_type_export_name(type_export_prefix, iface.name),
+      iface,
+    })
+  }
+  for nested in namespace_.module_.namespaces {
+    append_exported_type_namespace_members_with_prefix(
+      source_path,
+      namespace_local_export_name(local_name_prefix, nested.name + "."),
+      namespace_next_type_export_prefix(type_export_prefix, nested.name),
+      nested,
+      interfaces,
+    )
+  }
+}
+
+///|
+fn namespace_has_non_type_members(namespace_ : @ast.TsNamespaceDecl) -> Bool {
+  if namespace_.module_.imports.length() > 0 ||
+    namespace_.module_.funcs.length() > 0 ||
+    namespace_.module_.values.length() > 0 ||
+    namespace_.module_.classes.length() > 0 {
+    return true
+  }
+  for nested in namespace_.module_.namespaces {
+    if namespace_has_non_type_members(nested) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn append_exported_namespace_members_with_prefix(
+  source_path : String,
+  runtime_prefix : String,
+  local_name_prefix : String,
+  type_export_prefix : String,
+  value_export_prefix : String,
   namespace_ : @ast.TsNamespaceDecl,
   interfaces : Array[ExportedInterfaceDecl],
   imports : Array[ExportedImportDecl],
@@ -806,17 +980,20 @@ fn append_exported_namespace_members(
   for iface in namespace_.module_.interfaces {
     interfaces.push({
       source_path,
-      local_name: iface.name,
-      export_name: iface.name,
+      local_name: namespace_local_export_name(local_name_prefix, iface.name),
+      export_name: namespace_type_export_name(type_export_prefix, iface.name),
       iface,
     })
   }
   for import_ in namespace_.module_.imports {
     imports.push({
       source_path,
-      export_name: import_.name,
+      export_name: namespace_value_export_name(
+        value_export_prefix,
+        import_.name,
+      ),
       source_export_name: namespace_member_runtime_export_name(
-        runtime_root_export_name,
+        runtime_prefix,
         import_.name,
       ),
       import_,
@@ -825,9 +1002,9 @@ fn append_exported_namespace_members(
   for func in namespace_.module_.funcs {
     funcs.push({
       source_path,
-      export_name: func.name,
+      export_name: namespace_value_export_name(value_export_prefix, func.name),
       source_export_name: namespace_member_runtime_export_name(
-        runtime_root_export_name,
+        runtime_prefix,
         func.name,
       ),
       func,
@@ -839,9 +1016,9 @@ fn append_exported_namespace_members(
     }
     values.push({
       source_path,
-      export_name: value.name,
+      export_name: namespace_value_export_name(value_export_prefix, value.name),
       source_export_name: namespace_member_runtime_export_name(
-        runtime_root_export_name,
+        runtime_prefix,
         value.name,
       ),
       value,
@@ -850,14 +1027,61 @@ fn append_exported_namespace_members(
   for class_ in namespace_.module_.classes {
     classes.push({
       source_path,
-      local_name: class_.name,
-      export_name: class_.name,
+      local_name: namespace_local_export_name(local_name_prefix, class_.name),
+      export_name: namespace_type_export_name(type_export_prefix, class_.name),
       source_export_name: namespace_member_runtime_export_name(
-        runtime_root_export_name,
+        runtime_prefix,
         class_.name,
       ),
       class_,
     })
+  }
+  for nested in namespace_.module_.namespaces {
+    append_exported_namespace_members_with_prefix(
+      source_path,
+      namespace_member_runtime_export_name(runtime_prefix, nested.name),
+      namespace_local_export_name(local_name_prefix, nested.name + "."),
+      namespace_next_type_export_prefix(type_export_prefix, nested.name),
+      namespace_next_value_export_prefix(value_export_prefix, nested.name),
+      nested,
+      interfaces,
+      imports,
+      funcs,
+      values,
+      classes,
+    )
+  }
+}
+
+///|
+fn append_exported_namespace_members(
+  source_path : String,
+  runtime_root_export_name : String,
+  namespace_ : @ast.TsNamespaceDecl,
+  interfaces : Array[ExportedInterfaceDecl],
+  imports : Array[ExportedImportDecl],
+  funcs : Array[ExportedFuncDecl],
+  values : Array[ExportedValueDecl],
+  classes : Array[ExportedClassDecl],
+) -> Unit {
+  append_exported_namespace_members_with_prefix(
+    source_path, runtime_root_export_name, "", "", "", namespace_, interfaces, imports,
+    funcs, values, classes,
+  )
+}
+
+///|
+fn exported_local_namespace_decl(
+  export_ : ResolvedExport,
+  modules : Map[String, DeclModuleInfo],
+) -> @ast.TsNamespaceDecl? {
+  let local_name = match export_.local_name {
+    Some(local_name) => local_name
+    None => return None
+  }
+  match modules.get(export_.source_path) {
+    Some(info) => find_namespace_decl(info.module_, local_name)
+    None => None
   }
 }
 
@@ -1106,9 +1330,26 @@ fn collect_exported_decls(
   for export_ in export_surface {
     match export_.kind {
       Namespace => {
-        notes.push(
-          "///|\n/// Unsupported export \{export_.export_name}: namespace export is widened to JSValue.",
-        )
+        match exported_local_namespace_decl(export_, modules) {
+          Some(namespace_) => {
+            append_exported_type_namespace_members_with_prefix(
+              export_.source_path,
+              export_.export_name + ".",
+              decl_to_pascal_case(export_.export_name),
+              namespace_,
+              interfaces,
+            )
+            if namespace_has_non_type_members(namespace_) {
+              notes.push(
+                "///|\n/// Unsupported export \{export_.export_name}: runtime members inside exported namespace are omitted; only type members are exposed.",
+              )
+            }
+          }
+          None =>
+            notes.push(
+              "///|\n/// Unsupported export \{export_.export_name}: namespace export is widened to JSValue.",
+            )
+        }
         continue
       }
       Ambiguous => {
@@ -1125,6 +1366,24 @@ fn collect_exported_decls(
     let local_name = match export_.local_name {
       Some(local_name) => local_name
       None => continue
+    }
+    match exported_local_namespace_decl(export_, modules) {
+      Some(namespace_) if export_.export_name != "default" => {
+        append_exported_type_namespace_members_with_prefix(
+          export_.source_path,
+          export_.export_name + ".",
+          decl_to_pascal_case(export_.export_name),
+          namespace_,
+          interfaces,
+        )
+        if namespace_has_non_type_members(namespace_) {
+          notes.push(
+            "///|\n/// Unsupported export \{export_.export_name}: runtime members inside exported namespace are omitted; only type members are exposed.",
+          )
+        }
+        continue
+      }
+      _ => ()
     }
     if export_.export_name == "default" {
       match modules.get(export_.source_path) {
@@ -1245,6 +1504,536 @@ fn resolve_exported_type_name(
 }
 
 ///|
+fn resolve_interface_origin(
+  info : DeclModuleInfo,
+  name : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> ResolvedInterfaceOrigin? {
+  match find_interface_decl_recursive(info.module_, name) {
+    Some(iface) =>
+      Some({
+        info,
+        export_name: match
+          resolve_exported_type_name(info, name, canonical_types) {
+          Some(export_name) => export_name
+          None => name
+        },
+        iface,
+      })
+    None =>
+      match resolve_imported_type_origin(info, name) {
+        Some((source_path, imported_name)) =>
+          match modules.get(source_path) {
+            Some(source_info) =>
+              match
+                find_interface_decl_recursive(
+                  source_info.module_,
+                  imported_name,
+                ) {
+                Some(iface) =>
+                  Some({
+                    info: source_info,
+                    export_name: match
+                      resolve_exported_type_name(
+                        source_info, imported_name, canonical_types,
+                      ) {
+                      Some(export_name) => export_name
+                      None => imported_name
+                    },
+                    iface,
+                  })
+                None => None
+              }
+            None => None
+          }
+        None => None
+      }
+  }
+}
+
+///|
+fn props_with_children_interface_name(base_name : String) -> String {
+  base_name + "WithChildren"
+}
+
+///|
+fn component_props_with_ref_interface_name(base_name : String) -> String {
+  base_name + "WithRef"
+}
+
+///|
+fn is_props_passthrough_name(name : String) -> Bool {
+  name == "PropsWithoutRef" || name == "PropsWithRef"
+}
+
+///|
+fn props_with_children_object_interface_name(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+) -> String {
+  let mut prefix = ""
+  for field in fields {
+    let (key_type, _) = field
+    match key_type {
+      Literal(name) => prefix += decl_to_pascal_case(name)
+      _ => ()
+    }
+  }
+  if prefix == "" {
+    "InlinePropsWithChildren"
+  } else {
+    prefix + "PropsWithChildren"
+  }
+}
+
+///|
+fn resolve_react_node_type_name(
+  info : DeclModuleInfo,
+  canonical_types : Map[String, String],
+) -> String {
+  match resolve_exported_type_name(info, "ReactNode", canonical_types) {
+    Some(name) => name
+    None => "ReactNode"
+  }
+}
+
+///|
+fn props_with_children_named_interface_spec(
+  info : DeclModuleInfo,
+  name : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsInterface? {
+  match resolve_interface_origin(info, name, modules, canonical_types) {
+    Some(origin) => {
+      let fields : Array[(String, @ast.TsType)] = []
+      for field in origin.iface.fields {
+        let (field_name, field_type) = field
+        fields.push(
+          (
+            field_name,
+            rewrite_type_refs(origin.info, field_type, canonical_types),
+          ),
+        )
+      }
+      if !fields.iter().any(fn(field) { field.0 == "children" }) {
+        fields.push(
+          (
+            "children",
+            Named(resolve_react_node_type_name(info, canonical_types)),
+          ),
+        )
+      }
+      Some({
+        name: props_with_children_interface_name(origin.export_name),
+        fields,
+      })
+    }
+    None => None
+  }
+}
+
+///|
+fn props_with_children_interface_spec(
+  info : DeclModuleInfo,
+  inner_type : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsInterface? {
+  match inner_type {
+    Named(name) =>
+      props_with_children_named_interface_spec(
+        info, name, modules, canonical_types,
+      )
+    Object(inner_fields) => {
+      let fields : Array[(String, @ast.TsType)] = []
+      for field in inner_fields {
+        let (key_type, field_type) = field
+        match key_type {
+          Literal(field_name) =>
+            fields.push(
+              (
+                field_name,
+                lower_react_utility_type(
+                  info,
+                  rewrite_type_refs(info, field_type, canonical_types),
+                  modules,
+                  canonical_types,
+                ),
+              ),
+            )
+          _ => return None
+        }
+      }
+      if !fields.iter().any(fn(field) { field.0 == "children" }) {
+        fields.push(
+          (
+            "children",
+            Named(resolve_react_node_type_name(info, canonical_types)),
+          ),
+        )
+      }
+      Some({
+        name: props_with_children_object_interface_name(inner_fields),
+        fields,
+      })
+    }
+    _ =>
+      match
+        lower_react_utility_type(info, inner_type, modules, canonical_types) {
+        Named(name) =>
+          props_with_children_named_interface_spec(
+            info, name, modules, canonical_types,
+          )
+        _ => None
+      }
+  }
+}
+
+///|
+fn component_props_resolved_type(
+  info : DeclModuleInfo,
+  inner_type : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType? {
+  match inner_type {
+    Literal(name) =>
+      match find_jsx_intrinsic_elements_decl(info.module_) {
+        Some(iface) => {
+          for field in iface.fields {
+            let (field_name, field_type) = field
+            if field_name == name {
+              return Some(
+                lower_react_utility_type(
+                  info,
+                  rewrite_type_refs(info, field_type, canonical_types),
+                  modules,
+                  canonical_types,
+                ),
+              )
+            }
+          }
+          None
+        }
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn component_props_with_ref_interface_spec(
+  info : DeclModuleInfo,
+  inner_type : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsInterface? {
+  match
+    component_props_resolved_type(info, inner_type, modules, canonical_types) {
+    Some(Named(name)) =>
+      match resolve_interface_origin(info, name, modules, canonical_types) {
+        Some(origin) => {
+          let fields : Array[(String, @ast.TsType)] = []
+          for field in origin.iface.fields {
+            let (field_name, field_type) = field
+            fields.push(
+              (
+                field_name,
+                lower_react_utility_type(
+                  origin.info,
+                  rewrite_type_refs(origin.info, field_type, canonical_types),
+                  modules,
+                  canonical_types,
+                ),
+              ),
+            )
+          }
+          if !fields.iter().any(fn(field) { field.0 == "ref" }) {
+            match
+              resolve_interface_origin(
+                info, "RefAttributes", modules, canonical_types,
+              ) {
+              Some(ref_origin) =>
+                for field in ref_origin.iface.fields {
+                  let (field_name, field_type) = field
+                  if field_name == "ref" {
+                    fields.push(
+                      (
+                        "ref",
+                        lower_react_utility_type(
+                          ref_origin.info,
+                          rewrite_type_refs(
+                            ref_origin.info,
+                            field_type,
+                            canonical_types,
+                          ),
+                          modules,
+                          canonical_types,
+                        ),
+                      ),
+                    )
+                    break
+                  }
+                }
+              None => ()
+            }
+          }
+          Some({
+            name: component_props_with_ref_interface_name(origin.export_name),
+            fields,
+          })
+        }
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn is_component_props_like_name(name : String) -> Bool {
+  name == "ComponentProps" || name == "ComponentPropsWithoutRef"
+}
+
+///|
+fn lower_react_utility_type(
+  info : DeclModuleInfo,
+  type_ : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType {
+  match type_ {
+    Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
+      lower_react_utility_type(info, inner_type, modules, canonical_types)
+    Applied("PropsWithChildren", [inner_type]) =>
+      match
+        props_with_children_interface_spec(
+          info, inner_type, modules, canonical_types,
+        ) {
+        Some(iface) => Named(iface.name)
+        None =>
+          Applied("PropsWithChildren", [
+            lower_react_utility_type(info, inner_type, modules, canonical_types),
+          ])
+      }
+    Applied("ComponentPropsWithRef", [inner_type]) =>
+      match
+        component_props_with_ref_interface_spec(
+          info, inner_type, modules, canonical_types,
+        ) {
+        Some(iface) => Named(iface.name)
+        None =>
+          Applied("ComponentPropsWithRef", [
+            lower_react_utility_type(info, inner_type, modules, canonical_types),
+          ])
+      }
+    Applied(name, [inner_type]) if is_component_props_like_name(name) =>
+      match
+        component_props_resolved_type(
+          info, inner_type, modules, canonical_types,
+        ) {
+        Some(type_) => type_
+        None =>
+          Applied(name, [
+            lower_react_utility_type(info, inner_type, modules, canonical_types),
+          ])
+      }
+    Applied(name, args) => {
+      let next_args : Array[@ast.TsType] = []
+      for arg in args {
+        next_args.push(
+          lower_react_utility_type(info, arg, modules, canonical_types),
+        )
+      }
+      Applied(name, next_args)
+    }
+    Array(inner) =>
+      Array(lower_react_utility_type(info, inner, modules, canonical_types))
+    Tuple(items) => {
+      let next_items : Array[@ast.TsType] = []
+      for item in items {
+        next_items.push(
+          lower_react_utility_type(info, item, modules, canonical_types),
+        )
+      }
+      Tuple(next_items)
+    }
+    Object(fields) => {
+      let next_fields : Array[(@ast.TsType, @ast.TsType)] = []
+      for field in fields {
+        let (key_type, value_type) = field
+        next_fields.push(
+          (
+            lower_react_utility_type(info, key_type, modules, canonical_types),
+            lower_react_utility_type(info, value_type, modules, canonical_types),
+          ),
+        )
+      }
+      Object(next_fields)
+    }
+    Struct(name, fields) => {
+      let next_fields : Array[(String, @ast.TsType)] = []
+      for field in fields {
+        let (field_name, field_type) = field
+        next_fields.push(
+          (
+            field_name,
+            lower_react_utility_type(info, field_type, modules, canonical_types),
+          ),
+        )
+      }
+      Struct(name, next_fields)
+    }
+    Func(params, return_type) => {
+      let next_params : Array[@ast.TsType] = []
+      for param in params {
+        next_params.push(
+          lower_react_utility_type(info, param, modules, canonical_types),
+        )
+      }
+      Func(
+        next_params,
+        lower_react_utility_type(info, return_type, modules, canonical_types),
+      )
+    }
+    Union(types) => {
+      let next_types : Array[@ast.TsType] = []
+      for item in types {
+        next_types.push(
+          lower_react_utility_type(info, item, modules, canonical_types),
+        )
+      }
+      Union(next_types)
+    }
+    Intersection(types) => {
+      let next_types : Array[@ast.TsType] = []
+      for item in types {
+        next_types.push(
+          lower_react_utility_type(info, item, modules, canonical_types),
+        )
+      }
+      Intersection(next_types)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn collect_react_utility_interfaces_from_type(
+  info : DeclModuleInfo,
+  type_ : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  seen_names : Array[String],
+  interfaces : Array[@ast.TsInterface],
+) -> Unit {
+  match type_ {
+    Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
+      collect_react_utility_interfaces_from_type(
+        info, inner_type, modules, canonical_types, seen_names, interfaces,
+      )
+    Applied("PropsWithChildren", [inner_type]) => {
+      match
+        props_with_children_interface_spec(
+          info, inner_type, modules, canonical_types,
+        ) {
+        Some(iface) =>
+          if !seen_names.contains(iface.name) {
+            seen_names.push(iface.name)
+            interfaces.push(iface)
+          }
+        None => ()
+      }
+      collect_react_utility_interfaces_from_type(
+        info, inner_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    Applied("ComponentPropsWithRef", [inner_type]) => {
+      match
+        component_props_with_ref_interface_spec(
+          info, inner_type, modules, canonical_types,
+        ) {
+        Some(iface) => {
+          if !seen_names.contains(iface.name) {
+            seen_names.push(iface.name)
+            interfaces.push(iface)
+          }
+          for field in iface.fields {
+            let (_, field_type) = field
+            collect_react_utility_interfaces_from_type(
+              info, field_type, modules, canonical_types, seen_names, interfaces,
+            )
+          }
+        }
+        None => ()
+      }
+      collect_react_utility_interfaces_from_type(
+        info, inner_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    Applied(name, [inner_type]) if is_component_props_like_name(name) => {
+      match
+        component_props_resolved_type(
+          info, inner_type, modules, canonical_types,
+        ) {
+        Some(resolved_type) =>
+          collect_react_utility_interfaces_from_type(
+            info, resolved_type, modules, canonical_types, seen_names, interfaces,
+          )
+        None => ()
+      }
+      collect_react_utility_interfaces_from_type(
+        info, inner_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    Applied(_, args) =>
+      for arg in args {
+        collect_react_utility_interfaces_from_type(
+          info, arg, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+    Array(inner) =>
+      collect_react_utility_interfaces_from_type(
+        info, inner, modules, canonical_types, seen_names, interfaces,
+      )
+    Tuple(items) | Union(items) | Intersection(items) =>
+      for item in items {
+        collect_react_utility_interfaces_from_type(
+          info, item, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+    Object(fields) =>
+      for field in fields {
+        let (key_type, value_type) = field
+        collect_react_utility_interfaces_from_type(
+          info, key_type, modules, canonical_types, seen_names, interfaces,
+        )
+        collect_react_utility_interfaces_from_type(
+          info, value_type, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+    Struct(_, fields) =>
+      for field in fields {
+        let (_, field_type) = field
+        collect_react_utility_interfaces_from_type(
+          info, field_type, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+    Func(params, return_type) => {
+      for param in params {
+        collect_react_utility_interfaces_from_type(
+          info, param, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+      collect_react_utility_interfaces_from_type(
+        info, return_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    _ => ()
+  }
+}
+
+///|
 fn rewrite_type_refs(
   info : DeclModuleInfo,
   type_ : @ast.TsType,
@@ -1256,6 +2045,16 @@ fn rewrite_type_refs(
         Some(export_name) => Named(export_name)
         None => type_
       }
+    Applied(name, args) => {
+      let next_args : Array[@ast.TsType] = []
+      for arg in args {
+        next_args.push(rewrite_type_refs(info, arg, canonical_types))
+      }
+      match resolve_exported_type_name(info, name, canonical_types) {
+        Some(export_name) => Applied(export_name, next_args)
+        None => Applied(name, next_args)
+      }
+    }
     Array(inner) => Array(rewrite_type_refs(info, inner, canonical_types))
     Tuple(items) => {
       let next_items : Array[@ast.TsType] = []
@@ -1325,8 +2124,9 @@ fn tuple_result_interface_spec(
   match return_type {
     Tuple(items) => {
       let fields : Array[(String, @ast.TsType)] = []
+      let field_names = tuple_result_field_names(export_name, items.length())
       for i, item in items {
-        fields.push(("_" + i.to_string(), item))
+        fields.push((field_names[i], item))
       }
       Some({
         export_name,
@@ -1390,16 +2190,175 @@ fn normalize_tuple_result_interfaces(
 }
 
 ///|
+fn normalize_react_utility_interfaces(
+  exported_interfaces : Array[ExportedInterfaceDecl],
+  exported_imports : Array[ExportedImportDecl],
+  exported_funcs : Array[ExportedFuncDecl],
+  exported_values : Array[ExportedValueDecl],
+  exported_classes : Array[ExportedClassDecl],
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> Array[@ast.TsInterface] {
+  let interfaces : Array[@ast.TsInterface] = []
+  let seen_names : Array[String] = []
+  for exported in exported_interfaces {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        for field in exported.iface.fields {
+          let (_, field_type) = field
+          collect_react_utility_interfaces_from_type(
+            info,
+            rewrite_type_refs(info, field_type, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+      None => ()
+    }
+  }
+  for exported in exported_imports {
+    match modules.get(exported.source_path) {
+      Some(info) => {
+        for param in exported.import_.params {
+          let (_, param_type) = param
+          collect_react_utility_interfaces_from_type(
+            info,
+            rewrite_type_refs(info, param_type, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+        collect_react_utility_interfaces_from_type(
+          info,
+          rewrite_type_refs(info, exported.import_.return_type, canonical_types),
+          modules,
+          canonical_types,
+          seen_names,
+          interfaces,
+        )
+      }
+      None => ()
+    }
+  }
+  for exported in exported_funcs {
+    match modules.get(exported.source_path) {
+      Some(info) => {
+        for param in exported.func.params {
+          collect_react_utility_interfaces_from_type(
+            info,
+            rewrite_type_refs(info, param.type_, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+        collect_react_utility_interfaces_from_type(
+          info,
+          rewrite_type_refs(info, exported.func.return_type, canonical_types),
+          modules,
+          canonical_types,
+          seen_names,
+          interfaces,
+        )
+      }
+      None => ()
+    }
+  }
+  for exported in exported_values {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        collect_react_utility_interfaces_from_type(
+          info,
+          rewrite_type_refs(info, exported.value.type_, canonical_types),
+          modules,
+          canonical_types,
+          seen_names,
+          interfaces,
+        )
+      None => ()
+    }
+  }
+  for exported in exported_classes {
+    match modules.get(exported.source_path) {
+      Some(info) => {
+        for class_property in exported.class_.properties {
+          collect_react_utility_interfaces_from_type(
+            info,
+            rewrite_type_refs(info, class_property.type_, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+        for class_method in exported.class_.methods {
+          for param in class_method.params {
+            let (_, param_type) = param
+            collect_react_utility_interfaces_from_type(
+              info,
+              rewrite_type_refs(info, param_type, canonical_types),
+              modules,
+              canonical_types,
+              seen_names,
+              interfaces,
+            )
+          }
+          collect_react_utility_interfaces_from_type(
+            info,
+            rewrite_type_refs(info, class_method.return_type, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+        match exported.class_.constructor_params {
+          Some(params) =>
+            for param in params {
+              let (_, param_type) = param
+              collect_react_utility_interfaces_from_type(
+                info,
+                rewrite_type_refs(info, param_type, canonical_types),
+                modules,
+                canonical_types,
+                seen_names,
+                interfaces,
+              )
+            }
+          None => ()
+        }
+      }
+      None => ()
+    }
+  }
+  interfaces
+}
+
+///|
 fn clone_exported_interface(
   exported : ExportedInterfaceDecl,
   info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsInterface {
   let fields : Array[(String, @ast.TsType)] = []
   for field in exported.iface.fields {
     let (field_name, field_type) = field
     fields.push(
-      (field_name, rewrite_type_refs(info, field_type, canonical_types)),
+      (
+        field_name,
+        lower_react_utility_type(
+          info,
+          rewrite_type_refs(info, field_type, canonical_types),
+          modules,
+          canonical_types,
+        ),
+      ),
     )
   }
   { name: exported.export_name, fields }
@@ -1409,18 +2368,28 @@ fn clone_exported_interface(
 fn clone_exported_import(
   exported : ExportedImportDecl,
   info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsImport {
   let params : Array[(String, @ast.TsType)] = []
   for param in exported.import_.params {
     let (param_name, param_type) = param
     params.push(
-      (param_name, rewrite_type_refs(info, param_type, canonical_types)),
+      (
+        param_name,
+        lower_react_utility_type(
+          info,
+          rewrite_type_refs(info, param_type, canonical_types),
+          modules,
+          canonical_types,
+        ),
+      ),
     )
   }
-  let return_type = rewrite_type_refs(
+  let return_type = lower_react_utility_type(
     info,
-    exported.import_.return_type,
+    rewrite_type_refs(info, exported.import_.return_type, canonical_types),
+    modules,
     canonical_types,
   )
   {
@@ -1438,6 +2407,7 @@ fn clone_exported_import(
 fn clone_exported_func(
   exported : ExportedFuncDecl,
   info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsFunc {
   let params : Array[@ast.TsParam] = []
@@ -1446,13 +2416,19 @@ fn clone_exported_func(
       name: param.name,
       binding: param.binding,
       is_rest: param.is_rest,
-      type_: rewrite_type_refs(info, param.type_, canonical_types),
+      type_: lower_react_utility_type(
+        info,
+        rewrite_type_refs(info, param.type_, canonical_types),
+        modules,
+        canonical_types,
+      ),
       default: param.default,
     })
   }
-  let return_type = rewrite_type_refs(
+  let return_type = lower_react_utility_type(
     info,
-    exported.func.return_type,
+    rewrite_type_refs(info, exported.func.return_type, canonical_types),
+    modules,
     canonical_types,
   )
   {
@@ -1472,11 +2448,17 @@ fn clone_exported_func(
 fn clone_exported_value(
   exported : ExportedValueDecl,
   info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsValueDecl {
   {
     name: exported.export_name,
-    type_: rewrite_type_refs(info, exported.value.type_, canonical_types),
+    type_: lower_react_utility_type(
+      info,
+      rewrite_type_refs(info, exported.value.type_, canonical_types),
+      modules,
+      canonical_types,
+    ),
   }
 }
 
@@ -1484,13 +2466,19 @@ fn clone_exported_value(
 fn clone_exported_class(
   exported : ExportedClassDecl,
   info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsClassDecl {
   let properties : Array[@ast.TsClassPropertyDecl] = []
   for class_property in exported.class_.properties {
     properties.push({
       name: class_property.name,
-      type_: rewrite_type_refs(info, class_property.type_, canonical_types),
+      type_: lower_react_utility_type(
+        info,
+        rewrite_type_refs(info, class_property.type_, canonical_types),
+        modules,
+        canonical_types,
+      ),
       is_static: class_property.is_static,
       is_readonly: class_property.is_readonly,
     })
@@ -1501,15 +2489,24 @@ fn clone_exported_class(
     for param in class_method.params {
       let (param_name, param_type) = param
       params.push(
-        (param_name, rewrite_type_refs(info, param_type, canonical_types)),
+        (
+          param_name,
+          lower_react_utility_type(
+            info,
+            rewrite_type_refs(info, param_type, canonical_types),
+            modules,
+            canonical_types,
+          ),
+        ),
       )
     }
     methods.push({
       name: class_method.name,
       params,
-      return_type: rewrite_type_refs(
+      return_type: lower_react_utility_type(
         info,
-        class_method.return_type,
+        rewrite_type_refs(info, class_method.return_type, canonical_types),
+        modules,
         canonical_types,
       ),
       is_static: class_method.is_static,
@@ -1521,7 +2518,15 @@ fn clone_exported_class(
       for param in params {
         let (param_name, param_type) = param
         next_params.push(
-          (param_name, rewrite_type_refs(info, param_type, canonical_types)),
+          (
+            param_name,
+            lower_react_utility_type(
+              info,
+              rewrite_type_refs(info, param_type, canonical_types),
+              modules,
+              canonical_types,
+            ),
+          ),
         )
       }
       Some(next_params)
@@ -1559,12 +2564,16 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let tuple_result_interfaces = normalize_tuple_result_interfaces(
     exported_imports, exported_funcs, modules, canonical_types,
   )
+  let react_utility_interfaces = normalize_react_utility_interfaces(
+    exported_interfaces, exported_imports, exported_funcs, exported_values, exported_classes,
+    modules, canonical_types,
+  )
   let interfaces : Array[@ast.TsInterface] = []
   for exported in exported_interfaces {
     match modules.get(exported.source_path) {
       Some(info) =>
         interfaces.push(
-          clone_exported_interface(exported, info, canonical_types),
+          clone_exported_interface(exported, info, modules, canonical_types),
         )
       None => ()
     }
@@ -1572,11 +2581,16 @@ pub async fn emit_moonbit_decl_from_entry_path(
   for spec in tuple_result_interfaces {
     interfaces.push(spec.iface)
   }
+  for iface in react_utility_interfaces {
+    interfaces.push(iface)
+  }
   let imports : Array[@ast.TsImport] = []
   for exported in exported_imports {
     match modules.get(exported.source_path) {
       Some(info) =>
-        imports.push(clone_exported_import(exported, info, canonical_types))
+        imports.push(
+          clone_exported_import(exported, info, modules, canonical_types),
+        )
       None => ()
     }
   }
@@ -1584,7 +2598,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
   for exported in exported_funcs {
     match modules.get(exported.source_path) {
       Some(info) =>
-        funcs.push(clone_exported_func(exported, info, canonical_types))
+        funcs.push(
+          clone_exported_func(exported, info, modules, canonical_types),
+        )
       None => ()
     }
   }
@@ -1592,7 +2608,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
   for exported in exported_classes {
     match modules.get(exported.source_path) {
       Some(info) =>
-        classes.push(clone_exported_class(exported, info, canonical_types))
+        classes.push(
+          clone_exported_class(exported, info, modules, canonical_types),
+        )
       None => ()
     }
   }
@@ -1600,7 +2618,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
   for exported in exported_values {
     match modules.get(exported.source_path) {
       Some(info) =>
-        values.push(clone_exported_value(exported, info, canonical_types))
+        values.push(
+          clone_exported_value(exported, info, modules, canonical_types),
+        )
       None => ()
     }
   }

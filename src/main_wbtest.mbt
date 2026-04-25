@@ -4561,7 +4561,15 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
     e => fail("failed to read export-as-namespace hook tuple bridge.mbt: \{e}")
   }
   assert_true(bridge_mbti.contains("declare pub type UseStateResult"))
+  assert_true(bridge_mbti.contains("/// state : S"))
+  assert_true(bridge_mbti.contains("/// setState : Dispatch"))
+  assert_true(bridge_mbti.contains("declare pub type UseReducerResult"))
+  assert_true(bridge_mbti.contains("/// dispatch : ActionDispatch"))
   assert_true(bridge_mbti.contains("declare pub type UseTransitionResult"))
+  assert_true(bridge_mbti.contains("/// isPending : Bool"))
+  assert_true(bridge_mbti.contains("/// startTransition : TransitionFunction"))
+  assert_true(bridge_mbti.contains("declare pub type UseOptimisticResult"))
+  assert_true(bridge_mbti.contains("declare pub type UseActionStateResult"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn useState(initialState : S) -> UseStateResult",
@@ -4569,7 +4577,22 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbti.contains(
+      "declare pub fn useReducer(reducer : JSValue, initialState : S) -> UseReducerResult",
+    ),
+  )
+  assert_true(
+    bridge_mbti.contains(
       "declare pub fn useTransition() -> UseTransitionResult",
+    ),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn useOptimistic(passthrough : State) -> UseOptimisticResult",
+    ),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn useActionState(action : JSValue, initialState : State, permalink : String) -> UseActionStateResult",
     ),
   )
   assert_true(
@@ -4579,9 +4602,372 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbt.contains(
+      "pub fn useReducer(reducer : JSValue, initialState : S) -> UseReducerResult {\n  use_reducer(reducer, initialState)\n}",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
       "pub fn useTransition() -> UseTransitionResult {\n  use_transition()\n}",
     ),
   )
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn useOptimistic(passthrough : State) -> UseOptimisticResult {\n  use_optimistic(passthrough)\n}",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn useActionState(action : JSValue, initialState : State, permalink : String) -> UseActionStateResult {\n  use_action_state(action, initialState, permalink)\n}",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace JSX namespace members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_jsx",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-jsx-entry.d.ts", "./runtime/react-like.js",
+    root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read export-as-namespace jsx bridge.mbti: \{e}")
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => fail("failed to read export-as-namespace jsx bridge.mbt: \{e}")
+  }
+  assert_true(bridge_mbti.contains("declare pub type JsxElement"))
+  assert_true(bridge_mbti.contains("declare pub type JsxIntrinsicElements"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn createElement(tag : JSValue) -> JsxElement",
+    ),
+  )
+  assert_true(bridge_mbt.contains("pub struct JsxElement {"))
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn createElement(tag : JSValue) -> JsxElement {\n  create_element(tag)\n}",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles exported JSX namespace members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_exported_jsx_namespace",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/exported-jsx-namespace-entry.d.ts", "react/jsx-runtime",
+    root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read exported jsx namespace bridge.mbti: \{e}")
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => fail("failed to read exported jsx namespace bridge.mbt: \{e}")
+  }
+  assert_true(bridge_mbti.contains("declare pub type JsxElement"))
+  assert_true(bridge_mbti.contains("declare pub type JsxIntrinsicElements"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn jsx(tag : JSValue, props : BadgeProps) -> JsxElement",
+    ),
+  )
+  assert_false(bridge_mbti.contains("declare pub fn get_jsx()"))
+  assert_true(
+    bridge_mbt.contains(
+      "#module(\"react/jsx-runtime\")\npub extern \"js\" fn jsx(tag : @js.Any, props : BadgeProps) -> JsxElement = \"jsx\"",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace PropsWithChildren members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_props_with_children",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-props-with-children-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace props-with-children bridge.mbti: \{e}",
+      )
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace props-with-children bridge.mbt: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
+    ),
+  )
+  assert_false(bridge_mbti.contains("declare pub type PropsWithChildren"))
+  assert_true(bridge_mbt.contains("pub struct BadgePropsWithChildren {"))
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren {\n  create_badge(props)\n}",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentProps members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_component_props",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace component-props bridge.mbti: \{e}",
+      )
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace component-props bridge.mbt: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn createBadge(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+  assert_false(bridge_mbti.contains("declare pub type ComponentProps"))
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn createBadge(props : BadgeProps) -> BadgeProps {\n  create_badge(props)\n}",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentPropsWithoutRef members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_component_props_without_ref",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace component-props-without-ref bridge.mbti: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn createBadge(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+  assert_false(
+    bridge_mbti.contains("declare pub type ComponentPropsWithoutRef"),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentPropsWithRef members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_component_props_with_ref",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-with-ref-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace component-props-with-ref bridge.mbti: \{e}",
+      )
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace component-props-with-ref bridge.mbt: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub type BadgePropsWithRef"))
+  assert_true(bridge_mbti.contains("declare pub type Ref"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn createBadge(props : BadgePropsWithRef) -> BadgePropsWithRef",
+    ),
+  )
+  assert_true(bridge_mbt.contains("pub struct BadgePropsWithRef {"))
+  assert_false(bridge_mbti.contains("declare pub type ComponentPropsWithRef"))
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace nested PropsWithChildren members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_nested_props_with_children",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-nested-props-with-children-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace nested props-with-children bridge.mbti: \{e}",
+      )
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace nested props-with-children bridge.mbt: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
+    ),
+  )
+  assert_true(bridge_mbt.contains("pub struct BadgePropsWithChildren {"))
+  assert_false(bridge_mbti.contains("declare pub type PropsWithChildren"))
+  assert_false(
+    bridge_mbti.contains("declare pub type ComponentPropsWithoutRef"),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace PropsWithoutRef and PropsWithRef members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_props_ref_alias",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-props-ref-alias-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace props-ref-alias bridge.mbti: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
+  assert_true(bridge_mbti.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn stripRef(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn keepRef(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn nested(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
+    ),
+  )
+  assert_false(bridge_mbti.contains("declare pub type PropsWithoutRef"))
+  assert_false(bridge_mbti.contains("declare pub type PropsWithRef"))
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace optional React-like fields" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_optional_react_fields",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-optional-react-fields-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace optional-react-fields bridge.mbti: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
+  assert_true(bridge_mbti.contains("/// label : String"))
+  assert_true(bridge_mbti.contains("/// children : ReactNode"))
+  assert_true(bridge_mbti.contains("/// ref : Ref"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn renderBadge(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace inline PropsWithChildren members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_inline_props_with_children",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-inline-props-with-children-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace inline props-with-children bridge.mbti: \{e}",
+      )
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace inline props-with-children bridge.mbt: \{e}",
+      )
+  }
+  assert_true(
+    bridge_mbti.contains("declare pub type LabelCountPropsWithChildren"),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn createBadge(props : LabelCountPropsWithChildren) -> LabelCountPropsWithChildren",
+    ),
+  )
+  assert_true(bridge_mbt.contains("pub struct LabelCountPropsWithChildren {"))
+  assert_false(bridge_mbti.contains("declare pub type PropsWithChildren"))
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
 

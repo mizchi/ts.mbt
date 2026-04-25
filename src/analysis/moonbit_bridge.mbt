@@ -186,6 +186,9 @@ fn add_bridge_namespace_public_decls(
     }
     let export_name = export_.export_name
     let unsupported_note = "///|\n/// Unsupported export \{export_name}: namespace export is widened to JSValue."
+    if !next_bridge_mbti.contains(unsupported_note) {
+      continue
+    }
     if next_bridge_mbti.contains(unsupported_note) {
       next_bridge_mbti = next_bridge_mbti.replace(
         old=unsupported_note,

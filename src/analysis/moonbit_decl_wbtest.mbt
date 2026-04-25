@@ -814,15 +814,276 @@ async test "analysis: emit MoonBit declarations from export-as-namespace hook tu
     }
   }
   assert_true(actual.contains("declare pub type UseStateResult"))
+  assert_true(actual.contains("/// state : S"))
+  assert_true(actual.contains("/// setState : Dispatch"))
+  assert_true(actual.contains("declare pub type UseReducerResult"))
+  assert_true(actual.contains("/// dispatch : ActionDispatch"))
   assert_true(actual.contains("declare pub type UseTransitionResult"))
+  assert_true(actual.contains("/// isPending : Bool"))
+  assert_true(actual.contains("/// startTransition : TransitionFunction"))
+  assert_true(actual.contains("declare pub type UseOptimisticResult"))
+  assert_true(actual.contains("/// state : State"))
+  assert_true(actual.contains("declare pub type UseActionStateResult"))
+  assert_true(actual.contains("/// isPending : Bool"))
   assert_true(
     actual.contains(
       "declare pub fn useState(initialState : S) -> UseStateResult",
     ),
   )
   assert_true(
+    actual.contains(
+      "declare pub fn useReducer(reducer : JSValue, initialState : S) -> UseReducerResult",
+    ),
+  )
+  assert_true(
     actual.contains("declare pub fn useTransition() -> UseTransitionResult"),
   )
+  assert_true(
+    actual.contains(
+      "declare pub fn useOptimistic(passthrough : State) -> UseOptimisticResult",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn useActionState(action : JSValue, initialState : State, permalink : String) -> UseActionStateResult",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace JSX namespace members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-jsx-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BadgeProps"))
+  assert_true(actual.contains("declare pub type JsxElement"))
+  assert_true(actual.contains("declare pub type JsxIntrinsicElements"))
+  assert_true(actual.contains("declare pub type JsxLibraryManagedAttributes"))
+  assert_true(
+    actual.contains("declare pub fn createElement(tag : JSValue) -> JsxElement"),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit declarations from exported JSX namespace members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/exported-jsx-namespace-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BadgeProps"))
+  assert_true(actual.contains("declare pub type JsxElement"))
+  assert_true(actual.contains("declare pub type JsxIntrinsicElements"))
+  assert_true(actual.contains("declare pub type JsxLibraryManagedAttributes"))
+  assert_true(
+    actual.contains(
+      "declare pub fn jsx(tag : JSValue, props : BadgeProps) -> JsxElement",
+    ),
+  )
+  assert_false(actual.contains("declare pub fn get_jsx() ->"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace PropsWithChildren members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-props-with-children-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type ReactNode"))
+  assert_true(actual.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
+    ),
+  )
+  assert_false(actual.contains("declare pub type PropsWithChildren"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace ComponentProps members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BadgeProps"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createBadge(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+  assert_false(actual.contains("declare pub type ComponentProps"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace ComponentPropsWithoutRef members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BadgeProps"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createBadge(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+  assert_false(actual.contains("declare pub type ComponentPropsWithoutRef"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace ComponentPropsWithRef members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-component-props-with-ref-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BadgePropsWithRef"))
+  assert_true(actual.contains("declare pub type Ref"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createBadge(props : BadgePropsWithRef) -> BadgePropsWithRef",
+    ),
+  )
+  assert_false(actual.contains("declare pub type ComponentPropsWithRef"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace nested PropsWithChildren members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-nested-props-with-children-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
+    ),
+  )
+  assert_false(actual.contains("declare pub type PropsWithChildren"))
+  assert_false(actual.contains("declare pub type ComponentPropsWithoutRef"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace PropsWithoutRef and PropsWithRef members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-props-ref-alias-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BadgeProps"))
+  assert_true(actual.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(
+    actual.contains("declare pub fn stripRef(props : BadgeProps) -> BadgeProps"),
+  )
+  assert_true(
+    actual.contains("declare pub fn keepRef(props : BadgeProps) -> BadgeProps"),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn nested(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
+    ),
+  )
+  assert_false(actual.contains("declare pub type PropsWithoutRef"))
+  assert_false(actual.contains("declare pub type PropsWithRef"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace optional React-like fields" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-optional-react-fields-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BadgeProps"))
+  assert_true(actual.contains("/// label : String"))
+  assert_true(actual.contains("/// children : ReactNode"))
+  assert_true(actual.contains("/// ref : Ref"))
+  assert_true(
+    actual.contains(
+      "declare pub fn renderBadge(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit declarations from export-as-namespace inline PropsWithChildren members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-inline-props-with-children-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type LabelCountPropsWithChildren"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createBadge(props : LabelCountPropsWithChildren) -> LabelCountPropsWithChildren",
+    ),
+  )
+  assert_false(actual.contains("declare pub type PropsWithChildren"))
 }
 
 ///|

@@ -320,6 +320,7 @@ pub(all) enum TsType {
   Union(Array[TsType])
   Intersection(Array[TsType])
   Named(String)
+  Applied(String, Array[TsType])
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
 

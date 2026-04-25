@@ -54,6 +54,8 @@ pub impl Show for Lexer
 pub struct Parser {
   tokens : Array[Token]
   mut pos : Int
+  mut pending_gt : Int
+  mut pending_gt_pos : Int
   mut in_generator : Bool
   mut in_async : Bool
   mut temp_index : Int

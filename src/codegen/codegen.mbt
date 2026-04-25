@@ -81,6 +81,7 @@ fn encode_type(t : @ast.TsType) -> Byte {
     @ast.TsType::Struct(_, _) => b'\x07'
     @ast.TsType::Func(_, _) => b'\x08'
     @ast.TsType::Named(_) => b'\x09'
+    @ast.TsType::Applied(_, _) => b'\x09'
     // Extended types (for analysis, not yet used in codegen)
     @ast.TsType::BigInt => b'\x0A'
     @ast.TsType::Symbol => b'\x0B'
@@ -316,6 +317,7 @@ fn ts_type_to_valtype(t : @ast.TsType) -> @core.ValType {
     @ast.TsType::String_ => I32 // string
     @ast.TsType::Array(_) => I32 // array
     @ast.TsType::Named(_) => I32 // struct reference
+    @ast.TsType::Applied(_, _) => I32 // generic reference
     @ast.TsType::Void => I32 // void
     _ => F64 // f64
   }
@@ -355,6 +357,15 @@ fn ts_type_to_valtype_gc(
             true, // nullable
           )
         None => I32 // fallback for unknown types
+      }
+    @ast.TsType::Applied(name, _) =>
+      match gc_struct_types.get(name) {
+        Some(type_idx) =>
+          @core.ValType::Ref(
+            @core.RefType::TypeIndex(type_idx.reinterpret_as_int()),
+            true,
+          )
+        None => I32
       }
     @ast.TsType::Void => I32 // void
     _ => F64 // f64

@@ -616,6 +616,7 @@ pub fn needs_gc(type_ : @ast.TsType) -> Bool {
     | @ast.TsType::Func(_, _)
     | @ast.TsType::Struct(_, _)
     | @ast.TsType::Named(_)
+    | @ast.TsType::Applied(_, _)
     | @ast.TsType::Any => true
     // Union/Intersection - check components
     @ast.TsType::Union(types) | @ast.TsType::Intersection(types) =>

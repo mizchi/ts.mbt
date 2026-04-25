@@ -152,6 +152,12 @@ pub fn is_assignable(a : @ast.TsType, b : @ast.TsType) -> Bool {
     // Array compatibility
     (@ast.TsType::Array(elem_a), @ast.TsType::Array(elem_b)) =>
       is_assignable(elem_a, elem_b)
+    (@ast.TsType::Applied(name_a, _), @ast.TsType::Applied(name_b, _)) =>
+      name_a == name_b
+    (@ast.TsType::Applied(name_a, _), @ast.TsType::Named(name_b)) =>
+      name_a == name_b
+    (@ast.TsType::Named(name_a), @ast.TsType::Applied(name_b, _)) =>
+      name_a == name_b
     // Union type: a is assignable if assignable to any member
     (_, @ast.TsType::Union(types)) =>
       types.iter().any(fn(t) { is_assignable(a, t) })
@@ -298,8 +304,10 @@ fn type_to_typeof_string(t : @ast.TsType) -> String {
     @ast.TsType::Undefined | @ast.TsType::Void => "undefined"
     @ast.TsType::Func(_, _) => "function"
     @ast.TsType::Null => "object"
-    @ast.TsType::Object(_) | @ast.TsType::Array(_) | @ast.TsType::Tuple(_) =>
-      "object"
+    @ast.TsType::Object(_)
+    | @ast.TsType::Array(_)
+    | @ast.TsType::Tuple(_)
+    | @ast.TsType::Applied(_, _) => "object"
     @ast.TsType::Symbol => "symbol"
     @ast.TsType::BigInt => "bigint"
     _ => "object"

@@ -96,7 +96,32 @@ fn mark_referenced_type(state : MoonBitDeclState, name : String) -> Unit {
 }
 
 ///|
+fn collapse_optional_like_union(type_ : @ast.TsType) -> @ast.TsType? {
+  match type_ {
+    Union(items) => {
+      let mut concrete : @ast.TsType? = None
+      for item in items {
+        match item {
+          Any => ()
+          _ =>
+            match concrete {
+              Some(_) => return None
+              None => concrete = Some(item)
+            }
+        }
+      }
+      concrete
+    }
+    _ => None
+  }
+}
+
+///|
 fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
+  match collapse_optional_like_union(type_) {
+    Some(collapsed) => return moonbit_type_name(state, collapsed)
+    None => ()
+  }
   match type_ {
     Number => "Double"
     Int => "Int"
@@ -112,7 +137,13 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       state.needs_jsvalue = true
       "Array[JSValue]"
     }
+    Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
+      "Array[" + moonbit_type_name(state, inner) + "]"
     Named(name) => {
+      mark_referenced_type(state, name)
+      moonbit_type_identifier(name, "OpaqueType")
+    }
+    Applied(name, _) => {
       mark_referenced_type(state, name)
       moonbit_type_identifier(name, "OpaqueType")
     }

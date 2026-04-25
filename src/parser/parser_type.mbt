@@ -118,6 +118,94 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
 }
 
 ///|
+fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
+  if !self.check(LBrace) {
+    return None
+  }
+  let saved_pos = self.pos
+  let fields : Array[(@ast.TsType, @ast.TsType)] = []
+  try {
+    let _ = self.expect(LBrace)
+    while !self.check(Eof) && !self.check(RBrace) {
+      let field_name = match self.advance().kind {
+        Ident(name) => name
+        _ => {
+          self.pos = saved_pos
+          return None
+        }
+      }
+      let _ = self.match_(Question)
+      let _ = self.expect(Colon)
+      fields.push((Literal(field_name), self.parse_type()))
+      if self.match_(Semicolon) || self.match_(Comma) {
+        continue
+      }
+      if self.check(RBrace) {
+        break
+      }
+      self.pos = saved_pos
+      return None
+    }
+    let _ = self.expect(RBrace)
+    Some(Object(fields))
+  } catch {
+    _ => {
+      self.pos = saved_pos
+      None
+    }
+  }
+}
+
+///|
+fn Parser::try_parse_simple_type_args(self : Parser) -> Array[@ast.TsType]? {
+  if !self.check(Lt) {
+    return None
+  }
+  let saved_pos = self.pos
+  let args : Array[@ast.TsType] = []
+  try {
+    let _ = self.expect(Lt)
+    while !self.check(Eof) {
+      args.push(self.parse_type())
+      if self.match_(Comma) {
+        continue
+      }
+      match self.peek().kind {
+        Gt => {
+          let _ = self.advance()
+          return Some(args)
+        }
+        GtGt => {
+          let tok = self.advance()
+          self.pending_gt += 1
+          self.pending_gt_pos = tok.pos
+          return Some(args)
+        }
+        GtGtGt => {
+          let tok = self.advance()
+          self.pending_gt += 2
+          self.pending_gt_pos = tok.pos
+          return Some(args)
+        }
+        _ => ()
+      }
+      self.pos = saved_pos
+      self.pending_gt = 0
+      return None
+    }
+    self.pos = saved_pos
+    self.pending_gt = 0
+    None
+  } catch {
+    _ => {
+      self.pos = saved_pos
+      self.pending_gt = 0
+      None
+    }
+  }
+}
+
+///|
 /// Parse a single type (not including union/intersection)
 fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
   let tok = self.peek()
@@ -158,17 +246,21 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       String_
     }
     // Literal types: "foo", 1, true, false
-    Str(_) => {
+    Str(value) => {
       let _ = self.advance()
-      Any
+      Literal(value)
     }
-    Int(_) | Number(_) => {
+    Int(value) => {
       let _ = self.advance()
-      Any
+      Literal(value.to_string())
     }
-    Bool(_) => {
+    Number(value) => {
       let _ = self.advance()
-      Any
+      Literal(value.to_string())
+    }
+    Bool(value) => {
+      let _ = self.advance()
+      Literal(value.to_string())
     }
     // null and undefined literal types
     Null => {
@@ -194,10 +286,14 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       Any
     }
     // Object type: { key: T; ... }
-    LBrace => {
-      self.skip_object_type()
-      Any
-    }
+    LBrace =>
+      match self.try_parse_simple_object_type() {
+        Some(type_) => type_
+        None => {
+          self.skip_object_type()
+          Any
+        }
+      }
     // Tuple type: [T, U]
     LBracket => self.parse_tuple_type()
     // Parenthesized type or function type: (T) or (x: T) => U
@@ -329,7 +425,10 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       }
       // Check for generic type arguments <T, U>
       if self.check(Lt) {
-        self.skip_type_args()
+        match self.try_parse_simple_type_args() {
+          Some(type_args) => return Applied(full_name, type_args)
+          None => self.skip_type_args()
+        }
       }
       Named(full_name)
     }
@@ -386,13 +485,22 @@ fn Parser::parse_type_operand(self : Parser) -> @ast.TsType raise ParseError {
     let _ = self.parse_type()
     return Boolean
   }
-  if self.check(Amp) {
-    while self.match_(Amp) {
-      let _ = self.parse_primary_type()
-    }
-    return Any
-  }
   base
+}
+
+///|
+fn Parser::parse_intersection_type(
+  self : Parser,
+) -> @ast.TsType raise ParseError {
+  let items : Array[@ast.TsType] = [self.parse_type_operand()]
+  while self.match_(Amp) {
+    items.push(self.parse_type_operand())
+  }
+  if items.length() == 1 {
+    items[0]
+  } else {
+    Intersection(items)
+  }
 }
 
 ///|
@@ -400,27 +508,28 @@ fn Parser::parse_type_operand(self : Parser) -> @ast.TsType raise ParseError {
 fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
   if self.check(Pipe) {
     let _ = self.advance()
-    let _ = self.parse_type_operand()
+    let items : Array[@ast.TsType] = [self.parse_intersection_type()]
     while self.match_(Pipe) {
-      let _ = self.parse_type_operand()
+      items.push(self.parse_intersection_type())
     }
-    return Any
+    return Union(items)
   }
   if self.check(Amp) {
     let _ = self.advance()
-    let _ = self.parse_type_operand()
+    let items : Array[@ast.TsType] = [self.parse_type_operand()]
     while self.match_(Amp) {
-      let _ = self.parse_type_operand()
+      items.push(self.parse_type_operand())
     }
-    return Any
+    return Intersection(items)
   }
-  let base = self.parse_type_operand()
+  let base = self.parse_intersection_type()
   // Union type: T | U
   if self.check(Pipe) {
+    let items : Array[@ast.TsType] = [base]
     while self.match_(Pipe) {
-      let _ = self.parse_type_operand()
+      items.push(self.parse_intersection_type())
     }
-    return Any // Return Any for union types
+    return Union(items)
   }
   base
 }

@@ -515,6 +515,26 @@ test "parser: parse array type" {
 }
 
 ///|
+test "parser: parse union type" {
+  let parser = Parser::from_source("string | number")
+  let t = parser.parse_type()
+  assert_eq(t, Union([String_, Number]))
+}
+
+///|
+test "parser: parse intersection type" {
+  let parser = Parser::from_source("BadgeProps & RefAttributes<Element>")
+  let t = parser.parse_type()
+  assert_eq(
+    t,
+    Intersection([
+      Named("BadgeProps"),
+      Applied("RefAttributes", [Named("Element")]),
+    ]),
+  )
+}
+
+///|
 test "parser: parse array literal" {
   let parser = Parser::from_source("[1, 2, 3]")
   let expr = parser.parse_expr()
@@ -898,9 +918,22 @@ test "parser: parse tuple return hook signatures inside namespace members in mod
   let src =
     #|declare namespace ReactLike {
     #|  type Dispatch<A> = (value: A) => void;
+    #|  type ActionDispatch<A> = (action: A) => void;
     #|  type TransitionFunction = () => void;
     #|  function useState<S>(initialState: S): [S, Dispatch<S>];
+    #|  function useReducer<S, A>(
+    #|    reducer: (prevState: S, action: A) => S,
+    #|    initialState: S
+    #|  ): [S, ActionDispatch<A>];
     #|  function useTransition(): [boolean, TransitionFunction];
+    #|  function useOptimistic<State>(
+    #|    passthrough: State
+    #|  ): [State, (action: State) => void];
+    #|  function useActionState<State>(
+    #|    action: (state: State) => State | Promise<State>,
+    #|    initialState: State,
+    #|    permalink?: string
+    #|  ): [State, () => void, boolean];
     #|}
     #|export = ReactLike;
     #|export as namespace ReactLike;
@@ -913,19 +946,356 @@ test "parser: parse tuple return hook signatures inside namespace members in mod
   }
   assert_eq(module_.namespaces.length(), 1)
   let namespace_ = module_.namespaces[0]
-  assert_eq(namespace_.module_.funcs.length(), 2)
+  assert_eq(namespace_.module_.funcs.length(), 5)
   assert_eq(namespace_.module_.funcs[0].name, "useState")
   assert_eq(
     namespace_.module_.funcs[0].return_type,
-    @ast.TsType::Tuple([@ast.TsType::Named("S"), @ast.TsType::Named("Dispatch")]),
+    @ast.TsType::Tuple([
+      @ast.TsType::Named("S"),
+      @ast.TsType::Applied("Dispatch", [@ast.TsType::Named("S")]),
+    ]),
   )
-  assert_eq(namespace_.module_.funcs[1].name, "useTransition")
+  assert_eq(namespace_.module_.funcs[1].name, "useReducer")
   assert_eq(
     namespace_.module_.funcs[1].return_type,
+    @ast.TsType::Tuple([
+      @ast.TsType::Named("S"),
+      @ast.TsType::Applied("ActionDispatch", [@ast.TsType::Named("A")]),
+    ]),
+  )
+  assert_eq(namespace_.module_.funcs[2].name, "useTransition")
+  assert_eq(
+    namespace_.module_.funcs[2].return_type,
     @ast.TsType::Tuple([
       @ast.TsType::Boolean,
       @ast.TsType::Named("TransitionFunction"),
     ]),
+  )
+  assert_eq(namespace_.module_.funcs[3].name, "useOptimistic")
+  assert_eq(
+    namespace_.module_.funcs[3].return_type,
+    @ast.TsType::Tuple([
+      @ast.TsType::Named("State"),
+      @ast.TsType::Func([@ast.TsType::Named("State")], @ast.TsType::Void),
+    ]),
+  )
+  assert_eq(namespace_.module_.funcs[4].name, "useActionState")
+  assert_eq(
+    namespace_.module_.funcs[4].return_type,
+    @ast.TsType::Tuple([
+      @ast.TsType::Named("State"),
+      @ast.TsType::Func([], @ast.TsType::Void),
+      @ast.TsType::Boolean,
+    ]),
+  )
+}
+
+///|
+test "parser: parse nested namespace members inside export-as-namespace module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  namespace JSX {
+    #|    interface Element { kind: string; }
+    #|    interface IntrinsicElements { badge: BadgeProps; }
+    #|  }
+    #|  interface BadgeProps { label: string; }
+    #|  function createElement(tag: keyof JSX.IntrinsicElements): JSX.Element;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  assert_eq(namespace_.module_.namespaces.length(), 1)
+  let jsx_namespace = namespace_.module_.namespaces[0]
+  assert_eq(jsx_namespace.name, "JSX")
+  assert_eq(jsx_namespace.module_.interfaces.length(), 2)
+  assert_eq(jsx_namespace.module_.interfaces[0].name, "Element")
+  assert_eq(jsx_namespace.module_.interfaces[1].name, "IntrinsicElements")
+  assert_eq(namespace_.module_.funcs.length(), 1)
+  assert_eq(
+    namespace_.module_.funcs[0].return_type,
+    @ast.TsType::Named("JSX.Element"),
+  )
+}
+
+///|
+test "parser: parse generic type application inside export-as-namespace module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  type ReactNode = string | number;
+    #|  type PropsWithChildren<P> = P & { children?: ReactNode | undefined };
+    #|  interface BadgeProps { label: string; }
+    #|  function createBadge(
+    #|    props: PropsWithChildren<BadgeProps>
+    #|  ): PropsWithChildren<BadgeProps>;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  assert_eq(namespace_.module_.funcs.length(), 1)
+  assert_eq(
+    namespace_.module_.funcs[0].params[0].type_,
+    @ast.TsType::Applied("PropsWithChildren", [@ast.TsType::Named("BadgeProps")]),
+  )
+  assert_eq(
+    namespace_.module_.funcs[0].return_type,
+    @ast.TsType::Applied("PropsWithChildren", [@ast.TsType::Named("BadgeProps")]),
+  )
+}
+
+///|
+test "parser: parse ComponentProps literal application inside export-as-namespace module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  namespace JSX {
+    #|    interface IntrinsicElements {
+    #|      badge: BadgeProps;
+    #|    }
+    #|  }
+    #|  interface BadgeProps { label: string; }
+    #|  type ComponentProps<T extends keyof JSX.IntrinsicElements> =
+    #|    JSX.IntrinsicElements[T];
+    #|  function createBadge(
+    #|    props: ComponentProps<"badge">
+    #|  ): ComponentProps<"badge">;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  assert_eq(
+    namespace_.module_.funcs[0].params[0].type_,
+    @ast.TsType::Applied("ComponentProps", [@ast.TsType::Literal("badge")]),
+  )
+  assert_eq(
+    namespace_.module_.funcs[0].return_type,
+    @ast.TsType::Applied("ComponentProps", [@ast.TsType::Literal("badge")]),
+  )
+}
+
+///|
+test "parser: parse ComponentPropsWithoutRef literal application inside export-as-namespace module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  namespace JSX {
+    #|    interface IntrinsicElements {
+    #|      badge: BadgeProps;
+    #|    }
+    #|  }
+    #|  interface BadgeProps { label: string; }
+    #|  type ComponentPropsWithoutRef<T extends keyof JSX.IntrinsicElements> =
+    #|    JSX.IntrinsicElements[T];
+    #|  function createBadge(
+    #|    props: ComponentPropsWithoutRef<"badge">
+    #|  ): ComponentPropsWithoutRef<"badge">;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  assert_eq(
+    namespace_.module_.funcs[0].params[0].type_,
+    @ast.TsType::Applied("ComponentPropsWithoutRef", [
+      @ast.TsType::Literal("badge"),
+    ]),
+  )
+  assert_eq(
+    namespace_.module_.funcs[0].return_type,
+    @ast.TsType::Applied("ComponentPropsWithoutRef", [
+      @ast.TsType::Literal("badge"),
+    ]),
+  )
+}
+
+///|
+test "parser: parse ComponentPropsWithRef literal application inside export-as-namespace module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  namespace JSX {
+    #|    interface IntrinsicElements {
+    #|      badge: BadgeProps;
+    #|    }
+    #|  }
+    #|  interface BadgeProps { label: string; }
+    #|  interface Ref<T> { current: T; }
+    #|  interface RefAttributes<T> { ref: Ref<T>; }
+    #|  type ComponentPropsWithRef<T extends keyof JSX.IntrinsicElements> =
+    #|    JSX.IntrinsicElements[T] & RefAttributes<BadgeProps>;
+    #|  function createBadge(
+    #|    props: ComponentPropsWithRef<"badge">
+    #|  ): ComponentPropsWithRef<"badge">;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  assert_eq(
+    namespace_.module_.funcs[0].params[0].type_,
+    @ast.TsType::Applied("ComponentPropsWithRef", [
+      @ast.TsType::Literal("badge"),
+    ]),
+  )
+  assert_eq(
+    namespace_.module_.funcs[0].return_type,
+    @ast.TsType::Applied("ComponentPropsWithRef", [
+      @ast.TsType::Literal("badge"),
+    ]),
+  )
+}
+
+///|
+test "parser: parse nested PropsWithChildren application inside export-as-namespace module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  namespace JSX {
+    #|    interface IntrinsicElements {
+    #|      badge: BadgeProps;
+    #|    }
+    #|  }
+    #|  type ReactNode = string | number;
+    #|  interface BadgeProps { label: string; }
+    #|  type ComponentPropsWithoutRef<T extends keyof JSX.IntrinsicElements> =
+    #|    JSX.IntrinsicElements[T];
+    #|  type PropsWithChildren<P> = P & { children?: ReactNode | undefined };
+    #|  function createBadge(
+    #|    props: PropsWithChildren<ComponentPropsWithoutRef<"badge">>
+    #|  ): PropsWithChildren<ComponentPropsWithoutRef<"badge">>;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  let expected = @ast.TsType::Applied("PropsWithChildren", [
+    @ast.TsType::Applied("ComponentPropsWithoutRef", [
+      @ast.TsType::Literal("badge"),
+    ]),
+  ])
+  assert_eq(namespace_.module_.funcs[0].params[0].type_, expected)
+  assert_eq(namespace_.module_.funcs[0].return_type, expected)
+}
+
+///|
+test "parser: parse PropsWithoutRef and PropsWithRef applications inside export-as-namespace module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  type ReactNode = string | number;
+    #|  interface BadgeProps { label: string; }
+    #|  type PropsWithChildren<P> = P & { children?: ReactNode | undefined };
+    #|  type PropsWithoutRef<Props> = Props;
+    #|  type PropsWithRef<Props> = Props;
+    #|  function stripRef(
+    #|    props: PropsWithoutRef<BadgeProps>
+    #|  ): PropsWithoutRef<BadgeProps>;
+    #|  function keepRef(
+    #|    props: PropsWithRef<BadgeProps>
+    #|  ): PropsWithRef<BadgeProps>;
+    #|  function nested(
+    #|    props: PropsWithoutRef<PropsWithChildren<BadgeProps>>
+    #|  ): PropsWithoutRef<PropsWithChildren<BadgeProps>>;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let namespace_ = module_.namespaces[0]
+  assert_eq(
+    namespace_.module_.funcs[0].params[0].type_,
+    @ast.TsType::Applied("PropsWithoutRef", [@ast.TsType::Named("BadgeProps")]),
+  )
+  assert_eq(
+    namespace_.module_.funcs[1].params[0].type_,
+    @ast.TsType::Applied("PropsWithRef", [@ast.TsType::Named("BadgeProps")]),
+  )
+  assert_eq(
+    namespace_.module_.funcs[2].params[0].type_,
+    @ast.TsType::Applied("PropsWithoutRef", [
+      @ast.TsType::Applied("PropsWithChildren", [
+        @ast.TsType::Named("BadgeProps"),
+      ]),
+    ]),
+  )
+}
+
+///|
+test "parser: parse inline object PropsWithChildren application inside export-as-namespace module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  type ReactNode = string | number;
+    #|  type PropsWithChildren<P> = P & { children?: ReactNode | undefined };
+    #|  function createBadge(
+    #|    props: PropsWithChildren<{ label: string; count: number }>
+    #|  ): PropsWithChildren<{ label: string; count: number }>;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let namespace_ = module_.namespaces[0]
+  let inline_props = @ast.TsType::Object([
+    (@ast.TsType::Literal("label"), @ast.TsType::String_),
+    (@ast.TsType::Literal("count"), @ast.TsType::Number),
+  ])
+  assert_eq(
+    namespace_.module_.funcs[0].params[0].type_,
+    @ast.TsType::Applied("PropsWithChildren", [inline_props]),
+  )
+  assert_eq(
+    namespace_.module_.funcs[0].return_type,
+    @ast.TsType::Applied("PropsWithChildren", [inline_props]),
   )
 }
 
