@@ -227,11 +227,26 @@ fn render_bridge_public_wrapper(fn_decl : BridgeTopLevelFnDecl) -> String? {
 }
 
 ///|
-fn add_bridge_public_wrappers(
+fn inject_bridge_public_type_aliases(
   bridge_mbti : String,
   bridge_mbt : String,
 ) -> String {
   let mut next_bridge_mbt = bridge_mbt
+  if bridge_mbti.contains("declare pub type JSValue") &&
+    !next_bridge_mbt.contains("pub type JSValue = @js.Any") {
+    next_bridge_mbt = "pub type JSValue = @js.Any\n\n" + next_bridge_mbt
+  }
+  next_bridge_mbt
+}
+
+///|
+fn add_bridge_public_wrappers(
+  bridge_mbti : String,
+  bridge_mbt : String,
+) -> String {
+  let mut next_bridge_mbt = inject_bridge_public_type_aliases(
+    bridge_mbti, bridge_mbt,
+  )
   let wrappers : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
     let line = line_view.to_string().trim().to_string()
@@ -293,12 +308,15 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     bundle.decl_mbt,
     export_surface,
   )
+  let bridge_mbt = add_bridge_public_wrappers(bridge_mbti, bundle.ffi_mbt)
   {
     entry_path: bundle.entry_path,
     module_spec: bundle.module_spec,
-    moon_pkg_json: render_bridge_pkg_json(bridge_bundle_needs_js_import(bundle)),
+    moon_pkg_json: render_bridge_pkg_json(
+      bridge_bundle_needs_js_import(bundle) || bridge_mbt.contains("@js."),
+    ),
     bridge_mbti,
-    bridge_mbt: add_bridge_public_wrappers(bridge_mbti, bundle.ffi_mbt),
+    bridge_mbt,
     bridge_js: bundle.bridge_js,
   }
 }

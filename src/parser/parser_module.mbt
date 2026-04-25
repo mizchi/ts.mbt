@@ -1627,6 +1627,13 @@ fn Parser::parse_export_decl_for_module(
     return (stmts, exports, reexports)
   }
   if self.match_(Type) || self.match_ident("type") {
+    if self.match_(Star) {
+      if self.match_(From) || self.match_ident("from") {
+        let _ = self.expect_str_literal()
+      }
+      self.consume_semicolon()
+      return (stmts, exports, reexports)
+    }
     if self.match_(LBrace) {
       let _ = self.parse_named_exports()
       let _ = self.expect(RBrace)
@@ -1636,7 +1643,11 @@ fn Parser::parse_export_decl_for_module(
       self.consume_semicolon()
       return (stmts, exports, reexports)
     }
-    self.skip_type_alias()
+    match self.parse_type_alias_interface_after_type_keyword() {
+      Some(iface) =>
+        exports.push({ local_name: iface.name, export_name: iface.name })
+      None => ()
+    }
     return (stmts, exports, reexports)
   }
   if self.match_(Default) || self.match_ident("default") {
@@ -1810,7 +1821,11 @@ fn Parser::parse_export_decl_for_module(
         return (stmts, exports, reexports)
       }
       Type => {
-        self.skip_type_alias()
+        match self.parse_type_alias_interface() {
+          Some(iface) =>
+            exports.push({ local_name: iface.name, export_name: iface.name })
+          None => ()
+        }
         return (stmts, exports, reexports)
       }
       Var | Let | Const => {
@@ -2023,6 +2038,13 @@ fn Parser::parse_export_stmt(
     raise ParseError("Unsupported export statement")
   }
   if self.match_(Type) || self.match_ident("type") {
+    if self.match_(Star) {
+      if self.match_(From) || self.match_ident("from") {
+        let _ = self.expect_str_literal()
+      }
+      self.consume_semicolon()
+      return
+    }
     if self.match_(LBrace) {
       let _ = self.parse_named_exports()
       let _ = self.expect(RBrace)
@@ -2032,7 +2054,10 @@ fn Parser::parse_export_stmt(
       self.consume_semicolon()
       return
     }
-    self.skip_type_alias()
+    match self.parse_type_alias_interface_after_type_keyword() {
+      Some(iface) => interfaces.push(iface)
+      None => ()
+    }
     return
   }
   if self.match_(Eq) {
@@ -2141,7 +2166,11 @@ fn Parser::parse_export_stmt(
       }
       Interface => interfaces.push(self.parse_interface())
       Class => classes.push(self.parse_declare_class(false))
-      Type => self.skip_type_alias()
+      Type =>
+        match self.parse_type_alias_interface() {
+          Some(iface) => interfaces.push(iface)
+          None => ()
+        }
       Ident(name) =>
         if name == "abstract" && self.peek_at(1).kind == Class {
           classes.push(self.parse_declare_class_with_optional_abstract())
@@ -2303,8 +2332,10 @@ fn Parser::parse_module_with_seeded_const_values_internal(
         Interface => interfaces.push(self.parse_interface())
         Class => classes.push(self.parse_declare_class(false))
         Type =>
-          // Skip type alias: consume until semicolon or end of type
-          self.skip_type_alias()
+          match self.parse_type_alias_interface() {
+            Some(iface) => interfaces.push(iface)
+            None => ()
+          }
         Ident(name) =>
           if name == "abstract" && self.peek_at(1).kind == Class {
             classes.push(self.parse_declare_class_with_optional_abstract())
@@ -2338,8 +2369,10 @@ fn Parser::parse_module_with_seeded_const_values_internal(
         funcs, interfaces, imports, values, classes, namespaces, const_values,
       )
     } else if self.check(Type) {
-      // Skip type alias at top level
-      self.skip_type_alias()
+      match self.parse_type_alias_interface() {
+        Some(iface) => interfaces.push(iface)
+        None => ()
+      }
     } else if self.is_namespace_decl_start() {
       match self.parse_namespace_decl() {
         Some((value, namespace_)) => {

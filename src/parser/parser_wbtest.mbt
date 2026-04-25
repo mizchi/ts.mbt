@@ -535,6 +535,13 @@ test "parser: parse intersection type" {
 }
 
 ///|
+test "parser: parse keyof object surface as string-like key" {
+  let parser = Parser::from_source("keyof JSX.IntrinsicElements")
+  let t = parser.parse_type()
+  assert_eq(t, String_)
+}
+
+///|
 test "parser: parse array literal" {
   let parser = Parser::from_source("[1, 2, 3]")
   let expr = parser.parse_expr()
@@ -864,6 +871,19 @@ test "parser: parse export as namespace in module block" {
 }
 
 ///|
+test "parser: parse export type star in module block" {
+  let src = "export type * from \"./types\";"
+  let module_ = parse_module_block_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 0)
+  assert_eq(module_.reexports.length(), 0)
+}
+
+///|
 test "parser: parse namespace members in module" {
   let src = "declare namespace ReactLike { function createContext<T>(defaultValue: T): Context<T>; interface Context<T> { value: T; } } export = ReactLike; export as namespace ReactLike;"
   let parser = Parser::from_source(src)
@@ -911,6 +931,62 @@ test "parser: parse ambient const and class inside namespace members in module" 
   assert_eq(namespace_.module_.classes[0].name, "Component")
   assert_eq(namespace_.module_.funcs.length(), 1)
   assert_eq(namespace_.module_.funcs[0].name, "useContext")
+}
+
+///|
+test "parser: parse JSX constructor signatures with trailing comma inside namespace members in module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  type JSXElementConstructor<P> =
+    #|    | ((
+    #|        props: P,
+    #|      ) => ReactNode | Promise<ReactNode>)
+    #|    | (new(props: P, context: any) => Component<any, any>);
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  assert_eq(module_.namespaces[0].name, "ReactLike")
+}
+
+///|
+test "parser: parse conditional utility signatures inside namespace members in module" {
+  let src =
+    #|declare namespace ReactLike {
+    #|  type ComponentRef<T extends ElementType> =
+    #|    ComponentPropsWithRef<T> extends RefAttributes<infer Method> ? Method
+    #|    : never;
+    #|
+    #|  type LibraryManagedAttributes<C, P> = C extends
+    #|    ReactLike.MemoExoticComponent<infer T> | ReactLike.LazyExoticComponent<
+    #|      infer T
+    #|    >
+    #|      ? T extends
+    #|          ReactLike.MemoExoticComponent<infer U> | ReactLike.LazyExoticComponent<
+    #|            infer U
+    #|          >
+    #|          ? ReactManagedAttributes<U, P>
+    #|          : ReactManagedAttributes<T, P>
+    #|      : ReactManagedAttributes<C, P>;
+    #|}
+    #|export = ReactLike;
+    #|export as namespace ReactLike;
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  assert_eq(module_.namespaces[0].name, "ReactLike")
 }
 
 ///|
@@ -1434,6 +1510,38 @@ test "parser: skip export type alias in module block" {
   assert_eq(module_.exports.length(), 1)
   assert_eq(module_.exports[0].local_name, "User")
   assert_eq(module_.exports[0].export_name, "User")
+}
+
+///|
+test "parser: parse export object type alias in module block as interface" {
+  let src =
+    #|export type HonoOptions<E> = {
+    #|  strict?: boolean | undefined
+    #|  bindings?: E | undefined
+    #|}
+    #|export class Hono<E> {
+    #|  constructor(options?: HonoOptions<E>);
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_true(
+    module_.interfaces.iter().any(fn(iface) { iface.name == "HonoOptions" }),
+  )
+  let mut found = false
+  for iface in module_.interfaces {
+    if iface.name == "HonoOptions" {
+      found = true
+      assert_eq(iface.fields.length(), 2)
+      assert_eq(iface.fields[0].0, "strict")
+      assert_eq(iface.fields[1].0, "bindings")
+      break
+    }
+  }
+  assert_true(found)
 }
 
 ///|
@@ -2994,6 +3102,21 @@ test "parser: parse export import alias declaration" {
     }
   }
   assert_eq(module_.exports.length(), 1)
+}
+
+///|
+async test "parser: parse export-as-namespace sanitize fixture in module block" {
+  let src = @fs.read_file(
+    "fixtures/resolver/project/types/export-as-namespace-sanitize-entry.d.ts",
+  ).text()
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].export_name, "default")
 }
 
 ///|

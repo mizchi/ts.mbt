@@ -92,6 +92,24 @@ fn Parser::skip_param_modifiers(self : Parser) -> Unit {
 }
 
 ///|
+fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    @ast.TsType::Undefined | @ast.TsType::Null =>
+      @ast.TsType::Union([type_, @ast.TsType::Undefined])
+    @ast.TsType::Union(items) => {
+      for item in items {
+        match item {
+          @ast.TsType::Undefined | @ast.TsType::Null => return type_
+          _ => ()
+        }
+      }
+      @ast.TsType::Union([type_, @ast.TsType::Undefined])
+    }
+    _ => @ast.TsType::Union([type_, @ast.TsType::Undefined])
+  }
+}
+
+///|
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   self.skip_param_decorators()
@@ -99,13 +117,18 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
-  let _ = self.match_(Question)
+  let is_optional = self.match_(Question)
   // type ()
-  let type_ = if self.check(Colon) {
+  let base_type = if self.check(Colon) {
     let _ = self.advance()
     self.parse_type()
   } else {
     Any // type Any
+  }
+  let type_ = if is_optional {
+    wrap_optional_ts_type(base_type)
+  } else {
+    base_type
   }
   // check
   let default : @ast.TsExpr? = if self.match_(Eq) {
@@ -683,7 +706,7 @@ pub fn Parser::parse_interface(
     // Skip method type parameters <T>
     self.skip_type_params()
     // Check for optional marker ?
-    let _ = self.match_(Question)
+    let is_optional = self.match_(Question)
     // Method signature: name(...): T or name<T>(...): U
     if self.check(LParen) {
       let _ = self.advance()
@@ -708,18 +731,56 @@ pub fn Parser::parse_interface(
       if self.check(Colon) {
         let _ = self.advance()
         let field_type = self.parse_type()
-        fields.push((field_name, field_type))
+        fields.push(
+          (
+            field_name,
+            if is_optional {
+              wrap_optional_ts_type(field_type)
+            } else {
+              field_type
+            },
+          ),
+        )
       } else {
-        fields.push((field_name, @ast.TsType::Void))
+        let field_type = @ast.TsType::Void
+        fields.push(
+          (
+            field_name,
+            if is_optional {
+              wrap_optional_ts_type(field_type)
+            } else {
+              field_type
+            },
+          ),
+        )
       }
     } else if self.check(Colon) {
       // Property: name: T
       let _ = self.advance()
       let field_type = self.parse_type()
-      fields.push((field_name, field_type))
+      fields.push(
+        (
+          field_name,
+          if is_optional {
+            wrap_optional_ts_type(field_type)
+          } else {
+            field_type
+          },
+        ),
+      )
     } else {
       // No type annotation - use Any
-      fields.push((field_name, @ast.TsType::Any))
+      let field_type = @ast.TsType::Any
+      fields.push(
+        (
+          field_name,
+          if is_optional {
+            wrap_optional_ts_type(field_type)
+          } else {
+            field_type
+          },
+        ),
+      )
     }
     // Skip trailing semicolon or comma (both optional)
     if self.check(Semicolon) || self.check(Comma) {
@@ -860,6 +921,88 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
 }
 
 ///|
+fn Parser::skip_type_param_clause(self : Parser) -> Unit {
+  if !self.check(Lt) {
+    return
+  }
+  let mut angle_depth = 0
+  while !self.check(Eof) {
+    match self.peek().kind {
+      Lt => {
+        angle_depth += 1
+        let _ = self.advance()
+      }
+      Gt => {
+        angle_depth -= 1
+        let _ = self.advance()
+        if angle_depth <= 0 {
+          break
+        }
+      }
+      GtGt => {
+        angle_depth -= 2
+        let _ = self.advance()
+        if angle_depth <= 0 {
+          break
+        }
+      }
+      GtGtGt => {
+        angle_depth -= 3
+        let _ = self.advance()
+        if angle_depth <= 0 {
+          break
+        }
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
+fn type_alias_object_fields_to_interface(
+  name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsInterface? {
+  match type_ {
+    @ast.TsType::Object(fields) => {
+      let iface_fields : Array[(String, @ast.TsType)] = []
+      for field in fields {
+        let (key_type, value_type) = field
+        match key_type {
+          @ast.TsType::Literal(field_name) =>
+            iface_fields.push((field_name, value_type))
+          _ => return None
+        }
+      }
+      Some({ name, fields: iface_fields })
+    }
+    _ => None
+  }
+}
+
+///|
+fn Parser::parse_type_alias_interface_after_type_keyword(
+  self : Parser,
+) -> @ast.TsInterface? raise ParseError {
+  let name = self.parse_binding_ident()
+  self.skip_type_param_clause()
+  let _ = self.expect(Eq)
+  let alias_type = self.parse_type()
+  self.consume_semicolon()
+  type_alias_object_fields_to_interface(name, alias_type)
+}
+
+///|
+fn Parser::parse_type_alias_interface(
+  self : Parser,
+) -> @ast.TsInterface? raise ParseError {
+  let _ = self.expect(Type)
+  self.parse_type_alias_interface_after_type_keyword()
+}
+
+///|
 /// Skip declaration block (namespace, module, class, enum, etc.)
 fn Parser::skip_declaration_block(self : Parser) -> Unit {
   // Skip until we find { or ;
@@ -916,14 +1059,24 @@ pub fn Parser::parse_declare_function(
     let _ = self.match_ellipsis()
     let param_name = self.parse_declare_param_name()
     // Handle optional parameter: name?
-    let _ = self.match_(Question)
+    let is_optional = self.match_(Question)
     // Type annotation is optional
     if self.check(Colon) {
       let _ = self.advance()
       let param_type = self.parse_type()
+      let param_type = if is_optional {
+        wrap_optional_ts_type(param_type)
+      } else {
+        param_type
+      }
       params.push((param_name, param_type))
     } else {
-      params.push((param_name, @ast.TsType::Any))
+      let param_type = if is_optional {
+        wrap_optional_ts_type(@ast.TsType::Any)
+      } else {
+        @ast.TsType::Any
+      }
+      params.push((param_name, param_type))
     }
     if self.check(Comma) {
       let _ = self.advance()

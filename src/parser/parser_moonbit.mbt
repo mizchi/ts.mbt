@@ -16,7 +16,7 @@ fn is_ascii_digit(c : Char) -> Bool {
 }
 
 ///|
-fn sanitize_identifier(name : String, fallback : String) -> String {
+fn sanitize_identifier_chars(name : String, fallback : String) -> String {
   let mut result = ""
   for c in name {
     if is_ascii_letter(c) || is_ascii_digit(c) || c == '_' {
@@ -32,6 +32,65 @@ fn sanitize_identifier(name : String, fallback : String) -> String {
   if is_ascii_digit(first) {
     result = "_" + result
   }
+  result
+}
+
+///|
+fn value_identifier_needs_suffix(name : String) -> Bool {
+  match name {
+    "as"
+    | "break"
+    | "catch"
+    | "const"
+    | "continue"
+    | "else"
+    | "fn"
+    | "for"
+    | "if"
+    | "in"
+    | "let"
+    | "match"
+    | "pub"
+    | "ref"
+    | "return"
+    | "struct"
+    | "test"
+    | "trait"
+    | "type"
+    | "typealias"
+    | "use"
+    | "while" => true
+    _ => false
+  }
+}
+
+///|
+fn lower_leading_ascii(name : String) -> String {
+  if name == "" {
+    return name
+  }
+  let first = name[0].unsafe_to_char()
+  if first >= 'A' && first <= 'Z' {
+    (first.to_int() + 32).unsafe_to_char().to_string() + name[1:].to_string()
+  } else {
+    name
+  }
+}
+
+///|
+fn sanitize_value_identifier(name : String, fallback : String) -> String {
+  let mut result = lower_leading_ascii(
+    sanitize_identifier_chars(name, fallback),
+  )
+  if value_identifier_needs_suffix(result) {
+    result += "_"
+  }
+  result
+}
+
+///|
+fn sanitize_identifier(name : String, fallback : String) -> String {
+  let result = sanitize_identifier_chars(name, fallback)
   match result {
     "as"
     | "break"
@@ -96,13 +155,16 @@ fn mark_referenced_type(state : MoonBitDeclState, name : String) -> Unit {
 }
 
 ///|
-fn collapse_optional_like_union(type_ : @ast.TsType) -> @ast.TsType? {
+fn classify_optional_like_union(type_ : @ast.TsType) -> (@ast.TsType, Bool)? {
   match type_ {
     Union(items) => {
       let mut concrete : @ast.TsType? = None
+      let mut has_any = false
+      let mut is_optional = false
       for item in items {
         match item {
-          Any => ()
+          Any => has_any = true
+          Undefined | Null => is_optional = true
           _ =>
             match concrete {
               Some(_) => return None
@@ -110,7 +172,10 @@ fn collapse_optional_like_union(type_ : @ast.TsType) -> @ast.TsType? {
             }
         }
       }
-      concrete
+      match concrete {
+        Some(inner) => if has_any { None } else { Some((inner, is_optional)) }
+        None => if has_any { Some((Any, is_optional)) } else { None }
+      }
     }
     _ => None
   }
@@ -118,8 +183,11 @@ fn collapse_optional_like_union(type_ : @ast.TsType) -> @ast.TsType? {
 
 ///|
 fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
-  match collapse_optional_like_union(type_) {
-    Some(collapsed) => return moonbit_type_name(state, collapsed)
+  match classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      let suffix = if is_optional { "?" } else { "" }
+      return moonbit_type_name(state, collapsed) + suffix
+    }
     None => ()
   }
   match type_ {
@@ -132,6 +200,10 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     Struct(name, _) => {
       mark_referenced_type(state, name)
       moonbit_type_identifier(name, "OpaqueType")
+    }
+    Named("any") | Named("Function") => {
+      state.needs_jsvalue = true
+      "JSValue"
     }
     Named("Array") | Named("ReadonlyArray") => {
       state.needs_jsvalue = true
@@ -178,12 +250,12 @@ fn import_decl_to_moonbit(
   let params : Array[String] = []
   for item in import_.params {
     let (name, type_) = item
-    let param_name = sanitize_identifier(name, "arg")
+    let param_name = sanitize_value_identifier(name, "arg")
     let param_type = moonbit_type_name(state, type_)
     params.push("\{param_name} : \{param_type}")
   }
   let return_type = moonbit_type_name(state, import_.return_type)
-  let fn_name = sanitize_identifier(import_.name, "generated_fn")
+  let fn_name = sanitize_value_identifier(import_.name, "generated_fn")
   let params_str = params.join(", ")
   "///|\ndeclare pub fn \{fn_name}(\{params_str}) -> \{return_type}"
 }
@@ -210,12 +282,12 @@ fn func_decl_to_moonbit(state : MoonBitDeclState, func : @ast.TsFunc) -> String 
     } else {
       param.name
     }
-    let safe_name = sanitize_identifier(param_name, "arg")
+    let safe_name = sanitize_value_identifier(param_name, "arg")
     let param_type = moonbit_type_name(state, param.type_)
     params.push("\{safe_name} : \{param_type}")
   }
   let return_type = moonbit_type_name(state, func.return_type)
-  let fn_name = sanitize_identifier(func.name, "generated_fn")
+  let fn_name = sanitize_value_identifier(func.name, "generated_fn")
   let params_str = params.join(", ")
   "///|\ndeclare pub fn \{fn_name}(\{params_str}) -> \{return_type}"
 }
@@ -283,7 +355,7 @@ fn class_decl_to_moonbit_sections(
       Some(constructor_params) =>
         for param in constructor_params {
           let (param_name, param_type) = param
-          let safe_name = sanitize_identifier(param_name, "arg")
+          let safe_name = sanitize_value_identifier(param_name, "arg")
           let safe_type = moonbit_type_name(state, param_type)
           params.push("\{safe_name} : \{safe_type}")
         }
@@ -341,7 +413,7 @@ fn class_decl_to_moonbit_sections(
     }
     for param in class_method.params {
       let (param_name, param_type) = param
-      let safe_name = sanitize_identifier(param_name, "arg")
+      let safe_name = sanitize_value_identifier(param_name, "arg")
       let safe_type = moonbit_type_name(state, param_type)
       params.push("\{safe_name} : \{safe_type}")
     }
@@ -393,7 +465,7 @@ pub fn emit_moonbit_decl_with_sections(
   let import_sections : Array[String] = []
   let seen_import_binding_names : Array[String] = []
   for import_ in module_.imports {
-    let fn_name = sanitize_identifier(import_.name, "generated_fn")
+    let fn_name = sanitize_value_identifier(import_.name, "generated_fn")
     push_unique_decl_section(
       seen_import_binding_names,
       import_sections,
@@ -418,7 +490,7 @@ pub fn emit_moonbit_decl_with_sections(
   let func_sections : Array[String] = []
   let seen_func_binding_names : Array[String] = []
   for func in module_.funcs {
-    let fn_name = sanitize_identifier(func.name, "generated_fn")
+    let fn_name = sanitize_value_identifier(func.name, "generated_fn")
     push_unique_decl_section(
       seen_func_binding_names,
       func_sections,

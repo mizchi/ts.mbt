@@ -4346,7 +4346,7 @@ async test "emit_moonbit_js_ffi_texts handles runtime tsx exported functions" {
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "#module(\"/runtime/runtime-component.js\")\npub extern \"js\" fn render_badge(props : BadgeProps) -> JsxElement = \"renderBadge\"",
+      "#module(\"/runtime/runtime-component.js\")\npub extern \"js\" fn render_badge(props : BadgeProps) -> JSX_Element = \"renderBadge\"",
     ),
   )
   assert_false(bundle.bridge_js.contains("__ts_mbt_render_badge"))
@@ -4592,7 +4592,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useActionState(action : JSValue, initialState : State, permalink : String) -> UseActionStateResult",
+      "declare pub fn useActionState(action : JSValue, initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
   assert_true(
@@ -4617,7 +4617,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useActionState(action : JSValue, initialState : State, permalink : String) -> UseActionStateResult {\n  use_action_state(action, initialState, permalink)\n}",
+      "pub fn useActionState(action : JSValue, initialState : State, permalink : String?) -> UseActionStateResult {\n  use_action_state(action, initialState, permalink)\n}",
     ),
   )
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
@@ -4644,15 +4644,57 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace JSX namesp
   assert_true(bridge_mbti.contains("declare pub type JsxIntrinsicElements"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn createElement(tag : JSValue) -> JsxElement",
+      "declare pub fn createElement(tag : String) -> JsxElement",
     ),
   )
   assert_true(bridge_mbt.contains("pub struct JsxElement {"))
   assert_true(
     bridge_mbt.contains(
-      "pub fn createElement(tag : JSValue) -> JsxElement {\n  create_element(tag)\n}",
+      "pub fn createElement(tag : String) -> JsxElement {\n  create_element(tag)\n}",
     ),
   )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace JSX constructor signatures" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_jsx_constructor",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-jsx-constructor-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace jsx constructor bridge.mbti: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub fn get_default() -> JSValue"))
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles export as namespace conditional utility signatures" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_conditional_utility",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-conditional-utility-entry.d.ts",
+    "./runtime/react-like.js", root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e =>
+      fail(
+        "failed to read export-as-namespace conditional utility bridge.mbti: \{e}",
+      )
+  }
+  assert_true(bridge_mbti.contains("declare pub fn get_default() -> JSValue"))
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
 
@@ -4677,15 +4719,16 @@ async test "emit_moonbit_scaffold_from_ts handles exported JSX namespace members
   assert_true(bridge_mbti.contains("declare pub type JsxIntrinsicElements"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn jsx(tag : JSValue, props : BadgeProps) -> JsxElement",
+      "declare pub fn jsx(tag : String, props : BadgeProps) -> JsxElement",
     ),
   )
   assert_false(bridge_mbti.contains("declare pub fn get_jsx()"))
   assert_true(
     bridge_mbt.contains(
-      "#module(\"react/jsx-runtime\")\npub extern \"js\" fn jsx(tag : @js.Any, props : BadgeProps) -> JsxElement = \"jsx\"",
+      "#module(\"react/jsx-runtime\")\npub extern \"js\" fn jsx(tag : String, props : BadgeProps) -> JsxElement = \"jsx\"",
     ),
   )
+  assert_false(bridge_mbt.contains("pub type JSValue = @js.Any"))
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
 
@@ -4924,12 +4967,36 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace optional R
       )
   }
   assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
-  assert_true(bridge_mbti.contains("/// label : String"))
-  assert_true(bridge_mbti.contains("/// children : ReactNode"))
-  assert_true(bridge_mbti.contains("/// ref : Ref"))
+  assert_true(bridge_mbti.contains("/// label : String?"))
+  assert_true(bridge_mbti.contains("/// children : ReactNode?"))
+  assert_true(bridge_mbti.contains("/// ref : Ref?"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn renderBadge(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+  assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles exported jsx-dev-runtime signatures" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_exported_jsx_dev_runtime",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/exported-jsx-dev-runtime-entry.d.ts", "react/jsx-dev-runtime",
+    root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read exported jsx-dev-runtime bridge.mbti: \{e}")
+  }
+  assert_true(bridge_mbti.contains("declare pub type JSXSource"))
+  assert_true(bridge_mbti.contains("/// fileName : String?"))
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn jsxDEV(type_ : ElementType, props : JSValue, key : Key?, isStatic : Bool, source : JSXSource?, self : JSValue?) -> ReactElement",
     ),
   )
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
@@ -4969,6 +5036,85 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace inline Pro
   assert_true(bridge_mbt.contains("pub struct LabelCountPropsWithChildren {"))
   assert_false(bridge_mbti.contains("declare pub type PropsWithChildren"))
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts sanitizes reserved exported function and parameter names" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_export_as_namespace_sanitize",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/export-as-namespace-sanitize-entry.d.ts", "./runtime/react-like.js",
+    root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read sanitize bridge.mbti: \{e}")
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => fail("failed to read sanitize bridge.mbt: \{e}")
+  }
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn jsx(type_ : String, props : Props) -> ReactElement",
+    ),
+  )
+  assert_true(
+    bridge_mbti.contains("declare pub fn use_(promise : Promise) -> String"),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn fragment(children : String) -> ReactElement",
+    ),
+  )
+  assert_true(
+    bridge_mbti.contains(
+      "declare pub fn strictMode(children : String) -> ReactElement",
+    ),
+  )
+  assert_false(bridge_mbti.contains("declare pub fn Fragment("))
+  assert_false(bridge_mbti.contains("declare pub fn use("))
+  assert_true(bridge_mbt.contains("pub extern \"js\" fn use_("))
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn fragment(children : String) -> ReactElement {\n  fragment(children)\n}",
+    ) ||
+    bridge_mbt.contains("pub extern \"js\" fn fragment(children : String)"),
+  )
+  assert_false(bridge_mbt.contains("pub fn Fragment("))
+  assert_false(bridge_mbt.contains("Component :"))
+  assert_false(bridge_mbt.contains("fn :"))
+}
+
+///|
+async test "emit_moonbit_scaffold_from_ts handles imported object type alias members" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "bridge_scaffold_hono_options_alias",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  emit_moonbit_scaffold_from_ts(
+    "fixtures/resolver/project/types/hono-options-entry.d.ts", "./runtime/hono.js",
+    root,
+  )
+  let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
+    e => fail("failed to read hono-options bridge.mbti: \{e}")
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => fail("failed to read hono-options bridge.mbt: \{e}")
+  }
+  assert_true(bridge_mbti.contains("declare pub type HonoOptions"))
+  assert_true(bridge_mbti.contains("/// strict : Bool?"))
+  assert_true(bridge_mbti.contains("/// bindings : E?"))
+  assert_true(bridge_mbt.contains("pub struct HonoOptions {"))
+  assert_true(bridge_mbt.contains("  strict : Bool?"))
+  assert_true(bridge_mbt.contains("  bindings : E?"))
+  assert_true(
+    bridge_mbt.contains(
+      "pub extern \"js\" fn new_hono(options : HonoOptions?) -> Hono = \"__ts_mbt_new_hono\"",
+    ),
+  )
 }
 
 ///|
@@ -5221,6 +5367,6 @@ async test "emit_moonbit_js_ffi_texts handles node-like ambient entry" {
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("#external\ntype NodeJsProcessEnv"))
+  assert_true(bundle.ffi_mbt.contains("#external\ntype NodeJS_ProcessEnv"))
   assert_false(bundle.bridge_js.contains("__ts_mbt_has_env"))
 }

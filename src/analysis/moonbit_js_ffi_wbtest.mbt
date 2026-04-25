@@ -521,10 +521,10 @@ async test "analysis: emit MoonBit JS FFI bundle with node-like ambient qualifie
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub struct RuntimeConfig"))
-  assert_true(bundle.ffi_mbt.contains("#external\ntype NodeJsProcessEnv"))
+  assert_true(bundle.ffi_mbt.contains("#external\ntype NodeJS_ProcessEnv"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "#module(\"/runtime/node-like.js\")\npub extern \"js\" fn has_env(env : NodeJsProcessEnv, key : String) -> Bool = \"hasEnv\"",
+      "#module(\"/runtime/node-like.js\")\npub extern \"js\" fn has_env(env : NodeJS_ProcessEnv, key : String) -> Bool = \"hasEnv\"",
     ),
   )
 }
@@ -633,10 +633,10 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime tsx exported funct
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
-  assert_true(bundle.ffi_mbt.contains("#external\ntype JsxElement"))
+  assert_true(bundle.ffi_mbt.contains("#external\ntype JSX_Element"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "#module(\"/runtime/runtime-component.js\")\npub extern \"js\" fn render_badge(props : BadgeProps) -> JsxElement = \"renderBadge\"",
+      "#module(\"/runtime/runtime-component.js\")\npub extern \"js\" fn render_badge(props : BadgeProps) -> JSX_Element = \"renderBadge\"",
     ),
   )
   assert_false(bundle.bridge_js.contains("__ts_mbt_render_badge"))
@@ -2760,7 +2760,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace hook t
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_action_state(action : @js.Any, initialState : State, permalink : String) -> UseActionStateResult = \"__ts_mbt_use_action_state\"",
+      "pub extern \"js\" fn use_action_state(action : @js.Any, initialState : State, permalink : String?) -> UseActionStateResult = \"__ts_mbt_use_action_state\"",
     ),
   )
   assert_true(
@@ -2811,7 +2811,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace JSX na
   assert_true(bundle.ffi_mbt.contains("  props : P"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn create_element(tag : @js.Any) -> JsxElement = \"__ts_mbt_create_element\"",
+      "pub extern \"js\" fn create_element(tag : String) -> JsxElement = \"__ts_mbt_create_element\"",
     ),
   )
   assert_true(
@@ -2839,7 +2839,7 @@ async test "analysis: emit MoonBit JS FFI bundle from exported JSX namespace mem
   assert_true(bundle.ffi_mbt.contains("pub struct JsxLibraryManagedAttributes"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn jsx(tag : @js.Any, props : BadgeProps) -> JsxElement = \"jsx\"",
+      "pub extern \"js\" fn jsx(tag : String, props : BadgeProps) -> JsxElement = \"jsx\"",
     ),
   )
   assert_false(bundle.ffi_mbt.contains("fn get_jsx()"))
@@ -2943,7 +2943,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace Compon
   }
   assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithRef"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
-  assert_true(bundle.ffi_mbt.contains("  ref : Ref"))
+  assert_true(bundle.ffi_mbt.contains("  ref_ : Ref"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : BadgePropsWithRef) -> BadgePropsWithRef = \"__ts_mbt_create_badge\"",
@@ -3031,12 +3031,36 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace option
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
-  assert_true(bundle.ffi_mbt.contains("  label : String"))
-  assert_true(bundle.ffi_mbt.contains("  children : ReactNode"))
-  assert_true(bundle.ffi_mbt.contains("  ref : Ref"))
+  assert_true(bundle.ffi_mbt.contains("  label : String?"))
+  assert_true(bundle.ffi_mbt.contains("  children : ReactNode?"))
+  assert_true(bundle.ffi_mbt.contains("  ref_ : Ref?"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn render_badge(props : BadgeProps) -> BadgeProps = \"__ts_mbt_render_badge\"",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from exported jsx-dev-runtime signatures" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/exported-jsx-dev-runtime-entry.d.ts", "react/jsx-dev-runtime",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct JSXSource"))
+  assert_true(bundle.ffi_mbt.contains("  fileName : String?"))
+  assert_true(bundle.ffi_mbt.contains("  lineNumber : Double?"))
+  assert_true(bundle.ffi_mbt.contains("  columnNumber : Double?"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn jsx_dev(type_ : ElementType, props : @js.Any, key : Key?, isStatic : Bool, source : JSXSource?, self : @js.Any?) -> ReactElement = \"jsxDEV\"",
     ),
   )
 }
@@ -3065,4 +3089,84 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace inline
     ),
   )
   assert_false(bundle.ffi_mbt.contains("pub type PropsWithChildren"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle sanitizes reserved exported function and parameter names" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-sanitize-entry.d.ts", "./runtime/react-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct Props"))
+  assert_true(bundle.ffi_mbt.contains("  type_ : String"))
+  assert_true(bundle.ffi_mbt.contains("  ref_ : String"))
+  assert_true(bundle.ffi_mbt.contains("pub struct ReactElement"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn jsx(type_ : String, props : Props) -> ReactElement = \"__ts_mbt_jsx\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn use_(promise : Promise) -> String = \"__ts_mbt_use\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn forward_ref(component : @js.Any) -> @js.Any = \"__ts_mbt_forward_ref\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn use_action_state(fn_ : @js.Any, initialState : String, permalink : String) -> String = \"__ts_mbt_use_action_state\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn fragment(children : String) -> ReactElement = \"__ts_mbt_fragment\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn strict_mode(children : String) -> ReactElement = \"__ts_mbt_strict_mode\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("fn use("))
+  assert_false(bundle.ffi_mbt.contains("Component :"))
+  assert_false(bundle.ffi_mbt.contains("fn :"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle from imported object type alias members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/hono-options-entry.d.ts", "./runtime/hono.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct HonoOptions"))
+  assert_true(bundle.ffi_mbt.contains("  strict : Bool?"))
+  assert_true(bundle.ffi_mbt.contains("  bindings : E?"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_hono(options : HonoOptions?) -> Hono = \"__ts_mbt_new_hono\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_app(options : HonoOptions) -> Hono = \"__ts_mbt_create_app\"",
+    ),
+  )
 }

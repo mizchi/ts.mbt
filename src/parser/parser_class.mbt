@@ -475,7 +475,7 @@ fn Parser::parse_class_body(
     let is_generator = self.match_(Star)
     let key = self.parse_class_method_key()
     let method_name = class_key_name(key)
-    let _ = self.match_(Question)
+    let is_optional = self.match_(Question)
     let _ = self.match_(Bang)
     if self.check(Lt) {
       self.skip_type_params()
@@ -532,6 +532,11 @@ fn Parser::parse_class_body(
         self.parse_type()
       } else {
         @ast.TsType::Any
+      }
+      let field_type = if is_optional {
+        wrap_optional_ts_type(field_type)
+      } else {
+        field_type
       }
       let init : @ast.TsExpr? = if self.match_(Eq) {
         Some(self.parse_assignment())

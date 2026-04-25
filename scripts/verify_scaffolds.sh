@@ -89,6 +89,31 @@ EOF
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
 }
 
+write_js_any_stub() {
+  local root="$1"
+
+  mkdir -p "$root/_stubs/mizchi_js/core"
+
+  cat > "$root/_stubs/mizchi_js/moon.mod.json" <<'EOF'
+{
+  "name": "mizchi/js",
+  "version": "0.0.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/_stubs/mizchi_js/core/moon.pkg.json" <<'EOF'
+{}
+EOF
+
+  cat > "$root/_stubs/mizchi_js/core/core.mbt" <<'EOF'
+///|
+#external
+pub type Any
+EOF
+}
+
 verify_moonbit_scaffold_fixture() {
   local root="_build/scaffold_ts_to_moonbit"
   local fixture_path="$repo_root/fixtures/bridge_smoke/double-entry.d.ts"
@@ -166,6 +191,217 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_moonbit_scaffold_react_like_jsx_fixture() {
+  local root="_build/scaffold_ts_to_moonbit_react_like_jsx"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-scaffold-from-ts \
+    fixtures/resolver/project/types/export-as-namespace-jsx-entry.d.ts \
+    ./runtime/react-like.js \
+    "$root" >/dev/null
+
+  write_js_any_stub "$root"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/scaffold_ts_to_moonbit_react_like_jsx",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/runtime/react-like.js" <<'EOF'
+export default {
+  createElement(tag) {
+    return { kind: tag };
+  }
+};
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated react-like jsx scaffold smoke" {
+  let _ = createElement("badge")
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
+verify_moonbit_scaffold_react_jsx_runtime_fixture() {
+  local root="_build/scaffold_ts_to_moonbit_react_jsx_runtime"
+
+  rm -rf "$root"
+  mkdir -p "$root/node_modules/react"
+
+  moon run src -- emit-moonbit-scaffold-from-ts \
+    fixtures/resolver/project/types/exported-jsx-namespace-entry.d.ts \
+    react/jsx-runtime \
+    "$root" >/dev/null
+
+  write_js_any_stub "$root"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/scaffold_ts_to_moonbit_react_jsx_runtime",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/node_modules/react/package.json" <<'EOF'
+{
+  "type": "module",
+  "exports": {
+    "./jsx-runtime": "./jsx-runtime.js"
+  }
+}
+EOF
+
+  cat > "$root/node_modules/react/jsx-runtime.js" <<'EOF'
+export function jsx(tag, props) {
+  return { kind: tag, props };
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+extern "js" fn test_badge_props() -> BadgeProps =
+  #| () => ({ label: "Badge" })
+
+test "generated jsx runtime scaffold smoke" {
+  let _ = jsx("badge", test_badge_props())
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
+verify_moonbit_scaffold_react_jsx_dev_runtime_fixture() {
+  local root="_build/scaffold_ts_to_moonbit_react_jsx_dev_runtime"
+
+  rm -rf "$root"
+  mkdir -p "$root/node_modules/react"
+
+  moon run src -- emit-moonbit-scaffold-from-ts \
+    fixtures/resolver/project/types/exported-jsx-dev-runtime-entry.d.ts \
+    react/jsx-dev-runtime \
+    "$root" >/dev/null
+
+  write_js_any_stub "$root"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/scaffold_ts_to_moonbit_react_jsx_dev_runtime",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/node_modules/react/package.json" <<'EOF'
+{
+  "type": "module",
+  "exports": {
+    "./jsx-dev-runtime": "./jsx-dev-runtime.js"
+  }
+}
+EOF
+
+  cat > "$root/node_modules/react/jsx-dev-runtime.js" <<'EOF'
+export function jsxDEV(type, props, key, isStatic, source, self) {
+  return { type, props, key, isStatic, source, self };
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+extern "js" fn test_element_type() -> ElementType =
+  #| () => "badge"
+
+extern "js" fn test_key() -> Key =
+  #| () => "key"
+
+extern "js" fn test_props() -> JSValue =
+  #| () => ({ label: "Badge" })
+
+extern "js" fn test_source() -> JSXSource =
+  #| () => ({ fileName: "x.tsx", lineNumber: 1 })
+
+test "generated jsx dev runtime scaffold smoke" {
+  let _ = jsxDEV(
+    test_element_type(),
+    test_props(),
+    Some(test_key()),
+    false,
+    Some(test_source()),
+    None,
+  )
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
+verify_moonbit_scaffold_hono_options_fixture() {
+  local root="_build/scaffold_ts_to_moonbit_hono_options"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-scaffold-from-ts \
+    fixtures/resolver/project/types/hono-options-entry.d.ts \
+    ./runtime/hono.js \
+    "$root" >/dev/null
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/scaffold_ts_to_moonbit_hono_options",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/runtime/hono.js" <<'EOF'
+export class Hono {
+  constructor(options) {
+    this.options = options;
+  }
+}
+
+export function createApp(options) {
+  return new Hono(options);
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+extern "js" fn test_hono_options() -> HonoOptions =
+  #| () => ({ strict: true })
+
+test "generated hono options scaffold smoke" {
+  let _ = new_hono(None)
+  let _ = createApp(test_hono_options())
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_moonbit_scaffold_namespace_fixture() {
   local root="_build/scaffold_ts_to_moonbit_namespace"
 
@@ -177,12 +413,16 @@ verify_moonbit_scaffold_namespace_fixture() {
     ./runtime/ns.js \
     "$root" >/dev/null
 
+  write_js_any_stub "$root"
   cp "$repo_root/fixtures/bridge_smoke/runtime/ns.js" "$root/runtime/ns.js"
 
   cat > "$root/moon.mod.json" <<'EOF'
 {
   "name": "fixture/scaffold_ts_to_moonbit_namespace",
   "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
   "source": ".",
   "preferred-target": "js"
 }
@@ -209,10 +449,15 @@ verify_moonbit_scaffold_handles_ambiguous_surface() {
     ./runtime/ambiguous.js \
     "$root" >/dev/null
 
+  write_js_any_stub "$root"
+
   cat > "$root/moon.mod.json" <<'EOF'
 {
   "name": "fixture/scaffold_ts_to_moonbit_ambiguous",
   "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
   "source": ".",
   "preferred-target": "js"
 }
@@ -231,5 +476,9 @@ verify_typescript_scaffold_fixture
 verify_typescript_facade_scaffold_fixture
 verify_moonbit_scaffold_fixture
 verify_moonbit_scaffold_external_package_fixture
+verify_moonbit_scaffold_react_like_jsx_fixture
+verify_moonbit_scaffold_react_jsx_runtime_fixture
+verify_moonbit_scaffold_react_jsx_dev_runtime_fixture
+verify_moonbit_scaffold_hono_options_fixture
 verify_moonbit_scaffold_namespace_fixture
 verify_moonbit_scaffold_handles_ambiguous_surface

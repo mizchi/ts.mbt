@@ -2340,6 +2340,298 @@ fn normalize_react_utility_interfaces(
 }
 
 ///|
+fn clone_resolved_interface_origin(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsInterface {
+  let fields : Array[(String, @ast.TsType)] = []
+  for field in origin.iface.fields {
+    let (field_name, field_type) = field
+    fields.push(
+      (
+        field_name,
+        lower_react_utility_type(
+          origin.info,
+          rewrite_type_refs(origin.info, field_type, canonical_types),
+          modules,
+          canonical_types,
+        ),
+      ),
+    )
+  }
+  { name: origin.export_name, fields }
+}
+
+///|
+fn collect_interface_dependencies_from_type(
+  info : DeclModuleInfo,
+  type_ : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  seen_names : Array[String],
+  interfaces : Array[@ast.TsInterface],
+) -> Unit {
+  match type_ {
+    Named(name) =>
+      match resolve_interface_origin(info, name, modules, canonical_types) {
+        Some(origin) => {
+          let iface = clone_resolved_interface_origin(
+            origin, modules, canonical_types,
+          )
+          if !seen_names.contains(iface.name) {
+            seen_names.push(iface.name)
+            interfaces.push(iface)
+            for field in iface.fields {
+              let (_, field_type) = field
+              collect_interface_dependencies_from_type(
+                origin.info,
+                field_type,
+                modules,
+                canonical_types,
+                seen_names,
+                interfaces,
+              )
+            }
+          }
+        }
+        None => ()
+      }
+    Applied(name, args) => {
+      match resolve_interface_origin(info, name, modules, canonical_types) {
+        Some(origin) => {
+          let iface = clone_resolved_interface_origin(
+            origin, modules, canonical_types,
+          )
+          if !seen_names.contains(iface.name) {
+            seen_names.push(iface.name)
+            interfaces.push(iface)
+            for field in iface.fields {
+              let (_, field_type) = field
+              collect_interface_dependencies_from_type(
+                origin.info,
+                field_type,
+                modules,
+                canonical_types,
+                seen_names,
+                interfaces,
+              )
+            }
+          }
+        }
+        None => ()
+      }
+      for arg in args {
+        collect_interface_dependencies_from_type(
+          info, arg, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+    }
+    Array(inner) =>
+      collect_interface_dependencies_from_type(
+        info, inner, modules, canonical_types, seen_names, interfaces,
+      )
+    Tuple(items) | Union(items) | Intersection(items) =>
+      for item in items {
+        collect_interface_dependencies_from_type(
+          info, item, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+    Object(fields) =>
+      for field in fields {
+        let (key_type, value_type) = field
+        collect_interface_dependencies_from_type(
+          info, key_type, modules, canonical_types, seen_names, interfaces,
+        )
+        collect_interface_dependencies_from_type(
+          info, value_type, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+    Struct(name, fields) => {
+      collect_interface_dependencies_from_type(
+        info,
+        Named(name),
+        modules,
+        canonical_types,
+        seen_names,
+        interfaces,
+      )
+      for field in fields {
+        let (_, field_type) = field
+        collect_interface_dependencies_from_type(
+          info, field_type, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+    }
+    Func(params, return_type) => {
+      for param in params {
+        collect_interface_dependencies_from_type(
+          info, param, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+      collect_interface_dependencies_from_type(
+        info, return_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    _ => ()
+  }
+}
+
+///|
+fn collect_interface_dependencies(
+  exported_interfaces : Array[ExportedInterfaceDecl],
+  exported_imports : Array[ExportedImportDecl],
+  exported_funcs : Array[ExportedFuncDecl],
+  exported_values : Array[ExportedValueDecl],
+  exported_classes : Array[ExportedClassDecl],
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  existing_interfaces : Array[@ast.TsInterface],
+) -> Array[@ast.TsInterface] {
+  let interfaces : Array[@ast.TsInterface] = []
+  let seen_names : Array[String] = []
+  for iface in existing_interfaces {
+    seen_names.push(iface.name)
+  }
+  for exported in exported_interfaces {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        for field in exported.iface.fields {
+          let (_, field_type) = field
+          collect_interface_dependencies_from_type(
+            info,
+            rewrite_type_refs(info, field_type, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+      None => ()
+    }
+  }
+  for exported in exported_imports {
+    match modules.get(exported.source_path) {
+      Some(info) => {
+        for param in exported.import_.params {
+          let (_, param_type) = param
+          collect_interface_dependencies_from_type(
+            info,
+            rewrite_type_refs(info, param_type, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+        collect_interface_dependencies_from_type(
+          info,
+          rewrite_type_refs(info, exported.import_.return_type, canonical_types),
+          modules,
+          canonical_types,
+          seen_names,
+          interfaces,
+        )
+      }
+      None => ()
+    }
+  }
+  for exported in exported_funcs {
+    match modules.get(exported.source_path) {
+      Some(info) => {
+        for param in exported.func.params {
+          collect_interface_dependencies_from_type(
+            info,
+            rewrite_type_refs(info, param.type_, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+        collect_interface_dependencies_from_type(
+          info,
+          rewrite_type_refs(info, exported.func.return_type, canonical_types),
+          modules,
+          canonical_types,
+          seen_names,
+          interfaces,
+        )
+      }
+      None => ()
+    }
+  }
+  for exported in exported_values {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        collect_interface_dependencies_from_type(
+          info,
+          rewrite_type_refs(info, exported.value.type_, canonical_types),
+          modules,
+          canonical_types,
+          seen_names,
+          interfaces,
+        )
+      None => ()
+    }
+  }
+  for exported in exported_classes {
+    match modules.get(exported.source_path) {
+      Some(info) => {
+        for class_property in exported.class_.properties {
+          collect_interface_dependencies_from_type(
+            info,
+            rewrite_type_refs(info, class_property.type_, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+        for class_method in exported.class_.methods {
+          for param in class_method.params {
+            let (_, param_type) = param
+            collect_interface_dependencies_from_type(
+              info,
+              rewrite_type_refs(info, param_type, canonical_types),
+              modules,
+              canonical_types,
+              seen_names,
+              interfaces,
+            )
+          }
+          collect_interface_dependencies_from_type(
+            info,
+            rewrite_type_refs(info, class_method.return_type, canonical_types),
+            modules,
+            canonical_types,
+            seen_names,
+            interfaces,
+          )
+        }
+        match exported.class_.constructor_params {
+          Some(params) =>
+            for param in params {
+              let (_, param_type) = param
+              collect_interface_dependencies_from_type(
+                info,
+                rewrite_type_refs(info, param_type, canonical_types),
+                modules,
+                canonical_types,
+                seen_names,
+                interfaces,
+              )
+            }
+          None => ()
+        }
+      }
+      None => ()
+    }
+  }
+  interfaces
+}
+
+///|
 fn clone_exported_interface(
   exported : ExportedInterfaceDecl,
   info : DeclModuleInfo,
@@ -2582,6 +2874,13 @@ pub async fn emit_moonbit_decl_from_entry_path(
     interfaces.push(spec.iface)
   }
   for iface in react_utility_interfaces {
+    interfaces.push(iface)
+  }
+  for
+    iface in collect_interface_dependencies(
+      exported_interfaces, exported_imports, exported_funcs, exported_values, exported_classes,
+      modules, canonical_types, interfaces,
+    ) {
     interfaces.push(iface)
   }
   let imports : Array[@ast.TsImport] = []

@@ -67,6 +67,9 @@ fn Parser::parse_paren_or_function_type(
     }
     param_types.push(self.parse_type())
     if self.match_(Comma) {
+      if self.check(RParen) {
+        break
+      }
       continue
     }
     break
@@ -139,6 +142,12 @@ fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
       fields.push((Literal(field_name), self.parse_type()))
       if self.match_(Semicolon) || self.match_(Comma) {
         continue
+      }
+      if self.has_line_terminator_before() {
+        match self.peek().kind {
+          Ident(_) | RBrace => continue
+          _ => ()
+        }
       }
       if self.check(RBrace) {
         break
@@ -267,15 +276,25 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let _ = self.advance()
       Any
     }
-    Ident("null")
-    | Ident("undefined")
-    | Ident("never")
+    Ident("any")
     | Ident("unknown")
     | Ident("object")
     | Ident("symbol")
     | Ident("bigint") => {
       let _ = self.advance()
       Any
+    }
+    Ident("undefined") => {
+      let _ = self.advance()
+      Undefined
+    }
+    Ident("null") => {
+      let _ = self.advance()
+      Null
+    }
+    Ident("never") => {
+      let _ = self.advance()
+      Never
     }
     Minus => {
       // Negative number literal: -1
@@ -384,7 +403,7 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Ident("keyof") => {
       let _ = self.advance()
       let _ = self.parse_primary_type()
-      Any
+      String_
     }
     Ident("readonly") => {
       let _ = self.advance()
@@ -470,11 +489,6 @@ fn Parser::parse_postfix_type(
     }
     return self.parse_postfix_type(Any)
   }
-  // Conditional type: T extends U ? V : W - skip it
-  if self.check(Extends) {
-    self.skip_conditional_type()
-    return Any
-  }
   base_type
 }
 
@@ -523,15 +537,122 @@ fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
     return Intersection(items)
   }
   let base = self.parse_intersection_type()
+  if self.check(Extends) {
+    self.skip_conditional_type_tail()
+    return Any
+  }
   // Union type: T | U
   if self.check(Pipe) {
     let items : Array[@ast.TsType] = [base]
     while self.match_(Pipe) {
       items.push(self.parse_intersection_type())
     }
+    if self.check(Extends) {
+      self.skip_conditional_type_tail()
+      return Any
+    }
     return Union(items)
   }
   base
+}
+
+///|
+fn Parser::skip_conditional_type_segment(
+  self : Parser,
+  stop_on_question : Bool,
+  stop_on_colon : Bool,
+) -> Unit {
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut brace_depth = 0
+  let mut angle_depth = 0
+  let mut conditional_depth = 0
+  while !self.check(Eof) {
+    let top_level = paren_depth == 0 &&
+      bracket_depth == 0 &&
+      brace_depth == 0 &&
+      angle_depth == 0
+    match self.peek().kind {
+      Question if top_level && stop_on_question && conditional_depth == 0 =>
+        break
+      Question if top_level => {
+        conditional_depth += 1
+        let _ = self.advance()
+      }
+      Colon if top_level && stop_on_colon && conditional_depth == 0 => break
+      Colon if top_level && conditional_depth > 0 => {
+        conditional_depth -= 1
+        let _ = self.advance()
+      }
+      Semicolon | Comma | RParen | RBracket | RBrace if top_level &&
+        conditional_depth == 0 => break
+      LParen => {
+        paren_depth += 1
+        let _ = self.advance()
+      }
+      RParen => {
+        if paren_depth == 0 {
+          break
+        }
+        paren_depth -= 1
+        let _ = self.advance()
+      }
+      LBracket => {
+        bracket_depth += 1
+        let _ = self.advance()
+      }
+      RBracket => {
+        if bracket_depth == 0 {
+          break
+        }
+        bracket_depth -= 1
+        let _ = self.advance()
+      }
+      LBrace => {
+        brace_depth += 1
+        let _ = self.advance()
+      }
+      RBrace => {
+        if brace_depth == 0 {
+          break
+        }
+        brace_depth -= 1
+        let _ = self.advance()
+      }
+      Lt => {
+        angle_depth += 1
+        let _ = self.advance()
+      }
+      Gt => {
+        if angle_depth > 0 {
+          angle_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      GtGt => {
+        angle_depth = if angle_depth >= 2 { angle_depth - 2 } else { 0 }
+        let _ = self.advance()
+      }
+      GtGtGt => {
+        angle_depth = if angle_depth >= 3 { angle_depth - 3 } else { 0 }
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
+fn Parser::skip_conditional_type_tail(self : Parser) -> Unit {
+  let _ = self.advance() // consume extends
+  self.skip_conditional_type_segment(true, false)
+  if self.match_(Question) {
+    self.skip_conditional_type_segment(false, true)
+    let _ = self.match_(Colon)
+    self.skip_conditional_type_segment(false, true)
+  }
 }
 
 ///|
@@ -733,23 +854,6 @@ fn Parser::skip_type_args(self : Parser) -> Unit {
       _ => {
         let _ = self.advance()
       }
-    }
-  }
-}
-
-///|
-/// Skip conditional type: extends U ? V : W
-fn Parser::skip_conditional_type(self : Parser) -> Unit raise ParseError {
-  let _ = self.advance() // consume 'extends'
-  // Skip constraint type
-  let _ = self.parse_primary_type()
-  // Skip ? V : W
-  if self.check(Question) {
-    let _ = self.advance()
-    let _ = self.parse_type()
-    if self.check(Colon) {
-      let _ = self.advance()
-      let _ = self.parse_type()
     }
   }
 }

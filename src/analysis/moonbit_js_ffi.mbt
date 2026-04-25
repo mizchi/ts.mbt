@@ -47,7 +47,7 @@ fn ffi_to_upper_ascii(c : Char) -> Char {
 }
 
 ///|
-fn ffi_sanitize_identifier(name : String, fallback : String) -> String {
+fn ffi_sanitize_identifier_chars(name : String, fallback : String) -> String {
   let mut result = ""
   for c in name {
     if ffi_is_ascii_letter(c) || ffi_is_ascii_digit(c) || c == '_' {
@@ -62,6 +62,59 @@ fn ffi_sanitize_identifier(name : String, fallback : String) -> String {
   let first = result[0].unsafe_to_char()
   if ffi_is_ascii_digit(first) {
     result = "_" + result
+  }
+  result
+}
+
+///|
+fn ffi_value_identifier_needs_suffix(name : String) -> Bool {
+  match name {
+    "as"
+    | "break"
+    | "catch"
+    | "const"
+    | "continue"
+    | "else"
+    | "fn"
+    | "for"
+    | "if"
+    | "in"
+    | "let"
+    | "match"
+    | "pub"
+    | "ref"
+    | "return"
+    | "struct"
+    | "test"
+    | "trait"
+    | "type"
+    | "typealias"
+    | "use"
+    | "while" => true
+    _ => false
+  }
+}
+
+///|
+fn ffi_lower_leading_ascii(name : String) -> String {
+  if name == "" {
+    return name
+  }
+  let first = name[0].unsafe_to_char()
+  if first >= 'A' && first <= 'Z' {
+    (first.to_int() + 32).unsafe_to_char().to_string() + name[1:].to_string()
+  } else {
+    name
+  }
+}
+
+///|
+fn ffi_sanitize_identifier(name : String, fallback : String) -> String {
+  let mut result = ffi_lower_leading_ascii(
+    ffi_sanitize_identifier_chars(name, fallback),
+  )
+  if ffi_value_identifier_needs_suffix(result) {
+    result += "_"
   }
   result
 }
@@ -110,28 +163,39 @@ fn ffi_to_snake_case(name : String) -> String {
       prev_is_lower_or_digit = false
     }
   }
-  ffi_sanitize_identifier(ffi_trim_underscores(result), "generated_name")
+  ffi_sanitize_identifier_chars(ffi_trim_underscores(result), "generated_name")
 }
 
 ///|
-fn ffi_to_pascal_case(name : String) -> String {
-  let snake = ffi_to_snake_case(name)
-  let parts = snake.split("_")
-  let mut result = ""
-  for part_view in parts {
-    let part = part_view.to_string()
-    if part == "" {
-      continue
-    }
-    let first = ffi_to_upper_ascii(part[0].unsafe_to_char()).to_string()
-    result += first + part[1:].to_string()
+fn ffi_type_identifier(name : String, fallback : String) -> String {
+  let sanitized = ffi_sanitize_identifier_chars(name, fallback)
+  if sanitized == "" {
+    return fallback
   }
-  ffi_sanitize_identifier(result, "OpaqueType")
+  let first = sanitized[0].unsafe_to_char()
+  let normalized = if first >= 'a' && first <= 'z' {
+    ffi_to_upper_ascii(first).to_string() + sanitized[1:].to_string()
+  } else {
+    sanitized
+  }
+  match normalized {
+    "default" => "Default"
+    _ => normalized
+  }
+}
+
+///|
+fn ffi_value_fn_name(name : String) -> String {
+  let mut result = ffi_to_snake_case(name)
+  if ffi_value_identifier_needs_suffix(result) {
+    result += "_"
+  }
+  result
 }
 
 ///|
 fn ffi_mark_external_type(state : MoonBitJsFfiState, name : String) -> String {
-  let type_name = ffi_to_pascal_case(name)
+  let type_name = ffi_type_identifier(name, "OpaqueType")
   if state.declared_type_names.contains(type_name) {
     return type_name
   }
@@ -142,13 +206,18 @@ fn ffi_mark_external_type(state : MoonBitJsFfiState, name : String) -> String {
 }
 
 ///|
-fn ffi_collapse_optional_like_union(type_ : @ast.TsType) -> @ast.TsType? {
+fn ffi_classify_optional_like_union(
+  type_ : @ast.TsType,
+) -> (@ast.TsType, Bool)? {
   match type_ {
     Union(items) => {
       let mut concrete : @ast.TsType? = None
+      let mut has_any = false
+      let mut is_optional = false
       for item in items {
         match item {
-          Any => ()
+          Any => has_any = true
+          Undefined | Null => is_optional = true
           _ =>
             match concrete {
               Some(_) => return None
@@ -156,7 +225,10 @@ fn ffi_collapse_optional_like_union(type_ : @ast.TsType) -> @ast.TsType? {
             }
         }
       }
-      concrete
+      match concrete {
+        Some(inner) => if has_any { None } else { Some((inner, is_optional)) }
+        None => if has_any { Some((Any, is_optional)) } else { None }
+      }
     }
     _ => None
   }
@@ -164,8 +236,11 @@ fn ffi_collapse_optional_like_union(type_ : @ast.TsType) -> @ast.TsType? {
 
 ///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
-  match ffi_collapse_optional_like_union(type_) {
-    Some(collapsed) => return ffi_type_name(state, collapsed)
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      let suffix = if is_optional { "?" } else { "" }
+      return ffi_type_name(state, collapsed) + suffix
+    }
     None => ()
   }
   match type_ {
@@ -175,7 +250,11 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     String_ => "String"
     Void => "Unit"
     Array(inner) => "Array[" + ffi_type_name(state, inner) + "]"
-    Struct(name, _) => ffi_to_pascal_case(name)
+    Struct(name, _) => ffi_type_identifier(name, "OpaqueType")
+    Named("any") | Named("Function") => {
+      state.needs_js_any = true
+      "@js.Any"
+    }
     Named("Array") | Named("ReadonlyArray") => {
       state.needs_js_any = true
       "Array[@js.Any]"
@@ -196,7 +275,8 @@ fn ffi_struct_decl_to_moonbit(
   state : MoonBitJsFfiState,
   iface : @ast.TsInterface,
 ) -> String {
-  let lines : Array[String] = ["pub struct \{ffi_to_pascal_case(iface.name)} {"]
+  let type_name = ffi_type_identifier(iface.name, "OpaqueType")
+  let lines : Array[String] = ["pub struct \{type_name} {"]
   for field in iface.fields {
     let (name, type_) = field
     let field_name = ffi_sanitize_identifier(name, "field")
@@ -213,7 +293,8 @@ fn ffi_named_struct_decl_to_moonbit(
   name : String,
   fields : Array[(String, @ast.TsType)],
 ) -> String {
-  let lines : Array[String] = ["pub struct \{ffi_to_pascal_case(name)} {"]
+  let type_name = ffi_type_identifier(name, "OpaqueType")
+  let lines : Array[String] = ["pub struct \{type_name} {"]
   for field in fields {
     let (field_name, field_type) = field
     let safe_name = ffi_sanitize_identifier(field_name, "field")
@@ -358,7 +439,7 @@ fn ffi_import_decl_to_moonbit(
     params.push("\{param_name} : \{param_type}")
   }
   let return_type = ffi_type_name(state, import_.return_type)
-  let fn_name = ffi_to_snake_case(import_.name)
+  let fn_name = ffi_value_fn_name(import_.name)
   let params_str = params.join(", ")
   "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{ffi_binding_name(import_.name)}\""
 }
@@ -378,7 +459,7 @@ fn ffi_import_decl_to_moonbit_direct(
     params.push("\{param_name} : \{param_type}")
   }
   let return_type = ffi_type_name(state, import_.return_type)
-  let fn_name = ffi_to_snake_case(import_.name)
+  let fn_name = ffi_value_fn_name(import_.name)
   let params_str = params.join(", ")
   ffi_direct_module_decl(
     module_spec,
@@ -406,7 +487,7 @@ fn ffi_func_decl_to_moonbit(
     params.push("\{safe_name} : \{safe_type}")
   }
   let return_type = ffi_type_name(state, func.return_type)
-  let fn_name = ffi_to_snake_case(func.name)
+  let fn_name = ffi_value_fn_name(func.name)
   let params_str = params.join(", ")
   "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{ffi_binding_name(func.name)}\""
 }
@@ -433,7 +514,7 @@ fn ffi_func_decl_to_moonbit_direct(
     params.push("\{safe_name} : \{safe_type}")
   }
   let return_type = ffi_type_name(state, func.return_type)
-  let fn_name = ffi_to_snake_case(func.name)
+  let fn_name = ffi_value_fn_name(func.name)
   let params_str = params.join(", ")
   ffi_direct_module_decl(
     module_spec,
@@ -491,7 +572,7 @@ fn ffi_class_property_setter_binding_name(
 
 ///|
 fn ffi_class_type_name(class_name : String) -> String {
-  ffi_to_pascal_case(class_name)
+  ffi_type_identifier(class_name, "OpaqueType")
 }
 
 ///|
@@ -641,7 +722,7 @@ fn ffi_class_property_setter_decl_to_moonbit(
 
 ///|
 fn ffi_namespace_decl(export_name : String) -> (String, String) {
-  let type_name = ffi_to_pascal_case(export_name)
+  let type_name = ffi_type_identifier(export_name, "OpaqueType")
   let ffi_decl = "#external\ntype \{type_name}\n\npub extern \"js\" fn \{ffi_namespace_getter_name(export_name)}() -> \{type_name} = \"__ts_mbt_get_\{ffi_to_snake_case(export_name)}\""
   (type_name, ffi_decl)
 }
@@ -1016,6 +1097,13 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   for iface in react_utility_interfaces {
     interfaces.push(iface)
   }
+  for
+    iface in collect_interface_dependencies(
+      exported_interfaces, exported_imports, exported_funcs, exported_values, exported_classes,
+      modules, canonical_types, interfaces,
+    ) {
+    interfaces.push(iface)
+  }
   let imports = normalize_imports_for_ffi(
     exported_imports, modules, canonical_types,
   )
@@ -1053,7 +1141,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
 
   let declared_type_names : Array[String] = []
   for iface in interfaces {
-    declared_type_names.push(ffi_to_pascal_case(iface.name))
+    declared_type_names.push(ffi_type_identifier(iface.name, "OpaqueType"))
   }
   for class_ in classes {
     declared_type_names.push(ffi_class_type_name(class_.name))
@@ -1434,7 +1522,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   for value in values {
     match value.type_ {
       Struct(name, fields) => {
-        let type_name = ffi_to_pascal_case(name)
+        let type_name = ffi_type_identifier(name, "OpaqueType")
         if !state.declared_type_names.contains(type_name) {
           state.declared_type_names.push(type_name)
         }

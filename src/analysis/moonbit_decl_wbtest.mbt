@@ -845,7 +845,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace hook tu
   )
   assert_true(
     actual.contains(
-      "declare pub fn useActionState(action : JSValue, initialState : State, permalink : String) -> UseActionStateResult",
+      "declare pub fn useActionState(action : JSValue, initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
 }
@@ -868,7 +868,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace JSX nam
   assert_true(actual.contains("declare pub type JsxIntrinsicElements"))
   assert_true(actual.contains("declare pub type JsxLibraryManagedAttributes"))
   assert_true(
-    actual.contains("declare pub fn createElement(tag : JSValue) -> JsxElement"),
+    actual.contains("declare pub fn createElement(tag : String) -> JsxElement"),
   )
 }
 
@@ -891,7 +891,7 @@ async test "analysis: emit MoonBit declarations from exported JSX namespace memb
   assert_true(actual.contains("declare pub type JsxLibraryManagedAttributes"))
   assert_true(
     actual.contains(
-      "declare pub fn jsx(tag : JSValue, props : BadgeProps) -> JsxElement",
+      "declare pub fn jsx(tag : String, props : BadgeProps) -> JsxElement",
     ),
   )
   assert_false(actual.contains("declare pub fn get_jsx() ->"))
@@ -1054,12 +1054,36 @@ async test "analysis: emit MoonBit declarations from export-as-namespace optiona
     }
   }
   assert_true(actual.contains("declare pub type BadgeProps"))
-  assert_true(actual.contains("/// label : String"))
-  assert_true(actual.contains("/// children : ReactNode"))
-  assert_true(actual.contains("/// ref : Ref"))
+  assert_true(actual.contains("/// label : String?"))
+  assert_true(actual.contains("/// children : ReactNode?"))
+  assert_true(actual.contains("/// ref : Ref?"))
   assert_true(
     actual.contains(
       "declare pub fn renderBadge(props : BadgeProps) -> BadgeProps",
+    ),
+  )
+}
+
+///|
+async test "analysis: emit MoonBit declarations from exported jsx-dev-runtime signatures" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/exported-jsx-dev-runtime-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type JSXSource"))
+  assert_true(actual.contains("/// fileName : String?"))
+  assert_true(actual.contains("/// lineNumber : Double?"))
+  assert_true(actual.contains("/// columnNumber : Double?"))
+  assert_true(
+    actual.contains(
+      "declare pub fn jsxDEV(type_ : ElementType, props : JSValue, key : Key?, isStatic : Bool, source : JSXSource?, self : JSValue?) -> ReactElement",
     ),
   )
 }
@@ -1084,6 +1108,74 @@ async test "analysis: emit MoonBit declarations from export-as-namespace inline 
     ),
   )
   assert_false(actual.contains("declare pub type PropsWithChildren"))
+}
+
+///|
+async test "analysis: emit MoonBit declarations sanitizes reserved exported function and parameter names" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/export-as-namespace-sanitize-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    actual.contains(
+      "declare pub fn jsx(type_ : String, props : Props) -> ReactElement",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn use_(promise : Promise) -> String"),
+  )
+  assert_true(
+    actual.contains("declare pub fn forwardRef(component : JSValue) -> JSValue"),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn useActionState(fn_ : JSValue, initialState : String, permalink : String) -> String",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn fragment(children : String) -> ReactElement",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn strictMode(children : String) -> ReactElement",
+    ),
+  )
+  assert_false(actual.contains("declare pub fn Fragment("))
+  assert_false(actual.contains("declare pub fn use("))
+}
+
+///|
+async test "analysis: emit MoonBit declarations from imported object type alias members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/hono-options-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type HonoOptions"))
+  assert_true(actual.contains("/// strict : Bool?"))
+  assert_true(actual.contains("/// bindings : E?"))
+  assert_true(actual.contains("declare pub type Hono"))
+  assert_true(
+    actual.contains("declare pub fn new_hono(options : HonoOptions?) -> Hono"),
+  )
+  assert_true(
+    actual.contains("declare pub fn createApp(options : HonoOptions) -> Hono"),
+  )
 }
 
 ///|

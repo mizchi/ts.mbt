@@ -115,6 +115,41 @@ Reduce the need to pick one edge case at a time by shipping the next `default ex
 - [x] Add parser / decl / JS FFI / bridge-package regressions for the mutation cases.
 - [x] Add bridge smoke fixtures for the conservative widened mutation cases.
 
+## React / JSX Real-World Support
+
+Keep pushing real package support through `.d.ts` surface parsing and scaffold generation before adding a full JSX expression parser.
+
+### Current status
+
+- [x] Accept `export as namespace ...` without crashing `emit-moonbit-scaffold-from-ts`.
+- [x] Flatten `export = React; declare namespace React { ... }` style surfaces into top-level scaffold exports.
+- [x] Surface nested `JSX` namespace types from `react`, `react/jsx-runtime`, and `react/jsx-dev-runtime`.
+- [x] Normalize the first round of React utility types:
+  - `PropsWithChildren<T>`
+  - `ComponentProps<"tag">`
+  - `ComponentPropsWithoutRef<"tag">`
+  - `ComponentPropsWithRef<"tag">`
+  - nested `PropsWithChildren<ComponentPropsWithoutRef<...>>`
+- [x] Convert known React hook tuple returns into named synthetic result types.
+- [x] Preserve optional React-style props/params as `T?` instead of widening everything to `JSValue`.
+- [x] Make generated MoonBit identifiers safe for reserved words and dotted ambient names.
+
+### Next work
+
+- [ ] Reduce widening around React overload-heavy APIs.
+  - Priority targets: `createElement`, `cloneElement`, `forwardRef`, `memo`.
+  - [x] Lower `keyof JSX.IntrinsicElements` parameters to `String` for `createElement` / JSX runtime entrypoints instead of `JSValue`.
+- [ ] Model exotic/callable component surfaces more explicitly.
+  - Priority targets: `FunctionComponent`, `ForwardRefExoticComponent`, `MemoExoticComponent`, `NamedExoticComponent`.
+- [ ] Improve utility/conditional type lowering beyond the first pass.
+  - Priority targets: `ReactNode`, `ComponentRef`, `ElementRef`, `LibraryManagedAttributes`, `RefAttributes`.
+- [x] Add stable end-to-end verification for generated React scaffolds under `moon check/test --target js`.
+  - `just verify-scaffolds` now checks React-like JSX, `react/jsx-runtime`, `react/jsx-dev-runtime`, and the Hono options fixture with generated packages under the JS target. The React cases use a local `mizchi/js/core` stub instead of depending on a separate checkout.
+- [ ] Add stable fixture coverage for `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, and `hono/jsx`.
+  - Keep real-world probe findings as minimized fixtures instead of ad-hoc `/tmp` checks.
+- [ ] Keep JSX parser work deferred until `.d.ts` type-surface parsing is no longer the blocker.
+  - Re-evaluate only if React/Hono support hits syntax that cannot be represented from declaration files alone.
+
 ## Codegen Type Mismatch Bugs
 
 - [x] Re-verify the historical wasmtime mismatch regressions against the current codegen.

@@ -97,6 +97,8 @@ async test "analysis: emit MoonBit TS bridge package bundle exposes namespace ex
     bundle.bridge_mbti.contains("declare pub fn get_shapes() -> Shapes"),
   )
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_shapes()"))
+  assert_true(bundle.moon_pkg_json.contains("\"path\": \"mizchi/js/core\""))
+  assert_true(bundle.moon_pkg_json.contains("\"alias\": \"js\""))
   assert_true(
     bundle.bridge_js.contains("export function __ts_mbt_get_shapes()"),
   )
