@@ -122,6 +122,10 @@ verify-scaffolds:
 verify-examples:
     bash scripts/verify_examples.sh
 
+# Verify optional ghq real-world MoonBit package scaffolds
+verify-realworld-moonbit:
+    bash scripts/verify_realworld_moonbit.sh
+
 # Benchmark a local TypeScript project corpus
 benchmark-project root limit="200":
     moon run src -- benchmark-project {{root}} {{limit}}

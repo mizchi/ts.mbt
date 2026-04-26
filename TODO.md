@@ -76,7 +76,7 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
 - [x] Keep the shape-merge scope narrow.
   - Current responsibility: decide whether object-like interface expansions can be flattened safely, or should fall back to intersections.
   - Current coverage: duplicate properties, `readonly`, optional-property keys, and "do not merge methods / overload-like members".
-- [ ] Avoid growing the bridge normalization helper into a full semantic checker unless a separate goal is explicitly chosen.
+- [x] Avoid growing the bridge normalization helper into a full semantic checker unless a separate goal is explicitly chosen.
   - If future work needs real TS semantics, define that as a separate milestone instead of quietly expanding the normalization helper.
 
 ## Bridge Const-Table Batch Plan
@@ -150,7 +150,7 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Add stable fixture coverage for `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, and `hono/jsx`.
   - Keep real-world probe findings as minimized fixtures instead of ad-hoc `/tmp` checks.
   - Minimized package fixtures live under `fixtures/resolver/project/node_modules/react` and `fixtures/resolver/project/node_modules/hono`; `just verify-scaffolds` now compiles/tests generated MoonBit packages against those package names.
-- [ ] Keep JSX parser work deferred until `.d.ts` type-surface parsing is no longer the blocker.
+- [x] Keep JSX parser work deferred until `.d.ts` type-surface parsing is no longer the blocker.
   - Re-evaluate only if React/Hono support hits syntax that cannot be represented from declaration files alone.
 
 ## Codegen Type Mismatch Bugs
@@ -170,15 +170,23 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Template literals (untagged only, string-typed expressions only; desugar to concat)
 - [x] Full template literals (ToString coercion for non-strings)
 - [x] Computed property access in literals (const key only)
+- [x] Spread in array literals and known-signature function calls
 
 ### Next in order
-1. Spread in arrays/args (requires iterator protocol fixes)
+1. Add broader optional real-world MoonBit package probes as local checkouts become available.
 
 ### Candidates (need more groundwork)
-- Spread in arrays/args (requires iterator protocol fixes)
 - Arbitrary call expressions (function values / closures)
+
+## Real-World MoonBit Package Probe
+
+- [x] Support `tsmbt --input mizchi/foo --out dist/` style ghq package resolution for MoonBit packages.
+- [x] Verify build-backed `MoonBit -> TypeScript` scaffold generation through `moon build --target js` for local `mizchi/ripple`, `mizchi/semver`, and `mizchi/tempfile` checkouts.
+  - `just verify-realworld-moonbit` is optional and skipped package-by-package when those local ghq checkouts are absent.
+- [x] Preserve MoonBit `raise` effects in temporary glue wrappers so effectful packages such as `mizchi/semver` build.
+- [x] Skip facade wrappers that would expose private root types from the source package; the generated `.d.ts` can still document those opaque types, but glue packages cannot refer to private MoonBit symbols.
 
 ## CI Notes
 
-- 4 parser tests also fail due to missing TypeScript submodule (not a codegen issue)
-- Consider adding `actions/checkout` with `submodules: true` if those tests are needed in CI
+- Default `just ci` remains fixture-based and does not require local ghq checkouts.
+- `just verify-realworld-moonbit` is intentionally outside default CI because it probes developer-local MoonBit repositories and writes temporary glue packages into those source modules during `moon build --target js`.

@@ -218,6 +218,40 @@ fn parse_mbti_package_name_from_source(source : String) -> String? {
 
 ///|
 async fn resolve_unified_mbt_input_path(input : String) -> String? {
+  let roots : Array[String] = ["."]
+  match infer_ghq_github_root_from_cwd() {
+    Some(root) => roots.push(root)
+    None => ()
+  }
+  resolve_unified_mbt_input_path_from_roots(input, roots)
+}
+
+///|
+fn ghq_candidate_repo_paths(
+  github_root : String,
+  input : String,
+) -> Array[String] {
+  let paths = [main_join_path(github_root, input)]
+  if !input.has_suffix(".mbt") {
+    paths.push(main_join_path(github_root, input + ".mbt"))
+  }
+  paths
+}
+
+///|
+async fn infer_ghq_github_root_from_cwd() -> String? {
+  let cwd = @fs.realpath(".") catch { _ => "." }
+  match cwd.find("/ghq/github.com/") {
+    Some(idx) => Some(cwd[:idx + "/ghq/github.com".length()].to_string())
+    None => None
+  }
+}
+
+///|
+async fn resolve_unified_mbt_input_path_from_roots(
+  input : String,
+  roots : Array[String],
+) -> String? {
   if main_file_exists(input) {
     return Some(input)
   }
@@ -225,13 +259,25 @@ async fn resolve_unified_mbt_input_path(input : String) -> String? {
   if main_file_exists(direct_pkg_path) {
     return Some(direct_pkg_path)
   }
-  let candidates : Array[String] = []
-  collect_pkg_generated_mbti_files(".", candidates)
-  for path in candidates {
-    let source = @fs.read_file(path).text() catch { _ => continue }
-    match parse_mbti_package_name_from_source(source) {
-      Some(package_name) if package_name == input => return Some(path)
-      _ => ()
+  for root in roots {
+    let scan_roots = if root.has_suffix("/github.com") && input.contains("/") {
+      ghq_candidate_repo_paths(root, input)
+    } else {
+      [root]
+    }
+    for scan_root in scan_roots {
+      if !@fs.exists(scan_root) {
+        continue
+      }
+      let candidates : Array[String] = []
+      collect_pkg_generated_mbti_files(scan_root, candidates)
+      for path in candidates {
+        let source = @fs.read_file(path).text() catch { _ => continue }
+        match parse_mbti_package_name_from_source(source) {
+          Some(package_name) if package_name == input => return Some(path)
+          _ => ()
+        }
+      }
     }
   }
   None

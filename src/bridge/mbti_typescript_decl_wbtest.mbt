@@ -802,3 +802,49 @@ async test "bridge: emit TypeScript facade scaffold bundle keeps root imports in
   assert_true(bundle.moon_pkg_json.contains("\"alias\": \"tsmbt_source\""))
   assert_true(bundle.moon_pkg_json.contains("\"path\": \"demo/facade/child\""))
 }
+
+///|
+async test "bridge: emit TypeScript facade scaffold bundle skips private root types in wrapper source" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/private_facade.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade scaffold bundle emit error: \{msg}")
+  }
+  assert_true(bundle.autolink_glue_mbt.contains("database_current_revision"))
+  assert_false(bundle.autolink_glue_mbt.contains("database_runtime"))
+  let mut root_content = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  assert_true(
+    root_content.contains(
+      "export function database_current_revision(self: Database): number;",
+    ),
+  )
+  assert_false(root_content.contains("export function database_runtime"))
+}
+
+///|
+async test "bridge: emit TypeScript facade scaffold bundle preserves raise effects in wrapper source" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/effect_facade.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade scaffold bundle emit error: \{msg}")
+  }
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub fn parse(arg0 : String) -> @tsmbt_source.SemVer raise @tsmbt_source.SemVerError {",
+    ),
+  )
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub fn sem_ver_parse_next(self_ : @tsmbt_source.SemVer, arg1 : String) -> @tsmbt_source.SemVer raise @tsmbt_source.SemVerError {",
+    ),
+  )
+}

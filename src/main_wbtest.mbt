@@ -250,6 +250,34 @@ async test "resolve_unified_mbt_input_path finds package name in generated mbti 
 }
 
 ///|
+async test "resolve_unified_mbt_input_path_from_roots finds ghq-style package names" {
+  let root = wbtest_tmp_project_benchmark_root("unified_fake_ghq")
+  let github_root = wbtest_join_path(root, "github.com")
+  let pkg_dir = wbtest_join_path(github_root, "mizchi/ripple/src")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  @fs.mkdir(root, permission=0o755)
+  @fs.mkdir(wbtest_join_path(root, "github.com"), permission=0o755)
+  @fs.mkdir(wbtest_join_path(github_root, "mizchi"), permission=0o755)
+  @fs.mkdir(wbtest_join_path(github_root, "mizchi/ripple"), permission=0o755)
+  @fs.mkdir(pkg_dir, permission=0o755)
+  let mbti_path = wbtest_join_path(pkg_dir, "pkg.generated.mbti")
+  let mbti_source =
+    #|// Generated using `moon info`, DON'T EDIT IT
+    #|package "mizchi/ripple"
+    #|
+    #|// Values
+    #|pub fn version() -> String
+  @fs.write_file(mbti_path, mbti_source, create=0o644)
+  match
+    resolve_unified_mbt_input_path_from_roots("mizchi/ripple", [
+      ".", github_root,
+    ]) {
+    Some(path) => assert_eq(path, mbti_path)
+    None => fail("expected mizchi/ripple to resolve from fake ghq root")
+  }
+}
+
+///|
 async test "infer_unified_tsmbt_direction detects package names and TypeScript entries" {
   match infer_unified_tsmbt_direction("examples/counter") {
     Some(TsmbtDirection::MbtToTs) => ()

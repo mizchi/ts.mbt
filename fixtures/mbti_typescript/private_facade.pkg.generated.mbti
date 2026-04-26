@@ -1,0 +1,18 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/private_facade"
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct Database {
+}
+type Runtime
+pub fn Database::current_revision(Self) -> Int
+pub fn Database::new() -> Self
+pub fn Database::runtime(Self) -> Runtime
+
+// Type aliases
+
+// Traits

@@ -1,0 +1,19 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/effect_facade"
+
+// Values
+pub fn parse(String) -> SemVer raise SemVerError
+
+// Errors
+pub suberror SemVerError {
+  InvalidFormat(String)
+}
+
+// Types and methods
+pub struct SemVer {
+}
+pub fn SemVer::parse_next(Self, String) -> Self raise SemVerError
+
+// Type aliases
+
+// Traits
