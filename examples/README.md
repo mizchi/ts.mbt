@@ -30,6 +30,12 @@ Input:
 - `typescript-to-moonbit/hono/runtime/hono.js`
 - `typescript-to-moonbit/react/src/index.d.ts`
 - `typescript-to-moonbit/react/runtime/react-like.js`
+- `typescript-to-moonbit/result/src/index.d.ts`
+- `typescript-to-moonbit/result/runtime/result.js`
+- `typescript-to-moonbit/default-class/src/index.ts`
+- `typescript-to-moonbit/default-class/runtime/counter.js`
+- `typescript-to-moonbit/const-table/src/index.ts`
+- `typescript-to-moonbit/const-table/runtime/index.js`
 
 Generate a MoonBit bridge package:
 
@@ -58,6 +64,24 @@ moon run src -- \
   --out examples/typescript-to-moonbit/react/dist \
   --direction ts-to-mbt \
   --module-spec ../runtime/react-like.js
+
+moon run src -- \
+  --input examples/typescript-to-moonbit/result/src/index.d.ts \
+  --out examples/typescript-to-moonbit/result/dist \
+  --direction ts-to-mbt \
+  --module-spec ../runtime/result.js
+
+moon run src -- \
+  --input examples/typescript-to-moonbit/default-class/src/index.ts \
+  --out examples/typescript-to-moonbit/default-class/dist \
+  --direction ts-to-mbt \
+  --module-spec ../runtime/counter.js
+
+moon run src -- \
+  --input examples/typescript-to-moonbit/const-table/src/index.ts \
+  --out examples/typescript-to-moonbit/const-table/dist \
+  --direction ts-to-mbt \
+  --module-spec ../runtime/index.js
 ```
 
 Run `just verify-examples` from the repository root to verify these examples

@@ -214,7 +214,146 @@ EOF
   moon -C "$out" test --target js
 }
 
+verify_typescript_to_moonbit_result_example() {
+  local root="_build/examples/typescript-to-moonbit-result"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  cp examples/typescript-to-moonbit/result/runtime/result.js "$root/runtime/result.js"
+
+  moon run src -- \
+    --input examples/typescript-to-moonbit/result/src/index.d.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec ../runtime/result.js >/dev/null
+
+  write_js_any_stub "$out"
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_result",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+test "generated Result pattern" {
+  let _ = parseUser("u1")
+  let _ = fetchUser("u2")
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  grep -F 'pub fn parseUser(input : String)' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn fetchUser(id : String)' "$out/bridge.mbt" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+}
+
+verify_typescript_to_moonbit_default_class_example() {
+  local root="_build/examples/typescript-to-moonbit-default-class"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  cp examples/typescript-to-moonbit/default-class/runtime/counter.js "$root/runtime/counter.js"
+
+  moon run src -- \
+    --input examples/typescript-to-moonbit/default-class/src/index.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec ../runtime/counter.js >/dev/null
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_default_class",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+test "generated default class pattern" {
+  let counter = new_default(10.0)
+  assert_eq(counter.default_inc(5.0), 15.0)
+  counter.set_default_count(20.0)
+  assert_eq(counter.get_default_count(), 20.0)
+  let seeded = default_from(3.0)
+  assert_eq(seeded.get_default_count(), 3.0)
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  grep -F 'pub extern "js" fn new_default(initial : Double) -> Default' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn Default::default_inc(self : Default, delta : Double) -> Double' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn default_from(seed : Double) -> Default' "$out/bridge.mbt" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+}
+
+verify_typescript_to_moonbit_const_table_example() {
+  local root="_build/examples/typescript-to-moonbit-const-table"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  cp examples/typescript-to-moonbit/const-table/runtime/index.js "$root/runtime/index.js"
+  cp examples/typescript-to-moonbit/const-table/runtime/table.js "$root/runtime/table.js"
+
+  moon run src -- \
+    --input examples/typescript-to-moonbit/const-table/src/index.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec ../runtime/index.js >/dev/null
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_const_table",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+test "generated const table pattern" {
+  assert_eq(get_runtime_version(), "v12")
+  assert_eq(get_build(), 16.0)
+  let _ = get_rest_meta()
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  grep -F 'pub extern "js" fn get_runtime_version() -> String' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn get_build() -> Double' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn get_rest_meta() -> RestMeta' "$out/bridge.mbt" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+}
+
 verify_moonbit_to_typescript_example
 verify_typescript_to_moonbit_example
 verify_typescript_to_moonbit_hono_example
 verify_typescript_to_moonbit_react_example
+verify_typescript_to_moonbit_result_example
+verify_typescript_to_moonbit_default_class_example
+verify_typescript_to_moonbit_const_table_example
