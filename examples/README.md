@@ -26,6 +26,10 @@ Input:
 
 - `typescript-to-moonbit/src/index.d.ts`
 - `typescript-to-moonbit/runtime/greetings.js`
+- `typescript-to-moonbit/hono/src/index.d.ts`
+- `typescript-to-moonbit/hono/runtime/hono.js`
+- `typescript-to-moonbit/react/src/index.d.ts`
+- `typescript-to-moonbit/react/runtime/react-like.js`
 
 Generate a MoonBit bridge package:
 
@@ -40,5 +44,21 @@ moon run src -- \
 The generated output includes `bridge.mbti`, `bridge.mbt`, `bridge.js`, and
 `moon.pkg.json`.
 
-Run `just verify-examples` from the repository root to verify both examples
+Additional patterns:
+
+```bash
+moon run src -- \
+  --input examples/typescript-to-moonbit/hono/src/index.d.ts \
+  --out examples/typescript-to-moonbit/hono/dist \
+  --direction ts-to-mbt \
+  --module-spec ../runtime/hono.js
+
+moon run src -- \
+  --input examples/typescript-to-moonbit/react/src/index.d.ts \
+  --out examples/typescript-to-moonbit/react/dist \
+  --direction ts-to-mbt \
+  --module-spec ../runtime/react-like.js
+```
+
+Run `just verify-examples` from the repository root to verify these examples
 without writing generated files into `examples/**/dist`.

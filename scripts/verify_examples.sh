@@ -99,5 +99,122 @@ EOF
   moon -C "$out" test --target js
 }
 
+write_js_any_stub() {
+  local root="$1"
+
+  mkdir -p "$root/_stubs/mizchi_js/core"
+
+  cat > "$root/_stubs/mizchi_js/moon.mod.json" <<'EOF'
+{
+  "name": "mizchi/js",
+  "version": "0.0.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/_stubs/mizchi_js/core/moon.pkg.json" <<'EOF'
+{}
+EOF
+
+  cat > "$root/_stubs/mizchi_js/core/core.mbt" <<'EOF'
+///|
+#external
+pub type Any
+EOF
+}
+
+verify_typescript_to_moonbit_hono_example() {
+  local root="_build/examples/typescript-to-moonbit-hono"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  cp examples/typescript-to-moonbit/hono/runtime/hono.js "$root/runtime/hono.js"
+
+  moon run src -- \
+    --input examples/typescript-to-moonbit/hono/src/index.d.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec ../runtime/hono.js >/dev/null
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_hono",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn test_hono_options() -> HonoOptions =
+  #| () => ({ strict: true })
+
+test "generated Hono pattern" {
+  let _ = new_hono(None)
+  let _ = createApp(test_hono_options())
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  grep -F 'pub extern "js" fn new_hono(options : HonoOptions?) -> Hono' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn createApp(options : HonoOptions) -> Hono' "$out/bridge.mbt" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+}
+
+verify_typescript_to_moonbit_react_example() {
+  local root="_build/examples/typescript-to-moonbit-react"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  cp examples/typescript-to-moonbit/react/runtime/react-like.js "$root/runtime/react-like.js"
+
+  moon run src -- \
+    --input examples/typescript-to-moonbit/react/src/index.d.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec ../runtime/react-like.js >/dev/null
+
+  write_js_any_stub "$out"
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_react",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+test "generated React pattern" {
+  let _ = createElement("badge")
+  let _ = get_default()
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  grep -F 'pub fn createElement(tag : String) -> JsxElement' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn get_default() -> @js.Any' "$out/bridge.mbt" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+}
+
 verify_moonbit_to_typescript_example
 verify_typescript_to_moonbit_example
+verify_typescript_to_moonbit_hono_example
+verify_typescript_to_moonbit_react_example

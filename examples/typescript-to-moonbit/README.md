@@ -20,3 +20,8 @@ Generated files:
 - `bridge.mbti`
 - `bridge.mbt`
 - `bridge.js`
+
+Additional TypeScript -> MoonBit patterns are available under:
+
+- `hono/`
+- `react/`
