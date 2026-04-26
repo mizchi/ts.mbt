@@ -82,6 +82,14 @@ priv struct MbtiTypeAliasDecl {
   name : String
   type_params : Array[MbtiTypeParam]
   body : String
+  is_opaque : Bool
+}
+
+///|
+priv struct MbtiTraitDecl {
+  name : String
+  type_params : Array[MbtiTypeParam]
+  methods : Array[String]
 }
 
 ///|
@@ -104,6 +112,7 @@ priv struct MbtiFunctionDecl {
   type_params : Array[MbtiTypeParam]
   params_src : String
   return_src : String
+  is_async : Bool
 }
 
 ///|
@@ -279,8 +288,10 @@ fn sanitize_ts_identifier(name : String, fallback : String) -> String {
     | "delete"
     | "do"
     | "else"
+    | "enum"
     | "export"
     | "extends"
+    | "false"
     | "finally"
     | "for"
     | "function"
@@ -289,13 +300,16 @@ fn sanitize_ts_identifier(name : String, fallback : String) -> String {
     | "in"
     | "instanceof"
     | "new"
+    | "null"
     | "return"
     | "super"
     | "switch"
     | "this"
     | "throw"
+    | "true"
     | "try"
     | "typeof"
+    | "undefined"
     | "var"
     | "void"
     | "while"
@@ -312,6 +326,14 @@ fn trim_trailing_comma_or_semicolon(source : String) -> String {
     result = result[:result.length() - 1].trim().to_string()
   }
   result
+}
+
+///|
+fn strip_mbti_derive_suffix(source : String) -> String {
+  match source.find(" derive(") {
+    Some(derive_idx) => source[:derive_idx].trim().to_string()
+    None => source.trim().to_string()
+  }
 }
 
 ///|
@@ -362,7 +384,7 @@ fn parse_mbti_import_line(line : String) -> ParsedMbtiImportLine? {
 
 ///|
 fn mbti_public_prefixes(keyword : String) -> Array[String] {
-  ["pub \{keyword} ", "pub(all) \{keyword} "]
+  ["pub \{keyword} ", "pub(all) \{keyword} ", "pub(open) \{keyword} "]
 }
 
 ///|
@@ -413,8 +435,45 @@ fn split_top_level_items(source : String) -> Array[String] {
       '{' => brace += 1
       '}' => brace -= 1
       '<' => angle += 1
-      '>' => if i == 0 || mbti_char_at(source, i - 1) != '=' { angle -= 1 }
+      '>' =>
+        if i == 0 ||
+          (
+            mbti_char_at(source, i - 1) != '=' &&
+            mbti_char_at(source, i - 1) != '-'
+          ) {
+          angle -= 1
+        }
       ',' if paren == 0 && bracket == 0 && brace == 0 && angle == 0 => {
+        parts.push(source[start:i].trim().to_string())
+        start = i + 1
+      }
+      _ => ()
+    }
+  }
+  let tail = source[start:source.length()].trim().to_string()
+  if tail != "" {
+    parts.push(tail)
+  }
+  parts
+}
+
+///|
+fn split_top_level_plus_items(source : String) -> Array[String] {
+  let parts : Array[String] = []
+  let mut start = 0
+  let mut paren = 0
+  let mut bracket = 0
+  let mut brace = 0
+  for i = 0; i < source.length(); i = i + 1 {
+    let c = mbti_char_at(source, i)
+    match c {
+      '(' => paren += 1
+      ')' => paren -= 1
+      '[' => bracket += 1
+      ']' => bracket -= 1
+      '{' => brace += 1
+      '}' => brace -= 1
+      '+' if paren == 0 && bracket == 0 && brace == 0 => {
         parts.push(source[start:i].trim().to_string())
         start = i + 1
       }
@@ -451,6 +510,21 @@ fn find_matching(
 }
 
 ///|
+fn find_top_level_tuple_payload_open(source : String) -> Int? {
+  let mut bracket = 0
+  for i = 0; i < source.length(); i = i + 1 {
+    let c = mbti_char_at(source, i)
+    match c {
+      '[' => bracket += 1
+      ']' => bracket -= 1
+      '(' if bracket == 0 => return Some(i)
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
 fn find_top_level_arrow(source : String) -> Int? {
   let mut paren = 0
   let mut bracket = 0
@@ -475,6 +549,61 @@ fn find_top_level_arrow(source : String) -> Int? {
 }
 
 ///|
+fn is_mbti_effect_marker_at(
+  source : String,
+  space_idx : Int,
+  keyword : String,
+) -> Bool {
+  let keyword_start = space_idx + 1
+  let keyword_end = keyword_start + keyword.length()
+  if keyword_end > source.length() {
+    return false
+  }
+  if source[keyword_start:keyword_end].to_string() != keyword {
+    return false
+  }
+  if keyword_end >= source.length() {
+    return true
+  }
+  let next = mbti_char_at(source, keyword_end)
+  next == ' ' || next == '?'
+}
+
+///|
+fn find_top_level_effect_marker(source : String) -> Int? {
+  let mut paren = 0
+  let mut bracket = 0
+  let mut brace = 0
+  for i = 0; i < source.length(); i = i + 1 {
+    let c = mbti_char_at(source, i)
+    match c {
+      '(' => paren += 1
+      ')' => paren -= 1
+      '[' => bracket += 1
+      ']' => bracket -= 1
+      '{' => brace += 1
+      '}' => brace -= 1
+      ' ' if paren == 0 && bracket == 0 && brace == 0 =>
+        if is_mbti_effect_marker_at(source, i, "raise") ||
+          is_mbti_effect_marker_at(source, i, "noraise") {
+          return Some(i)
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+fn strip_mbti_top_level_effect(source : String) -> String {
+  let trimmed = source.trim().to_string()
+  match find_top_level_effect_marker(trimmed) {
+    Some(effect_idx) => trimmed[:effect_idx].trim().to_string()
+    None => trimmed
+  }
+}
+
+///|
 fn parse_type_params(
   source : String,
   imports : Array[MbtiImportRef],
@@ -489,13 +618,15 @@ fn parse_type_params(
     match trimmed.find(":") {
       Some(idx) => {
         let name = trimmed[:idx].trim().to_string()
-        let extends_ty = translate_mbti_type(
-          trimmed[idx + 1:trimmed.length()].trim().to_string(),
-          imports,
-          used_aliases,
-          None,
-          [],
-        )
+        let extends_src = trimmed[idx + 1:trimmed.length()].trim().to_string()
+        let bound_parts = split_top_level_plus_items(extends_src)
+        let rendered_bounds : Array[String] = []
+        for bound_part in bound_parts {
+          rendered_bounds.push(
+            translate_mbti_type(bound_part, imports, used_aliases, None, []),
+          )
+        }
+        let extends_ty = rendered_bounds.join(" & ")
         normalized.push({ name, extends_ty: Some(extends_ty) })
       }
       None => normalized.push({ name: trimmed, extends_ty: None })
@@ -727,7 +858,7 @@ fn collect_root_mbti_local_type_params(
     let trimmed = line.trim().to_string()
     if trimmed.has_prefix("pub struct ") ||
       trimmed.has_prefix("pub(all) struct ") {
-      let (block, next_idx) = collect_brace_block(lines, idx)
+      let (block, next_idx) = collect_mbti_decl_block(lines, idx)
       let struct_decl = parse_struct_block_decl(block, imports, used_aliases)
       type_params_by_name[struct_decl.name] = struct_decl.type_params
       idx = next_idx
@@ -776,11 +907,21 @@ fn collect_mbti_root_autolink_facades(
     let trimmed = line_view.trim().to_string()
     match parse_mbti_function_signature(trimmed, imports, used_aliases) {
       Some(signature) => {
-        let (owner_name, fn_name, fn_type_params, params_src, return_src) = signature
+        let (
+          owner_name,
+          fn_name,
+          fn_type_params,
+          params_src,
+          return_src,
+          is_async,
+        ) = signature
         match owner_name {
           Some(owner_name) =>
             match local_type_params.get(owner_name) {
               Some(owner_type_params) => {
+                if is_async {
+                  continue
+                }
                 if owner_type_params.length() > 0 || fn_type_params.length() > 0 {
                   continue
                 }
@@ -898,6 +1039,44 @@ fn mbti_dirname(path : String) -> String {
 }
 
 ///|
+fn mbti_generated_package_relative_path(segments : Array[String]) -> String {
+  if segments.length() == 0 {
+    "pkg.generated.mbti"
+  } else {
+    segments.join("/") + "/pkg.generated.mbti"
+  }
+}
+
+///|
+fn collect_mbti_fully_qualified_package_refs(source : String) -> Array[String] {
+  let refs : Array[String] = []
+  for idx = 0; idx < source.length(); idx = idx + 1 {
+    if mbti_char_at(source, idx) != '@' {
+      continue
+    }
+    let start = idx + 1
+    let mut end_ = start
+    while end_ < source.length() {
+      let c = mbti_char_at(source, end_)
+      if c == '.' || c == ']' || c == ')' || c == ',' || c == ' ' || c == '\n' {
+        break
+      }
+      end_ += 1
+    }
+    if end_ <= start ||
+      end_ >= source.length() ||
+      mbti_char_at(source, end_) != '.' {
+      continue
+    }
+    let package_name = source[start:end_].to_string()
+    if package_name.contains("/") && !refs.contains(package_name) {
+      refs.push(package_name)
+    }
+  }
+  refs
+}
+
+///|
 async fn load_mbti_package_sources(
   root_file_path : String,
 ) -> LoadedMbtiPackageSources raise MbtiTypescriptDeclError {
@@ -935,11 +1114,9 @@ async fn load_mbti_package_sources(
         mbti_local_package_segments(root_package_name, import_ref.module_spec) {
         Some(target_segments) => {
           if !package_sources.contains(import_ref.module_spec) {
-            let relative_pkg_path = if target_segments.length() == 0 {
-              "pkg.generated.mbti"
-            } else {
-              target_segments.join("/") + "/pkg.generated.mbti"
-            }
+            let relative_pkg_path = mbti_generated_package_relative_path(
+              target_segments,
+            )
             let target_file_path = mbti_join_path(
               source_root_dir, relative_pkg_path,
             )
@@ -951,6 +1128,33 @@ async fn load_mbti_package_sources(
           if !ordered_packages.contains(import_ref.module_spec) &&
             !pending_packages.contains(import_ref.module_spec) {
             pending_packages.push(import_ref.module_spec)
+          }
+        }
+        None => ()
+      }
+    }
+    for referenced_package in collect_mbti_fully_qualified_package_refs(source) {
+      match mbti_local_package_segments(root_package_name, referenced_package) {
+        Some(target_segments) => {
+          if !package_sources.contains(referenced_package) {
+            let target_file_path = mbti_join_path(
+              source_root_dir,
+              mbti_generated_package_relative_path(target_segments),
+            )
+            let file_kind = @fs.kind(target_file_path, follow_symlink=false) catch {
+              _ => @fs.FileKind::Unknown
+            }
+            if !(file_kind is @fs.FileKind::Regular) {
+              continue
+            }
+            let target_source = @fs.read_file(target_file_path).text() catch {
+              e => raise MbtiTypescriptDeclError::ReadError("\{e}")
+            }
+            package_sources[referenced_package] = target_source
+          }
+          if !ordered_packages.contains(referenced_package) &&
+            !pending_packages.contains(referenced_package) {
+            pending_packages.push(referenced_package)
           }
         }
         None => ()
@@ -1149,6 +1353,32 @@ fn lookup_import_ts_alias(
 }
 
 ///|
+fn collect_used_import_refs(
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+) -> Array[MbtiImportRef] {
+  let refs : Array[MbtiImportRef] = []
+  for alias_name in used_aliases {
+    let mut found = false
+    for import_ref in imports {
+      if import_ref.alias_name == alias_name {
+        refs.push(import_ref)
+        found = true
+        break
+      }
+    }
+    if !found {
+      refs.push({
+        alias_name,
+        ts_alias: sanitize_ts_identifier(alias_name, "pkg"),
+        module_spec: alias_name,
+      })
+    }
+  }
+  refs
+}
+
+///|
 fn parse_mbti_params(
   source : String,
   imports : Array[MbtiImportRef],
@@ -1262,6 +1492,12 @@ fn translate_named_type(
         "Map<unknown, unknown>"
       }
     "Set" => if args.length() == 1 { "Set<\{args[0]}>" } else { "Set<unknown>" }
+    "Iter" =>
+      if args.length() == 1 {
+        "Iterable<\{args[0]}>"
+      } else {
+        "Iterable<unknown>"
+      }
     "Ref" =>
       if args.length() == 1 {
         "{ val: \{args[0]} }"
@@ -1316,24 +1552,27 @@ fn translate_mbti_type(
   owner_name : String?,
   owner_type_params : Array[String],
 ) -> String raise MbtiTypescriptDeclError {
-  let trimmed = source.trim().to_string()
+  let trimmed = strip_mbti_top_level_effect(source)
   if trimmed == "" {
     return ""
   }
-  if trimmed.has_suffix("?") {
-    let inner = trimmed[:trimmed.length() - 1].trim().to_string()
-    let normalized_inner = translate_mbti_type(
-      inner, imports, used_aliases, owner_name, owner_type_params,
+  if trimmed.has_prefix("&") {
+    let borrowed_inner = trimmed[1:trimmed.length()].trim().to_string()
+    return translate_mbti_type(
+      borrowed_inner, imports, used_aliases, owner_name, owner_type_params,
     )
-    if normalized_inner.contains("=>") {
-      return "(\{normalized_inner}) | undefined"
-    }
-    return "\{normalized_inner} | undefined"
   }
-  match find_top_level_arrow(trimmed) {
+  let (function_source, is_async_function) = if trimmed.has_prefix("async ") {
+    (trimmed["async ".length():trimmed.length()].trim().to_string(), true)
+  } else {
+    (trimmed, false)
+  }
+  match find_top_level_arrow(function_source) {
     Some(arrow_idx) => {
-      let left = trimmed[:arrow_idx].trim().to_string()
-      let right = trimmed[arrow_idx + 2:trimmed.length()].trim().to_string()
+      let left = function_source[:arrow_idx].trim().to_string()
+      let right = function_source[arrow_idx + 2:function_source.length()]
+        .trim()
+        .to_string()
       let params_src = if left.has_prefix("(") && left.has_suffix(")") {
         left[1:left.length() - 1].to_string()
       } else {
@@ -1350,10 +1589,28 @@ fn translate_mbti_type(
       let rendered_return = translate_mbti_type(
         right, imports, used_aliases, owner_name, owner_type_params,
       )
-      return "(\{rendered_params}) => \{rendered_return}"
+      let final_return = if is_async_function {
+        "Promise<\{rendered_return}>"
+      } else {
+        rendered_return
+      }
+      return "(\{rendered_params}) => \{final_return}"
     }
     None => ()
   }
+  if function_source.has_suffix("?") {
+    let inner = function_source[:function_source.length() - 1]
+      .trim()
+      .to_string()
+    let normalized_inner = translate_mbti_type(
+      inner, imports, used_aliases, owner_name, owner_type_params,
+    )
+    if normalized_inner.contains("=>") {
+      return "(\{normalized_inner}) | undefined"
+    }
+    return "\{normalized_inner} | undefined"
+  }
+  let trimmed = function_source
   if trimmed.has_prefix("(") && trimmed.has_suffix(")") {
     let inner = trimmed[1:trimmed.length() - 1].to_string()
     let items = split_top_level_items(inner)
@@ -1403,12 +1660,18 @@ fn parse_mbti_function_signature(
   line : String,
   imports : Array[MbtiImportRef],
   used_aliases : Array[String],
-) -> (String?, String, Array[MbtiTypeParam], String, String)? raise MbtiTypescriptDeclError {
+) -> (String?, String, Array[MbtiTypeParam], String, String, Bool)? raise MbtiTypescriptDeclError {
   let trimmed = line.trim().to_string()
-  if !trimmed.has_prefix("pub fn") || trimmed.has_prefix("pub fn(") {
+  let mut idx = 0
+  let is_async = if trimmed.has_prefix("pub async fn") {
+    idx = "pub async fn".length()
+    true
+  } else if trimmed.has_prefix("pub fn") && !trimmed.has_prefix("pub fn(") {
+    idx = "pub fn".length()
+    false
+  } else {
     return None
   }
-  let mut idx = "pub fn".length()
   let type_params : Array[MbtiTypeParam] = []
   if idx < trimmed.length() && mbti_char_at(trimmed, idx) == '[' {
     match find_matching(trimmed, idx, '[', ']') {
@@ -1435,12 +1698,9 @@ fn parse_mbti_function_signature(
           if !rest.has_prefix("->") {
             return None
           }
-          let mut return_ty = rest[2:rest.length()].trim().to_string()
-          match return_ty.find(" raise ") {
-            Some(raise_idx) =>
-              return_ty = return_ty[:raise_idx].trim().to_string()
-            None => ()
-          }
+          let return_ty = strip_mbti_top_level_effect(
+            rest[2:rest.length()].trim().to_string(),
+          )
           match raw_name.find("::") {
             Some(sep_idx) =>
               Some(
@@ -1450,14 +1710,50 @@ fn parse_mbti_function_signature(
                   type_params,
                   params_src,
                   return_ty,
+                  is_async,
                 ),
               )
-            None => Some((None, raw_name, type_params, params_src, return_ty))
+            None =>
+              Some(
+                (None, raw_name, type_params, params_src, return_ty, is_async),
+              )
           }
         }
         None => None
       }
     _ => None
+  }
+}
+
+///|
+fn parse_mbti_type_name_and_params(
+  source : String,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+) -> (String, Array[MbtiTypeParam])? raise MbtiTypescriptDeclError {
+  let mut header = strip_mbti_derive_suffix(source)
+  match header.find("{") {
+    Some(open_idx) => header = header[:open_idx].trim().to_string()
+    None => ()
+  }
+  match find_top_level_tuple_payload_open(header) {
+    Some(open_idx) => header = header[:open_idx].trim().to_string()
+    None => ()
+  }
+  if header == "" {
+    return None
+  }
+  match header.find("[") {
+    Some(idx) if header.has_suffix("]") => {
+      let name = header[:idx].trim().to_string()
+      let params = parse_type_params(
+        header[idx + 1:header.length() - 1].to_string(),
+        imports,
+        used_aliases,
+      )
+      Some((name, params))
+    }
+    _ => Some((header, []))
   }
 }
 
@@ -1468,29 +1764,8 @@ fn parse_mbti_type_header(
   imports : Array[MbtiImportRef],
   used_aliases : Array[String],
 ) -> (String, Array[MbtiTypeParam])? raise MbtiTypescriptDeclError {
-  let trimmed = match strip_mbti_public_prefix(line, keyword) {
-    Some(rest) => rest
-    None => return None
-  }
-  if trimmed == "" {
-    return None
-  }
-  match trimmed.find("{") {
-    Some(open_idx) => {
-      let header = trimmed[:open_idx].trim().to_string()
-      match header.find("[") {
-        Some(idx) if header.has_suffix("]") => {
-          let name = header[:idx].trim().to_string()
-          let params = parse_type_params(
-            header[idx + 1:header.length() - 1].to_string(),
-            imports,
-            used_aliases,
-          )
-          Some((name, params))
-        }
-        _ => Some((header, []))
-      }
-    }
+  match strip_mbti_public_prefix(line, keyword) {
+    Some(rest) => parse_mbti_type_name_and_params(rest, imports, used_aliases)
     None => None
   }
 }
@@ -1522,6 +1797,54 @@ fn collect_brace_block(
 }
 
 ///|
+fn collect_mbti_decl_block(
+  lines : Array[String],
+  start : Int,
+) -> (Array[String], Int) {
+  if lines[start].contains("{") {
+    collect_brace_block(lines, start)
+  } else {
+    ([lines[start]], start + 1)
+  }
+}
+
+///|
+fn parse_tuple_struct_fields(
+  line : String,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+  owner_name : String,
+  owner_type_params : Array[String],
+) -> Array[String]? raise MbtiTypescriptDeclError {
+  let header = match strip_mbti_public_prefix(line, "struct") {
+    Some(rest) => strip_mbti_derive_suffix(rest)
+    None => return None
+  }
+  match find_top_level_tuple_payload_open(header) {
+    Some(open_idx) =>
+      match find_matching(header, open_idx, '(', ')') {
+        Some(close_idx) => {
+          let rest = header[close_idx + 1:header.length()].trim().to_string()
+          if rest != "" {
+            return None
+          }
+          let payload_src = header[open_idx + 1:close_idx].to_string()
+          let fields = parse_variant_payload(
+            payload_src, imports, used_aliases, owner_name, owner_type_params,
+          )
+          let field_lines : Array[String] = []
+          for field in fields {
+            field_lines.push("  \{field};")
+          }
+          Some(field_lines)
+        }
+        None => None
+      }
+    None => None
+  }
+}
+
+///|
 fn parse_struct_block_decl(
   lines : Array[String],
   imports : Array[MbtiImportRef],
@@ -1531,6 +1854,17 @@ fn parse_struct_block_decl(
     Some(header) => {
       let (name, type_params) = header
       let owner_type_param_names = type_param_names(type_params)
+      match
+        parse_tuple_struct_fields(
+          lines[0],
+          imports,
+          used_aliases,
+          name,
+          owner_type_param_names,
+        ) {
+        Some(fields) => return { name, type_params, fields }
+        None => ()
+      }
       let field_lines : Array[String] = []
       for idx in 1..<lines.length() {
         let trimmed = trim_trailing_comma_or_semicolon(
@@ -1669,39 +2003,156 @@ fn parse_enum_like_block_decl(
 }
 
 ///|
+fn parse_type_alias_decl_source(
+  decl_source : String,
+  original_line : String,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+) -> MbtiTypeAliasDecl raise MbtiTypescriptDeclError {
+  let decl_src = strip_mbti_derive_suffix(decl_source)
+  match decl_src.find("=") {
+    Some(eq_idx) => {
+      let left = decl_src[:eq_idx].trim().to_string()
+      let right = trim_trailing_comma_or_semicolon(
+        decl_src[eq_idx + 1:decl_src.length()].trim().to_string(),
+      )
+      let (name, type_params) = match
+        parse_mbti_type_name_and_params(left, imports, used_aliases) {
+        Some(header) => header
+        None =>
+          raise MbtiTypescriptDeclError::ParseError(
+            "invalid type alias: \{original_line}",
+          )
+      }
+      let rendered = translate_mbti_type(right, imports, used_aliases, None, [])
+      { name, type_params, body: rendered, is_opaque: false }
+    }
+    None =>
+      match parse_mbti_type_name_and_params(decl_src, imports, used_aliases) {
+        Some((name, type_params)) =>
+          { name, type_params, body: "unknown", is_opaque: true }
+        None =>
+          raise MbtiTypescriptDeclError::ParseError(
+            "invalid type alias: \{original_line}",
+          )
+      }
+  }
+}
+
+///|
 fn parse_type_alias_decl(
   line : String,
   imports : Array[MbtiImportRef],
   used_aliases : Array[String],
 ) -> MbtiTypeAliasDecl raise MbtiTypescriptDeclError {
-  let trimmed = match strip_mbti_public_prefix(line, "type") {
-    Some(rest) => rest
+  match strip_mbti_public_prefix(line, "type") {
+    Some(rest) =>
+      parse_type_alias_decl_source(rest, line, imports, used_aliases)
     None =>
       raise MbtiTypescriptDeclError::ParseError("invalid type alias: \{line}")
   }
-  match trimmed.find("=") {
-    Some(eq_idx) => {
-      let left = trimmed[:eq_idx].trim().to_string()
-      let right = trim_trailing_comma_or_semicolon(
-        trimmed[eq_idx + 1:trimmed.length()].trim().to_string(),
-      )
-      let (name, type_params) = match left.find("[") {
-        Some(idx) if left.has_suffix("]") =>
-          (
-            left[:idx].trim().to_string(),
-            parse_type_params(
-              left[idx + 1:left.length() - 1].to_string(),
+}
+
+///|
+fn parse_private_type_alias_decl(
+  line : String,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+) -> MbtiTypeAliasDecl? raise MbtiTypescriptDeclError {
+  let trimmed = line.trim().to_string()
+  if !trimmed.has_prefix("type ") {
+    return None
+  }
+  Some(
+    parse_type_alias_decl_source(
+      trimmed["type ".length():trimmed.length()].to_string(),
+      line,
+      imports,
+      used_aliases,
+    ),
+  )
+}
+
+///|
+fn parse_trait_block_decl(
+  lines : Array[String],
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+) -> MbtiTraitDecl raise MbtiTypescriptDeclError {
+  match parse_mbti_type_header(lines[0], "trait", imports, used_aliases) {
+    Some(header) => {
+      let (name, type_params) = header
+      let owner_type_param_names = type_param_names(type_params)
+      let methods : Array[String] = []
+      for idx in 1..<lines.length() {
+        let trimmed = trim_trailing_comma_or_semicolon(
+          lines[idx].trim().to_string(),
+        )
+        if trimmed == "" || trimmed == "}" || trimmed.has_prefix("}") {
+          continue
+        }
+        match
+          parse_mbti_function_signature(
+            "pub fn \{name}::\{trimmed}",
+            imports,
+            used_aliases,
+          ) {
+          Some(signature) => {
+            let (_, fn_name, type_params, params_src, return_src, is_async) = signature
+            let params = parse_mbti_params(
+              params_src,
               imports,
               used_aliases,
-            ),
-          )
-        _ => (left, [])
+              Some(name),
+              owner_type_param_names,
+            )
+            let instance_params : Array[MbtiParam] = []
+            for param_idx in 0..<params.length() {
+              let param = params[param_idx]
+              if param_idx == 0 && param.name == "self" {
+                continue
+              }
+              let normalized_name = if mbti_is_generated_param_name(param.name) {
+                "arg\{instance_params.length()}"
+              } else {
+                param.name
+              }
+              instance_params.push({
+                name: normalized_name,
+                ty: param.ty,
+                optional: param.optional,
+              })
+            }
+            let method_type_params = filter_method_type_params(type_params, [])
+            let type_param_suffix = render_type_param_suffix(method_type_params)
+            let return_ty = translate_mbti_type(
+              return_src,
+              imports,
+              used_aliases,
+              Some(name),
+              owner_type_param_names,
+            )
+            let rendered_return_ty = render_ts_return_type(return_ty, is_async)
+            let method_name = sanitize_ts_identifier(fn_name, "method")
+            if instance_params.length() == 0 {
+              methods.push(
+                "\{method_name}\{type_param_suffix}: \{rendered_return_ty};",
+              )
+            } else {
+              methods.push(
+                "\{method_name}\{type_param_suffix}(\{render_ts_params(instance_params)}): \{rendered_return_ty};",
+              )
+            }
+          }
+          None => ()
+        }
       }
-      let rendered = translate_mbti_type(right, imports, used_aliases, None, [])
-      { name, type_params, body: rendered }
+      { name, type_params, methods }
     }
     None =>
-      raise MbtiTypescriptDeclError::ParseError("invalid type alias: \{line}")
+      raise MbtiTypescriptDeclError::ParseError(
+        "invalid trait block: \{lines[0]}",
+      )
   }
 }
 
@@ -1713,6 +2164,267 @@ fn render_ts_params(params : Array[MbtiParam]) -> String {
     rendered.push("\{param.name}\{optional_suffix}: \{param.ty}")
   }
   rendered.join(", ")
+}
+
+///|
+fn render_ts_return_type(return_ty : String, is_async : Bool) -> String {
+  if is_async {
+    "Promise<\{return_ty}>"
+  } else {
+    return_ty
+  }
+}
+
+///|
+fn struct_decl_has_field_name(
+  struct_decl : MbtiStructDecl,
+  field_name : String,
+) -> Bool {
+  let field_prefix = field_name + ":"
+  let optional_field_prefix = field_name + "?:"
+  for field_decl in struct_decl.fields {
+    let trimmed = field_decl.trim().to_string()
+    if trimmed.has_prefix(field_prefix) ||
+      trimmed.has_prefix(optional_field_prefix) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn render_builtin_result_decl() -> String {
+  "export type Result<T, E> = { $tag: \"Ok\"; _0: T } | { $tag: \"Err\"; _0: E };"
+}
+
+///|
+fn is_ts_identifier_part(c : Char) -> Bool {
+  mbti_is_ascii_letter(c) || mbti_is_ascii_digit(c) || c == '_' || c == '$'
+}
+
+///|
+fn contains_unqualified_result_type_ref(source : String) -> Bool {
+  let needle = "Result<"
+  if source.length() < needle.length() {
+    return false
+  }
+  for idx = 0; idx + needle.length() <= source.length(); idx = idx + 1 {
+    if source[idx:idx + needle.length()].to_string() != needle {
+      continue
+    }
+    if idx == 0 {
+      return true
+    }
+    let prev = mbti_char_at(source, idx - 1)
+    if !is_ts_identifier_part(prev) && prev != '.' {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn contains_unqualified_type_name(source : String, type_name : String) -> Bool {
+  if source.length() < type_name.length() {
+    return false
+  }
+  for idx = 0; idx + type_name.length() <= source.length(); idx = idx + 1 {
+    if source[idx:idx + type_name.length()].to_string() != type_name {
+      continue
+    }
+    if idx > 0 {
+      let prev = mbti_char_at(source, idx - 1)
+      if is_ts_identifier_part(prev) || prev == '.' {
+        continue
+      }
+    }
+    let next_idx = idx + type_name.length()
+    if next_idx < source.length() {
+      let next = mbti_char_at(source, next_idx)
+      if is_ts_identifier_part(next) {
+        continue
+      }
+    }
+    return true
+  }
+  false
+}
+
+///|
+fn decls_reference_builtin_result(
+  decls : Array[String],
+  type_kinds : Map[String, String],
+) -> Bool {
+  match type_kinds.get("Result") {
+    Some(_) => return false
+    None => ()
+  }
+  for decl in decls {
+    if contains_unqualified_result_type_ref(decl) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn render_builtin_json_decl() -> String {
+  "export type Json = null | boolean | number | string | Array<Json> | { [key: string]: Json };"
+}
+
+///|
+fn decls_reference_builtin_json(
+  decls : Array[String],
+  type_kinds : Map[String, String],
+) -> Bool {
+  match type_kinds.get("Json") {
+    Some(_) => return false
+    None => ()
+  }
+  for decl in decls {
+    if contains_unqualified_type_name(decl, "Json") {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn mbti_push_unique_ts_name(names : Array[String], name : String) -> Unit {
+  if name != "" && !names.contains(name) {
+    names.push(name)
+  }
+}
+
+///|
+fn compute_import_alias_rewrites(
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+  occupied_names : Array[String],
+  rewrite_order : Array[String],
+) -> Map[String, String] {
+  let rewrites : Map[String, String] = {}
+  let occupied : Array[String] = []
+  for name in occupied_names {
+    mbti_push_unique_ts_name(occupied, name)
+  }
+  for import_ref in imports {
+    if !used_aliases.contains(import_ref.alias_name) {
+      continue
+    }
+    let original_alias = import_ref.ts_alias
+    let mut rewritten_alias = original_alias
+    while occupied.contains(rewritten_alias) {
+      rewritten_alias += "_"
+    }
+    mbti_push_unique_ts_name(occupied, rewritten_alias)
+    if rewritten_alias != original_alias {
+      rewrites[original_alias] = rewritten_alias
+      rewrite_order.push(original_alias)
+    }
+  }
+  rewrites
+}
+
+///|
+fn rewrite_import_alias_refs(
+  source : String,
+  rewrites : Map[String, String],
+  rewrite_order : Array[String],
+) -> String {
+  let mut rewritten = source
+  for original_alias in rewrite_order {
+    match rewrites.get(original_alias) {
+      Some(rewritten_alias) =>
+        rewritten = rewritten.replace(
+          old=original_alias + ".",
+          new=rewritten_alias + ".",
+        )
+      None => ()
+    }
+  }
+  rewritten
+}
+
+///|
+fn is_builtin_ts_bound_name(name : String) -> Bool {
+  match name {
+    "Array"
+    | "Date"
+    | "Error"
+    | "Iterable"
+    | "Map"
+    | "Promise"
+    | "ReadonlyArray"
+    | "Record"
+    | "Set"
+    | "Uint8Array"
+    | "unknown"
+    | "void"
+    | "string"
+    | "number"
+    | "boolean"
+    | "bigint" => true
+    _ => false
+  }
+}
+
+///|
+fn is_unqualified_marker_bound_name(name : String) -> Bool {
+  if !is_simple_ts_trait_name(name) || is_builtin_ts_bound_name(name) {
+    return false
+  }
+  let first = name[0].unsafe_to_char()
+  first >= 'A' && first <= 'Z'
+}
+
+///|
+fn take_ts_extends_clause(source : String) -> String {
+  let mut angle = 0
+  let mut saw_angle = false
+  for idx = 0; idx < source.length(); idx = idx + 1 {
+    let c = mbti_char_at(source, idx)
+    match c {
+      '<' => {
+        angle += 1
+        saw_angle = true
+      }
+      '>' =>
+        if angle > 0 {
+          angle -= 1
+        } else if !saw_angle {
+          return source[:idx].trim().to_string()
+        }
+      '{' | '(' | ')' | ';' | '\n' if angle == 0 =>
+        return source[:idx].trim().to_string()
+      _ => ()
+    }
+  }
+  source.trim().to_string()
+}
+
+///|
+fn collect_marker_bounds_from_decl(
+  decl : String,
+  order : Array[String],
+) -> Unit {
+  let mut seen_prefix = false
+  for part_view in decl.split(" extends ") {
+    if !seen_prefix {
+      seen_prefix = true
+      continue
+    }
+    let clause = take_ts_extends_clause(part_view.to_string())
+    for comma_part_view in clause.split(",") {
+      let comma_part = comma_part_view.to_string()
+      for amp_part_view in comma_part.split("&") {
+        let name = amp_part_view.trim().to_string()
+        if is_unqualified_marker_bound_name(name) {
+          mbti_push_unique_ts_name(order, name)
+        }
+      }
+    }
+  }
 }
 
 ///|
@@ -1828,6 +2540,24 @@ fn render_type_alias_decl(
   traits : Array[String],
 ) -> String {
   let type_param_suffix = render_type_param_suffix(alias_decl.type_params)
+  if alias_decl.is_opaque {
+    let extends_items = render_trait_refs(
+      traits,
+      alias_decl.name,
+      type_param_suffix,
+    )
+    let extends_suffix = if extends_items.length() > 0 {
+      " extends " + extends_items.join(", ")
+    } else {
+      ""
+    }
+    let body_lines : Array[String] = []
+    for method_decl in methods {
+      body_lines.push("  " + method_decl)
+    }
+    let rendered_body = body_lines.join("\n")
+    return "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
+  }
   let trait_suffix = render_type_alias_trait_suffix(
     traits,
     alias_decl.name,
@@ -1846,6 +2576,26 @@ fn render_type_alias_decl(
   }
   let rendered_body = body_lines.join("\n")
   "export interface \{methods_name}\{type_param_suffix} {\n\{rendered_body}\n}\n\nexport type \{alias_decl.name}\{type_param_suffix} = (\{alias_decl.body}) & \{methods_name}\{type_param_suffix}\{trait_suffix};"
+}
+
+///|
+fn render_private_type_alias_decl(alias_decl : MbtiTypeAliasDecl) -> String {
+  let type_param_suffix = render_type_param_suffix(alias_decl.type_params)
+  if alias_decl.is_opaque {
+    return "interface \{alias_decl.name}\{type_param_suffix} {\n}"
+  }
+  "type \{alias_decl.name}\{type_param_suffix} = \{alias_decl.body};"
+}
+
+///|
+fn render_trait_decl(trait_decl : MbtiTraitDecl) -> String {
+  let type_param_suffix = render_type_param_suffix(trait_decl.type_params)
+  let body_lines : Array[String] = []
+  for method_decl in trait_decl.methods {
+    body_lines.push("  " + method_decl)
+  }
+  let rendered_body = body_lines.join("\n")
+  "export interface \{trait_decl.name}\{type_param_suffix} {\n\{rendered_body}\n}"
 }
 
 ///|
@@ -2002,12 +2752,17 @@ fn parse_mbti_to_typescript_with_import_rewrites(
   let imports = parse_mbti_imports(source)
   let used_aliases : Array[String] = []
   let top_level_decls : Array[String] = []
+  let top_level_export_names : Array[String] = []
   let type_order : Array[String] = []
   let type_kinds : Map[String, String] = {}
   let type_params_by_name : Map[String, Array[MbtiTypeParam]] = {}
   let struct_decls : Map[String, MbtiStructDecl] = {}
   let enum_like_decls : Map[String, MbtiEnumLikeDecl] = {}
   let type_alias_decls : Map[String, MbtiTypeAliasDecl] = {}
+  let private_type_order : Array[String] = []
+  let private_type_alias_decls : Map[String, MbtiTypeAliasDecl] = {}
+  let trait_order : Array[String] = []
+  let trait_decls : Map[String, MbtiTraitDecl] = {}
   let struct_method_decls : Map[String, Array[String]] = {}
   let enum_method_decls : Map[String, Array[String]] = {}
   let alias_method_decls : Map[String, Array[String]] = {}
@@ -2035,7 +2790,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
     }
     if trimmed.has_prefix("pub struct ") ||
       trimmed.has_prefix("pub(all) struct ") {
-      let (block, next_idx) = collect_brace_block(lines, idx)
+      let (block, next_idx) = collect_mbti_decl_block(lines, idx)
       let struct_decl = parse_struct_block_decl(block, imports, used_aliases)
       match parse_mbti_type_header(trimmed, "struct", imports, used_aliases) {
         Some(header) => {
@@ -2104,41 +2859,61 @@ fn parse_mbti_to_typescript_with_import_rewrites(
     }
     if trimmed.has_prefix("pub type ") || trimmed.has_prefix("pub(all) type ") {
       let alias_decl = parse_type_alias_decl(trimmed, imports, used_aliases)
-      let type_header = match strip_mbti_public_prefix(trimmed, "type") {
-        Some(rest) => rest
-        None => ""
+      let name = alias_decl.name
+      type_order.push(name)
+      type_kinds[name] = "type"
+      type_params_by_name[name] = alias_decl.type_params
+      type_alias_decls[name] = alias_decl
+      for trait_name in parse_mbti_derive_trait_names(trimmed) {
+        impl_decls.push({ trait_name, owner_name: name })
       }
-      match type_header.find("=") {
-        Some(eq_idx) => {
-          let left = type_header[:eq_idx].trim().to_string()
-          let name = match left.find("[") {
-            Some(name_idx) if left.has_suffix("]") =>
-              left[:name_idx].trim().to_string()
-            _ => left
+      idx += 1
+      continue
+    }
+    if trimmed.has_prefix("type ") {
+      match parse_private_type_alias_decl(trimmed, imports, used_aliases) {
+        Some(alias_decl) => {
+          let name = alias_decl.name
+          if !private_type_order.contains(name) {
+            private_type_order.push(name)
           }
-          type_order.push(name)
-          type_kinds[name] = "type"
-          type_params_by_name[name] = alias_decl.type_params
-          type_alias_decls[name] = alias_decl
-          for trait_name in parse_mbti_derive_trait_names(trimmed) {
-            impl_decls.push({ trait_name, owner_name: name })
-          }
+          private_type_alias_decls[name] = alias_decl
         }
         None => ()
       }
       idx += 1
       continue
     }
-    if trimmed.has_prefix("pub fn") {
+    if trimmed.has_prefix("pub trait ") ||
+      trimmed.has_prefix("pub(all) trait ") ||
+      trimmed.has_prefix("pub(open) trait ") {
+      let (block, next_idx) = collect_brace_block(lines, idx)
+      let trait_decl = parse_trait_block_decl(block, imports, used_aliases)
+      if !trait_order.contains(trait_decl.name) {
+        trait_order.push(trait_decl.name)
+      }
+      trait_decls[trait_decl.name] = trait_decl
+      idx = next_idx
+      continue
+    }
+    if trimmed.has_prefix("pub fn") || trimmed.has_prefix("pub async fn") {
       match parse_mbti_function_signature(trimmed, imports, used_aliases) {
         Some(signature) => {
-          let (owner_name, fn_name, type_params, params_src, return_src) = signature
+          let (
+            owner_name,
+            fn_name,
+            type_params,
+            params_src,
+            return_src,
+            is_async,
+          ) = signature
           function_decls.push({
             owner_name,
             fn_name,
             type_params,
             params_src,
             return_src,
+            is_async,
           })
           idx += 1
           continue
@@ -2180,10 +2955,27 @@ fn parse_mbti_to_typescript_with_import_rewrites(
               Some(owner),
               owner_type_param_names,
             )
+            let rendered_return_ty = render_ts_return_type(
+              return_ty,
+              function_decl.is_async,
+            )
             let member_name = sanitize_ts_identifier(
               function_decl.fn_name,
               "method",
             )
+            let member_name = if kind == "struct" {
+              match struct_decls.get(owner) {
+                Some(struct_decl) =>
+                  if struct_decl_has_field_name(struct_decl, member_name) {
+                    member_name + "_"
+                  } else {
+                    member_name
+                  }
+                None => member_name
+              }
+            } else {
+              member_name
+            }
             if (
                 kind == "struct" ||
                 kind == "enum" ||
@@ -2216,7 +3008,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
                 method_type_params,
               )
               let rendered_params = render_ts_params(instance_params)
-              let member_decl = "\{member_name}\{type_param_suffix}(\{rendered_params}): \{return_ty};"
+              let member_decl = "\{member_name}\{type_param_suffix}(\{rendered_params}): \{rendered_return_ty};"
               if kind == "struct" {
                 match struct_method_decls.get(owner) {
                   Some(methods) => methods.push(member_decl)
@@ -2238,7 +3030,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
                 function_decl.type_params,
               )
               let rendered_params = render_ts_params(params)
-              let member_decl = "function \{member_name}\{type_param_suffix}(\{rendered_params}): \{return_ty};"
+              let member_decl = "function \{member_name}\{type_param_suffix}(\{rendered_params}): \{rendered_return_ty};"
               match namespace_member_decls.get(owner) {
                 Some(methods) => methods.push(member_decl)
                 None => namespace_member_decls[owner] = [member_decl]
@@ -2262,11 +3054,16 @@ fn parse_mbti_to_typescript_with_import_rewrites(
           None,
           [],
         )
+        let rendered_return_ty = render_ts_return_type(
+          return_ty,
+          function_decl.is_async,
+        )
         let fn_type_params = render_type_param_suffix(function_decl.type_params)
         let safe_fn_name = sanitize_ts_identifier(function_decl.fn_name, "fn")
         let rendered_params = render_ts_params(params)
+        mbti_push_unique_ts_name(top_level_export_names, safe_fn_name)
         top_level_decls.push(
-          "export function \{safe_fn_name}\{fn_type_params}(\{rendered_params}): \{return_ty};",
+          "export function \{safe_fn_name}\{fn_type_params}(\{rendered_params}): \{rendered_return_ty};",
         )
       }
     }
@@ -2361,10 +3158,26 @@ fn parse_mbti_to_typescript_with_import_rewrites(
   if has_eq_trait {
     decls.push("export interface Eq<T> {\n  equals(other: T): boolean;\n}")
   }
+  for trait_name in trait_order {
+    match trait_decls.get(trait_name) {
+      Some(trait_decl) => decls.push(render_trait_decl(trait_decl))
+      None => ()
+    }
+  }
   for marker_trait_name in marker_trait_order {
-    match marker_trait_decls.get(marker_trait_name) {
-      Some(marker_trait_decl) =>
-        decls.push(render_marker_trait_decl(marker_trait_decl))
+    match trait_decls.get(marker_trait_name) {
+      Some(_) => ()
+      None =>
+        match marker_trait_decls.get(marker_trait_name) {
+          Some(marker_trait_decl) =>
+            decls.push(render_marker_trait_decl(marker_trait_decl))
+          None => ()
+        }
+    }
+  }
+  for type_name in private_type_order {
+    match private_type_alias_decls.get(type_name) {
+      Some(alias_decl) => decls.push(render_private_type_alias_decl(alias_decl))
       None => ()
     }
   }
@@ -2439,29 +3252,91 @@ fn parse_mbti_to_typescript_with_import_rewrites(
       _ => ()
     }
   }
-  let import_lines : Array[String] = []
-  for alias_name in used_aliases {
-    for import_ref in imports {
-      if import_ref.alias_name == alias_name {
-        let import_spec = match
-          import_spec_rewrites.get(import_ref.module_spec) {
-          Some(rewritten) => rewritten
-          None => import_ref.module_spec
-        }
-        import_lines.push(
-          "import type * as \{import_ref.ts_alias} from \"\{import_spec}\";",
-        )
-        break
+  let bound_marker_order : Array[String] = []
+  for decl in decls {
+    collect_marker_bounds_from_decl(decl, bound_marker_order)
+  }
+  let final_decls : Array[String] = []
+  if decls_reference_builtin_result(decls, type_kinds) {
+    final_decls.push(render_builtin_result_decl())
+  }
+  if decls_reference_builtin_json(decls, type_kinds) {
+    final_decls.push(render_builtin_json_decl())
+  }
+  for marker_name in bound_marker_order {
+    if marker_name == "Show" {
+      if !has_show_trait {
+        final_decls.push("export interface Show {\n}")
       }
+    } else if marker_name == "Eq" {
+      if !has_eq_trait {
+        final_decls.push("export interface Eq {\n}")
+      }
+    } else if !marker_trait_order.contains(marker_name) &&
+      !trait_order.contains(marker_name) {
+      final_decls.push("export interface \{marker_name} {\n}")
     }
+  }
+  for decl in decls {
+    final_decls.push(decl)
+  }
+  let occupied_import_names : Array[String] = []
+  for type_name in type_order {
+    mbti_push_unique_ts_name(occupied_import_names, type_name)
+  }
+  for type_name in private_type_order {
+    mbti_push_unique_ts_name(occupied_import_names, type_name)
+  }
+  for fn_name in top_level_export_names {
+    mbti_push_unique_ts_name(occupied_import_names, fn_name)
+  }
+  if has_show_trait {
+    mbti_push_unique_ts_name(occupied_import_names, "Show")
+  }
+  if has_eq_trait {
+    mbti_push_unique_ts_name(occupied_import_names, "Eq")
+  }
+  for marker_trait_name in marker_trait_order {
+    mbti_push_unique_ts_name(occupied_import_names, marker_trait_name)
+  }
+  for trait_name in trait_order {
+    mbti_push_unique_ts_name(occupied_import_names, trait_name)
+  }
+  for marker_name in bound_marker_order {
+    mbti_push_unique_ts_name(occupied_import_names, marker_name)
+  }
+  let used_import_refs = collect_used_import_refs(imports, used_aliases)
+  let import_alias_rewrite_order : Array[String] = []
+  let import_alias_rewrites = compute_import_alias_rewrites(
+    used_import_refs, used_aliases, occupied_import_names, import_alias_rewrite_order,
+  )
+  let rendered_decls : Array[String] = []
+  for decl in final_decls {
+    rendered_decls.push(
+      rewrite_import_alias_refs(
+        decl, import_alias_rewrites, import_alias_rewrite_order,
+      ),
+    )
+  }
+  let import_lines : Array[String] = []
+  for import_ref in used_import_refs {
+    let import_spec = match import_spec_rewrites.get(import_ref.module_spec) {
+      Some(rewritten) => rewritten
+      None => import_ref.module_spec
+    }
+    let ts_alias = match import_alias_rewrites.get(import_ref.ts_alias) {
+      Some(rewritten) => rewritten
+      None => import_ref.ts_alias
+    }
+    import_lines.push("import type * as \{ts_alias} from \"\{import_spec}\";")
   }
   import_lines.sort()
   let all_parts : Array[String] = []
   if import_lines.length() > 0 {
     all_parts.push(import_lines.join("\n"))
   }
-  if decls.length() > 0 {
-    all_parts.push(decls.join("\n\n"))
+  if rendered_decls.length() > 0 {
+    all_parts.push(rendered_decls.join("\n\n"))
   }
   all_parts.join("\n\n")
 }
@@ -2513,6 +3388,19 @@ pub async fn emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
     for pair in external_import_spec_rewrites {
       let (module_spec, rewritten_spec) = pair
       import_rewrites[module_spec] = rewritten_spec
+    }
+    for target_package_name in ordered_packages {
+      if target_package_name == package_name {
+        continue
+      }
+      match
+        mbti_local_package_segments(root_package_name, target_package_name) {
+        Some(target_segments) =>
+          import_rewrites[target_package_name] = mbti_relative_package_import_spec(
+            current_segments, target_segments,
+          )
+        None => ()
+      }
     }
     for import_ref in parse_mbti_imports(source) {
       if import_ref.module_spec == package_name {
