@@ -367,6 +367,9 @@ test "codegen: call with spread" {
     #|function sum3(a: int, b: int, c: int): int {
     #|  return a + b + c;
     #|}
+    #|function sumNumber(a: number, b: int, c: int): number {
+    #|  return a + b + c;
+    #|}
     #|function callSpread(): int {
     #|  let xs: int[] = [2, 3];
     #|  return sum3(1, ...xs);
@@ -375,9 +378,34 @@ test "codegen: call with spread" {
     #|  let ys: int[] = [4, 5, 6];
     #|  return sum3(...ys);
     #|}
+    #|function callSpreadMixedWidths(): number {
+    #|  let zs: int[] = [2, 3];
+    #|  return sumNumber(1.5, ...zs);
+    #|}
   let wasm = compile_to_wasm(src)
   assert_run_i32(wasm, "callSpread", [], 6)
   assert_run_i32(wasm, "callSpreadOnly", [], 15)
+  assert_run_f64(wasm, "callSpreadMixedWidths", [], 6.5)
+}
+
+///|
+test "codegen: call with interleaved spread" {
+  let src =
+    #|function sum5(a: int, b: int, c: int, d: int, e: int): int {
+    #|  return a + b + c + d + e;
+    #|}
+    #|function callSpreadMixed(): int {
+    #|  let left: int[] = [1, 2];
+    #|  let right: int[] = [4, 5];
+    #|  return sum5(...left, 3, ...right);
+    #|}
+    #|function callSpreadMiddle(): int {
+    #|  let mid: int[] = [2, 3];
+    #|  return sum5(1, ...mid, 4, 5);
+    #|}
+  let wasm = compile_to_wasm(src)
+  assert_run_i32(wasm, "callSpreadMixed", [], 15)
+  assert_run_i32(wasm, "callSpreadMiddle", [], 15)
 }
 
 ///|

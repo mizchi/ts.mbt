@@ -3552,25 +3552,15 @@ fn compile_call(
     param_types : Array[@ast.TsType],
     expected_type : @ast.TsType,
   ) -> Unit raise CodeGenError {
-    let mut spread_index = -1
-    for i, arg in args {
+    let mut has_spread = false
+    for arg in args {
       match arg {
-        @ast.TsExpr::Spread(_) =>
-          if spread_index >= 0 {
-            raise CodeGenError("multiple spread arguments are not supported")
-          } else {
-            spread_index = i
-          }
+        @ast.TsExpr::Spread(_) => has_spread = true
         _ => ()
       }
     }
-    if spread_index < 0 {
+    if !has_spread {
       for i, arg in args {
-        match arg {
-          @ast.TsExpr::Spread(_) =>
-            raise CodeGenError("spread is not supported in this call")
-          _ => ()
-        }
         let param_type = if i < param_types.length() {
           param_types[i]
         } else {
@@ -3580,39 +3570,144 @@ fn compile_call(
       }
       return
     }
-    if spread_index != args.length() - 1 {
-      raise CodeGenError("spread argument must be last in call")
-    }
-    let fixed_count = spread_index
-    if fixed_count > param_types.length() {
-      raise CodeGenError("too many arguments before spread")
-    }
-    for i in 0..<fixed_count {
-      let param_type = if i < param_types.length() {
-        param_types[i]
-      } else {
-        expected_type
+
+    let mut spread_count = 0
+    let mut spread_index = -1
+    for i, arg in args {
+      match arg {
+        @ast.TsExpr::Spread(_) => {
+          spread_count += 1
+          spread_index = i
+        }
+        _ => ()
       }
-      compile_expr(ctx, args[i], param_type)
     }
-    let spread_expr = match args[fixed_count] {
-      @ast.TsExpr::Spread(inner) => inner
-      _ => raise CodeGenError("spread argument missing")
-    }
-    if param_types.length() == fixed_count {
-      let spread_type = infer_type(ctx, spread_expr)
-      compile_expr(ctx, spread_expr, spread_type)
-      ctx.emit(Drop)
+    if spread_count == 1 && spread_index == args.length() - 1 {
+      let fixed_count = spread_index
+      if fixed_count > param_types.length() {
+        raise CodeGenError("too many arguments before spread")
+      }
+      for i in 0..<fixed_count {
+        let param_type = if i < param_types.length() {
+          param_types[i]
+        } else {
+          expected_type
+        }
+        compile_expr(ctx, args[i], param_type)
+      }
+      let spread_expr = match args[fixed_count] {
+        @ast.TsExpr::Spread(inner) => inner
+        _ => raise CodeGenError("spread argument missing")
+      }
+      if param_types.length() == fixed_count {
+        let spread_type = infer_type(ctx, spread_expr)
+        compile_expr(ctx, spread_expr, spread_type)
+        ctx.emit(Drop)
+        return
+      }
+      let arr_type = infer_type(ctx, spread_expr)
+      let elem_type = match arr_type {
+        @ast.TsType::Array(t) => t
+        _ => raise CodeGenError("spread argument must be an array")
+      }
+      let arr_local = ctx.add_temp_local(arr_type)
+      compile_expr(ctx, spread_expr, arr_type)
+      ctx.emit(LocalSet(arr_local))
+      let len_local = ctx.add_temp_local(@ast.TsType::Int)
+      ctx.emit(LocalGet(arr_local))
+      if ctx.use_gc {
+        ctx.emit(ArrayLen)
+      } else {
+        ctx.emit(I32Load(2U, 0U, 0U))
+      }
+      ctx.emit(LocalSet(len_local))
+      let type_key = if is_f64_type(elem_type) { "f64" } else { "i32" }
+      let type_idx = if ctx.use_gc {
+        match ctx.gc_array_types.get(type_key) {
+          Some(idx) => idx
+          None =>
+            raise CodeGenError(
+              "wasm-gc array type not defined for: \{type_key}",
+            )
+        }
+      } else {
+        0U
+      }
+      let elem_sz = element_size(elem_type)
+      let val_type = if is_f64_type(elem_type) {
+        @core.ValType::F64
+      } else {
+        @core.ValType::I32
+      }
+      for j in fixed_count..<param_types.length() {
+        let idx = (j - fixed_count).reinterpret_as_uint()
+        ctx.emit(I32Const(idx))
+        ctx.emit(LocalGet(len_local))
+        ctx.emit(I32LtS)
+        let then_instrs : Array[@core.Instr] = []
+        if ctx.use_gc {
+          then_instrs.push(LocalGet(arr_local))
+          then_instrs.push(I32Const(idx))
+          then_instrs.push(ArrayGet(type_idx))
+        } else {
+          then_instrs.push(LocalGet(arr_local))
+          then_instrs.push(I32Const(4U))
+          then_instrs.push(I32Add)
+          then_instrs.push(I32Const(idx))
+          then_instrs.push(I32Const(elem_sz.reinterpret_as_uint()))
+          then_instrs.push(I32Mul)
+          then_instrs.push(I32Add)
+          if is_f64_type(elem_type) {
+            then_instrs.push(F64Load(3U, 0U, 0U))
+          } else {
+            then_instrs.push(I32Load(2U, 0U, 0U))
+          }
+        }
+        let else_instrs : Array[@core.Instr] = if is_f64_type(elem_type) {
+          [F64Const(0.0)]
+        } else {
+          [I32Const(0U)]
+        }
+        ctx.emit(If(Value(val_type), then_instrs, else_instrs))
+        let param_type = param_types[j]
+        emit_coerce(ctx, elem_type, param_type)
+      }
       return
     }
-    let arr_type = infer_type(ctx, spread_expr)
-    let elem_type = match arr_type {
-      @ast.TsType::Array(t) => t
-      _ => raise CodeGenError("spread argument must be an array")
+
+    let mut spread_elem_type = None
+    for arg in args {
+      match arg {
+        @ast.TsExpr::Spread(inner) => {
+          let arr_type = infer_type(ctx, inner)
+          let elem_type = match arr_type {
+            @ast.TsType::Array(t) => t
+            _ => raise CodeGenError("spread argument must be an array")
+          }
+          match spread_elem_type {
+            Some(current) =>
+              if is_f64_type(current) != is_f64_type(elem_type) {
+                raise CodeGenError(
+                  "spread argument arrays must have compatible element widths",
+                )
+              }
+            None => spread_elem_type = Some(elem_type)
+          }
+        }
+        _ => ()
+      }
     }
-    let arr_local = ctx.add_temp_local(arr_type)
-    compile_expr(ctx, spread_expr, arr_type)
+    let elem_type = match spread_elem_type {
+      Some(t) => t
+      None => expected_type
+    }
+    let flattened_type = @ast.TsType::Array(elem_type)
+    let arr_local = ctx.add_temp_local(flattened_type)
+    compile_array_lit(ctx, args, flattened_type)
     ctx.emit(LocalSet(arr_local))
+    if param_types.length() == 0 {
+      return
+    }
     let len_local = ctx.add_temp_local(@ast.TsType::Int)
     ctx.emit(LocalGet(arr_local))
     if ctx.use_gc {
@@ -3637,8 +3732,8 @@ fn compile_call(
     } else {
       @core.ValType::I32
     }
-    for j in fixed_count..<param_types.length() {
-      let idx = (j - fixed_count).reinterpret_as_uint()
+    for j in 0..<param_types.length() {
+      let idx = j.reinterpret_as_uint()
       ctx.emit(I32Const(idx))
       ctx.emit(LocalGet(len_local))
       ctx.emit(I32LtS)
