@@ -258,18 +258,86 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_moonbit_scaffold_react_package_fixture() {
+  local root="_build/scaffold_ts_to_moonbit_react_package"
+
+  rm -rf "$root"
+  mkdir -p "$root/node_modules"
+
+  moon run src -- emit-moonbit-scaffold-from-ts \
+    fixtures/resolver/project/node_modules/react/index.d.ts \
+    react \
+    "$root" >/dev/null
+
+  write_js_any_stub "$root"
+  cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/scaffold_ts_to_moonbit_react_package",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+extern "js" fn test_dom_attributes() -> DOMAttributes =
+  #| () => ({ id: "app" })
+
+extern "js" fn test_button_attributes() -> ButtonHTMLAttributes =
+  #| () => ({ disabled: true })
+
+extern "js" fn test_function_component() -> FunctionComponent =
+  #| () => (props) => ({ type: "component", props, key: null })
+
+extern "js" fn test_forward_ref_render() -> @js.Any =
+  #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
+
+extern "js" fn test_ref() -> Ref =
+  #| () => ({ current: null })
+
+extern "js" fn test_children() -> Array[JSValue] =
+  #| () => []
+
+test "generated React package scaffold smoke" {
+  let element = createElement(
+    "div",
+    Some(test_dom_attributes()),
+    test_children(),
+  )
+  let _ = cloneElement(element, Some(test_dom_attributes()), test_children())
+  let _ = forwardRef(test_forward_ref_render())
+  let _ = memo(test_function_component(), None)
+  let _ = normalizeProps(test_button_attributes())
+  let _ = useComponentRef(test_ref())
+  let _ = get_default()
+}
+EOF
+
+  grep -F 'pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement' "$root/bridge.mbt" >/dev/null
+  grep -F 'pub fn cloneElement(element : ReactElement, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement' "$root/bridge.mbt" >/dev/null
+  grep -F '#external' "$root/bridge.mbt" >/dev/null
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_moonbit_scaffold_react_jsx_runtime_fixture() {
   local root="_build/scaffold_ts_to_moonbit_react_jsx_runtime"
 
   rm -rf "$root"
-  mkdir -p "$root/node_modules/react"
+  mkdir -p "$root/node_modules"
 
   moon run src -- emit-moonbit-scaffold-from-ts \
-    fixtures/resolver/project/types/exported-jsx-namespace-entry.d.ts \
+    fixtures/resolver/project/node_modules/react/jsx-runtime.d.ts \
     react/jsx-runtime \
     "$root" >/dev/null
 
   write_js_any_stub "$root"
+  cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
 
   cat > "$root/moon.mod.json" <<'EOF'
 {
@@ -283,27 +351,13 @@ verify_moonbit_scaffold_react_jsx_runtime_fixture() {
 }
 EOF
 
-  cat > "$root/node_modules/react/package.json" <<'EOF'
-{
-  "type": "module",
-  "exports": {
-    "./jsx-runtime": "./jsx-runtime.js"
-  }
-}
-EOF
-
-  cat > "$root/node_modules/react/jsx-runtime.js" <<'EOF'
-export function jsx(tag, props) {
-  return { kind: tag, props };
-}
-EOF
-
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_badge_props() -> BadgeProps =
-  #| () => ({ label: "Badge" })
+extern "js" fn test_button_attributes() -> ButtonHTMLAttributes =
+  #| () => ({ disabled: true })
 
 test "generated jsx runtime scaffold smoke" {
-  let _ = jsx("badge", test_badge_props())
+  let _ = jsx("button", test_button_attributes(), None)
+  let _ = jsxs("button", test_button_attributes(), None)
 }
 EOF
 
@@ -315,14 +369,15 @@ verify_moonbit_scaffold_react_jsx_dev_runtime_fixture() {
   local root="_build/scaffold_ts_to_moonbit_react_jsx_dev_runtime"
 
   rm -rf "$root"
-  mkdir -p "$root/node_modules/react"
+  mkdir -p "$root/node_modules"
 
   moon run src -- emit-moonbit-scaffold-from-ts \
-    fixtures/resolver/project/types/exported-jsx-dev-runtime-entry.d.ts \
+    fixtures/resolver/project/node_modules/react/jsx-dev-runtime.d.ts \
     react/jsx-dev-runtime \
     "$root" >/dev/null
 
   write_js_any_stub "$root"
+  cp -R "$repo_root/fixtures/resolver/project/node_modules/react" "$root/node_modules/react"
 
   cat > "$root/moon.mod.json" <<'EOF'
 {
@@ -333,21 +388,6 @@ verify_moonbit_scaffold_react_jsx_dev_runtime_fixture() {
   },
   "source": ".",
   "preferred-target": "js"
-}
-EOF
-
-  cat > "$root/node_modules/react/package.json" <<'EOF'
-{
-  "type": "module",
-  "exports": {
-    "./jsx-dev-runtime": "./jsx-dev-runtime.js"
-  }
-}
-EOF
-
-  cat > "$root/node_modules/react/jsx-dev-runtime.js" <<'EOF'
-export function jsxDEV(type, props, key, isStatic, source, self) {
-  return { type, props, key, isStatic, source, self };
 }
 EOF
 
@@ -373,6 +413,49 @@ test "generated jsx dev runtime scaffold smoke" {
     Some(test_source()),
     None,
   )
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
+verify_moonbit_scaffold_hono_jsx_fixture() {
+  local root="_build/scaffold_ts_to_moonbit_hono_jsx"
+
+  rm -rf "$root"
+  mkdir -p "$root/node_modules"
+
+  moon run src -- emit-moonbit-scaffold-from-ts \
+    fixtures/resolver/project/node_modules/hono/dist/types/jsx/index.d.ts \
+    hono/jsx \
+    "$root" >/dev/null
+
+  write_js_any_stub "$root"
+  cp -R "$repo_root/fixtures/resolver/project/node_modules/hono" "$root/node_modules/hono"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/scaffold_ts_to_moonbit_hono_jsx",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+extern "js" fn test_button_attributes() -> ButtonAttributes =
+  #| () => ({ disabled: true })
+
+extern "js" fn test_component() -> @js.Any =
+  #| () => (props) => ({ tag: "button", props })
+
+test "generated Hono JSX scaffold smoke" {
+  let _ = jsx("button", test_button_attributes())
+  let _ = memo(test_component())
 }
 EOF
 
@@ -501,8 +584,10 @@ verify_typescript_facade_scaffold_fixture
 verify_moonbit_scaffold_fixture
 verify_moonbit_scaffold_external_package_fixture
 verify_moonbit_scaffold_react_like_jsx_fixture
+verify_moonbit_scaffold_react_package_fixture
 verify_moonbit_scaffold_react_jsx_runtime_fixture
 verify_moonbit_scaffold_react_jsx_dev_runtime_fixture
+verify_moonbit_scaffold_hono_jsx_fixture
 verify_moonbit_scaffold_hono_options_fixture
 verify_moonbit_scaffold_namespace_fixture
 verify_moonbit_scaffold_handles_ambiguous_surface

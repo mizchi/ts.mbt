@@ -376,6 +376,19 @@ fn ffi_named_struct_decl_to_moonbit(
 }
 
 ///|
+fn ffi_is_react_callable_component_interface(name : String) -> Bool {
+  name == "FunctionComponent" ||
+  name == "ForwardRefExoticComponent" ||
+  name == "MemoExoticComponent" ||
+  name == "NamedExoticComponent"
+}
+
+///|
+fn ffi_interface_type_decl_to_moonbit(iface : @ast.TsInterface) -> String {
+  "#external\ntype " + ffi_type_identifier(iface.name, "OpaqueType")
+}
+
+///|
 fn ffi_binding_name(export_name : String) -> String {
   "__ts_mbt_" + ffi_to_snake_case(export_name)
 }
@@ -1071,7 +1084,8 @@ fn normalize_imports_for_ffi(
   for exported in exported_imports {
     match modules.get(exported.source_path) {
       Some(info) =>
-        imports.push(
+        push_preferred_import_decl(
+          imports,
           clone_exported_import(exported, info, modules, canonical_types),
         )
       None => ()
@@ -1090,7 +1104,8 @@ fn normalize_funcs_for_ffi(
   for exported in exported_funcs {
     match modules.get(exported.source_path) {
       Some(info) =>
-        funcs.push(
+        push_preferred_func_decl(
+          funcs,
           clone_exported_func(exported, info, modules, canonical_types),
         )
       None => ()
@@ -1295,7 +1310,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     let type_name = ffi_type_identifier(iface.name, "OpaqueType")
     if !emitted_type_names.contains(type_name) {
       emitted_type_names.push(type_name)
-      ffi_sections.push(ffi_struct_decl_to_moonbit(state, iface))
+      if ffi_is_react_callable_component_interface(iface.name) {
+        ffi_sections.push(ffi_interface_type_decl_to_moonbit(iface))
+      } else {
+        ffi_sections.push(ffi_struct_decl_to_moonbit(state, iface))
+      }
     }
     handled_export_names.push(iface.name)
   }

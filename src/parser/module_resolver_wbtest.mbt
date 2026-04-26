@@ -107,6 +107,42 @@ async test "parser: resolver supports neverthrow-like pnpm packages" {
 }
 
 ///|
+async test "parser: resolver uses fixture React package exports for root and JSX subpaths" {
+  let react = resolve_type_module_specifier(resolver_nested_base_path, "react")
+  assert_eq(
+    react,
+    Some("fixtures/resolver/project/node_modules/react/index.d.ts"),
+  )
+  let jsx_runtime = resolve_type_module_specifier(
+    resolver_nested_base_path, "react/jsx-runtime",
+  )
+  assert_eq(
+    jsx_runtime,
+    Some("fixtures/resolver/project/node_modules/react/jsx-runtime.d.ts"),
+  )
+  let jsx_dev_runtime = resolve_type_module_specifier(
+    resolver_nested_base_path, "react/jsx-dev-runtime",
+  )
+  assert_eq(
+    jsx_dev_runtime,
+    Some("fixtures/resolver/project/node_modules/react/jsx-dev-runtime.d.ts"),
+  )
+}
+
+///|
+async test "parser: resolver uses fixture Hono JSX package export" {
+  let resolved = resolve_type_module_specifier(
+    resolver_nested_base_path, "hono/jsx",
+  )
+  assert_eq(
+    resolved,
+    Some(
+      "fixtures/resolver/project/node_modules/hono/dist/types/jsx/index.d.ts",
+    ),
+  )
+}
+
+///|
 async test "parser: resolver uses tsconfig paths aliases" {
   let resolved = resolve_type_module_specifier(
     resolver_tsconfig_base_path, "@lib/util",

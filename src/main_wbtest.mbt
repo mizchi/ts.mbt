@@ -5145,7 +5145,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace optional R
   }
   assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
   assert_true(bridge_mbti.contains("/// label : String?"))
-  assert_true(bridge_mbti.contains("/// children : ReactNode?"))
+  assert_true(bridge_mbti.contains("/// children : JSValue?"))
   assert_true(bridge_mbti.contains("/// ref : Ref?"))
   assert_true(
     bridge_mbti.contains(

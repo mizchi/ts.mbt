@@ -136,17 +136,20 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 
 ### Next work
 
-- [ ] Reduce widening around React overload-heavy APIs.
+- [x] Reduce widening around React overload-heavy APIs.
   - Priority targets: `createElement`, `cloneElement`, `forwardRef`, `memo`.
   - [x] Lower `keyof JSX.IntrinsicElements` parameters to `String` for `createElement` / JSX runtime entrypoints instead of `JSValue`.
-- [ ] Model exotic/callable component surfaces more explicitly.
+- [x] Model exotic/callable component surfaces more explicitly.
   - Priority targets: `FunctionComponent`, `ForwardRefExoticComponent`, `MemoExoticComponent`, `NamedExoticComponent`.
-- [ ] Improve utility/conditional type lowering beyond the first pass.
+  - Callable React component surfaces are emitted as opaque external JS callable types in FFI output instead of fake record structs with `<call>` fields.
+- [x] Improve utility/conditional type lowering beyond the first pass.
   - Priority targets: `ReactNode`, `ComponentRef`, `ElementRef`, `LibraryManagedAttributes`, `RefAttributes`.
+  - `Partial<T>` / `Readonly<T>` pass through to `T`; `LibraryManagedAttributes<C, P>` lowers to `P`; `ComponentRef<T>` / `ElementRef<T>` lower to `Ref`; `ReactNode` lowers to `JSValue` / `@js.Any` at the generated bridge boundary.
 - [x] Add stable end-to-end verification for generated React scaffolds under `moon check/test --target js`.
   - `just verify-scaffolds` now checks React-like JSX, `react/jsx-runtime`, `react/jsx-dev-runtime`, and the Hono options fixture with generated packages under the JS target. The React cases use a local `mizchi/js/core` stub instead of depending on a separate checkout.
-- [ ] Add stable fixture coverage for `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, and `hono/jsx`.
+- [x] Add stable fixture coverage for `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, and `hono/jsx`.
   - Keep real-world probe findings as minimized fixtures instead of ad-hoc `/tmp` checks.
+  - Minimized package fixtures live under `fixtures/resolver/project/node_modules/react` and `fixtures/resolver/project/node_modules/hono`; `just verify-scaffolds` now compiles/tests generated MoonBit packages against those package names.
 - [ ] Keep JSX parser work deferred until `.d.ts` type-surface parsing is no longer the blocker.
   - Re-evaluate only if React/Hono support hits syntax that cannot be represented from declaration files alone.
 

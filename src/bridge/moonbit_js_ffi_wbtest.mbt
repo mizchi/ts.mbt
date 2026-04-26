@@ -2862,7 +2862,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace PropsWit
   }
   assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithChildren"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
-  assert_true(bundle.ffi_mbt.contains("  children : ReactNode"))
+  assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : BadgePropsWithChildren) -> BadgePropsWithChildren = \"__ts_mbt_create_badge\"",
@@ -2968,7 +2968,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace nested P
   }
   assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithChildren"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
-  assert_true(bundle.ffi_mbt.contains("  children : ReactNode"))
+  assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : BadgePropsWithChildren) -> BadgePropsWithChildren = \"__ts_mbt_create_badge\"",
@@ -3032,7 +3032,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace optional
   }
   assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
   assert_true(bundle.ffi_mbt.contains("  label : String?"))
-  assert_true(bundle.ffi_mbt.contains("  children : ReactNode?"))
+  assert_true(bundle.ffi_mbt.contains("  children : @js.Any?"))
   assert_true(bundle.ffi_mbt.contains("  ref_ : Ref?"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -3082,7 +3082,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace inline P
   assert_true(bundle.ffi_mbt.contains("pub struct LabelCountPropsWithChildren"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
   assert_true(bundle.ffi_mbt.contains("  count : Double"))
-  assert_true(bundle.ffi_mbt.contains("  children : ReactNode"))
+  assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : LabelCountPropsWithChildren) -> LabelCountPropsWithChildren = \"__ts_mbt_create_badge\"",
@@ -3167,6 +3167,112 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_app(options : HonoOptions) -> Hono = \"__ts_mbt_create_app\"",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit JS FFI bundle from fixture React package surface" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/node_modules/react/index.d.ts", "react",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype FunctionComponent"))
+  assert_true(bundle.ffi_mbt.contains("#external\ntype NamedExoticComponent"))
+  assert_true(
+    bundle.ffi_mbt.contains("#external\ntype ForwardRefExoticComponent"),
+  )
+  assert_true(bundle.ffi_mbt.contains("#external\ntype MemoExoticComponent"))
+  assert_false(bundle.ffi_mbt.contains("pub struct FunctionComponent"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn create_element(type_ : String, props : DOMAttributes?, children : Array[@js.Any]) -> ReactElement = \"__ts_mbt_create_element\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn clone_element(element : ReactElement, props : DOMAttributes?, children : Array[@js.Any]) -> ReactElement = \"__ts_mbt_clone_element\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn forward_ref(render : @js.Any) -> ForwardRefExoticComponent = \"__ts_mbt_forward_ref\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn memo(component : FunctionComponent, propsAreEqual : @js.Any?) -> MemoExoticComponent = \"__ts_mbt_memo\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn normalize_props(props : ButtonHTMLAttributes) -> ButtonHTMLAttributes = \"__ts_mbt_normalize_props\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn use_component_ref(ref_ : Ref) -> Ref = \"__ts_mbt_use_component_ref\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("props : @js.Any?"))
+}
+
+///|
+async test "bridge: emit MoonBit JS FFI bundle from fixture React JSX runtime package subpath" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/node_modules/react/jsx-runtime.d.ts", "react/jsx-runtime",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct JsxElement"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn jsx(type_ : String, props : ButtonHTMLAttributes, key : Key?) -> ReactElement = \"jsx\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn jsxs(type_ : String, props : ButtonHTMLAttributes, key : Key?) -> ReactElement = \"jsxs\"",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit JS FFI bundle from fixture Hono JSX package subpath" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/node_modules/hono/dist/types/jsx/index.d.ts", "hono/jsx",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct JsxElement"))
+  assert_true(bundle.ffi_mbt.contains("pub struct ButtonAttributes"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn jsx(tag : String, props : ButtonAttributes) -> JsxElement = \"jsx\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn memo(component : @js.Any) -> @js.Any = \"memo\"",
     ),
   )
 }

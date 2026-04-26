@@ -355,7 +355,7 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // null and undefined literal types
     Null => {
       let _ = self.advance()
-      Any
+      Null
     }
     Ident("any")
     | Ident("unknown")

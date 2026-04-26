@@ -1564,7 +1564,20 @@ fn component_props_with_ref_interface_name(base_name : String) -> String {
 
 ///|
 fn is_props_passthrough_name(name : String) -> Bool {
-  name == "PropsWithoutRef" || name == "PropsWithRef"
+  name == "PropsWithoutRef" ||
+  name == "PropsWithRef" ||
+  name == "Partial" ||
+  name == "Readonly"
+}
+
+///|
+fn is_component_ref_like_name(name : String) -> Bool {
+  name == "ComponentRef" || name == "ElementRef"
+}
+
+///|
+fn is_react_node_like_name(name : String) -> Bool {
+  name == "ReactNode" || name.has_suffix(".ReactNode")
 }
 
 ///|
@@ -1587,13 +1600,13 @@ fn props_with_children_object_interface_name(
 }
 
 ///|
-fn resolve_react_node_type_name(
+fn resolve_react_ref_type_name(
   info : DeclModuleInfo,
   canonical_types : Map[String, String],
 ) -> String {
-  match resolve_exported_type_name(info, "ReactNode", canonical_types) {
+  match resolve_exported_type_name(info, "Ref", canonical_types) {
     Some(name) => name
-    None => "ReactNode"
+    None => "Ref"
   }
 }
 
@@ -1612,17 +1625,17 @@ fn props_with_children_named_interface_spec(
         fields.push(
           (
             field_name,
-            rewrite_type_refs(origin.info, field_type, canonical_types),
+            lower_react_utility_type(
+              origin.info,
+              rewrite_type_refs(origin.info, field_type, canonical_types),
+              modules,
+              canonical_types,
+            ),
           ),
         )
       }
       if !fields.iter().any(fn(field) { field.0 == "children" }) {
-        fields.push(
-          (
-            "children",
-            Named(resolve_react_node_type_name(info, canonical_types)),
-          ),
-        )
+        fields.push(("children", Any))
       }
       Some({
         name: props_with_children_interface_name(origin.export_name),
@@ -1666,12 +1679,7 @@ fn props_with_children_interface_spec(
         }
       }
       if !fields.iter().any(fn(field) { field.0 == "children" }) {
-        fields.push(
-          (
-            "children",
-            Named(resolve_react_node_type_name(info, canonical_types)),
-          ),
-        )
+        fields.push(("children", Any))
       }
       Some({
         name: props_with_children_object_interface_name(inner_fields),
@@ -1803,6 +1811,7 @@ fn lower_react_utility_type(
   canonical_types : Map[String, String],
 ) -> @ast.TsType {
   match type_ {
+    Named(name) if is_react_node_like_name(name) => Any
     Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
     Applied("PropsWithChildren", [inner_type]) =>
@@ -1827,6 +1836,10 @@ fn lower_react_utility_type(
             lower_react_utility_type(info, inner_type, modules, canonical_types),
           ])
       }
+    Applied(name, [_]) if is_component_ref_like_name(name) =>
+      Named(resolve_react_ref_type_name(info, canonical_types))
+    Applied("LibraryManagedAttributes", [_, props_type]) =>
+      lower_react_utility_type(info, props_type, modules, canonical_types)
     Applied(name, [inner_type]) if is_component_props_like_name(name) =>
       match
         component_props_resolved_type(
@@ -1969,6 +1982,18 @@ fn collect_react_utility_interfaces_from_type(
       }
       collect_react_utility_interfaces_from_type(
         info, inner_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    Applied(name, [inner_type]) if is_component_ref_like_name(name) =>
+      collect_react_utility_interfaces_from_type(
+        info, inner_type, modules, canonical_types, seen_names, interfaces,
+      )
+    Applied("LibraryManagedAttributes", [component_type, props_type]) => {
+      collect_react_utility_interfaces_from_type(
+        info, component_type, modules, canonical_types, seen_names, interfaces,
+      )
+      collect_react_utility_interfaces_from_type(
+        info, props_type, modules, canonical_types, seen_names, interfaces,
       )
     }
     Applied(name, [inner_type]) if is_component_props_like_name(name) => {
@@ -2696,6 +2721,148 @@ fn clone_exported_import(
 }
 
 ///|
+fn decl_classify_optional_like_union(
+  type_ : @ast.TsType,
+) -> (@ast.TsType, Bool)? {
+  match type_ {
+    Union(items) => {
+      let mut concrete : @ast.TsType? = None
+      let mut has_any = false
+      let mut is_optional = false
+      for item in items {
+        match item {
+          Any => has_any = true
+          Undefined | Null => is_optional = true
+          _ =>
+            match concrete {
+              Some(_) => return None
+              None => concrete = Some(item)
+            }
+        }
+      }
+      match concrete {
+        Some(inner) => if has_any { None } else { Some((inner, is_optional)) }
+        None => if has_any { Some((Any, is_optional)) } else { None }
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+fn decl_type_widening_score(type_ : @ast.TsType) -> Int {
+  match decl_classify_optional_like_union(type_) {
+    Some((inner, _)) => return decl_type_widening_score(inner)
+    None => ()
+  }
+  match type_ {
+    Any => 100
+    Func(params, return_type) => {
+      let mut score = 40 + decl_type_widening_score(return_type)
+      for param in params {
+        score += decl_type_widening_score(param)
+      }
+      score
+    }
+    Union(items) => {
+      let mut score = 20
+      for item in items {
+        score += decl_type_widening_score(item)
+      }
+      score
+    }
+    Intersection(items) => {
+      let mut score = 0
+      for item in items {
+        score += decl_type_widening_score(item)
+      }
+      score
+    }
+    Array(inner) => decl_type_widening_score(inner)
+    Tuple(items) => {
+      let mut score = 0
+      for item in items {
+        score += decl_type_widening_score(item)
+      }
+      score
+    }
+    Object(fields) => {
+      let mut score = 0
+      for field in fields {
+        score += decl_type_widening_score(field.1)
+      }
+      score
+    }
+    Struct(_, fields) => {
+      let mut score = 0
+      for field in fields {
+        score += decl_type_widening_score(field.1)
+      }
+      score
+    }
+    Applied(_, args) => {
+      let mut score = 0
+      for arg in args {
+        score += decl_type_widening_score(arg)
+      }
+      score
+    }
+    _ => 0
+  }
+}
+
+///|
+fn decl_import_widening_score(import_ : @ast.TsImport) -> Int {
+  let mut score = decl_type_widening_score(import_.return_type)
+  for param in import_.params {
+    score += decl_type_widening_score(param.1)
+  }
+  score
+}
+
+///|
+fn decl_func_widening_score(func : @ast.TsFunc) -> Int {
+  let mut score = decl_type_widening_score(func.return_type)
+  for param in func.params {
+    score += decl_type_widening_score(param.type_)
+  }
+  score
+}
+
+///|
+fn push_preferred_import_decl(
+  imports : Array[@ast.TsImport],
+  import_ : @ast.TsImport,
+) -> Unit {
+  for i, existing in imports {
+    if existing.name == import_.name {
+      if decl_import_widening_score(import_) <
+        decl_import_widening_score(existing) {
+        imports[i] = import_
+      }
+      return
+    }
+  }
+  imports.push(import_)
+}
+
+///|
+fn push_preferred_func_decl(
+  funcs : Array[@ast.TsFunc],
+  func : @ast.TsFunc,
+) -> Unit {
+  for i, existing in funcs {
+    if existing.name == func.name {
+      if decl_func_widening_score(func) < decl_func_widening_score(existing) {
+        funcs[i] = func
+      }
+      return
+    }
+  }
+  funcs.push(func)
+}
+
+///|
 fn clone_exported_func(
   exported : ExportedFuncDecl,
   info : DeclModuleInfo,
@@ -2887,7 +3054,8 @@ pub async fn emit_moonbit_decl_from_entry_path(
   for exported in exported_imports {
     match modules.get(exported.source_path) {
       Some(info) =>
-        imports.push(
+        push_preferred_import_decl(
+          imports,
           clone_exported_import(exported, info, modules, canonical_types),
         )
       None => ()
@@ -2897,7 +3065,8 @@ pub async fn emit_moonbit_decl_from_entry_path(
   for exported in exported_funcs {
     match modules.get(exported.source_path) {
       Some(info) =>
-        funcs.push(
+        push_preferred_func_decl(
+          funcs,
           clone_exported_func(exported, info, modules, canonical_types),
         )
       None => ()

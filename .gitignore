@@ -18,6 +18,14 @@ Thumbs.db
 # Node.js
 node_modules/
 
+# Resolver package fixtures intentionally live under a fixture node_modules tree.
+!fixtures/resolver/project/node_modules/
+fixtures/resolver/project/node_modules/*
+!fixtures/resolver/project/node_modules/react/
+!fixtures/resolver/project/node_modules/react/**
+!fixtures/resolver/project/node_modules/hono/
+!fixtures/resolver/project/node_modules/hono/**
+
 # Example generated outputs
 examples/**/dist/
 

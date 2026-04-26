@@ -910,8 +910,9 @@ async test "bridge: emit MoonBit declarations from export-as-namespace PropsWith
       return
     }
   }
-  assert_true(actual.contains("declare pub type ReactNode"))
+  assert_false(actual.contains("declare pub type ReactNode"))
   assert_true(actual.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(actual.contains("/// children : JSValue"))
   assert_true(
     actual.contains(
       "declare pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
@@ -1055,7 +1056,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace optional 
   }
   assert_true(actual.contains("declare pub type BadgeProps"))
   assert_true(actual.contains("/// label : String?"))
-  assert_true(actual.contains("/// children : ReactNode?"))
+  assert_true(actual.contains("/// children : JSValue?"))
   assert_true(actual.contains("/// ref : Ref?"))
   assert_true(
     actual.contains(
@@ -1102,6 +1103,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace inline Pr
     }
   }
   assert_true(actual.contains("declare pub type LabelCountPropsWithChildren"))
+  assert_true(actual.contains("/// children : JSValue"))
   assert_true(
     actual.contains(
       "declare pub fn createBadge(props : LabelCountPropsWithChildren) -> LabelCountPropsWithChildren",
@@ -1175,6 +1177,127 @@ async test "bridge: emit MoonBit declarations from imported object type alias me
   )
   assert_true(
     actual.contains("declare pub fn createApp(options : HonoOptions) -> Hono"),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit declarations from fixture React package surface" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/node_modules/react/index.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type FunctionComponent"))
+  assert_true(actual.contains("declare pub type NamedExoticComponent"))
+  assert_true(actual.contains("declare pub type ForwardRefExoticComponent"))
+  assert_true(actual.contains("declare pub type MemoExoticComponent"))
+  assert_true(
+    actual.contains(
+      "declare pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn cloneElement(element : ReactElement, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn forwardRef(render : JSValue) -> ForwardRefExoticComponent",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn memo(component : FunctionComponent, propsAreEqual : JSValue?) -> MemoExoticComponent",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn normalizeProps(props : ButtonHTMLAttributes) -> ButtonHTMLAttributes",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn useComponentRef(ref_ : Ref) -> Ref"),
+  )
+  assert_false(actual.contains("declare pub type ReactNode"))
+  assert_false(actual.contains("props : JSValue?"))
+}
+
+///|
+async test "bridge: emit MoonBit declarations from fixture React JSX runtime subpaths" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/node_modules/react/jsx-runtime.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type JsxElement"))
+  assert_true(
+    actual.contains(
+      "declare pub fn jsx(type_ : String, props : ButtonHTMLAttributes, key : Key?) -> ReactElement",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn jsxs(type_ : String, props : ButtonHTMLAttributes, key : Key?) -> ReactElement",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit declarations from fixture React JSX dev runtime subpath" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/node_modules/react/jsx-dev-runtime.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type JSXSource"))
+  assert_true(
+    actual.contains(
+      "declare pub fn jsxDEV(type_ : ElementType, props : JSValue, key : Key?, isStatic : Bool, source : JSXSource?, self : JSValue?) -> ReactElement",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit declarations from fixture Hono JSX package subpath" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/node_modules/hono/dist/types/jsx/index.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type JsxElement"))
+  assert_true(actual.contains("declare pub type ButtonAttributes"))
+  assert_true(
+    actual.contains(
+      "declare pub fn jsx(tag : String, props : ButtonAttributes) -> JsxElement",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn memo(component : JSValue) -> JSValue"),
   )
 }
 
