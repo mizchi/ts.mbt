@@ -114,6 +114,31 @@ dynamic JS features. It currently uses wasm-gc for arrays and structs.
 
 This repo now supports both directions of package scaffold generation.
 
+### Unified CLI
+
+For the common "generate everything for this package" path, use the unified
+CLI. It accepts either a MoonBit package name / `pkg.generated.mbti` path or a
+TypeScript entrypoint / installed package specifier.
+
+```bash
+# MoonBit -> TypeScript. Run `moon info` first so pkg.generated.mbti exists.
+tsmbt --input mizchi/foo --out dist
+
+# TypeScript -> MoonBit. For bare npm-style inputs, the runtime module spec
+# defaults to the input specifier.
+tsmbt --input neverthrow --out dist --direction ts-to-mbt
+
+# File input also works; pass the runtime module when it differs from the
+# declaration entry path.
+tsmbt --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist --direction ts-to-mbt
+```
+
+`--direction auto` is the default. It resolves MoonBit package names by scanning
+for matching `pkg.generated.mbti` files under the current project, and resolves
+bare TypeScript inputs through the TypeScript package resolver. The MoonBit ->
+TypeScript unified path emits the facade scaffold by default; pass
+`--no-facade` to emit only the base TypeScript scaffold.
+
 ### MoonBit -> TypeScript
 
 Start from a root `pkg.generated.mbti` and emit:

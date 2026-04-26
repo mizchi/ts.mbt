@@ -173,6 +173,11 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
+      "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] Generate a complete bridge scaffold in either direction",
+    ),
+  )
+  assert_true(
+    lines.contains(
       "  benchmark-project <root> [limit] Benchmark local TS/.d.ts corpus coverage",
     ),
   )
@@ -192,6 +197,132 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
     ),
   )
   assert_false(lines.contains("  aot-check <file>     Alias for analyze"))
+}
+
+///|
+test "parse_unified_tsmbt_options accepts input out and direction flags" {
+  let args = [
+    "tsmbt", "--input", "mizchi/foo", "--out", "dist", "--direction", "mbt-to-ts",
+    "--import-rewrites", "rewrites.json", "--no-facade",
+  ]
+  match parse_unified_tsmbt_options(args, 1) {
+    (Some(options), None) => {
+      assert_eq(options.input, Some("mizchi/foo"))
+      assert_eq(options.out, Some("dist"))
+      assert_true(options.direction is TsmbtDirection::MbtToTs)
+      assert_eq(options.import_rewrite_path, Some("rewrites.json"))
+      assert_false(options.facade)
+    }
+    (_, Some(message)) => fail(message)
+    _ => fail("expected options")
+  }
+}
+
+///|
+test "parse_unified_tsmbt_options accepts positional generate args and equals flags" {
+  let args = [
+    "tsmbt", "generate", "neverthrow", "dist/generated", "--direction=ts", "--module-spec=/runtime/neverthrow.js",
+    "--import-rewrite=rewrites.json",
+  ]
+  match parse_unified_tsmbt_options(args, 2) {
+    (Some(options), None) => {
+      assert_eq(options.input, Some("neverthrow"))
+      assert_eq(options.out, Some("dist/generated"))
+      assert_true(options.direction is TsmbtDirection::TsToMbt)
+      assert_eq(options.module_spec, Some("/runtime/neverthrow.js"))
+      assert_eq(options.import_rewrite_path, Some("rewrites.json"))
+      assert_true(options.facade)
+    }
+    (_, Some(message)) => fail(message)
+    _ => fail("expected options")
+  }
+}
+
+///|
+async test "resolve_unified_mbt_input_path finds package name in generated mbti files" {
+  match resolve_unified_mbt_input_path("demo/pkg") {
+    Some(path) =>
+      assert_eq(path, "fixtures/mbti_typescript_package/pkg.generated.mbti")
+    None => fail("expected demo/pkg pkg.generated.mbti")
+  }
+}
+
+///|
+async test "infer_unified_tsmbt_direction detects package names and TypeScript entries" {
+  match infer_unified_tsmbt_direction("demo/pkg") {
+    Some(TsmbtDirection::MbtToTs) => ()
+    _ => fail("expected demo/pkg to infer mbt-to-ts")
+  }
+  match
+    infer_unified_tsmbt_direction(
+      "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
+    ) {
+    Some(TsmbtDirection::TsToMbt) => ()
+    _ => fail("expected .d.ts entry to infer ts-to-mbt")
+  }
+}
+
+///|
+async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold from package name" {
+  let root = wbtest_tmp_project_benchmark_root("unified_mbt_to_ts")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_unified_tsmbt_scaffold(
+    "demo/pkg",
+    root,
+    direction=TsmbtDirection::MbtToTs,
+    module_spec=None,
+    import_rewrite_path=None,
+    facade=true,
+  )
+  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+    e => fail("failed to read unified moon.pkg.json: \{e}")
+  }
+  let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
+    e => fail("failed to read unified index.d.ts: \{e}")
+  }
+  assert_true(moon_pkg_json.contains("\"make\""))
+  assert_true(root_decl.contains("import type * as child from \"./child\";"))
+}
+
+///|
+async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
+  let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_unified_tsmbt_scaffold(
+    "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
+    root,
+    direction=TsmbtDirection::TsToMbt,
+    module_spec=Some("/runtime/neverthrow-like.js"),
+    import_rewrite_path=None,
+    facade=true,
+  )
+  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+    e => fail("failed to read unified TS moon.pkg.json: \{e}")
+  }
+  let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
+    e => fail("failed to read unified TS bridge.mbt: \{e}")
+  }
+  assert_eq(moon_pkg_json, "{}")
+  assert_true(bridge_mbt.contains("#module(\"/runtime/neverthrow-like.js\")"))
+}
+
+///|
+async test "emit_unified_tsmbt_scaffold creates nested TypeScript to MoonBit output dirs" {
+  let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt_nested")
+  let out_dir = wbtest_join_path(root, "dist/generated")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  emit_unified_tsmbt_scaffold(
+    "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
+    out_dir,
+    direction=TsmbtDirection::TsToMbt,
+    module_spec=Some("/runtime/neverthrow-like.js"),
+    import_rewrite_path=None,
+    facade=true,
+  )
+  let bridge_mbt = @fs.read_file(wbtest_join_path(out_dir, "bridge.mbt")).text() catch {
+    e => fail("failed to read nested unified TS bridge.mbt: \{e}")
+  }
+  assert_true(bridge_mbt.contains("pub fn parseUser"))
 }
 
 ///|

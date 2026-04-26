@@ -5,8 +5,13 @@ async fn main_async() -> Unit {
     print_usage()
     return
   }
+  if args[1].has_prefix("--") {
+    run_unified_tsmbt_cli(args, 1)
+    return
+  }
   let command = args[1]
   match command {
+    "generate" | "scaffold" => run_unified_tsmbt_cli(args, 2)
     "run" => {
       if args.length() < 3 {
         println("Error: no file specified")
@@ -242,7 +247,9 @@ fn main {
 
 ///|
 fn print_usage() -> Unit {
-  println("Usage: wasm5-ts <command> [args...]")
+  println(
+    "Usage: tsmbt [--input <pkg-or-entry> --out <dir>] [command] [args...]",
+  )
   println("")
   println("Commands:")
   for line in command_help_lines() {
@@ -262,6 +269,7 @@ fn command_help_lines() -> Array[String] {
     "  emit-typescript-package-from-mbti <file> <out-dir> [import-rewrite-json] Emit a recursive TypeScript declaration package from a root .mbti interface",
     "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit MoonBit autolink config and recursive TypeScript declarations together",
     "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit scaffold files plus MoonBit autolink facade wrappers for omitted local methods",
+    "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] Generate a complete bridge scaffold in either direction",
     "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
     "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
@@ -891,7 +899,7 @@ async fn emit_moonbit_bridge_package(
     }
   }
   if !@fs.exists(output_dir) {
-    let _ = @fs.mkdir(output_dir, permission=0o755) catch {
+    let _ = ensure_dir_tree(output_dir) catch {
       e => {
         println("Write error: \{e}")
         return
