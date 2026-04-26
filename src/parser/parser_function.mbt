@@ -217,6 +217,16 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       is_async,
     }
   }
+  if !self.check(LBrace) {
+    return {
+      name,
+      params,
+      return_type,
+      body: { stmts: [] },
+      is_generator,
+      is_async,
+    }
+  }
   // Save and set function context (new function scope resets iteration/switch/labels context)
   let prev_generator = self.in_generator
   let prev_async = self.in_async
@@ -1044,10 +1054,7 @@ pub fn Parser::parse_declare_function(
 ) -> @ast.TsImport raise ParseError {
 
   // function
-  let name = match self.advance().kind {
-    Ident(n) => n
-    _ => raise ParseError("Expected function name after 'declare function'")
-  }
+  let name = self.parse_binding_ident()
 
   // Skip type parameters if present
   self.skip_type_params()
@@ -1175,10 +1182,16 @@ fn Parser::parse_declare_values(
   let values : Array[@ast.TsValueDecl] = []
   let name = self.parse_binding_ident()
   let type_ = self.parse_var_decl_type()
+  if self.match_(Eq) {
+    let _ = self.parse_expr()
+  }
   values.push({ name, type_ })
   while self.match_(Comma) {
     let next_name = self.parse_binding_ident()
     let next_type = self.parse_var_decl_type()
+    if self.match_(Eq) {
+      let _ = self.parse_expr()
+    }
     values.push({ name: next_name, type_: next_type })
   }
   self.consume_semicolon()
@@ -1252,6 +1265,7 @@ fn Parser::parse_declare_class_member_name(
     Finally => "finally"
     Throw => "throw"
     Yield => "yield"
+    Declare => "declare"
     Type => "type"
     Let => "let"
     Const => "const"
@@ -1282,8 +1296,68 @@ fn Parser::parse_declare_class_member_name(
 
 ///|
 fn Parser::skip_declare_class_heritage(self : Parser) -> Unit {
-  while !self.check(LBrace) && !self.check(Eof) {
-    let _ = self.advance()
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut brace_depth = 0
+  let mut angle_depth = 0
+  while !self.check(Eof) {
+    match self.peek().kind {
+      LBrace if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 &&
+        angle_depth == 0 => break
+      LParen => {
+        paren_depth += 1
+        let _ = self.advance()
+      }
+      RParen => {
+        if paren_depth > 0 {
+          paren_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      LBracket => {
+        bracket_depth += 1
+        let _ = self.advance()
+      }
+      RBracket => {
+        if bracket_depth > 0 {
+          bracket_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      LBrace => {
+        brace_depth += 1
+        let _ = self.advance()
+      }
+      RBrace => {
+        if brace_depth > 0 {
+          brace_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      Lt => {
+        angle_depth += 1
+        let _ = self.advance()
+      }
+      Gt => {
+        if angle_depth > 0 {
+          angle_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      GtGt => {
+        angle_depth = if angle_depth >= 2 { angle_depth - 2 } else { 0 }
+        let _ = self.advance()
+      }
+      GtGtGt => {
+        angle_depth = if angle_depth >= 3 { angle_depth - 3 } else { 0 }
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
   }
 }
 
@@ -1440,8 +1514,7 @@ fn Parser::parse_declare_class(
     if self.match_(Colon) {
       property_type = self.parse_type()
     }
-    let _ = self.match_(Eq)
-    if !self.check(Semicolon) && !self.check(RBrace) {
+    if self.match_(Eq) {
       let _ = self.parse_assignment()
     }
     self.consume_semicolon()

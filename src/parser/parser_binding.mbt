@@ -43,9 +43,33 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
       let _ = self.advance()
       "type"
     }
+    Function => {
+      let _ = self.advance()
+      "function"
+    }
+    Class => {
+      let _ = self.advance()
+      "class"
+    }
+    Interface => {
+      let _ = self.advance()
+      "interface"
+    }
+    New => {
+      let _ = self.advance()
+      "new"
+    }
     Let => {
       let _ = self.advance()
       "let"
+    }
+    Var => {
+      let _ = self.advance()
+      "var"
+    }
+    Const => {
+      let _ = self.advance()
+      "const"
     }
     Switch => {
       let _ = self.advance()
@@ -54,6 +78,38 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
     Case => {
       let _ = self.advance()
       "case"
+    }
+    If => {
+      let _ = self.advance()
+      "if"
+    }
+    Else => {
+      let _ = self.advance()
+      "else"
+    }
+    While => {
+      let _ = self.advance()
+      "while"
+    }
+    Do => {
+      let _ = self.advance()
+      "do"
+    }
+    For => {
+      let _ = self.advance()
+      "for"
+    }
+    Return => {
+      let _ = self.advance()
+      "return"
+    }
+    Break => {
+      let _ = self.advance()
+      "break"
+    }
+    Continue => {
+      let _ = self.advance()
+      "continue"
     }
     Default => {
       let _ = self.advance()
@@ -67,6 +123,22 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
       let _ = self.advance()
       "debugger"
     }
+    Try => {
+      let _ = self.advance()
+      "try"
+    }
+    Catch => {
+      let _ = self.advance()
+      "catch"
+    }
+    Finally => {
+      let _ = self.advance()
+      "finally"
+    }
+    Throw => {
+      let _ = self.advance()
+      "throw"
+    }
     Import => {
       let _ = self.advance()
       "import"
@@ -74,6 +146,10 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
     Export => {
       let _ = self.advance()
       "export"
+    }
+    Declare => {
+      let _ = self.advance()
+      "declare"
     }
     From => {
       let _ = self.advance()
@@ -94,6 +170,30 @@ fn Parser::parse_binding_ident(self : Parser) -> String raise ParseError {
     In => {
       let _ = self.advance()
       "in"
+    }
+    Extends => {
+      let _ = self.advance()
+      "extends"
+    }
+    Typeof => {
+      let _ = self.advance()
+      "typeof"
+    }
+    Instanceof => {
+      let _ = self.advance()
+      "instanceof"
+    }
+    Null => {
+      let _ = self.advance()
+      "null"
+    }
+    Bool(true) => {
+      let _ = self.advance()
+      "true"
+    }
+    Bool(false) => {
+      let _ = self.advance()
+      "false"
     }
     k => raise ParseError("Expected identifier, got \{k}")
   }

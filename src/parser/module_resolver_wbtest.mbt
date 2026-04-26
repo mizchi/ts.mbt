@@ -20,6 +20,14 @@ async test "parser: resolver falls back to directory index for relative imports"
 }
 
 ///|
+async test "parser: resolver maps explicit .ts specifier to declaration file in types mode" {
+  let resolved = resolve_type_module_specifier(
+    resolver_base_path, "./ts-specifier.ts",
+  )
+  assert_eq(resolved, Some("fixtures/resolver/project/src/ts-specifier.d.ts"))
+}
+
+///|
 async test "parser: resolver uses package types field for bare specifiers" {
   let resolved = resolve_type_module_specifier(
     resolver_nested_base_path, "pkg-types",

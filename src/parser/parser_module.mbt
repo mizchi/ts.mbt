@@ -138,19 +138,16 @@ fn Parser::parse_namespace_decl(
     self.skip_declaration_block()
     return Some((None, None))
   }
-  let name = match self.peek().kind {
-    Ident(name) => {
-      let _ = self.advance()
-      Some(name)
-    }
-    _ => None
+  let name = if self.is_qualified_type_name_part(0) {
+    Some(self.parse_binding_ident())
+  } else {
+    None
   }
   while self.match_(Dot) {
-    match self.peek().kind {
-      Ident(_) => {
-        let _ = self.advance()
-      }
-      _ => break
+    if self.is_qualified_type_name_part(0) {
+      let _ = self.parse_binding_ident()
+    } else {
+      break
     }
   }
   let value = match name {
@@ -1997,6 +1994,10 @@ fn Parser::is_ambient_export_value_decl(self : Parser) -> Bool {
         brace_depth == 0 &&
         angle_depth == 0 => return false
       Semicolon | Comma if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 &&
+        angle_depth == 0 => return true
+      Export | Declare | Interface | Type if paren_depth == 0 &&
         bracket_depth == 0 &&
         brace_depth == 0 &&
         angle_depth == 0 => return true

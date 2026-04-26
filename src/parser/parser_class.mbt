@@ -287,6 +287,51 @@ fn Parser::can_consume_class_modifier(self : Parser) -> Bool {
 }
 
 ///|
+fn Parser::try_skip_class_index_signature(self : Parser) -> Bool {
+  if !self.check(LBracket) {
+    return false
+  }
+  let saved_pos = self.pos
+  let _ = self.advance()
+  let mut depth = 1
+  let mut has_index_type_separator = false
+  while depth > 0 && !self.check(Eof) {
+    match self.peek().kind {
+      Colon if depth == 1 => {
+        has_index_type_separator = true
+        let _ = self.advance()
+      }
+      LBracket => {
+        depth += 1
+        let _ = self.advance()
+      }
+      RBracket => {
+        depth -= 1
+        let _ = self.advance()
+      }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+  if !has_index_type_separator {
+    self.pos = saved_pos
+    return false
+  }
+  if self.match_(Colon) {
+    try {
+      let _ = self.parse_type()
+    } catch {
+      _ => self.skip_until_semicolon()
+    }
+  }
+  if self.check(Semicolon) || self.check(Comma) {
+    let _ = self.advance()
+  }
+  true
+}
+
+///|
 fn Parser::is_super_call_stmt(_self : Parser, stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Expr(Call("super", _)) => true
@@ -460,6 +505,9 @@ fn Parser::parse_class_body(
     }
     if parsed_static_block {
       continue // Continue to next class element
+    }
+    if self.try_skip_class_index_signature() {
+      continue
     }
     let mut accessor_kind : String? = None
     match self.peek().kind {

@@ -629,6 +629,50 @@ fn append_resolution_candidates(
     }
     return
   }
+  if candidate.has_suffix(".ts") && !candidate.has_suffix(".d.ts") {
+    let stem = strip_suffix(candidate, ".ts")
+    match mode {
+      Types => {
+        push_unique(out, stem + ".d.ts")
+        push_unique(out, candidate)
+      }
+      Runtime => push_unique(out, candidate)
+    }
+    return
+  }
+  if candidate.has_suffix(".tsx") {
+    let stem = strip_suffix(candidate, ".tsx")
+    match mode {
+      Types => {
+        push_unique(out, stem + ".d.ts")
+        push_unique(out, candidate)
+      }
+      Runtime => push_unique(out, candidate)
+    }
+    return
+  }
+  if candidate.has_suffix(".mts") && !candidate.has_suffix(".d.mts") {
+    let stem = strip_suffix(candidate, ".mts")
+    match mode {
+      Types => {
+        push_unique(out, stem + ".d.mts")
+        push_unique(out, candidate)
+      }
+      Runtime => push_unique(out, candidate)
+    }
+    return
+  }
+  if candidate.has_suffix(".cts") && !candidate.has_suffix(".d.cts") {
+    let stem = strip_suffix(candidate, ".cts")
+    match mode {
+      Types => {
+        push_unique(out, stem + ".d.cts")
+        push_unique(out, candidate)
+      }
+      Runtime => push_unique(out, candidate)
+    }
+    return
+  }
   if has_known_extension(candidate) {
     push_unique(out, candidate)
     return

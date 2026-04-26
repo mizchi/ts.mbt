@@ -6,7 +6,7 @@
 /// Check if current token is a number literal (Int or Number)
 fn Parser::is_number_literal(self : Parser) -> Bool {
   match self.peek().kind {
-    Int(_) | Number(_) => true
+    Int(_) | Number(_) | BigInt(_) => true
     _ => false
   }
 }
@@ -107,7 +107,14 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
       }
       _ => ()
     }
-    items.push(self.parse_type())
+    let item_type = self.parse_type()
+    items.push(
+      if self.match_(Question) {
+        wrap_optional_ts_type(item_type)
+      } else {
+        item_type
+      },
+    )
     if self.match_(Comma) {
       if self.match_(RBracket) {
         break
@@ -215,6 +222,56 @@ fn Parser::try_parse_simple_type_args(self : Parser) -> Array[@ast.TsType]? {
 }
 
 ///|
+fn Parser::is_qualified_type_name_part(self : Parser, offset : Int) -> Bool {
+  match self.peek_at(offset).kind {
+    Ident(_)
+    | Type
+    | Function
+    | Class
+    | New
+    | Import
+    | Export
+    | From
+    | As
+    | In
+    | Of
+    | Extends
+    | Typeof
+    | Instanceof
+    | StringType
+    | NumberType
+    | BooleanType
+    | VoidType
+    | Null => true
+    _ => false
+  }
+}
+
+///|
+fn Parser::parse_named_type_tail(
+  self : Parser,
+  first_name : String,
+) -> @ast.TsType raise ParseError {
+  let mut full_name = first_name
+  while self.check(Dot) && self.is_qualified_type_name_part(1) {
+    let _ = self.advance()
+    let next_name = self.parse_binding_ident()
+    full_name = full_name + "." + next_name
+  }
+  if self.check(Lt) {
+    match self.try_parse_simple_type_args() {
+      Some(type_args) => Applied(full_name, type_args)
+      None => {
+        self.skip_type_args()
+        Named(full_name)
+      }
+    }
+  } else {
+    Named(full_name)
+  }
+}
+
+///|
 /// Parse a single type (not including union/intersection)
 fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
   let tok = self.peek()
@@ -232,23 +289,43 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     }
     NumberType => {
       let _ = self.advance()
-      Number
+      if self.check(Dot) {
+        self.parse_named_type_tail("number")
+      } else {
+        Number
+      }
     }
     IntType => {
       let _ = self.advance()
-      Int
+      if self.check(Dot) {
+        self.parse_named_type_tail("int")
+      } else {
+        Int
+      }
     }
     BooleanType => {
       let _ = self.advance()
-      Boolean
+      if self.check(Dot) {
+        self.parse_named_type_tail("boolean")
+      } else {
+        Boolean
+      }
     }
     StringType => {
       let _ = self.advance()
-      String_
+      if self.check(Dot) {
+        self.parse_named_type_tail("string")
+      } else {
+        String_
+      }
     }
     VoidType => {
       let _ = self.advance()
-      Void
+      if self.check(Dot) {
+        self.parse_named_type_tail("void")
+      } else {
+        Void
+      }
     }
     Template(_, _, _) => {
       let _ = self.advance()
@@ -267,6 +344,10 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let _ = self.advance()
       Literal(value.to_string())
     }
+    BigInt(value) => {
+      let _ = self.advance()
+      Literal(value + "n")
+    }
     Bool(value) => {
       let _ = self.advance()
       Literal(value.to_string())
@@ -281,8 +362,15 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     | Ident("object")
     | Ident("symbol")
     | Ident("bigint") => {
-      let _ = self.advance()
-      Any
+      let name = match self.advance().kind {
+        Ident(n) => n
+        _ => "any"
+      }
+      if self.check(Dot) {
+        self.parse_named_type_tail(name)
+      } else {
+        Any
+      }
     }
     Ident("undefined") => {
       let _ = self.advance()
@@ -427,29 +515,45 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let _ = self.advance()
       Any
     }
+    Function
+    | Class
+    | From
+    | As
+    | In
+    | Of
+    | Extends
+    | Return
+    | If
+    | Else
+    | While
+    | Do
+    | For
+    | Switch
+    | Case
+    | Default
+    | Break
+    | Continue
+    | Try
+    | Catch
+    | Finally
+    | Throw
+    | Let
+    | Var
+    | Declare
+    | Delete
+    | Debugger
+    | Instanceof => {
+      let name = self.parse_binding_ident()
+      self.parse_named_type_tail(name)
+    }
     Type => {
       let _ = self.advance()
-      Named("type")
+      self.parse_named_type_tail("type")
     }
     // Ident or generic type: Foo, Array<T>
     Ident(name) => {
       let _ = self.advance()
-      let mut full_name = name
-      while self.check(Dot) && self.peek_at(1).kind is Ident(_) {
-        let _ = self.advance()
-        match self.advance().kind {
-          Ident(next_name) => full_name = full_name + "." + next_name
-          _ => ()
-        }
-      }
-      // Check for generic type arguments <T, U>
-      if self.check(Lt) {
-        match self.try_parse_simple_type_args() {
-          Some(type_args) => return Applied(full_name, type_args)
-          None => self.skip_type_args()
-        }
-      }
-      Named(full_name)
+      self.parse_named_type_tail(name)
     }
     _ => raise ParseError("Expected type, got \{tok.kind}")
   }
@@ -585,6 +689,8 @@ fn Parser::skip_conditional_type_segment(
         let _ = self.advance()
       }
       Semicolon | Comma | RParen | RBracket | RBrace if top_level &&
+        conditional_depth == 0 => break
+      Export | Declare | Interface | Type | Function | Class if top_level &&
         conditional_depth == 0 => break
       LParen => {
         paren_depth += 1

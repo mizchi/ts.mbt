@@ -36,6 +36,19 @@ fn sanitize_identifier_chars(name : String, fallback : String) -> String {
 }
 
 ///|
+fn is_all_underscores(name : String) -> Bool {
+  if name == "" {
+    return false
+  }
+  for c in name {
+    if c != '_' {
+      return false
+    }
+  }
+  true
+}
+
+///|
 fn value_identifier_needs_suffix(name : String) -> Bool {
   match name {
     "as"
@@ -43,12 +56,15 @@ fn value_identifier_needs_suffix(name : String) -> Bool {
     | "catch"
     | "const"
     | "continue"
+    | "defer"
     | "else"
     | "fn"
     | "for"
     | "if"
     | "in"
+    | "is"
     | "let"
+    | "loop"
     | "match"
     | "pub"
     | "ref"
@@ -58,7 +74,9 @@ fn value_identifier_needs_suffix(name : String) -> Bool {
     | "trait"
     | "type"
     | "typealias"
+    | "using"
     | "use"
+    | "with"
     | "while" => true
     _ => false
   }
@@ -97,12 +115,15 @@ fn sanitize_identifier(name : String, fallback : String) -> String {
     | "catch"
     | "const"
     | "continue"
+    | "defer"
     | "else"
     | "fn"
     | "for"
     | "if"
     | "in"
+    | "is"
     | "let"
+    | "loop"
     | "match"
     | "pub"
     | "return"
@@ -111,6 +132,9 @@ fn sanitize_identifier(name : String, fallback : String) -> String {
     | "trait"
     | "type"
     | "typealias"
+    | "using"
+    | "use"
+    | "with"
     | "while" => result + "_"
     _ => result
   }
@@ -118,11 +142,21 @@ fn sanitize_identifier(name : String, fallback : String) -> String {
 
 ///|
 fn moonbit_type_identifier(name : String, fallback : String) -> String {
-  let sanitized = sanitize_identifier(name, fallback)
-  if sanitized == "default" {
-    "Default"
+  let sanitized = sanitize_identifier_chars(name, fallback)
+  if sanitized == "" || is_all_underscores(sanitized) {
+    return fallback
+  }
+  let first = sanitized[0].unsafe_to_char()
+  let normalized = if first >= 'a' && first <= 'z' {
+    (first.to_int() - 32).unsafe_to_char().to_string() +
+    sanitized[1:].to_string()
   } else {
     sanitized
+  }
+  match normalized {
+    "Array" | "Bool" | "Double" | "Error" | "Int" | "String" | "Unit" =>
+      normalized + "_"
+    _ => normalized
   }
 }
 
@@ -453,12 +487,24 @@ pub fn emit_moonbit_decl_with_sections(
     needs_jsvalue: false,
   }
   let interface_sections : Array[String] = []
+  let seen_type_decl_names : Array[String] = []
   for iface in module_.interfaces {
-    interface_sections.push(interface_decl_to_moonbit(state, iface))
+    let type_name = moonbit_type_identifier(iface.name, "OpaqueType")
+    if !seen_type_decl_names.contains(type_name) {
+      seen_type_decl_names.push(type_name)
+      interface_sections.push(interface_decl_to_moonbit(state, iface))
+    }
   }
   let class_sections : Array[String] = []
   for class_ in module_.classes {
-    for section in class_decl_to_moonbit_sections(state, class_) {
+    let type_name = moonbit_type_identifier(class_.name, "OpaqueType")
+    for i, section in class_decl_to_moonbit_sections(state, class_) {
+      if i == 0 {
+        if seen_type_decl_names.contains(type_name) {
+          continue
+        }
+        seen_type_decl_names.push(type_name)
+      }
       class_sections.push(section)
     }
   }
@@ -500,7 +546,11 @@ pub fn emit_moonbit_decl_with_sections(
   }
   let referenced : Array[String] = []
   for name in state.referenced_type_names {
-    referenced.push(moonbit_type_identifier(name, "OpaqueType"))
+    let type_name = moonbit_type_identifier(name, "OpaqueType")
+    if !seen_type_decl_names.contains(type_name) &&
+      !referenced.contains(type_name) {
+      referenced.push(type_name)
+    }
   }
   referenced.sort()
   if state.needs_jsvalue || force_jsvalue {

@@ -5255,3 +5255,296 @@ test "parser: parse top-level runtime classes for default reexports" {
   assert_eq(module_.classes.length(), 1)
   assert_eq(module_.classes[0].name, "RuntimeGreeter")
 }
+
+///|
+test "parser: parse generic tuple item followed by array postfix" {
+  let src = "declare function flatten(issues: [BaseIssue<unknown>, ...BaseIssue<unknown>[]]): FlatErrors<undefined>;"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected generic tuple array postfix to parse: \{e}")
+  }
+  assert_eq(module_.imports.length(), 1)
+}
+
+///|
+test "parser: parse ambient class index signature" {
+  let src =
+    #|export class AxiosHeaders {
+    #|  [key: string]: any;
+    #|  set(headerName?: string): AxiosHeaders;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected class index signature to parse: \{e}")
+  }
+  assert_eq(module_.classes.length(), 1)
+}
+
+///|
+test "parser: parse named reexport containing declare binding name" {
+  let src =
+    #|export { ark, declare, define, type, type Ark } from "./keywords/keywords.ts";
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected declare binding name in export list to parse: \{e}")
+  }
+  assert_eq(module_.funcs.length(), 0)
+}
+
+///|
+test "parser: parse declare function whose name is a type keyword" {
+  let src = "declare function string(): StringSchema<undefined>;"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected type keyword function name to parse: \{e}")
+  }
+  assert_eq(module_.imports.length(), 1)
+  assert_eq(module_.imports[0].name, "string")
+}
+
+///|
+test "parser: parse named export alias to keyword name" {
+  let src = "export { function_ as function, null_ as null };"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected keyword aliases in export list to parse: \{e}")
+  }
+  assert_eq(module_.funcs.length(), 0)
+}
+
+///|
+test "parser: parse named export alias to interface keyword" {
+  let src = "export { type as interface };"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected interface keyword alias in export list to parse: \{e}")
+  }
+  assert_eq(module_.funcs.length(), 0)
+}
+
+///|
+test "parser: parse qualified type name starting with type keyword" {
+  let src = "export type Validator<a> = type.validate<a>;"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected type-qualified generic name to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 0)
+}
+
+///|
+test "parser: parse declare const with initializer" {
+  let src = "declare const extendsToken = \"extends \";"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected declare const initializer to parse: \{e}")
+  }
+  assert_eq(module_.values.length(), 1)
+  assert_eq(module_.values[0].name, "extendsToken")
+}
+
+///|
+test "parser: parse declare class member named declare" {
+  let src =
+    #|export declare class InternalScope {
+    #|  declare: () => { type: InternalTypeParser };
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected declare-named class member to parse: \{e}")
+  }
+  assert_eq(module_.classes.length(), 1)
+}
+
+///|
+test "parser: parse type alias reference named from" {
+  let src =
+    #|declare namespace ctx {
+    #|  type from<ctx extends MatchParserContext> = ctx;
+    #|  type init = from<{ cases: [] }>;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected from-named type alias reference to parse: \{e}")
+  }
+  assert_eq(module_.namespaces.length(), 1)
+}
+
+///|
+test "parser: parse primitive keyword qualified type names" {
+  let src =
+    #|export declare namespace Ark {
+    #|  interface wrapped extends arkPrototypes.wrapped {
+    #|    string: string.submodule;
+    #|    number: number.submodule;
+    #|    object: object.submodule;
+    #|    unknown: unknown.submodule;
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected primitive keyword qualified names to parse: \{e}")
+  }
+  assert_eq(module_.funcs.length(), 0)
+}
+
+///|
+test "parser: parse namespace named type" {
+  let src =
+    #|export declare namespace type {
+    #|  type infer<def> = inferDefinition<def>;
+    #|}
+    #|export type type<t = unknown> = Type<t>;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected namespace named type to parse: \{e}")
+  }
+  assert_eq(module_.funcs.length(), 0)
+}
+
+///|
+test "parser: parse optional tuple elements after variadic tuple rest" {
+  let src = "export declare function merge<A extends readonly unknown[]>(...sourcesAndConcurrency: [...ObservableInputTuple<A>, number?]): Observable<A[number]>;"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected optional tuple element after rest to parse: \{e}")
+  }
+  assert_eq(module_.imports.length(), 1)
+}
+
+///|
+test "parser: parse generic function type property in interface" {
+  let src =
+    #|export interface Apply<F> extends Functor<F> {
+    #|  readonly ap: <A, B>(fab: HKT<F, (a: A) => B>, fa: HKT<F, A>) => HKT<F, B>
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected generic function type property to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].fields[0].0, "ap")
+}
+
+///|
+test "parser: parse semicolonless ambient export const followed by export list" {
+  let src =
+    #|declare namespace fastify {
+    #|  export const errorCodes: FastifyErrorCodes
+    #|  export type {
+    #|    FastifyErrorCodes
+    #|  }
+    #|  export const fastify: Fastify
+    #|  export { fastify as default }
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected ambient namespace export const to parse: \{e}")
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  assert_eq(module_.namespaces[0].module_.values.length(), 2)
+}
+
+///|
+test "parser: emit MoonBit declarations uppercases lowercase type names" {
+  let src =
+    #|export type p = string;
+    #|export declare function isMatching(pattern: p): unknown;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected lowercase type alias surface to parse: \{e}")
+  }
+  let actual = emit_moonbit_decl(module_)
+  assert_true(actual.contains("declare pub type P"))
+  assert_true(actual.contains("pattern : P"))
+  assert_false(actual.contains("declare pub type p"))
+  assert_false(actual.contains("pattern : p"))
+}
+
+///|
+test "parser: emit MoonBit declarations suffixes reserved parameter names" {
+  let src =
+    #|export interface Is {}
+    #|export declare class Type {
+    #|  constructor(is: Is)
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected reserved constructor parameter to parse: \{e}")
+  }
+  let actual = emit_moonbit_decl(module_)
+  assert_true(actual.contains("declare pub fn new_type_(is_ : Is) -> Type"))
+  assert_false(actual.contains("new_type_(is : Is)"))
+}
+
+///|
+test "parser: parse bigint literal union types" {
+  let src = "export type Falsy = null | undefined | false | 0 | -0 | 0n | '';"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected bigint literal union type to parse: \{e}")
+  }
+  assert_eq(module_.funcs.length(), 0)
+}
+
+///|
+test "parser: parse generic curried function return type" {
+  let src =
+    #|export declare function ap<F extends URIS2, G extends URIS>(
+    #|  F: Apply2<F>,
+    #|  G: Apply1<G>
+    #|): <FE, A>(
+    #|  fa: Kind2<F, FE, Kind<G, A>>
+    #|) => <B>(fab: Kind2<F, FE, Kind<G, (a: A) => B>>) => Kind2<F, FE, Kind<G, B>>
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected curried generic function return type to parse: \{e}")
+  }
+  assert_eq(module_.imports.length(), 1)
+}
+
+///|
+test "parser: parse semicolonless conditional type before export" {
+  let src =
+    #|type EnforceNonEmptyRecord<R> = keyof R extends never ? never : R
+    #|export declare function sequenceS<F extends URIS4>(
+    #|  F: Apply4<F>
+    #|): <S, R, E, NER extends Record<string, Kind4<F, S, R, E, any>>>(
+    #|  r: EnforceNonEmptyRecord<NER> & Record<string, Kind4<F, S, R, E, any>>
+    #|) => Kind4<
+    #|  F,
+    #|  S,
+    #|  R,
+    #|  E,
+    #|  {
+    #|    [K in keyof NER]: [NER[K]] extends [Kind4<F, any, any, any, infer A>] ? A : never
+    #|  }
+    #|>
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected conditional type alias before export to parse: \{e}")
+  }
+  assert_eq(module_.imports.length(), 1)
+}
+
+///|
+test "parser: parse declare class method with this parameter" {
+  let src =
+    #|export declare class Type<A, O = A, I = unknown> {
+    #|  readonly name: string
+    #|  readonly encode: Encode<A, O>
+    #|  pipe<B, IB, A2 extends IB, OB extends A2>(this: Type<A2, O, I>, ab: Type<B, OB, IB>, name?: string): Type<B, O, I>
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected this parameter in declare class method to parse: \{e}")
+  }
+  assert_eq(module_.classes.length(), 1)
+}
+
+///|
+test "parser: parse declare class heritage with object type argument" {
+  let src =
+    #|export declare class AnyDictionaryType extends Type<{
+    #|  [key: string]: unknown
+    #|}> {
+    #|  readonly _tag: 'AnyDictionaryType'
+    #|  constructor()
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected object type in declare class heritage to parse: \{e}")
+  }
+  assert_eq(module_.classes.length(), 1)
+}
+
+///|
+test "parser: parse exported dts function declarations without declare keyword" {
+  let src =
+    #|export function nanoid<Type extends string>(size?: number): Type
+    #|export const urlAlphabet: string
+    #|export function random(bytes: number): Uint8Array
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected ambient export function declarations to parse: \{e}")
+  }
+  assert_eq(module_.funcs.length(), 2)
+  assert_eq(module_.values.length(), 1)
+}
