@@ -2,11 +2,12 @@
 package "mizchi/ts/bridge"
 
 import {
-  "mizchi/ts/ast",
   "moonbitlang/core/debug",
 }
 
 // Values
+pub async fn collect_moonbit_ts_scaffold_unsupported_exports(String) -> Array[String] raise ModuleGraphError
+
 pub async fn emit_moonbit_decl_from_entry_path(String) -> String raise ModuleGraphError
 
 pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(String, String) -> MoonBitJsFfiBundle raise ModuleGraphError
@@ -35,19 +36,9 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path(String) -> MbtiTypes
 
 pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(String, Map[String, String]) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
 
-pub async fn load_runtime_module_graph(String) -> ModuleGraph raise ModuleGraphError
-
-pub async fn load_type_module_graph(String) -> ModuleGraph raise ModuleGraphError
-
 pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String) -> String raise ModuleGraphError
 
 pub fn parse_typescript_import_rewrite_map_source(String) -> Map[String, String]?
-
-pub fn resolve_export_surface(ModuleGraph) -> Array[ResolvedExport]
-
-pub async fn resolve_runtime_export_surface(String) -> Array[ResolvedExport] raise ModuleGraphError
-
-pub async fn resolve_type_export_surface(String) -> Array[ResolvedExport] raise ModuleGraphError
 
 // Errors
 pub suberror MbtiJsLinkConfigError {
@@ -80,10 +71,7 @@ pub struct MbtiTypescriptScaffoldBundle {
   files : Array[MbtiTypescriptPackageFile]
 }
 
-pub struct ModuleGraph {
-  entry_path : String
-  modules : Array[ResolvedModuleRecord]
-} derive(@debug.Debug)
+type ModuleGraph derive(@debug.Debug)
 
 pub struct MoonBitJsFfiBundle {
   ffi_mbt : String
@@ -107,44 +95,15 @@ pub struct MoonBitTsBridgePackageBundle {
   bridge_js : String
 } derive(@debug.Debug)
 
-pub struct ResolvedExport {
-  export_name : String
-  source_export_name : String
-  source_path : String
-  local_name : String?
-  kind : ResolvedExportKind
-  via_path : String?
-  ambiguous_source_paths : Array[String]
-} derive(@debug.Debug)
+type ResolvedExport derive(@debug.Debug)
 
-pub enum ResolvedExportKind {
-  Local
-  NamedReExport
-  StarReExport
-  Namespace
-  Ambiguous
-} derive(Eq, @debug.Debug)
-pub impl Show for ResolvedExportKind
+type ResolvedExportKind derive(Eq, @debug.Debug)
 
-pub struct ResolvedImportEdge {
-  specifier : String
-  resolved_path : String
-  type_only : Bool
-  side_effect_only : Bool
-} derive(@debug.Debug)
+type ResolvedImportEdge derive(@debug.Debug)
 
-pub struct ResolvedModuleRecord {
-  path : String
-  module_block : @ast.TsModuleBlock
-  imports : Array[ResolvedImportEdge]
-  reexports : Array[ResolvedReExportEdge]
-} derive(@debug.Debug)
+type ResolvedModuleRecord derive(@debug.Debug)
 
-pub struct ResolvedReExportEdge {
-  specifier : String
-  resolved_path : String
-  kind : @ast.TsReExportKind
-} derive(@debug.Debug)
+type ResolvedReExportEdge derive(@debug.Debug)
 
 // Type aliases
 

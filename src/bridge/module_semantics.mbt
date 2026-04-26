@@ -6,13 +6,7 @@ pub(all) suberror ModuleGraphError {
 } derive(Debug)
 
 ///|
-priv enum ModuleGraphMode {
-  Types
-  Runtime
-}
-
-///|
-pub struct ResolvedImportEdge {
+struct ResolvedImportEdge {
   specifier : String
   resolved_path : String
   type_only : Bool
@@ -20,14 +14,14 @@ pub struct ResolvedImportEdge {
 } derive(Debug)
 
 ///|
-pub struct ResolvedReExportEdge {
+struct ResolvedReExportEdge {
   specifier : String
   resolved_path : String
   kind : @ast.TsReExportKind
 } derive(Debug)
 
 ///|
-pub struct ResolvedModuleRecord {
+struct ResolvedModuleRecord {
   path : String
   module_block : @ast.TsModuleBlock
   imports : Array[ResolvedImportEdge]
@@ -35,13 +29,13 @@ pub struct ResolvedModuleRecord {
 } derive(Debug)
 
 ///|
-pub struct ModuleGraph {
+struct ModuleGraph {
   entry_path : String
   modules : Array[ResolvedModuleRecord]
 } derive(Debug)
 
 ///|
-pub enum ResolvedExportKind {
+enum ResolvedExportKind {
   Local
   NamedReExport
   StarReExport
@@ -50,7 +44,7 @@ pub enum ResolvedExportKind {
 } derive(Eq, Debug)
 
 ///|
-pub struct ResolvedExport {
+struct ResolvedExport {
   export_name : String
   source_export_name : String
   source_path : String
@@ -100,20 +94,12 @@ fn make_ambiguous_export(
 }
 
 ///|
-async fn resolve_module_specifier_with_mode(
+async fn resolve_type_module_specifier(
   base_path : String,
   specifier : String,
-  mode : ModuleGraphMode,
 ) -> String? {
-  match mode {
-    Types =>
-      @parser.resolve_type_module_specifier(base_path, specifier) catch {
-        _ => None
-      }
-    Runtime =>
-      @parser.resolve_runtime_module_specifier(base_path, specifier) catch {
-        _ => None
-      }
+  @parser.resolve_type_module_specifier(base_path, specifier) catch {
+    _ => None
   }
 }
 
@@ -153,7 +139,6 @@ fn module_specifier_is_path_like(specifier : String) -> Bool {
 ///|
 async fn load_module_record(
   path : String,
-  mode : ModuleGraphMode,
   loaded : Map[String, ResolvedModuleRecord],
   visiting : Array[String],
 ) -> Unit raise ModuleGraphError {
@@ -181,11 +166,7 @@ async fn load_module_record(
       })
       continue
     }
-    let resolved_path = resolve_module_specifier_with_mode(
-      path,
-      decl.module_spec,
-      mode,
-    ) catch {
+    let resolved_path = resolve_type_module_specifier(path, decl.module_spec) catch {
       _ => None
     }
     match resolved_path {
@@ -196,7 +177,7 @@ async fn load_module_record(
           type_only: decl.type_only,
           side_effect_only: decl.side_effect_only,
         })
-        load_module_record(dep_path, mode, loaded, visiting) catch {
+        load_module_record(dep_path, loaded, visiting) catch {
           ReadError(_) | ParseError(_) | ResolveError(_) => ()
         }
       }
@@ -211,10 +192,9 @@ async fn load_module_record(
   }
   let reexports : Array[ResolvedReExportEdge] = []
   for reexport in module_block.reexports {
-    let resolved_path = resolve_module_specifier_with_mode(
+    let resolved_path = resolve_type_module_specifier(
       path,
       reexport.module_spec,
-      mode,
     ) catch {
       _ => None
     }
@@ -225,7 +205,7 @@ async fn load_module_record(
           resolved_path: dep_path,
           kind: reexport.kind,
         })
-        load_module_record(dep_path, mode, loaded, visiting)
+        load_module_record(dep_path, loaded, visiting)
       }
       None =>
         if module_specifier_is_path_like(reexport.module_spec) {
@@ -242,13 +222,12 @@ async fn load_module_record(
 }
 
 ///|
-async fn load_module_graph_with_mode(
+async fn load_type_module_graph(
   entry_path : String,
-  mode : ModuleGraphMode,
 ) -> ModuleGraph raise ModuleGraphError {
   let loaded : Map[String, ResolvedModuleRecord] = {}
   let visiting : Array[String] = []
-  load_module_record(entry_path, mode, loaded, visiting)
+  load_module_record(entry_path, loaded, visiting)
   let paths : Array[String] = []
   for entry in loaded {
     paths.push(entry.0)
@@ -262,20 +241,6 @@ async fn load_module_graph_with_mode(
     }
   }
   { entry_path, modules }
-}
-
-///|
-pub async fn load_type_module_graph(
-  entry_path : String,
-) -> ModuleGraph raise ModuleGraphError {
-  load_module_graph_with_mode(entry_path, ModuleGraphMode::Types)
-}
-
-///|
-pub async fn load_runtime_module_graph(
-  entry_path : String,
-) -> ModuleGraph raise ModuleGraphError {
-  load_module_graph_with_mode(entry_path, ModuleGraphMode::Runtime)
 }
 
 ///|
@@ -471,7 +436,7 @@ fn resolve_export_surface_from_map(
 }
 
 ///|
-pub fn resolve_export_surface(graph : ModuleGraph) -> Array[ResolvedExport] {
+fn resolve_export_surface(graph : ModuleGraph) -> Array[ResolvedExport] {
   let records = graph_to_map(graph)
   let cache : Map[String, Array[ResolvedExport]] = {}
   let visiting : Array[String] = []
@@ -501,7 +466,7 @@ pub fn resolve_export_surface(graph : ModuleGraph) -> Array[ResolvedExport] {
 }
 
 ///|
-pub async fn resolve_type_export_surface(
+async fn resolve_type_export_surface(
   entry_path : String,
 ) -> Array[ResolvedExport] raise ModuleGraphError {
   let graph = load_type_module_graph(entry_path)
@@ -509,9 +474,27 @@ pub async fn resolve_type_export_surface(
 }
 
 ///|
-pub async fn resolve_runtime_export_surface(
+fn scaffold_unsupported_export_text(export_ : ResolvedExport) -> String {
+  let base = "\{export_.export_name} (ambiguous re-export"
+  if export_.ambiguous_source_paths.length() == 0 {
+    base + ")"
+  } else {
+    base + ": " + export_.ambiguous_source_paths.join(", ") + ")"
+  }
+}
+
+///|
+pub async fn collect_moonbit_ts_scaffold_unsupported_exports(
   entry_path : String,
-) -> Array[ResolvedExport] raise ModuleGraphError {
-  let graph = load_runtime_module_graph(entry_path)
-  resolve_export_surface(graph)
+) -> Array[String] raise ModuleGraphError {
+  let export_surface = resolve_type_export_surface(entry_path)
+  let unsupported_exports : Array[String] = []
+  for export_ in export_surface {
+    match export_.kind {
+      Ambiguous =>
+        unsupported_exports.push(scaffold_unsupported_export_text(export_))
+      _ => ()
+    }
+  }
+  unsupported_exports
 }

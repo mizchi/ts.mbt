@@ -21,6 +21,7 @@ These are the primary goals right now.
 - `src/parser` is the foundation for parsing TypeScript/JavaScript and resolving module structure.
 - `src/analysis` contains pure analysis/type-checking and AOT eligibility passes over parsed TypeScript.
 - `src/bridge` contains TypeScript-to-MoonBit bridge generation, MBTI-to-TypeScript declaration generation, and declaration normalization helpers.
+  - Its TypeScript module graph helpers are scoped to declaration/export-surface generation; runtime package resolution stays in `src/parser`.
 
 ## Project Structure
 

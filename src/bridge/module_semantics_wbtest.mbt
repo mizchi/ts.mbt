@@ -1,7 +1,4 @@
 ///|
-let semantics_entry_path : String = "fixtures/resolver/project/src/graph/entry.ts"
-
-///|
 let semantics_conflict_entry_path : String = "fixtures/resolver/project/src/graph/conflict-entry.ts"
 
 ///|
@@ -45,82 +42,11 @@ fn find_resolved_export(
 }
 
 ///|
-async test "bridge: load runtime module graph follows resolved imports and reexports" {
-  let graph = load_runtime_module_graph(semantics_entry_path)
-  assert_eq(graph.entry_path, semantics_entry_path)
-  assert_eq(graph.modules.length(), 6)
-
-  let paths : Array[String] = []
-  for module_ in graph.modules {
-    paths.push(module_.path)
-  }
-  assert_true(paths.contains("fixtures/resolver/project/src/graph/entry.ts"))
-  assert_true(paths.contains("fixtures/resolver/project/src/graph/dep.ts"))
-  assert_true(paths.contains("fixtures/resolver/project/src/graph/barrel.ts"))
-  assert_true(paths.contains("fixtures/resolver/project/src/graph/bar.ts"))
-  assert_true(paths.contains("fixtures/resolver/project/src/graph/leaf.ts"))
-  assert_true(
-    paths.contains(
-      "fixtures/resolver/project/node_modules/pkg-exports/dist/index.js",
-    ),
-  )
-}
-
-///|
-async test "bridge: resolve runtime export surface follows reexports and namespaces" {
-  let exports = resolve_runtime_export_surface(semantics_entry_path)
-  let names : Array[String] = []
-  for export_ in exports {
-    names.push(export_.export_name)
-  }
-  assert_true(names.contains("foo"))
-  assert_true(names.contains("bar"))
-  assert_true(names.contains("baz"))
-  assert_true(names.contains("ns"))
-  assert_true(names.contains("pkgValue"))
-
-  match find_resolved_export(exports, "foo") {
-    Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
-      assert_eq(
-        export_.source_path,
-        "fixtures/resolver/project/src/graph/dep.ts",
-      )
-      assert_eq(export_.local_name, Some("foo"))
-    }
-    None => fail("expected foo export")
-  }
-
-  match find_resolved_export(exports, "ns") {
-    Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::Namespace)
-      assert_eq(
-        export_.source_path,
-        "fixtures/resolver/project/src/graph/barrel.ts",
-      )
-    }
-    None => fail("expected ns export")
-  }
-
-  match find_resolved_export(exports, "pkgValue") {
-    Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
-      assert_eq(
-        export_.source_path,
-        "fixtures/resolver/project/node_modules/pkg-exports/dist/index.js",
-      )
-      assert_eq(export_.local_name, Some("exportedRuntime"))
-    }
-    None => fail("expected pkgValue export")
-  }
-}
-
-///|
 async test "bridge: conflicting star exports are marked ambiguous" {
-  let exports = resolve_runtime_export_surface(semantics_conflict_entry_path)
+  let exports = resolve_type_export_surface(semantics_conflict_entry_path)
   match find_resolved_export(exports, "shared") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::Ambiguous)
+      assert_true(export_.kind == ResolvedExportKind::Ambiguous)
       assert_true(
         export_.ambiguous_source_paths.contains(
           "fixtures/resolver/project/src/graph/conflict-a.ts",
@@ -137,11 +63,28 @@ async test "bridge: conflicting star exports are marked ambiguous" {
 }
 
 ///|
+async test "bridge: collect MoonBit TS scaffold unsupported exports reports only ambiguous exports" {
+  let namespace_unsupported = collect_moonbit_ts_scaffold_unsupported_exports(
+    "fixtures/resolver/project/types/ns-entry.d.ts",
+  )
+  inspect(namespace_unsupported, content="[]")
+  let ambiguous_unsupported = collect_moonbit_ts_scaffold_unsupported_exports(
+    "fixtures/resolver/project/types/ambiguous-entry.d.ts",
+  )
+  inspect(
+    ambiguous_unsupported,
+    content=(
+      #|["Shared (ambiguous re-export: fixtures/resolver/project/types/ambiguous-a.d.ts, fixtures/resolver/project/types/ambiguous-b.d.ts)"]
+    ),
+  )
+}
+
+///|
 async test "bridge: resolve type export surface through package exports subpath" {
   let exports = resolve_type_export_surface(semantics_subpath_type_entry_path)
   match find_resolved_export(exports, "FeatureOptions") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_true(export_.kind == ResolvedExportKind::NamedReExport)
       assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-subpath/dist/feature.d.ts",
@@ -152,7 +95,7 @@ async test "bridge: resolve type export surface through package exports subpath"
   }
   match find_resolved_export(exports, "executeFeature") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_true(export_.kind == ResolvedExportKind::NamedReExport)
       assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-subpath/dist/feature.d.ts",
@@ -168,7 +111,7 @@ async test "bridge: resolve type export surface through package exports wildcard
   let exports = resolve_type_export_surface(semantics_pattern_type_entry_path)
   match find_resolved_export(exports, "PatternOptions") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_true(export_.kind == ResolvedExportKind::NamedReExport)
       assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-exports-pattern/dist/feature/util.d.ts",
@@ -179,7 +122,7 @@ async test "bridge: resolve type export surface through package exports wildcard
   }
   match find_resolved_export(exports, "createPattern") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_true(export_.kind == ResolvedExportKind::NamedReExport)
       assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-exports-pattern/dist/feature/util.d.ts",
@@ -197,7 +140,7 @@ async test "bridge: resolve type export surface through package exports array fa
   )
   match find_resolved_export(exports, "ArrayPatternOptions") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_true(export_.kind == ResolvedExportKind::NamedReExport)
       assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-exports-array/dist/feature/util.d.ts",
@@ -208,7 +151,7 @@ async test "bridge: resolve type export surface through package exports array fa
   }
   match find_resolved_export(exports, "createArrayPattern") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_true(export_.kind == ResolvedExportKind::NamedReExport)
       assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-exports-array/dist/feature/util.d.ts",
@@ -224,7 +167,7 @@ async test "bridge: resolve type export surface through package barrel reexports
   let exports = resolve_type_export_surface(semantics_barrel_type_entry_path)
   match find_resolved_export(exports, "BarrelOptions") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_true(export_.kind == ResolvedExportKind::NamedReExport)
       assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-barrel/dist/internal.d.ts",
@@ -235,7 +178,7 @@ async test "bridge: resolve type export surface through package barrel reexports
   }
   match find_resolved_export(exports, "createBarrel") {
     Some(export_) => {
-      assert_eq(export_.kind, ResolvedExportKind::NamedReExport)
+      assert_true(export_.kind == ResolvedExportKind::NamedReExport)
       assert_eq(
         export_.source_path,
         "fixtures/resolver/project/node_modules/pkg-barrel/dist/internal.d.ts",
@@ -314,7 +257,7 @@ async test "bridge: resolve type export surface from namespace export assignment
     Some(export_) => {
       assert_eq(export_.source_path, semantics_export_equals_entry_path)
       assert_eq(export_.local_name, Some("semver"))
-      assert_eq(export_.kind, ResolvedExportKind::Local)
+      assert_true(export_.kind == ResolvedExportKind::Local)
     }
     None => fail("expected default export")
   }
@@ -327,7 +270,7 @@ async test "bridge: resolve type export surface from import-equals export assign
     Some(export_) => {
       assert_eq(export_.source_path, semantics_import_equals_entry_path)
       assert_eq(export_.local_name, Some("pkg"))
-      assert_eq(export_.kind, ResolvedExportKind::Local)
+      assert_true(export_.kind == ResolvedExportKind::Local)
     }
     None => fail("expected default export")
   }

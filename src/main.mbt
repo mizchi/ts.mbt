@@ -924,16 +924,6 @@ async fn emit_moonbit_bridge_package(
 }
 
 ///|
-fn scaffold_unsupported_export_text(export_ : @bridge.ResolvedExport) -> String {
-  let base = "\{export_.export_name} (ambiguous re-export"
-  if export_.ambiguous_source_paths.length() == 0 {
-    base + ")"
-  } else {
-    base + ": " + export_.ambiguous_source_paths.join(", ") + ")"
-  }
-}
-
-///|
 fn render_moonbit_scaffold_diagnostics_md(
   unsupported_exports : Array[String],
 ) -> String {
@@ -953,17 +943,7 @@ fn render_moonbit_scaffold_diagnostics_md(
 async fn collect_moonbit_ts_scaffold_unsupported_exports(
   file_path : String,
 ) -> Array[String] raise @bridge.ModuleGraphError {
-  let graph = @bridge.load_type_module_graph(file_path)
-  let export_surface = @bridge.resolve_export_surface(graph)
-  let unsupported_exports : Array[String] = []
-  for export_ in export_surface {
-    match export_.kind {
-      @bridge.ResolvedExportKind::Ambiguous =>
-        unsupported_exports.push(scaffold_unsupported_export_text(export_))
-      _ => ()
-    }
-  }
-  unsupported_exports
+  @bridge.collect_moonbit_ts_scaffold_unsupported_exports(file_path)
 }
 
 ///|
