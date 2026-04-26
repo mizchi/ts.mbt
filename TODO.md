@@ -69,14 +69,14 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
   - `= "Counter.from"` / `= "Counter.version"` style dotted import names compile poorly in the current JS backend.
   - `#module(...)` combined with inline `#|` JS also does not lower correctly for imported module bindings in the current backend.
 
-## Normalized DTS Checker Scope
+## Normalized DTS Shape-Merge Scope
 
-- [x] Split object-shape compatibility checks into `src/checker`.
-  - `checker` currently exists to support `normalize-moonbit-dts`, not to become a full TypeScript checker.
-- [x] Keep the checker scope narrow.
+- [x] Keep object-shape compatibility checks inside `src/bridge/object_shape_merge.mbt`.
+  - The helper exists to support `normalize-moonbit-dts`, not to become a full TypeScript checker.
+- [x] Keep the shape-merge scope narrow.
   - Current responsibility: decide whether object-like interface expansions can be flattened safely, or should fall back to intersections.
   - Current coverage: duplicate properties, `readonly`, optional-property keys, and "do not merge methods / overload-like members".
-- [ ] Avoid growing `src/checker` into a full semantic checker unless a separate goal is explicitly chosen.
+- [ ] Avoid growing the bridge normalization helper into a full semantic checker unless a separate goal is explicitly chosen.
   - If future work needs real TS semantics, define that as a separate milestone instead of quietly expanding the normalization helper.
 
 ## Bridge Const-Table Batch Plan

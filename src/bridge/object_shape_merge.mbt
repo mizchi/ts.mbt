@@ -1,4 +1,4 @@
-///| Minimal object-shape compatibility checker for `normalize-moonbit-dts`.
+///| Minimal object-shape merge helpers for `normalize-moonbit-dts`.
 
 ///|
 
@@ -15,36 +15,42 @@
 ///| Keep the scope narrow unless a separate "real checker" goal is chosen.
 
 ///|
-fn char_at(s : String, idx : Int) -> Char {
+fn object_shape_char_at(s : String, idx : Int) -> Char {
   s[idx].to_int().unsafe_to_char()
 }
 
 ///|
-fn is_ascii_letter(c : Char) -> Bool {
+fn object_shape_is_ascii_letter(c : Char) -> Bool {
   (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 ///|
-fn is_ascii_digit(c : Char) -> Bool {
+fn object_shape_is_ascii_digit(c : Char) -> Bool {
   c >= '0' && c <= '9'
 }
 
 ///|
-fn is_ident_char(c : Char) -> Bool {
-  is_ascii_letter(c) || is_ascii_digit(c) || c == '_' || c == '$'
+fn object_shape_is_ident_char(c : Char) -> Bool {
+  object_shape_is_ascii_letter(c) ||
+  object_shape_is_ascii_digit(c) ||
+  c == '_' ||
+  c == '$'
 }
 
 ///|
-fn take_identifier_at(source : String, start : Int) -> (String, Int) {
+fn object_shape_take_identifier_at(
+  source : String,
+  start : Int,
+) -> (String, Int) {
   let mut i = start
   let mut result = ""
   while i < source.length() {
-    let c = char_at(source, i)
+    let c = object_shape_char_at(source, i)
     if result == "" {
-      if !is_ascii_letter(c) && c != '_' && c != '$' {
+      if !object_shape_is_ascii_letter(c) && c != '_' && c != '$' {
         return ("", start)
       }
-    } else if !is_ident_char(c) {
+    } else if !object_shape_is_ident_char(c) {
       return (result, i)
     }
     result += c.to_string()
@@ -54,7 +60,7 @@ fn take_identifier_at(source : String, start : Int) -> (String, Int) {
 }
 
 ///|
-fn compact_ascii_space(source : String) -> String {
+fn object_shape_compact_ascii_space(source : String) -> String {
   let buf = StringBuilder::new()
   let mut last_was_space = false
   for c in source {
@@ -73,10 +79,10 @@ fn compact_ascii_space(source : String) -> String {
 }
 
 ///|
-fn next_non_space_index(source : String, start : Int) -> Int {
+fn object_shape_next_non_space_index(source : String, start : Int) -> Int {
   let mut i = start
   while i < source.length() {
-    let c = char_at(source, i)
+    let c = object_shape_char_at(source, i)
     if c != ' ' && c != '\n' && c != '\r' && c != '\t' {
       return i
     }
@@ -86,7 +92,10 @@ fn next_non_space_index(source : String, start : Int) -> Int {
 }
 
 ///|
-fn split_top_level_by_char(source : String, delimiter : Char) -> Array[String] {
+fn object_shape_split_top_level_by_char(
+  source : String,
+  delimiter : Char,
+) -> Array[String] {
   let parts : Array[String] = []
   let mut start = 0
   let mut angle = 0
@@ -94,10 +103,13 @@ fn split_top_level_by_char(source : String, delimiter : Char) -> Array[String] {
   let mut bracket = 0
   let mut brace = 0
   for i = 0; i < source.length(); i = i + 1 {
-    let c = char_at(source, i)
+    let c = object_shape_char_at(source, i)
     match c {
       '<' => angle += 1
-      '>' => if i == 0 || char_at(source, i - 1) != '=' { angle -= 1 }
+      '>' =>
+        if i == 0 || object_shape_char_at(source, i - 1) != '=' {
+          angle -= 1
+        }
       '(' => paren += 1
       ')' => paren -= 1
       '[' => bracket += 1
@@ -116,7 +128,7 @@ fn split_top_level_by_char(source : String, delimiter : Char) -> Array[String] {
 }
 
 ///|
-fn trim_object_type_body(source : String) -> String {
+fn object_shape_trim_object_type_body(source : String) -> String {
   let trimmed = source.trim().to_string()
   if trimmed.has_prefix("{") && trimmed.has_suffix("}") && trimmed.length() >= 2 {
     trimmed[1:trimmed.length() - 1].trim().to_string()
@@ -126,7 +138,7 @@ fn trim_object_type_body(source : String) -> String {
 }
 
 ///|
-fn strip_trailing_semicolon(source : String) -> String {
+fn object_shape_strip_trailing_semicolon(source : String) -> String {
   let trimmed = source.trim().to_string()
   if trimmed.has_suffix(";") {
     trimmed[:trimmed.length() - 1].trim().to_string()
@@ -136,43 +148,46 @@ fn strip_trailing_semicolon(source : String) -> String {
 }
 
 ///|
-fn skip_leading_object_member_modifiers_from(source : String, idx : Int) -> Int {
-  let start = next_non_space_index(source, idx)
+fn object_shape_skip_leading_member_modifiers_from(
+  source : String,
+  idx : Int,
+) -> Int {
+  let start = object_shape_next_non_space_index(source, idx)
   if start >= source.length() {
     return start
   }
-  let (ident, end_) = take_identifier_at(source, start)
+  let (ident, end_) = object_shape_take_identifier_at(source, start)
   if ident == "readonly" {
-    skip_leading_object_member_modifiers_from(source, end_)
+    object_shape_skip_leading_member_modifiers_from(source, end_)
   } else {
     start
   }
 }
 
 ///|
-fn skip_leading_object_member_modifiers(source : String) -> Int {
-  skip_leading_object_member_modifiers_from(source, 0)
+fn object_shape_skip_leading_member_modifiers(source : String) -> Int {
+  object_shape_skip_leading_member_modifiers_from(source, 0)
 }
 
 ///|
-fn object_type_member_info(member_src : String) -> (String, Bool)? {
+fn object_shape_member_info(member_src : String) -> (String, Bool)? {
   let trimmed = member_src.trim().to_string()
   if trimmed == "" {
     return None
   }
-  let start = skip_leading_object_member_modifiers(trimmed)
-  let (name, end_) = take_identifier_at(trimmed, start)
+  let start = object_shape_skip_leading_member_modifiers(trimmed)
+  let (name, end_) = object_shape_take_identifier_at(trimmed, start)
   if name == "" {
     return None
   }
   let mut next = end_
-  if next < trimmed.length() && char_at(trimmed, next) == '?' {
+  if next < trimmed.length() && object_shape_char_at(trimmed, next) == '?' {
     next += 1
   }
   if next >= trimmed.length() {
     return None
   }
-  let next_char = char_at(trimmed, next)
+  let next_char = object_shape_char_at(trimmed, next)
   if next_char == ':' {
     Some((name, true))
   } else if next_char == '(' || next_char == '<' {
@@ -183,12 +198,14 @@ fn object_type_member_info(member_src : String) -> (String, Bool)? {
 }
 
 ///|
-fn canonicalize_object_type_member(member_src : String) -> String {
-  compact_ascii_space(strip_trailing_semicolon(member_src))
+fn object_shape_canonicalize_member(member_src : String) -> String {
+  object_shape_compact_ascii_space(
+    object_shape_strip_trailing_semicolon(member_src),
+  )
 }
 
 ///|
-pub fn can_merge_object_shapes(bodies : Array[String]) -> Bool {
+fn can_merge_object_shapes(bodies : Array[String]) -> Bool {
   let seen_keys : Array[String] = []
   let seen_members : Array[String] = []
   let seen_property_members : Array[Bool] = []
@@ -197,13 +214,13 @@ pub fn can_merge_object_shapes(bodies : Array[String]) -> Bool {
     if !trimmed.has_prefix("{") || !trimmed.has_suffix("}") {
       return false
     }
-    let inner = trim_object_type_body(trimmed)
-    for member_src in split_top_level_by_char(inner, ';') {
+    let inner = object_shape_trim_object_type_body(trimmed)
+    for member_src in object_shape_split_top_level_by_char(inner, ';') {
       let normalized_member = member_src.trim().to_string()
       if normalized_member == "" {
         continue
       }
-      match object_type_member_info(normalized_member) {
+      match object_shape_member_info(normalized_member) {
         Some((key, is_property_member)) => {
           let mut found_idx = None
           for idx = 0; idx < seen_keys.length(); idx = idx + 1 {
@@ -215,14 +232,14 @@ pub fn can_merge_object_shapes(bodies : Array[String]) -> Bool {
           match found_idx {
             Some(idx) =>
               if seen_members[idx] !=
-                canonicalize_object_type_member(member_src) ||
+                object_shape_canonicalize_member(member_src) ||
                 !is_property_member ||
                 !seen_property_members[idx] {
                 return false
               }
             None => {
               seen_keys.push(key)
-              seen_members.push(canonicalize_object_type_member(member_src))
+              seen_members.push(object_shape_canonicalize_member(member_src))
               seen_property_members.push(is_property_member)
             }
           }
@@ -235,18 +252,22 @@ pub fn can_merge_object_shapes(bodies : Array[String]) -> Bool {
 }
 
 ///|
-pub fn merge_object_shapes(bodies : Array[String]) -> String {
+fn merge_object_shapes(bodies : Array[String]) -> String {
   let merged_members : Array[String] = []
   let seen_members : Array[String] = []
   for body in bodies {
-    let inner = strip_trailing_semicolon(trim_object_type_body(body))
+    let inner = object_shape_strip_trailing_semicolon(
+      object_shape_trim_object_type_body(body),
+    )
     if inner != "" {
-      for member_src in split_top_level_by_char(inner, ';') {
-        let trimmed = strip_trailing_semicolon(member_src).trim().to_string()
+      for member_src in object_shape_split_top_level_by_char(inner, ';') {
+        let trimmed = object_shape_strip_trailing_semicolon(member_src)
+          .trim()
+          .to_string()
         if trimmed == "" {
           continue
         }
-        let canonical = canonicalize_object_type_member(trimmed)
+        let canonical = object_shape_canonicalize_member(trimmed)
         if !seen_members.contains(canonical) {
           seen_members.push(canonical)
           merged_members.push(trimmed)

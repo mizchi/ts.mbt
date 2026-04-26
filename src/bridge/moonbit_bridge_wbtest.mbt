@@ -1,5 +1,5 @@
 ///|
-async test "analysis: emit MoonBit TS bridge bundle from runtime entry" {
+async test "bridge: emit MoonBit TS bridge bundle from runtime entry" {
   let bundle = emit_moonbit_ts_bridge_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
   ) catch {
@@ -30,7 +30,7 @@ async test "analysis: emit MoonBit TS bridge bundle from runtime entry" {
 }
 
 ///|
-async test "analysis: emit MoonBit TS bridge package bundle adds js import when widened types require it" {
+async test "bridge: emit MoonBit TS bridge package bundle adds js import when widened types require it" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
   ) catch {
@@ -50,7 +50,7 @@ async test "analysis: emit MoonBit TS bridge package bundle adds js import when 
 }
 
 ///|
-async test "analysis: emit MoonBit TS bridge package bundle wraps camelCase exports" {
+async test "bridge: emit MoonBit TS bridge package bundle wraps camelCase exports" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
   ) catch {
@@ -80,7 +80,7 @@ async test "analysis: emit MoonBit TS bridge package bundle wraps camelCase expo
 }
 
 ///|
-async test "analysis: emit MoonBit TS bridge package bundle exposes namespace exports as opaque getters" {
+async test "bridge: emit MoonBit TS bridge package bundle exposes namespace exports as opaque getters" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js",
   ) catch {
@@ -105,7 +105,7 @@ async test "analysis: emit MoonBit TS bridge package bundle exposes namespace ex
 }
 
 ///|
-test "analysis: bridge public wrapper skips reserved public names" {
+test "bridge: bridge public wrapper skips reserved public names" {
   let decl : BridgeTopLevelFnDecl = {
     public_name: "enum",
     params_src: "value : String",

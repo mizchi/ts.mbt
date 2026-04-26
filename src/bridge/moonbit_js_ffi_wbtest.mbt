@@ -8,7 +8,7 @@ fn count_occurrences_in_ffi_output(haystack : String, needle : String) -> Int {
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle for function reexports" {
+async test "bridge: emit MoonBit JS FFI bundle for function reexports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/entry.d.ts", "/runtime/mod.js",
   ) catch {
@@ -30,7 +30,7 @@ async test "analysis: emit MoonBit JS FFI bundle for function reexports" {
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle for namespace exports" {
+async test "bridge: emit MoonBit JS FFI bundle for namespace exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js",
   ) catch {
@@ -57,7 +57,7 @@ async test "analysis: emit MoonBit JS FFI bundle for namespace exports" {
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle keeps ambiguous exports as comments" {
+async test "bridge: emit MoonBit JS FFI bundle keeps ambiguous exports as comments" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/ambiguous-entry.d.ts", "./runtime/ambiguous.js",
   ) catch {
@@ -98,7 +98,7 @@ async test "analysis: emit MoonBit JS FFI bundle keeps ambiguous exports as comm
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle for typed value exports" {
+async test "bridge: emit MoonBit JS FFI bundle for typed value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/value-entry.d.ts", "./runtime/value.js",
   ) catch {
@@ -133,7 +133,7 @@ async test "analysis: emit MoonBit JS FFI bundle for typed value exports" {
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle infers literal runtime value exports" {
+async test "bridge: emit MoonBit JS FFI bundle infers literal runtime value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-value-entry.ts", "./runtime/value.js",
   ) catch {
@@ -158,7 +158,7 @@ async test "analysis: emit MoonBit JS FFI bundle infers literal runtime value ex
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle for exported classes" {
+async test "bridge: emit MoonBit JS FFI bundle for exported classes" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/class-entry.d.ts", "./runtime/class.js",
   ) catch {
@@ -200,7 +200,7 @@ async test "analysis: emit MoonBit JS FFI bundle for exported classes" {
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle for abstract classes without constructor" {
+async test "bridge: emit MoonBit JS FFI bundle for abstract classes without constructor" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/abstract-class-entry.d.ts", "./runtime/shape.js",
   ) catch {
@@ -223,7 +223,7 @@ async test "analysis: emit MoonBit JS FFI bundle for abstract classes without co
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle for exported class properties" {
+async test "bridge: emit MoonBit JS FFI bundle for exported class properties" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/class-property-entry.d.ts", "./runtime/class-property.js",
   ) catch {
@@ -277,7 +277,7 @@ async test "analysis: emit MoonBit JS FFI bundle for exported class properties" 
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle with unresolved external library types as opaque types" {
+async test "bridge: emit MoonBit JS FFI bundle with unresolved external library types as opaque types" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/external-lib-entry.d.ts", "/runtime/external-lib.js",
   ) catch {
@@ -306,7 +306,7 @@ async test "analysis: emit MoonBit JS FFI bundle with unresolved external librar
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle with resolved bare-package types as opaque types" {
+async test "bridge: emit MoonBit JS FFI bundle with resolved bare-package types as opaque types" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/resolved-lib-entry.d.ts", "/runtime/resolved-lib.js",
   ) catch {
@@ -329,7 +329,7 @@ async test "analysis: emit MoonBit JS FFI bundle with resolved bare-package type
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle with minimal opaque bare-package imports" {
+async test "bridge: emit MoonBit JS FFI bundle with minimal opaque bare-package imports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/opaque-package-entry.d.ts", "/runtime/opaque-package.js",
   ) catch {
@@ -351,7 +351,7 @@ async test "analysis: emit MoonBit JS FFI bundle with minimal opaque bare-packag
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle with resolved mixed imports as opaque types" {
+async test "bridge: emit MoonBit JS FFI bundle with resolved mixed imports as opaque types" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/resolved-mixed-lib-entry.d.ts", "/runtime/resolved-mixed-lib.js",
   ) catch {
@@ -380,7 +380,7 @@ async test "analysis: emit MoonBit JS FFI bundle with resolved mixed imports as 
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle with resolved generic library imports" {
+async test "bridge: emit MoonBit JS FFI bundle with resolved generic library imports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/resolved-generic-lib-entry.d.ts", "/runtime/resolved-generic-lib.js",
   ) catch {
@@ -408,7 +408,7 @@ async test "analysis: emit MoonBit JS FFI bundle with resolved generic library i
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle with resolved symlinked library imports" {
+async test "bridge: emit MoonBit JS FFI bundle with resolved symlinked library imports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/resolved-symlink-lib-entry.d.ts", "/runtime/resolved-symlink-lib.js",
   ) catch {
@@ -436,7 +436,7 @@ async test "analysis: emit MoonBit JS FFI bundle with resolved symlinked library
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle with neverthrow-like package imports" {
+async test "bridge: emit MoonBit JS FFI bundle with neverthrow-like package imports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/neverthrow-like-entry.d.ts", "/runtime/neverthrow-like.js",
   ) catch {
@@ -464,7 +464,7 @@ async test "analysis: emit MoonBit JS FFI bundle with neverthrow-like package im
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle through package exports subpath" {
+async test "bridge: emit MoonBit JS FFI bundle through package exports subpath" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/subpath-package-entry.d.ts", "/runtime/subpath-package.js",
   ) catch {
@@ -486,7 +486,7 @@ async test "analysis: emit MoonBit JS FFI bundle through package exports subpath
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle through package barrel reexports" {
+async test "bridge: emit MoonBit JS FFI bundle through package barrel reexports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/barrel-package-entry.d.ts", "/runtime/barrel-package.js",
   ) catch {
@@ -508,7 +508,7 @@ async test "analysis: emit MoonBit JS FFI bundle through package barrel reexport
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle with node-like ambient qualified types" {
+async test "bridge: emit MoonBit JS FFI bundle with node-like ambient qualified types" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/node-like-entry.d.ts", "/runtime/node-like.js",
   ) catch {
@@ -530,7 +530,7 @@ async test "analysis: emit MoonBit JS FFI bundle with node-like ambient qualifie
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle collapse overloads by generated binding name" {
+async test "bridge: emit MoonBit JS FFI bundle collapse overloads by generated binding name" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/overload-entry.d.ts", "./runtime/overload.js",
   ) catch {
@@ -573,7 +573,7 @@ async test "analysis: emit MoonBit JS FFI bundle collapse overloads by generated
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported functions" {
+async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
   ) catch {
@@ -595,7 +595,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported functi
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for relative runtime functions" {
+async test "bridge: emit MoonBit JS FFI bundle uses adapter reexport for relative runtime functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "./runtime/runtime-function.js",
   ) catch {
@@ -620,7 +620,7 @@ async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for relat
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from runtime tsx exported functions" {
+async test "bridge: emit MoonBit JS FFI bundle from runtime tsx exported functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-component-entry.tsx", "/runtime/runtime-component.js",
   ) catch {
@@ -643,7 +643,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime tsx exported funct
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported const arrow functions" {
+async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported const arrow functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-arrow-entry.ts", "/runtime/runtime-arrow.js",
   ) catch {
@@ -665,7 +665,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported const 
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported untyped const arrow functions" {
+async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported untyped const arrow functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts", "/runtime/runtime-untyped-arrow.js",
   ) catch {
@@ -690,7 +690,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts exported untype
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from runtime ts function reexports" {
+async test "bridge: emit MoonBit JS FFI bundle from runtime ts function reexports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-reexport-entry.ts", "/runtime/runtime-function-reexport.js",
   ) catch {
@@ -707,7 +707,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime ts function reexpo
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle keeps direct class-property reexports bound to original runtime class" {
+async test "bridge: emit MoonBit JS FFI bundle keeps direct class-property reexports bound to original runtime class" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/class-property-reexport-entry.d.ts", "/runtime/class-property.js",
   ) catch {
@@ -753,7 +753,7 @@ async test "analysis: emit MoonBit JS FFI bundle keeps direct class-property ree
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle keeps bare class-property reexports bound to package class" {
+async test "bridge: emit MoonBit JS FFI bundle keeps bare class-property reexports bound to package class" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/bare-class-property-entry.d.ts", "pkg-class-property",
   ) catch {
@@ -789,7 +789,7 @@ async test "analysis: emit MoonBit JS FFI bundle keeps bare class-property reexp
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle keeps bare default class reexports bound to package default export" {
+async test "bridge: emit MoonBit JS FFI bundle keeps bare default class reexports bound to package default export" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/bare-default-class-entry.d.ts", "pkg-default-class",
   ) catch {
@@ -838,7 +838,7 @@ async test "analysis: emit MoonBit JS FFI bundle keeps bare default class reexpo
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle keeps subpath class reexports bound to package export" {
+async test "bridge: emit MoonBit JS FFI bundle keeps subpath class reexports bound to package export" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/subpath-class-entry.d.ts", "pkg-class-subpath/state",
   ) catch {
@@ -874,7 +874,7 @@ async test "analysis: emit MoonBit JS FFI bundle keeps subpath class reexports b
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles runtime ts destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles runtime ts destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-destructured-value-entry.ts", "/runtime/runtime-destructured-value.js",
   ) catch {
@@ -914,7 +914,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles runtime ts destructured
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles nested and array-rest destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles nested and array-rest destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-destructured-nested-rest-value-entry.ts",
     "/runtime/runtime-destructured-nested-rest-value.js",
@@ -960,7 +960,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles nested and array-rest d
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles object-rest destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles object-rest destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-object-rest-value-entry.ts", "/runtime/runtime-object-rest-value.js",
   ) catch {
@@ -998,7 +998,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles object-rest destructure
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles computed-key destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles computed-key destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-computed-destructured-value-entry.ts",
     "/runtime/runtime-computed-destructured-value.js",
@@ -1041,7 +1041,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles computed-key destructur
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles template-literal computed-key destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles template-literal computed-key destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-template-computed-destructured-value-entry.ts",
     "/runtime/runtime-template-computed-destructured-value.js",
@@ -1084,7 +1084,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles template-literal comput
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles concatenated computed-key destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles concatenated computed-key destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-concat-computed-destructured-value-entry.ts",
     "/runtime/runtime-concat-computed-destructured-value.js",
@@ -1127,7 +1127,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles concatenated computed-k
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles primitive-literal computed-key destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles primitive-literal computed-key destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-primitive-computed-destructured-value-entry.ts",
     "/runtime/runtime-primitive-computed-destructured-value.js",
@@ -1180,7 +1180,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles primitive-literal compu
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles void-and-negative-bigint computed-key destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles void-and-negative-bigint computed-key destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-void-bigint-computed-destructured-value-entry.ts",
     "/runtime/runtime-void-bigint-computed-destructured-value.js",
@@ -1223,7 +1223,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles void-and-negative-bigin
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles const-reference computed-key destructured value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles const-reference computed-key destructured value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-const-ref-computed-destructured-value-entry.ts",
     "/runtime/runtime-const-ref-computed-destructured-value.js",
@@ -1266,7 +1266,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles const-reference compute
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles destructured-const-reference computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles destructured-const-reference computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-destructured-const-ref-computed-destructured-value-entry.ts",
     "/runtime/runtime-destructured-const-ref-computed-destructured-value.js",
@@ -1309,7 +1309,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles destructured-const-refe
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles const-object-access computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles const-object-access computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-const-object-access-computed-destructured-value-entry.ts",
     "/runtime/runtime-const-object-access-computed-destructured-value.js",
@@ -1352,7 +1352,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles const-object-access com
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles nested-const-object-access computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles nested-const-object-access computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-nested-const-object-access-computed-destructured-value-entry.ts",
     "/runtime/runtime-nested-const-object-access-computed-destructured-value.js",
@@ -1395,7 +1395,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles nested-const-object-acc
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles const-array-access computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles const-array-access computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-const-array-access-computed-destructured-value-entry.ts",
     "/runtime/runtime-const-array-access-computed-destructured-value.js",
@@ -1438,7 +1438,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles const-array-access comp
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles nested-const-array-access computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles nested-const-array-access computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-nested-const-array-access-computed-destructured-value-entry.ts",
     "/runtime/runtime-nested-const-array-access-computed-destructured-value.js",
@@ -1481,7 +1481,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles nested-const-array-acce
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles const-index-alias computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles const-index-alias computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-const-index-alias-computed-destructured-value-entry.ts",
     "/runtime/runtime-const-index-alias-computed-destructured-value.js",
@@ -1524,7 +1524,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles const-index-alias compu
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles const-index-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles const-index-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-const-index-table-computed-destructured-value-entry.ts",
     "/runtime/runtime-const-index-table-computed-destructured-value.js",
@@ -1567,7 +1567,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles const-index-table compu
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles nested-index-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles nested-index-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-nested-index-table-computed-destructured-value-entry.ts",
     "/runtime/runtime-nested-index-table-computed-destructured-value.js",
@@ -1610,7 +1610,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles nested-index-table comp
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-const-table-entry.ts", "/runtime/runtime-imported-const-table-entry.js",
   ) catch {
@@ -1652,7 +1652,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported const-table co
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported namespace const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported namespace const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-namespace-const-table-entry.ts",
     "/runtime/runtime-imported-namespace-const-table-entry.js",
@@ -1695,7 +1695,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported namespace cons
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported default const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported default const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-default-const-table-entry.ts",
     "/runtime/runtime-imported-default-const-table-entry.js",
@@ -1738,7 +1738,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported default const-
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported inline default const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported inline default const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-inline-default-const-table-entry.ts",
     "/runtime/runtime-imported-inline-default-const-table-entry.js",
@@ -1781,7 +1781,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported inline default
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported inline default const-table as const computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported inline default const-table as const computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-inline-default-const-table-as-const-entry.ts",
     "/runtime/runtime-imported-inline-default-const-table-as-const-entry.js",
@@ -1824,7 +1824,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported inline default
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported iife default const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported iife default const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-iife-default-const-table-entry.ts",
     "/runtime/runtime-imported-iife-default-const-table-entry.js",
@@ -1867,7 +1867,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported iife default c
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported iife local const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported iife local const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-iife-local-const-table-entry.ts",
     "/runtime/runtime-imported-iife-local-const-table-entry.js",
@@ -1910,7 +1910,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported iife local con
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported function iife local const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported function iife local const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-function-iife-local-const-table-entry.ts",
     "/runtime/runtime-imported-function-iife-local-const-table-entry.js",
@@ -1953,7 +1953,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported function iife 
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported iife local let-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported iife local let-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-iife-local-let-table-entry.ts",
     "/runtime/runtime-imported-iife-local-let-table-entry.js",
@@ -1996,7 +1996,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported iife local let
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported function iife local let-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported function iife local let-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-function-iife-local-let-table-entry.ts",
     "/runtime/runtime-imported-function-iife-local-let-table-entry.js",
@@ -2039,7 +2039,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported function iife 
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle widens imported reassigned local let-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle widens imported reassigned local let-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-iife-reassigned-let-table-entry.ts",
     "/runtime/runtime-imported-iife-reassigned-let-table-entry.js",
@@ -2076,7 +2076,7 @@ async test "analysis: emit MoonBit JS FFI bundle widens imported reassigned loca
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle widens imported prop-mutated local let-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle widens imported prop-mutated local let-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-iife-prop-mutated-let-table-entry.ts",
     "/runtime/runtime-imported-iife-prop-mutated-let-table-entry.js",
@@ -2113,7 +2113,7 @@ async test "analysis: emit MoonBit JS FFI bundle widens imported prop-mutated lo
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle widens imported index-mutated local let-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle widens imported index-mutated local let-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-function-iife-index-mutated-let-table-entry.ts",
     "/runtime/runtime-imported-function-iife-index-mutated-let-table-entry.js",
@@ -2150,7 +2150,7 @@ async test "analysis: emit MoonBit JS FFI bundle widens imported index-mutated l
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported reexported const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported reexported const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-reexported-const-table-entry.ts",
     "/runtime/runtime-imported-reexported-const-table-entry.js",
@@ -2193,7 +2193,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported reexported con
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported chained const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported chained const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-chained-const-table-entry.ts",
     "/runtime/runtime-imported-chained-const-table-entry.js",
@@ -2236,7 +2236,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported chained const-
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported star const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported star const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-star-const-table-entry.ts",
     "/runtime/runtime-imported-star-const-table-entry.js",
@@ -2279,7 +2279,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported star const-tab
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported deep star const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported deep star const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-deep-star-const-table-entry.ts",
     "/runtime/runtime-imported-deep-star-const-table-entry.js",
@@ -2322,7 +2322,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported deep star cons
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle handles imported mixed barrel const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle handles imported mixed barrel const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-mixed-barrel-const-table-entry.ts",
     "/runtime/runtime-imported-mixed-barrel-const-table-entry.js",
@@ -2365,7 +2365,7 @@ async test "analysis: emit MoonBit JS FFI bundle handles imported mixed barrel c
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle widens conflicting star const-table computed-key value exports" {
+async test "bridge: emit MoonBit JS FFI bundle widens conflicting star const-table computed-key value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-imported-conflicting-star-const-table-entry.ts",
     "/runtime/runtime-imported-conflicting-star-const-table-entry.js",
@@ -2402,7 +2402,7 @@ async test "analysis: emit MoonBit JS FFI bundle widens conflicting star const-t
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from runtime default exported functions" {
+async test "bridge: emit MoonBit JS FFI bundle from runtime default exported functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts", "/runtime/runtime-default-function.js",
   ) catch {
@@ -2423,7 +2423,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime default exported f
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for relative default functions" {
+async test "bridge: emit MoonBit JS FFI bundle uses adapter reexport for relative default functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts", "./runtime/runtime-default-function.js",
   ) catch {
@@ -2448,7 +2448,7 @@ async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for relat
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for parent-relative default functions" {
+async test "bridge: emit MoonBit JS FFI bundle uses adapter reexport for parent-relative default functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts", "../runtime/runtime-default-function.js",
   ) catch {
@@ -2473,7 +2473,7 @@ async test "analysis: emit MoonBit JS FFI bundle uses adapter reexport for paren
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from runtime default exported classes" {
+async test "bridge: emit MoonBit JS FFI bundle from runtime default exported classes" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-class-entry.ts", "/runtime/runtime-default-class.js",
   ) catch {
@@ -2510,7 +2510,7 @@ async test "analysis: emit MoonBit JS FFI bundle from runtime default exported c
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle uses adapter helpers for relative default exported classes" {
+async test "bridge: emit MoonBit JS FFI bundle uses adapter helpers for relative default exported classes" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-class-entry.ts", "./runtime/runtime-default-class.js",
   ) catch {
@@ -2551,7 +2551,7 @@ async test "analysis: emit MoonBit JS FFI bundle uses adapter helpers for relati
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle keeps mixed default class imports on one relative import line" {
+async test "bridge: emit MoonBit JS FFI bundle keeps mixed default class imports on one relative import line" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-class-mixed-entry.ts", "../../runtime/runtime-default-class-mixed.js",
   ) catch {
@@ -2602,7 +2602,7 @@ async test "analysis: emit MoonBit JS FFI bundle keeps mixed default class impor
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle keeps aliased reexports bound to original runtime names" {
+async test "bridge: emit MoonBit JS FFI bundle keeps aliased reexports bound to original runtime names" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-class-mixed-reexport-entry.ts",
     "../../runtime/runtime-default-class-mixed.js",
@@ -2654,7 +2654,7 @@ async test "analysis: emit MoonBit JS FFI bundle keeps aliased reexports bound t
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from namespace export assignment" {
+async test "bridge: emit MoonBit JS FFI bundle from namespace export assignment" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
   ) catch {
@@ -2679,7 +2679,7 @@ async test "analysis: emit MoonBit JS FFI bundle from namespace export assignmen
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace assignment" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace assignment" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-entry.d.ts", "./runtime/react-like.js",
   ) catch {
@@ -2709,7 +2709,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace assign
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace hook tuple members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tuple members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-hook-tuple-entry.d.ts",
     "./runtime/react-like.js",
@@ -2791,7 +2791,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace hook t
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace JSX namespace members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace JSX namespace members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-jsx-entry.d.ts", "./runtime/react-like.js",
   ) catch {
@@ -2822,7 +2822,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace JSX na
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from exported JSX namespace members" {
+async test "bridge: emit MoonBit JS FFI bundle from exported JSX namespace members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/exported-jsx-namespace-entry.d.ts", "react/jsx-runtime",
   ) catch {
@@ -2847,7 +2847,7 @@ async test "analysis: emit MoonBit JS FFI bundle from exported JSX namespace mem
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace PropsWithChildren members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace PropsWithChildren members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-props-with-children-entry.d.ts",
     "./runtime/react-like.js",
@@ -2877,7 +2877,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace PropsW
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace ComponentProps members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace ComponentProps members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-entry.d.ts",
     "./runtime/react-like.js",
@@ -2905,7 +2905,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace Compon
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace ComponentPropsWithoutRef members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace ComponentPropsWithoutRef members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",
     "./runtime/react-like.js",
@@ -2928,7 +2928,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace Compon
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace ComponentPropsWithRef members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace ComponentPropsWithRef members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-with-ref-entry.d.ts",
     "./runtime/react-like.js",
@@ -2953,7 +2953,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace Compon
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace nested PropsWithChildren members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace nested PropsWithChildren members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-nested-props-with-children-entry.d.ts",
     "./runtime/react-like.js",
@@ -2979,7 +2979,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace nested
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace PropsWithoutRef and PropsWithRef members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace PropsWithoutRef and PropsWithRef members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-props-ref-alias-entry.d.ts",
     "./runtime/react-like.js",
@@ -3017,7 +3017,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace PropsW
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace optional React-like fields" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace optional React-like fields" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-optional-react-fields-entry.d.ts",
     "./runtime/react-like.js",
@@ -3042,7 +3042,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace option
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from exported jsx-dev-runtime signatures" {
+async test "bridge: emit MoonBit JS FFI bundle from exported jsx-dev-runtime signatures" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/exported-jsx-dev-runtime-entry.d.ts", "react/jsx-dev-runtime",
   ) catch {
@@ -3066,7 +3066,7 @@ async test "analysis: emit MoonBit JS FFI bundle from exported jsx-dev-runtime s
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace inline PropsWithChildren members" {
+async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace inline PropsWithChildren members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-inline-props-with-children-entry.d.ts",
     "./runtime/react-like.js",
@@ -3092,7 +3092,7 @@ async test "analysis: emit MoonBit JS FFI bundle from export-as-namespace inline
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle sanitizes reserved exported function and parameter names" {
+async test "bridge: emit MoonBit JS FFI bundle sanitizes reserved exported function and parameter names" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-sanitize-entry.d.ts", "./runtime/react-like.js",
   ) catch {
@@ -3144,7 +3144,7 @@ async test "analysis: emit MoonBit JS FFI bundle sanitizes reserved exported fun
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle from imported object type alias members" {
+async test "bridge: emit MoonBit JS FFI bundle from imported object type alias members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/hono-options-entry.d.ts", "./runtime/hono.js",
   ) catch {
@@ -3172,7 +3172,7 @@ async test "analysis: emit MoonBit JS FFI bundle from imported object type alias
 }
 
 ///|
-test "analysis: FFI struct generation deduplicates sanitized field names" {
+test "bridge: FFI struct generation deduplicates sanitized field names" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     external_type_names: [],
@@ -3191,7 +3191,7 @@ test "analysis: FFI struct generation deduplicates sanitized field names" {
 }
 
 ///|
-test "analysis: FFI value identifier sanitizes MoonBit keywords and discard names" {
+test "bridge: FFI value identifier sanitizes MoonBit keywords and discard names" {
   assert_eq(ffi_sanitize_identifier("declare", "field"), "declare_")
   assert_eq(ffi_sanitize_identifier("import", "field"), "import_")
   assert_eq(ffi_sanitize_identifier("and", "field"), "and_")
@@ -3202,14 +3202,14 @@ test "analysis: FFI value identifier sanitizes MoonBit keywords and discard name
 }
 
 ///|
-test "analysis: FFI type identifier avoids invalid and core type names" {
+test "bridge: FFI type identifier avoids invalid and core type names" {
   assert_eq(ffi_type_identifier("_", "OpaqueType"), "OpaqueType")
   assert_eq(ffi_type_identifier("Array", "OpaqueType"), "Array_")
   assert_eq(ffi_type_identifier("Error", "OpaqueType"), "Error_")
 }
 
 ///|
-test "analysis: FFI struct generation sanitizes keyword and discard fields" {
+test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     external_type_names: [],
@@ -3240,7 +3240,7 @@ test "analysis: FFI struct generation sanitizes keyword and discard fields" {
 }
 
 ///|
-async test "analysis: emit MoonBit JS FFI bundle avoids duplicate class/interface type declarations" {
+async test "bridge: emit MoonBit JS FFI bundle avoids duplicate class/interface type declarations" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/class-interface-merge-entry.d.ts", "./runtime/class-interface-merge.js",
   ) catch {

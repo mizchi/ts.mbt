@@ -32,7 +32,7 @@ priv struct TypeScriptDeclNormalizationRules {
 
 ///| `normalize-moonbit-dts` is a readability pass for MoonBit-generated `.d.ts`.
 
-///| It can borrow limited compatibility checks from `src/checker`, but it is not
+///| It can borrow limited object-shape checks from this package, but it is not
 
 ///| intended to reimplement the full TypeScript checker.
 
@@ -753,8 +753,8 @@ fn expand_interface_expansion_body(
       rules,
     ),
   )
-  if @checker.can_merge_object_shapes(expanded_parts) {
-    expand_known_alias_refs(@checker.merge_object_shapes(expanded_parts), rules)
+  if can_merge_object_shapes(expanded_parts) {
+    expand_known_alias_refs(merge_object_shapes(expanded_parts), rules)
   } else {
     render_intersection_types(expanded_parts)
   }

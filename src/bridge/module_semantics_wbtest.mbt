@@ -45,7 +45,7 @@ fn find_resolved_export(
 }
 
 ///|
-async test "analysis: load runtime module graph follows resolved imports and reexports" {
+async test "bridge: load runtime module graph follows resolved imports and reexports" {
   let graph = load_runtime_module_graph(semantics_entry_path)
   assert_eq(graph.entry_path, semantics_entry_path)
   assert_eq(graph.modules.length(), 6)
@@ -67,7 +67,7 @@ async test "analysis: load runtime module graph follows resolved imports and ree
 }
 
 ///|
-async test "analysis: resolve runtime export surface follows reexports and namespaces" {
+async test "bridge: resolve runtime export surface follows reexports and namespaces" {
   let exports = resolve_runtime_export_surface(semantics_entry_path)
   let names : Array[String] = []
   for export_ in exports {
@@ -116,7 +116,7 @@ async test "analysis: resolve runtime export surface follows reexports and names
 }
 
 ///|
-async test "analysis: conflicting star exports are marked ambiguous" {
+async test "bridge: conflicting star exports are marked ambiguous" {
   let exports = resolve_runtime_export_surface(semantics_conflict_entry_path)
   match find_resolved_export(exports, "shared") {
     Some(export_) => {
@@ -137,7 +137,7 @@ async test "analysis: conflicting star exports are marked ambiguous" {
 }
 
 ///|
-async test "analysis: resolve type export surface through package exports subpath" {
+async test "bridge: resolve type export surface through package exports subpath" {
   let exports = resolve_type_export_surface(semantics_subpath_type_entry_path)
   match find_resolved_export(exports, "FeatureOptions") {
     Some(export_) => {
@@ -164,7 +164,7 @@ async test "analysis: resolve type export surface through package exports subpat
 }
 
 ///|
-async test "analysis: resolve type export surface through package exports wildcard subpath" {
+async test "bridge: resolve type export surface through package exports wildcard subpath" {
   let exports = resolve_type_export_surface(semantics_pattern_type_entry_path)
   match find_resolved_export(exports, "PatternOptions") {
     Some(export_) => {
@@ -191,7 +191,7 @@ async test "analysis: resolve type export surface through package exports wildca
 }
 
 ///|
-async test "analysis: resolve type export surface through package exports array fallback wildcard subpath" {
+async test "bridge: resolve type export surface through package exports array fallback wildcard subpath" {
   let exports = resolve_type_export_surface(
     semantics_pattern_array_type_entry_path,
   )
@@ -220,7 +220,7 @@ async test "analysis: resolve type export surface through package exports array 
 }
 
 ///|
-async test "analysis: resolve type export surface through package barrel reexports" {
+async test "bridge: resolve type export surface through package barrel reexports" {
   let exports = resolve_type_export_surface(semantics_barrel_type_entry_path)
   match find_resolved_export(exports, "BarrelOptions") {
     Some(export_) => {
@@ -247,7 +247,7 @@ async test "analysis: resolve type export surface through package barrel reexpor
 }
 
 ///|
-async test "analysis: type module graph skips non-exported opaque package imports" {
+async test "bridge: type module graph skips non-exported opaque package imports" {
   let graph = load_type_module_graph(semantics_neverthrow_like_type_entry_path)
   assert_eq(graph.entry_path, semantics_neverthrow_like_type_entry_path)
   assert_eq(graph.modules.length(), 1)
@@ -260,7 +260,7 @@ async test "analysis: type module graph skips non-exported opaque package import
 }
 
 ///|
-async test "analysis: type module graph keeps minimal opaque package imports unresolved" {
+async test "bridge: type module graph keeps minimal opaque package imports unresolved" {
   let graph = load_type_module_graph(semantics_opaque_package_type_entry_path)
   assert_eq(graph.entry_path, semantics_opaque_package_type_entry_path)
   assert_eq(graph.modules.length(), 1)
@@ -273,7 +273,7 @@ async test "analysis: type module graph keeps minimal opaque package imports unr
 }
 
 ///|
-async test "analysis: unresolved bare reexports do not fail type export surface resolution" {
+async test "bridge: unresolved bare reexports do not fail type export surface resolution" {
   let exports = resolve_type_export_surface(
     semantics_unresolved_bare_reexport_entry_path,
   ) catch {
@@ -308,7 +308,7 @@ async test "analysis: unresolved bare reexports do not fail type export surface 
 }
 
 ///|
-async test "analysis: resolve type export surface from namespace export assignment" {
+async test "bridge: resolve type export surface from namespace export assignment" {
   let exports = resolve_type_export_surface(semantics_export_equals_entry_path)
   match find_resolved_export(exports, "default") {
     Some(export_) => {
@@ -321,7 +321,7 @@ async test "analysis: resolve type export surface from namespace export assignme
 }
 
 ///|
-async test "analysis: resolve type export surface from import-equals export assignment" {
+async test "bridge: resolve type export surface from import-equals export assignment" {
   let exports = resolve_type_export_surface(semantics_import_equals_entry_path)
   match find_resolved_export(exports, "default") {
     Some(export_) => {

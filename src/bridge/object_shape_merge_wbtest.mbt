@@ -1,5 +1,5 @@
 ///|
-test "checker: merges identical property members" {
+test "bridge object shape merge: merges identical property members" {
   assert_true(
     can_merge_object_shapes([
       "{ kind: string }", "{ kind: string }", "{ ok: boolean }",
@@ -14,7 +14,7 @@ test "checker: merges identical property members" {
 }
 
 ///|
-test "checker: rejects conflicting property members" {
+test "bridge object shape merge: rejects conflicting property members" {
   assert_false(
     can_merge_object_shapes([
       "{ value: string }", "{ value: number }", "{ ok: boolean }",
@@ -23,7 +23,7 @@ test "checker: rejects conflicting property members" {
 }
 
 ///|
-test "checker: merges identical readonly property members" {
+test "bridge object shape merge: merges identical readonly property members" {
   assert_true(
     can_merge_object_shapes([
       "{ readonly count: number }", "{ readonly count: number }", "{ ok: boolean }",
@@ -38,7 +38,7 @@ test "checker: merges identical readonly property members" {
 }
 
 ///|
-test "checker: rejects readonly and mutable conflicts" {
+test "bridge object shape merge: rejects readonly and mutable conflicts" {
   assert_false(
     can_merge_object_shapes([
       "{ readonly count: number }", "{ count: number }", "{ ok: boolean }",
@@ -47,7 +47,7 @@ test "checker: rejects readonly and mutable conflicts" {
 }
 
 ///|
-test "checker: rejects duplicate methods to avoid overload merging" {
+test "bridge object shape merge: rejects duplicate methods to avoid overload merging" {
   assert_false(
     can_merge_object_shapes([
       "{ format(value: number): string }", "{ format(value: number): string }", "{ ok: boolean }",
@@ -56,21 +56,21 @@ test "checker: rejects duplicate methods to avoid overload merging" {
 }
 
 ///|
-test "checker: rejects call signatures to stay conservative" {
+test "bridge object shape merge: rejects call signatures to stay conservative" {
   assert_false(
     can_merge_object_shapes(["{ (value: string): string }", "{ ok: boolean }"]),
   )
 }
 
 ///|
-test "checker: rejects index signatures to stay conservative" {
+test "bridge object shape merge: rejects index signatures to stay conservative" {
   assert_false(
     can_merge_object_shapes(["{ [key: string]: string }", "{ ok: boolean }"]),
   )
 }
 
 ///|
-test "checker: merges identical optional property members" {
+test "bridge object shape merge: merges identical optional property members" {
   assert_true(
     can_merge_object_shapes([
       "{ name?: string }", "{ name?: string }", "{ ok: boolean }",
@@ -85,7 +85,7 @@ test "checker: merges identical optional property members" {
 }
 
 ///|
-test "checker: rejects optional and required conflicts" {
+test "bridge object shape merge: rejects optional and required conflicts" {
   assert_false(
     can_merge_object_shapes([
       "{ name?: string }", "{ name: string }", "{ ok: boolean }",

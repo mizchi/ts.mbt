@@ -42,7 +42,7 @@ verify-mbti-dts:
     moon run src -- emit-typescript-from-mbti src/runtime/pkg.generated.mbti "$TS_ROOT/runtime.d.ts" >/dev/null
     moon run src -- emit-typescript-from-mbti src/codegen/pkg.generated.mbti "$TS_ROOT/codegen.d.ts" >/dev/null
     moon run src -- emit-typescript-from-mbti src/aot/pkg.generated.mbti "$TS_ROOT/aot.d.ts" >/dev/null
-    moon run src -- emit-typescript-from-mbti src/checker/pkg.generated.mbti "$TS_ROOT/checker.d.ts" >/dev/null
+    moon run src -- emit-typescript-from-mbti src/bridge/pkg.generated.mbti "$TS_ROOT/bridge.d.ts" >/dev/null
     moon run src -- emit-typescript-from-mbti src/pkg.generated.mbti "$TS_ROOT/root.d.ts" >/dev/null
 
     cat <<'EOF' > "$MOONBIT_ROOT/debug.d.ts"
@@ -95,7 +95,7 @@ verify-mbti-dts:
         "mizchi/ts/runtime.d.ts",
         "mizchi/ts/codegen.d.ts",
         "mizchi/ts/aot.d.ts",
-        "mizchi/ts/checker.d.ts",
+        "mizchi/ts/bridge.d.ts",
         "mizchi/ts/root.d.ts",
         "moonbitlang/core/debug.d.ts",
         "moonbitlang/core/json.d.ts",

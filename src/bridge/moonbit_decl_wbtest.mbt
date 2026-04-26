@@ -8,7 +8,7 @@ fn count_occurrences_in_decl_output(haystack : String, needle : String) -> Int {
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from type export surface" {
+async test "bridge: emit MoonBit declarations from type export surface" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/entry.d.ts",
   ) catch {
@@ -37,7 +37,7 @@ async test "analysis: emit MoonBit declarations from type export surface" {
 }
 
 ///|
-async test "analysis: emit MoonBit declarations resolves local import reexports" {
+async test "bridge: emit MoonBit declarations resolves local import reexports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/import-reexport-entry.d.ts",
   ) catch {
@@ -56,7 +56,7 @@ async test "analysis: emit MoonBit declarations resolves local import reexports"
 }
 
 ///|
-async test "analysis: emit MoonBit declarations keeps namespace exports as JSValue notes" {
+async test "bridge: emit MoonBit declarations keeps namespace exports as JSValue notes" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/ns-entry.d.ts",
   ) catch {
@@ -77,7 +77,7 @@ async test "analysis: emit MoonBit declarations keeps namespace exports as JSVal
 }
 
 ///|
-async test "analysis: emit MoonBit declarations keeps ambiguous exports as JSValue notes" {
+async test "bridge: emit MoonBit declarations keeps ambiguous exports as JSValue notes" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/ambiguous-entry.d.ts",
   ) catch {
@@ -104,7 +104,7 @@ async test "analysis: emit MoonBit declarations keeps ambiguous exports as JSVal
 }
 
 ///|
-async test "analysis: emit MoonBit declarations for exported classes" {
+async test "bridge: emit MoonBit declarations for exported classes" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/class-entry.d.ts",
   ) catch {
@@ -131,7 +131,7 @@ async test "analysis: emit MoonBit declarations for exported classes" {
 }
 
 ///|
-async test "analysis: emit MoonBit declarations for abstract exported classes without constructor" {
+async test "bridge: emit MoonBit declarations for abstract exported classes without constructor" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/abstract-class-entry.d.ts",
   ) catch {
@@ -151,7 +151,7 @@ async test "analysis: emit MoonBit declarations for abstract exported classes wi
 }
 
 ///|
-async test "analysis: emit MoonBit declarations for exported class properties" {
+async test "bridge: emit MoonBit declarations for exported class properties" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/class-property-entry.d.ts",
   ) catch {
@@ -194,7 +194,7 @@ async test "analysis: emit MoonBit declarations for exported class properties" {
 }
 
 ///|
-async test "analysis: emit MoonBit declarations with unresolved external library types as opaque types" {
+async test "bridge: emit MoonBit declarations with unresolved external library types as opaque types" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/external-lib-entry.d.ts",
   ) catch {
@@ -218,7 +218,7 @@ async test "analysis: emit MoonBit declarations with unresolved external library
 }
 
 ///|
-async test "analysis: emit MoonBit declarations with resolved bare-package types as opaque types" {
+async test "bridge: emit MoonBit declarations with resolved bare-package types as opaque types" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/resolved-lib-entry.d.ts",
   ) catch {
@@ -238,7 +238,7 @@ async test "analysis: emit MoonBit declarations with resolved bare-package types
 }
 
 ///|
-async test "analysis: emit MoonBit declarations with minimal opaque bare-package imports" {
+async test "bridge: emit MoonBit declarations with minimal opaque bare-package imports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/opaque-package-entry.d.ts",
   ) catch {
@@ -259,7 +259,7 @@ async test "analysis: emit MoonBit declarations with minimal opaque bare-package
 }
 
 ///|
-async test "analysis: emit MoonBit declarations with resolved mixed imports as opaque types" {
+async test "bridge: emit MoonBit declarations with resolved mixed imports as opaque types" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/resolved-mixed-lib-entry.d.ts",
   ) catch {
@@ -283,7 +283,7 @@ async test "analysis: emit MoonBit declarations with resolved mixed imports as o
 }
 
 ///|
-async test "analysis: emit MoonBit declarations with resolved generic library imports" {
+async test "bridge: emit MoonBit declarations with resolved generic library imports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/resolved-generic-lib-entry.d.ts",
   ) catch {
@@ -307,7 +307,7 @@ async test "analysis: emit MoonBit declarations with resolved generic library im
 }
 
 ///|
-async test "analysis: emit MoonBit declarations with resolved symlinked library imports" {
+async test "bridge: emit MoonBit declarations with resolved symlinked library imports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/resolved-symlink-lib-entry.d.ts",
   ) catch {
@@ -335,7 +335,7 @@ async test "analysis: emit MoonBit declarations with resolved symlinked library 
 }
 
 ///|
-async test "analysis: emit MoonBit declarations with neverthrow-like package imports" {
+async test "bridge: emit MoonBit declarations with neverthrow-like package imports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
   ) catch {
@@ -359,7 +359,7 @@ async test "analysis: emit MoonBit declarations with neverthrow-like package imp
 }
 
 ///|
-async test "analysis: emit MoonBit declarations through package exports subpath" {
+async test "bridge: emit MoonBit declarations through package exports subpath" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/subpath-package-entry.d.ts",
   ) catch {
@@ -381,7 +381,7 @@ async test "analysis: emit MoonBit declarations through package exports subpath"
 }
 
 ///|
-async test "analysis: emit MoonBit declarations through package exports wildcard subpath" {
+async test "bridge: emit MoonBit declarations through package exports wildcard subpath" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/pattern-package-entry.d.ts",
   ) catch {
@@ -403,7 +403,7 @@ async test "analysis: emit MoonBit declarations through package exports wildcard
 }
 
 ///|
-async test "analysis: emit MoonBit declarations through package exports array fallback wildcard subpath" {
+async test "bridge: emit MoonBit declarations through package exports array fallback wildcard subpath" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/pattern-array-package-entry.d.ts",
   ) catch {
@@ -425,7 +425,7 @@ async test "analysis: emit MoonBit declarations through package exports array fa
 }
 
 ///|
-async test "analysis: emit MoonBit declarations through package barrel reexports" {
+async test "bridge: emit MoonBit declarations through package barrel reexports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/barrel-package-entry.d.ts",
   ) catch {
@@ -447,7 +447,7 @@ async test "analysis: emit MoonBit declarations through package barrel reexports
 }
 
 ///|
-async test "analysis: emit MoonBit declarations with node-like ambient qualified types" {
+async test "bridge: emit MoonBit declarations with node-like ambient qualified types" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/node-like-entry.d.ts",
   ) catch {
@@ -470,7 +470,7 @@ async test "analysis: emit MoonBit declarations with node-like ambient qualified
 }
 
 ///|
-async test "analysis: emit MoonBit declarations collapse overloads by generated binding name" {
+async test "bridge: emit MoonBit declarations collapse overloads by generated binding name" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/overload-entry.d.ts",
   ) catch {
@@ -493,7 +493,7 @@ async test "analysis: emit MoonBit declarations collapse overloads by generated 
 }
 
 ///|
-async test "analysis: emit MoonBit declarations ignore unresolved bare-package reexports" {
+async test "bridge: emit MoonBit declarations ignore unresolved bare-package reexports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/unresolved-bare-reexport-entry.d.ts",
   ) catch {
@@ -514,7 +514,7 @@ async test "analysis: emit MoonBit declarations ignore unresolved bare-package r
 }
 
 ///|
-async test "analysis: emit MoonBit declarations tolerate transitive ts implementation modules" {
+async test "bridge: emit MoonBit declarations tolerate transitive ts implementation modules" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/transitive-impl-entry.d.ts",
   ) catch {
@@ -534,7 +534,7 @@ async test "analysis: emit MoonBit declarations tolerate transitive ts implement
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime ts exported functions" {
+async test "bridge: emit MoonBit declarations from runtime ts exported functions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-entry.ts",
   ) catch {
@@ -555,7 +555,7 @@ async test "analysis: emit MoonBit declarations from runtime ts exported functio
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime tsx exported functions" {
+async test "bridge: emit MoonBit declarations from runtime tsx exported functions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-component-entry.tsx",
   ) catch {
@@ -577,7 +577,7 @@ async test "analysis: emit MoonBit declarations from runtime tsx exported functi
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime ts exported const arrow functions" {
+async test "bridge: emit MoonBit declarations from runtime ts exported const arrow functions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-arrow-entry.ts",
   ) catch {
@@ -598,7 +598,7 @@ async test "analysis: emit MoonBit declarations from runtime ts exported const a
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime ts exported untyped const arrow functions" {
+async test "bridge: emit MoonBit declarations from runtime ts exported untyped const arrow functions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts",
   ) catch {
@@ -619,7 +619,7 @@ async test "analysis: emit MoonBit declarations from runtime ts exported untyped
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime ts function reexports" {
+async test "bridge: emit MoonBit declarations from runtime ts function reexports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-reexport-entry.ts",
   ) catch {
@@ -640,7 +640,7 @@ async test "analysis: emit MoonBit declarations from runtime ts function reexpor
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime imported class exports" {
+async test "bridge: emit MoonBit declarations from runtime imported class exports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-import-reexport-class-entry.ts",
   ) catch {
@@ -662,7 +662,7 @@ async test "analysis: emit MoonBit declarations from runtime imported class expo
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime imported class barrel exports" {
+async test "bridge: emit MoonBit declarations from runtime imported class barrel exports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-import-reexport-class-barrel-entry.ts",
   ) catch {
@@ -683,7 +683,7 @@ async test "analysis: emit MoonBit declarations from runtime imported class barr
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from semicolonless runtime export type alias entry" {
+async test "bridge: emit MoonBit declarations from semicolonless runtime export type alias entry" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-semicolonless-export-type-alias-entry.ts",
   ) catch {
@@ -699,7 +699,7 @@ async test "analysis: emit MoonBit declarations from semicolonless runtime expor
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime default exported functions" {
+async test "bridge: emit MoonBit declarations from runtime default exported functions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts",
   ) catch {
@@ -717,7 +717,7 @@ async test "analysis: emit MoonBit declarations from runtime default exported fu
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from runtime default exported classes" {
+async test "bridge: emit MoonBit declarations from runtime default exported classes" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-class-entry.ts",
   ) catch {
@@ -744,7 +744,7 @@ async test "analysis: emit MoonBit declarations from runtime default exported cl
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from namespace export assignment" {
+async test "bridge: emit MoonBit declarations from namespace export assignment" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-equals-entry.d.ts",
   ) catch {
@@ -761,7 +761,7 @@ async test "analysis: emit MoonBit declarations from namespace export assignment
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace assignment" {
+async test "bridge: emit MoonBit declarations from export-as-namespace assignment" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-entry.d.ts",
   ) catch {
@@ -781,7 +781,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace assignm
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace ambient members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace ambient members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-ambient-members-entry.d.ts",
   ) catch {
@@ -801,7 +801,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace ambient
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace hook tuple members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace hook tuple members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-hook-tuple-entry.d.ts",
   ) catch {
@@ -851,7 +851,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace hook tu
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace JSX namespace members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace JSX namespace members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-jsx-entry.d.ts",
   ) catch {
@@ -873,7 +873,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace JSX nam
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from exported JSX namespace members" {
+async test "bridge: emit MoonBit declarations from exported JSX namespace members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/exported-jsx-namespace-entry.d.ts",
   ) catch {
@@ -898,7 +898,7 @@ async test "analysis: emit MoonBit declarations from exported JSX namespace memb
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace PropsWithChildren members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace PropsWithChildren members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-props-with-children-entry.d.ts",
   ) catch {
@@ -921,7 +921,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace PropsWi
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace ComponentProps members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace ComponentProps members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-entry.d.ts",
   ) catch {
@@ -943,7 +943,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace Compone
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace ComponentPropsWithoutRef members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace ComponentPropsWithoutRef members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",
   ) catch {
@@ -965,7 +965,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace Compone
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace ComponentPropsWithRef members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace ComponentPropsWithRef members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-with-ref-entry.d.ts",
   ) catch {
@@ -988,7 +988,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace Compone
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace nested PropsWithChildren members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace nested PropsWithChildren members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-nested-props-with-children-entry.d.ts",
   ) catch {
@@ -1011,7 +1011,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace nested 
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace PropsWithoutRef and PropsWithRef members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace PropsWithoutRef and PropsWithRef members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-props-ref-alias-entry.d.ts",
   ) catch {
@@ -1041,7 +1041,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace PropsWi
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace optional React-like fields" {
+async test "bridge: emit MoonBit declarations from export-as-namespace optional React-like fields" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-optional-react-fields-entry.d.ts",
   ) catch {
@@ -1065,7 +1065,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace optiona
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from exported jsx-dev-runtime signatures" {
+async test "bridge: emit MoonBit declarations from exported jsx-dev-runtime signatures" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/exported-jsx-dev-runtime-entry.d.ts",
   ) catch {
@@ -1089,7 +1089,7 @@ async test "analysis: emit MoonBit declarations from exported jsx-dev-runtime si
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from export-as-namespace inline PropsWithChildren members" {
+async test "bridge: emit MoonBit declarations from export-as-namespace inline PropsWithChildren members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-inline-props-with-children-entry.d.ts",
   ) catch {
@@ -1111,7 +1111,7 @@ async test "analysis: emit MoonBit declarations from export-as-namespace inline 
 }
 
 ///|
-async test "analysis: emit MoonBit declarations sanitizes reserved exported function and parameter names" {
+async test "bridge: emit MoonBit declarations sanitizes reserved exported function and parameter names" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-sanitize-entry.d.ts",
   ) catch {
@@ -1154,7 +1154,7 @@ async test "analysis: emit MoonBit declarations sanitizes reserved exported func
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from imported object type alias members" {
+async test "bridge: emit MoonBit declarations from imported object type alias members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/hono-options-entry.d.ts",
   ) catch {
@@ -1179,7 +1179,7 @@ async test "analysis: emit MoonBit declarations from imported object type alias 
 }
 
 ///|
-async test "analysis: emit MoonBit declarations from import-equals export assignment" {
+async test "bridge: emit MoonBit declarations from import-equals export assignment" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/import-equals-entry.d.ts",
   ) catch {

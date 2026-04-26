@@ -1,5 +1,5 @@
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations inlines primitive aliases" {
+async test "bridge: normalize MoonBit generated TypeScript declarations inlines primitive aliases" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/app.d.ts",
   ) catch {
@@ -16,7 +16,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations inline
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations expands multiline aliases from moonbit.d.ts" {
+async test "bridge: normalize MoonBit generated TypeScript declarations expands multiline aliases from moonbit.d.ts" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/result.d.ts",
   ) catch {
@@ -33,7 +33,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations expand
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations expands common MoonBit container aliases" {
+async test "bridge: normalize MoonBit generated TypeScript declarations expands common MoonBit container aliases" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/advanced.d.ts",
   ) catch {
@@ -56,7 +56,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations expand
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations expands nested generic aliases from moonbit.d.ts" {
+async test "bridge: normalize MoonBit generated TypeScript declarations expands nested generic aliases from moonbit.d.ts" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/nested_alias.d.ts",
   ) catch {
@@ -71,7 +71,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations expand
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations expands interface-based generic aliases from moonbit.d.ts" {
+async test "bridge: normalize MoonBit generated TypeScript declarations expands interface-based generic aliases from moonbit.d.ts" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_alias.d.ts",
   ) catch {
@@ -86,7 +86,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations expand
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations flattens interface extends chains from moonbit.d.ts" {
+async test "bridge: normalize MoonBit generated TypeScript declarations flattens interface extends chains from moonbit.d.ts" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_alias.d.ts",
   ) catch {
@@ -101,7 +101,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations flatte
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations preserves conflicting extends as intersections" {
+async test "bridge: normalize MoonBit generated TypeScript declarations preserves conflicting extends as intersections" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_conflict_alias.d.ts",
   ) catch {
@@ -114,7 +114,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations preser
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations keeps identical inherited members flattened" {
+async test "bridge: normalize MoonBit generated TypeScript declarations keeps identical inherited members flattened" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_member_alias.d.ts",
   ) catch {
@@ -127,7 +127,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations keeps 
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations keeps identical readonly inherited members flattened" {
+async test "bridge: normalize MoonBit generated TypeScript declarations keeps identical readonly inherited members flattened" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_readonly_alias.d.ts",
   ) catch {
@@ -140,7 +140,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations keeps 
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations keeps conflicting readonly members as intersections" {
+async test "bridge: normalize MoonBit generated TypeScript declarations keeps conflicting readonly members as intersections" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_conflicting_readonly_alias.d.ts",
   ) catch {
@@ -153,7 +153,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations keeps 
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations keeps identical optional members flattened" {
+async test "bridge: normalize MoonBit generated TypeScript declarations keeps identical optional members flattened" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_optional_alias.d.ts",
   ) catch {
@@ -166,7 +166,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations keeps 
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations keeps conflicting optional members as intersections" {
+async test "bridge: normalize MoonBit generated TypeScript declarations keeps conflicting optional members as intersections" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_conflicting_optional_alias.d.ts",
   ) catch {
@@ -179,7 +179,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations keeps 
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations preserves call signature inheritance as intersections" {
+async test "bridge: normalize MoonBit generated TypeScript declarations preserves call signature inheritance as intersections" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_call_signature_alias.d.ts",
   ) catch {
@@ -192,7 +192,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations preser
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations expands multiple namespace imports" {
+async test "bridge: normalize MoonBit generated TypeScript declarations expands multiple namespace imports" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/multi_import_alias.d.ts",
   ) catch {
@@ -209,7 +209,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations expand
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations falls back to named imports when relative rules are missing" {
+async test "bridge: normalize MoonBit generated TypeScript declarations falls back to named imports when relative rules are missing" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/missing_import_alias.d.ts",
   ) catch {
@@ -228,7 +228,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations falls 
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations rewrites external namespace imports to named imports" {
+async test "bridge: normalize MoonBit generated TypeScript declarations rewrites external namespace imports to named imports" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/external_import_alias.d.ts",
   ) catch {
@@ -243,7 +243,7 @@ async test "analysis: normalize MoonBit generated TypeScript declarations rewrit
 }
 
 ///|
-async test "analysis: normalize MoonBit generated TypeScript declarations merges named imports for the same module" {
+async test "bridge: normalize MoonBit generated TypeScript declarations merges named imports for the same module" {
   let actual = normalize_moonbit_generated_typescript_decl_from_entry_path(
     "fixtures/typescript_decl/moonbit_generated/duplicate_module_import_alias.d.ts",
   ) catch {

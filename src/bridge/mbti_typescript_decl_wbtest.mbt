@@ -1,5 +1,5 @@
 ///|
-async test "analysis: emit TypeScript declarations directly from mbti" {
+async test "bridge: emit TypeScript declarations directly from mbti" {
   let actual = emit_typescript_decl_from_mbti_path(
     "fixtures/mbti_typescript/basic.pkg.generated.mbti",
   ) catch {
@@ -70,7 +70,7 @@ async test "analysis: emit TypeScript declarations directly from mbti" {
 }
 
 ///|
-async test "analysis: emit TypeScript declarations keeps pub(all) types used by public api and normalizes optional tuples" {
+async test "bridge: emit TypeScript declarations keeps pub(all) types used by public api and normalizes optional tuples" {
   let actual = emit_typescript_decl_from_mbti_path(
     "fixtures/mbti_typescript/pub_all.pkg.generated.mbti",
   ) catch {
@@ -92,7 +92,7 @@ async test "analysis: emit TypeScript declarations keeps pub(all) types used by 
 }
 
 ///|
-async test "analysis: emit TypeScript declarations from real pkg.generated.mbti keeps public helper types readable" {
+async test "bridge: emit TypeScript declarations from real pkg.generated.mbti keeps public helper types readable" {
   let actual = emit_typescript_decl_from_mbti_path(
     "src/analysis/pkg.generated.mbti",
   ) catch {
@@ -119,7 +119,7 @@ async test "analysis: emit TypeScript declarations from real pkg.generated.mbti 
 }
 
 ///|
-async test "analysis: emit TypeScript declarations sanitizes imported namespace aliases" {
+async test "bridge: emit TypeScript declarations sanitizes imported namespace aliases" {
   let actual = emit_typescript_decl_from_mbti_path(
     "fixtures/mbti_typescript/import_keyword_alias.pkg.generated.mbti",
   ) catch {
@@ -136,7 +136,7 @@ async test "analysis: emit TypeScript declarations sanitizes imported namespace 
 }
 
 ///|
-async test "analysis: emit TypeScript declarations unwraps grouped optional function types" {
+async test "bridge: emit TypeScript declarations unwraps grouped optional function types" {
   let actual = emit_typescript_decl_from_mbti_path(
     "fixtures/mbti_typescript/grouped_function_option.pkg.generated.mbti",
   ) catch {
@@ -154,7 +154,7 @@ async test "analysis: emit TypeScript declarations unwraps grouped optional func
 }
 
 ///|
-async test "analysis: emit TypeScript declarations keeps real runtime function fields valid" {
+async test "bridge: emit TypeScript declarations keeps real runtime function fields valid" {
   let actual = emit_typescript_decl_from_mbti_path(
     "src/runtime/pkg.generated.mbti",
   ) catch {
@@ -169,7 +169,7 @@ async test "analysis: emit TypeScript declarations keeps real runtime function f
 }
 
 ///|
-async test "analysis: emit TypeScript declarations supports explicit import aliases in mbti fixtures" {
+async test "bridge: emit TypeScript declarations supports explicit import aliases in mbti fixtures" {
   let actual = emit_typescript_decl_from_mbti_path(
     "fixtures/mbti_typescript/import_explicit_alias.pkg.generated.mbti",
   ) catch {
@@ -187,7 +187,7 @@ async test "analysis: emit TypeScript declarations supports explicit import alia
 }
 
 ///|
-async test "analysis: emit MoonBit JS link config from mbti keeps only top-level free functions" {
+async test "bridge: emit MoonBit JS link config from mbti keeps only top-level free functions" {
   let actual = emit_moonbit_js_link_config_from_mbti_path(
     "fixtures/mbti_typescript/basic.pkg.generated.mbti",
   ) catch {
@@ -212,7 +212,7 @@ async test "analysis: emit MoonBit JS link config from mbti keeps only top-level
 }
 
 ///|
-async test "analysis: emit MoonBit JS link config from mbti includes top-level async functions and excludes methods" {
+async test "bridge: emit MoonBit JS link config from mbti includes top-level async functions and excludes methods" {
   let actual = emit_moonbit_js_link_config_from_mbti_path(
     "fixtures/mbti_typescript/link_config_async.pkg.generated.mbti",
   ) catch {
@@ -236,7 +236,7 @@ async test "analysis: emit MoonBit JS link config from mbti includes top-level a
 }
 
 ///|
-async test "analysis: emit TypeScript package bundle from mbti rewrites local imports to sibling declarations" {
+async test "bridge: emit TypeScript package bundle from mbti rewrites local imports to sibling declarations" {
   let files = emit_typescript_package_bundle_from_mbti_path(
     "fixtures/mbti_typescript_package/pkg.generated.mbti",
   ) catch {
@@ -268,7 +268,7 @@ async test "analysis: emit TypeScript package bundle from mbti rewrites local im
 }
 
 ///|
-test "analysis: parse TypeScript import rewrite map source accepts string-object json" {
+test "bridge: parse TypeScript import rewrite map source accepts string-object json" {
   let rewrites = parse_typescript_import_rewrite_map_source(
     "{\"moonbitlang/core/debug\":\"demo-debug\"}",
   )
@@ -282,7 +282,7 @@ test "analysis: parse TypeScript import rewrite map source accepts string-object
 }
 
 ///|
-async test "analysis: emit TypeScript package bundle from mbti rewrites external imports through configured map" {
+async test "bridge: emit TypeScript package bundle from mbti rewrites external imports through configured map" {
   let import_rewrites : Map[String, String] = {}
   import_rewrites["moonbitlang/core/debug"] = "demo-debug"
   let files = emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
@@ -305,7 +305,7 @@ async test "analysis: emit TypeScript package bundle from mbti rewrites external
 }
 
 ///|
-async test "analysis: emit TypeScript scaffold bundle from mbti combines autolink config and declaration files" {
+async test "bridge: emit TypeScript scaffold bundle from mbti combines autolink config and declaration files" {
   let bundle = emit_typescript_scaffold_bundle_from_mbti_path(
     "fixtures/mbti_typescript_package/pkg.generated.mbti",
   ) catch {
@@ -337,7 +337,7 @@ async test "analysis: emit TypeScript scaffold bundle from mbti combines autolin
 }
 
 ///|
-async test "analysis: emit TypeScript scaffold bundle from mbti rewrites external imports through configured map" {
+async test "bridge: emit TypeScript scaffold bundle from mbti rewrites external imports through configured map" {
   let import_rewrites : Map[String, String] = {}
   import_rewrites["moonbitlang/core/debug"] = "demo-debug"
   let bundle = emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
@@ -362,7 +362,7 @@ async test "analysis: emit TypeScript scaffold bundle from mbti rewrites externa
 }
 
 ///|
-async test "analysis: emit TypeScript facade scaffold bundle from mbti adds facade exports and wrapper source" {
+async test "bridge: emit TypeScript facade scaffold bundle from mbti adds facade exports and wrapper source" {
   let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
     "fixtures/mbti_typescript/link_config_async.pkg.generated.mbti",
   ) catch {
@@ -401,7 +401,7 @@ async test "analysis: emit TypeScript facade scaffold bundle from mbti adds faca
 }
 
 ///|
-async test "analysis: emit TypeScript facade scaffold bundle keeps root imports in wrapper source" {
+async test "bridge: emit TypeScript facade scaffold bundle keeps root imports in wrapper source" {
   let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
     "fixtures/mbti_typescript_facade_package/pkg.generated.mbti",
   ) catch {
