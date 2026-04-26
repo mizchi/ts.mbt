@@ -3170,3 +3170,88 @@ async test "analysis: emit MoonBit JS FFI bundle from imported object type alias
     ),
   )
 }
+
+///|
+test "analysis: FFI struct generation deduplicates sanitized field names" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    external_type_names: [],
+    needs_js_any: false,
+  }
+  let iface : @ast.TsInterface = {
+    name: "GenericDateConstructor",
+    fields: [
+      ("<new>", @ast.TsType::Named("DateType")),
+      ("<new>", @ast.TsType::Named("DateType")),
+      ("<new>", @ast.TsType::Named("DateType")),
+    ],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  assert_eq(count_occurrences_in_ffi_output(actual, "  _new_ : DateType"), 1)
+}
+
+///|
+test "analysis: FFI value identifier sanitizes MoonBit keywords and discard names" {
+  assert_eq(ffi_sanitize_identifier("declare", "field"), "declare_")
+  assert_eq(ffi_sanitize_identifier("import", "field"), "import_")
+  assert_eq(ffi_sanitize_identifier("and", "field"), "and_")
+  assert_eq(ffi_sanitize_identifier("is", "field"), "is_")
+  assert_eq(ffi_sanitize_identifier("with", "field"), "with_")
+  assert_eq(ffi_sanitize_identifier("_", "field"), "field")
+  assert_eq(ffi_value_fn_name("enum"), "enum_")
+}
+
+///|
+test "analysis: FFI type identifier avoids invalid and core type names" {
+  assert_eq(ffi_type_identifier("_", "OpaqueType"), "OpaqueType")
+  assert_eq(ffi_type_identifier("Array", "OpaqueType"), "Array_")
+  assert_eq(ffi_type_identifier("Error", "OpaqueType"), "Error_")
+}
+
+///|
+test "analysis: FFI struct generation sanitizes keyword and discard fields" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    external_type_names: [],
+    needs_js_any: false,
+  }
+  let iface : @ast.TsInterface = {
+    name: "Scope",
+    fields: [
+      ("declare", @ast.TsType::Named("DeclarationParser")),
+      ("import", @ast.TsType::Named("Module")),
+      ("and", @ast.TsType::Named("NaryIntersectionParser")),
+      ("with", @ast.TsType::Named("Scheduler")),
+      ("_", @ast.TsType::Named("_")),
+      (
+        "references",
+        @ast.TsType::Applied("Array", [@ast.TsType::Named("BaseNode")]),
+      ),
+    ],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  assert_true(actual.contains("  declare_ : DeclarationParser"))
+  assert_true(actual.contains("  import_ : Module"))
+  assert_true(actual.contains("  and_ : NaryIntersectionParser"))
+  assert_true(actual.contains("  with_ : Scheduler"))
+  assert_true(actual.contains("  field : OpaqueType"))
+  assert_true(actual.contains("  references : Array[BaseNode]"))
+  assert_false(actual.contains("  _ : Scope"))
+}
+
+///|
+async test "analysis: emit MoonBit JS FFI bundle avoids duplicate class/interface type declarations" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/class-interface-merge-entry.d.ts", "./runtime/class-interface-merge.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct Location"))
+  assert_eq(count_occurrences_in_ffi_output(bundle.ffi_mbt, "type Location"), 0)
+}

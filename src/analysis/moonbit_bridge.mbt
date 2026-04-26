@@ -103,6 +103,86 @@ fn bridge_to_snake_case(name : String) -> String {
 }
 
 ///|
+fn bridge_value_identifier_needs_suffix(name : String) -> Bool {
+  match name {
+    "and"
+    | "as"
+    | "assert"
+    | "async"
+    | "await"
+    | "break"
+    | "case"
+    | "catch"
+    | "class"
+    | "const"
+    | "continue"
+    | "declare"
+    | "defer"
+    | "do"
+    | "else"
+    | "enum"
+    | "export"
+    | "extern"
+    | "false"
+    | "finally"
+    | "fn"
+    | "for"
+    | "if"
+    | "import"
+    | "in"
+    | "interface"
+    | "is"
+    | "guard"
+    | "lazy"
+    | "let"
+    | "loop"
+    | "match"
+    | "module"
+    | "namespace"
+    | "new"
+    | "null"
+    | "or"
+    | "package"
+    | "private"
+    | "protected"
+    | "pub"
+    | "public"
+    | "raise"
+    | "readonly"
+    | "ref"
+    | "return"
+    | "static"
+    | "struct"
+    | "super"
+    | "switch"
+    | "test"
+    | "throw"
+    | "trait"
+    | "true"
+    | "try"
+    | "typeof"
+    | "type"
+    | "typealias"
+    | "using"
+    | "use"
+    | "var"
+    | "void"
+    | "with"
+    | "while" => true
+    _ => false
+  }
+}
+
+///|
+fn bridge_value_fn_name(name : String) -> String {
+  let mut result = bridge_to_snake_case(name)
+  if bridge_value_identifier_needs_suffix(result) {
+    result += "_"
+  }
+  result
+}
+
+///|
 fn bridge_to_upper_ascii(c : Char) -> Char {
   if c >= 'a' && c <= 'z' {
     (c.to_int() - 32).unsafe_to_char()
@@ -211,7 +291,10 @@ fn add_bridge_namespace_public_decls(
 
 ///|
 fn render_bridge_public_wrapper(fn_decl : BridgeTopLevelFnDecl) -> String? {
-  let internal_name = bridge_to_snake_case(fn_decl.public_name)
+  if bridge_value_identifier_needs_suffix(fn_decl.public_name) {
+    return None
+  }
+  let internal_name = bridge_value_fn_name(fn_decl.public_name)
   if internal_name == "" || internal_name == fn_decl.public_name {
     return None
   }

@@ -103,3 +103,17 @@ async test "analysis: emit MoonBit TS bridge package bundle exposes namespace ex
     bundle.bridge_js.contains("export function __ts_mbt_get_shapes()"),
   )
 }
+
+///|
+test "analysis: bridge public wrapper skips reserved public names" {
+  let decl : BridgeTopLevelFnDecl = {
+    public_name: "enum",
+    params_src: "value : String",
+    arg_names: ["value"],
+    return_type: "String",
+  }
+  match render_bridge_public_wrapper(decl) {
+    Some(_) => fail("reserved public names should not generate wrappers")
+    None => ()
+  }
+}
