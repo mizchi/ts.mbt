@@ -10,6 +10,7 @@ import {
   "mizchi/ts/codegen" @codegen,
   "mizchi/wasmx/encode" @encode,
   "mizchi/ts/analysis" @analysis,
+  "mizchi/ts/bridge" @bridge,
 }
 
 options(

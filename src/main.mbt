@@ -330,9 +330,9 @@ async fn experimental_analyze_aot(file_path : String) -> Unit {
 ///|
 async fn emit_moonbit_decl(file_path : String, output_path : String?) -> Unit {
   let emitted = emit_moonbit_decl_text(file_path) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -354,8 +354,8 @@ async fn emit_moonbit_decl(file_path : String, output_path : String?) -> Unit {
 ///|
 async fn emit_moonbit_decl_text(
   file_path : String,
-) -> String raise @analysis.ModuleGraphError {
-  @analysis.emit_moonbit_decl_from_entry_path(file_path)
+) -> String raise @bridge.ModuleGraphError {
+  @bridge.emit_moonbit_decl_from_entry_path(file_path)
 }
 
 ///|
@@ -364,9 +364,9 @@ async fn emit_typescript_decl(
   output_path : String?,
 ) -> Unit {
   let emitted = emit_typescript_decl_text(file_path) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -388,10 +388,8 @@ async fn emit_typescript_decl(
 ///|
 async fn emit_typescript_decl_text(
   file_path : String,
-) -> String raise @analysis.ModuleGraphError {
-  @analysis.normalize_moonbit_generated_typescript_decl_from_entry_path(
-    file_path,
-  )
+) -> String raise @bridge.ModuleGraphError {
+  @bridge.normalize_moonbit_generated_typescript_decl_from_entry_path(file_path)
 }
 
 ///|
@@ -400,8 +398,8 @@ async fn emit_typescript_decl_from_mbti(
   output_path : String?,
 ) -> Unit {
   let emitted = emit_typescript_decl_from_mbti_text(file_path) catch {
-    @analysis.MbtiTypescriptDeclError::ReadError(msg)
-    | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
+    @bridge.MbtiTypescriptDeclError::ReadError(msg)
+    | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -423,8 +421,8 @@ async fn emit_typescript_decl_from_mbti(
 ///|
 async fn emit_typescript_decl_from_mbti_text(
   file_path : String,
-) -> String raise @analysis.MbtiTypescriptDeclError {
-  @analysis.emit_typescript_decl_from_mbti_path(file_path)
+) -> String raise @bridge.MbtiTypescriptDeclError {
+  @bridge.emit_typescript_decl_from_mbti_path(file_path)
 }
 
 ///|
@@ -433,8 +431,8 @@ async fn emit_js_link_config_from_mbti(
   output_path : String?,
 ) -> Unit {
   let emitted = emit_js_link_config_from_mbti_text(file_path) catch {
-    @analysis.MbtiJsLinkConfigError::ReadError(msg)
-    | @analysis.MbtiJsLinkConfigError::ParseError(msg) => {
+    @bridge.MbtiJsLinkConfigError::ReadError(msg)
+    | @bridge.MbtiJsLinkConfigError::ParseError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -456,8 +454,8 @@ async fn emit_js_link_config_from_mbti(
 ///|
 async fn emit_js_link_config_from_mbti_text(
   file_path : String,
-) -> String raise @analysis.MbtiJsLinkConfigError {
-  @analysis.emit_moonbit_js_link_config_from_mbti_path(file_path)
+) -> String raise @bridge.MbtiJsLinkConfigError {
+  @bridge.emit_moonbit_js_link_config_from_mbti_path(file_path)
 }
 
 ///|
@@ -474,7 +472,7 @@ async fn load_typescript_import_rewrite_map(
           return None
         }
       }
-      match @analysis.parse_typescript_import_rewrite_map_source(source) {
+      match @bridge.parse_typescript_import_rewrite_map_source(source) {
         Some(rewrites) => Some(rewrites)
         None => {
           println(
@@ -533,11 +531,11 @@ async fn emit_typescript_package_from_mbti(
     Some(rewrites) => rewrites
     None => return
   }
-  let files = @analysis.emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
+  let files = @bridge.emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
     file_path, import_rewrites,
   ) catch {
-    @analysis.MbtiTypescriptDeclError::ReadError(msg)
-    | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
+    @bridge.MbtiTypescriptDeclError::ReadError(msg)
+    | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -582,11 +580,11 @@ async fn emit_typescript_scaffold_from_mbti(
     Some(rewrites) => rewrites
     None => return
   }
-  let bundle = @analysis.emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
+  let bundle = @bridge.emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
     file_path, import_rewrites,
   ) catch {
-    @analysis.MbtiTypescriptDeclError::ReadError(msg)
-    | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
+    @bridge.MbtiTypescriptDeclError::ReadError(msg)
+    | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -664,11 +662,11 @@ async fn emit_typescript_facade_scaffold_from_mbti(
     Some(rewrites) => rewrites
     None => return
   }
-  let bundle = @analysis.emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_rewrites(
+  let bundle = @bridge.emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_rewrites(
     file_path, import_rewrites,
   ) catch {
-    @analysis.MbtiTypescriptDeclError::ReadError(msg)
-    | @analysis.MbtiTypescriptDeclError::ParseError(msg) => {
+    @bridge.MbtiTypescriptDeclError::ReadError(msg)
+    | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -756,9 +754,9 @@ async fn emit_moonbit_js_ffi(
   bridge_output_path : String?,
 ) -> Unit {
   let bundle = emit_moonbit_js_ffi_texts(file_path, module_spec) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -812,9 +810,9 @@ async fn emit_moonbit_bridge(
   bridge_output_path : String?,
 ) -> Unit {
   let bundle = emit_moonbit_bridge_texts(file_path, module_spec) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -885,9 +883,9 @@ async fn emit_moonbit_bridge_package(
   output_dir : String,
 ) -> Unit {
   let bundle = emit_moonbit_bridge_package_texts(file_path, module_spec) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -926,9 +924,7 @@ async fn emit_moonbit_bridge_package(
 }
 
 ///|
-fn scaffold_unsupported_export_text(
-  export_ : @analysis.ResolvedExport,
-) -> String {
+fn scaffold_unsupported_export_text(export_ : @bridge.ResolvedExport) -> String {
   let base = "\{export_.export_name} (ambiguous re-export"
   if export_.ambiguous_source_paths.length() == 0 {
     base + ")"
@@ -956,13 +952,13 @@ fn render_moonbit_scaffold_diagnostics_md(
 ///|
 async fn collect_moonbit_ts_scaffold_unsupported_exports(
   file_path : String,
-) -> Array[String] raise @analysis.ModuleGraphError {
-  let graph = @analysis.load_type_module_graph(file_path)
-  let export_surface = @analysis.resolve_export_surface(graph)
+) -> Array[String] raise @bridge.ModuleGraphError {
+  let graph = @bridge.load_type_module_graph(file_path)
+  let export_surface = @bridge.resolve_export_surface(graph)
   let unsupported_exports : Array[String] = []
   for export_ in export_surface {
     match export_.kind {
-      @analysis.ResolvedExportKind::Ambiguous =>
+      @bridge.ResolvedExportKind::Ambiguous =>
         unsupported_exports.push(scaffold_unsupported_export_text(export_))
       _ => ()
     }
@@ -979,9 +975,9 @@ async fn emit_moonbit_scaffold_from_ts(
   let unsupported_exports = collect_moonbit_ts_scaffold_unsupported_exports(
     file_path,
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
       return
     }
@@ -1051,26 +1047,24 @@ fn rewrite_bridge_package_module_path(
 async fn emit_moonbit_js_ffi_texts(
   file_path : String,
   module_spec : String,
-) -> @analysis.MoonBitJsFfiBundle raise @analysis.ModuleGraphError {
-  @analysis.emit_moonbit_js_ffi_bundle_from_entry_path(file_path, module_spec)
+) -> @bridge.MoonBitJsFfiBundle raise @bridge.ModuleGraphError {
+  @bridge.emit_moonbit_js_ffi_bundle_from_entry_path(file_path, module_spec)
 }
 
 ///|
 async fn emit_moonbit_bridge_texts(
   file_path : String,
   module_spec : String,
-) -> @analysis.MoonBitTsBridgeBundle raise @analysis.ModuleGraphError {
-  @analysis.emit_moonbit_ts_bridge_bundle_from_entry_path(
-    file_path, module_spec,
-  )
+) -> @bridge.MoonBitTsBridgeBundle raise @bridge.ModuleGraphError {
+  @bridge.emit_moonbit_ts_bridge_bundle_from_entry_path(file_path, module_spec)
 }
 
 ///|
 async fn emit_moonbit_bridge_package_texts(
   file_path : String,
   module_spec : String,
-) -> @analysis.MoonBitTsBridgePackageBundle raise @analysis.ModuleGraphError {
-  @analysis.emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+) -> @bridge.MoonBitTsBridgePackageBundle raise @bridge.ModuleGraphError {
+  @bridge.emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     file_path, module_spec,
   )
 }

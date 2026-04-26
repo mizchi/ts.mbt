@@ -199,8 +199,8 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
   let actual = emit_typescript_decl_from_mbti_text(
     "fixtures/mbti_typescript/basic.pkg.generated.mbti",
   ) catch {
-    @analysis.MbtiTypescriptDeclError::ReadError(msg)
-    | @analysis.MbtiTypescriptDeclError::ParseError(msg) =>
+    @bridge.MbtiTypescriptDeclError::ReadError(msg)
+    | @bridge.MbtiTypescriptDeclError::ParseError(msg) =>
       fail("Emit error: \{msg}")
   }
   assert_true(actual.contains("export function identity<T>(arg0: T): T;"))
@@ -250,8 +250,8 @@ async test "emit_js_link_config_from_mbti_text emits MoonBit JS link config from
   let actual = emit_js_link_config_from_mbti_text(
     "fixtures/mbti_typescript/basic.pkg.generated.mbti",
   ) catch {
-    @analysis.MbtiJsLinkConfigError::ReadError(msg)
-    | @analysis.MbtiJsLinkConfigError::ParseError(msg) =>
+    @bridge.MbtiJsLinkConfigError::ReadError(msg)
+    | @bridge.MbtiJsLinkConfigError::ParseError(msg) =>
       fail("Emit error: \{msg}")
   }
   assert_true(actual.contains("\"identity\""))
@@ -431,8 +431,8 @@ async test "emit_typescript_decl_from_mbti_text keeps real analysis package outp
   let actual = emit_typescript_decl_from_mbti_text(
     "src/analysis/pkg.generated.mbti",
   ) catch {
-    @analysis.MbtiTypescriptDeclError::ReadError(msg)
-    | @analysis.MbtiTypescriptDeclError::ParseError(msg) =>
+    @bridge.MbtiTypescriptDeclError::ReadError(msg)
+    | @bridge.MbtiTypescriptDeclError::ParseError(msg) =>
       fail("Emit error: \{msg}")
   }
   assert_true(actual.contains("export type AnalysisResult<T> ="))
@@ -459,9 +459,9 @@ async test "emit_typescript_decl_text normalizes MoonBit generated d.ts" {
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/app.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(actual.contains("x: number"))
   assert_true(actual.contains("): string;"))
@@ -473,9 +473,9 @@ async test "emit_typescript_decl_text expands common MoonBit aliases from moonbi
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/advanced.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(actual.contains("export type UserId = bigint;"))
   assert_true(actual.contains("export type Scores = Array<number>;"))
@@ -492,9 +492,9 @@ async test "emit_typescript_decl_text expands nested MoonBit generic aliases" {
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/nested_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -508,9 +508,9 @@ async test "emit_typescript_decl_text expands interface-based MoonBit aliases" {
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/interface_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -524,9 +524,9 @@ async test "emit_typescript_decl_text flattens interface extends aliases" {
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -540,9 +540,9 @@ async test "emit_typescript_decl_text keeps conflicting interface extends as int
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_conflict_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -556,9 +556,9 @@ async test "emit_typescript_decl_text keeps identical inherited members flattene
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_member_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -572,9 +572,9 @@ async test "emit_typescript_decl_text keeps identical readonly inherited members
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_readonly_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -588,9 +588,9 @@ async test "emit_typescript_decl_text keeps conflicting readonly members as inte
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_conflicting_readonly_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -604,9 +604,9 @@ async test "emit_typescript_decl_text keeps identical optional members flattened
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_shared_optional_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -620,9 +620,9 @@ async test "emit_typescript_decl_text keeps conflicting optional members as inte
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/interface_extends_conflicting_optional_alias.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => fail("Emit error: \{msg}")
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => fail("Emit error: \{msg}")
   }
   assert_true(
     actual.contains(
@@ -742,9 +742,9 @@ async test "emit_moonbit_decl_text resolves type reexports from entry file" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/entry.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -761,9 +761,9 @@ async test "emit_moonbit_js_ffi_texts generates ffi and bridge snippets" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/entry.d.ts", "/runtime/mod.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -777,9 +777,9 @@ async test "emit_moonbit_bridge_texts generates decl, ffi, and bridge snippets" 
   let bundle = emit_moonbit_bridge_texts(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -803,9 +803,9 @@ async test "emit_moonbit_bridge_package_texts generates a compileable package bu
   let bundle = emit_moonbit_bridge_package_texts(
     "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1384,9 +1384,9 @@ async test "emit_moonbit_decl_text handles neverthrow-like package entry" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1403,9 +1403,9 @@ async test "emit_moonbit_decl_text handles minimal opaque package entry" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/opaque-package-entry.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1423,9 +1423,9 @@ async test "emit_moonbit_decl_text handles runtime ts exported functions" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-function-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1443,9 +1443,9 @@ async test "emit_moonbit_decl_text handles runtime tsx exported functions" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-component-entry.tsx",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1463,9 +1463,9 @@ async test "emit_moonbit_decl_text handles runtime ts exported const arrow funct
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-arrow-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1483,9 +1483,9 @@ async test "emit_moonbit_decl_text handles runtime ts exported untyped const arr
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1503,9 +1503,9 @@ async test "emit_moonbit_decl_text handles runtime ts function reexports" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-function-reexport-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1522,9 +1522,9 @@ async test "emit_moonbit_decl_text handles runtime ts imported class exports" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-import-reexport-class-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1564,9 +1564,9 @@ async test "emit_moonbit_decl_text handles runtime ts imported class barrel expo
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-import-reexport-class-barrel-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1609,9 +1609,9 @@ async test "emit_moonbit_decl_text handles semicolonless runtime export type ali
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-semicolonless-export-type-alias-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1644,9 +1644,9 @@ async test "emit_moonbit_decl_text handles runtime ts destructured value exports
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1660,9 +1660,9 @@ async test "emit_moonbit_decl_text handles nested and array-rest destructured va
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-destructured-nested-rest-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1678,9 +1678,9 @@ async test "emit_moonbit_decl_text handles object-rest destructured value export
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-object-rest-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1695,9 +1695,9 @@ async test "emit_moonbit_decl_text handles computed-key destructured value expor
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1713,9 +1713,9 @@ async test "emit_moonbit_decl_text handles template-literal computed-key destruc
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-template-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1731,9 +1731,9 @@ async test "emit_moonbit_decl_text handles concatenated computed-key destructure
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-concat-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1749,9 +1749,9 @@ async test "emit_moonbit_decl_text handles primitive-literal computed-key destru
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-primitive-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1769,9 +1769,9 @@ async test "emit_moonbit_decl_text handles void-and-negative-bigint computed-key
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-void-bigint-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1787,9 +1787,9 @@ async test "emit_moonbit_decl_text handles const-reference computed-key destruct
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-const-ref-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1805,9 +1805,9 @@ async test "emit_moonbit_decl_text handles destructured-const-reference computed
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-destructured-const-ref-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1823,9 +1823,9 @@ async test "emit_moonbit_decl_text handles const-object-access computed-key valu
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-const-object-access-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1841,9 +1841,9 @@ async test "emit_moonbit_decl_text handles nested-const-object-access computed-k
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-nested-const-object-access-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1859,9 +1859,9 @@ async test "emit_moonbit_decl_text handles const-array-access computed-key value
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-const-array-access-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1877,9 +1877,9 @@ async test "emit_moonbit_decl_text handles nested-const-array-access computed-ke
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-nested-const-array-access-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1895,9 +1895,9 @@ async test "emit_moonbit_decl_text handles const-index-alias computed-key value 
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-const-index-alias-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1913,9 +1913,9 @@ async test "emit_moonbit_decl_text handles const-index-table computed-key value 
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-const-index-table-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1931,9 +1931,9 @@ async test "emit_moonbit_decl_text handles nested-index-table computed-key value
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-nested-index-table-computed-destructured-value-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1949,9 +1949,9 @@ async test "emit_moonbit_decl_text handles imported const-table computed-key val
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1967,9 +1967,9 @@ async test "emit_moonbit_decl_text handles imported namespace const-table comput
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-namespace-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -1985,9 +1985,9 @@ async test "emit_moonbit_decl_text handles imported default const-table computed
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-default-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2003,9 +2003,9 @@ async test "emit_moonbit_decl_text handles imported inline default const-table c
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-inline-default-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2021,9 +2021,9 @@ async test "emit_moonbit_decl_text handles imported inline default const-table a
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-inline-default-const-table-as-const-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2039,9 +2039,9 @@ async test "emit_moonbit_decl_text handles imported iife default const-table com
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-iife-default-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2057,9 +2057,9 @@ async test "emit_moonbit_decl_text handles imported iife local const-table compu
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-iife-local-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2075,9 +2075,9 @@ async test "emit_moonbit_decl_text handles imported function iife local const-ta
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-function-iife-local-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2093,9 +2093,9 @@ async test "emit_moonbit_decl_text handles imported iife local let-table compute
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-iife-local-let-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2111,9 +2111,9 @@ async test "emit_moonbit_decl_text handles imported function iife local let-tabl
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-function-iife-local-let-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2129,9 +2129,9 @@ async test "emit_moonbit_decl_text widens imported reassigned local let-table co
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-iife-reassigned-let-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2149,9 +2149,9 @@ async test "emit_moonbit_decl_text widens imported prop-mutated local let-table 
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-iife-prop-mutated-let-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2169,9 +2169,9 @@ async test "emit_moonbit_decl_text widens imported index-mutated local let-table
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-function-iife-index-mutated-let-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2189,9 +2189,9 @@ async test "emit_moonbit_decl_text handles imported reexported const-table compu
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-reexported-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2207,9 +2207,9 @@ async test "emit_moonbit_decl_text handles imported chained const-table computed
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-chained-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2225,9 +2225,9 @@ async test "emit_moonbit_decl_text handles imported star const-table computed-ke
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-star-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2243,9 +2243,9 @@ async test "emit_moonbit_decl_text handles imported deep star const-table comput
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-deep-star-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2261,9 +2261,9 @@ async test "emit_moonbit_decl_text handles imported mixed barrel const-table com
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-mixed-barrel-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2279,9 +2279,9 @@ async test "emit_moonbit_decl_text widens conflicting star const-table computed-
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-imported-conflicting-star-const-table-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2299,9 +2299,9 @@ async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/neverthrow-like-entry.d.ts", "/runtime/neverthrow-like.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -2358,9 +2358,9 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts exported functions" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -4337,9 +4337,9 @@ async test "emit_moonbit_js_ffi_texts handles runtime tsx exported functions" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/runtime-component-entry.tsx", "/runtime/runtime-component.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -4357,9 +4357,9 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts exported const arrow fu
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/runtime-arrow-entry.ts", "/runtime/runtime-arrow.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -4377,9 +4377,9 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts exported untyped const 
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts", "/runtime/runtime-untyped-arrow.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -4401,9 +4401,9 @@ async test "emit_moonbit_js_ffi_texts handles runtime ts function reexports" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/runtime-function-reexport-entry.ts", "/runtime/runtime-function-reexport.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -4417,9 +4417,9 @@ async test "emit_moonbit_decl_text handles runtime default exported classes" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/runtime-default-class-entry.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -4434,9 +4434,9 @@ async test "emit_moonbit_js_ffi_texts handles runtime default exported classes" 
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/runtime-default-class-entry.ts", "/runtime/runtime-default-class.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -4463,9 +4463,9 @@ async test "emit_moonbit_decl_text handles export assignment declarations" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/export-equals-entry.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -4478,9 +4478,9 @@ async test "emit_moonbit_js_ffi_texts handles export assignment declarations" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -5129,9 +5129,9 @@ async test "emit_moonbit_decl_text handles neverthrow-like package entry from tm
       }
     }
     let actual = emit_moonbit_decl_text(entry_path) catch {
-      @analysis.ReadError(msg)
-      | @analysis.ParseError(msg)
-      | @analysis.ResolveError(msg) => {
+      @bridge.ModuleGraphError::ReadError(msg)
+      | @bridge.ModuleGraphError::ParseError(msg)
+      | @bridge.ModuleGraphError::ResolveError(msg) => {
         fail("Emit error: \{msg}")
         return
       }
@@ -5159,9 +5159,9 @@ async test "emit_moonbit_js_ffi_texts handles neverthrow-like package entry from
     let bundle = emit_moonbit_js_ffi_texts(
       entry_path, "/runtime/neverthrow-like.js",
     ) catch {
-      @analysis.ReadError(msg)
-      | @analysis.ParseError(msg)
-      | @analysis.ResolveError(msg) => {
+      @bridge.ModuleGraphError::ReadError(msg)
+      | @bridge.ModuleGraphError::ParseError(msg)
+      | @bridge.ModuleGraphError::ResolveError(msg) => {
         fail("Emit error: \{msg}")
         return
       }
@@ -5226,9 +5226,9 @@ async test "collect_moonbit_ts_scaffold_unsupported_exports ignores namespace ex
   let unsupported = collect_moonbit_ts_scaffold_unsupported_exports(
     "fixtures/resolver/project/types/ns-entry.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Unexpected error: \{msg}")
       return
     }
@@ -5312,9 +5312,9 @@ async test "emit_moonbit_decl_text handles package exports subpath entry" {
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/subpath-package-entry.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -5328,9 +5328,9 @@ async test "emit_moonbit_decl_text handles package exports wildcard subpath entr
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/pattern-package-entry.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -5344,9 +5344,9 @@ async test "emit_moonbit_decl_text handles package exports array fallback wildca
   let actual = emit_moonbit_decl_text(
     "fixtures/resolver/project/types/pattern-array-package-entry.d.ts",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }
@@ -5360,9 +5360,9 @@ async test "emit_moonbit_js_ffi_texts handles node-like ambient entry" {
   let bundle = emit_moonbit_js_ffi_texts(
     "fixtures/resolver/project/types/node-like-entry.d.ts", "/runtime/node-like.js",
   ) catch {
-    @analysis.ReadError(msg)
-    | @analysis.ParseError(msg)
-    | @analysis.ResolveError(msg) => {
+    @bridge.ModuleGraphError::ReadError(msg)
+    | @bridge.ModuleGraphError::ParseError(msg)
+    | @bridge.ModuleGraphError::ResolveError(msg) => {
       fail("Emit error: \{msg}")
       return
     }

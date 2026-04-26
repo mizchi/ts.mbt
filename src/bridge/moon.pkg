@@ -1,0 +1,12 @@
+import {
+  "moonbitlang/async/fs",
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json" @json,
+  "mizchi/ts/checker" @checker,
+  "mizchi/ts/ast" @ast,
+  "mizchi/ts/parser" @parser,
+}
+
+import {
+  "moonbitlang/async",
+} for "wbtest"

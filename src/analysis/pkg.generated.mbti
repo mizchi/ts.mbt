@@ -89,34 +89,6 @@ pub fn collect_binding_names(@ast.TsBinding, Array[String]) -> Unit
 
 pub fn collect_param_names(Array[@ast.TsParam]) -> Array[String]
 
-pub async fn emit_moonbit_decl_from_entry_path(String) -> String raise ModuleGraphError
-
-pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(String, String) -> MoonBitJsFfiBundle raise ModuleGraphError
-
-pub async fn emit_moonbit_js_link_config_from_mbti_path(String) -> String raise MbtiJsLinkConfigError
-
-pub fn emit_moonbit_js_link_config_from_mbti_source(String) -> String raise MbtiJsLinkConfigError
-
-pub fn emit_moonbit_js_link_config_from_mbti_source_with_extra_exports(String, Array[String]) -> String raise MbtiJsLinkConfigError
-
-pub async fn emit_moonbit_ts_bridge_bundle_from_entry_path(String, String) -> MoonBitTsBridgeBundle raise ModuleGraphError
-
-pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(String, String) -> MoonBitTsBridgePackageBundle raise ModuleGraphError
-
-pub async fn emit_typescript_decl_from_mbti_path(String) -> String raise MbtiTypescriptDeclError
-
-pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path(String) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
-
-pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_rewrites(String, Map[String, String]) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
-
-pub async fn emit_typescript_package_bundle_from_mbti_path(String) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError
-
-pub async fn emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(String, Map[String, String]) -> Array[MbtiTypescriptPackageFile] raise MbtiTypescriptDeclError
-
-pub async fn emit_typescript_scaffold_bundle_from_mbti_path(String) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
-
-pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(String, Map[String, String]) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError
-
 pub fn eval_const(@ast.TsExpr) -> ConstValue
 
 pub fn find_aot_groups(@ast.TsModule, CallGraph) -> Array[AOTGroup]
@@ -189,10 +161,6 @@ pub fn is_pure_expr(@ast.TsExpr) -> Bool
 
 pub fn is_unique(AliasInfo, String) -> Bool
 
-pub async fn load_runtime_module_graph(String) -> ModuleGraph raise ModuleGraphError
-
-pub async fn load_type_module_graph(String) -> ModuleGraph raise ModuleGraphError
-
 pub fn make_const_assign_error(String, SourceLoc) -> AnalysisError
 
 pub fn make_duplicate_decl_error(String, SourceLoc) -> AnalysisError
@@ -209,11 +177,7 @@ pub fn narrow_type_negated(@ast.TsType, String) -> @ast.TsType
 
 pub fn needs_gc(@ast.TsType) -> Bool
 
-pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String) -> String raise ModuleGraphError
-
 pub fn parse_and_analyze(String) -> AnalysisResult[@ast.TypedModule]
-
-pub fn parse_typescript_import_rewrite_map_source(String) -> Map[String, String]?
 
 pub fn register_lexical_declarations(AnalysisCtx, @ast.TsBlock) -> Unit
 
@@ -225,32 +189,11 @@ pub fn resolve_any(@ast.TsType, @ast.TsExpr) -> @ast.TsType
 
 pub fn resolve_any_with_ctx(TypeInferCtx, @ast.TsType, @ast.TsExpr) -> @ast.TsType
 
-pub fn resolve_export_surface(ModuleGraph) -> Array[ResolvedExport]
-
-pub async fn resolve_runtime_export_surface(String) -> Array[ResolvedExport] raise ModuleGraphError
-
-pub async fn resolve_type_export_surface(String) -> Array[ResolvedExport] raise ModuleGraphError
-
 pub fn type_check_module(@ast.TsModule, String) -> TypeCheckResult
 
 pub fn union_types(@ast.TsType, @ast.TsType) -> @ast.TsType
 
 // Errors
-pub suberror MbtiJsLinkConfigError {
-  ReadError(String)
-  ParseError(String)
-} derive(@debug.Debug)
-
-pub suberror MbtiTypescriptDeclError {
-  ReadError(String)
-  ParseError(String)
-} derive(@debug.Debug)
-
-pub(all) suberror ModuleGraphError {
-  ReadError(String)
-  ParseError(String)
-  ResolveError(String)
-} derive(@debug.Debug)
 
 // Types and methods
 pub struct AOTCheckResult {
@@ -530,46 +473,6 @@ pub(all) struct LoopInvariantInfo {
 }
 pub fn LoopInvariantInfo::new() -> Self
 
-pub struct MbtiTypescriptPackageFile {
-  relative_path : String
-  content : String
-}
-
-pub struct MbtiTypescriptScaffoldBundle {
-  moon_pkg_json : String
-  package_json : String
-  autolink_diagnostics_md : String
-  autolink_facade_mbt : String
-  files : Array[MbtiTypescriptPackageFile]
-}
-
-pub struct ModuleGraph {
-  entry_path : String
-  modules : Array[ResolvedModuleRecord]
-} derive(@debug.Debug)
-
-pub struct MoonBitJsFfiBundle {
-  ffi_mbt : String
-  bridge_js : String
-} derive(@debug.Debug)
-
-pub struct MoonBitTsBridgeBundle {
-  entry_path : String
-  module_spec : String
-  decl_mbt : String
-  ffi_mbt : String
-  bridge_js : String
-} derive(@debug.Debug)
-
-pub struct MoonBitTsBridgePackageBundle {
-  entry_path : String
-  module_spec : String
-  moon_pkg_json : String
-  bridge_mbti : String
-  bridge_mbt : String
-  bridge_js : String
-} derive(@debug.Debug)
-
 pub(all) struct ObjectType {
   properties : Map[String, @ast.TsType]
   index_type : @ast.TsType?
@@ -631,45 +534,6 @@ pub(all) struct RefPoint {
   op : RefOp
   is_before : Bool
 }
-
-pub struct ResolvedExport {
-  export_name : String
-  source_export_name : String
-  source_path : String
-  local_name : String?
-  kind : ResolvedExportKind
-  via_path : String?
-  ambiguous_source_paths : Array[String]
-} derive(@debug.Debug)
-
-pub enum ResolvedExportKind {
-  Local
-  NamedReExport
-  StarReExport
-  Namespace
-  Ambiguous
-} derive(Eq, @debug.Debug)
-pub impl Show for ResolvedExportKind
-
-pub struct ResolvedImportEdge {
-  specifier : String
-  resolved_path : String
-  type_only : Bool
-  side_effect_only : Bool
-} derive(@debug.Debug)
-
-pub struct ResolvedModuleRecord {
-  path : String
-  module_block : @ast.TsModuleBlock
-  imports : Array[ResolvedImportEdge]
-  reexports : Array[ResolvedReExportEdge]
-} derive(@debug.Debug)
-
-pub struct ResolvedReExportEdge {
-  specifier : String
-  resolved_path : String
-  kind : @ast.TsReExportKind
-} derive(@debug.Debug)
 
 pub(all) struct Scope {
   parent : Scope?

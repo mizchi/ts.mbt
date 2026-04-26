@@ -323,10 +323,10 @@ async fn benchmark_declaration_file(
       }
       let _ = parsed
       result.decl_parse_ok += 1
-      let _ = @analysis.emit_moonbit_decl_from_entry_path(path) catch {
-        @analysis.ReadError(msg)
-        | @analysis.ParseError(msg)
-        | @analysis.ResolveError(msg) => {
+      let _ = @bridge.emit_moonbit_decl_from_entry_path(path) catch {
+        @bridge.ModuleGraphError::ReadError(msg)
+        | @bridge.ModuleGraphError::ParseError(msg)
+        | @bridge.ModuleGraphError::ResolveError(msg) => {
           result.decl_emit_failed += 1
           benchmark_push_failure(result, "emit_moonbit_decl", path, msg)
           return
@@ -334,12 +334,12 @@ async fn benchmark_declaration_file(
       }
       result.decl_emit_ok += 1
       let module_spec = benchmark_ffi_module_spec(path, root)
-      let _ = @analysis.emit_moonbit_js_ffi_bundle_from_entry_path(
+      let _ = @bridge.emit_moonbit_js_ffi_bundle_from_entry_path(
         path, module_spec,
       ) catch {
-        @analysis.ReadError(msg)
-        | @analysis.ParseError(msg)
-        | @analysis.ResolveError(msg) => {
+        @bridge.ModuleGraphError::ReadError(msg)
+        | @bridge.ModuleGraphError::ParseError(msg)
+        | @bridge.ModuleGraphError::ResolveError(msg) => {
           result.decl_js_ffi_failed += 1
           benchmark_push_failure(result, "emit_moonbit_js_ffi", path, msg)
           return
