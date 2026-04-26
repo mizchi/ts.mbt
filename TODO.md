@@ -27,7 +27,7 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
 ### Next batches
 
 - [x] Add a recursive `.mbti` resolver so generated `.d.ts` imports can be rewritten to generated sibling packages instead of raw MoonBit package specifiers.
-- [x] Add a high-level `MoonBit -> TS package scaffold` command that emits the autolink config and `.d.ts` bundle together.
+- [x] Add a high-level `MoonBit -> TS package scaffold` command that generates temporary autolink glue, runs `moon build --target js`, and emits a JS-backed `.d.ts` package.
 - [x] Align the reverse `TS -> MoonBit bridge package` flow on the same top-level export surface model and resolver assumptions.
 
 ## Bridge / Scaffold Operational Hardening
@@ -37,16 +37,16 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
 - [x] Harden unsupported export handling in `emit-moonbit-scaffold-from-ts`.
   - Namespace exports are supported as opaque getters, and ambiguous re-exports no longer block scaffold generation; they are widened/omitted consistently with the low-level emitters and reported in `SCAFFOLD_DIAGNOSTICS.md`.
 - [x] Add `just verify-scaffolds` and wire it into `just ci`.
-  - Acceptance: `emit-typescript-scaffold-from-mbti` is compiled with `tsc`, and `emit-moonbit-scaffold-from-ts` is compiled/tested with `moon check/test --target js`.
+  - Acceptance: `emit-typescript-scaffold-from-mbti` produces build-backed `index.js`, is compiled with `tsc`, and is smoke-tested through Node import; `emit-moonbit-scaffold-from-ts` is compiled/tested with `moon check/test --target js`.
 - [x] Add external import rewrite mapping for `emit-typescript-scaffold-from-mbti`.
   - `emit-typescript-package-from-mbti` / `emit-typescript-scaffold-from-mbti` now accept an optional JSON rewrite map and apply it before writing external `.d.ts` imports.
 
 ### P1
 
 - [x] Generate publish-ready metadata for `MoonBit -> TS` scaffold output.
-  - `emit-typescript-scaffold-from-mbti` now writes `package.json` with `name`, `type`, `types`, and per-subpath `exports.types` entries alongside `moon.pkg.json` and `.d.ts` files.
+  - `emit-typescript-scaffold-from-mbti` now writes `package.json` with `name`, `type`, `types`, `import`, and per-subpath `exports.types` entries alongside build-backed `index.js` / `.d.ts` files. Temporary `moon.pkg.json` glue is created only inside the source module and removed after `moon build --target js`.
 - [x] Decide how to handle methods / static members omitted from `link.js.exports`.
-  - The default scaffold still emits `AUTOLINK_DIAGNOSTICS.md` so omissions are explicit, and `emit-typescript-facade-scaffold-from-mbti` now provides an opt-in wrapper path for root-package local non-generic methods / constructors.
+  - The default scaffold still emits `AUTOLINK_DIAGNOSTICS.md` so omissions are explicit, strips runtime-inaccessible method declarations from package `.d.ts`, and `emit-typescript-facade-scaffold-from-mbti` now provides an opt-in wrapper path for root-package local non-generic methods / constructors.
 
 ### P2
 

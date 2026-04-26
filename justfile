@@ -118,6 +118,10 @@ verify-generated-fixtures:
 verify-scaffolds:
     bash scripts/verify_scaffolds.sh
 
+# Verify checked-in examples
+verify-examples:
+    bash scripts/verify_examples.sh
+
 # Benchmark a local TypeScript project corpus
 benchmark-project root limit="200":
     moon run src -- benchmark-project {{root}} {{limit}}
@@ -127,7 +131,7 @@ benchmark-corpora limit="200":
     moon run src -- benchmark-corpora {{limit}}
 
 # Full CI check
-ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures
+ci: fmt check test verify-mbti-dts verify-scaffolds verify-generated-fixtures verify-examples
 
 # Update dependencies
 update:

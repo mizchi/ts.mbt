@@ -67,7 +67,7 @@ pub struct MbtiTypescriptScaffoldBundle {
   moon_pkg_json : String
   package_json : String
   autolink_diagnostics_md : String
-  autolink_facade_mbt : String
+  autolink_glue_mbt : String
   files : Array[MbtiTypescriptPackageFile]
 }
 

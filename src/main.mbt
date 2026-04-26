@@ -267,9 +267,9 @@ fn command_help_lines() -> Array[String] {
     "  emit-typescript-from-mbti <file> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
     "  emit-js-link-config-from-mbti <file> [out] Emit MoonBit link.js.exports config from a .mbti interface",
     "  emit-typescript-package-from-mbti <file> <out-dir> [import-rewrite-json] Emit a recursive TypeScript declaration package from a root .mbti interface",
-    "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit MoonBit autolink config and recursive TypeScript declarations together",
-    "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit scaffold files plus MoonBit autolink facade wrappers for omitted local methods",
-    "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] Generate a complete bridge scaffold in either direction",
+    "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold from a MoonBit package interface",
+    "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold plus facade wrappers for omitted local methods",
+    "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] Generate a complete build-backed bridge scaffold in either direction",
     "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
     "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
@@ -578,6 +578,327 @@ async fn emit_typescript_package_from_mbti(
 }
 
 ///|
+priv struct MoonbitJsBuildContext {
+  module_root : String
+  glue_dir_name : String
+  glue_dir_path : String
+  build_arg : String
+  build_output_dir : String
+}
+
+///|
+fn parse_moon_mod_string_field(source : String, field_name : String) -> String? {
+  let json = @json.parse(source) catch { _ => return None }
+  guard json is Object(members) else { return None }
+  for pair in members {
+    let (name, value) = pair
+    if name == field_name {
+      guard value is String(text) else { return None }
+      return Some(text)
+    }
+  }
+  None
+}
+
+///|
+fn sanitize_glue_dir_part(source : String) -> String {
+  let mut rendered = ""
+  for c in source {
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') {
+      rendered += c.to_string()
+    } else if !rendered.has_suffix("_") {
+      rendered += "_"
+    }
+  }
+  let trimmed = rendered.trim(chars="_").to_string()
+  if trimmed == "" {
+    "package"
+  } else {
+    trimmed
+  }
+}
+
+///|
+fn hash_glue_dir_part(source : String) -> String {
+  let mut hash = 5381
+  for c in source {
+    hash = (hash * 33 + c.to_int()) % 1000003
+  }
+  hash.to_string()
+}
+
+///|
+async fn find_nearest_moon_mod_dir(start_dir : String) -> String? {
+  let mut current = start_dir
+  while true {
+    let moon_mod = main_join_path(current, "moon.mod.json")
+    if @fs.exists(moon_mod) {
+      return Some(current)
+    }
+    let parent = main_dirname(current)
+    if parent == current {
+      return None
+    }
+    current = parent
+  }
+  None
+}
+
+///|
+fn strip_dir_prefix(root : String, path : String) -> String? {
+  if path == root {
+    return Some("")
+  }
+  let prefix = if root.has_suffix("/") { root } else { root + "/" }
+  if path.has_prefix(prefix) {
+    Some(path[prefix.length():path.length()].to_string())
+  } else {
+    None
+  }
+}
+
+///|
+async fn resolve_moonbit_js_build_context(
+  mbti_path : String,
+  output_dir : String,
+) -> MoonbitJsBuildContext? {
+  let source = @fs.read_file(mbti_path).text() catch { _ => return None }
+  let package_name = match parse_mbti_package_name_from_source(source) {
+    Some(name) => name
+    None => return None
+  }
+  let mbti_realpath = @fs.realpath(mbti_path) catch { _ => mbti_path }
+  let package_dir = main_dirname(mbti_realpath)
+  let module_root = match find_nearest_moon_mod_dir(package_dir) {
+    Some(root) => @fs.realpath(root) catch { _ => root }
+    None => return None
+  }
+  let moon_mod_path = main_join_path(module_root, "moon.mod.json")
+  let moon_mod_source = @fs.read_file(moon_mod_path).text() catch {
+    _ => return None
+  }
+  let source_root_rel = match
+    parse_moon_mod_string_field(moon_mod_source, "source") {
+    Some(source) => source
+    None => "."
+  }
+  let source_root = if source_root_rel == "." || source_root_rel == "" {
+    module_root
+  } else {
+    main_join_path(module_root, source_root_rel)
+  }
+  let source_root_realpath = @fs.realpath(source_root) catch {
+    _ => source_root
+  }
+  match strip_dir_prefix(source_root_realpath, package_dir) {
+    Some(_) => ()
+    None => return None
+  }
+  let glue_dir_name = "__tsmbt_glue__" +
+    sanitize_glue_dir_part(package_name) +
+    "__" +
+    hash_glue_dir_part(output_dir)
+  let glue_dir_path = main_join_path(source_root_realpath, glue_dir_name)
+  let build_arg = if source_root_rel == "." || source_root_rel == "" {
+    glue_dir_name
+  } else {
+    main_join_path(source_root_rel, glue_dir_name)
+  }
+  let build_output_dir = main_join_path(
+    main_join_path(
+      main_join_path(
+        main_join_path(main_join_path(module_root, "_build"), "js"),
+        "debug",
+      ),
+      "build",
+    ),
+    glue_dir_name,
+  )
+  Some({
+    module_root,
+    glue_dir_name,
+    glue_dir_path,
+    build_arg,
+    build_output_dir,
+  })
+}
+
+///|
+async fn write_text_file(path : String, content : String) -> Bool {
+  let parent = main_dirname(path)
+  let _ = ensure_dir_tree(parent) catch {
+    e => {
+      println("Write error: \{e}")
+      return false
+    }
+  }
+  let _ = @fs.write_file(path, string_to_bytes(content), create=0o644) catch {
+    e => {
+      println("Write error: \{e}")
+      return false
+    }
+  }
+  true
+}
+
+///|
+async fn copy_text_file_with_rewrite(
+  from : String,
+  to : String,
+  old_text : String,
+  new_text : String,
+) -> Bool {
+  let source = @fs.read_file(from).text() catch {
+    e => {
+      println("Build output error: failed to read \{from}: \{e}")
+      return false
+    }
+  }
+  write_text_file(to, source.replace(old=old_text, new=new_text))
+}
+
+///|
+async fn copy_binary_file(from : String, to : String) -> Bool {
+  let bytes = @fs.read_file(from) catch {
+    e => {
+      println("Build output error: failed to read \{from}: \{e}")
+      return false
+    }
+  }
+  let parent = main_dirname(to)
+  let _ = ensure_dir_tree(parent) catch {
+    e => {
+      println("Write error: \{e}")
+      return false
+    }
+  }
+  let _ = @fs.write_file(to, bytes, create=0o644) catch {
+    e => {
+      println("Write error: \{e}")
+      return false
+    }
+  }
+  true
+}
+
+///|
+async fn remove_moonbit_js_glue_dir(path : String) -> Unit {
+  let _ = @fs.rmdir(path, recursive=true) catch { _ => () }
+}
+
+///|
+async fn build_moonbit_js_runtime_from_mbti(
+  mbti_path : String,
+  output_dir : String,
+  bundle : @bridge.MbtiTypescriptScaffoldBundle,
+) -> Bool {
+  if bundle.autolink_glue_mbt == "" {
+    println("Build error: no MoonBit JS glue exports were generated")
+    return false
+  }
+  let context = match resolve_moonbit_js_build_context(mbti_path, output_dir) {
+    Some(context) => context
+    None => {
+      println(
+        "Build error: could not locate a MoonBit source package for \{mbti_path}; pass a package with real source, not only a pkg.generated.mbti fixture.",
+      )
+      return false
+    }
+  }
+  remove_moonbit_js_glue_dir(context.glue_dir_path)
+  let _ = ensure_dir_tree(context.glue_dir_path) catch {
+    e => {
+      println("Write error: \{e}")
+      remove_moonbit_js_glue_dir(context.glue_dir_path)
+      return false
+    }
+  }
+  if !write_text_file(
+      main_join_path(context.glue_dir_path, "moon.pkg.json"),
+      bundle.moon_pkg_json,
+    ) {
+    remove_moonbit_js_glue_dir(context.glue_dir_path)
+    return false
+  }
+  if !write_text_file(
+      main_join_path(context.glue_dir_path, "glue.mbt"),
+      bundle.autolink_glue_mbt,
+    ) {
+    remove_moonbit_js_glue_dir(context.glue_dir_path)
+    return false
+  }
+  let (exit_code, output) = @process.collect_output_merged(
+    "moon",
+    ["build", "--target", "js", context.build_arg],
+    cwd=context.module_root,
+  )
+  if exit_code != 0 {
+    println("Build error: moon build --target js failed")
+    println(output.text())
+    remove_moonbit_js_glue_dir(context.glue_dir_path)
+    return false
+  }
+  let built_js_name = context.glue_dir_name + ".js"
+  let built_js_path = main_join_path(context.build_output_dir, built_js_name)
+  let built_map_path = built_js_path + ".map"
+  let output_js_path = main_join_path(output_dir, "index.js")
+  let output_map_path = main_join_path(output_dir, "index.js.map")
+  if !copy_text_file_with_rewrite(
+      built_js_path,
+      output_js_path,
+      built_js_name + ".map",
+      "index.js.map",
+    ) {
+    remove_moonbit_js_glue_dir(context.glue_dir_path)
+    return false
+  }
+  if @fs.exists(built_map_path) {
+    if !copy_binary_file(built_map_path, output_map_path) {
+      remove_moonbit_js_glue_dir(context.glue_dir_path)
+      return false
+    }
+  }
+  remove_moonbit_js_glue_dir(context.glue_dir_path)
+  true
+}
+
+///|
+async fn write_typescript_scaffold_bundle_files(
+  output_dir : String,
+  bundle : @bridge.MbtiTypescriptScaffoldBundle,
+) -> Bool {
+  let _ = ensure_dir_tree(output_dir) catch {
+    e => {
+      println("Write error: \{e}")
+      return false
+    }
+  }
+  if !write_text_file(
+      main_join_path(output_dir, "package.json"),
+      bundle.package_json,
+    ) {
+    return false
+  }
+  if !write_text_file(
+      main_join_path(output_dir, "AUTOLINK_DIAGNOSTICS.md"),
+      bundle.autolink_diagnostics_md,
+    ) {
+    return false
+  }
+  for file in bundle.files {
+    if !write_text_file(
+        main_join_path(output_dir, file.relative_path),
+        file.content,
+      ) {
+      return false
+    }
+  }
+  true
+}
+
+///|
 async fn emit_typescript_scaffold_from_mbti(
   file_path : String,
   output_dir : String,
@@ -597,64 +918,11 @@ async fn emit_typescript_scaffold_from_mbti(
       return
     }
   }
-  let _ = ensure_dir_tree(output_dir) catch {
-    e => {
-      println("Write error: \{e}")
-      return
-    }
+  if !build_moonbit_js_runtime_from_mbti(file_path, output_dir, bundle) {
+    return
   }
-  let moon_pkg_path = main_join_path(output_dir, "moon.pkg.json")
-  let _ = @fs.write_file(
-    moon_pkg_path,
-    string_to_bytes(bundle.moon_pkg_json),
-    create=0o644,
-  ) catch {
-    e => {
-      println("Write error: \{e}")
-      return
-    }
-  }
-  let package_json_path = main_join_path(output_dir, "package.json")
-  let _ = @fs.write_file(
-    package_json_path,
-    string_to_bytes(bundle.package_json),
-    create=0o644,
-  ) catch {
-    e => {
-      println("Write error: \{e}")
-      return
-    }
-  }
-  let diagnostics_path = main_join_path(output_dir, "AUTOLINK_DIAGNOSTICS.md")
-  let _ = @fs.write_file(
-    diagnostics_path,
-    string_to_bytes(bundle.autolink_diagnostics_md),
-    create=0o644,
-  ) catch {
-    e => {
-      println("Write error: \{e}")
-      return
-    }
-  }
-  for file in bundle.files {
-    let output_path = main_join_path(output_dir, file.relative_path)
-    let parent_dir = main_dirname(output_path)
-    let _ = ensure_dir_tree(parent_dir) catch {
-      e => {
-        println("Write error: \{e}")
-        return
-      }
-    }
-    let _ = @fs.write_file(
-      output_path,
-      string_to_bytes(file.content),
-      create=0o644,
-    ) catch {
-      e => {
-        println("Write error: \{e}")
-        return
-      }
-    }
+  if !write_typescript_scaffold_bundle_files(output_dir, bundle) {
+    return
   }
   println("Wrote TypeScript scaffold to \{output_dir}")
 }
@@ -679,77 +947,11 @@ async fn emit_typescript_facade_scaffold_from_mbti(
       return
     }
   }
-  let _ = ensure_dir_tree(output_dir) catch {
-    e => {
-      println("Write error: \{e}")
-      return
-    }
+  if !build_moonbit_js_runtime_from_mbti(file_path, output_dir, bundle) {
+    return
   }
-  let moon_pkg_path = main_join_path(output_dir, "moon.pkg.json")
-  let _ = @fs.write_file(
-    moon_pkg_path,
-    string_to_bytes(bundle.moon_pkg_json),
-    create=0o644,
-  ) catch {
-    e => {
-      println("Write error: \{e}")
-      return
-    }
-  }
-  let package_json_path = main_join_path(output_dir, "package.json")
-  let _ = @fs.write_file(
-    package_json_path,
-    string_to_bytes(bundle.package_json),
-    create=0o644,
-  ) catch {
-    e => {
-      println("Write error: \{e}")
-      return
-    }
-  }
-  let diagnostics_path = main_join_path(output_dir, "AUTOLINK_DIAGNOSTICS.md")
-  let _ = @fs.write_file(
-    diagnostics_path,
-    string_to_bytes(bundle.autolink_diagnostics_md),
-    create=0o644,
-  ) catch {
-    e => {
-      println("Write error: \{e}")
-      return
-    }
-  }
-  if bundle.autolink_facade_mbt != "" {
-    let facade_path = main_join_path(output_dir, "AUTOLINK_FACADE.mbt")
-    let _ = @fs.write_file(
-      facade_path,
-      string_to_bytes(bundle.autolink_facade_mbt),
-      create=0o644,
-    ) catch {
-      e => {
-        println("Write error: \{e}")
-        return
-      }
-    }
-  }
-  for file in bundle.files {
-    let output_path = main_join_path(output_dir, file.relative_path)
-    let parent_dir = main_dirname(output_path)
-    let _ = ensure_dir_tree(parent_dir) catch {
-      e => {
-        println("Write error: \{e}")
-        return
-      }
-    }
-    let _ = @fs.write_file(
-      output_path,
-      string_to_bytes(file.content),
-      create=0o644,
-    ) catch {
-      e => {
-        println("Write error: \{e}")
-        return
-      }
-    }
+  if !write_typescript_scaffold_bundle_files(output_dir, bundle) {
+    return
   }
   println("Wrote TypeScript facade scaffold to \{output_dir}")
 }

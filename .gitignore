@@ -18,6 +18,9 @@ Thumbs.db
 # Node.js
 node_modules/
 
+# Example generated outputs
+examples/**/dist/
+
 # test262 run logs and temporary files
 test262*.run.log
 test262*.log

@@ -1,7 +1,9 @@
 import {
   "moonbitlang/async",
   "moonbitlang/async/fs",
+  "moonbitlang/async/process" @process,
   "moonbitlang/core/env",
+  "moonbitlang/core/json" @json,
   "moonbitlang/core/string",
   "moonbitlang/core/encoding/utf8",
   "mizchi/ts/ast" @ast,

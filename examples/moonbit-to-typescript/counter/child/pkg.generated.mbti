@@ -1,0 +1,19 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "examples/counter/child"
+
+// Values
+pub fn make_item(Int, String) -> Item
+
+// Errors
+
+// Types and methods
+pub struct Item {
+  id : Int
+  name : String
+}
+pub fn Item::display(Self) -> String
+
+// Type aliases
+
+// Traits
+

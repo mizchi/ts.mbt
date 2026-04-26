@@ -163,17 +163,17 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
-      "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit MoonBit autolink config and recursive TypeScript declarations together",
+      "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold from a MoonBit package interface",
     ),
   )
   assert_true(
     lines.contains(
-      "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit scaffold files plus MoonBit autolink facade wrappers for omitted local methods",
+      "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold plus facade wrappers for omitted local methods",
     ),
   )
   assert_true(
     lines.contains(
-      "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] Generate a complete bridge scaffold in either direction",
+      "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] Generate a complete build-backed bridge scaffold in either direction",
     ),
   )
   assert_true(
@@ -240,18 +240,20 @@ test "parse_unified_tsmbt_options accepts positional generate args and equals fl
 
 ///|
 async test "resolve_unified_mbt_input_path finds package name in generated mbti files" {
-  match resolve_unified_mbt_input_path("demo/pkg") {
+  match resolve_unified_mbt_input_path("examples/counter") {
     Some(path) =>
-      assert_eq(path, "fixtures/mbti_typescript_package/pkg.generated.mbti")
-    None => fail("expected demo/pkg pkg.generated.mbti")
+      assert_eq(
+        path, "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
+      )
+    None => fail("expected examples/counter pkg.generated.mbti")
   }
 }
 
 ///|
 async test "infer_unified_tsmbt_direction detects package names and TypeScript entries" {
-  match infer_unified_tsmbt_direction("demo/pkg") {
+  match infer_unified_tsmbt_direction("examples/counter") {
     Some(TsmbtDirection::MbtToTs) => ()
-    _ => fail("expected demo/pkg to infer mbt-to-ts")
+    _ => fail("expected examples/counter to infer mbt-to-ts")
   }
   match
     infer_unified_tsmbt_direction(
@@ -267,21 +269,21 @@ async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold fro
   let root = wbtest_tmp_project_benchmark_root("unified_mbt_to_ts")
   let _ = try? @fs.rmdir(root, recursive=true)
   emit_unified_tsmbt_scaffold(
-    "demo/pkg",
+    "examples/counter",
     root,
     direction=TsmbtDirection::MbtToTs,
     module_spec=None,
     import_rewrite_path=None,
     facade=true,
   )
-  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
-    e => fail("failed to read unified moon.pkg.json: \{e}")
-  }
   let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
     e => fail("failed to read unified index.d.ts: \{e}")
   }
-  assert_true(moon_pkg_json.contains("\"make\""))
+  let root_js = @fs.read_file(wbtest_join_path(root, "index.js")).text() catch {
+    e => fail("failed to read unified index.js: \{e}")
+  }
   assert_true(root_decl.contains("import type * as child from \"./child\";"))
+  assert_true(root_js.contains("export {"))
 }
 
 ///|
@@ -414,20 +416,17 @@ async test "emit_typescript_package_from_mbti writes recursive declaration bundl
 }
 
 ///|
-async test "emit_typescript_scaffold_from_mbti writes moon.pkg.json and declaration bundle" {
+async test "emit_typescript_scaffold_from_mbti writes declaration package metadata" {
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_scaffold_bundle",
   )
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
   emit_typescript_scaffold_from_mbti(
-    "fixtures/mbti_typescript_package/pkg.generated.mbti",
+    "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
     root,
     None,
   )
-  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
-    e => fail("failed to read moon.pkg.json: \{e}")
-  }
   let package_json = @fs.read_file(wbtest_join_path(root, "package.json")).text() catch {
     e => fail("failed to read package.json: \{e}")
   }
@@ -439,14 +438,18 @@ async test "emit_typescript_scaffold_from_mbti writes moon.pkg.json and declarat
   let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
     e => fail("failed to read root index.d.ts: \{e}")
   }
-  assert_true(moon_pkg_json.contains("\"make\""))
-  assert_true(moon_pkg_json.contains("\"render\""))
-  assert_true(package_json.contains("\"name\": \"@demo/pkg\""))
+  let root_js = @fs.read_file(wbtest_join_path(root, "index.js")).text() catch {
+    e => fail("failed to read root index.js: \{e}")
+  }
+  assert_true(package_json.contains("\"name\": \"@examples/counter\""))
+  assert_true(package_json.contains("\"import\": \"./index.js\""))
   assert_true(
     package_json.contains("\"./child\": { \"types\": \"./child/index.d.ts\" }"),
   )
-  assert_true(diagnostics_md.contains("Item::new"))
+  assert_true(diagnostics_md.contains("Counter::label"))
   assert_true(root_decl.contains("import type * as child from \"./child\";"))
+  assert_false(root_decl.contains("counter_label"))
+  assert_true(root_js.contains("export {"))
 }
 
 ///|
@@ -469,91 +472,134 @@ async test "emit_typescript_package_from_mbti rewrites external imports from jso
 }
 
 ///|
-async test "emit_typescript_scaffold_from_mbti rewrites external imports from json map" {
+async test "emit_typescript_scaffold_from_mbti rejects mbti fixtures without source package" {
   let root = wbtest_tmp_project_benchmark_root(
-    "mbti_typescript_scaffold_bundle_rewrites",
+    "mbti_typescript_scaffold_bundle_fixture_rejected",
   )
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
   emit_typescript_scaffold_from_mbti(
     "fixtures/mbti_typescript_package/pkg.generated.mbti",
     root,
-    Some("fixtures/mbti_typescript_package/import-rewrites.json"),
+    None,
   )
-  let package_json = @fs.read_file(wbtest_join_path(root, "package.json")).text() catch {
-    e => fail("failed to read rewritten scaffold package.json: \{e}")
-  }
-  let diagnostics_md = @fs.read_file(
-    wbtest_join_path(root, "AUTOLINK_DIAGNOSTICS.md"),
-  ).text() catch {
-    e => fail("failed to read rewritten scaffold AUTOLINK_DIAGNOSTICS.md: \{e}")
-  }
-  let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
-    e => fail("failed to read rewritten scaffold index.d.ts: \{e}")
-  }
-  assert_true(package_json.contains("\"name\": \"@demo/pkg\""))
-  assert_true(diagnostics_md.contains("Item::new"))
-  assert_true(root_decl.contains("import type * as debug from \"demo-debug\";"))
-  assert_false(root_decl.contains("\"moonbitlang/core/debug\""))
+  assert_false(@fs.exists(wbtest_join_path(root, "package.json")))
+  assert_false(@fs.exists(wbtest_join_path(root, "index.d.ts")))
+  assert_false(@fs.exists(wbtest_join_path(root, "index.js")))
 }
 
 ///|
-async test "emit_typescript_facade_scaffold_from_mbti writes facade wrapper file" {
+async test "emit_typescript_scaffold_from_mbti handles moon.mod source subdir" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "mbti_typescript_scaffold_source_subdir",
+  )
+  let _ = try? @fs.rmdir(root, recursive=true)
+  let pkg_dir = wbtest_join_path(root, "src/pkg")
+  ensure_dir_tree(pkg_dir)
+  @fs.write_file(
+    wbtest_join_path(root, "moon.mod.json"),
+    (
+      #|{
+      #|  "name": "fixture/source-subdir",
+      #|  "version": "0.1.0",
+      #|  "source": "src",
+      #|  "preferred-target": "js"
+      #|}
+    ),
+    create=0o644,
+  )
+  @fs.write_file(wbtest_join_path(pkg_dir, "moon.pkg"), "", create=0o644)
+  @fs.write_file(
+    wbtest_join_path(pkg_dir, "pkg.mbt"),
+    (
+      #|///|
+      #|pub struct Cell {
+      #|  value : String
+      #|}
+      #|
+      #|///|
+      #|pub fn make(value : String) -> Cell {
+      #|  { value }
+      #|}
+      #|
+      #|///|
+      #|pub fn render(cell : Cell) -> String {
+      #|  cell.value
+      #|}
+    ),
+    create=0o644,
+  )
+  let (info_exit, info_output) = @process.collect_output_merged(
+    "moon",
+    ["-C", root, "info"],
+    cwd=".",
+  )
+  if info_exit != 0 {
+    fail("moon info failed: \{info_output.text()}")
+  }
+  let out = wbtest_join_path(root, "dist")
+  emit_typescript_scaffold_from_mbti(
+    wbtest_join_path(pkg_dir, "pkg.generated.mbti"),
+    out,
+    None,
+  )
+  let package_json = @fs.read_file(wbtest_join_path(out, "package.json")).text() catch {
+    e => fail("failed to read source-subdir package.json: \{e}")
+  }
+  let root_decl = @fs.read_file(wbtest_join_path(out, "index.d.ts")).text() catch {
+    e => fail("failed to read source-subdir index.d.ts: \{e}")
+  }
+  let root_js = @fs.read_file(wbtest_join_path(out, "index.js")).text() catch {
+    e => fail("failed to read source-subdir index.js: \{e}")
+  }
+  assert_true(package_json.contains("\"name\": \"@fixture/source-subdir-pkg\""))
+  assert_true(root_decl.contains("export function make(arg0: string): Cell;"))
+  assert_true(root_js.contains("export {"))
+}
+
+///|
+async test "emit_typescript_facade_scaffold_from_mbti writes facade declarations" {
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_facade_scaffold",
   )
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
   emit_typescript_facade_scaffold_from_mbti(
-    "fixtures/mbti_typescript/link_config_async.pkg.generated.mbti",
+    "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
     root,
     None,
   )
-  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
-    e => fail("failed to read facade moon.pkg.json: \{e}")
-  }
-  let facade_mbt = @fs.read_file(wbtest_join_path(root, "AUTOLINK_FACADE.mbt")).text() catch {
-    e => fail("failed to read AUTOLINK_FACADE.mbt: \{e}")
-  }
   let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
     e => fail("failed to read facade index.d.ts: \{e}")
   }
-  assert_true(moon_pkg_json.contains("\"loader_new\""))
-  assert_true(moon_pkg_json.contains("\"loader_load\""))
-  assert_true(facade_mbt.contains("pub fn loader_new(arg0 : String) -> Loader"))
+  let root_js = @fs.read_file(wbtest_join_path(root, "index.js")).text() catch {
+    e => fail("failed to read facade index.js: \{e}")
+  }
   assert_true(
-    facade_mbt.contains("pub fn loader_load(self : Loader) -> String"),
+    root_decl.contains("export function counter_label(self: Counter): string;"),
   )
-  assert_true(
-    root_decl.contains("export function loader_new(arg0: string): Loader;"),
-  )
-  assert_true(
-    root_decl.contains("export function loader_load(self: Loader): string;"),
-  )
+  assert_true(root_js.contains("counter__label"))
 }
 
 ///|
-async test "emit_typescript_facade_scaffold_from_mbti keeps root imports in facade wrapper file" {
+async test "emit_typescript_facade_scaffold_from_mbti keeps root imports in facade declarations" {
   let root = wbtest_tmp_project_benchmark_root(
     "mbti_typescript_facade_scaffold_imports",
   )
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
   emit_typescript_facade_scaffold_from_mbti(
-    "fixtures/mbti_typescript_facade_package/pkg.generated.mbti",
+    "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
     root,
     None,
   )
-  let facade_mbt = @fs.read_file(wbtest_join_path(root, "AUTOLINK_FACADE.mbt")).text() catch {
-    e => fail("failed to read imported AUTOLINK_FACADE.mbt: \{e}")
+  let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
+    e => fail("failed to read imported facade index.d.ts: \{e}")
   }
-  assert_true(facade_mbt.contains("import {"))
-  assert_true(facade_mbt.contains("\"demo/facade/child\","))
+  assert_true(root_decl.contains("import type * as child from \"./child\";"))
+  assert_true(root_decl.contains("item: child.Item;"))
   assert_true(
-    facade_mbt.contains("pub fn loader_new(arg0 : @child.Item) -> Loader"),
-  )
-  assert_true(
-    facade_mbt.contains("pub fn loader_load(self : Loader) -> @child.Item"),
+    root_decl.contains("export function counter_label(self: Counter): string;"),
   )
 }
 

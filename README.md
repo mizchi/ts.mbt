@@ -113,6 +113,7 @@ dynamic JS features. It currently uses wasm-gc for arrays and structs.
 ## Package Bridge Scaffolds
 
 This repo now supports both directions of package scaffold generation.
+See [`examples/`](./examples/) for runnable demos of both directions.
 
 ### Unified CLI
 
@@ -122,6 +123,8 @@ TypeScript entrypoint / installed package specifier.
 
 ```bash
 # MoonBit -> TypeScript. Run `moon info` first so pkg.generated.mbti exists.
+# This creates temporary MoonBit glue code, runs `moon build --target js`,
+# and emits a TypeScript package backed by the built JS output.
 tsmbt --input mizchi/foo --out dist
 
 # TypeScript -> MoonBit. For bare npm-style inputs, the runtime module spec
@@ -136,18 +139,23 @@ tsmbt --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist --d
 `--direction auto` is the default. It resolves MoonBit package names by scanning
 for matching `pkg.generated.mbti` files under the current project, and resolves
 bare TypeScript inputs through the TypeScript package resolver. The MoonBit ->
-TypeScript unified path emits the facade scaffold by default; pass
-`--no-facade` to emit only the base TypeScript scaffold.
+TypeScript unified path emits facade glue by default, builds it with
+`moon build --target js`, and copies the built JS to `index.js`; pass
+`--no-facade` to emit only top-level free-function glue.
 
 ### MoonBit -> TypeScript
 
-Start from a root `pkg.generated.mbti` and emit:
+Start from a root `pkg.generated.mbti` for a real MoonBit source package and
+emit:
 
-- `moon.pkg.json` with generated `link.js.exports`
+- `index.js` copied from the temporary glue package's `moon build --target js` output
 - `package.json` with `types` / `exports` metadata for the emitted declaration package
 - `AUTOLINK_DIAGNOSTICS.md` listing public methods/constructors omitted from `link.js.exports`
 - recursive `.d.ts` files with local MoonBit package imports rewritten to sibling relative imports
-- optional `AUTOLINK_FACADE.mbt` wrappers for omitted root-local methods/constructors
+
+The temporary glue package contains generated wrapper functions and
+`link.js.exports`, is built with `moon build --target js`, and is removed after
+the built JS is copied to `index.js`.
 
 ```bash
 moon run src -- emit-typescript-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg
@@ -175,9 +183,10 @@ moon run src -- emit-typescript-from-mbti src/pkg.generated.mbti
 Current export model:
 
 - JS autolink is generated from top-level public free functions only.
-- Methods, constructors, and trait methods stay in the emitted `.d.ts`, but are not added to `link.js.exports`.
+- Runtime-inaccessible method / namespace declarations are stripped from scaffold `.d.ts` output unless wrapper glue is generated for them.
 - Scaffold output includes `AUTOLINK_DIAGNOSTICS.md` so omitted public members are explicit.
-- `emit-typescript-facade-scaffold-from-mbti` is an opt-in variant that also emits `AUTOLINK_FACADE.mbt` and extends `link.js.exports` / `index.d.ts` with generated wrappers for root-package local non-generic methods and constructors.
+- `emit-typescript-facade-scaffold-from-mbti` is an opt-in variant that adds generated top-level wrappers for root-package local non-generic methods and constructors to the temporary glue package, then exposes those wrappers from the built `index.js` and `index.d.ts`.
+- The temporary `moon.pkg.json` and wrapper `.mbt` files are build inputs only; they are not written to the final TypeScript package.
 - Recursive `.mbti` resolution only rewrites imports that stay under the same root package prefix. External imports remain bare specifiers.
 - `emit-typescript-package-from-mbti` and `emit-typescript-scaffold-from-mbti` accept an optional JSON object for external import rewrites, for example `{ "moonbitlang/core/debug": "demo-debug" }`.
 - Generated `package.json` names are derived from the MoonBit package path, for example `demo/pkg` -> `@demo/pkg` and `mizchi/ts/analysis` -> `@mizchi/ts-analysis`.

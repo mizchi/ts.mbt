@@ -1,0 +1,25 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "examples/counter"
+
+import {
+  "examples/counter/child",
+}
+
+// Values
+pub fn create(String, @child.Item) -> Counter
+
+pub fn summarize(Counter) -> String
+
+// Errors
+
+// Types and methods
+pub struct Counter {
+  label : String
+  item : @child.Item
+}
+pub fn Counter::label(Self) -> String
+
+// Type aliases
+
+// Traits
+

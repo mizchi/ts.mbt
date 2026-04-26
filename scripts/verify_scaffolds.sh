@@ -6,55 +6,13 @@ cd "$repo_root"
 
 verify_typescript_scaffold_fixture() {
   local root="_build/scaffold_mbti_to_ts"
-  local rewrite_map="$repo_root/fixtures/mbti_typescript_package/import-rewrites.json"
+  local mbti_path="$repo_root/examples/moonbit-to-typescript/counter/pkg.generated.mbti"
 
   rm -rf "$root"
   mkdir -p "$root"
 
   moon run src -- emit-typescript-scaffold-from-mbti \
-    fixtures/mbti_typescript_package/pkg.generated.mbti \
-    "$root/out" \
-    "$rewrite_map" >/dev/null
-
-  cat > "$root/demo-debug.d.ts" <<'EOF'
-export interface Debug {}
-EOF
-
-  cat > "$root/tsconfig.json" <<'EOF'
-{
-  "compilerOptions": {
-    "strict": true,
-    "noEmit": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "baseUrl": ".",
-    "lib": ["es2020"]
-  },
-  "files": [
-    "out/index.d.ts",
-    "out/child/index.d.ts",
-    "demo-debug.d.ts"
-  ]
-}
-EOF
-
-  [ -f "$root/out/moon.pkg.json" ]
-  [ -f "$root/out/package.json" ]
-  [ -f "$root/out/AUTOLINK_DIAGNOSTICS.md" ]
-  grep -F '"name": "@demo/pkg"' "$root/out/package.json" >/dev/null
-  grep -F '"./child": { "types": "./child/index.d.ts" }' "$root/out/package.json" >/dev/null
-  grep -F 'Item::new' "$root/out/AUTOLINK_DIAGNOSTICS.md" >/dev/null
-  pnpm exec tsc -p "$root/tsconfig.json" --pretty false
-}
-
-verify_typescript_facade_scaffold_fixture() {
-  local root="_build/scaffold_mbti_to_ts_facade"
-
-  rm -rf "$root"
-  mkdir -p "$root"
-
-  moon run src -- emit-typescript-facade-scaffold-from-mbti \
-    fixtures/mbti_typescript_facade_package/pkg.generated.mbti \
+    "$mbti_path" \
     "$root/out" >/dev/null
 
   cat > "$root/tsconfig.json" <<'EOF'
@@ -74,19 +32,85 @@ verify_typescript_facade_scaffold_fixture() {
 }
 EOF
 
-  [ -f "$root/out/moon.pkg.json" ]
   [ -f "$root/out/package.json" ]
+  [ -f "$root/out/index.js" ]
+  [ -f "$root/out/index.js.map" ]
   [ -f "$root/out/AUTOLINK_DIAGNOSTICS.md" ]
-  [ -f "$root/out/AUTOLINK_FACADE.mbt" ]
-  grep -F '"loader_new"' "$root/out/moon.pkg.json" >/dev/null
-  grep -F '"loader_load"' "$root/out/moon.pkg.json" >/dev/null
-  grep -F 'import {' "$root/out/AUTOLINK_FACADE.mbt" >/dev/null
-  grep -F '"demo/facade/child",' "$root/out/AUTOLINK_FACADE.mbt" >/dev/null
-  grep -F 'pub fn loader_new(arg0 : @child.Item) -> Loader {' "$root/out/AUTOLINK_FACADE.mbt" >/dev/null
-  grep -F 'pub fn loader_load(self : Loader) -> @child.Item {' "$root/out/AUTOLINK_FACADE.mbt" >/dev/null
-  grep -F 'export function loader_new(arg0: child.Item): Loader;' "$root/out/index.d.ts" >/dev/null
-  grep -F 'export function loader_load(self: Loader): child.Item;' "$root/out/index.d.ts" >/dev/null
+  [ ! -f "$root/out/moon.pkg.json" ]
+  [ ! -f "$root/out/moon.pkg" ]
+  [ ! -f "$root/out/AUTOLINK_FACADE.mbt" ]
+  [ ! -f "$root/out/TSMBT_GLUE.mbt" ]
+  grep -F '"name": "@examples/counter"' "$root/out/package.json" >/dev/null
+  grep -F '"import": "./index.js"' "$root/out/package.json" >/dev/null
+  grep -F '"./child": { "types": "./child/index.d.ts" }' "$root/out/package.json" >/dev/null
+  grep -F 'Counter::label' "$root/out/AUTOLINK_DIAGNOSTICS.md" >/dev/null
+  if grep -F 'counter_label' "$root/out/index.d.ts" >/dev/null; then
+    echo "base scaffold should not emit facade declarations" >&2
+    exit 1
+  fi
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
+  node --input-type=module <<'EOF'
+const mod = await import("./_build/scaffold_mbti_to_ts/out/index.js");
+const counter = mod.create("demo", { id: 7, name: "item" });
+if (mod.summarize(counter) !== "demo:item#7") {
+  throw new Error("unexpected summarize output");
+}
+if ("counter_label" in mod) {
+  throw new Error("base scaffold unexpectedly exported counter_label");
+}
+EOF
+}
+
+verify_typescript_facade_scaffold_fixture() {
+  local root="_build/scaffold_mbti_to_ts_facade"
+  local mbti_path="$repo_root/examples/moonbit-to-typescript/counter/pkg.generated.mbti"
+
+  rm -rf "$root"
+  mkdir -p "$root"
+
+  moon run src -- emit-typescript-facade-scaffold-from-mbti \
+    "$mbti_path" \
+    "$root/out" >/dev/null
+
+  cat > "$root/tsconfig.json" <<'EOF'
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "lib": ["es2020"]
+  },
+  "files": [
+    "out/index.d.ts",
+    "out/child/index.d.ts"
+  ]
+}
+EOF
+
+  [ -f "$root/out/package.json" ]
+  [ -f "$root/out/index.js" ]
+  [ -f "$root/out/index.js.map" ]
+  [ -f "$root/out/AUTOLINK_DIAGNOSTICS.md" ]
+  [ ! -f "$root/out/moon.pkg.json" ]
+  [ ! -f "$root/out/moon.pkg" ]
+  [ ! -f "$root/out/AUTOLINK_FACADE.mbt" ]
+  [ ! -f "$root/out/TSMBT_GLUE.mbt" ]
+  grep -F '"name": "@examples/counter"' "$root/out/package.json" >/dev/null
+  grep -F '"import": "./index.js"' "$root/out/package.json" >/dev/null
+  grep -F 'export function counter_label(self: Counter): string;' "$root/out/index.d.ts" >/dev/null
+  pnpm exec tsc -p "$root/tsconfig.json" --pretty false
+  node --input-type=module <<'EOF'
+const mod = await import("./_build/scaffold_mbti_to_ts_facade/out/index.js");
+const counter = mod.create("demo", { id: 7, name: "item" });
+if (mod.counter_label(counter) !== "demo") {
+  throw new Error("unexpected counter_label output");
+}
+if (mod.summarize(counter) !== "demo:item#7") {
+  throw new Error("unexpected summarize output");
+}
+EOF
 }
 
 write_js_any_stub() {
