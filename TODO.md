@@ -173,6 +173,7 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Spread in array literals and known-signature function calls
 - [x] Conditional named function call expressions, e.g. `(flag ? f : g)(x)`
 - [x] IIFE call expressions for arrow/function expressions with expression or single-return block bodies
+  - Covered shapes now include zero-arg wrappers, multi-arg wrappers, named function IIFEs, and nested IIFEs; reusable function values remain a separate closure-conversion task.
 
 ### Next in order
 1. Continue arbitrary call expression support beyond inline IIFEs toward reusable function values / closures.

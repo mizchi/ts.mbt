@@ -305,6 +305,28 @@ test "codegen: function expression iife call expression" {
 }
 
 ///|
+test "codegen: real-world iife wrapper patterns" {
+  let src =
+    #|function normalize(n: number): number {
+    #|  return (() => (n > 0 ? n : -n))();
+    #|}
+    #|function scale(n: number): number {
+    #|  return ((value: number, factor: number) => value * factor)(n, 3);
+    #|}
+    #|function named(n: number): number {
+    #|  return (function init(value: number): number { return value + 5; })(n);
+    #|}
+    #|function nested(n: number): number {
+    #|  return (() => ((x: number) => x + 1)(n))();
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "normalize", [-7.0], 7.0)
+  assert_run_f64(wasm, "scale", [7.0], 21.0)
+  assert_run_f64(wasm, "named", [7.0], 12.0)
+  assert_run_f64(wasm, "nested", [7.0], 8.0)
+}
+
+///|
 test "codegen: int type operations" {
   let src =
     #|function sum_int(n: int): int {

@@ -900,6 +900,48 @@ test "can_compile_to_wasm: function expression iife call expression" {
 }
 
 ///|
+test "can_compile_to_wasm: real-world iife wrapper patterns" {
+  let src =
+    #|function normalize(n: number): number {
+    #|  return (() => (n > 0 ? n : -n))();
+    #|}
+    #|function scale(n: number): number {
+    #|  return ((value: number, factor: number) => value * factor)(n, 3);
+    #|}
+    #|function named(n: number): number {
+    #|  return (function init(value: number): number { return value + 5; })(n);
+    #|}
+    #|function nested(n: number): number {
+    #|  return (() => ((x: number) => x + 1)(n))();
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
+test "can_compile_to_wasm: reusable function value remains unsupported" {
+  let src =
+    #|function apply(n: number): number {
+    #|  const f = (x: number) => x + 1;
+    #|  return f(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  let func = mod.funcs[0]
+  match can_compile_to_wasm(func) {
+    Compilable => fail("expected reusable function value to remain unsupported")
+    NotCompilable(reason) => assert_true(reason.contains("closures"))
+  }
+}
+
+///|
 test "can_compile_to_wasm: async function not supported" {
   // Create an async function directly
   let func : @ast.TsFunc = {
