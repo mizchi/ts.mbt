@@ -173,7 +173,7 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Spread in array literals and known-signature function calls
 
 ### Next in order
-1. Add broader optional real-world MoonBit package probes as local checkouts become available.
+1. Track remaining real-world MoonBit scaffold failures as explicit compatibility gaps.
 
 ### Candidates (need more groundwork)
 - Arbitrary call expressions (function values / closures)
@@ -183,8 +183,12 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Support `tsmbt --input mizchi/foo --out dist/` style ghq package resolution for MoonBit packages.
 - [x] Verify build-backed `MoonBit -> TypeScript` scaffold generation through `moon build --target js` for local `mizchi/ripple`, `mizchi/semver`, and `mizchi/tempfile` checkouts.
   - `just verify-realworld-moonbit` is optional and skipped package-by-package when those local ghq checkouts are absent.
+- [x] Broaden the local real-world probe set to `mizchi/js`, `mizchi/jsonschema`, `mizchi/markdown`, `mizchi/nom`, `mizchi/pixelmatch`, `mizchi/syntree`, `mizchi/tui`, `mizchi/vfs`, and `mizchi/jwt.mbt`.
+- [x] Resolve ghq packages whose repository name differs from their MoonBit module name by reading `moon.mod.json` metadata.
 - [x] Preserve MoonBit `raise` effects in temporary glue wrappers so effectful packages such as `mizchi/semver` build.
 - [x] Skip facade wrappers that would expose private root types from the source package; the generated `.d.ts` can still document those opaque types, but glue packages cannot refer to private MoonBit symbols.
+- [x] Qualify local root trait bounds in temporary glue wrappers so generic packages such as `mizchi/nom` build.
+- [ ] Investigate packages that fail before or during source JS build for reasons outside the generated glue surface, for example local `mizchi/ast_printer` currently fails in its parser dependency with a duplicate `Show` impl during `moon build --target js`.
 
 ## CI Notes
 

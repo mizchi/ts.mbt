@@ -1,4 +1,21 @@
 ///|
+fn cli_command_failed() -> Unit {
+  println("tsmbt command failed")
+  cli_exit(1)
+}
+
+///|
+#cfg(target="native")
+extern "C" fn cli_exit(code : Int) = "exit"
+
+///|
+#cfg(not(target="native"))
+fn cli_exit(code : Int) -> Unit {
+  let _ = code
+  abort("tsmbt command failed")
+}
+
+///|
 async fn main_async() -> Unit {
   let args = @env.args()
   if args.length() < 2 {
@@ -6,12 +23,17 @@ async fn main_async() -> Unit {
     return
   }
   if args[1].has_prefix("--") {
-    run_unified_tsmbt_cli(args, 1)
+    if !run_unified_tsmbt_cli(args, 1) {
+      cli_command_failed()
+    }
     return
   }
   let command = args[1]
   match command {
-    "generate" | "scaffold" => run_unified_tsmbt_cli(args, 2)
+    "generate" | "scaffold" =>
+      if !run_unified_tsmbt_cli(args, 2) {
+        cli_command_failed()
+      }
     "run" => {
       if args.length() < 3 {
         println("Error: no file specified")
@@ -109,9 +131,11 @@ async fn main_async() -> Unit {
       } else {
         None
       }
-      emit_typescript_scaffold_from_mbti(
-        file_path, output_dir, import_rewrite_path,
-      )
+      if !emit_typescript_scaffold_from_mbti(
+          file_path, output_dir, import_rewrite_path,
+        ) {
+        cli_command_failed()
+      }
     }
     "emit-typescript-facade-scaffold-from-mbti" => {
       if args.length() < 4 {
@@ -125,9 +149,11 @@ async fn main_async() -> Unit {
       } else {
         None
       }
-      emit_typescript_facade_scaffold_from_mbti(
-        file_path, output_dir, import_rewrite_path,
-      )
+      if !emit_typescript_facade_scaffold_from_mbti(
+          file_path, output_dir, import_rewrite_path,
+        ) {
+        cli_command_failed()
+      }
     }
     "emit-moonbit-js-ffi" => {
       if args.length() < 4 {
@@ -903,11 +929,11 @@ async fn emit_typescript_scaffold_from_mbti(
   file_path : String,
   output_dir : String,
   import_rewrite_path : String?,
-) -> Unit {
+) -> Bool {
   let import_rewrites = match
     load_typescript_import_rewrite_map(import_rewrite_path) {
     Some(rewrites) => rewrites
-    None => return
+    None => return false
   }
   let bundle = @bridge.emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites(
     file_path, import_rewrites,
@@ -915,16 +941,17 @@ async fn emit_typescript_scaffold_from_mbti(
     @bridge.MbtiTypescriptDeclError::ReadError(msg)
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   if !build_moonbit_js_runtime_from_mbti(file_path, output_dir, bundle) {
-    return
+    return false
   }
   if !write_typescript_scaffold_bundle_files(output_dir, bundle) {
-    return
+    return false
   }
   println("Wrote TypeScript scaffold to \{output_dir}")
+  true
 }
 
 ///|
@@ -932,11 +959,11 @@ async fn emit_typescript_facade_scaffold_from_mbti(
   file_path : String,
   output_dir : String,
   import_rewrite_path : String?,
-) -> Unit {
+) -> Bool {
   let import_rewrites = match
     load_typescript_import_rewrite_map(import_rewrite_path) {
     Some(rewrites) => rewrites
-    None => return
+    None => return false
   }
   let bundle = @bridge.emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_rewrites(
     file_path, import_rewrites,
@@ -944,16 +971,17 @@ async fn emit_typescript_facade_scaffold_from_mbti(
     @bridge.MbtiTypescriptDeclError::ReadError(msg)
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   if !build_moonbit_js_runtime_from_mbti(file_path, output_dir, bundle) {
-    return
+    return false
   }
   if !write_typescript_scaffold_bundle_files(output_dir, bundle) {
-    return
+    return false
   }
   println("Wrote TypeScript facade scaffold to \{output_dir}")
+  true
 }
 
 ///|

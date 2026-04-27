@@ -1013,6 +1013,27 @@ fn collect_root_mbti_local_type_params(
 }
 
 ///|
+fn collect_root_mbti_local_trait_names(
+  source : String,
+) -> Array[String] raise MbtiTypescriptDeclError {
+  let imports = parse_mbti_imports(source)
+  let used_aliases : Array[String] = []
+  let names : Array[String] = []
+  for line in source.split("\n") {
+    let trimmed = line.trim().to_string()
+    if trimmed.has_prefix("pub trait ") ||
+      trimmed.has_prefix("pub(all) trait ") ||
+      trimmed.has_prefix("pub(open) trait ") {
+      match parse_mbti_type_header(trimmed, "trait", imports, used_aliases) {
+        Some((name, _)) if !names.contains(name) => names.push(name)
+        _ => ()
+      }
+    }
+  }
+  names
+}
+
+///|
 fn parse_private_mbti_type_name(
   trimmed : String,
   keyword : String,
@@ -1135,6 +1156,12 @@ fn collect_mbti_root_autolink_glue_decls(
     let (name, _) = pair
     local_type_names.push(name)
   }
+  let local_glue_ref_names = local_type_names.copy()
+  for trait_name in collect_root_mbti_local_trait_names(source) {
+    if !local_glue_ref_names.contains(trait_name) {
+      local_glue_ref_names.push(trait_name)
+    }
+  }
   let private_type_names = collect_root_mbti_private_type_names(source)
   let source_alias = mbti_source_alias()
   let decls : Array[MbtiAutolinkGlueDecl] = []
@@ -1154,10 +1181,13 @@ fn collect_mbti_root_autolink_glue_decls(
         let return_src_with_effect = mbti_return_source_with_effect_from_function_line(
           trimmed,
         )
+        let fn_type_param_names = type_param_names(fn_type_params)
         let raw_type_param_suffix = render_mbt_raw_type_param_suffix_from_line(
           trimmed,
         )
-        let fn_type_param_names = type_param_names(fn_type_params)
+        let type_param_suffix = mbti_qualify_root_type_refs_for_glue(
+          raw_type_param_suffix, local_glue_ref_names, fn_type_param_names, source_alias,
+        )
         match owner_name {
           None => {
             let raw_params = match
@@ -1186,7 +1216,7 @@ fn collect_mbti_root_autolink_glue_decls(
             } else {
               "@\{source_alias}.\{fn_name}(\{call_args})"
             }
-            let mbt_decl = "pub \{async_prefix}fn\{raw_type_param_suffix} \{fn_name}(\{rendered_mbt_params}) -> \{return_ty}\{effect_suffix} {\n  \{body_expr}\n}"
+            let mbt_decl = "pub \{async_prefix}fn\{type_param_suffix} \{fn_name}(\{rendered_mbt_params}) -> \{return_ty}\{effect_suffix} {\n  \{body_expr}\n}"
             decls.push({ export_name: fn_name, ts_decl: "", mbt_decl })
             free_function_names.push(fn_name)
           }
@@ -1840,7 +1870,7 @@ fn translate_named_type(
     | "Float"
     | "Double" => "number"
     "Int64" | "UInt64" => "bigint"
-    "String" => "string"
+    "String" | "StringView" => "string"
     "Bytes" | "BytesView" => "Uint8Array"
     "Array" | "FixedArray" =>
       if args.length() == 1 {
@@ -2528,9 +2558,31 @@ fn parse_trait_block_decl(
 ///|
 fn render_ts_params(params : Array[MbtiParam]) -> String {
   let rendered : Array[String] = []
-  for param in params {
-    let optional_suffix = if param.optional { "?" } else { "" }
-    rendered.push("\{param.name}\{optional_suffix}: \{param.ty}")
+  for param_idx in 0..<params.length() {
+    let param = params[param_idx]
+    let mut has_required_after = false
+    for next_idx in (param_idx + 1)..<params.length() {
+      if !params[next_idx].optional {
+        has_required_after = true
+        break
+      }
+    }
+    if param.optional && has_required_after {
+      let optional_ty = if contains_unqualified_type_name(param.ty, "undefined") {
+        param.ty
+      } else {
+        let base_ty = if param.ty.contains("=>") {
+          "(\{param.ty})"
+        } else {
+          param.ty
+        }
+        "\{base_ty} | undefined"
+      }
+      rendered.push("\{param.name}: \{optional_ty}")
+    } else {
+      let optional_suffix = if param.optional { "?" } else { "" }
+      rendered.push("\{param.name}\{optional_suffix}: \{param.ty}")
+    }
   }
   rendered.join(", ")
 }
@@ -2652,6 +2704,28 @@ fn decls_reference_builtin_json(
   }
   for decl in decls {
     if contains_unqualified_type_name(decl, "Json") {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn render_builtin_string_builder_decl() -> String {
+  "export interface StringBuilder {\n}"
+}
+
+///|
+fn decls_reference_builtin_string_builder(
+  decls : Array[String],
+  type_kinds : Map[String, String],
+) -> Bool {
+  match type_kinds.get("StringBuilder") {
+    Some(_) => return false
+    None => ()
+  }
+  for decl in decls {
+    if contains_unqualified_type_name(decl, "StringBuilder") {
       return true
     }
   }
@@ -3631,6 +3705,9 @@ fn parse_mbti_to_typescript_with_import_rewrites(
   }
   if decls_reference_builtin_json(decls, type_kinds) {
     final_decls.push(render_builtin_json_decl())
+  }
+  if decls_reference_builtin_string_builder(decls, type_kinds) {
+    final_decls.push(render_builtin_string_builder_decl())
   }
   for marker_name in bound_marker_order {
     if marker_name == "Show" {

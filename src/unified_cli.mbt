@@ -239,6 +239,54 @@ fn ghq_candidate_repo_paths(
 }
 
 ///|
+async fn ghq_module_name_candidate_repo_paths(
+  github_root : String,
+  input : String,
+) -> Array[String] {
+  let paths : Array[String] = []
+  let owner = match input.find("/") {
+    Some(sep_idx) => input[:sep_idx].to_string()
+    None => return paths
+  }
+  let owner_root = main_join_path(github_root, owner)
+  if !@fs.exists(owner_root) {
+    return paths
+  }
+  let entries = @fs.readdir(
+    owner_root,
+    include_hidden=false,
+    include_special=false,
+    sort=true,
+  ) catch {
+    _ => return paths
+  }
+  for name in entries {
+    if unified_tsmbt_skip_scan_dir(name) {
+      continue
+    }
+    let repo_path = main_join_path(owner_root, name)
+    let kind = @fs.kind(repo_path, follow_symlink=false) catch {
+      _ => @fs.FileKind::Unknown
+    }
+    if !(kind is @fs.FileKind::Directory) {
+      continue
+    }
+    let moon_mod_path = main_join_path(repo_path, "moon.mod.json")
+    if !main_file_exists(moon_mod_path) {
+      continue
+    }
+    let moon_mod_source = @fs.read_file(moon_mod_path).text() catch {
+      _ => continue
+    }
+    match parse_moon_mod_string_field(moon_mod_source, "name") {
+      Some(module_name) if module_name == input => paths.push(repo_path)
+      _ => ()
+    }
+  }
+  paths
+}
+
+///|
 async fn infer_ghq_github_root_from_cwd() -> String? {
   let cwd = @fs.realpath(".") catch { _ => "." }
   match cwd.find("/ghq/github.com/") {
@@ -261,7 +309,13 @@ async fn resolve_unified_mbt_input_path_from_roots(
   }
   for root in roots {
     let scan_roots = if root.has_suffix("/github.com") && input.contains("/") {
-      ghq_candidate_repo_paths(root, input)
+      let paths = ghq_candidate_repo_paths(root, input)
+      for path in ghq_module_name_candidate_repo_paths(root, input) {
+        if !paths.contains(path) {
+          paths.push(path)
+        }
+      }
+      paths
     } else {
       [root]
     }
@@ -328,7 +382,7 @@ async fn emit_unified_tsmbt_scaffold(
   module_spec~ : String?,
   import_rewrite_path~ : String?,
   facade~ : Bool,
-) -> Unit {
+) -> Bool {
   let resolved_direction = match direction {
     TsmbtDirection::Auto =>
       match infer_unified_tsmbt_direction(input) {
@@ -337,7 +391,7 @@ async fn emit_unified_tsmbt_scaffold(
           println(
             "Error: could not infer direction for '\{input}'. Use --direction mbt-to-ts or --direction ts-to-mbt.",
           )
-          return
+          return false
         }
       }
     _ => direction
@@ -350,7 +404,7 @@ async fn emit_unified_tsmbt_scaffold(
           println(
             "Error: could not resolve MoonBit package or pkg.generated.mbti '\{input}'. Run moon info first or pass a pkg.generated.mbti path.",
           )
-          return
+          return false
         }
       }
       if facade {
@@ -368,7 +422,7 @@ async fn emit_unified_tsmbt_scaffold(
           println(
             "Error: could not resolve TypeScript entrypoint '\{input}'. Pass a .d.ts/.ts path or an installed package specifier.",
           )
-          return
+          return false
         }
       }
       let runtime_module_spec = match module_spec {
@@ -376,27 +430,28 @@ async fn emit_unified_tsmbt_scaffold(
         None => input
       }
       emit_moonbit_scaffold_from_ts(entry_path, runtime_module_spec, out)
+      true
     }
-    TsmbtDirection::Auto => ()
+    TsmbtDirection::Auto => true
   }
 }
 
 ///|
-async fn run_unified_tsmbt_cli(args : Array[String], start : Int) -> Unit {
+async fn run_unified_tsmbt_cli(args : Array[String], start : Int) -> Bool {
   let options = match parse_unified_tsmbt_options(args, start) {
     (Some(options), None) => options
     (_, Some("help")) => {
       print_usage()
-      return
+      return true
     }
     (_, Some(message)) => {
       println("Error: \{message}")
       print_usage()
-      return
+      return false
     }
     _ => {
       print_usage()
-      return
+      return false
     }
   }
   let input = match options.input {
@@ -404,7 +459,7 @@ async fn run_unified_tsmbt_cli(args : Array[String], start : Int) -> Unit {
     None => {
       println("Error: expected --input <pkg-or-entry>")
       print_usage()
-      return
+      return false
     }
   }
   let out = match options.out {
@@ -412,7 +467,7 @@ async fn run_unified_tsmbt_cli(args : Array[String], start : Int) -> Unit {
     None => {
       println("Error: expected --out <dir>")
       print_usage()
-      return
+      return false
     }
   }
   emit_unified_tsmbt_scaffold(

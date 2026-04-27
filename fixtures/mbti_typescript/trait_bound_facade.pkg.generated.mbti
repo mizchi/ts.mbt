@@ -1,0 +1,16 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/trait_bound_facade"
+
+// Values
+pub fn[T : InputLen] eof(T) -> Bool
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+pub trait InputLen {
+  input_len(Self) -> Int
+}

@@ -239,6 +239,11 @@ test "parse_unified_tsmbt_options accepts positional generate args and equals fl
 }
 
 ///|
+async test "run_unified_tsmbt_cli reports invalid unified args" {
+  assert_false(run_unified_tsmbt_cli(["tsmbt", "--input", "missing"], 1))
+}
+
+///|
 async test "resolve_unified_mbt_input_path finds package name in generated mbti files" {
   match resolve_unified_mbt_input_path("examples/counter") {
     Some(path) =>
@@ -278,6 +283,43 @@ async test "resolve_unified_mbt_input_path_from_roots finds ghq-style package na
 }
 
 ///|
+async test "resolve_unified_mbt_input_path_from_roots finds package names from ghq moon.mod metadata" {
+  let root = wbtest_tmp_project_benchmark_root("unified_fake_ghq_module_name")
+  let github_root = wbtest_join_path(root, "github.com")
+  let repo_dir = wbtest_join_path(github_root, "mizchi/moonbit_jsonschema")
+  let pkg_dir = wbtest_join_path(repo_dir, "src")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  ensure_dir_tree(pkg_dir)
+  @fs.write_file(
+    wbtest_join_path(repo_dir, "moon.mod.json"),
+    (
+      #|{
+      #|  "name": "mizchi/jsonschema",
+      #|  "version": "0.1.0",
+      #|  "source": "src",
+      #|  "preferred-target": "js"
+      #|}
+    ),
+    create=0o644,
+  )
+  let mbti_path = wbtest_join_path(pkg_dir, "pkg.generated.mbti")
+  let mbti_source =
+    #|// Generated using `moon info`, DON'T EDIT IT
+    #|package "mizchi/jsonschema"
+    #|
+    #|// Values
+    #|pub fn emit_schema() -> String
+  @fs.write_file(mbti_path, mbti_source, create=0o644)
+  match
+    resolve_unified_mbt_input_path_from_roots("mizchi/jsonschema", [
+      ".", github_root,
+    ]) {
+    Some(path) => assert_eq(path, mbti_path)
+    None => fail("expected mizchi/jsonschema to resolve from moon.mod name")
+  }
+}
+
+///|
 async test "infer_unified_tsmbt_direction detects package names and TypeScript entries" {
   match infer_unified_tsmbt_direction("examples/counter") {
     Some(TsmbtDirection::MbtToTs) => ()
@@ -296,13 +338,15 @@ async test "infer_unified_tsmbt_direction detects package names and TypeScript e
 async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold from package name" {
   let root = wbtest_tmp_project_benchmark_root("unified_mbt_to_ts")
   let _ = try? @fs.rmdir(root, recursive=true)
-  emit_unified_tsmbt_scaffold(
-    "examples/counter",
-    root,
-    direction=TsmbtDirection::MbtToTs,
-    module_spec=None,
-    import_rewrite_path=None,
-    facade=true,
+  assert_true(
+    emit_unified_tsmbt_scaffold(
+      "examples/counter",
+      root,
+      direction=TsmbtDirection::MbtToTs,
+      module_spec=None,
+      import_rewrite_path=None,
+      facade=true,
+    ),
   )
   let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
     e => fail("failed to read unified index.d.ts: \{e}")
@@ -318,13 +362,15 @@ async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold fro
 async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
   let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt")
   let _ = try? @fs.rmdir(root, recursive=true)
-  emit_unified_tsmbt_scaffold(
-    "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
-    root,
-    direction=TsmbtDirection::TsToMbt,
-    module_spec=Some("/runtime/neverthrow-like.js"),
-    import_rewrite_path=None,
-    facade=true,
+  assert_true(
+    emit_unified_tsmbt_scaffold(
+      "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
+      root,
+      direction=TsmbtDirection::TsToMbt,
+      module_spec=Some("/runtime/neverthrow-like.js"),
+      import_rewrite_path=None,
+      facade=true,
+    ),
   )
   let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
     e => fail("failed to read unified TS moon.pkg.json: \{e}")
@@ -341,13 +387,15 @@ async test "emit_unified_tsmbt_scaffold creates nested TypeScript to MoonBit out
   let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt_nested")
   let out_dir = wbtest_join_path(root, "dist/generated")
   let _ = try? @fs.rmdir(root, recursive=true)
-  emit_unified_tsmbt_scaffold(
-    "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
-    out_dir,
-    direction=TsmbtDirection::TsToMbt,
-    module_spec=Some("/runtime/neverthrow-like.js"),
-    import_rewrite_path=None,
-    facade=true,
+  assert_true(
+    emit_unified_tsmbt_scaffold(
+      "fixtures/resolver/project/types/neverthrow-like-entry.d.ts",
+      out_dir,
+      direction=TsmbtDirection::TsToMbt,
+      module_spec=Some("/runtime/neverthrow-like.js"),
+      import_rewrite_path=None,
+      facade=true,
+    ),
   )
   let bridge_mbt = @fs.read_file(wbtest_join_path(out_dir, "bridge.mbt")).text() catch {
     e => fail("failed to read nested unified TS bridge.mbt: \{e}")
@@ -450,10 +498,12 @@ async test "emit_typescript_scaffold_from_mbti writes declaration package metada
   )
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
-  emit_typescript_scaffold_from_mbti(
-    "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
-    root,
-    None,
+  assert_true(
+    emit_typescript_scaffold_from_mbti(
+      "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
+      root,
+      None,
+    ),
   )
   let package_json = @fs.read_file(wbtest_join_path(root, "package.json")).text() catch {
     e => fail("failed to read package.json: \{e}")
@@ -506,10 +556,12 @@ async test "emit_typescript_scaffold_from_mbti rejects mbti fixtures without sou
   )
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
-  emit_typescript_scaffold_from_mbti(
-    "fixtures/mbti_typescript_package/pkg.generated.mbti",
-    root,
-    None,
+  assert_false(
+    emit_typescript_scaffold_from_mbti(
+      "fixtures/mbti_typescript_package/pkg.generated.mbti",
+      root,
+      None,
+    ),
   )
   assert_false(@fs.exists(wbtest_join_path(root, "package.json")))
   assert_false(@fs.exists(wbtest_join_path(root, "index.d.ts")))
@@ -566,10 +618,12 @@ async test "emit_typescript_scaffold_from_mbti handles moon.mod source subdir" {
     fail("moon info failed: \{info_output.text()}")
   }
   let out = wbtest_join_path(root, "dist")
-  emit_typescript_scaffold_from_mbti(
-    wbtest_join_path(pkg_dir, "pkg.generated.mbti"),
-    out,
-    None,
+  assert_true(
+    emit_typescript_scaffold_from_mbti(
+      wbtest_join_path(pkg_dir, "pkg.generated.mbti"),
+      out,
+      None,
+    ),
   )
   let package_json = @fs.read_file(wbtest_join_path(out, "package.json")).text() catch {
     e => fail("failed to read source-subdir package.json: \{e}")
@@ -592,10 +646,12 @@ async test "emit_typescript_facade_scaffold_from_mbti writes facade declarations
   )
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
-  emit_typescript_facade_scaffold_from_mbti(
-    "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
-    root,
-    None,
+  assert_true(
+    emit_typescript_facade_scaffold_from_mbti(
+      "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
+      root,
+      None,
+    ),
   )
   let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
     e => fail("failed to read facade index.d.ts: \{e}")
@@ -616,10 +672,12 @@ async test "emit_typescript_facade_scaffold_from_mbti keeps root imports in faca
   )
   let _ = try? @fs.rmdir(root, recursive=true)
   @fs.mkdir(root, permission=0o755)
-  emit_typescript_facade_scaffold_from_mbti(
-    "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
-    root,
-    None,
+  assert_true(
+    emit_typescript_facade_scaffold_from_mbti(
+      "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
+      root,
+      None,
+    ),
   )
   let root_decl = @fs.read_file(wbtest_join_path(root, "index.d.ts")).text() catch {
     e => fail("failed to read imported facade index.d.ts: \{e}")
