@@ -840,6 +840,66 @@ test "can_compile_to_wasm: function with loops" {
 }
 
 ///|
+test "can_compile_to_wasm: conditional named function call expression" {
+  let src =
+    #|function choose(flag: number, x: number): number {
+    #|  return (flag > 0 ? double : triple)(x);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  let func = mod.funcs[0]
+  match can_compile_to_wasm(func) {
+    Compilable => ()
+    NotCompilable(reason) => fail("expected compilable: \{reason}")
+  }
+}
+
+///|
+test "can_compile_to_wasm: arrow iife call expression" {
+  let src =
+    #|function apply(n: number): number {
+    #|  return ((x: number) => x * 2)(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  let func = mod.funcs[0]
+  match can_compile_to_wasm(func) {
+    Compilable => ()
+    NotCompilable(reason) => fail("expected compilable: \{reason}")
+  }
+}
+
+///|
+test "can_compile_to_wasm: block iife call expressions" {
+  let src =
+    #|function apply(n: number): number {
+    #|  return ((x: number) => { return x * 3; })(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  let func = mod.funcs[0]
+  match can_compile_to_wasm(func) {
+    Compilable => ()
+    NotCompilable(reason) => fail("expected compilable: \{reason}")
+  }
+}
+
+///|
+test "can_compile_to_wasm: function expression iife call expression" {
+  let src =
+    #|function apply(n: number): number {
+    #|  return (function (x: number): number { return x * 4; })(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  let func = mod.funcs[0]
+  match can_compile_to_wasm(func) {
+    Compilable => ()
+    NotCompilable(reason) => fail("expected compilable: \{reason}")
+  }
+}
+
+///|
 test "can_compile_to_wasm: async function not supported" {
   // Create an async function directly
   let func : @ast.TsFunc = {

@@ -171,9 +171,11 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Full template literals (ToString coercion for non-strings)
 - [x] Computed property access in literals (const key only)
 - [x] Spread in array literals and known-signature function calls
+- [x] Conditional named function call expressions, e.g. `(flag ? f : g)(x)`
+- [x] IIFE call expressions for arrow/function expressions with expression or single-return block bodies
 
 ### Next in order
-1. Track remaining real-world MoonBit scaffold failures as explicit compatibility gaps.
+1. Continue arbitrary call expression support beyond inline IIFEs toward reusable function values / closures.
 
 ### Candidates (need more groundwork)
 - Arbitrary call expressions (function values / closures)
@@ -188,6 +190,7 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Preserve MoonBit `raise` effects in temporary glue wrappers so effectful packages such as `mizchi/semver` build.
 - [x] Skip facade wrappers that would expose private root types from the source package; the generated `.d.ts` can still document those opaque types, but glue packages cannot refer to private MoonBit symbols.
 - [x] Qualify local root trait bounds in temporary glue wrappers so generic packages such as `mizchi/nom` build.
+- [x] Re-run the local real-world MoonBit probe and confirm the current package set passes generated JS import and declaration typecheck.
 - [x] Investigate packages that fail before or during source JS build for reasons outside the generated glue surface.
   - `mizchi/ast_printer` was fixed by updating its `moonbitlang/parser` dependency from `0.1.15` to `0.2.5` and adapting the printer to the current parser AST (`type P = Point` aliases, no removed top-level alias constructors, `TypeDesc::Record(fields~, ..)`).
 

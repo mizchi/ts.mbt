@@ -236,6 +236,75 @@ test "codegen: multiple functions" {
 }
 
 ///|
+test "codegen: conditional named function call expression" {
+  let src =
+    #|function double(x: number): number {
+    #|  return x * 2;
+    #|}
+    #|function triple(x: number): number {
+    #|  return x * 3;
+    #|}
+    #|function choose(flag: number, x: number): number {
+    #|  return (flag > 0 ? double : triple)(x);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "choose", [1.0, 5.0], 10.0)
+  assert_run_f64(wasm, "choose", [0.0, 5.0], 15.0)
+}
+
+///|
+test "codegen: arrow iife call expression" {
+  let src =
+    #|function apply(n: number): number {
+    #|  return ((x: number) => x * 2)(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "apply", [7.0], 14.0)
+}
+
+///|
+test "codegen: arrow iife preserves outer scope" {
+  let src =
+    #|function apply(n: number): number {
+    #|  const x: number = 10;
+    #|  return ((x: number) => x + 1)(n) + x;
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "apply", [7.0], 18.0)
+}
+
+///|
+test "codegen: arrow iife reads outer variables" {
+  let src =
+    #|function apply(n: number): number {
+    #|  const bias: number = 3;
+    #|  return ((x: number) => x + bias)(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "apply", [7.0], 10.0)
+}
+
+///|
+test "codegen: arrow block iife call expression" {
+  let src =
+    #|function apply(n: number): number {
+    #|  return ((x: number) => { return x * 3; })(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "apply", [7.0], 21.0)
+}
+
+///|
+test "codegen: function expression iife call expression" {
+  let src =
+    #|function apply(n: number): number {
+    #|  return (function (x: number): number { return x * 4; })(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "apply", [7.0], 28.0)
+}
+
+///|
 test "codegen: int type operations" {
   let src =
     #|function sum_int(n: int): int {

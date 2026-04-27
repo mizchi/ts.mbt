@@ -378,6 +378,30 @@ fn can_compile_expr(expr : @ast.TsExpr) -> CompilabilityResult {
         }
         Compilable
       }
+    @ast.TsExpr::CallExpr(@ast.TsExpr::Var(name), args) =>
+      can_compile_expr(@ast.TsExpr::Call(name, args))
+    @ast.TsExpr::CallExpr(@ast.TsExpr::ArrowFunc(params, body, is_async), args) =>
+      can_compile_arrow_iife(params, body, is_async, args)
+    @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(func), args) =>
+      can_compile_func_expr_iife(func, args)
+    @ast.TsExpr::CallExpr(
+      @ast.TsExpr::Cond(
+        cond,
+        @ast.TsExpr::Var(then_name),
+        @ast.TsExpr::Var(else_name)
+      ),
+      args
+    ) => {
+      match can_compile_expr(cond) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match can_compile_expr(@ast.TsExpr::Call(then_name, args)) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr(@ast.TsExpr::Call(else_name, args))
+    }
     // Not supported: arbitrary call expression
     @ast.TsExpr::CallExpr(_, _) =>
       NotCompilable("arbitrary call expression not supported")
@@ -470,6 +494,90 @@ fn can_compile_expr(expr : @ast.TsExpr) -> CompilabilityResult {
       NotCompilable("arrow functions not supported (closures)")
     @ast.TsExpr::FuncExpr(_) =>
       NotCompilable("function expressions not supported (closures)")
+  }
+}
+
+///|
+fn can_compile_arrow_iife(
+  params : Array[@ast.TsParam],
+  body : @ast.TsArrowBody,
+  is_async : Bool,
+  args : Array[@ast.TsExpr],
+) -> CompilabilityResult {
+  if is_async {
+    return NotCompilable("async arrow iife not supported")
+  }
+  if params.length() != args.length() {
+    return NotCompilable("arrow iife arity mismatch")
+  }
+  for param in params {
+    if param.is_rest {
+      return NotCompilable("rest parameter arrow iife not supported")
+    }
+    match param.default {
+      Some(_) =>
+        return NotCompilable("default parameter arrow iife not supported")
+      None => ()
+    }
+  }
+  for arg in args {
+    match can_compile_expr(arg) {
+      NotCompilable(r) => return NotCompilable(r)
+      Compilable => ()
+    }
+  }
+  match body {
+    @ast.TsArrowBody::ArrowExpr(expr) => can_compile_expr(expr)
+    @ast.TsArrowBody::ArrowBlock(block) => can_compile_iife_return_block(block)
+  }
+}
+
+///|
+fn can_compile_func_expr_iife(
+  func : @ast.TsFunc,
+  args : Array[@ast.TsExpr],
+) -> CompilabilityResult {
+  if func.is_async {
+    return NotCompilable("async function expression iife not supported")
+  }
+  if func.is_generator {
+    return NotCompilable("generator function expression iife not supported")
+  }
+  if func.params.length() != args.length() {
+    return NotCompilable("function expression iife arity mismatch")
+  }
+  for param in func.params {
+    if param.is_rest {
+      return NotCompilable(
+        "rest parameter function expression iife not supported",
+      )
+    }
+    match param.default {
+      Some(_) =>
+        return NotCompilable(
+          "default parameter function expression iife not supported",
+        )
+      None => ()
+    }
+  }
+  for arg in args {
+    match can_compile_expr(arg) {
+      NotCompilable(r) => return NotCompilable(r)
+      Compilable => ()
+    }
+  }
+  can_compile_iife_return_block(func.body)
+}
+
+///|
+fn can_compile_iife_return_block(block : @ast.TsBlock) -> CompilabilityResult {
+  if block.stmts.length() != 1 {
+    return NotCompilable("iife block must contain exactly one return statement")
+  }
+  match block.stmts[0] {
+    @ast.TsStmt::Return(Some(expr)) => can_compile_expr(expr)
+    @ast.TsStmt::Return(None) => Compilable
+    _ => NotCompilable("iife block must contain exactly one return statement")
   }
 }
 

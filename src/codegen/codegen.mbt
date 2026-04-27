@@ -915,10 +915,27 @@ fn compile_expr(
       compile_binop(ctx, op, left, right, expected_type)
     @ast.TsExpr::UnaryOp(op, operand) =>
       compile_unaryop(ctx, op, operand, expected_type)
-    @ast.TsExpr::Call(name, args) => {
-      let return_type = compile_call(ctx, name, args, expected_type)
-      emit_coerce(ctx, return_type, expected_type)
-    }
+    @ast.TsExpr::Call(name, args) =>
+      compile_named_call_expr(ctx, name, args, expected_type)
+    @ast.TsExpr::CallExpr(@ast.TsExpr::Var(name), args) =>
+      compile_named_call_expr(ctx, name, args, expected_type)
+    @ast.TsExpr::CallExpr(@ast.TsExpr::ArrowFunc(params, body, is_async), args) =>
+      compile_arrow_iife_call_expr(
+        ctx, params, body, is_async, args, expected_type,
+      )
+    @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(func), args) =>
+      compile_func_expr_iife_call_expr(ctx, func, args, expected_type)
+    @ast.TsExpr::CallExpr(
+      @ast.TsExpr::Cond(
+        cond,
+        @ast.TsExpr::Var(then_name),
+        @ast.TsExpr::Var(else_name)
+      ),
+      args
+    ) =>
+      compile_conditional_named_call_expr(
+        ctx, cond, then_name, else_name, args, expected_type,
+      )
     @ast.TsExpr::CallExpr(_, _) =>
       raise CodeGenError("call expression is not supported in Wasm compiler")
     @ast.TsExpr::Cond(cond, then_expr, else_expr) => {
@@ -2757,6 +2774,28 @@ fn make_branch_ctx(ctx : CodeGenCtx) -> CodeGenCtx {
 }
 
 ///|
+fn make_inline_expr_ctx(ctx : CodeGenCtx) -> CodeGenCtx {
+  {
+    locals: ctx.locals.copy(),
+    local_types: ctx.local_types,
+    next_local: ctx.next_local,
+    funcs: ctx.funcs,
+    func_types: ctx.func_types,
+    interfaces: ctx.interfaces,
+    import_types: ctx.import_types,
+    instrs: ctx.instrs,
+    loop_depth: ctx.loop_depth,
+    string_pool: ctx.string_pool,
+    builtins_used: ctx.builtins_used,
+    const_values: ctx.const_values.copy(),
+    use_gc: ctx.use_gc,
+    gc_array_types: ctx.gc_array_types,
+    gc_struct_types: ctx.gc_struct_types,
+    gc_struct_fields: ctx.gc_struct_fields,
+  }
+}
+
+///|
 fn emit_is_zero_check(ctx : CodeGenCtx, operand_type : @ast.TsType) -> Unit {
   if is_f64_type(operand_type) {
     ctx.emit(F64Const(0.0))
@@ -3540,6 +3579,164 @@ fn compile_unaryop(
 
 ///|
 // / function
+fn compile_named_call_expr(
+  ctx : CodeGenCtx,
+  name : String,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+) -> Unit raise CodeGenError {
+  let return_type = compile_call(ctx, name, args, expected_type)
+  emit_coerce(ctx, return_type, expected_type)
+}
+
+///|
+fn compile_arrow_iife_call_expr(
+  ctx : CodeGenCtx,
+  params : Array[@ast.TsParam],
+  body : @ast.TsArrowBody,
+  is_async : Bool,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+) -> Unit raise CodeGenError {
+  if is_async {
+    raise CodeGenError("async arrow iife is not supported in Wasm compiler")
+  }
+  let bindings = bind_iife_params(ctx, params, args, "arrow")
+  let body_ctx = make_iife_body_ctx(ctx, bindings)
+  match body {
+    @ast.TsArrowBody::ArrowExpr(expr) =>
+      compile_expr(body_ctx, expr, expected_type)
+    @ast.TsArrowBody::ArrowBlock(block) =>
+      compile_iife_return_block(body_ctx, block, expected_type)
+  }
+  ctx.next_local = body_ctx.next_local
+}
+
+///|
+fn compile_func_expr_iife_call_expr(
+  ctx : CodeGenCtx,
+  func : @ast.TsFunc,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+) -> Unit raise CodeGenError {
+  if func.is_async {
+    raise CodeGenError(
+      "async function expression iife is not supported in Wasm compiler",
+    )
+  }
+  if func.is_generator {
+    raise CodeGenError(
+      "generator function expression iife is not supported in Wasm compiler",
+    )
+  }
+  let bindings = bind_iife_params(ctx, func.params, args, "function expression")
+  let body_ctx = make_iife_body_ctx(ctx, bindings)
+  compile_iife_return_block(body_ctx, func.body, expected_type)
+  ctx.next_local = body_ctx.next_local
+}
+
+///|
+fn bind_iife_params(
+  ctx : CodeGenCtx,
+  params : Array[@ast.TsParam],
+  args : Array[@ast.TsExpr],
+  kind : String,
+) -> Array[(String, UInt, @ast.TsType)] raise CodeGenError {
+  if params.length() != args.length() {
+    raise CodeGenError("\{kind} iife arity mismatch in Wasm compiler")
+  }
+  let bindings : Array[(String, UInt, @ast.TsType)] = []
+  for i, param in params {
+    if param.is_rest {
+      raise CodeGenError("\{kind} iife rest parameter is not supported")
+    }
+    match param.default {
+      Some(_) =>
+        raise CodeGenError("\{kind} iife default parameter is not supported")
+      None => ()
+    }
+    let param_type = resolve_any_with_ctx(ctx, param.type_, args[i])
+    let idx = ctx.add_temp_local(param_type)
+    compile_expr(ctx, args[i], param_type)
+    ctx.emit(LocalSet(idx))
+    bindings.push((param.name, idx, param_type))
+  }
+  bindings
+}
+
+///|
+fn make_iife_body_ctx(
+  ctx : CodeGenCtx,
+  bindings : Array[(String, UInt, @ast.TsType)],
+) -> CodeGenCtx {
+  let body_ctx = make_inline_expr_ctx(ctx)
+  for binding in bindings {
+    let (name, idx, type_) = binding
+    body_ctx.locals[name] = { index: idx, type_ }
+    body_ctx.const_values[name] = @analysis.ConstValue::NotConst
+  }
+  body_ctx
+}
+
+///|
+fn compile_iife_return_block(
+  ctx : CodeGenCtx,
+  block : @ast.TsBlock,
+  expected_type : @ast.TsType,
+) -> Unit raise CodeGenError {
+  if block.stmts.length() != 1 {
+    raise CodeGenError(
+      "iife block must contain exactly one return statement in Wasm compiler",
+    )
+  }
+  match block.stmts[0] {
+    @ast.TsStmt::Return(Some(expr)) => compile_expr(ctx, expr, expected_type)
+    @ast.TsStmt::Return(None) => {
+      ctx.emit(I32Const(0U))
+      emit_coerce(ctx, @ast.TsType::Int, expected_type)
+    }
+    _ =>
+      raise CodeGenError(
+        "iife block must contain exactly one return statement in Wasm compiler",
+      )
+  }
+}
+
+///|
+fn compile_conditional_named_call_expr(
+  ctx : CodeGenCtx,
+  cond : @ast.TsExpr,
+  then_name : String,
+  else_name : String,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+) -> Unit raise CodeGenError {
+  match @analysis.eval_const(cond) {
+    @analysis.ConstValue::Boolean(true)
+    | @analysis.ConstValue::Int(_)
+    | @analysis.ConstValue::Number(_)
+    | @analysis.ConstValue::String_(_) => {
+      compile_named_call_expr(ctx, then_name, args, expected_type)
+      return
+    }
+    @analysis.ConstValue::Boolean(false)
+    | @analysis.ConstValue::Null
+    | @analysis.ConstValue::Undefined => {
+      compile_named_call_expr(ctx, else_name, args, expected_type)
+      return
+    }
+    @analysis.ConstValue::NotConst => ()
+  }
+  compile_expr(ctx, cond, @ast.TsType::Boolean)
+  let then_ctx = make_branch_ctx(ctx)
+  compile_named_call_expr(then_ctx, then_name, args, expected_type)
+  let else_ctx = make_branch_ctx(ctx)
+  compile_named_call_expr(else_ctx, else_name, args, expected_type)
+  let result_type = ts_type_to_valtype(expected_type)
+  ctx.emit(If(Value(result_type), then_ctx.instrs, else_ctx.instrs))
+}
+
+///|
 fn compile_call(
   ctx : CodeGenCtx,
   name : String,
