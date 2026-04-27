@@ -6,6 +6,7 @@ cd "$repo_root"
 
 github_root="$(cd "$repo_root/../.." && pwd)"
 packages=(
+  "mizchi/ast_printer"
   "mizchi/js"
   "mizchi/jsonschema"
   "mizchi/markdown"
