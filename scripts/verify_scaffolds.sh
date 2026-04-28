@@ -4,6 +4,26 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
+assert_declared_value_exports_present() {
+  local module_path="$1"
+  local decl_path="$2"
+
+  MODULE_PATH="$module_path" DECL_PATH="$decl_path" node --input-type=module <<'EOF'
+import { readFileSync } from "node:fs";
+
+const modulePath = process.env.MODULE_PATH;
+const declPath = process.env.DECL_PATH;
+const mod = await import(modulePath);
+const decl = readFileSync(declPath, "utf8");
+const declared = [...decl.matchAll(/^export function\s+([A-Za-z_$][\w$]*)\s*\(/gm)]
+  .map((match) => match[1]);
+const missing = declared.filter((name) => !(name in mod));
+if (missing.length > 0) {
+  throw new Error(`missing runtime exports for declarations: ${missing.join(", ")}`);
+}
+EOF
+}
+
 verify_typescript_scaffold_fixture() {
   local root="_build/scaffold_mbti_to_ts"
   local mbti_path="$repo_root/examples/moonbit-to-typescript/counter/pkg.generated.mbti"
@@ -48,6 +68,7 @@ EOF
     echo "base scaffold should not emit facade declarations" >&2
     exit 1
   fi
+  assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
   node --input-type=module <<'EOF'
 const mod = await import("./_build/scaffold_mbti_to_ts/out/index.js");
@@ -100,6 +121,7 @@ EOF
   grep -F '"name": "@examples/counter"' "$root/out/package.json" >/dev/null
   grep -F '"import": "./index.js"' "$root/out/package.json" >/dev/null
   grep -F 'export function counter_label(self: Counter): string;' "$root/out/index.d.ts" >/dev/null
+  assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
   node --input-type=module <<'EOF'
 const mod = await import("./_build/scaffold_mbti_to_ts_facade/out/index.js");
@@ -109,6 +131,124 @@ if (mod.counter_label(counter) !== "demo") {
 }
 if (mod.summarize(counter) !== "demo:item#7") {
   throw new Error("unexpected summarize output");
+}
+EOF
+}
+
+verify_typescript_reverse_edge_scaffold_fixture() {
+  local root="_build/scaffold_mbti_to_ts_reverse_edge"
+  local mbti_path="$repo_root/examples/moonbit-to-typescript/reverse_edge/pkg.generated.mbti"
+
+  rm -rf "$root"
+  mkdir -p "$root/moonbitlang/core"
+
+  moon run src -- emit-typescript-scaffold-from-mbti \
+    "$mbti_path" \
+    "$root/out" >/dev/null
+
+  cat > "$root/moonbitlang/core/ref.d.ts" <<'EOF'
+export interface Ref<T> {
+  val: T;
+}
+EOF
+
+  cat > "$root/moonbitlang/core/set.d.ts" <<'EOF'
+export type Set<T> = globalThis.Set<T>;
+EOF
+
+  cat > "$root/consumer.ts" <<'EOF'
+import {
+  borrow_bytes,
+  consume_callbacks,
+  failed,
+  load_all,
+  make_string_box,
+  ready,
+  update_ref,
+  type CallbackBox,
+  type LoadError,
+  type Result,
+  type Status,
+} from "./out/index.js";
+import type { Ref } from "moonbitlang/core/ref";
+
+const bytes: Uint8Array = borrow_bytes(new Uint8Array([1, 2, 3]));
+const box: CallbackBox<string> = make_string_box("value");
+const ok: Promise<Result<Array<[string, number]>, LoadError>> = load_all(["a"]);
+const status: Status = ready(1);
+const errorStatus: Status = failed("missing");
+const state: Ref<Array<bigint>> = { val: [] };
+const updated: Set<string> = update_ref(state, [1n, 2n]);
+consume_callbacks((_label, _count) => {}, undefined, ["required"]);
+void bytes;
+void box;
+void ok;
+void status;
+void errorStatus;
+void updated;
+EOF
+
+  cat > "$root/tsconfig.json" <<'EOF'
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "es2020",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "lib": ["es2020"]
+  },
+  "files": [
+    "consumer.ts",
+    "out/index.d.ts"
+  ]
+}
+EOF
+
+  [ -f "$root/out/package.json" ]
+  [ -f "$root/out/index.js" ]
+  [ -f "$root/out/index.js.map" ]
+  grep -F '"name": "@examples/reverse_edge"' "$root/out/package.json" >/dev/null
+  grep -F 'export function consume_callbacks' "$root/out/index.d.ts" >/dev/null
+  grep -F 'export function load_all' "$root/out/index.d.ts" >/dev/null
+  assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
+  pnpm exec tsc -p "$root/tsconfig.json" --pretty false
+  node --input-type=module <<'EOF'
+const mod = await import("./_build/scaffold_mbti_to_ts_reverse_edge/out/index.js");
+let seen = "";
+let errorSeen = "";
+mod.consume_callbacks(
+  (label, count) => {
+    seen = `${label}:${count}`;
+  },
+  (err) => {
+    errorSeen = err?._0 ?? "";
+  },
+  ["a", "b"],
+);
+if (seen !== "required:2") {
+  throw new Error(`unexpected callback output: ${seen}`);
+}
+if (errorSeen !== "optional") {
+  throw new Error(`unexpected optional callback output: ${errorSeen}`);
+}
+const bytes = mod.borrow_bytes(new Uint8Array([1, 2, 3]));
+if (!(bytes instanceof Uint8Array) || bytes.length !== 3 || bytes[1] !== 2) {
+  throw new Error("unexpected borrow_bytes output");
+}
+const box = mod.make_string_box("value");
+if (box.current !== "value") {
+  throw new Error("unexpected CallbackBox output");
+}
+const loaded = await mod.load_all(["aa"]);
+if (!loaded || !("_0" in loaded)) {
+  throw new Error("unexpected load_all output");
+}
+const state = { val: [] };
+const updated = mod.update_ref(state, [1n, 2n]);
+if (state.val.length !== 2 || state.val[0] !== 1n || !updated) {
+  throw new Error("unexpected update_ref output");
 }
 EOF
 }
@@ -581,6 +721,7 @@ EOF
 
 verify_typescript_scaffold_fixture
 verify_typescript_facade_scaffold_fixture
+verify_typescript_reverse_edge_scaffold_fixture
 verify_moonbit_scaffold_fixture
 verify_moonbit_scaffold_external_package_fixture
 verify_moonbit_scaffold_react_like_jsx_fixture

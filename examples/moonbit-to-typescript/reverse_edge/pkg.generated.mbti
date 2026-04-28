@@ -1,0 +1,49 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "examples/reverse_edge"
+
+import {
+  "moonbitlang/core/ref",
+  "moonbitlang/core/set",
+}
+
+// Values
+pub fn borrow_bytes(BytesView) -> Bytes
+
+pub fn consume_callbacks((String, Int) -> Unit, on_error? : (LoadError) -> Unit, Array[String]) -> Unit
+
+pub fn failed(String) -> Status
+
+pub async fn load_all(Array[String]) -> Result[Array[(String, Int)], LoadError] raise LoadError
+
+pub fn make_string_box(String) -> CallbackBox[String]
+
+pub fn ready(Int) -> Status
+
+pub fn update_ref(@ref.Ref[Array[Int64]], ArrayView[UInt64]) -> @set.Set[String]
+
+// Errors
+pub suberror LoadError {
+  MissingKey(String)
+}
+
+// Types and methods
+pub(all) struct CallbackBox[T] {
+  current : T
+  on_change : ((T) -> Unit)?
+  meta : Map[String, Array[Bool]]
+}
+pub fn[T, U] CallbackBox::map(Self[T], (T) -> U) -> Self[U]
+pub fn[T] CallbackBox::tap(Self[T], (Self[T]) -> Unit) -> Self[T]
+
+pub enum Status {
+  Ready(Int)
+  Failed(LoadError)
+}
+
+// Type aliases
+pub type MaybeHandler[T] = ((T) -> Unit)?
+
+pub type Task[T] = async () -> Result[T, LoadError]
+
+// Traits
+

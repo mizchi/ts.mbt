@@ -8,7 +8,12 @@ js_module_root="${HOME}/ghq/github.com/mizchi/js.mbt"
 verify_mbti_fixture_typescript() {
   local root="_build/fixture_mbti_tscheck"
   rm -rf "$root"
-  mkdir -p "$root/fixtures" "$root/mizchi/ts" "$root/moonbitlang/core" "$root/demo"
+  mkdir -p \
+    "$root/fixtures" \
+    "$root/mizchi/ts" \
+    "$root/moonbitlang/core" \
+    "$root/moonbitlang/parser" \
+    "$root/demo"
 
   shopt -s nullglob
   local fixtures=(fixtures/mbti_typescript/*.pkg.generated.mbti)
@@ -38,6 +43,22 @@ EOF
 
   cat > "$root/moonbitlang/core/bigint.d.ts" <<'EOF'
 export interface BigInt {}
+EOF
+
+  cat > "$root/moonbitlang/core/list.d.ts" <<'EOF'
+export interface List<T> {}
+EOF
+
+  cat > "$root/moonbitlang/parser/basic.d.ts" <<'EOF'
+export interface Report {}
+EOF
+
+  cat > "$root/moonbitlang/parser/syntax.d.ts" <<'EOF'
+export interface Constant {}
+export interface Expr {}
+export interface Impl {}
+export interface Pattern {}
+export interface Type {}
 EOF
 
   cat > "$root/demo/class.d.ts" <<'EOF'

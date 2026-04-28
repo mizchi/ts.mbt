@@ -132,6 +132,7 @@ priv struct MbtiAutolinkGlueDecl {
 priv struct MbtiRawFacadeParam {
   name : String
   ty_src : String
+  optional : Bool
 }
 
 ///|
@@ -818,11 +819,11 @@ fn parse_mbti_raw_facade_params(
     match trimmed.find(":") {
       Some(colon_idx) => {
         let raw_name = trimmed[:colon_idx].trim().to_string()
-        if raw_name.has_suffix("?") {
-          return None
-        }
+        let optional = raw_name.has_suffix("?")
         let name = if idx == 0 && trimmed.has_prefix("Self") {
           "self"
+        } else if optional {
+          raw_name[:raw_name.length() - 1].trim().to_string()
         } else {
           raw_name
         }
@@ -830,7 +831,7 @@ fn parse_mbti_raw_facade_params(
           trimmed[colon_idx + 1:trimmed.length()].trim().to_string(),
           owner_name,
         )
-        params.push({ name, ty_src })
+        params.push({ name, ty_src, optional })
       }
       None => {
         let name = if idx == 0 && trimmed.has_prefix("Self") {
@@ -839,7 +840,7 @@ fn parse_mbti_raw_facade_params(
           "arg\{idx}"
         }
         let ty_src = replace_mbti_self_refs(trimmed, owner_name)
-        params.push({ name, ty_src })
+        params.push({ name, ty_src, optional: false })
       }
     }
     idx += 1
@@ -911,27 +912,76 @@ fn render_mbt_glue_params(
 ) -> String {
   let rendered : Array[String] = []
   for param in params {
-    let ty_src = mbti_qualify_root_type_refs_for_glue(
+    let ty_src = mbti_render_js_boundary_glue_param_type(
       param.ty_src,
       local_type_names,
       type_param_names,
       source_alias,
     )
+    let rendered_ty_src = if param.optional { "(\{ty_src})?" } else { ty_src }
     let name = if param.name == "self" { "self_" } else { param.name }
-    rendered.push("\{name} : \{ty_src}")
+    rendered.push("\{name} : \{rendered_ty_src}")
   }
   rendered.join(", ")
+}
+
+///|
+fn mbti_strip_borrow_prefix(source : String) -> String {
+  let trimmed = source.trim().to_string()
+  if trimmed.has_prefix("&") {
+    trimmed[1:trimmed.length()].trim().to_string()
+  } else {
+    trimmed
+  }
+}
+
+///|
+fn mbti_render_js_boundary_glue_param_type(
+  source : String,
+  local_type_names : Array[String],
+  type_param_names : Array[String],
+  source_alias : String,
+) -> String {
+  let unborrowed = mbti_strip_borrow_prefix(source)
+  if unborrowed == "BytesView" {
+    return "Bytes"
+  }
+  if unborrowed.has_prefix("ArrayView[") {
+    let inner = unborrowed["ArrayView[".length():unborrowed.length() - 1].to_string()
+    let rendered_inner = mbti_qualify_root_type_refs_for_glue(
+      inner, local_type_names, type_param_names, source_alias,
+    )
+    return "Array[\{rendered_inner}]"
+  }
+  mbti_qualify_root_type_refs_for_glue(
+    source, local_type_names, type_param_names, source_alias,
+  )
+}
+
+///|
+fn mbti_render_js_boundary_call_arg(param : MbtiRawFacadeParam) -> String {
+  let unborrowed = mbti_strip_borrow_prefix(param.ty_src)
+  let name = if param.name == "self" { "self_" } else { param.name }
+  if unborrowed == "BytesView" {
+    return "\{name}.view()"
+  }
+  if unborrowed.has_prefix("ArrayView[") {
+    return "\{name}[:]"
+  }
+  if param.name == "self" {
+    return "self_"
+  }
+  if param.optional {
+    return "\{param.name}?"
+  }
+  param.name
 }
 
 ///|
 fn render_mbt_glue_call_args(params : Array[MbtiRawFacadeParam]) -> String {
   let args : Array[String] = []
   for param in params {
-    if param.name == "self" {
-      args.push("self_")
-    } else {
-      args.push(param.name)
-    }
+    args.push(mbti_render_js_boundary_call_arg(param))
   }
   args.join(", ")
 }

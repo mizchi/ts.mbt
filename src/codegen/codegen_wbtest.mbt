@@ -7,6 +7,20 @@ fn compile_to_wasm(source : String) -> Bytes raise CompileError {
 }
 
 ///|
+fn assert_compile_error_contains(
+  source : String,
+  expected : String,
+) -> Unit raise Error {
+  let _ = experimental_compile_to_wasm(source) catch {
+    CompileError(msg) => {
+      assert_true(msg.contains(expected))
+      return
+    }
+  }
+  fail("expected CompileError containing \{expected}")
+}
+
+///|
 fn compile(source : String) -> @core.Module raise CompileError {
   experimental_compile(source)
 }
@@ -324,6 +338,56 @@ test "codegen: real-world iife wrapper patterns" {
   assert_run_f64(wasm, "scale", [7.0], 21.0)
   assert_run_f64(wasm, "named", [7.0], 12.0)
   assert_run_f64(wasm, "nested", [7.0], 8.0)
+}
+
+///|
+test "codegen: iife argument evaluation order edge cases" {
+  let src =
+    #|function order(n: number): number {
+    #|  return ((a: number, b: number) => a * 10 + b)(n = 2, n + 1);
+    #|}
+    #|function shadow(n: number): number {
+    #|  const captured: number = 10;
+    #|  return ((captured: number) => (() => captured + 1)())(n) + captured;
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "order", [7.0], 23.0)
+  assert_run_f64(wasm, "shadow", [7.0], 18.0)
+}
+
+///|
+test "codegen: iife numeric coercion edge cases" {
+  let src =
+    #|function trunc(n: number): int {
+    #|  return ((x: int) => x + 1)(n);
+    #|}
+    #|function truthy(n: number): int {
+    #|  return ((flag: boolean) => flag ? 1 : 2)(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_i32(wasm, "trunc", [7.8], 8)
+  assert_run_i32(wasm, "truthy", [0.0], 2)
+  assert_run_i32(wasm, "truthy", [3.0], 1)
+}
+
+///|
+test "codegen: unsupported iife edge cases report errors" {
+  assert_compile_error_contains(
+    (
+      #|function bad(n: number): number {
+      #|  return ((x: number, y: number) => x + y)(n);
+      #|}
+    ),
+    "arity mismatch",
+  )
+  assert_compile_error_contains(
+    (
+      #|function bad(n: number): number {
+      #|  return ((x: number) => { const y: number = x + 1; return y; })(n);
+      #|}
+    ),
+    "exactly one return statement",
+  )
 }
 
 ///|

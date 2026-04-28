@@ -942,6 +942,31 @@ test "can_compile_to_wasm: reusable function value remains unsupported" {
 }
 
 ///|
+test "can_compile_to_wasm: iife unsupported edge cases" {
+  let arity_src =
+    #|function bad(n: number): number {
+    #|  return ((x: number, y: number) => x + y)(n);
+    #|}
+  let arity_parser = @parser.Parser::from_source(arity_src)
+  let arity_mod = arity_parser.parse_module()
+  match can_compile_to_wasm(arity_mod.funcs[0]) {
+    Compilable => fail("expected arity mismatch to remain unsupported")
+    NotCompilable(reason) => assert_true(reason.contains("arity mismatch"))
+  }
+  let block_src =
+    #|function bad(n: number): number {
+    #|  return ((x: number) => { const y: number = x + 1; return y; })(n);
+    #|}
+  let block_parser = @parser.Parser::from_source(block_src)
+  let block_mod = block_parser.parse_module()
+  match can_compile_to_wasm(block_mod.funcs[0]) {
+    Compilable => fail("expected non-trivial iife block to remain unsupported")
+    NotCompilable(reason) =>
+      assert_true(reason.contains("exactly one return statement"))
+  }
+}
+
+///|
 test "can_compile_to_wasm: async function not supported" {
   // Create an async function directly
   let func : @ast.TsFunc = {

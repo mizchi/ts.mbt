@@ -1,0 +1,33 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/reverse-edge"
+
+// Values
+pub fn consume_callbacks(handler : (String, Int) -> Unit, on_error? : (Error) -> Unit, required : Array[String]) -> Unit
+pub async fn load_all(keys : Array[String]) -> Result[Array[(String, Int)], Error] raise Error
+pub fn borrow_bytes(&BytesView) -> Bytes
+pub fn update_ref(state : Ref[Array[Int64]], next : ArrayView[UInt64]) -> Set[String]
+
+// Errors
+
+// Types and methods
+pub(all) struct CallbackBox[T] {
+  current : T
+  on_change : ((T) -> Unit)?
+  meta : Map[String, Array[Bool]]
+}
+pub fn[T, U] CallbackBox::map(Self[T], mapper : (T) -> U) -> CallbackBox[U]
+pub fn[T] CallbackBox::tap(Self[T], effect : (Self[T]) -> Unit) -> Self[T]
+
+pub enum Result[T, E] {
+  Ok(T)
+  Err(E)
+}
+
+pub enum Status {
+  Ready(Int)
+  Failed(Error)
+}
+
+// Type aliases
+pub type Task[T] = async () -> Result[T, Error]
+pub type MaybeHandler[T] = ((T) -> Unit)?
