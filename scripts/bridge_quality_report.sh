@@ -7,6 +7,10 @@ cd "$repo_root"
 report_root="_build/bridge-quality"
 log_root="$report_root/logs"
 report_file="$report_root/REPORT.md"
+unsupported_details_file="$report_root/unsupported-exports.tsv"
+ambiguous_unsupported_export_budget=1
+namespace_omitted_unsupported_export_budget=0
+namespace_widened_unsupported_export_budget=0
 
 rm -rf "$report_root"
 mkdir -p "$log_root"
@@ -102,6 +106,59 @@ count_matching_files() {
   printf '%s\n' "$total"
 }
 
+collect_unsupported_export_counts() {
+  local details_file="$1"
+  local total=0
+  local ambiguous=0
+  local namespace_omitted=0
+  local namespace_widened=0
+  local unbudgeted=0
+  local file
+  local line
+  local line_no
+  local classification
+
+  : > "$details_file"
+
+  while IFS= read -r file; do
+    line_no=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      line_no=$((line_no + 1))
+      if [[ "$line" != ///\ Unsupported\ export* ]]; then
+        continue
+      fi
+
+      total=$((total + 1))
+      classification="unbudgeted"
+      if [[ "$line" == *"ambiguous re-export surface is widened to JSValue; candidates: "* ]]; then
+        classification="ambiguous-re-export"
+        ambiguous=$((ambiguous + 1))
+      elif [[ "$line" == *"runtime members inside exported namespace are omitted; only type members are exposed." ]]; then
+        classification="namespace-runtime-omitted"
+        namespace_omitted=$((namespace_omitted + 1))
+      elif [[ "$line" == *"namespace export is widened to JSValue." ]]; then
+        classification="namespace-widened"
+        namespace_widened=$((namespace_widened + 1))
+      else
+        unbudgeted=$((unbudgeted + 1))
+      fi
+
+      printf '%s\t%s:%s\t%s\n' \
+        "$classification" \
+        "$file" \
+        "$line_no" \
+        "$line" >> "$details_file"
+    done < "$file"
+  done < <(find_metric_files 'bridge.mbti')
+
+  printf '%s|%s|%s|%s|%s\n' \
+    "$total" \
+    "$ambiguous" \
+    "$namespace_omitted" \
+    "$namespace_widened" \
+    "$unbudgeted"
+}
+
 jsvalue_cause_counts() {
   local surface_total=0
   local unknown_any=0
@@ -169,7 +226,12 @@ moonbit_decl_lines="$(sum_lines 'bridge.mbti')"
 typescript_decl_lines="$(sum_lines '*.d.ts')"
 javascript_lines="$(sum_lines '*.js')"
 diagnostic_files=$(( $(count_files 'SCAFFOLD_DIAGNOSTICS.md') + $(count_files 'AUTOLINK_DIAGNOSTICS.md') ))
-unsupported_exports="$(count_matching_files 'bridge.mbti' '^/// Unsupported export ')"
+IFS='|' read -r \
+  unsupported_exports \
+  ambiguous_unsupported_exports \
+  namespace_omitted_unsupported_exports \
+  namespace_widened_unsupported_exports \
+  unbudgeted_unsupported_exports < <(collect_unsupported_export_counts "$unsupported_details_file")
 moonbit_declared_functions="$(count_matching_files 'bridge.mbti' '^declare pub fn ')"
 moonbit_declared_types="$(count_matching_files 'bridge.mbti' '^declare pub type ')"
 typescript_exported_declarations="$(count_matching_files '*.d.ts' '^export (declare )?(function|interface|class|const|type) ')"
@@ -191,6 +253,18 @@ for status in "${statuses[@]}"; do
     overall="fail"
   fi
 done
+if [ "$unbudgeted_unsupported_exports" -gt 0 ]; then
+  overall="fail"
+fi
+if [ "$ambiguous_unsupported_exports" -gt "$ambiguous_unsupported_export_budget" ]; then
+  overall="fail"
+fi
+if [ "$namespace_omitted_unsupported_exports" -gt "$namespace_omitted_unsupported_export_budget" ]; then
+  overall="fail"
+fi
+if [ "$namespace_widened_unsupported_exports" -gt "$namespace_widened_unsupported_export_budget" ]; then
+  overall="fail"
+fi
 
 {
   printf '# Bridge Quality Report\n\n'
@@ -219,6 +293,10 @@ done
   printf '| TypeScript exported declarations | %s |\n' "$typescript_exported_declarations"
   printf '| diagnostics files | %s |\n' "$diagnostic_files"
   printf '| unsupported exports | %s |\n' "$unsupported_exports"
+  printf '| budgeted ambiguous unsupported exports | %s / %s |\n' "$ambiguous_unsupported_exports" "$ambiguous_unsupported_export_budget"
+  printf '| budgeted namespace-runtime omitted exports | %s / %s |\n' "$namespace_omitted_unsupported_exports" "$namespace_omitted_unsupported_export_budget"
+  printf '| budgeted namespace-widened exports | %s / %s |\n' "$namespace_widened_unsupported_exports" "$namespace_widened_unsupported_export_budget"
+  printf '| unbudgeted unsupported exports | %s |\n' "$unbudgeted_unsupported_exports"
   printf '| JSValue refs | %s |\n' "$jsvalue_refs"
   printf '| JSValue surface lines | %s |\n' "$jsvalue_surface_lines"
   printf '| JSValue functions | %s |\n' "$jsvalue_functions"
@@ -234,6 +312,18 @@ done
   printf '| callback / function type fallback | %s |\n' "$jsvalue_callback_function_fallback"
   printf '| tuple / array fallback | %s |\n' "$jsvalue_tuple_array_fallback"
   printf '| namespace / value fallback | %s |\n' "$jsvalue_namespace_value_fallback"
+  printf '\n'
+  printf '## Unsupported Export Budget\n\n'
+  printf 'Only ambiguous re-export surfaces with explicit candidate diagnostics are budgeted in this fixture corpus. Any other unsupported export class fails this report unless its budget is raised deliberately.\n\n'
+  printf '| class | location | diagnostic |\n'
+  printf '| --- | --- | --- |\n'
+  if [ -s "$unsupported_details_file" ]; then
+    while IFS=$'\t' read -r classification location diagnostic; do
+      printf '| %s | `%s` | %s |\n' "$classification" "$location" "$diagnostic"
+    done < "$unsupported_details_file"
+  else
+    printf '| none |  |  |\n'
+  fi
 } > "$report_file"
 
 cat "$report_file"

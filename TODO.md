@@ -25,8 +25,11 @@ corpus without manual edits.
 - [x] Every generated MoonBit -> TS package in the real-world corpus passes:
   `moon build --target js`, TypeScript declaration typecheck, and a Node import
   smoke run for root and subpath exports.
-- [ ] Unsupported exports are either 0 or limited to explicitly-budgeted
+- [x] Unsupported exports are either 0 or limited to explicitly-budgeted
   ambiguous surfaces with actionable diagnostics.
+  - `just bridge-quality` now fails on unbudgeted unsupported exports and
+    budgets only the single fixture-backed ambiguous re-export surface with
+    explicit candidate diagnostics.
 - [x] `JSValue` usage is classified by reason, and budgets are stable per
   package instead of being treated as an opaque quality number.
   - Real-world TypeScript metrics now split `JSValue` surface usage into
