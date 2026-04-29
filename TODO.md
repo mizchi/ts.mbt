@@ -35,7 +35,11 @@ corpus without manual edits.
   - Real-world TypeScript metrics now split `JSValue` surface usage into
     unknown / any, overload, conditional / mapped, callback / function,
     tuple / array, and namespace / value buckets, with per-package budgets.
-- [ ] Generated packages require no manual glue edits for the supported corpus.
+- [x] Generated packages require no manual glue edits for the supported corpus.
+  - Real-world TypeScript verification hashes generated glue files immediately
+    after CLI generation and fails if smoke setup or builds mutate them.
+  - Real-world MoonBit verification hashes generated package artifacts and
+    fails if typecheck, import smoke, or consumer smoke steps mutate them.
 - [ ] `README.md` documents the supported surface, unsupported surface, and
   diagnostic interpretation clearly enough for external users.
 
@@ -181,8 +185,12 @@ corpus without manual edits.
 - [x] Keep each real-world failure as a minimized fixture before fixing it.
   - The `node:assert` missing runtime binding failure is covered by
     `unique-symbol-runtime-export-entry.d.ts`.
-- [ ] Track corpus status in a generated markdown report checked by CI or an
+- [x] Track corpus status in a generated markdown report checked by CI or an
   opt-in verification task.
+  - `just verify-realworld-typescript` writes
+    `_build/realworld-typescript/METRICS.md`.
+  - `just verify-realworld-moonbit` writes
+    `_build/realworld-moonbit/REPORT.md`.
 
 ### Phase 6: Productization and Safety (88% -> 90%)
 

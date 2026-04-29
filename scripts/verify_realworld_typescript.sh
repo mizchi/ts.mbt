@@ -31,6 +31,41 @@ run_logged() {
   fi
 }
 
+record_file_manifest() {
+  local root="$1"
+  local manifest="$2"
+  shift 2
+
+  mkdir -p "$(dirname "$manifest")"
+  : > "$manifest"
+
+  local file
+  local digest
+  for file in "$@"; do
+    if [ ! -f "$root/$file" ]; then
+      echo "Generated glue file missing: $root/$file" >&2
+      exit 1
+    fi
+    digest="$(shasum -a 256 "$root/$file" | awk '{ print $1 }')"
+    printf '%s  %s\n' "$digest" "$file" >> "$manifest"
+  done
+}
+
+assert_file_manifest_unchanged() {
+  local root="$1"
+  local manifest="$2"
+  local label="$3"
+  shift 3
+  local after="$manifest.after"
+
+  record_file_manifest "$root" "$after" "$@"
+  if ! cmp -s "$manifest" "$after"; then
+    echo "Generated glue was modified after CLI generation for $label" >&2
+    diff -u "$manifest" "$after" >&2 || true
+    exit 1
+  fi
+}
+
 count_lines_matching() {
   local pattern="$1"
   local file="$2"
@@ -118,8 +153,8 @@ init_metrics() {
 node_modules: \`$node_modules_root\`
 corpus: \`$corpus_file\`
 
-| package | bridge lines | declared types | declared functions | structs | external types | JSValue refs | JSValue functions | JSValue surface | unknown/any | overload | conditional/mapped | callback/function | tuple/array | namespace/value | unsupported exports |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| package | bridge lines | declared types | declared functions | structs | external types | JSValue refs | JSValue functions | JSValue surface | unknown/any | overload | conditional/mapped | callback/function | tuple/array | namespace/value | unsupported exports | generated glue unchanged |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 EOF
 }
 
@@ -161,7 +196,7 @@ append_metrics() {
     jsvalue_namespace_value < <(jsvalue_cause_counts "$decl")
   unsupported_exports="$(count_lines_matching '^/// Unsupported export ' "$decl")"
 
-  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | yes |\n' \
     "$package_spec" \
     "$bridge_lines" \
     "$declared_types" \
@@ -1135,6 +1170,13 @@ verify_package() {
       --direction ts-to-mbt
   )
 
+  local generated_glue_manifest="$log_root/${module_name}_generated_glue.sha256"
+  record_file_manifest "$out" "$generated_glue_manifest" \
+    bridge.mbt \
+    bridge.mbti \
+    bridge.js \
+    moon.pkg.json
+
   write_probe_moon_mod "$out" "$module_name"
   write_bridge_test "$out" "$module_name"
 
@@ -1149,6 +1191,12 @@ verify_package() {
     cat "$out/SCAFFOLD_DIAGNOSTICS.md" >&2
     exit 1
   fi
+
+  assert_file_manifest_unchanged "$out" "$generated_glue_manifest" "$package_spec" \
+    bridge.mbt \
+    bridge.mbti \
+    bridge.js \
+    moon.pkg.json
 
   printf "real-world checked %s lines=%s\n" \
     "$package_spec" \
@@ -1287,6 +1335,13 @@ verify_node_sqlite() {
     --direction ts-to-mbt \
     --module-spec node:sqlite
 
+  local generated_glue_manifest="$log_root/${module_name}_generated_glue.sha256"
+  record_file_manifest "$out" "$generated_glue_manifest" \
+    bridge.mbt \
+    bridge.mbti \
+    bridge.js \
+    moon.pkg.json
+
   write_probe_moon_mod "$out" "$module_name"
   write_bridge_test "$out" "$module_name"
 
@@ -1295,6 +1350,12 @@ verify_node_sqlite() {
   run_logged "$log_root/${module_name}_test.log" \
     env NODE_OPTIONS=--experimental-sqlite moon -C "$out" test --target js
   run_build_smoke "$out" "$module_name"
+
+  assert_file_manifest_unchanged "$out" "$generated_glue_manifest" "$package_spec" \
+    bridge.mbt \
+    bridge.mbti \
+    bridge.js \
+    moon.pkg.json
 
   printf "real-world checked %s lines=%s\n" \
     "node:sqlite" \
@@ -1327,6 +1388,13 @@ verify_node_fs() {
     --direction ts-to-mbt \
     --module-spec node:fs
 
+  local generated_glue_manifest="$log_root/${module_name}_generated_glue.sha256"
+  record_file_manifest "$out" "$generated_glue_manifest" \
+    bridge.mbt \
+    bridge.mbti \
+    bridge.js \
+    moon.pkg.json
+
   write_probe_moon_mod "$out" "$module_name"
   write_bridge_test "$out" "$module_name"
 
@@ -1335,6 +1403,12 @@ verify_node_fs() {
   run_logged "$log_root/${module_name}_test.log" \
     moon -C "$out" test --target js
   run_build_smoke "$out" "$module_name"
+
+  assert_file_manifest_unchanged "$out" "$generated_glue_manifest" "$package_spec" \
+    bridge.mbt \
+    bridge.mbti \
+    bridge.js \
+    moon.pkg.json
 
   printf "real-world checked %s lines=%s\n" \
     "node:fs" \
@@ -1370,6 +1444,13 @@ verify_node_builtin() {
     --direction ts-to-mbt \
     --module-spec "$package_spec"
 
+  local generated_glue_manifest="$log_root/${module_name}_generated_glue.sha256"
+  record_file_manifest "$out" "$generated_glue_manifest" \
+    bridge.mbt \
+    bridge.mbti \
+    bridge.js \
+    moon.pkg.json
+
   write_probe_moon_mod "$out" "$module_name"
   write_bridge_test "$out" "$module_name"
 
@@ -1378,6 +1459,12 @@ verify_node_builtin() {
   run_logged "$log_root/${module_name}_test.log" \
     moon -C "$out" test --target js
   run_build_smoke "$out" "$module_name"
+
+  assert_file_manifest_unchanged "$out" "$generated_glue_manifest" "$package_spec" \
+    bridge.mbt \
+    bridge.mbti \
+    bridge.js \
+    moon.pkg.json
 
   printf "real-world checked %s lines=%s\n" \
     "$package_spec" \

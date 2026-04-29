@@ -5,6 +5,8 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 github_root="$(cd "$repo_root/../.." && pwd)"
+report_root="_build/realworld-moonbit"
+report_file="$report_root/REPORT.md"
 packages=(
   "mizchi/ast_printer"
   "mizchi/js"
@@ -25,6 +27,79 @@ packages=(
 )
 
 checked=0
+
+init_report() {
+  mkdir -p "$report_root"
+  cat > "$report_file" <<'EOF'
+# Real-World MoonBit Bridge Report
+
+| package | status | output | .d.ts files | JS files | generated package unchanged | note |
+| --- | --- | --- | ---: | ---: | --- | --- |
+EOF
+}
+
+append_report() {
+  local package_name="$1"
+  local status="$2"
+  local output="$3"
+  local dts_files="$4"
+  local js_files="$5"
+  local generated_package_unchanged="$6"
+  local note="$7"
+
+  printf '| %s | %s | `%s` | %s | %s | %s | %s |\n' \
+    "$package_name" \
+    "$status" \
+    "$output" \
+    "$dts_files" \
+    "$js_files" \
+    "$generated_package_unchanged" \
+    "$note" >> "$report_file"
+}
+
+count_files_under() {
+  local root="$1"
+  local pattern="$2"
+
+  find "$root" -type f -name "$pattern" \
+    ! -path "$root/_typecheck/*" \
+    ! -path "$root/_consumer/*" | wc -l | tr -d ' '
+}
+
+record_generated_package_manifest() {
+  local root="$1"
+  local manifest="$2"
+
+  mkdir -p "$(dirname "$manifest")"
+  : > "$manifest"
+
+  local file
+  local rel
+  local digest
+  while IFS= read -r file; do
+    rel="${file#"$root"/}"
+    digest="$(shasum -a 256 "$file" | awk '{ print $1 }')"
+    printf '%s  %s\n' "$digest" "$rel" >> "$manifest"
+  done < <(
+    find "$root" -type f \
+      ! -path "$root/_typecheck/*" \
+      ! -path "$root/_consumer/*" | LC_ALL=C sort
+  )
+}
+
+assert_generated_package_unchanged() {
+  local root="$1"
+  local manifest="$2"
+  local label="$3"
+  local after="$manifest.after"
+
+  record_generated_package_manifest "$root" "$after"
+  if ! cmp -s "$manifest" "$after"; then
+    echo "Generated package artifacts were modified after CLI generation for $label" >&2
+    diff -u "$manifest" "$after" >&2 || true
+    exit 1
+  fi
+}
 
 package_checkout_exists() {
   local package_name="$1"
@@ -63,16 +138,21 @@ verify_package() {
   skip_reason="$(known_skip_reason "$package_name")"
   if [ -n "$skip_reason" ]; then
     echo "skip $package_name: $skip_reason" >&2
+    append_report "$package_name" "skip" "" 0 0 "n/a" "$skip_reason"
     return
   fi
 
   if ! package_checkout_exists "$package_name"; then
     echo "skip $package_name: checkout not found under $github_root" >&2
+    append_report "$package_name" "skip" "" 0 0 "n/a" "checkout not found under $github_root"
     return
   fi
 
   rm -rf "$out"
   moon run src -- --input "$package_name" --out "$out" >/dev/null
+
+  local generated_package_manifest="$report_root/logs/${safe_name}_generated_package.sha256"
+  record_generated_package_manifest "$out" "$generated_package_manifest"
 
   [ -f "$out/package.json" ]
   [ -f "$out/index.d.ts" ]
@@ -87,6 +167,16 @@ verify_package() {
   verify_typescript_declarations "$out"
   verify_runtime_declaration_exports "$out"
   verify_package_consumer "$package_name" "$out"
+  assert_generated_package_unchanged "$out" "$generated_package_manifest" "$package_name"
+
+  append_report \
+    "$package_name" \
+    "pass" \
+    "$out" \
+    "$(count_files_under "$out" '*.d.ts')" \
+    "$(count_files_under "$out" '*.js')" \
+    "yes" \
+    ""
 
   checked=$((checked + 1))
 }
@@ -652,6 +742,8 @@ EOF
   pnpm exec tsc -p "$consumer_dir/tsconfig.json" --pretty false
 }
 
+init_report
+
 for package_name in "${packages[@]}"; do
   verify_package "$package_name"
 done
@@ -660,4 +752,5 @@ if [ "$checked" -eq 0 ]; then
   echo "skip real-world MoonBit probe: no target checkouts found" >&2
 else
   echo "real-world MoonBit checked $checked packages"
+  echo "report written to $report_file"
 fi
