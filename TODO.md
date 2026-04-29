@@ -40,8 +40,11 @@ corpus without manual edits.
     after CLI generation and fails if smoke setup or builds mutate them.
   - Real-world MoonBit verification hashes generated package artifacts and
     fails if typecheck, import smoke, or consumer smoke steps mutate them.
-- [ ] `README.md` documents the supported surface, unsupported surface, and
+- [x] `README.md` documents the supported surface, unsupported surface, and
   diagnostic interpretation clearly enough for external users.
+  - README now documents the supported MoonBit -> TypeScript and TypeScript ->
+    MoonBit bridge surfaces, known fallbacks, diagnostics files, quality
+    reports, and the no-arbitrary-package-conversion caveat.
 
 ### Phase 1: Measurement and Diagnostics (60% -> 65%)
 

@@ -192,6 +192,21 @@ Current export model:
 - `emit-typescript-package-from-mbti` and `emit-typescript-scaffold-from-mbti` accept an optional JSON object for external import rewrites, for example `{ "moonbitlang/core/debug": "demo-debug" }`.
 - Generated `package.json` names are derived from the MoonBit package path, for example `demo/pkg` -> `@demo/pkg` and `mizchi/ts/analysis` -> `@mizchi/ts-analysis`.
 
+Supported surface:
+
+- Top-level public free functions whose parameter and return types can cross the MoonBit JS backend boundary.
+- Root and local child-package exports, with generated `package.json` subpath exports.
+- `raise` effects in `.mbti`, represented in TypeScript declarations as `Result<Return, ErrorType>`.
+- Opaque MoonBit-defined types in TypeScript declarations.
+- Opt-in facade wrappers for local non-generic methods and constructors via `emit-typescript-facade-scaffold-from-mbti`.
+
+Unsupported or limited surface:
+
+- Arbitrary methods, constructors, trait methods, and generic functions are not exported directly by JS autolink.
+- Public members omitted from the runtime export surface are listed in `AUTOLINK_DIAGNOSTICS.md`.
+- External MoonBit imports are left as bare TypeScript imports unless an import rewrite map is provided.
+- The final package should not contain temporary glue files such as `moon.pkg.json` or generated facade `.mbt`; those are build inputs only.
+
 ### TypeScript -> MoonBit
 
 Start from a TypeScript entrypoint and emit a MoonBit bridge scaffold:
@@ -219,6 +234,28 @@ The TS -> MoonBit path resolves exported surface recursively through local packa
 - Literal unions such as `"solid" | "ghost"` and `true | false` are narrowed to `String` / `Bool` instead of being widened to `JSValue`.
 - Generated bridge packages preserve camelCase top-level export names in their public MoonBit API, even when the internal JS extern binding is lowered to snake_case.
 
+Supported surface:
+
+- Exported functions, classes, interfaces, constants, default exports, package `exports`, `types` / `typings`, common subpath exports, `@types/*` fallbacks, and configured Node built-in declaration files.
+- Primitive values, arrays, optionals, literal string / boolean unions, object option bags, and representable readonly fields.
+- Common real-world package shapes covered by the probe corpus, including function libraries, schema libraries, web libraries, callback-heavy Node APIs, Promise-heavy APIs, CJS-style packages, and Node built-ins.
+- Generated packages are expected to pass `moon check --target js`, `moon test --target js`, `moon build --target js`, and a Node smoke run without editing generated glue.
+
+Fallback and unsupported surface:
+
+- Complex `any` / `unknown`, overloads, conditional / mapped types, function-valued callbacks, tuple edge cases, and namespace/value merge surfaces may be widened to `JSValue`.
+- Ambiguous re-exports are intentionally not bound unsafely. The generated package remains buildable and reports the candidate source files.
+- Unsupported exports are either absent or explicitly budgeted in verification; new unsupported surfaces should be minimized into fixtures before broadening the generator.
+
+Diagnostics and quality reports:
+
+- `SCAFFOLD_DIAGNOSTICS.md` explains each widened, omitted, or bridge-wrapped TypeScript export, including whether the generated decision is runtime-safe.
+- `AUTOLINK_DIAGNOSTICS.md` explains MoonBit public members omitted from JS autolink output.
+- `just bridge-quality` writes `_build/bridge-quality/REPORT.md` with fixture-backed metrics, unsupported export budgets, and `JSValue` cause breakdowns.
+- `just verify-realworld-typescript` writes `_build/realworld-typescript/METRICS.md` with per-package `JSValue` budgets and generated-glue immutability checks.
+- `just verify-realworld-moonbit` writes `_build/realworld-moonbit/REPORT.md` with per-package status and generated-package immutability checks.
+- The project does not claim arbitrary npm or MoonBit package conversion. Treat a clean report plus diagnostics review as the supported workflow.
+
 ## Development
 
 ```bash
@@ -230,6 +267,13 @@ moon test --target native
 
 # Verify high-level scaffold commands end-to-end
 just verify-scaffolds
+
+# Fixture-backed bridge quality report
+just bridge-quality
+
+# Optional local real-world probes
+just verify-realworld-typescript
+just verify-realworld-moonbit
 
 # Format code
 moon fmt
