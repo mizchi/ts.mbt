@@ -1212,12 +1212,17 @@ fn Parser::parse_declare_signature_params(
   while !self.check(RParen) && !self.check(Eof) {
     let _ = self.match_ellipsis()
     let param_name = self.parse_declare_param_name()
-    let _ = self.match_(Question)
-    let param_type = if self.check(Colon) {
+    let is_optional = self.match_(Question)
+    let base_param_type = if self.check(Colon) {
       let _ = self.advance()
       self.parse_type()
     } else {
       @ast.TsType::Any
+    }
+    let param_type = if is_optional {
+      wrap_optional_ts_type(base_param_type)
+    } else {
+      base_param_type
     }
     params.push((param_name, param_type))
     if self.check(Comma) {

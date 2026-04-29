@@ -109,7 +109,19 @@ jsvalue_function_budget() {
     hono) printf '0\n' ;;
     zod) printf '130\n' ;;
     date-fns) printf '10\n' ;;
+    node:sqlite) printf '2\n' ;;
+    node:fs) printf '43\n' ;;
     *) printf '999999\n' ;;
+  esac
+}
+
+unsupported_export_budget() {
+  local package_spec="$1"
+
+  case "$package_spec" in
+    node:sqlite) printf '1\n' ;;
+    node:fs) printf '43\n' ;;
+    *) printf '0\n' ;;
   esac
 }
 
@@ -118,10 +130,12 @@ assert_metric_budget() {
   local jsvalue_functions="$2"
   local unsupported_exports="$3"
   local jsvalue_budget
+  local unsupported_budget
 
   jsvalue_budget="$(jsvalue_function_budget "$package_spec")"
-  if [ "$unsupported_exports" -ne 0 ]; then
-    echo "Unsupported exports regressed for $package_spec: $unsupported_exports" >&2
+  unsupported_budget="$(unsupported_export_budget "$package_spec")"
+  if [ "$unsupported_exports" -gt "$unsupported_budget" ]; then
+    echo "Unsupported exports regressed for $package_spec: $unsupported_exports > $unsupported_budget" >&2
     exit 1
   fi
   if [ "$jsvalue_functions" -gt "$jsvalue_budget" ]; then
@@ -217,7 +231,7 @@ extern "js" fn realworld_hono_options() -> HonoOptions =
   #| () => ({ strict: true })
 
 test "real-world hono bridge smoke" {
-  let _ = new_hono(realworld_hono_options())
+  let _ = new_hono(Some(realworld_hono_options()))
 }
 EOF
       ;;
@@ -237,6 +251,66 @@ test "real-world date-fns bridge smoke" {
   assert_eq(weeksToDays(2.0), 14.0)
   assert_eq(hoursToMinutes(2.0), 120.0)
   assert_true(isExists(2020.0, 1.0, 29.0))
+}
+EOF
+      ;;
+    node_sqlite)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_node_sqlite_memory_path() -> PathLike =
+  #| () => ":memory:"
+
+extern "js" fn realworld_node_sqlite_options() -> DatabaseSyncOptions =
+  #| () => ({})
+
+extern "js" fn realworld_node_sqlite_params() -> Array[SQLInputValue] =
+  #| () => []
+
+extern "js" fn realworld_node_sqlite_row_value(row : Record?) -> String =
+  #| (row) => row.value
+
+test "real-world node:sqlite bridge smoke" {
+  let db = new_database_sync(
+    realworld_node_sqlite_memory_path(),
+    Some(realworld_node_sqlite_options()),
+  )
+  assert_true(db.get_database_sync_is_open())
+  db.database_sync_exec("CREATE TABLE data (key INTEGER PRIMARY KEY, value TEXT) STRICT")
+  db.database_sync_exec("INSERT INTO data (key, value) VALUES (1, 'hello')")
+  db.database_sync_exec("UPDATE data SET value = 'world' WHERE key = 1")
+  let stmt = db.database_sync_prepare("SELECT value FROM data WHERE key = 1", None)
+  let row = stmt.statement_sync_get(realworld_node_sqlite_params())
+  assert_eq(realworld_node_sqlite_row_value(row), "world")
+  db.database_sync_close()
+  assert_false(db.get_database_sync_is_open())
+}
+EOF
+      ;;
+    node_fs)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_node_fs_path_like() -> PathLike =
+  #| () => process.cwd() + "/node-fs-test.txt"
+
+extern "js" fn realworld_node_fs_path_or_fd() -> PathOrFileDescriptor =
+  #| () => process.cwd() + "/node-fs-test.txt"
+
+extern "js" fn realworld_node_fs_data() -> JSValue =
+  #| () => "hello from moonbit"
+
+extern "js" fn realworld_node_fs_to_string(data : NonSharedBuffer) -> String =
+  #| (data) => data.toString("utf8")
+
+test "real-world node:fs bridge smoke" {
+  let path = realworld_node_fs_path_like()
+  let file = realworld_node_fs_path_or_fd()
+  if existsSync(path) {
+    unlinkSync(path)
+  }
+  writeFileSync(file, realworld_node_fs_data(), None)
+  assert_true(existsSync(path))
+  let data = readFileSync(file, None)
+  assert_eq(realworld_node_fs_to_string(data), "hello from moonbit")
+  unlinkSync(path)
+  assert_false(existsSync(path))
 }
 EOF
       ;;
@@ -307,7 +381,7 @@ extern "js" fn realworld_hono_options() -> @sut.HonoOptions =
   #| () => ({ strict: true })
 
 fn main {
-  let _ = @sut.new_hono(realworld_hono_options())
+  let _ = @sut.new_hono(Some(realworld_hono_options()))
 }
 EOF
       ;;
@@ -338,6 +412,78 @@ fn main {
 }
 EOF
       ;;
+    node_sqlite)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_node_sqlite_memory_path() -> @sut.PathLike =
+  #| () => ":memory:"
+
+extern "js" fn realworld_node_sqlite_options() -> @sut.DatabaseSyncOptions =
+  #| () => ({})
+
+extern "js" fn realworld_node_sqlite_params() -> Array[@sut.SQLInputValue] =
+  #| () => []
+
+extern "js" fn realworld_node_sqlite_row_value(row : @sut.Record?) -> String =
+  #| (row) => row.value
+
+fn main {
+  let db = @sut.new_database_sync(
+    realworld_node_sqlite_memory_path(),
+    Some(realworld_node_sqlite_options()),
+  )
+  if !db.get_database_sync_is_open() {
+    abort("expected sqlite database to be open")
+  }
+  db.database_sync_exec("CREATE TABLE data (key INTEGER PRIMARY KEY, value TEXT) STRICT")
+  db.database_sync_exec("INSERT INTO data (key, value) VALUES (1, 'hello')")
+  db.database_sync_exec("UPDATE data SET value = 'world' WHERE key = 1")
+  let stmt = db.database_sync_prepare("SELECT value FROM data WHERE key = 1", None)
+  let row = stmt.statement_sync_get(realworld_node_sqlite_params())
+  if realworld_node_sqlite_row_value(row) != "world" {
+    abort("unexpected sqlite row value")
+  }
+  db.database_sync_close()
+  if db.get_database_sync_is_open() {
+    abort("expected sqlite database to be closed")
+  }
+}
+EOF
+      ;;
+    node_fs)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_node_fs_path_like() -> @sut.PathLike =
+  #| () => process.cwd() + "/node-fs-build-smoke.txt"
+
+extern "js" fn realworld_node_fs_path_or_fd() -> @sut.PathOrFileDescriptor =
+  #| () => process.cwd() + "/node-fs-build-smoke.txt"
+
+extern "js" fn realworld_node_fs_data() -> @sut.JSValue =
+  #| () => "hello from moonbit"
+
+extern "js" fn realworld_node_fs_to_string(data : @sut.NonSharedBuffer) -> String =
+  #| (data) => data.toString("utf8")
+
+fn main {
+  let path = realworld_node_fs_path_like()
+  let file = realworld_node_fs_path_or_fd()
+  if @sut.existsSync(path) {
+    @sut.unlinkSync(path)
+  }
+  @sut.writeFileSync(file, realworld_node_fs_data(), None)
+  if !@sut.existsSync(path) {
+    abort("expected file to exist")
+  }
+  let data = @sut.readFileSync(file, None)
+  if realworld_node_fs_to_string(data) != "hello from moonbit" {
+    abort("unexpected file content")
+  }
+  @sut.unlinkSync(path)
+  if @sut.existsSync(path) {
+    abort("expected file to be removed")
+  }
+}
+EOF
+      ;;
     *)
       echo "No build smoke configured for $module_name" >&2
       exit 1
@@ -362,7 +508,12 @@ run_build_smoke() {
   fi
 
   printf '{ "type": "module" }\n' > "$(dirname "$built_js")/package.json"
-  run_logged "$log_root/${module_name}_node_smoke.log" node "$built_js"
+  if [ "$module_name" = "node_sqlite" ]; then
+    run_logged "$log_root/${module_name}_node_smoke.log" \
+      node --experimental-sqlite "$built_js"
+  else
+    run_logged "$log_root/${module_name}_node_smoke.log" node "$built_js"
+  fi
 }
 
 verify_package() {
@@ -415,6 +566,120 @@ verify_package() {
   append_metrics "$package_spec" "$out"
 }
 
+find_node_sqlite_types() {
+  if [ -n "${TSMBT_NODE_SQLITE_TYPES:-}" ]; then
+    if [ -f "$TSMBT_NODE_SQLITE_TYPES" ]; then
+      printf '%s\n' "$TSMBT_NODE_SQLITE_TYPES"
+      return 0
+    fi
+    echo "TSMBT_NODE_SQLITE_TYPES does not exist: $TSMBT_NODE_SQLITE_TYPES" >&2
+    exit 1
+  fi
+
+  if [ -f "$node_modules_root/@types/node/sqlite.d.ts" ]; then
+    printf '%s\n' "$node_modules_root/@types/node/sqlite.d.ts"
+    return 0
+  fi
+
+  return 1
+}
+
+find_node_fs_types() {
+  if [ -n "${TSMBT_NODE_FS_TYPES:-}" ]; then
+    if [ -f "$TSMBT_NODE_FS_TYPES" ]; then
+      printf '%s\n' "$TSMBT_NODE_FS_TYPES"
+      return 0
+    fi
+    echo "TSMBT_NODE_FS_TYPES does not exist: $TSMBT_NODE_FS_TYPES" >&2
+    exit 1
+  fi
+
+  if [ -f "$node_modules_root/@types/node/fs.d.ts" ]; then
+    printf '%s\n' "$node_modules_root/@types/node/fs.d.ts"
+    return 0
+  fi
+
+  return 1
+}
+
+verify_node_sqlite() {
+  local module_name="node_sqlite"
+  local root="_build/realworld-typescript"
+  local out="$root/node_sqlite"
+  local types_path
+
+  if ! types_path="$(find_node_sqlite_types)"; then
+    echo "Skipping node:sqlite probe: @types/node/sqlite.d.ts not found" >&2
+    echo "Set TSMBT_NODE_SQLITE_TYPES to enable it." >&2
+    return
+  fi
+
+  echo "== node:sqlite"
+
+  rm -rf "$out"
+  mkdir -p "$out"
+
+  run_logged "$log_root/${module_name}_generate.log" \
+    moon run src -- \
+    --input "$types_path" \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec node:sqlite
+
+  write_probe_moon_mod "$out" "$module_name"
+  write_bridge_test "$out" "$module_name"
+
+  run_logged "$log_root/${module_name}_check.log" \
+    moon -C "$out" check --target js
+  run_logged "$log_root/${module_name}_test.log" \
+    env NODE_OPTIONS=--experimental-sqlite moon -C "$out" test --target js
+  run_build_smoke "$out" "$module_name"
+
+  printf "real-world checked %s lines=%s\n" \
+    "node:sqlite" \
+    "$(wc -l < "$out/bridge.mbt")"
+  append_metrics "node:sqlite" "$out"
+}
+
+verify_node_fs() {
+  local module_name="node_fs"
+  local root="_build/realworld-typescript"
+  local out="$root/node_fs"
+  local types_path
+
+  if ! types_path="$(find_node_fs_types)"; then
+    echo "Skipping node:fs probe: @types/node/fs.d.ts not found" >&2
+    echo "Set TSMBT_NODE_FS_TYPES to enable it." >&2
+    return
+  fi
+
+  echo "== node:fs"
+
+  rm -rf "$out"
+  mkdir -p "$out"
+
+  run_logged "$log_root/${module_name}_generate.log" \
+    moon run src -- \
+    --input "$types_path" \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec node:fs
+
+  write_probe_moon_mod "$out" "$module_name"
+  write_bridge_test "$out" "$module_name"
+
+  run_logged "$log_root/${module_name}_check.log" \
+    moon -C "$out" check --target js
+  run_logged "$log_root/${module_name}_test.log" \
+    moon -C "$out" test --target js
+  run_build_smoke "$out" "$module_name"
+
+  printf "real-world checked %s lines=%s\n" \
+    "node:fs" \
+    "$(wc -l < "$out/bridge.mbt")"
+  append_metrics "node:fs" "$out"
+}
+
 rm -rf _build/realworld-typescript
 init_metrics
 
@@ -429,5 +694,8 @@ hono|hono
 zod|zod
 date-fns|date_fns
 EOF
+
+verify_node_sqlite
+verify_node_fs
 
 echo "metrics written to $metrics_file"

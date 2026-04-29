@@ -57,6 +57,48 @@ async test "bridge: emit MoonBit JS FFI bundle for namespace exports" {
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle from ambient external module" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/ambient-node-sqlite-entry.d.ts", "node:sqlite",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype DatabaseSync"))
+  assert_true(bundle.ffi_mbt.contains("#external\ntype StatementSync"))
+  assert_true(bundle.ffi_mbt.contains("pub struct DatabaseSyncOptions"))
+  assert_true(bundle.ffi_mbt.contains("  open : Bool?"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_database_sync(path : String, options : DatabaseSyncOptions?) -> DatabaseSync",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn DatabaseSync::database_sync_exec(self : DatabaseSync, sql : String) -> Unit",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn DatabaseSync::database_sync_prepare(self : DatabaseSync, sql : String) -> StatementSync",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_sqlite_ok() -> Double = \"__ts_mbt_get_sqlite_ok\"",
+    ),
+  )
+  assert_true(bundle.bridge_js.contains("from \"node:sqlite\";"))
+  assert_true(bundle.bridge_js.contains("DatabaseSync"))
+  assert_true(bundle.bridge_js.contains("SQLITE_OK"))
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle keeps ambiguous exports as comments" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/ambiguous-entry.d.ts", "./runtime/ambiguous.js",

@@ -125,6 +125,119 @@ fn empty_ts_module() -> @ast.TsModule {
 }
 
 ///|
+fn Parser::parse_declaration_block_source(
+  self : Parser,
+) -> String raise ParseError {
+  let brace_start_pos = self.peek().pos
+  let _ = self.expect(LBrace)
+  let mut depth = 1
+  while depth > 0 {
+    let token = self.advance()
+    match token.kind {
+      LBrace => depth += 1
+      RBrace => depth -= 1
+      Eof => raise ParseError("Unterminated declaration block")
+      _ => ()
+    }
+  }
+  let body_end_pos = self.tokens[self.pos - 1].pos
+  if body_end_pos <= brace_start_pos + 1 {
+    ""
+  } else {
+    self.src[brace_start_pos + 1:body_end_pos].to_string()
+  }
+}
+
+///|
+fn parse_ambient_external_module_source(
+  body_source : String,
+) -> @ast.TsModule raise ParseError {
+  if body_source.trim() == "" {
+    empty_ts_module()
+  } else {
+    let parser = Parser::from_source(body_source)
+    parser.parse_module_with_seeded_const_values_internal({}, true)
+  }
+}
+
+///|
+fn Parser::parse_ambient_external_module_decl(
+  self : Parser,
+) -> @ast.TsModule? raise ParseError {
+  if !self.match_ident("module") {
+    return None
+  }
+  match self.peek().kind {
+    Str(_) => {
+      let _ = self.expect_str_literal()
+      if self.check(LBrace) {
+        let body_source = self.parse_declaration_block_source()
+        Some(parse_ambient_external_module_source(body_source))
+      } else {
+        self.skip_declaration_block()
+        Some(empty_ts_module())
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+fn append_module_decls(
+  module_ : @ast.TsModule,
+  funcs : Array[@ast.TsFunc],
+  interfaces : Array[@ast.TsInterface],
+  imports : Array[@ast.TsImport],
+  values : Array[@ast.TsValueDecl],
+  classes : Array[@ast.TsClassDecl],
+  namespaces : Array[@ast.TsNamespaceDecl],
+) -> Unit {
+  for func in module_.funcs {
+    funcs.push(func)
+  }
+  for iface in module_.interfaces {
+    interfaces.push(iface)
+  }
+  for import_ in module_.imports {
+    imports.push(import_)
+  }
+  for value in module_.values {
+    values.push(value)
+  }
+  for class_ in module_.classes {
+    classes.push(class_)
+  }
+  for namespace_ in module_.namespaces {
+    namespaces.push(namespace_)
+  }
+}
+
+///|
+fn append_ambient_external_module_exports(
+  module_ : @ast.TsModule,
+  exports : Array[@ast.TsExportSpec],
+) -> Unit {
+  for func in module_.funcs {
+    exports.push({ local_name: func.name, export_name: func.name })
+  }
+  for iface in module_.interfaces {
+    exports.push({ local_name: iface.name, export_name: iface.name })
+  }
+  for import_ in module_.imports {
+    exports.push({ local_name: import_.name, export_name: import_.name })
+  }
+  for value in module_.values {
+    exports.push({ local_name: value.name, export_name: value.name })
+  }
+  for class_ in module_.classes {
+    exports.push({ local_name: class_.name, export_name: class_.name })
+  }
+  for namespace_ in module_.namespaces {
+    exports.push({ local_name: namespace_.name, export_name: namespace_.name })
+  }
+}
+
+///|
 fn Parser::parse_namespace_decl(
   self : Parser,
 ) -> (@ast.TsValueDecl?, @ast.TsNamespaceDecl?)? raise ParseError {
@@ -159,24 +272,7 @@ fn Parser::parse_namespace_decl(
   }
   let namespace_ = match name {
     Some(name) if self.check(LBrace) => {
-      let brace_start_pos = self.peek().pos
-      let _ = self.expect(LBrace)
-      let mut depth = 1
-      while depth > 0 {
-        let token = self.advance()
-        match token.kind {
-          LBrace => depth += 1
-          RBrace => depth -= 1
-          Eof => raise ParseError("Unterminated namespace declaration block")
-          _ => ()
-        }
-      }
-      let body_end_pos = self.tokens[self.pos - 1].pos
-      let body_source = if body_end_pos <= brace_start_pos + 1 {
-        ""
-      } else {
-        self.src[brace_start_pos + 1:body_end_pos].to_string()
-      }
+      let body_source = self.parse_declaration_block_source()
       let module_ = if body_source.trim() == "" {
         empty_ts_module()
       } else {
@@ -1843,6 +1939,17 @@ fn Parser::parse_export_decl_for_module(
           let class_ = self.parse_declare_class_with_optional_abstract()
           exports.push({ local_name: class_.name, export_name: class_.name })
           return (stmts, exports, reexports)
+        } else if name == "module" &&
+          (match self.peek_at(1).kind {
+            Str(_) => true
+            _ => false
+          }) {
+          match self.parse_ambient_external_module_decl() {
+            Some(module_) =>
+              append_ambient_external_module_exports(module_, exports)
+            None => ()
+          }
+          return (stmts, exports, reexports)
         } else if name == "namespace" ||
           name == "module" ||
           name == "global" ||
@@ -2340,6 +2447,18 @@ fn Parser::parse_module_with_seeded_const_values_internal(
         Ident(name) =>
           if name == "abstract" && self.peek_at(1).kind == Class {
             classes.push(self.parse_declare_class_with_optional_abstract())
+          } else if name == "module" &&
+            (match self.peek_at(1).kind {
+              Str(_) => true
+              _ => false
+            }) {
+            match self.parse_ambient_external_module_decl() {
+              Some(module_) =>
+                append_module_decls(
+                  module_, funcs, interfaces, imports, values, classes, namespaces,
+                )
+              None => ()
+            }
           } else if name == "namespace" ||
             name == "module" ||
             name == "global" ||
@@ -2495,6 +2614,16 @@ fn Parser::parse_module_block_with_const_values(
         Ident(name) =>
           if name == "abstract" && self.peek_at(1).kind == Class {
             let _ = self.parse_declare_class_with_optional_abstract()
+          } else if name == "module" &&
+            (match self.peek_at(1).kind {
+              Str(_) => true
+              _ => false
+            }) {
+            match self.parse_ambient_external_module_decl() {
+              Some(module_) =>
+                append_ambient_external_module_exports(module_, exports)
+              None => ()
+            }
           } else if name == "namespace" ||
             name == "module" ||
             name == "global" ||

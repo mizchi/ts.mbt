@@ -28,3 +28,5 @@ Additional TypeScript -> MoonBit patterns are available under:
 - `result/`
 - `default-class/`
 - `const-table/`
+- `node-sqlite/`
+- `node-fs/`

@@ -36,6 +36,8 @@ Input:
 - `typescript-to-moonbit/default-class/runtime/counter.js`
 - `typescript-to-moonbit/const-table/src/index.ts`
 - `typescript-to-moonbit/const-table/runtime/index.js`
+- `typescript-to-moonbit/node-sqlite/smoke/main.mbt`
+- `typescript-to-moonbit/node-fs/smoke/main.mbt`
 
 Generate a MoonBit bridge package:
 
@@ -82,6 +84,18 @@ moon run src -- \
   --out examples/typescript-to-moonbit/const-table/dist \
   --direction ts-to-mbt \
   --module-spec ../runtime/index.js
+
+moon run src -- \
+  --input "$TSMBT_NODE_SQLITE_TYPES" \
+  --out _build/examples/node-sqlite/dist \
+  --direction ts-to-mbt \
+  --module-spec node:sqlite
+
+moon run src -- \
+  --input "$TSMBT_NODE_FS_TYPES" \
+  --out _build/examples/node-fs/dist \
+  --direction ts-to-mbt \
+  --module-spec node:fs
 ```
 
 Run `just verify-examples` from the repository root to verify these examples
