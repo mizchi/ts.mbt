@@ -73,3 +73,36 @@ test "parser: emit MoonBit declarations sanitizes parameter names" {
     ),
   )
 }
+
+///|
+test "parser: emit MoonBit declarations sanitizes future reserved parameter names" {
+  let src =
+    #|interface RuntimeOptions {
+    #|  override: boolean;
+    #|  method: string;
+    #|}
+    #|declare function transpose(constructor: unknown): void;
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_true(actual.contains("/// override : Bool"))
+  assert_true(actual.contains("/// method : String"))
+  assert_true(
+    actual.contains("declare pub fn transpose(constructor_ : JSValue) -> Unit"),
+  )
+}
+
+///|
+test "parser: emit MoonBit declaration type names with leading underscores" {
+  let src = "interface _ZodType { value: string; }"
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type UnderscoreZodType"))
+}

@@ -297,6 +297,89 @@ fn find_named_export(
 }
 
 ///|
+fn find_import_edge(
+  record : ResolvedModuleRecord,
+  specifier : String,
+) -> ResolvedImportEdge? {
+  for edge in record.imports {
+    if edge.specifier == specifier {
+      return Some(edge)
+    }
+  }
+  None
+}
+
+///|
+fn fallback_imported_binding_export(
+  imported_name : String,
+  source_path : String,
+) -> ResolvedExport {
+  {
+    export_name: imported_name,
+    source_export_name: imported_name,
+    source_path,
+    local_name: Some(imported_name),
+    kind: NamedReExport,
+    via_path: None,
+    ambiguous_source_paths: [],
+  }
+}
+
+///|
+fn resolve_imported_binding_export(
+  record : ResolvedModuleRecord,
+  local_name : String,
+  records : Map[String, ResolvedModuleRecord],
+  cache : Map[String, Array[ResolvedExport]],
+  visiting : Array[String],
+) -> ResolvedExport? {
+  for import_decl in record.module_block.imports {
+    let edge = match find_import_edge(record, import_decl.module_spec) {
+      Some(edge) if edge.resolved_path != "" => edge
+      _ => continue
+    }
+    for binding in import_decl.named_bindings {
+      let (imported_name, bound_local_name) = binding
+      if bound_local_name != local_name {
+        continue
+      }
+      let dep_exports = resolve_export_surface_from_map(
+        edge.resolved_path,
+        records,
+        cache,
+        visiting,
+      )
+      match find_named_export(dep_exports, imported_name) {
+        Some(dep_export) => return Some(dep_export)
+        None =>
+          return Some(
+            fallback_imported_binding_export(imported_name, edge.resolved_path),
+          )
+      }
+    }
+    match import_decl.default_binding {
+      Some(bound_local_name) if bound_local_name == local_name => {
+        let dep_exports = resolve_export_surface_from_map(
+          edge.resolved_path,
+          records,
+          cache,
+          visiting,
+        )
+        match find_named_export(dep_exports, "default") {
+          Some(dep_export) => return Some(dep_export)
+          None =>
+            return Some(
+              fallback_imported_binding_export("default", edge.resolved_path),
+            )
+        }
+      }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
 fn upsert_explicit_export(
   exports : Array[ResolvedExport],
   export_ : ResolvedExport,
@@ -358,15 +441,40 @@ fn resolve_export_surface_from_map(
   visiting.push(path)
   let exports : Array[ResolvedExport] = []
   for spec in record.module_block.exports {
-    upsert_explicit_export(exports, {
-      export_name: spec.export_name,
-      source_export_name: spec.export_name,
-      source_path: path,
-      local_name: Some(spec.local_name),
-      kind: Local,
-      via_path: None,
-      ambiguous_source_paths: [],
-    })
+    match
+      resolve_imported_binding_export(
+        record,
+        spec.local_name,
+        records,
+        cache,
+        visiting,
+      ) {
+      Some(imported_export) => {
+        let kind = match imported_export.kind {
+          Namespace => Namespace
+          _ => NamedReExport
+        }
+        upsert_explicit_export(
+          exports,
+          clone_export_with_name(
+            imported_export,
+            spec.export_name,
+            kind,
+            Some(path),
+          ),
+        )
+      }
+      None =>
+        upsert_explicit_export(exports, {
+          export_name: spec.export_name,
+          source_export_name: spec.export_name,
+          source_path: path,
+          local_name: Some(spec.local_name),
+          kind: Local,
+          via_path: None,
+          ambiguous_source_paths: [],
+        })
+    }
   }
   let star_edges : Array[ResolvedReExportEdge] = []
   for reexport in record.reexports {

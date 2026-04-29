@@ -241,6 +241,7 @@ fn Parser::is_qualified_type_name_part(self : Parser, offset : Int) -> Bool {
     | StringType
     | NumberType
     | BooleanType
+    | IntType
     | VoidType
     | Null => true
     _ => false
@@ -599,7 +600,7 @@ fn Parser::parse_postfix_type(
 ///|
 fn Parser::parse_type_operand(self : Parser) -> @ast.TsType raise ParseError {
   let base = self.parse_primary_type()
-  if self.match_ident("is") {
+  if !self.has_line_terminator_before() && self.match_ident("is") {
     let _ = self.parse_type()
     return Boolean
   }

@@ -3326,6 +3326,9 @@ test "bridge: FFI value identifier sanitizes MoonBit keywords and discard names"
   assert_eq(ffi_sanitize_identifier("and", "field"), "and_")
   assert_eq(ffi_sanitize_identifier("is", "field"), "is_")
   assert_eq(ffi_sanitize_identifier("with", "field"), "with_")
+  assert_eq(ffi_sanitize_identifier("override", "field"), "override_")
+  assert_eq(ffi_sanitize_identifier("method", "field"), "method_")
+  assert_eq(ffi_sanitize_identifier("constructor", "field"), "constructor_")
   assert_eq(ffi_sanitize_identifier("_", "field"), "field")
   assert_eq(ffi_value_fn_name("enum"), "enum_")
 }
@@ -3333,6 +3336,7 @@ test "bridge: FFI value identifier sanitizes MoonBit keywords and discard names"
 ///|
 test "bridge: FFI type identifier avoids invalid and core type names" {
   assert_eq(ffi_type_identifier("_", "OpaqueType"), "OpaqueType")
+  assert_eq(ffi_type_identifier("_ZodType", "OpaqueType"), "UnderscoreZodType")
   assert_eq(ffi_type_identifier("Array", "OpaqueType"), "Array_")
   assert_eq(ffi_type_identifier("Error", "OpaqueType"), "Error_")
 }
@@ -3351,6 +3355,8 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
       ("import", @ast.TsType::Named("Module")),
       ("and", @ast.TsType::Named("NaryIntersectionParser")),
       ("with", @ast.TsType::Named("Scheduler")),
+      ("override", @ast.TsType::Boolean),
+      ("method", @ast.TsType::String_),
       ("_", @ast.TsType::Named("_")),
       (
         "references",
@@ -3363,6 +3369,8 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   assert_true(actual.contains("  import_ : Module"))
   assert_true(actual.contains("  and_ : NaryIntersectionParser"))
   assert_true(actual.contains("  with_ : Scheduler"))
+  assert_true(actual.contains("  override_ : Bool"))
+  assert_true(actual.contains("  method_ : String"))
   assert_true(actual.contains("  field : OpaqueType"))
   assert_true(actual.contains("  references : Array[BaseNode]"))
   assert_false(actual.contains("  _ : Scope"))

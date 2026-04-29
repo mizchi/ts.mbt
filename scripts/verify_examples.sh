@@ -104,6 +104,16 @@ EOF
   grep -F 'pub extern "js" fn double(value : Double) -> Double' "$out/bridge.mbt" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit" <<'EOF'
+fn main {
+  if @sut.greet("MoonBit") != "Hello, MoonBit" {
+    abort("unexpected greet output")
+  }
+  if @sut.double(21.0) != 42.0 {
+    abort("unexpected double output")
+  }
+}
+EOF
 }
 
 write_js_any_stub() {
@@ -129,6 +139,46 @@ EOF
 #external
 pub type Any
 EOF
+}
+
+run_typescript_to_moonbit_js_build_smoke() {
+  local root="$1"
+  local module_name="$2"
+  local needs_js_import="${3:-false}"
+  local smoke_pkg="__tsmbt_build_smoke__"
+  local smoke_dir="$root/$smoke_pkg"
+
+  rm -rf "$smoke_dir" "$root/_build/js/debug/build"
+  mkdir -p "$smoke_dir"
+
+  local js_import_suffix=""
+  if [ "$needs_js_import" = "true" ]; then
+    js_import_suffix=$',
+    { "path": "mizchi/js/core", "alias": "js" }'
+  fi
+
+  cat > "$smoke_dir/moon.pkg.json" <<EOF
+{
+  "is-main": true,
+  "import": [
+    { "path": "$module_name", "alias": "sut" }$js_import_suffix
+  ]
+}
+EOF
+
+  cat > "$smoke_dir/main.mbt"
+
+  moon -C "$root" build --target js "$smoke_pkg"
+
+  local built_js
+  built_js="$(find "$root/_build/js/debug/build" -type f -name '*.js' | head -n 1)"
+  if [ -z "$built_js" ]; then
+    echo "moon build --target js did not emit a runnable JS file for $module_name" >&2
+    exit 1
+  fi
+
+  printf '{ "type": "module" }\n' > "$(dirname "$built_js")/package.json"
+  node "$built_js"
 }
 
 verify_typescript_to_moonbit_hono_example() {
@@ -173,6 +223,15 @@ EOF
   grep -F 'pub fn createApp(options : HonoOptions) -> Hono' "$out/bridge.mbt" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_hono" <<'EOF'
+extern "js" fn test_hono_options() -> @sut.HonoOptions =
+  #| () => ({ strict: true })
+
+fn main {
+  let _ = @sut.new_hono(None)
+  let _ = @sut.createApp(test_hono_options())
+}
+EOF
 }
 
 verify_typescript_to_moonbit_react_example() {
@@ -219,6 +278,12 @@ EOF
   grep -F 'pub extern "js" fn get_default() -> @js.Any' "$out/bridge.mbt" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_react" <<'EOF'
+fn main {
+  let _ = @sut.createElement("badge")
+  let _ = @sut.get_default()
+}
+EOF
 }
 
 verify_typescript_to_moonbit_result_example() {
@@ -265,6 +330,12 @@ EOF
   grep -F 'pub fn fetchUser(id : String)' "$out/bridge.mbt" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_result" <<'EOF'
+fn main {
+  let _ = @sut.parseUser("u1")
+  let _ = @sut.fetchUser("u2")
+}
+EOF
 }
 
 verify_typescript_to_moonbit_default_class_example() {
@@ -311,6 +382,22 @@ EOF
   grep -F 'pub extern "js" fn default_from(seed : Double) -> Default' "$out/bridge.mbt" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_default_class" <<'EOF'
+fn main {
+  let counter = @sut.new_default(10.0)
+  if counter.default_inc(5.0) != 15.0 {
+    abort("unexpected default_inc output")
+  }
+  counter.set_default_count(20.0)
+  if counter.get_default_count() != 20.0 {
+    abort("unexpected count after setter")
+  }
+  let seeded = @sut.default_from(3.0)
+  if seeded.get_default_count() != 3.0 {
+    abort("unexpected default_from output")
+  }
+}
+EOF
 }
 
 verify_typescript_to_moonbit_const_table_example() {
@@ -355,6 +442,17 @@ EOF
   grep -F 'pub extern "js" fn get_rest_meta() -> RestMeta' "$out/bridge.mbt" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_const_table" <<'EOF'
+fn main {
+  if @sut.get_runtime_version() != "v12" {
+    abort("unexpected runtime version")
+  }
+  if @sut.get_build() != 16.0 {
+    abort("unexpected build")
+  }
+  let _ = @sut.get_rest_meta()
+}
+EOF
 }
 
 verify_moonbit_to_typescript_example

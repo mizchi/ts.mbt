@@ -114,11 +114,14 @@ fn ffi_value_identifier_needs_suffix(name : String) -> Bool {
     | "let"
     | "loop"
     | "match"
+    | "method"
     | "module"
     | "namespace"
     | "new"
+    | "constructor"
     | "null"
     | "or"
+    | "override"
     | "package"
     | "private"
     | "protected"
@@ -230,12 +233,23 @@ fn ffi_type_identifier(name : String, fallback : String) -> String {
   if sanitized == "" || ffi_trim_underscores(sanitized) == "" {
     return fallback
   }
-  let first = sanitized[0].unsafe_to_char()
-  let normalized = if first >= 'a' && first <= 'z' {
-    ffi_to_upper_ascii(first).to_string() + sanitized[1:].to_string()
-  } else {
-    sanitized
+  let mut idx = 0
+  let mut prefix = ""
+  while idx < sanitized.length() && sanitized[idx].unsafe_to_char() == '_' {
+    prefix += "Underscore"
+    idx += 1
   }
+  let core = sanitized[idx:sanitized.length()].to_string()
+  if core == "" {
+    return fallback
+  }
+  let first = core[0].unsafe_to_char()
+  let normalized_core = if first >= 'a' && first <= 'z' {
+    ffi_to_upper_ascii(first).to_string() + core[1:].to_string()
+  } else {
+    core
+  }
+  let normalized = prefix + normalized_core
   match normalized {
     "Array" | "Bool" | "Double" | "Error" | "Int" | "String" | "Unit" =>
       normalized + "_"

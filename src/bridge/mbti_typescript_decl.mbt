@@ -391,10 +391,20 @@ fn mbti_public_prefixes(keyword : String) -> Array[String] {
 }
 
 ///|
+fn mbti_public_generic_prefixes(keyword : String) -> Array[String] {
+  ["pub \{keyword}", "pub(all) \{keyword}", "pub(open) \{keyword}"]
+}
+
+///|
 fn strip_mbti_public_prefix(line : String, keyword : String) -> String? {
   let trimmed = line.trim().to_string()
   for prefix in mbti_public_prefixes(keyword) {
     if trimmed.has_prefix(prefix) {
+      return Some(trimmed[prefix.length():trimmed.length()].to_string())
+    }
+  }
+  for prefix in mbti_public_generic_prefixes(keyword) {
+    if trimmed.has_prefix(prefix + "[") {
       return Some(trimmed[prefix.length():trimmed.length()].to_string())
     }
   }
@@ -733,8 +743,17 @@ fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
       Some(rest) =>
         match rest.find("(") {
           Some(open_idx) => {
-            let name = rest[:open_idx].trim().to_string()
-            if name.contains("::") && !members.contains(name) {
+            let name = if rest.has_prefix("[") {
+              match rest.find("]") {
+                Some(close_idx) =>
+                  rest[close_idx + 1:open_idx].trim().to_string()
+                None => rest[:open_idx].trim().to_string()
+              }
+            } else {
+              rest[:open_idx].trim().to_string()
+            }
+            if (name.contains("::") || rest.has_prefix("[")) &&
+              !members.contains(name) {
               members.push(name)
             }
           }
@@ -743,7 +762,76 @@ fn collect_mbti_omitted_autolink_members(source : String) -> Array[String] {
       None => ()
     }
   }
+  for name in collect_runtime_inaccessible_free_function_names(source) {
+    if !members.contains(name) {
+      members.push(name)
+    }
+  }
   members
+}
+
+///|
+fn collect_runtime_inaccessible_free_function_names(
+  source : String,
+) -> Array[String] {
+  let imports = parse_mbti_imports(source)
+  let used_aliases : Array[String] = []
+  let private_type_names = collect_root_mbti_private_type_names(source) catch {
+    _ => []
+  }
+  let names : Array[String] = []
+  for line_view in source.split("\n") {
+    let trimmed = line_view.trim().to_string()
+    let parsed = parse_mbti_function_signature(trimmed, imports, used_aliases) catch {
+      _ => None
+    }
+    match parsed {
+      Some(signature) => {
+        let (
+          owner_name,
+          fn_name,
+          fn_type_params,
+          params_src,
+          _return_src,
+          _is_async,
+        ) = signature
+        match owner_name {
+          None => {
+            let export_name = sanitize_ts_identifier(fn_name, "fn")
+            if fn_type_params.length() > 0 {
+              if !names.contains(export_name) {
+                names.push(export_name)
+              }
+              continue
+            }
+            let raw_params = match
+              parse_mbti_raw_facade_params(params_src, "") {
+              Some(params) => params
+              None => {
+                if !names.contains(export_name) {
+                  names.push(export_name)
+                }
+                continue
+              }
+            }
+            let fn_type_param_names = type_param_names(fn_type_params)
+            let return_src_with_effect = mbti_return_source_with_effect_from_function_line(
+              trimmed,
+            )
+            if mbti_raw_facade_uses_private_types(
+                raw_params, return_src_with_effect, private_type_names, fn_type_param_names,
+              ) &&
+              !names.contains(export_name) {
+              names.push(export_name)
+            }
+          }
+          Some(_) => ()
+        }
+      }
+      None => ()
+    }
+  }
+  names
 }
 
 ///|
@@ -773,7 +861,7 @@ fn render_autolink_diagnostics_md(
   package_sources : Map[String, String],
 ) -> String {
   let lines : Array[String] = [
-    "# Autolink Diagnostics", "", "Public members omitted from link.js.exports because MoonBit JS autolink currently exports top-level public free functions only.",
+    "# Autolink Diagnostics", "", "Public members omitted from link.js.exports because MoonBit JS autolink currently exports non-generic top-level public free functions with runtime-public boundary types.",
     "",
   ]
   let mut has_entries = false
@@ -1298,6 +1386,9 @@ fn collect_mbti_autolink_glue_decls(
         )
         match owner_name {
           None => {
+            if fn_type_params.length() > 0 {
+              continue
+            }
             let raw_params = match
               parse_mbti_raw_facade_params(glue_params_src, "") {
               Some(params) => params
@@ -1320,7 +1411,8 @@ fn collect_mbti_autolink_glue_decls(
               glue_return_src_with_effect, local_type_names, fn_type_param_names,
               source_alias,
             )
-            let runtime_export_name = runtime_export_prefix + fn_name
+            let export_name = sanitize_ts_identifier(fn_name, "fn")
+            let runtime_export_name = runtime_export_prefix + export_name
             let body_expr = if call_args == "" {
               "@\{source_alias}.\{fn_name}()"
             } else {
@@ -1329,12 +1421,12 @@ fn collect_mbti_autolink_glue_decls(
             let mbt_decl = "pub \{async_prefix}fn\{type_param_suffix} \{runtime_export_name}(\{rendered_mbt_params}) -> \{return_ty}\{effect_suffix} {\n  \{body_expr}\n}"
             decls.push({
               package_name,
-              export_name: fn_name,
+              export_name,
               runtime_export_name,
               ts_decl: "",
               mbt_decl,
             })
-            free_function_names.push(fn_name)
+            free_function_names.push(export_name)
           }
           Some(owner_name) if include_facades =>
             match local_type_params.get(owner_name) {
@@ -4137,7 +4229,50 @@ fn ts_decl_line_is_runtime_inaccessible_method(line : String) -> Bool {
 }
 
 ///|
-fn strip_runtime_inaccessible_typescript_members(source : String) -> String {
+fn ts_decl_line_is_runtime_inaccessible_function(line : String) -> Bool {
+  let trimmed = line.trim().to_string()
+  if !trimmed.has_prefix("export function ") {
+    return false
+  }
+  match trimmed.find("(") {
+    Some(paren_idx) => {
+      let before = trimmed[:paren_idx].to_string()
+      before.contains("<") && before.contains(">")
+    }
+    None => false
+  }
+}
+
+///|
+fn ts_decl_export_function_name(line : String) -> String? {
+  let trimmed = line.trim().to_string()
+  let prefix = "export function "
+  if !trimmed.has_prefix(prefix) {
+    return None
+  }
+  let rest = trimmed[prefix.length():trimmed.length()].to_string()
+  let mut end_idx = rest.length()
+  match rest.find("(") {
+    Some(idx) => end_idx = idx
+    None => ()
+  }
+  match rest.find("<") {
+    Some(idx) if idx < end_idx => end_idx = idx
+    _ => ()
+  }
+  let name = rest[:end_idx].trim().to_string()
+  if name == "" {
+    None
+  } else {
+    Some(name)
+  }
+}
+
+///|
+fn strip_runtime_inaccessible_typescript_members(
+  source : String,
+  inaccessible_function_names : Array[String],
+) -> String {
   let lines : Array[String] = []
   let mut in_interface = false
   let mut in_namespace = false
@@ -4169,6 +4304,13 @@ fn strip_runtime_inaccessible_typescript_members(source : String) -> String {
     if trimmed.has_prefix("export interface ") && trimmed.has_suffix("{") {
       in_interface = true
     }
+    match ts_decl_export_function_name(line) {
+      Some(name) if inaccessible_function_names.contains(name) => continue
+      _ => ()
+    }
+    if ts_decl_line_is_runtime_inaccessible_function(line) {
+      continue
+    }
     lines.push(line)
   }
   lines.join("\n")
@@ -4176,13 +4318,37 @@ fn strip_runtime_inaccessible_typescript_members(source : String) -> String {
 
 ///|
 fn strip_runtime_inaccessible_typescript_package_files(
+  loaded : LoadedMbtiPackageSources,
   files : Array[MbtiTypescriptPackageFile],
 ) -> Array[MbtiTypescriptPackageFile] {
+  let inaccessible_by_path : Map[String, Array[String]] = {}
+  for package_name in loaded.ordered_packages {
+    let source = match loaded.package_sources.get(package_name) {
+      Some(source) => source
+      None => continue
+    }
+    let segments = match
+      mbti_local_package_segments(loaded.root_package_name, package_name) {
+      Some(segments) => segments
+      None => continue
+    }
+    inaccessible_by_path[mbti_bundle_relative_path_from_segments(segments)] = collect_runtime_inaccessible_free_function_names(
+      source,
+    )
+  }
   let stripped : Array[MbtiTypescriptPackageFile] = []
   for file in files {
+    let inaccessible_function_names = match
+      inaccessible_by_path.get(file.relative_path) {
+      Some(names) => names
+      None => []
+    }
     stripped.push({
       relative_path: file.relative_path,
-      content: strip_runtime_inaccessible_typescript_members(file.content),
+      content: strip_runtime_inaccessible_typescript_members(
+        file.content,
+        inaccessible_function_names,
+      ),
     })
   }
   stripped
@@ -4220,8 +4386,20 @@ fn render_runtime_reexport_js(
   if export_items.length() == 0 {
     return "export {};\n"
   }
-  let names = export_items.join(", ")
-  "export { \{names} } from \"\{root_import}\";\n"
+  let lines : Array[String] = [
+    "import * as __tsmbtRoot from \"\{root_import}\";",
+  ]
+  for item in export_items {
+    match item.find(" as ") {
+      Some(alias_idx) => {
+        let runtime_name = item[:alias_idx].trim().to_string()
+        let export_name = item[alias_idx + 4:item.length()].trim().to_string()
+        lines.push("export const \{export_name} = __tsmbtRoot.\{runtime_name};")
+      }
+      None => lines.push("export const \{item} = __tsmbtRoot.\{item};")
+    }
+  }
+  lines.join("\n") + "\n"
 }
 
 ///|
@@ -4293,6 +4471,7 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
   }
   let moon_pkg_json = render_moonbit_js_glue_pkg_json(loaded, export_names)
   let files = strip_runtime_inaccessible_typescript_package_files(
+    loaded,
     emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
       root_file_path, external_import_spec_rewrites,
     ),
@@ -4362,6 +4541,7 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
     loaded, facade_export_names,
   )
   let files = strip_runtime_inaccessible_typescript_package_files(
+    loaded,
     emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
       root_file_path, external_import_spec_rewrites,
     ),

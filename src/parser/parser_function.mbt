@@ -484,6 +484,7 @@ fn Parser::can_consume_interface_readonly_modifier(self : Parser) -> Bool {
     | NumberType
     | BooleanType
     | VoidType
+    | IntType
     | Import
     | Export
     | As
@@ -686,6 +687,10 @@ pub fn Parser::parse_interface(
       VoidType => {
         let _ = self.advance()
         "void"
+      }
+      IntType => {
+        let _ = self.advance()
+        "int"
       }
       Import => {
         let _ = self.advance()

@@ -7,10 +7,16 @@ pub async fn load_all(keys : Array[String]) -> Result[Array[(String, Int)], Erro
 pub fn borrow_string(StringView) -> String
 pub fn borrow_bytes(&BytesView) -> Bytes
 pub fn update_ref(state : Ref[Array[Int64]], next : ArrayView[UInt64]) -> Set[String]
+pub fn null() -> Unit
+pub fn undefined() -> Unit
+pub fn[T] identity(T) -> T
+pub fn make_secret() -> Secret
 
 // Errors
 
 // Types and methods
+type Secret
+
 pub(all) struct CallbackBox[T] {
   current : T
   on_change : ((T) -> Unit)?

@@ -82,6 +82,8 @@ verify_package() {
   node --input-type=module -e "await import('./$out/index.js')"
   verify_runtime_smoke "$package_name" "$out"
   verify_typescript_declarations "$out"
+  verify_runtime_declaration_exports "$out"
+  verify_package_consumer "$package_name" "$out"
 
   checked=$((checked + 1))
 }
@@ -98,7 +100,7 @@ import { pathToFileURL } from "node:url";
 
 const out = process.argv[2];
 const mod = await import(pathToFileURL(path.resolve(out, "index.js")).href);
-const value = mod.undefined();
+const value = mod.undefined_();
 const valueType = mod.typeof_(value);
 if (valueType !== "undefined") {
   throw new Error(`expected typeof undefined to be undefined, got ${valueType}`);
@@ -372,6 +374,215 @@ fs.writeFileSync(path.join(typecheckDir, "tsconfig.json"), JSON.stringify(config
 EOF
 
   pnpm exec tsc -p "$typecheck_dir/tsconfig.json" --pretty false
+}
+
+verify_runtime_declaration_exports() {
+  local out="$1"
+
+  node --input-type=module - "$out" <<'EOF'
+import fs from "node:fs";
+import path from "node:path";
+
+const out = path.resolve(process.argv[2]);
+const rootJs = fs.readFileSync(path.join(out, "index.js"), "utf8");
+const rootExports = new Set([...rootJs.matchAll(/\bas\s+([A-Za-z_$][\w$]*)/g)].map((match) => match[1]));
+
+function walk(dir, acc = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith("_")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walk(full, acc);
+    } else if (entry.isFile() && entry.name === "index.d.ts") {
+      acc.push(full);
+    }
+  }
+  return acc;
+}
+
+function readSubpathRuntimeMap(jsFile) {
+  if (!fs.existsSync(jsFile)) return null;
+  const source = fs.readFileSync(jsFile, "utf8");
+  const map = new Map();
+  const exportRe = /export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*__tsmbtRoot\.([A-Za-z_$][\w$]*)\s*;/g;
+  for (const match of source.matchAll(exportRe)) {
+    map.set(match[1], match[2]);
+  }
+  return map;
+}
+
+const missing = [];
+for (const dtsFile of walk(out)) {
+  const relative = path.relative(out, dtsFile);
+  const source = fs.readFileSync(dtsFile, "utf8");
+  const functions = [...source.matchAll(/^export function ([A-Za-z_$][\w$]*)/gm)].map((match) => match[1]);
+  if (functions.length === 0) continue;
+
+  if (relative === "index.d.ts") {
+    for (const name of functions) {
+      if (!rootExports.has(name)) {
+        missing.push(`${relative}:${name}->${name}`);
+      }
+    }
+    continue;
+  }
+
+  const jsFile = path.join(path.dirname(dtsFile), "index.js");
+  const runtimeMap = readSubpathRuntimeMap(jsFile);
+  if (runtimeMap === null) continue;
+  for (const name of functions) {
+    const runtimeName = runtimeMap.get(name);
+    if (runtimeName === undefined || !rootExports.has(runtimeName)) {
+      missing.push(`${relative}:${name}->${runtimeName ?? "<missing reexport>"}`);
+    }
+  }
+}
+
+if (missing.length > 0) {
+  throw new Error(`runtime declaration exports missing:\n${missing.join("\n")}`);
+}
+EOF
+}
+
+verify_package_consumer() {
+  local package_name="$1"
+  local out="$2"
+
+  case "$package_name" in
+    "mizchi/js" | "mizchi/jsonschema" | "mizchi/jwt.mbt" | "mizchi/semver") ;;
+    *) return ;;
+  esac
+
+  local consumer_dir="$out/_consumer"
+  rm -rf "$consumer_dir"
+  mkdir -p "$consumer_dir"
+
+  node --input-type=module - "$package_name" "$out" "$consumer_dir" <<'EOF'
+import fs from "node:fs";
+import path from "node:path";
+
+const packageName = process.argv[2];
+const out = path.resolve(process.argv[3]);
+const consumerDir = path.resolve(process.argv[4]);
+const pkg = JSON.parse(fs.readFileSync(path.join(out, "package.json"), "utf8"));
+const linkPath = path.join(consumerDir, "node_modules", ...pkg.name.split("/"));
+
+fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+fs.symlinkSync(out, linkPath, "dir");
+fs.writeFileSync(path.join(consumerDir, "package.json"), JSON.stringify({ type: "module" }, null, 2));
+
+function writeStub(spec, source) {
+  const file = path.join(consumerDir, "stubs", ...spec.split("/"), "index.d.ts");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, source);
+  return path.relative(consumerDir, file);
+}
+
+const paths = {
+  "moonbitlang/core/set": [writeStub("moonbitlang/core/set", "export interface Set<T = unknown> {}\n")],
+  "moonbitlang/core/json": [writeStub("moonbitlang/core/json", "export interface JsonDecodeError {}\nexport interface ParseError {}\nexport interface FromJson {}\n")],
+  "moonbitlang/core/bigint": [writeStub("moonbitlang/core/bigint", "export type BigInt = bigint;\n")],
+};
+
+let runtimeSource = "";
+let typeSource = "";
+switch (packageName) {
+  case "mizchi/js":
+    runtimeSource = `
+import { undefined_, typeof_ } from "@mizchi/js";
+import { log, new_object, typeof_ as coreTypeof, undefined_ as coreUndefined } from "@mizchi/js/core";
+
+if (typeof_(undefined_()) !== "undefined") throw new Error("@mizchi/js root import failed");
+if (typeof log !== "function") throw new Error("@mizchi/js/core log export failed");
+if (coreTypeof(coreUndefined()) !== "undefined") throw new Error("@mizchi/js/core undefined export failed");
+if (coreTypeof(new_object()) !== "object") throw new Error("@mizchi/js/core subpath import failed");
+`;
+    typeSource = `
+import { undefined_, typeof_ } from "@mizchi/js";
+import { log, new_object, typeof_ as coreTypeof, undefined_ as coreUndefined } from "@mizchi/js/core";
+
+const valueType: string = typeof_(undefined_());
+const logger: typeof log = log;
+const subpathValueType: string = coreTypeof(coreUndefined());
+const objectType: string = coreTypeof(new_object());
+void logger;
+void valueType;
+void subpathValueType;
+void objectType;
+`;
+    break;
+  case "mizchi/jsonschema":
+    runtimeSource = `
+import { builder_new, builder_string } from "@mizchi/jsonschema";
+
+const builder = builder_new();
+const schema = builder_string(builder, 1, 10, ["name"]);
+if (schema === null || typeof schema !== "object") throw new Error("@mizchi/jsonschema package import failed");
+`;
+    typeSource = `
+import { builder_new, builder_string } from "@mizchi/jsonschema";
+
+const builder = builder_new();
+const schema = builder_string(builder, 1, 10, ["name"]);
+void schema;
+`;
+    break;
+  case "mizchi/jwt.mbt":
+    runtimeSource = `
+import { base64url_encode, base64url_decode } from "@mizchi/jwt.mbt";
+
+const encoded = base64url_encode(new Uint8Array([104, 105]));
+const decoded = base64url_decode(encoded)?._0;
+if (!(decoded instanceof Uint8Array) || decoded[0] !== 104 || decoded[1] !== 105) {
+  throw new Error("@mizchi/jwt.mbt package import failed");
+}
+`;
+    typeSource = `
+import { base64url_encode, base64url_decode } from "@mizchi/jwt.mbt";
+
+const encoded: string = base64url_encode(new Uint8Array([104, 105]));
+const decoded = base64url_decode(encoded);
+void decoded;
+`;
+    break;
+  case "mizchi/semver":
+    runtimeSource = `
+import { sem_ver_new, sem_ver_to_string } from "@mizchi/semver";
+
+if (sem_ver_to_string(sem_ver_new(1, 2, 3)) !== "1.2.3") {
+  throw new Error("@mizchi/semver package import failed");
+}
+`;
+    typeSource = `
+import { sem_ver_new, sem_ver_to_string } from "@mizchi/semver";
+
+const rendered: string = sem_ver_to_string(sem_ver_new(1, 2, 3));
+void rendered;
+`;
+    break;
+  default:
+    throw new Error(`missing consumer smoke for ${packageName}`);
+}
+
+fs.writeFileSync(path.join(consumerDir, "runtime.mjs"), runtimeSource);
+fs.writeFileSync(path.join(consumerDir, "types.ts"), typeSource);
+fs.writeFileSync(path.join(consumerDir, "tsconfig.json"), JSON.stringify({
+  compilerOptions: {
+    strict: true,
+    noEmit: true,
+    module: "esnext",
+    moduleResolution: "bundler",
+    target: "es2022",
+    baseUrl: ".",
+    lib: ["es2022", "dom"],
+    paths,
+  },
+  files: ["types.ts"],
+}, null, 2));
+EOF
+
+  node "$consumer_dir/runtime.mjs"
+  pnpm exec tsc -p "$consumer_dir/tsconfig.json" --pretty false
 }
 
 for package_name in "${packages[@]}"; do

@@ -26,6 +26,12 @@ let semantics_unresolved_bare_reexport_entry_path : String = "fixtures/resolver/
 let semantics_export_equals_entry_path : String = "fixtures/resolver/project/types/export-equals-entry.d.ts"
 
 ///|
+let semantics_imported_same_source_reexport_entry_path : String = "fixtures/resolver/project/types/imported-same-source-reexport-entry.d.ts"
+
+///|
+let semantics_imported_same_source_reexport_shared_path : String = "fixtures/resolver/project/types/imported-same-source-reexport-shared.d.ts"
+
+///|
 let semantics_import_equals_entry_path : String = "fixtures/resolver/project/types/import-equals-entry.d.ts"
 
 ///|
@@ -273,5 +279,31 @@ async test "bridge: resolve type export surface from import-equals export assign
       assert_true(export_.kind == ResolvedExportKind::Local)
     }
     None => fail("expected default export")
+  }
+}
+
+///|
+async test "bridge: star reexports of the same imported binding are not ambiguous" {
+  let exports = resolve_type_export_surface(
+    semantics_imported_same_source_reexport_entry_path,
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Resolve error: \{msg}")
+      }
+      return
+    }
+  }
+  match find_resolved_export(exports, "shared") {
+    Some(export_) => {
+      assert_false(export_.kind == ResolvedExportKind::Ambiguous)
+      assert_eq(
+        export_.source_path,
+        semantics_imported_same_source_reexport_shared_path,
+      )
+      assert_eq(export_.local_name, Some("shared"))
+    }
+    None => fail("expected shared export")
   }
 }

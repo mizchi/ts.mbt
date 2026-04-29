@@ -5299,6 +5299,66 @@ test "parser: parse declare function whose name is a type keyword" {
 }
 
 ///|
+test "parser: parse declare function whose name is int keyword" {
+  let src = "export declare function int(params?: string): ZodInt;"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected int keyword function name to parse: \{e}")
+  }
+  assert_eq(module_.imports.length(), 1)
+  assert_eq(module_.imports[0].name, "int")
+}
+
+///|
+test "parser: parse interface field whose name is int keyword" {
+  let src =
+    #|export interface NumericFlags {
+    #|  int: boolean
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected int keyword field name to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].fields[0].0, "int")
+}
+
+///|
+test "parser: parse multiline union before field named is" {
+  let src =
+    #|export interface HTMLAttributes {
+    #|  inputmode?:
+    #|    | 'none'
+    #|    | 'text'
+    #|    | undefined
+    #|  is?: string | undefined
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected multiline union before is field to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].fields.length(), 2)
+  assert_eq(module_.interfaces[0].fields[1].0, "is")
+}
+
+///|
+test "parser: parse exported JSX namespace followed by extending interface" {
+  let src =
+    #|export namespace JSX {
+    #|  export interface IntrinsicElements {
+    #|    div: HTMLAttributes
+    #|  }
+    #|}
+    #|
+    #|export interface IntrinsicElements extends JSX.IntrinsicElements {}
+  let module_block = Parser::from_source(src).parse_module_block() catch {
+    e =>
+      fail(
+        "expected exported JSX namespace and interface extends to parse: \{e}",
+      )
+  }
+  assert_eq(module_block.exports.length(), 2)
+}
+
+///|
 test "parser: parse named export alias to keyword name" {
   let src = "export { function_ as function, null_ as null };"
   let module_ = Parser::from_source(src).parse_module() catch {

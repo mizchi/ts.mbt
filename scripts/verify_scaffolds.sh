@@ -294,6 +294,46 @@ pub type Any
 EOF
 }
 
+run_typescript_to_moonbit_js_build_smoke() {
+  local root="$1"
+  local module_name="$2"
+  local needs_js_import="${3:-false}"
+  local smoke_pkg="__tsmbt_build_smoke__"
+  local smoke_dir="$root/$smoke_pkg"
+
+  rm -rf "$smoke_dir" "$root/_build/js/debug/build"
+  mkdir -p "$smoke_dir"
+
+  local js_import_suffix=""
+  if [ "$needs_js_import" = "true" ]; then
+    js_import_suffix=$',
+    { "path": "mizchi/js/core", "alias": "js" }'
+  fi
+
+  cat > "$smoke_dir/moon.pkg.json" <<EOF
+{
+  "is-main": true,
+  "import": [
+    { "path": "$module_name", "alias": "sut" }$js_import_suffix
+  ]
+}
+EOF
+
+  cat > "$smoke_dir/main.mbt"
+
+  moon -C "$root" build --target js "$smoke_pkg"
+
+  local built_js
+  built_js="$(find "$root/_build/js/debug/build" -type f -name '*.js' | head -n 1)"
+  if [ -z "$built_js" ]; then
+    echo "moon build --target js did not emit a runnable JS file for $module_name" >&2
+    exit 1
+  fi
+
+  printf '{ "type": "module" }\n' > "$(dirname "$built_js")/package.json"
+  node "$built_js"
+}
+
 verify_moonbit_scaffold_fixture() {
   local root="_build/scaffold_ts_to_moonbit"
   local fixture_path="$repo_root/fixtures/bridge_smoke/double-entry.d.ts"
@@ -323,6 +363,13 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit" <<'EOF'
+fn main {
+  if @sut.double(21.0) != 42.0 {
+    abort("unexpected double output")
+  }
+}
+EOF
 }
 
 verify_moonbit_scaffold_external_package_fixture() {
@@ -369,6 +416,12 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_neverthrow_like" <<'EOF'
+fn main {
+  let _ = @sut.parseUser("u1")
+  let _ = @sut.fetchUser("u2")
+}
+EOF
 }
 
 verify_moonbit_scaffold_react_like_jsx_fixture() {
@@ -412,6 +465,11 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_react_like_jsx" <<'EOF'
+fn main {
+  let _ = @sut.createElement("badge")
+}
+EOF
 }
 
 verify_moonbit_scaffold_react_package_fixture() {
@@ -479,6 +537,39 @@ EOF
   grep -F '#external' "$root/bridge.mbt" >/dev/null
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_react_package" true <<'EOF'
+extern "js" fn test_dom_attributes() -> @sut.DOMAttributes =
+  #| () => ({ id: "app" })
+
+extern "js" fn test_button_attributes() -> @sut.ButtonHTMLAttributes =
+  #| () => ({ disabled: true })
+
+extern "js" fn test_function_component() -> @sut.FunctionComponent =
+  #| () => (props) => ({ type: "component", props, key: null })
+
+extern "js" fn test_forward_ref_render() -> @js.Any =
+  #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
+
+extern "js" fn test_ref() -> @sut.Ref =
+  #| () => ({ current: null })
+
+extern "js" fn test_children() -> Array[@sut.JSValue] =
+  #| () => []
+
+fn main {
+  let element = @sut.createElement(
+    "div",
+    Some(test_dom_attributes()),
+    test_children(),
+  )
+  let _ = @sut.cloneElement(element, Some(test_dom_attributes()), test_children())
+  let _ = @sut.forwardRef(test_forward_ref_render())
+  let _ = @sut.memo(test_function_component(), None)
+  let _ = @sut.normalizeProps(test_button_attributes())
+  let _ = @sut.useComponentRef(test_ref())
+  let _ = @sut.get_default()
+}
+EOF
 }
 
 verify_moonbit_scaffold_react_jsx_runtime_fixture() {
@@ -519,6 +610,15 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_react_jsx_runtime" <<'EOF'
+extern "js" fn test_button_attributes() -> @sut.ButtonHTMLAttributes =
+  #| () => ({ disabled: true })
+
+fn main {
+  let _ = @sut.jsx("button", test_button_attributes(), None)
+  let _ = @sut.jsxs("button", test_button_attributes(), None)
+}
+EOF
 }
 
 verify_moonbit_scaffold_react_jsx_dev_runtime_fixture() {
@@ -574,6 +674,30 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_react_jsx_dev_runtime" <<'EOF'
+extern "js" fn test_element_type() -> @sut.ElementType =
+  #| () => "badge"
+
+extern "js" fn test_key() -> @sut.Key =
+  #| () => "key"
+
+extern "js" fn test_props() -> @sut.JSValue =
+  #| () => ({ label: "Badge" })
+
+extern "js" fn test_source() -> @sut.JSXSource =
+  #| () => ({ fileName: "x.tsx", lineNumber: 1 })
+
+fn main {
+  let _ = @sut.jsxDEV(
+    test_element_type(),
+    test_props(),
+    Some(test_key()),
+    false,
+    Some(test_source()),
+    None,
+  )
+}
+EOF
 }
 
 verify_moonbit_scaffold_hono_jsx_fixture() {
@@ -617,6 +741,18 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_hono_jsx" true <<'EOF'
+extern "js" fn test_button_attributes() -> @sut.ButtonAttributes =
+  #| () => ({ disabled: true })
+
+extern "js" fn test_component() -> @js.Any =
+  #| () => (props) => ({ tag: "button", props })
+
+fn main {
+  let _ = @sut.jsx("button", test_button_attributes())
+  let _ = @sut.memo(test_component())
+}
+EOF
 }
 
 verify_moonbit_scaffold_hono_options_fixture() {
@@ -663,6 +799,15 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_hono_options" <<'EOF'
+extern "js" fn test_hono_options() -> @sut.HonoOptions =
+  #| () => ({ strict: true })
+
+fn main {
+  let _ = @sut.new_hono(None)
+  let _ = @sut.createApp(test_hono_options())
+}
+EOF
 }
 
 verify_moonbit_scaffold_namespace_fixture() {
@@ -699,6 +844,11 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_namespace" <<'EOF'
+fn main {
+  let _ = @sut.get_shapes()
+}
+EOF
 }
 
 verify_moonbit_scaffold_handles_ambiguous_surface() {

@@ -848,7 +848,7 @@ async test "bridge: emit TypeScript scaffold bundle from mbti combines autolink 
       fail("MBTI scaffold bundle emit error: \{msg}")
   }
   assert_true(bundle.moon_pkg_json.contains("\"make\""))
-  assert_true(bundle.moon_pkg_json.contains("\"render\""))
+  assert_false(bundle.moon_pkg_json.contains("\"render\""))
   assert_false(bundle.moon_pkg_json.contains("Holder::"))
   assert_true(bundle.package_json.contains("\"name\": \"@demo/pkg\""))
   assert_true(bundle.package_json.contains("\"types\": \"./index.d.ts\""))
@@ -868,6 +868,7 @@ async test "bridge: emit TypeScript scaffold bundle from mbti combines autolink 
     ),
   )
   assert_true(bundle.autolink_diagnostics_md.contains("demo/pkg/child"))
+  assert_true(bundle.autolink_diagnostics_md.contains("- `render`"))
   assert_true(bundle.autolink_diagnostics_md.contains("Item::new"))
   assert_eq(bundle.files.length(), 2)
 }
@@ -899,7 +900,7 @@ async test "bridge: emit TypeScript scaffold bundle exposes child package runtim
     }
   }
   assert_eq(
-    child_js, "export { tsmbt_source_child_make_item as make_item } from \"../index.js\";\n",
+    child_js, "import * as __tsmbtRoot from \"../index.js\";\nexport const make_item = __tsmbtRoot.tsmbt_source_child_make_item;\n",
   )
 }
 
@@ -938,6 +939,20 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
       fail("MBTI scaffold bundle emit error: \{msg}")
   }
   assert_true(bundle.moon_pkg_json.contains("\"consume_callbacks\""))
+  assert_true(bundle.moon_pkg_json.contains("\"null_\""))
+  assert_true(bundle.moon_pkg_json.contains("\"undefined_\""))
+  assert_false(bundle.moon_pkg_json.contains("\"identity\""))
+  assert_false(bundle.moon_pkg_json.contains("\"make_secret\""))
+  assert_true(bundle.autolink_diagnostics_md.contains("- `identity`"))
+  assert_true(bundle.autolink_diagnostics_md.contains("- `make_secret`"))
+  let mut root_content = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  assert_false(root_content.contains("export function identity<T>"))
+  assert_false(root_content.contains("export function make_secret"))
   assert_true(
     bundle.autolink_glue_mbt.contains(
       "pub fn consume_callbacks(handler : (String, Int) -> Unit, on_error : ((Error) -> Unit)?, required : Array[String]) -> Unit {",
@@ -976,6 +991,14 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
       "@tsmbt_source.update_ref(state, next[:])",
     ),
   )
+  assert_true(bundle.autolink_glue_mbt.contains("pub fn null_() -> Unit {"))
+  assert_true(bundle.autolink_glue_mbt.contains("@tsmbt_source.null()"))
+  assert_true(
+    bundle.autolink_glue_mbt.contains("pub fn undefined_() -> Unit {"),
+  )
+  assert_true(bundle.autolink_glue_mbt.contains("@tsmbt_source.undefined()"))
+  assert_false(bundle.autolink_glue_mbt.contains("pub fn[T] identity"))
+  assert_false(bundle.autolink_glue_mbt.contains("pub fn make_secret"))
 }
 
 ///|
@@ -1076,7 +1099,7 @@ async test "bridge: emit TypeScript facade scaffold bundle adds child package fa
     child_content.contains("export function item_display(self: Item): string;"),
   )
   assert_eq(
-    child_js, "export { tsmbt_source_child_make_item as make_item, tsmbt_source_child_item_display as item_display } from \"../index.js\";\n",
+    child_js, "import * as __tsmbtRoot from \"../index.js\";\nexport const make_item = __tsmbtRoot.tsmbt_source_child_make_item;\nexport const item_display = __tsmbtRoot.tsmbt_source_child_item_display;\n",
   )
 }
 
@@ -1151,7 +1174,7 @@ async test "bridge: emit TypeScript facade scaffold bundle preserves raise effec
 }
 
 ///|
-async test "bridge: emit TypeScript facade scaffold bundle qualifies root trait bounds in wrapper source" {
+async test "bridge: emit TypeScript facade scaffold bundle omits generic root trait-bound function" {
   let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
     "fixtures/mbti_typescript/trait_bound_facade.pkg.generated.mbti",
   ) catch {
@@ -1159,9 +1182,6 @@ async test "bridge: emit TypeScript facade scaffold bundle qualifies root trait 
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI facade scaffold bundle emit error: \{msg}")
   }
-  assert_true(
-    bundle.autolink_glue_mbt.contains(
-      "pub fn[T : @tsmbt_source.InputLen] eof(arg0 : T) -> Bool {",
-    ),
-  )
+  assert_true(bundle.autolink_diagnostics_md.contains("- `eof`"))
+  assert_false(bundle.autolink_glue_mbt.contains("pub fn[T"))
 }
