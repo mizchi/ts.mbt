@@ -94,6 +94,40 @@ append_metrics() {
     "$jsvalue_refs" \
     "$jsvalue_functions" \
     "$unsupported_exports" >> "$metrics_file"
+
+  assert_metric_budget "$package_spec" "$jsvalue_functions" "$unsupported_exports"
+}
+
+jsvalue_function_budget() {
+  local package_spec="$1"
+
+  case "$package_spec" in
+    clsx) printf '0\n' ;;
+    chalk) printf '3\n' ;;
+    dotenv) printf '1\n' ;;
+    ignore) printf '0\n' ;;
+    hono) printf '0\n' ;;
+    zod) printf '130\n' ;;
+    date-fns) printf '10\n' ;;
+    *) printf '999999\n' ;;
+  esac
+}
+
+assert_metric_budget() {
+  local package_spec="$1"
+  local jsvalue_functions="$2"
+  local unsupported_exports="$3"
+  local jsvalue_budget
+
+  jsvalue_budget="$(jsvalue_function_budget "$package_spec")"
+  if [ "$unsupported_exports" -ne 0 ]; then
+    echo "Unsupported exports regressed for $package_spec: $unsupported_exports" >&2
+    exit 1
+  fi
+  if [ "$jsvalue_functions" -gt "$jsvalue_budget" ]; then
+    echo "JSValue function budget exceeded for $package_spec: $jsvalue_functions > $jsvalue_budget" >&2
+    exit 1
+  fi
 }
 
 write_js_any_stub() {
