@@ -801,6 +801,29 @@ async test "bridge: emit MoonBit declarations from export-as-namespace ambient m
 }
 
 ///|
+async test "bridge: emit MoonBit declarations from exported runtime namespace members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/exported-runtime-namespace-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type TaskOptions"))
+  assert_true(actual.contains("declare pub fn task(input : String) -> String"))
+  assert_true(
+    actual.contains("declare pub fn taskExtra(input : String) -> String"),
+  )
+  assert_true(actual.contains("declare pub fn get_constants_read() -> Double"))
+  assert_false(actual.contains("Unsupported export task"))
+  assert_false(actual.contains("Unsupported export constants"))
+}
+
+///|
 async test "bridge: emit MoonBit declarations from export-as-namespace hook tuple members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-hook-tuple-entry.d.ts",

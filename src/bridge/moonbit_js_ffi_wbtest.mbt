@@ -2770,6 +2770,47 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace assignme
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle from exported runtime namespace members" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/exported-runtime-namespace-entry.d.ts", "./runtime/runtime-namespace.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn task(input : String) -> String",
+    ),
+  )
+  assert_true(bundle.ffi_mbt.contains("pub struct TaskOptions"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn task_extra(input : String) -> String = \"__ts_mbt_task_extra\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains("export const __ts_mbt_task_extra = task.extra;"),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_constants_read() -> Double = \"__ts_mbt_get_constants_read\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_constants_read() { return constants.read; }",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("Unsupported export task"))
+  assert_false(bundle.ffi_mbt.contains("Unsupported export constants"))
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tuple members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-hook-tuple-entry.d.ts",

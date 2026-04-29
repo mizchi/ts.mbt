@@ -110,7 +110,7 @@ jsvalue_function_budget() {
     zod) printf '130\n' ;;
     date-fns) printf '10\n' ;;
     node:sqlite) printf '2\n' ;;
-    node:fs) printf '43\n' ;;
+    node:fs) printf '72\n' ;;
     *) printf '999999\n' ;;
   esac
 }
@@ -119,8 +119,8 @@ unsupported_export_budget() {
   local package_spec="$1"
 
   case "$package_spec" in
-    node:sqlite) printf '1\n' ;;
-    node:fs) printf '43\n' ;;
+    node:sqlite) printf '0\n' ;;
+    node:fs) printf '0\n' ;;
     *) printf '0\n' ;;
   esac
 }

@@ -847,6 +847,26 @@ fn find_class_decl(module_ : @ast.TsModule, name : String) -> @ast.TsClassDecl? 
 }
 
 ///|
+fn module_has_non_namespace_runtime_decl(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Bool {
+  match find_import_decl(module_, name) {
+    Some(_) => return true
+    None => ()
+  }
+  match find_func_decl(module_, name) {
+    Some(_) => return true
+    None => ()
+  }
+  match find_class_decl(module_, name) {
+    Some(_) => return true
+    None => ()
+  }
+  false
+}
+
+///|
 fn namespace_member_runtime_export_name(
   root_export_name : String,
   member_name : String,
@@ -1369,19 +1389,39 @@ fn collect_exported_decls(
     }
     match exported_local_namespace_decl(export_, modules) {
       Some(namespace_) if export_.export_name != "default" => {
-        append_exported_type_namespace_members_with_prefix(
-          export_.source_path,
-          export_.export_name + ".",
-          decl_to_pascal_case(export_.export_name),
-          namespace_,
-          interfaces,
-        )
+        let has_runtime_root = match modules.get(export_.source_path) {
+          Some(info) =>
+            module_has_non_namespace_runtime_decl(info.module_, local_name)
+          None => false
+        }
         if namespace_has_non_type_members(namespace_) {
-          notes.push(
-            "///|\n/// Unsupported export \{export_.export_name}: runtime members inside exported namespace are omitted; only type members are exposed.",
+          append_exported_namespace_members_with_prefix(
+            export_.source_path,
+            export_.source_export_name,
+            export_.export_name + ".",
+            decl_to_pascal_case(export_.export_name),
+            decl_to_camel_case(export_.export_name),
+            namespace_,
+            interfaces,
+            imports,
+            funcs,
+            values,
+            classes,
+          )
+        } else {
+          append_exported_type_namespace_members_with_prefix(
+            export_.source_path,
+            export_.export_name + ".",
+            decl_to_pascal_case(export_.export_name),
+            namespace_,
+            interfaces,
           )
         }
-        continue
+        if has_runtime_root {
+          ()
+        } else {
+          continue
+        }
       }
       _ => ()
     }
