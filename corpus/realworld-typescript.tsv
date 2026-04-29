@@ -1,0 +1,12 @@
+# kind|package_spec|module_name|types_path
+# `package` entries resolve through node_modules by package specifier.
+# `node_builtin` entries use types_path relative to the configured node_modules root.
+package|clsx|clsx|
+package|chalk|chalk|
+package|dotenv|dotenv|
+package|ignore|ignore|
+package|hono|hono|
+package|zod|zod|
+package|date-fns|date_fns|
+node_builtin|node:sqlite|node_sqlite|@types/node/sqlite.d.ts
+node_builtin|node:fs|node_fs|@types/node/fs.d.ts

@@ -10,10 +10,12 @@ report_file="$report_root/REPORT.md"
 
 rm -rf "$report_root"
 mkdir -p "$log_root"
+shopt -s nullglob
 
 checks=()
 statuses=()
 logs=()
+metric_roots=()
 
 run_check() {
   local name="$1"
@@ -29,22 +31,48 @@ run_check() {
   fi
 }
 
-count_files() {
-  local root="$1"
-  local pattern="$2"
+collect_metric_roots() {
+  metric_roots=()
+  local root
+  for root in _build/scaffold_* _build/fixture_* _build/bridge_fixture_* _build/examples; do
+    if [ -e "$root" ]; then
+      metric_roots+=("$root")
+    fi
+  done
+}
 
-  if [ ! -d "$root" ]; then
+find_metric_files() {
+  local pattern="$1"
+
+  if [ "${#metric_roots[@]}" -eq 0 ]; then
+    return
+  fi
+  find "${metric_roots[@]}" -type f -name "$pattern"
+}
+
+find_metric_dirs() {
+  local pattern="$1"
+
+  if [ "${#metric_roots[@]}" -eq 0 ]; then
+    return
+  fi
+  find "${metric_roots[@]}" -type d -name "$pattern"
+}
+
+count_files() {
+  local pattern="$1"
+
+  if [ "${#metric_roots[@]}" -eq 0 ]; then
     printf '0\n'
     return
   fi
-  find "$root" -path "$report_root" -prune -o -type f -name "$pattern" -print | wc -l | tr -d ' '
+  find_metric_files "$pattern" | wc -l | tr -d ' '
 }
 
 sum_lines() {
-  local root="$1"
-  local name_pattern="$2"
+  local name_pattern="$1"
 
-  if [ ! -d "$root" ]; then
+  if [ "${#metric_roots[@]}" -eq 0 ]; then
     printf '0\n'
     return
   fi
@@ -52,16 +80,15 @@ sum_lines() {
   local file
   while IFS= read -r file; do
     total=$((total + $(wc -l < "$file")))
-  done < <(find "$root" -path "$report_root" -prune -o -type f -name "$name_pattern" -print)
+  done < <(find_metric_files "$name_pattern")
   printf '%s\n' "$total"
 }
 
 count_matching_files() {
-  local root="$1"
-  local name_pattern="$2"
-  local pattern="$3"
+  local name_pattern="$1"
+  local pattern="$2"
 
-  if [ ! -d "$root" ]; then
+  if [ "${#metric_roots[@]}" -eq 0 ]; then
     printf '0\n'
     return
   fi
@@ -71,30 +98,92 @@ count_matching_files() {
   while IFS= read -r file; do
     count="$(grep -E -c "$pattern" "$file" 2>/dev/null || true)"
     total=$((total + count))
-  done < <(find "$root" -path "$report_root" -prune -o -type f -name "$name_pattern" -print)
+  done < <(find_metric_files "$name_pattern")
   printf '%s\n' "$total"
+}
+
+jsvalue_cause_counts() {
+  local surface_total=0
+  local unknown_any=0
+  local overload_fallback=0
+  local conditional_mapped_fallback=0
+  local callback_function_fallback=0
+  local tuple_array_fallback=0
+  local namespace_value_fallback=0
+  local file
+  local line
+
+  while IFS= read -r file; do
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [[ "$line" != *JSValue* ]]; then
+        continue
+      fi
+      if [[ "$line" == "/// Complex or unsupported TypeScript types are widened to JSValue." ]]; then
+        continue
+      fi
+      if [[ "$line" == "declare pub type JSValue" ]]; then
+        continue
+      fi
+
+      surface_total=$((surface_total + 1))
+      if [[ "$line" =~ Array\[JSValue\] || "$line" =~ JSValue\] ]]; then
+        tuple_array_fallback=$((tuple_array_fallback + 1))
+      elif [[ "$line" =~ (Unsupported\ export|namespace|Namespace|default|Default|get_|constants|Constants|meta|Meta|rest|Rest|runtime|Runtime|build|Build) ]]; then
+        namespace_value_fallback=$((namespace_value_fallback + 1))
+      elif [[ "$line" =~ \<call\> ]]; then
+        overload_fallback=$((overload_fallback + 1))
+      elif [[ "$line" =~ (callback|Callback|listener|Listener|handler|Handler|dispatch|Dispatch|reducer|Reducer|action|Action|func|Func|function|Function|component|Component|render|Render|propsAreEqual|Promise|NoParamCallback) ]]; then
+        callback_function_fallback=$((callback_function_fallback + 1))
+      elif [[ "$line" =~ (props|Props|children|Children|Ref|Element|ReactNode|LibraryManaged|Intrinsic|JSX|Partial|Readonly|Record|Exclude|Extract|NonNullable|ReturnType|Parameters|DOMAttributes|Key|source|self) ]]; then
+        conditional_mapped_fallback=$((conditional_mapped_fallback + 1))
+      elif [[ "$line" =~ ^declare\ pub\ fn ]]; then
+        overload_fallback=$((overload_fallback + 1))
+      else
+        unknown_any=$((unknown_any + 1))
+      fi
+    done < "$file"
+  done < <(find_metric_files 'bridge.mbti')
+
+  printf '%s|%s|%s|%s|%s|%s|%s\n' \
+    "$surface_total" \
+    "$unknown_any" \
+    "$overload_fallback" \
+    "$conditional_mapped_fallback" \
+    "$callback_function_fallback" \
+    "$tuple_array_fallback" \
+    "$namespace_value_fallback"
 }
 
 run_check "verify-scaffolds" bash scripts/verify_scaffolds.sh
 run_check "verify-generated-fixtures" bash scripts/verify_generated_fixtures.sh
 run_check "verify-examples" bash scripts/verify_examples.sh
 
-moonbit_bridge_files="$(count_files _build 'bridge.mbt')"
-moonbit_decl_files="$(count_files _build 'bridge.mbti')"
-typescript_decl_files="$(count_files _build '*.d.ts')"
-javascript_files="$(count_files _build '*.js')"
-moonbit_bridge_lines="$(sum_lines _build 'bridge.mbt')"
-moonbit_decl_lines="$(sum_lines _build 'bridge.mbti')"
-typescript_decl_lines="$(sum_lines _build '*.d.ts')"
-javascript_lines="$(sum_lines _build '*.js')"
-diagnostic_files="$(find _build -path "$report_root" -prune -o -type f \( -name 'SCAFFOLD_DIAGNOSTICS.md' -o -name 'AUTOLINK_DIAGNOSTICS.md' \) -print | wc -l | tr -d ' ')"
-unsupported_exports="$(count_matching_files _build 'bridge.mbti' '^/// Unsupported export ')"
-moonbit_declared_functions="$(count_matching_files _build 'bridge.mbti' '^declare pub fn ')"
-moonbit_declared_types="$(count_matching_files _build 'bridge.mbti' '^declare pub type ')"
-typescript_exported_declarations="$(count_matching_files _build '*.d.ts' '^export (declare )?(function|interface|class|const|type) ')"
-jsvalue_refs="$(count_matching_files _build 'bridge.mbti' 'JSValue')"
-jsvalue_functions="$(count_matching_files _build 'bridge.mbti' '^declare pub fn .*JSValue')"
-moon_build_smokes="$(find _build -path "$report_root" -prune -o -type d -name '__tsmbt_build_smoke__' -print | wc -l | tr -d ' ')"
+collect_metric_roots
+
+moonbit_bridge_files="$(count_files 'bridge.mbt')"
+moonbit_decl_files="$(count_files 'bridge.mbti')"
+typescript_decl_files="$(count_files '*.d.ts')"
+javascript_files="$(count_files '*.js')"
+moonbit_bridge_lines="$(sum_lines 'bridge.mbt')"
+moonbit_decl_lines="$(sum_lines 'bridge.mbti')"
+typescript_decl_lines="$(sum_lines '*.d.ts')"
+javascript_lines="$(sum_lines '*.js')"
+diagnostic_files=$(( $(count_files 'SCAFFOLD_DIAGNOSTICS.md') + $(count_files 'AUTOLINK_DIAGNOSTICS.md') ))
+unsupported_exports="$(count_matching_files 'bridge.mbti' '^/// Unsupported export ')"
+moonbit_declared_functions="$(count_matching_files 'bridge.mbti' '^declare pub fn ')"
+moonbit_declared_types="$(count_matching_files 'bridge.mbti' '^declare pub type ')"
+typescript_exported_declarations="$(count_matching_files '*.d.ts' '^export (declare )?(function|interface|class|const|type) ')"
+jsvalue_refs="$(count_matching_files 'bridge.mbti' 'JSValue')"
+jsvalue_functions="$(count_matching_files 'bridge.mbti' '^declare pub fn .*JSValue')"
+moon_build_smokes="$(find_metric_dirs '__tsmbt_build_smoke__' | wc -l | tr -d ' ')"
+IFS='|' read -r \
+  jsvalue_surface_lines \
+  jsvalue_unknown_any \
+  jsvalue_overload_fallback \
+  jsvalue_conditional_mapped_fallback \
+  jsvalue_callback_function_fallback \
+  jsvalue_tuple_array_fallback \
+  jsvalue_namespace_value_fallback < <(jsvalue_cause_counts)
 
 overall="pass"
 for status in "${statuses[@]}"; do
@@ -131,8 +220,20 @@ done
   printf '| diagnostics files | %s |\n' "$diagnostic_files"
   printf '| unsupported exports | %s |\n' "$unsupported_exports"
   printf '| JSValue refs | %s |\n' "$jsvalue_refs"
+  printf '| JSValue surface lines | %s |\n' "$jsvalue_surface_lines"
   printf '| JSValue functions | %s |\n' "$jsvalue_functions"
   printf '| generated build-smoke packages | %s |\n' "$moon_build_smokes"
+  printf '\n'
+  printf '## JSValue Cause Breakdown\n\n'
+  printf 'This is a heuristic classification over generated `bridge.mbti` surface lines that contain `JSValue`, excluding the shared banner and type declaration.\n\n'
+  printf '| cause | lines |\n'
+  printf '| --- | ---: |\n'
+  printf '| unknown / any | %s |\n' "$jsvalue_unknown_any"
+  printf '| overload fallback | %s |\n' "$jsvalue_overload_fallback"
+  printf '| conditional / mapped type fallback | %s |\n' "$jsvalue_conditional_mapped_fallback"
+  printf '| callback / function type fallback | %s |\n' "$jsvalue_callback_function_fallback"
+  printf '| tuple / array fallback | %s |\n' "$jsvalue_tuple_array_fallback"
+  printf '| namespace / value fallback | %s |\n' "$jsvalue_namespace_value_fallback"
 } > "$report_file"
 
 cat "$report_file"

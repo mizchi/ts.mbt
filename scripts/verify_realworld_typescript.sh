@@ -11,6 +11,12 @@ if [ ! -d "$node_modules_root" ]; then
   exit 0
 fi
 
+corpus_file="${TSMBT_REALWORLD_TYPESCRIPT_CORPUS:-corpus/realworld-typescript.tsv}"
+if [ ! -f "$corpus_file" ]; then
+  echo "Missing real-world TypeScript corpus config: $corpus_file" >&2
+  exit 1
+fi
+
 log_root="_build/realworld-typescript/logs"
 metrics_file="_build/realworld-typescript/METRICS.md"
 
@@ -55,6 +61,7 @@ init_metrics() {
 # Real-World TypeScript Bridge Metrics
 
 node_modules: \`$node_modules_root\`
+corpus: \`$corpus_file\`
 
 | package | bridge lines | declared types | declared functions | structs | external types | JSValue refs | JSValue functions | unsupported exports |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -566,7 +573,36 @@ verify_package() {
   append_metrics "$package_spec" "$out"
 }
 
+resolve_configured_types_path() {
+  local configured_path="$1"
+
+  if [ -z "$configured_path" ]; then
+    return 1
+  fi
+  if [[ "$configured_path" = /* ]]; then
+    if [ -f "$configured_path" ]; then
+      printf '%s\n' "$configured_path"
+      return 0
+    fi
+    return 1
+  fi
+  if [ -f "$node_modules_root/$configured_path" ]; then
+    printf '%s\n' "$node_modules_root/$configured_path"
+    return 0
+  fi
+  return 1
+}
+
 find_node_sqlite_types() {
+  local configured_path="${1:-}"
+
+  if [ -n "$configured_path" ]; then
+    if resolve_configured_types_path "$configured_path"; then
+      return 0
+    fi
+    echo "Configured node:sqlite types path does not exist: $configured_path" >&2
+    exit 1
+  fi
   if [ -n "${TSMBT_NODE_SQLITE_TYPES:-}" ]; then
     if [ -f "$TSMBT_NODE_SQLITE_TYPES" ]; then
       printf '%s\n' "$TSMBT_NODE_SQLITE_TYPES"
@@ -585,6 +621,15 @@ find_node_sqlite_types() {
 }
 
 find_node_fs_types() {
+  local configured_path="${1:-}"
+
+  if [ -n "$configured_path" ]; then
+    if resolve_configured_types_path "$configured_path"; then
+      return 0
+    fi
+    echo "Configured node:fs types path does not exist: $configured_path" >&2
+    exit 1
+  fi
   if [ -n "${TSMBT_NODE_FS_TYPES:-}" ]; then
     if [ -f "$TSMBT_NODE_FS_TYPES" ]; then
       printf '%s\n' "$TSMBT_NODE_FS_TYPES"
@@ -603,12 +648,13 @@ find_node_fs_types() {
 }
 
 verify_node_sqlite() {
+  local configured_types_path="${1:-}"
   local module_name="node_sqlite"
   local root="_build/realworld-typescript"
   local out="$root/node_sqlite"
   local types_path
 
-  if ! types_path="$(find_node_sqlite_types)"; then
+  if ! types_path="$(find_node_sqlite_types "$configured_types_path")"; then
     echo "Skipping node:sqlite probe: @types/node/sqlite.d.ts not found" >&2
     echo "Set TSMBT_NODE_SQLITE_TYPES to enable it." >&2
     return
@@ -642,12 +688,13 @@ verify_node_sqlite() {
 }
 
 verify_node_fs() {
+  local configured_types_path="${1:-}"
   local module_name="node_fs"
   local root="_build/realworld-typescript"
   local out="$root/node_fs"
   local types_path
 
-  if ! types_path="$(find_node_fs_types)"; then
+  if ! types_path="$(find_node_fs_types "$configured_types_path")"; then
     echo "Skipping node:fs probe: @types/node/fs.d.ts not found" >&2
     echo "Set TSMBT_NODE_FS_TYPES to enable it." >&2
     return
@@ -683,19 +730,29 @@ verify_node_fs() {
 rm -rf _build/realworld-typescript
 init_metrics
 
-while IFS='|' read -r package_spec module_name; do
-  verify_package "$package_spec" "$module_name"
-done <<'EOF'
-clsx|clsx
-chalk|chalk
-dotenv|dotenv
-ignore|ignore
-hono|hono
-zod|zod
-date-fns|date_fns
-EOF
-
-verify_node_sqlite
-verify_node_fs
+while IFS='|' read -r kind package_spec module_name types_path; do
+  if [ -z "${kind:-}" ] || [[ "$kind" == \#* ]]; then
+    continue
+  fi
+  case "$kind" in
+    package)
+      verify_package "$package_spec" "$module_name"
+      ;;
+    node_builtin)
+      case "$package_spec" in
+        node:sqlite) verify_node_sqlite "$types_path" ;;
+        node:fs) verify_node_fs "$types_path" ;;
+        *)
+          echo "Unsupported node_builtin corpus entry: $package_spec" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    *)
+      echo "Unsupported corpus entry kind: $kind" >&2
+      exit 1
+      ;;
+  esac
+done < "$corpus_file"
 
 echo "metrics written to $metrics_file"
