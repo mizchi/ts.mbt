@@ -266,6 +266,15 @@ fn ffi_mark_external_type(state : MoonBitJsFfiState, name : String) -> String {
 }
 
 ///|
+fn ffi_normalize_literal_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Literal("true") | Literal("false") => Boolean
+    Literal(_) => String_
+    _ => type_
+  }
+}
+
+///|
 fn ffi_classify_optional_like_union(
   type_ : @ast.TsType,
 ) -> (@ast.TsType, Bool)? {
@@ -278,11 +287,13 @@ fn ffi_classify_optional_like_union(
         match item {
           Any => has_any = true
           Undefined | Null => is_optional = true
-          _ =>
+          _ => {
+            let normalized = ffi_normalize_literal_type(item)
             match concrete {
-              Some(_) => return None
-              None => concrete = Some(item)
+              Some(existing) => if existing != normalized { return None }
+              None => concrete = Some(normalized)
             }
+          }
         }
       }
       match concrete {
@@ -304,6 +315,7 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     None => ()
   }
   match type_ {
+    Literal(_) => ffi_type_name(state, ffi_normalize_literal_type(type_))
     Number => "Double"
     Int => "Int"
     Boolean => "Bool"

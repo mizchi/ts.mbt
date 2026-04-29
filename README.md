@@ -107,8 +107,8 @@ dynamic JS features. It currently uses wasm-gc for arrays and structs.
 **Explicitly unsupported in codegen**:
 - `throw`, `try`/`catch`/`finally`
 - `typeof`, `void`, `delete`
-- Object literals, closures (arrow/function expressions)
-- Dynamic call expressions
+- Object literals and function values that escape or require full closure conversion
+- Arbitrary dynamic call expressions
 
 ## Package Bridge Scaffolds
 
@@ -149,6 +149,7 @@ Start from a root `pkg.generated.mbti` for a real MoonBit source package and
 emit:
 
 - `index.js` copied from the temporary glue package's `moon build --target js` output
+- child package `index.js` files that re-export their runtime surface from the built root JS
 - `package.json` with `types` / `exports` metadata for the emitted declaration package
 - `AUTOLINK_DIAGNOSTICS.md` listing public methods/constructors omitted from `link.js.exports`
 - recursive `.d.ts` files with local MoonBit package imports rewritten to sibling relative imports
@@ -163,7 +164,7 @@ moon run src -- emit-typescript-scaffold-from-mbti src/pkg.generated.mbti out/ts
 # optional: rewrite external MoonBit package imports to publishable TS specifiers
 moon run src -- emit-typescript-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg import-rewrites.json
 
-# opt-in: also emit top-level MoonBit wrappers for omitted root-local methods/constructors
+# opt-in: also emit top-level MoonBit wrappers for omitted local methods/constructors
 moon run src -- emit-typescript-facade-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg
 ```
 
@@ -182,10 +183,10 @@ moon run src -- emit-typescript-from-mbti src/pkg.generated.mbti
 
 Current export model:
 
-- JS autolink is generated from top-level public free functions only.
+- JS autolink is generated from top-level public free functions across the root package and recursively discovered local child packages.
 - Runtime-inaccessible method / namespace declarations are stripped from scaffold `.d.ts` output unless wrapper glue is generated for them.
 - Scaffold output includes `AUTOLINK_DIAGNOSTICS.md` so omitted public members are explicit.
-- `emit-typescript-facade-scaffold-from-mbti` is an opt-in variant that adds generated top-level wrappers for root-package local non-generic methods and constructors to the temporary glue package, then exposes those wrappers from the built `index.js` and `index.d.ts`.
+- `emit-typescript-facade-scaffold-from-mbti` is an opt-in variant that adds generated top-level wrappers for local non-generic methods and constructors to the temporary glue package, then exposes those wrappers from the built JS and the matching package `.d.ts`.
 - The temporary `moon.pkg.json` and wrapper `.mbt` files are build inputs only; they are not written to the final TypeScript package.
 - Recursive `.mbti` resolution only rewrites imports that stay under the same root package prefix. External imports remain bare specifiers.
 - `emit-typescript-package-from-mbti` and `emit-typescript-scaffold-from-mbti` accept an optional JSON object for external import rewrites, for example `{ "moonbitlang/core/debug": "demo-debug" }`.
@@ -215,6 +216,7 @@ The TS -> MoonBit path resolves exported surface recursively through local packa
 
 - Namespace exports are emitted as opaque getter-style bindings such as `get_shapes() -> Shapes`.
 - Ambiguous re-exports no longer block scaffold generation. They are widened/omitted the same way as the lower-level emitters, and the scaffold writes `SCAFFOLD_DIAGNOSTICS.md` so the dropped surface is explicit.
+- Literal unions such as `"solid" | "ghost"` and `true | false` are narrowed to `String` / `Bool` instead of being widened to `JSValue`.
 - Generated bridge packages preserve camelCase top-level export names in their public MoonBit API, even when the internal JS extern binding is lowered to snake_case.
 
 ## Development

@@ -319,6 +319,28 @@ test "codegen: function expression iife call expression" {
 }
 
 ///|
+test "codegen: reusable function value direct calls" {
+  let src =
+    #|function arrowApply(n: number): number {
+    #|  const f = (x: number) => x + 1;
+    #|  return f(n);
+    #|}
+    #|function arrowReadsOuter(n: number): number {
+    #|  const bias: number = 3;
+    #|  const f = (x: number) => x + bias;
+    #|  return f(n);
+    #|}
+    #|function functionApply(n: number): number {
+    #|  const f = function (x: number): number { return x * 2; };
+    #|  return f(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "arrowApply", [7.0], 8.0)
+  assert_run_f64(wasm, "arrowReadsOuter", [7.0], 10.0)
+  assert_run_f64(wasm, "functionApply", [7.0], 14.0)
+}
+
+///|
 test "codegen: real-world iife wrapper patterns" {
   let src =
     #|function normalize(n: number): number {

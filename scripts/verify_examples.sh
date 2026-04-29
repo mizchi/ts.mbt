@@ -34,6 +34,7 @@ EOF
   [ -f "$root/dist/package.json" ]
   [ -f "$root/dist/index.js" ]
   [ -f "$root/dist/index.js.map" ]
+  [ -f "$root/dist/child/index.js" ]
   [ -f "$root/dist/AUTOLINK_DIAGNOSTICS.md" ]
   [ ! -f "$root/dist/moon.pkg.json" ]
   [ ! -f "$root/dist/moon.pkg" ]
@@ -41,19 +42,25 @@ EOF
   [ ! -f "$root/dist/TSMBT_GLUE.mbt" ]
   grep -F '"name": "@examples/counter"' "$root/dist/package.json" >/dev/null
   grep -F '"import": "./index.js"' "$root/dist/package.json" >/dev/null
-  grep -F '"./child": { "types": "./child/index.d.ts" }' "$root/dist/package.json" >/dev/null
+  grep -F '"./child": { "types": "./child/index.d.ts", "import": "./child/index.js" }' "$root/dist/package.json" >/dev/null
   grep -F 'export function create' "$root/dist/index.d.ts" >/dev/null
   grep -F 'export function counter_label' "$root/dist/index.d.ts" >/dev/null
   grep -F 'export interface Item' "$root/dist/child/index.d.ts" >/dev/null
+  grep -F 'export function item_display' "$root/dist/child/index.d.ts" >/dev/null
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
   node --input-type=module - <<'EOF'
 const mod = await import("./_build/examples/moonbit-to-typescript/dist/index.js");
+const child = await import("./_build/examples/moonbit-to-typescript/dist/child/index.js");
 const counter = mod.create("demo", { id: 7, name: "item" });
 if (mod.counter_label(counter) !== "demo") {
   throw new Error("counter_label returned an unexpected value");
 }
 if (mod.summarize(counter) !== "demo:item#7") {
   throw new Error("summarize returned an unexpected value");
+}
+const item = child.make_item(8, "child");
+if (child.item_display(item) !== "child#8") {
+  throw new Error("item_display returned an unexpected value");
 }
 EOF
 }

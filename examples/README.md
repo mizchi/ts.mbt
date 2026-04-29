@@ -16,9 +16,9 @@ Generate a TypeScript package backed by `moon build --target js`:
 moon run src -- --input examples/counter --out examples/moonbit-to-typescript/dist
 ```
 
-The generated output includes `index.js`, `index.d.ts`, `child/index.d.ts`,
-`package.json`, and autolink diagnostics. The MoonBit glue package is temporary
-and is removed after `moon build --target js` succeeds.
+The generated output includes `index.js`, `index.d.ts`, `child/index.js`,
+`child/index.d.ts`, `package.json`, and autolink diagnostics. The MoonBit glue
+package is temporary and is removed after `moon build --target js` succeeds.
 
 ## TypeScript -> MoonBit
 

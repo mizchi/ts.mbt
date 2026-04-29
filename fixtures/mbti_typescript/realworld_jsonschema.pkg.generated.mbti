@@ -1,0 +1,196 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/jsonschema"
+
+import {
+  "moonbitlang/core/json",
+  "moonbitlang/core/set",
+}
+
+// Values
+pub fn build_resolver(Json) -> Resolver raise ParseError
+
+pub fn build_validator(Json) -> Validator raise
+
+pub fn collect_refs(Json) -> @set.Set[String]
+
+pub fn emit_json_schema(Builder) -> Json
+
+// Errors
+pub suberror ParseError {
+  JsonDecodeError(@json.JsonDecodeError)
+  PointerParseError(String)
+  InvalidSchema(String)
+}
+
+// Types and methods
+pub struct AllOfSchema {
+  schemas : Array[JsonSchema]
+} derive(Eq)
+pub impl Show for AllOfSchema
+
+pub struct AnyOfSchema {
+  schemas : Array[JsonSchema]
+} derive(Eq)
+pub impl Show for AnyOfSchema
+
+pub struct AnySchema {
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for AnySchema
+
+pub struct ArraySchema {
+  items : JsonSchema?
+  prefix_items : Array[JsonSchema]?
+  contains : JsonSchema?
+  min_contains : Int?
+  max_contains : Int?
+  min_items : Int?
+  max_items : Int?
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for ArraySchema
+
+pub struct BooleanSchema {
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for BooleanSchema
+
+pub struct Builder {
+  // private fields
+}
+pub fn Builder::all_of(Self, Array[JsonSchema]) -> JsonSchema
+pub fn Builder::any(Self) -> JsonSchema
+pub fn Builder::any_of(Self, Array[JsonSchema]) -> JsonSchema
+pub fn Builder::array(Self, items? : JsonSchema, prefix_items? : Array[JsonSchema], contains? : JsonSchema, min_contains? : Int, max_contains? : Int, min_items? : Int, max_items? : Int) -> JsonSchema
+pub fn Builder::boolean(Self) -> JsonSchema
+pub fn Builder::const_(Self, Json) -> JsonSchema
+pub fn Builder::define_schema(Self, JsonPointer, JsonSchema) -> RefSchema
+pub fn Builder::enum_(Self, Array[Json]) -> JsonSchema
+pub fn Builder::enumerable_one_of(Self, String, Array[JsonSchema], params~ : JsonSchema?) -> JsonSchema
+pub fn Builder::integer(Self, minimum? : Int, maximum? : Int, exclusive_minimum? : Int, exclusive_maximum? : Int) -> JsonSchema
+pub fn Builder::new() -> Self
+pub fn Builder::null(Self) -> JsonSchema
+pub fn Builder::number(Self, minimum? : Double, maximum? : Double, exclusive_minimum? : Double, exclusive_maximum? : Double) -> JsonSchema
+pub fn Builder::object(Self, properties? : Map[String, JsonSchema], required? : Array[String], additional_properties? : JsonSchema, required_all? : Bool) -> JsonSchema
+pub fn Builder::one_of(Self, Array[JsonSchema]) -> JsonSchema
+pub fn Builder::ref_(Self, JsonPointer) -> JsonSchema
+pub fn Builder::ref_from_string(Self, String) -> JsonSchema
+pub fn Builder::string(Self, minLength? : Int, maxLength? : Int, enum_? : Array[String]) -> JsonSchema
+
+pub struct ConstSchema {
+  value : Json
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for ConstSchema
+
+pub struct EnumSchema {
+  values : Array[Json]
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for EnumSchema
+
+pub(all) struct Enumerable {
+  tag : String
+  positionals : Array[JsonSchema]?
+  params : Map[String, JsonSchema]?
+} derive(Eq)
+pub fn Enumerable::new(String, Array[JsonSchema]?, Map[String, JsonSchema]?) -> Self
+pub fn Enumerable::parse_enumerable(OneOfSchema) -> Array[Self]?
+pub impl Show for Enumerable
+
+type IntegerSchema derive(Eq, ToJson, @json.FromJson)
+
+pub(all) enum JsonPointer {
+  Root
+  Key(JsonPointer, key~ : String)
+  Index(JsonPointer, index~ : Int)
+} derive(Eq, Hash, ToJson, @json.FromJson)
+pub fn JsonPointer::access(Self, Json) -> Json?
+pub fn JsonPointer::from_string(String) -> Result[Self, String]
+pub fn JsonPointer::index(Self, Int) -> Self
+pub fn JsonPointer::key(Self, String) -> Self
+pub impl Show for JsonPointer
+
+pub enum JsonSchema {
+  Any(AnySchema)
+  Null(NullSchema)
+  Boolean(BooleanSchema)
+  String(StringSchema)
+  Number(NumberSchema)
+  Integer(IntegerSchema)
+  Array(ArraySchema)
+  Object(ObjectSchema)
+  AnyOf(AnyOfSchema)
+  AllOf(AllOfSchema)
+  OneOf(OneOfSchema)
+  Ref(RefSchema)
+  Enum(EnumSchema)
+  Const(ConstSchema)
+} derive(Eq)
+pub impl Validatable for JsonSchema
+pub impl Show for JsonSchema
+pub impl ToJson for JsonSchema
+pub impl @json.FromJson for JsonSchema
+
+pub struct NullSchema {
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for NullSchema
+
+pub struct NumberSchema {
+  minimum : Double?
+  maximum : Double?
+  exclusive_minimum : Double?
+  exclusive_maximum : Double?
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for NumberSchema
+
+pub struct ObjectSchema {
+  properties : Map[String, JsonSchema]?
+  required : Array[String]?
+  additional_properties : JsonSchema?
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for ObjectSchema
+
+pub struct OneOfSchema {
+  schemas : Array[JsonSchema]
+  parsed_nullable : JsonSchema?
+  parsed_enumerable : Array[Enumerable]?
+} derive(Eq)
+pub fn OneOfSchema::parse_nullable(Self) -> JsonSchema?
+pub impl Show for OneOfSchema
+
+pub struct RefSchema {
+  pointer : JsonPointer
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for RefSchema
+
+pub struct Resolver {
+  // private fields
+}
+pub fn Resolver::get_refs(Self) -> Array[JsonPointer]
+pub fn Resolver::has(Self, JsonPointer) -> Bool
+pub fn Resolver::new(Json) -> Self raise ParseError
+pub fn Resolver::resolve(Self, JsonPointer) -> JsonSchema?
+
+pub struct StringSchema {
+  min_length : Int?
+  max_length : Int?
+  enum_ : Array[String]?
+} derive(Eq, ToJson, @json.FromJson)
+pub impl Show for StringSchema
+
+pub struct ValidationError {
+  input : Json
+  json_path : JsonPointer
+  schema_path : JsonPointer
+  message : String
+  children : Array[ValidationError]?
+} derive(Eq)
+pub fn ValidationError::new(Json, JsonPointer, JsonPointer, String, children? : Array[Self]) -> Self
+pub impl Show for ValidationError
+
+type Validator
+pub fn Validator::validate(Self, Json) -> Result[Unit, Array[ValidationError]]
+
+// Type aliases
+
+// Traits
+pub trait Validatable {
+  validate(Self, Json, resolver~ : Resolver, json_path~ : JsonPointer, schema_path~ : JsonPointer) -> Array[ValidationError]
+}
+

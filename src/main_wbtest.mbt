@@ -312,7 +312,7 @@ async test "resolve_unified_mbt_input_path_from_roots finds package names from g
   @fs.write_file(mbti_path, mbti_source, create=0o644)
   match
     resolve_unified_mbt_input_path_from_roots("mizchi/jsonschema", [
-      ".", github_root,
+      github_root, ".",
     ]) {
     Some(path) => assert_eq(path, mbti_path)
     None => fail("expected mizchi/jsonschema to resolve from moon.mod name")
@@ -522,7 +522,9 @@ async test "emit_typescript_scaffold_from_mbti writes declaration package metada
   assert_true(package_json.contains("\"name\": \"@examples/counter\""))
   assert_true(package_json.contains("\"import\": \"./index.js\""))
   assert_true(
-    package_json.contains("\"./child\": { \"types\": \"./child/index.d.ts\" }"),
+    package_json.contains(
+      "\"./child\": { \"types\": \"./child/index.d.ts\", \"import\": \"./child/index.js\" }",
+    ),
   )
   assert_true(diagnostics_md.contains("Counter::label"))
   assert_true(root_decl.contains("import type * as child from \"./child\";"))

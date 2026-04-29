@@ -123,6 +123,7 @@ priv struct MbtiMarkerTraitDecl {
 
 ///|
 priv struct MbtiAutolinkGlueDecl {
+  package_name : String
   export_name : String
   ts_decl : String
   mbt_decl : String
@@ -854,6 +855,17 @@ fn mbti_source_alias() -> String {
 }
 
 ///|
+fn mbti_source_alias_for_package(
+  root_package_name : String,
+  package_name : String,
+) -> String {
+  if package_name == root_package_name {
+    return mbti_source_alias()
+  }
+  infer_mbti_import_alias_name(package_name)
+}
+
+///|
 fn mbti_is_identifier_start(c : Char) -> Bool {
   mbti_is_ascii_letter(c) || c == '_'
 }
@@ -1194,8 +1206,10 @@ fn mbti_raw_facade_uses_private_types(
 }
 
 ///|
-fn collect_mbti_root_autolink_glue_decls(
+fn collect_mbti_autolink_glue_decls(
+  package_name : String,
   source : String,
+  source_alias : String,
   include_facades : Bool,
 ) -> Array[MbtiAutolinkGlueDecl] raise MbtiTypescriptDeclError {
   let imports = parse_mbti_imports(source)
@@ -1213,7 +1227,6 @@ fn collect_mbti_root_autolink_glue_decls(
     }
   }
   let private_type_names = collect_root_mbti_private_type_names(source)
-  let source_alias = mbti_source_alias()
   let decls : Array[MbtiAutolinkGlueDecl] = []
   let free_function_names : Array[String] = []
   for line_view in source.split("\n") {
@@ -1267,7 +1280,12 @@ fn collect_mbti_root_autolink_glue_decls(
               "@\{source_alias}.\{fn_name}(\{call_args})"
             }
             let mbt_decl = "pub \{async_prefix}fn\{type_param_suffix} \{fn_name}(\{rendered_mbt_params}) -> \{return_ty}\{effect_suffix} {\n  \{body_expr}\n}"
-            decls.push({ export_name: fn_name, ts_decl: "", mbt_decl })
+            decls.push({
+              package_name,
+              export_name: fn_name,
+              ts_decl: "",
+              mbt_decl,
+            })
             free_function_names.push(fn_name)
           }
           Some(owner_name) if include_facades =>
@@ -1357,6 +1375,7 @@ fn collect_mbti_root_autolink_glue_decls(
                 }
                 let facade_mbt_decl = "pub fn \{unique_export_name}(\{rendered_mbt_params}) -> \{rendered_mbt_return}\{effect_suffix} {\n  \{body_expr}\n}"
                 decls.push({
+                  package_name,
                   export_name: unique_export_name,
                   ts_decl: facade_ts_decl,
                   mbt_decl: facade_mbt_decl,
@@ -1368,6 +1387,34 @@ fn collect_mbti_root_autolink_glue_decls(
         }
       }
       None => ()
+    }
+  }
+  decls
+}
+
+///|
+fn collect_mbti_bundle_autolink_glue_decls(
+  loaded : LoadedMbtiPackageSources,
+  include_facades : Bool,
+) -> Array[MbtiAutolinkGlueDecl] raise MbtiTypescriptDeclError {
+  let decls : Array[MbtiAutolinkGlueDecl] = []
+  for package_name in loaded.ordered_packages {
+    let source = match loaded.package_sources.get(package_name) {
+      Some(source) => source
+      None =>
+        raise MbtiTypescriptDeclError::ParseError(
+          "missing loaded package source for \{package_name}",
+        )
+    }
+    let source_alias = mbti_source_alias_for_package(
+      loaded.root_package_name,
+      package_name,
+    )
+    let package_decls = collect_mbti_autolink_glue_decls(
+      package_name, source, source_alias, include_facades,
+    )
+    for decl in package_decls {
+      decls.push(decl)
     }
   }
   decls
@@ -1417,25 +1464,48 @@ fn render_glue_import_entry(path : String, alias_name : String) -> String {
 }
 
 ///|
+fn push_unique_glue_import_entry(
+  entries : Array[String],
+  seen : Array[String],
+  path : String,
+  alias_name : String,
+) -> Unit {
+  let key = path + "\n" + alias_name
+  if !seen.contains(key) {
+    seen.push(key)
+    entries.push(render_glue_import_entry(path, alias_name))
+  }
+}
+
+///|
 fn render_moonbit_js_glue_pkg_json(
-  source : String,
+  loaded : LoadedMbtiPackageSources,
   export_names : Array[String],
 ) -> String raise MbtiTypescriptDeclError {
-  let package_name = match parse_mbti_package_name(source) {
-    Some(package_name) => package_name
-    None =>
-      raise MbtiTypescriptDeclError::ParseError(
-        "missing package declaration in root mbti",
-      )
-  }
-  let source_alias = mbti_source_alias()
-  let import_entries : Array[String] = [
-    render_glue_import_entry(package_name, source_alias),
-  ]
-  for import_ref in parse_mbti_imports(source) {
-    import_entries.push(
-      render_glue_import_entry(import_ref.module_spec, import_ref.alias_name),
+  let import_entries : Array[String] = []
+  let seen_import_entries : Array[String] = []
+  for package_name in loaded.ordered_packages {
+    let source = match loaded.package_sources.get(package_name) {
+      Some(source) => source
+      None =>
+        raise MbtiTypescriptDeclError::ParseError(
+          "missing loaded package source for \{package_name}",
+        )
+    }
+    push_unique_glue_import_entry(
+      import_entries,
+      seen_import_entries,
+      package_name,
+      mbti_source_alias_for_package(loaded.root_package_name, package_name),
     )
+    for import_ref in parse_mbti_imports(source) {
+      push_unique_glue_import_entry(
+        import_entries,
+        seen_import_entries,
+        import_ref.module_spec,
+        import_ref.alias_name,
+      )
+    }
   }
   let lines : Array[String] = ["{"]
   lines.push("  \"import\": [")
@@ -1720,6 +1790,24 @@ fn mbti_export_key_from_relative_path(relative_path : String) -> String? {
 }
 
 ///|
+fn package_file_exists(
+  files : Array[MbtiTypescriptPackageFile],
+  relative_path : String,
+) -> Bool {
+  files.any(fn(file) { file.relative_path == relative_path })
+}
+
+///|
+fn mbti_runtime_js_path_for_decl_path(relative_path : String) -> String {
+  if relative_path.has_suffix(".d.ts") {
+    relative_path[:relative_path.length() - ".d.ts".length()].to_string() +
+    ".js"
+  } else {
+    relative_path
+  }
+}
+
+///|
 fn render_typescript_package_json(
   root_package_name : String,
   files : Array[MbtiTypescriptPackageFile],
@@ -1734,9 +1822,16 @@ fn render_typescript_package_json(
             "    \".\": { \"types\": \"./index.d.ts\", \"import\": \"./index.js\" }",
           )
         } else {
-          exports_lines.push(
-            "    \"\{export_key}\": { \"types\": \"./\{file.relative_path}\" }",
-          )
+          let js_path = mbti_runtime_js_path_for_decl_path(file.relative_path)
+          if package_file_exists(files, js_path) {
+            exports_lines.push(
+              "    \"\{export_key}\": { \"types\": \"./\{file.relative_path}\", \"import\": \"./\{js_path}\" }",
+            )
+          } else {
+            exports_lines.push(
+              "    \"\{export_key}\": { \"types\": \"./\{file.relative_path}\" }",
+            )
+          }
         }
       None => ()
     }
@@ -3986,6 +4081,79 @@ fn strip_runtime_inaccessible_typescript_package_files(
 }
 
 ///|
+fn mbti_bundle_js_relative_path_from_segments(
+  segments : Array[String],
+) -> String {
+  if segments.length() == 0 {
+    "index.js"
+  } else {
+    segments.join("/") + "/index.js"
+  }
+}
+
+///|
+fn mbti_runtime_root_import_from_segments(segments : Array[String]) -> String {
+  if segments.length() == 0 {
+    "./index.js"
+  } else {
+    let parts : Array[String] = []
+    for _ in 0..<segments.length() {
+      parts.push("..")
+    }
+    parts.join("/") + "/index.js"
+  }
+}
+
+///|
+fn render_runtime_reexport_js(
+  export_names : Array[String],
+  root_import : String,
+) -> String {
+  if export_names.length() == 0 {
+    return "export {};\n"
+  }
+  let names = export_names.join(", ")
+  "export { \{names} } from \"\{root_import}\";\n"
+}
+
+///|
+fn collect_runtime_reexport_files_for_mbti_bundle(
+  root_package_name : String,
+  ordered_packages : Array[String],
+  glue_decls : Array[MbtiAutolinkGlueDecl],
+) -> Array[MbtiTypescriptPackageFile] {
+  let files : Array[MbtiTypescriptPackageFile] = []
+  for package_name in ordered_packages {
+    if package_name == root_package_name {
+      continue
+    }
+    let segments = match
+      mbti_local_package_segments(root_package_name, package_name) {
+      Some(segments) => segments
+      None => continue
+    }
+    let export_names : Array[String] = []
+    for decl in glue_decls {
+      if decl.package_name == package_name &&
+        !export_names.contains(decl.export_name) {
+        export_names.push(decl.export_name)
+      }
+    }
+    if export_names.length() == 0 {
+      continue
+    }
+    files.push({
+      relative_path: mbti_bundle_js_relative_path_from_segments(segments),
+      content: render_runtime_reexport_js(
+        export_names,
+        mbti_runtime_root_import_from_segments(segments),
+      ),
+    })
+  }
+  files
+}
+
+///|
 pub async fn emit_typescript_scaffold_bundle_from_mbti_path(
   root_file_path : String,
 ) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError {
@@ -4001,28 +4169,41 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
   external_import_spec_rewrites : Map[String, String],
 ) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError {
   let loaded = load_mbti_package_sources(root_file_path)
-  let root_source = loaded.package_sources[loaded.root_package_name]
   let root_package_name = loaded.root_package_name
-  let glue_decls = collect_mbti_root_autolink_glue_decls(root_source, false)
+  let glue_decls = collect_mbti_bundle_autolink_glue_decls(loaded, false)
   let export_names : Array[String] = []
   for decl in glue_decls {
     export_names.push(decl.export_name)
   }
-  let moon_pkg_json = render_moonbit_js_glue_pkg_json(root_source, export_names)
+  let moon_pkg_json = render_moonbit_js_glue_pkg_json(loaded, export_names)
   let files = strip_runtime_inaccessible_typescript_package_files(
     emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
       root_file_path, external_import_spec_rewrites,
     ),
   )
+  let files_with_runtime : Array[MbtiTypescriptPackageFile] = []
+  for file in files {
+    files_with_runtime.push(file)
+  }
+  for
+    file in collect_runtime_reexport_files_for_mbti_bundle(
+      root_package_name,
+      loaded.ordered_packages,
+      glue_decls,
+    ) {
+    files_with_runtime.push(file)
+  }
   {
     moon_pkg_json,
-    package_json: render_typescript_package_json(root_package_name, files),
+    package_json: render_typescript_package_json(
+      root_package_name, files_with_runtime,
+    ),
     autolink_diagnostics_md: render_autolink_diagnostics_md(
       loaded.ordered_packages,
       loaded.package_sources,
     ),
     autolink_glue_mbt: render_autolink_glue_mbt(glue_decls),
-    files,
+    files: files_with_runtime,
   }
 }
 
@@ -4042,19 +4223,27 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
   external_import_spec_rewrites : Map[String, String],
 ) -> MbtiTypescriptScaffoldBundle raise MbtiTypescriptDeclError {
   let loaded = load_mbti_package_sources(root_file_path)
-  let root_source = loaded.package_sources[loaded.root_package_name]
   let root_package_name = loaded.root_package_name
-  let glue_decls = collect_mbti_root_autolink_glue_decls(root_source, true)
+  let glue_decls = collect_mbti_bundle_autolink_glue_decls(loaded, true)
   let facade_export_names : Array[String] = []
-  let facade_ts_decls : Array[String] = []
+  let facade_ts_decls_by_path : Map[String, Array[String]] = {}
   for decl in glue_decls {
     facade_export_names.push(decl.export_name)
     if decl.ts_decl != "" {
-      facade_ts_decls.push(decl.ts_decl)
+      match mbti_local_package_segments(root_package_name, decl.package_name) {
+        Some(segments) => {
+          let relative_path = mbti_bundle_relative_path_from_segments(segments)
+          match facade_ts_decls_by_path.get(relative_path) {
+            Some(items) => items.push(decl.ts_decl)
+            None => facade_ts_decls_by_path[relative_path] = [decl.ts_decl]
+          }
+        }
+        None => ()
+      }
     }
   }
   let moon_pkg_json = render_moonbit_js_glue_pkg_json(
-    root_source, facade_export_names,
+    loaded, facade_export_names,
   )
   let files = strip_runtime_inaccessible_typescript_package_files(
     emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
@@ -4062,16 +4251,25 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
     ),
   )
   let files_with_facades : Array[MbtiTypescriptPackageFile] = []
-  let rendered_facade_ts = facade_ts_decls.join("\n")
   for file in files {
-    if file.relative_path == "index.d.ts" && rendered_facade_ts != "" {
-      files_with_facades.push({
-        relative_path: file.relative_path,
-        content: file.content + "\n\n" + rendered_facade_ts,
-      })
-    } else {
-      files_with_facades.push(file)
+    match facade_ts_decls_by_path.get(file.relative_path) {
+      Some(facade_ts_decls) if facade_ts_decls.length() > 0 => {
+        let rendered_facade_ts = facade_ts_decls.join("\n")
+        files_with_facades.push({
+          relative_path: file.relative_path,
+          content: file.content + "\n\n" + rendered_facade_ts,
+        })
+      }
+      _ => files_with_facades.push(file)
     }
+  }
+  for
+    file in collect_runtime_reexport_files_for_mbti_bundle(
+      root_package_name,
+      loaded.ordered_packages,
+      glue_decls,
+    ) {
+    files_with_facades.push(file)
   }
   {
     moon_pkg_json,

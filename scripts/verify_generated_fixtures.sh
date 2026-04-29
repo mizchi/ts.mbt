@@ -38,7 +38,14 @@ export interface Debug {}
 EOF
 
   cat > "$root/moonbitlang/core/json.d.ts" <<'EOF'
+export interface Json {}
+export interface JsonDecodeError {}
 export interface ToJson {}
+export interface FromJson {}
+EOF
+
+  cat > "$root/moonbitlang/core/set.d.ts" <<'EOF'
+export interface Set<T> {}
 EOF
 
   cat > "$root/moonbitlang/core/bigint.d.ts" <<'EOF'

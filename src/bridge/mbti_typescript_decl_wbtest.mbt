@@ -70,6 +70,22 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
 }
 
 ///|
+async test "bridge: emit TypeScript declaration from real-world jsonschema mbti fixture" {
+  let actual = emit_typescript_decl_from_mbti_path(
+    "fixtures/mbti_typescript/realworld_jsonschema.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI emit error: \{msg}")
+  }
+  assert_true(actual.contains("import type * as json"))
+  assert_true(actual.contains("export function build_resolver"))
+  assert_true(actual.contains("export interface Validatable"))
+  assert_true(actual.contains("export namespace Builder"))
+  assert_true(actual.contains("export type JsonSchema ="))
+}
+
+///|
 async test "bridge: emit TypeScript declarations keeps pub(all) types used by public api and normalizes optional tuples" {
   let actual = emit_typescript_decl_from_mbti_path(
     "fixtures/mbti_typescript/pub_all.pkg.generated.mbti",
@@ -857,6 +873,35 @@ async test "bridge: emit TypeScript scaffold bundle from mbti combines autolink 
 }
 
 ///|
+async test "bridge: emit TypeScript scaffold bundle exposes child package runtime exports" {
+  let bundle = emit_typescript_scaffold_bundle_from_mbti_path(
+    "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI scaffold bundle emit error: \{msg}")
+  }
+  assert_true(bundle.moon_pkg_json.contains("\"make_item\""))
+  assert_true(
+    bundle.moon_pkg_json.contains(
+      "\"path\": \"examples/counter/child\", \"alias\": \"child\"",
+    ),
+  )
+  assert_true(
+    bundle.package_json.contains(
+      "\"./child\": { \"types\": \"./child/index.d.ts\", \"import\": \"./child/index.js\" }",
+    ),
+  )
+  let mut child_js = ""
+  for file in bundle.files {
+    if file.relative_path == "child/index.js" {
+      child_js = file.content
+    }
+  }
+  assert_eq(child_js, "export { make_item } from \"../index.js\";\n")
+}
+
+///|
 async test "bridge: emit TypeScript scaffold bundle from mbti rewrites external imports through configured map" {
   let import_rewrites : Map[String, String] = {}
   import_rewrites["moonbitlang/core/debug"] = "demo-debug"
@@ -959,6 +1004,39 @@ async test "bridge: emit TypeScript facade scaffold bundle from mbti adds facade
   )
   assert_true(
     root_content.contains("export function loader_load(self: Loader): string;"),
+  )
+}
+
+///|
+async test "bridge: emit TypeScript facade scaffold bundle adds child package facades" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "examples/moonbit-to-typescript/counter/pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade scaffold bundle emit error: \{msg}")
+  }
+  assert_true(bundle.moon_pkg_json.contains("\"item_display\""))
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub fn item_display(self_ : @child.Item) -> String {",
+    ),
+  )
+  assert_true(bundle.autolink_glue_mbt.contains("self_.display()"))
+  let mut child_content = ""
+  let mut child_js = ""
+  for file in bundle.files {
+    if file.relative_path == "child/index.d.ts" {
+      child_content = file.content
+    } else if file.relative_path == "child/index.js" {
+      child_js = file.content
+    }
+  }
+  assert_true(
+    child_content.contains("export function item_display(self: Item): string;"),
+  )
+  assert_eq(
+    child_js, "export { make_item, item_display } from \"../index.js\";\n",
   )
 }
 

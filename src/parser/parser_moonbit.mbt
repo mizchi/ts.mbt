@@ -189,6 +189,17 @@ fn mark_referenced_type(state : MoonBitDeclState, name : String) -> Unit {
 }
 
 ///|
+fn normalize_literal_type_for_moonbit_bridge(
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Literal("true") | Literal("false") => Boolean
+    Literal(_) => String_
+    _ => type_
+  }
+}
+
+///|
 fn classify_optional_like_union(type_ : @ast.TsType) -> (@ast.TsType, Bool)? {
   match type_ {
     Union(items) => {
@@ -199,11 +210,13 @@ fn classify_optional_like_union(type_ : @ast.TsType) -> (@ast.TsType, Bool)? {
         match item {
           Any => has_any = true
           Undefined | Null => is_optional = true
-          _ =>
+          _ => {
+            let normalized = normalize_literal_type_for_moonbit_bridge(item)
             match concrete {
-              Some(_) => return None
-              None => concrete = Some(item)
+              Some(existing) => if existing != normalized { return None }
+              None => concrete = Some(normalized)
             }
+          }
         }
       }
       match concrete {
@@ -225,6 +238,8 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     None => ()
   }
   match type_ {
+    Literal(_) =>
+      moonbit_type_name(state, normalize_literal_type_for_moonbit_bridge(type_))
     Number => "Double"
     Int => "Int"
     Boolean => "Bool"

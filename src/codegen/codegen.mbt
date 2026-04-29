@@ -206,6 +206,8 @@ priv struct LocalVar {
 priv struct CodeGenCtx {
   // variable ( -> )
   locals : Map[String, LocalVar]
+  // local reusable function values lowered like direct IIFEs
+  local_function_values : Map[String, @ast.TsExpr]
   // variabletype ()
   local_types : Array[@ast.TsType]
   // variable
@@ -250,6 +252,7 @@ fn CodeGenCtx::new(
 ) -> CodeGenCtx {
   {
     locals: {},
+    local_function_values: {},
     local_types: [],
     next_local: 0,
     funcs,
@@ -916,9 +919,17 @@ fn compile_expr(
     @ast.TsExpr::UnaryOp(op, operand) =>
       compile_unaryop(ctx, op, operand, expected_type)
     @ast.TsExpr::Call(name, args) =>
-      compile_named_call_expr(ctx, name, args, expected_type)
+      if compile_local_function_value_call_expr(ctx, name, args, expected_type) {
+        ()
+      } else {
+        compile_named_call_expr(ctx, name, args, expected_type)
+      }
     @ast.TsExpr::CallExpr(@ast.TsExpr::Var(name), args) =>
-      compile_named_call_expr(ctx, name, args, expected_type)
+      if compile_local_function_value_call_expr(ctx, name, args, expected_type) {
+        ()
+      } else {
+        compile_named_call_expr(ctx, name, args, expected_type)
+      }
     @ast.TsExpr::CallExpr(@ast.TsExpr::ArrowFunc(params, body, is_async), args) =>
       compile_arrow_iife_call_expr(
         ctx, params, body, is_async, args, expected_type,
@@ -962,6 +973,7 @@ fn compile_expr(
       compile_expr(ctx, cond, @ast.TsType::Boolean)
       let then_ctx : CodeGenCtx = {
         locals: ctx.locals,
+        local_function_values: ctx.local_function_values,
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
@@ -981,6 +993,7 @@ fn compile_expr(
       compile_expr(then_ctx, then_expr, expected_type)
       let else_ctx : CodeGenCtx = {
         locals: ctx.locals,
+        local_function_values: ctx.local_function_values,
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
@@ -2755,6 +2768,7 @@ fn emit_compound_op_instr(
 fn make_branch_ctx(ctx : CodeGenCtx) -> CodeGenCtx {
   {
     locals: ctx.locals,
+    local_function_values: ctx.local_function_values,
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
@@ -2777,6 +2791,7 @@ fn make_branch_ctx(ctx : CodeGenCtx) -> CodeGenCtx {
 fn make_inline_expr_ctx(ctx : CodeGenCtx) -> CodeGenCtx {
   {
     locals: ctx.locals.copy(),
+    local_function_values: ctx.local_function_values.copy(),
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
@@ -3208,6 +3223,7 @@ fn compile_binop(
       }
       let then_ctx : CodeGenCtx = {
         locals: ctx.locals,
+        local_function_values: ctx.local_function_values,
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
@@ -3250,6 +3266,7 @@ fn compile_binop(
       }
       let then_ctx : CodeGenCtx = {
         locals: ctx.locals,
+        local_function_values: ctx.local_function_values,
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
@@ -3296,6 +3313,7 @@ fn compile_binop(
       // Then branch: left was null-ish, evaluate and return right
       let then_ctx : CodeGenCtx = {
         locals: ctx.locals,
+        local_function_values: ctx.local_function_values,
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
@@ -3579,6 +3597,44 @@ fn compile_unaryop(
 
 ///|
 // / function
+fn register_local_function_value(
+  ctx : CodeGenCtx,
+  name : String,
+  init : @ast.TsExpr,
+) -> Bool {
+  match init {
+    @ast.TsExpr::ArrowFunc(_, _, _) | @ast.TsExpr::FuncExpr(_) => {
+      ctx.local_function_values[name] = init
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn compile_local_function_value_call_expr(
+  ctx : CodeGenCtx,
+  name : String,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+) -> Bool raise CodeGenError {
+  match ctx.local_function_values.get(name) {
+    Some(@ast.TsExpr::ArrowFunc(params, body, is_async)) => {
+      compile_arrow_iife_call_expr(
+        ctx, params, body, is_async, args, expected_type,
+      )
+      true
+    }
+    Some(@ast.TsExpr::FuncExpr(func)) => {
+      compile_func_expr_iife_call_expr(ctx, func, args, expected_type)
+      true
+    }
+    Some(_) => false
+    None => false
+  }
+}
+
+///|
 fn compile_named_call_expr(
   ctx : CodeGenCtx,
   name : String,
@@ -4018,6 +4074,9 @@ fn compile_stmt(
     | @ast.TsStmt::Let(binding, type_, init) =>
       match binding {
         @ast.TsBinding::Ident(name) => {
+          if register_local_function_value(ctx, name, init) {
+            return
+          }
           // Use pre-registered type if available, otherwise infer from init
           let (idx, resolved_type) = match ctx.get_local(name) {
             Some(existing) => (existing.index, existing.type_)
@@ -4034,6 +4093,9 @@ fn compile_stmt(
     @ast.TsStmt::Const(binding, type_, init) =>
       match binding {
         @ast.TsBinding::Ident(name) => {
+          if register_local_function_value(ctx, name, init) {
+            return
+          }
           // Track const value for constant propagation
           let const_val = @analysis.eval_const(init)
           match const_val {
@@ -4259,6 +4321,7 @@ fn compile_while(
   // conditioncheck
   let cond_ctx : CodeGenCtx = {
     locals: ctx.locals,
+    local_function_values: ctx.local_function_values,
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
@@ -4314,6 +4377,7 @@ fn compile_do_while(
   // condition check
   let cond_ctx : CodeGenCtx = {
     locals: ctx.locals,
+    local_function_values: ctx.local_function_values,
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
@@ -4362,6 +4426,7 @@ fn compile_for(
     Some(c) => {
       let cond_ctx : CodeGenCtx = {
         locals: ctx.locals,
+        local_function_values: ctx.local_function_values,
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
@@ -4399,6 +4464,7 @@ fn compile_for(
     Some(stmt) => {
       let update_ctx : CodeGenCtx = {
         locals: ctx.locals,
+        local_function_values: ctx.local_function_values,
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
@@ -4588,6 +4654,7 @@ fn compile_switch_cases(
         // Compile comparison: disc == test_expr
         let cond_ctx : CodeGenCtx = {
           locals: ctx.locals,
+          local_function_values: ctx.local_function_values,
           local_types: ctx.local_types,
           next_local: ctx.next_local,
           funcs: ctx.funcs,
@@ -4648,6 +4715,7 @@ fn compile_block_to_instrs(
   // locals local_types
   let sub_ctx : CodeGenCtx = {
     locals: ctx.locals,
+    local_function_values: ctx.local_function_values,
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
@@ -5177,6 +5245,7 @@ fn compile_function_gc(
 ) -> (@core.TypeDef, @core.Code) raise CodeGenError {
   let ctx : CodeGenCtx = {
     locals: {},
+    local_function_values: {},
     local_types: [],
     next_local: 0,
     funcs: func_map,

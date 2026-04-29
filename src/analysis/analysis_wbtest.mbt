@@ -926,18 +926,24 @@ test "can_compile_to_wasm: real-world iife wrapper patterns" {
 }
 
 ///|
-test "can_compile_to_wasm: reusable function value remains unsupported" {
+test "can_compile_to_wasm: reusable function value direct calls" {
   let src =
     #|function apply(n: number): number {
     #|  const f = (x: number) => x + 1;
     #|  return f(n);
     #|}
+    #|function apply_fn(n: number): number {
+    #|  const f = function (x: number): number { return x * 2; };
+    #|  return f(n);
+    #|}
   let parser = @parser.Parser::from_source(src)
   let mod = parser.parse_module()
-  let func = mod.funcs[0]
-  match can_compile_to_wasm(func) {
-    Compilable => fail("expected reusable function value to remain unsupported")
-    NotCompilable(reason) => assert_true(reason.contains("closures"))
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
   }
 }
 

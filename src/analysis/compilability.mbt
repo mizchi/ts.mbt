@@ -25,9 +25,11 @@ pub fn can_compile_to_wasm(func : @ast.TsFunc) -> CompilabilityResult {
   if func.is_async {
     return NotCompilable("async functions not supported")
   }
-  // Check all statements in body
+  // Check all statements in body. Local reusable function values are only
+  // accepted when they are called directly in the same function body.
+  let local_function_values : Map[String, @ast.TsExpr] = {}
   for stmt in func.body.stmts {
-    match can_compile_stmt(stmt) {
+    match can_compile_stmt_with_local_functions(stmt, local_function_values) {
       NotCompilable(reason) => return NotCompilable(reason)
       Compilable => continue
     }
@@ -223,6 +225,207 @@ fn can_compile_stmt(stmt : @ast.TsStmt) -> CompilabilityResult {
     @ast.TsStmt::ForAwaitOf(_, _, _, _, _) =>
       NotCompilable("for-await-of not supported")
   }
+}
+
+///|
+fn register_local_function_value_for_analysis(
+  local_function_values : Map[String, @ast.TsExpr],
+  name : String,
+  init : @ast.TsExpr,
+) -> Bool {
+  match init {
+    @ast.TsExpr::ArrowFunc(_, _, _) | @ast.TsExpr::FuncExpr(_) => {
+      local_function_values[name] = init
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn can_compile_stmt_with_local_functions(
+  stmt : @ast.TsStmt,
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  match stmt {
+    @ast.TsStmt::Var(binding, _, init)
+    | @ast.TsStmt::Let(binding, _, init)
+    | @ast.TsStmt::Const(binding, _, init) =>
+      match binding {
+        @ast.TsBinding::Ident(name) =>
+          if register_local_function_value_for_analysis(
+              local_function_values, name, init,
+            ) {
+            Compilable
+          } else {
+            can_compile_expr_with_local_functions(init, local_function_values)
+          }
+        @ast.TsBinding::Array(_) =>
+          NotCompilable("array destructuring not supported")
+        @ast.TsBinding::Object(_) =>
+          NotCompilable("object destructuring not supported")
+        @ast.TsBinding::Target(_) =>
+          NotCompilable("target binding not supported")
+      }
+    @ast.TsStmt::Assign(name, expr) => {
+      match local_function_values.get(name) {
+        Some(_) =>
+          return NotCompilable("function value reassignment not supported")
+        None => ()
+      }
+      can_compile_expr_with_local_functions(expr, local_function_values)
+    }
+    @ast.TsStmt::CompoundAssign(name, _, expr) => {
+      match local_function_values.get(name) {
+        Some(_) =>
+          return NotCompilable("function value reassignment not supported")
+        None => ()
+      }
+      can_compile_expr_with_local_functions(expr, local_function_values)
+    }
+    @ast.TsStmt::IndexAssign(arr, idx, val) => {
+      match can_compile_expr_with_local_functions(arr, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match can_compile_expr_with_local_functions(idx, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(val, local_function_values)
+    }
+    @ast.TsStmt::PropAssign(obj, _, val) => {
+      match can_compile_expr_with_local_functions(obj, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(val, local_function_values)
+    }
+    @ast.TsStmt::Expr(expr) =>
+      can_compile_expr_with_local_functions(expr, local_function_values)
+    @ast.TsStmt::Empty => Compilable
+    @ast.TsStmt::Block(block) =>
+      can_compile_block_with_local_functions(block, local_function_values)
+    @ast.TsStmt::Label(_, inner) =>
+      can_compile_stmt_with_local_functions(inner, local_function_values)
+    @ast.TsStmt::Return(None) => Compilable
+    @ast.TsStmt::Return(Some(expr)) =>
+      can_compile_expr_with_local_functions(expr, local_function_values)
+    @ast.TsStmt::If(cond, then_block, else_block) => {
+      match can_compile_expr_with_local_functions(cond, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match
+        can_compile_block_with_local_functions(
+          then_block, local_function_values,
+        ) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match else_block {
+        Some(eb) =>
+          can_compile_block_with_local_functions(eb, local_function_values)
+        None => Compilable
+      }
+    }
+    @ast.TsStmt::While(cond, body) | @ast.TsStmt::DoWhile(cond, body) => {
+      match can_compile_expr_with_local_functions(cond, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_block_with_local_functions(body, local_function_values)
+    }
+    @ast.TsStmt::For(init, cond, update, body) => {
+      match init {
+        Some(i) =>
+          match
+            can_compile_stmt_with_local_functions(i, local_function_values) {
+            NotCompilable(r) => return NotCompilable(r)
+            Compilable => ()
+          }
+        None => ()
+      }
+      match cond {
+        Some(c) =>
+          match
+            can_compile_expr_with_local_functions(c, local_function_values) {
+            NotCompilable(r) => return NotCompilable(r)
+            Compilable => ()
+          }
+        None => ()
+      }
+      match update {
+        Some(u) =>
+          match
+            can_compile_stmt_with_local_functions(u, local_function_values) {
+            NotCompilable(r) => return NotCompilable(r)
+            Compilable => ()
+          }
+        None => ()
+      }
+      can_compile_block_with_local_functions(body, local_function_values)
+    }
+    @ast.TsStmt::ForOf(kind, binding, type_, iterable, body) => {
+      match
+        can_compile_expr_with_local_functions(iterable, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match
+        can_compile_stmt(
+          @ast.TsStmt::ForOf(kind, binding, type_, iterable, body),
+        ) {
+        NotCompilable(r) => NotCompilable(r)
+        Compilable =>
+          can_compile_block_with_local_functions(body, local_function_values)
+      }
+    }
+    @ast.TsStmt::Switch(discriminant, cases) => {
+      match
+        can_compile_expr_with_local_functions(
+          discriminant, local_function_values,
+        ) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      for case in cases {
+        match case.test_expr {
+          Some(e) =>
+            match
+              can_compile_expr_with_local_functions(e, local_function_values) {
+              NotCompilable(r) => return NotCompilable(r)
+              Compilable => ()
+            }
+          None => ()
+        }
+        match
+          can_compile_block_with_local_functions(
+            case.body,
+            local_function_values,
+          ) {
+          NotCompilable(r) => return NotCompilable(r)
+          Compilable => ()
+        }
+      }
+      Compilable
+    }
+    _ => can_compile_stmt(stmt)
+  }
+}
+
+///|
+fn can_compile_block_with_local_functions(
+  block : @ast.TsBlock,
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  for s in block.stmts {
+    match can_compile_stmt_with_local_functions(s, local_function_values) {
+      NotCompilable(r) => return NotCompilable(r)
+      Compilable => continue
+    }
+  }
+  Compilable
 }
 
 ///|
@@ -494,6 +697,367 @@ fn can_compile_expr(expr : @ast.TsExpr) -> CompilabilityResult {
       NotCompilable("arrow functions not supported (closures)")
     @ast.TsExpr::FuncExpr(_) =>
       NotCompilable("function expressions not supported (closures)")
+  }
+}
+
+///|
+fn can_compile_expr_with_local_functions(
+  expr : @ast.TsExpr,
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  match expr {
+    @ast.TsExpr::Var(name) =>
+      match local_function_values.get(name) {
+        Some(_) => NotCompilable("function value escape not supported")
+        None => Compilable
+      }
+    @ast.TsExpr::BinOp(_, left, right) => {
+      match can_compile_expr_with_local_functions(left, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(right, local_function_values)
+    }
+    @ast.TsExpr::UnaryOp(op, operand) =>
+      match op {
+        @ast.TsUnaryOp::Delete => NotCompilable("delete operator not supported")
+        _ =>
+          can_compile_expr_with_local_functions(operand, local_function_values)
+      }
+    @ast.TsExpr::Cond(cond, then_e, else_e) => {
+      match can_compile_expr_with_local_functions(cond, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match
+        can_compile_expr_with_local_functions(then_e, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(else_e, local_function_values)
+    }
+    @ast.TsExpr::ArrayLit(elements) => {
+      for elem in elements {
+        match elem {
+          @ast.TsExpr::Spread(inner) =>
+            match
+              can_compile_expr_with_local_functions(
+                inner, local_function_values,
+              ) {
+              NotCompilable(r) => return NotCompilable(r)
+              Compilable => ()
+            }
+          _ =>
+            match
+              can_compile_expr_with_local_functions(elem, local_function_values) {
+              NotCompilable(r) => return NotCompilable(r)
+              Compilable => ()
+            }
+        }
+      }
+      Compilable
+    }
+    @ast.TsExpr::IndexAccess(arr, idx) => {
+      match can_compile_expr_with_local_functions(arr, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(idx, local_function_values)
+    }
+    @ast.TsExpr::PropAccess(obj, _) =>
+      can_compile_expr_with_local_functions(obj, local_function_values)
+    @ast.TsExpr::AssignExpr(name, value) => {
+      match local_function_values.get(name) {
+        Some(_) =>
+          return NotCompilable("function value reassignment not supported")
+        None => ()
+      }
+      can_compile_expr_with_local_functions(value, local_function_values)
+    }
+    @ast.TsExpr::AssignPattern(_, _) =>
+      NotCompilable("destructuring assignment not supported")
+    @ast.TsExpr::PropAssignExpr(obj, _, value) => {
+      match can_compile_expr_with_local_functions(obj, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(value, local_function_values)
+    }
+    @ast.TsExpr::IndexAssignExpr(arr, idx, value) => {
+      match can_compile_expr_with_local_functions(arr, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match can_compile_expr_with_local_functions(idx, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(value, local_function_values)
+    }
+    @ast.TsExpr::CompoundAssignExpr(left, _, right) => {
+      match can_compile_expr_with_local_functions(left, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(right, local_function_values)
+    }
+    @ast.TsExpr::Call(name, args) =>
+      can_compile_local_function_call_or_named_call(
+        name, args, local_function_values,
+      )
+    @ast.TsExpr::CallExpr(@ast.TsExpr::Var(name), args) =>
+      can_compile_local_function_call_or_named_call(
+        name, args, local_function_values,
+      )
+    @ast.TsExpr::CallExpr(@ast.TsExpr::ArrowFunc(params, body, is_async), args) =>
+      can_compile_arrow_iife_with_local_functions(
+        params, body, is_async, args, local_function_values,
+      )
+    @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(func), args) =>
+      can_compile_func_expr_iife_with_local_functions(
+        func, args, local_function_values,
+      )
+    @ast.TsExpr::CallExpr(
+      @ast.TsExpr::Cond(
+        cond,
+        @ast.TsExpr::Var(then_name),
+        @ast.TsExpr::Var(else_name)
+      ),
+      args
+    ) => {
+      match can_compile_expr_with_local_functions(cond, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match
+        can_compile_expr_with_local_functions(
+          @ast.TsExpr::Call(then_name, args),
+          local_function_values,
+        ) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(
+        @ast.TsExpr::Call(else_name, args),
+        local_function_values,
+      )
+    }
+    @ast.TsExpr::CallExpr(_, _) =>
+      NotCompilable("arbitrary call expression not supported")
+    @ast.TsExpr::MethodCall(receiver, method_name, args) => {
+      match
+        can_compile_expr_with_local_functions(receiver, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match
+        can_compile_call_args_with_local_functions(args, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      if is_compilable_method(method_name) {
+        Compilable
+      } else {
+        NotCompilable("method '\{method_name}' not supported")
+      }
+    }
+    @ast.TsExpr::New(_, args) => {
+      match
+        can_compile_call_args_with_local_functions(args, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      Compilable
+    }
+    @ast.TsExpr::TemplateLiteral(_, exprs) => {
+      for item in exprs {
+        match
+          can_compile_expr_with_local_functions(item, local_function_values) {
+          NotCompilable(r) => return NotCompilable(r)
+          Compilable => continue
+        }
+      }
+      Compilable
+    }
+    @ast.TsExpr::Seq(left, right) => {
+      match can_compile_expr_with_local_functions(left, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr_with_local_functions(right, local_function_values)
+    }
+    @ast.TsExpr::ComputedProp(key, value) =>
+      match eval_const(key) {
+        ConstValue::NotConst =>
+          NotCompilable("computed property key must be constant")
+        _ => can_compile_expr_with_local_functions(value, local_function_values)
+      }
+    @ast.TsExpr::ObjectLit(fields) => {
+      for item in fields {
+        let (key, value) = item
+        if key.has_prefix("@@spread:") {
+          return NotCompilable("object spread not supported")
+        }
+        if key.has_prefix("@@get:") || key.has_prefix("@@set:") {
+          return NotCompilable("object accessors not supported")
+        }
+        match
+          can_compile_expr_with_local_functions(value, local_function_values) {
+          NotCompilable(r) => return NotCompilable(r)
+          Compilable => ()
+        }
+      }
+      Compilable
+    }
+    @ast.TsExpr::ArrowFunc(_, _, _) =>
+      NotCompilable("arrow functions not supported (closures)")
+    @ast.TsExpr::FuncExpr(_) =>
+      NotCompilable("function expressions not supported (closures)")
+    _ => can_compile_expr(expr)
+  }
+}
+
+///|
+fn can_compile_call_args_with_local_functions(
+  args : Array[@ast.TsExpr],
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  for arg in args {
+    match arg {
+      @ast.TsExpr::Spread(_) =>
+        return NotCompilable(
+          "spread argument not supported for function value calls",
+        )
+      _ =>
+        match
+          can_compile_expr_with_local_functions(arg, local_function_values) {
+          NotCompilable(r) => return NotCompilable(r)
+          Compilable => continue
+        }
+    }
+  }
+  Compilable
+}
+
+///|
+fn can_compile_local_function_call_or_named_call(
+  name : String,
+  args : Array[@ast.TsExpr],
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  match local_function_values.get(name) {
+    Some(@ast.TsExpr::ArrowFunc(params, body, is_async)) =>
+      can_compile_arrow_iife_with_local_functions(
+        params, body, is_async, args, local_function_values,
+      )
+    Some(@ast.TsExpr::FuncExpr(func)) =>
+      can_compile_func_expr_iife_with_local_functions(
+        func, args, local_function_values,
+      )
+    Some(_) => NotCompilable("function value call not supported")
+    None => {
+      match
+        can_compile_call_args_with_local_functions(args, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_expr(@ast.TsExpr::Call(name, args))
+    }
+  }
+}
+
+///|
+fn can_compile_arrow_iife_with_local_functions(
+  params : Array[@ast.TsParam],
+  body : @ast.TsArrowBody,
+  is_async : Bool,
+  args : Array[@ast.TsExpr],
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  if is_async {
+    return NotCompilable("async arrow iife not supported")
+  }
+  if params.length() != args.length() {
+    return NotCompilable("arrow iife arity mismatch")
+  }
+  for param in params {
+    if param.is_rest {
+      return NotCompilable("rest parameter arrow iife not supported")
+    }
+    match param.default {
+      Some(_) =>
+        return NotCompilable("default parameter arrow iife not supported")
+      None => ()
+    }
+  }
+  match
+    can_compile_call_args_with_local_functions(args, local_function_values) {
+    NotCompilable(r) => return NotCompilable(r)
+    Compilable => ()
+  }
+  match body {
+    @ast.TsArrowBody::ArrowExpr(expr) =>
+      can_compile_expr_with_local_functions(expr, local_function_values)
+    @ast.TsArrowBody::ArrowBlock(block) =>
+      can_compile_iife_return_block_with_local_functions(
+        block, local_function_values,
+      )
+  }
+}
+
+///|
+fn can_compile_func_expr_iife_with_local_functions(
+  func : @ast.TsFunc,
+  args : Array[@ast.TsExpr],
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  if func.is_async {
+    return NotCompilable("async function expression iife not supported")
+  }
+  if func.is_generator {
+    return NotCompilable("generator function expression iife not supported")
+  }
+  if func.params.length() != args.length() {
+    return NotCompilable("function expression iife arity mismatch")
+  }
+  for param in func.params {
+    if param.is_rest {
+      return NotCompilable(
+        "rest parameter function expression iife not supported",
+      )
+    }
+    match param.default {
+      Some(_) =>
+        return NotCompilable(
+          "default parameter function expression iife not supported",
+        )
+      None => ()
+    }
+  }
+  match
+    can_compile_call_args_with_local_functions(args, local_function_values) {
+    NotCompilable(r) => return NotCompilable(r)
+    Compilable => ()
+  }
+  can_compile_iife_return_block_with_local_functions(
+    func.body,
+    local_function_values,
+  )
+}
+
+///|
+fn can_compile_iife_return_block_with_local_functions(
+  block : @ast.TsBlock,
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  if block.stmts.length() != 1 {
+    return NotCompilable("iife block must contain exactly one return statement")
+  }
+  match block.stmts[0] {
+    @ast.TsStmt::Return(Some(expr)) =>
+      can_compile_expr_with_local_functions(expr, local_function_values)
+    @ast.TsStmt::Return(None) => Compilable
+    _ => NotCompilable("iife block must contain exactly one return statement")
   }
 }
 

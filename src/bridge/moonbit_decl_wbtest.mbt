@@ -1181,6 +1181,29 @@ async test "bridge: emit MoonBit declarations from imported object type alias me
 }
 
 ///|
+async test "bridge: emit MoonBit declarations narrows literal unions to primitives" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/literal-union-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_false(actual.contains("declare pub type JSValue"))
+  assert_true(actual.contains("/// variant : String?"))
+  assert_true(actual.contains("/// disabled : Bool?"))
+  assert_true(
+    actual.contains(
+      "declare pub fn renderButton(variant : String, options : ButtonOptions?) -> String",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit declarations from fixture React package surface" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/node_modules/react/index.d.ts",

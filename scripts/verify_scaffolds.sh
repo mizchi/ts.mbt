@@ -55,6 +55,7 @@ EOF
   [ -f "$root/out/package.json" ]
   [ -f "$root/out/index.js" ]
   [ -f "$root/out/index.js.map" ]
+  [ -f "$root/out/child/index.js" ]
   [ -f "$root/out/AUTOLINK_DIAGNOSTICS.md" ]
   [ ! -f "$root/out/moon.pkg.json" ]
   [ ! -f "$root/out/moon.pkg" ]
@@ -62,19 +63,25 @@ EOF
   [ ! -f "$root/out/TSMBT_GLUE.mbt" ]
   grep -F '"name": "@examples/counter"' "$root/out/package.json" >/dev/null
   grep -F '"import": "./index.js"' "$root/out/package.json" >/dev/null
-  grep -F '"./child": { "types": "./child/index.d.ts" }' "$root/out/package.json" >/dev/null
+  grep -F '"./child": { "types": "./child/index.d.ts", "import": "./child/index.js" }' "$root/out/package.json" >/dev/null
   grep -F 'Counter::label' "$root/out/AUTOLINK_DIAGNOSTICS.md" >/dev/null
   if grep -F 'counter_label' "$root/out/index.d.ts" >/dev/null; then
     echo "base scaffold should not emit facade declarations" >&2
     exit 1
   fi
   assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
+  assert_declared_value_exports_present "./$root/out/child/index.js" "$root/out/child/index.d.ts"
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
   node --input-type=module <<'EOF'
 const mod = await import("./_build/scaffold_mbti_to_ts/out/index.js");
+const child = await import("./_build/scaffold_mbti_to_ts/out/child/index.js");
 const counter = mod.create("demo", { id: 7, name: "item" });
 if (mod.summarize(counter) !== "demo:item#7") {
   throw new Error("unexpected summarize output");
+}
+const item = child.make_item(8, "child");
+if (item.name !== "child" || item.id !== 8) {
+  throw new Error("unexpected child make_item output");
 }
 if ("counter_label" in mod) {
   throw new Error("base scaffold unexpectedly exported counter_label");
@@ -113,6 +120,7 @@ EOF
   [ -f "$root/out/package.json" ]
   [ -f "$root/out/index.js" ]
   [ -f "$root/out/index.js.map" ]
+  [ -f "$root/out/child/index.js" ]
   [ -f "$root/out/AUTOLINK_DIAGNOSTICS.md" ]
   [ ! -f "$root/out/moon.pkg.json" ]
   [ ! -f "$root/out/moon.pkg" ]
@@ -120,17 +128,25 @@ EOF
   [ ! -f "$root/out/TSMBT_GLUE.mbt" ]
   grep -F '"name": "@examples/counter"' "$root/out/package.json" >/dev/null
   grep -F '"import": "./index.js"' "$root/out/package.json" >/dev/null
+  grep -F '"./child": { "types": "./child/index.d.ts", "import": "./child/index.js" }' "$root/out/package.json" >/dev/null
   grep -F 'export function counter_label(self: Counter): string;' "$root/out/index.d.ts" >/dev/null
+  grep -F 'export function item_display(self: Item): string;' "$root/out/child/index.d.ts" >/dev/null
   assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
+  assert_declared_value_exports_present "./$root/out/child/index.js" "$root/out/child/index.d.ts"
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
   node --input-type=module <<'EOF'
 const mod = await import("./_build/scaffold_mbti_to_ts_facade/out/index.js");
+const child = await import("./_build/scaffold_mbti_to_ts_facade/out/child/index.js");
 const counter = mod.create("demo", { id: 7, name: "item" });
 if (mod.counter_label(counter) !== "demo") {
   throw new Error("unexpected counter_label output");
 }
 if (mod.summarize(counter) !== "demo:item#7") {
   throw new Error("unexpected summarize output");
+}
+const item = child.make_item(8, "child");
+if (child.item_display(item) !== "child#8") {
+  throw new Error("unexpected item_display output");
 }
 EOF
 }

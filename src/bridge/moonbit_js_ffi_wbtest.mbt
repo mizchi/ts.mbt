@@ -3172,6 +3172,29 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle narrows literal unions to primitives" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/literal-union-entry.d.ts", "./runtime/literal-union.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_false(bundle.ffi_mbt.contains("pub type JSValue = @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  variant : String?"))
+  assert_true(bundle.ffi_mbt.contains("  disabled : Bool?"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn render_button(variant : String, options : ButtonOptions?) -> String = \"__ts_mbt_render_button\"",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from fixture React package surface" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/node_modules/react/index.d.ts", "react",

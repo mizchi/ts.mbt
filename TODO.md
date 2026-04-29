@@ -173,13 +173,13 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Spread in array literals and known-signature function calls
 - [x] Conditional named function call expressions, e.g. `(flag ? f : g)(x)`
 - [x] IIFE call expressions for arrow/function expressions with expression or single-return block bodies
-  - Covered shapes now include zero-arg wrappers, multi-arg wrappers, named function IIFEs, and nested IIFEs; reusable function values remain a separate closure-conversion task.
+  - Covered shapes now include zero-arg wrappers, multi-arg wrappers, named function IIFEs, nested IIFEs, and reusable function values when they are called directly without escaping.
 
 ### Next in order
-1. Continue arbitrary call expression support beyond inline IIFEs toward reusable function values / closures.
+1. Continue arbitrary call expression support from direct reusable function calls toward escaping function values / full closure conversion.
 
 ### Candidates (need more groundwork)
-- Arbitrary call expressions (function values / closures)
+- Arbitrary call expressions where function values escape, are reassigned, or require captured mutable environments.
 
 ## Real-World MoonBit Package Probe
 
@@ -191,6 +191,8 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Preserve MoonBit `raise` effects in temporary glue wrappers so effectful packages such as `mizchi/semver` build.
 - [x] Skip facade wrappers that would expose private root types from the source package; the generated `.d.ts` can still document those opaque types, but glue packages cannot refer to private MoonBit symbols.
 - [x] Qualify local root trait bounds in temporary glue wrappers so generic packages such as `mizchi/nom` build.
+- [x] Emit child-package runtime re-export files and facade declarations so recursive MoonBit -> TypeScript packages expose matching `.d.ts` and JS subpaths.
+- [x] Add stable real-world MBTI declaration snapshots for `mizchi/ast_printer` and `mizchi/jsonschema` to default fixture typechecking.
 - [x] Re-run the local real-world MoonBit probe and confirm the current package set passes generated JS import and declaration typecheck.
 - [x] Investigate packages that fail before or during source JS build for reasons outside the generated glue surface.
   - `mizchi/ast_printer` was fixed by updating its `moonbitlang/parser` dependency from `0.1.15` to `0.2.5` and adapting the printer to the current parser AST (`type P = Point` aliases, no removed top-level alias constructors, `TypeDesc::Record(fields~, ..)`).
