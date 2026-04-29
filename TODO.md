@@ -201,3 +201,4 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 
 - Default `just ci` remains fixture-based and does not require local ghq checkouts.
 - `just verify-realworld-moonbit` is intentionally outside default CI because it probes developer-local MoonBit repositories and writes temporary glue packages into those source modules during `moon build --target js`.
+- `just verify-realworld-typescript` is intentionally outside default CI because it probes a developer-local npm package corpus via `TSMBT_REALWORLD_TYPESCRIPT_NODE_MODULES`.
