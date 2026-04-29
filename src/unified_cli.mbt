@@ -307,7 +307,18 @@ async fn resolve_unified_mbt_input_path_from_roots(
   if main_file_exists(direct_pkg_path) {
     return Some(direct_pkg_path)
   }
+  let scan_order : Array[String] = []
   for root in roots {
+    if root.has_suffix("/github.com") && !scan_order.contains(root) {
+      scan_order.push(root)
+    }
+  }
+  for root in roots {
+    if !root.has_suffix("/github.com") && !scan_order.contains(root) {
+      scan_order.push(root)
+    }
+  }
+  for root in scan_order {
     let scan_roots = if root.has_suffix("/github.com") && input.contains("/") {
       let paths = ghq_candidate_repo_paths(root, input)
       for path in ghq_module_name_candidate_repo_paths(root, input) {

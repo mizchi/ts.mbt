@@ -4,6 +4,7 @@ package "demo/reverse-edge"
 // Values
 pub fn consume_callbacks(handler : (String, Int) -> Unit, on_error? : (Error) -> Unit, required : Array[String]) -> Unit
 pub async fn load_all(keys : Array[String]) -> Result[Array[(String, Int)], Error] raise Error
+pub fn borrow_string(StringView) -> String
 pub fn borrow_bytes(&BytesView) -> Bytes
 pub fn update_ref(state : Ref[Array[Int64]], next : ArrayView[UInt64]) -> Set[String]
 

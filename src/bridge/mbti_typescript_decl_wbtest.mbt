@@ -881,10 +881,10 @@ async test "bridge: emit TypeScript scaffold bundle exposes child package runtim
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI scaffold bundle emit error: \{msg}")
   }
-  assert_true(bundle.moon_pkg_json.contains("\"make_item\""))
+  assert_true(bundle.moon_pkg_json.contains("\"tsmbt_source_child_make_item\""))
   assert_true(
     bundle.moon_pkg_json.contains(
-      "\"path\": \"examples/counter/child\", \"alias\": \"child\"",
+      "\"path\": \"examples/counter/child\", \"alias\": \"tsmbt_source_child\"",
     ),
   )
   assert_true(
@@ -898,7 +898,9 @@ async test "bridge: emit TypeScript scaffold bundle exposes child package runtim
       child_js = file.content
     }
   }
-  assert_eq(child_js, "export { make_item } from \"../index.js\";\n")
+  assert_eq(
+    child_js, "export { tsmbt_source_child_make_item as make_item } from \"../index.js\";\n",
+  )
 }
 
 ///|
@@ -956,12 +958,48 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
   )
   assert_true(
     bundle.autolink_glue_mbt.contains(
+      "pub fn borrow_string(arg0 : String) -> String {",
+    ),
+  )
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "@tsmbt_source.borrow_string(arg0.view())",
+    ),
+  )
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
       "pub fn update_ref(state : Ref[Array[Int64]], next : Array[UInt64]) -> Set[String] {",
     ),
   )
   assert_true(
     bundle.autolink_glue_mbt.contains(
       "@tsmbt_source.update_ref(state, next[:])",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit TypeScript facade scaffold bundle keeps optional named method params linkable" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/realworld_jsonschema.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade scaffold bundle emit error: \{msg}")
+  }
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub fn builder_array(self_ : @tsmbt_source.Builder, items : (@tsmbt_source.JsonSchema)?, prefix_items : (Array[@tsmbt_source.JsonSchema])?, contains : (@tsmbt_source.JsonSchema)?, min_contains : (Int)?, max_contains : (Int)?, min_items : (Int)?, max_items : (Int)?) -> @tsmbt_source.JsonSchema {",
+    ),
+  )
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "self_.array(items?, prefix_items?, contains?, min_contains?, max_contains?, min_items?, max_items?)",
+    ),
+  )
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "self_.integer(minimum?, maximum?, exclusive_minimum?, exclusive_maximum?)",
     ),
   )
 }
@@ -1016,10 +1054,12 @@ async test "bridge: emit TypeScript facade scaffold bundle adds child package fa
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI facade scaffold bundle emit error: \{msg}")
   }
-  assert_true(bundle.moon_pkg_json.contains("\"item_display\""))
+  assert_true(
+    bundle.moon_pkg_json.contains("\"tsmbt_source_child_item_display\""),
+  )
   assert_true(
     bundle.autolink_glue_mbt.contains(
-      "pub fn item_display(self_ : @child.Item) -> String {",
+      "pub fn tsmbt_source_child_item_display(self_ : @tsmbt_source_child.Item) -> String {",
     ),
   )
   assert_true(bundle.autolink_glue_mbt.contains("self_.display()"))
@@ -1036,7 +1076,7 @@ async test "bridge: emit TypeScript facade scaffold bundle adds child package fa
     child_content.contains("export function item_display(self: Item): string;"),
   )
   assert_eq(
-    child_js, "export { make_item, item_display } from \"../index.js\";\n",
+    child_js, "export { tsmbt_source_child_make_item as make_item, tsmbt_source_child_item_display as item_display } from \"../index.js\";\n",
   )
 }
 
@@ -1051,12 +1091,12 @@ async test "bridge: emit TypeScript facade scaffold bundle keeps root imports in
   }
   assert_true(
     bundle.autolink_glue_mbt.contains(
-      "pub fn loader_new(arg0 : @child.Item) -> @tsmbt_source.Loader {",
+      "pub fn loader_new(arg0 : @tsmbt_source_child.Item) -> @tsmbt_source.Loader {",
     ),
   )
   assert_true(
     bundle.autolink_glue_mbt.contains(
-      "pub fn loader_load(self_ : @tsmbt_source.Loader) -> @child.Item {",
+      "pub fn loader_load(self_ : @tsmbt_source.Loader) -> @tsmbt_source_child.Item {",
     ),
   )
   assert_true(bundle.moon_pkg_json.contains("\"path\": \"demo/facade\""))

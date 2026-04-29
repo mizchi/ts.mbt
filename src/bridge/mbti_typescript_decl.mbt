@@ -125,6 +125,7 @@ priv struct MbtiMarkerTraitDecl {
 priv struct MbtiAutolinkGlueDecl {
   package_name : String
   export_name : String
+  runtime_export_name : String
   ts_decl : String
   mbt_decl : String
 }
@@ -860,9 +861,21 @@ fn mbti_source_alias_for_package(
   package_name : String,
 ) -> String {
   if package_name == root_package_name {
-    return mbti_source_alias()
+    mbti_source_alias()
+  } else {
+    let alias_suffix = match
+      mbti_local_package_segments(root_package_name, package_name) {
+      Some(segments) if segments.length() > 0 => {
+        let parts : Array[String] = []
+        for segment in segments {
+          parts.push(mbti_to_snake_case(segment))
+        }
+        parts.join("_")
+      }
+      _ => mbti_to_snake_case(package_name)
+    }
+    "tsmbt_source_\{alias_suffix}"
   }
-  infer_mbti_import_alias_name(package_name)
 }
 
 ///|
@@ -955,6 +968,9 @@ fn mbti_render_js_boundary_glue_param_type(
   source_alias : String,
 ) -> String {
   let unborrowed = mbti_strip_borrow_prefix(source)
+  if unborrowed == "StringView" {
+    return "String"
+  }
   if unborrowed == "BytesView" {
     return "Bytes"
   }
@@ -974,6 +990,9 @@ fn mbti_render_js_boundary_glue_param_type(
 fn mbti_render_js_boundary_call_arg(param : MbtiRawFacadeParam) -> String {
   let unborrowed = mbti_strip_borrow_prefix(param.ty_src)
   let name = if param.name == "self" { "self_" } else { param.name }
+  if unborrowed == "StringView" {
+    return "\{name}.view()"
+  }
   if unborrowed == "BytesView" {
     return "\{name}.view()"
   }
@@ -994,6 +1013,20 @@ fn render_mbt_glue_call_args(params : Array[MbtiRawFacadeParam]) -> String {
   let args : Array[String] = []
   for param in params {
     args.push(mbti_render_js_boundary_call_arg(param))
+  }
+  args.join(", ")
+}
+
+///|
+fn render_mbt_glue_method_tail_call_args(
+  params : Array[MbtiRawFacadeParam],
+) -> String {
+  if params.length() <= 1 {
+    return ""
+  }
+  let args : Array[String] = []
+  for idx in 1..<params.length() {
+    args.push(mbti_render_js_boundary_call_arg(params[idx]))
   }
   args.join(", ")
 }
@@ -1211,6 +1244,8 @@ fn collect_mbti_autolink_glue_decls(
   source : String,
   source_alias : String,
   include_facades : Bool,
+  local_package_import_alias_rewrites : Map[String, String],
+  runtime_export_prefix : String,
 ) -> Array[MbtiAutolinkGlueDecl] raise MbtiTypescriptDeclError {
   let imports = parse_mbti_imports(source)
   let used_aliases : Array[String] = []
@@ -1244,9 +1279,19 @@ fn collect_mbti_autolink_glue_decls(
         let return_src_with_effect = mbti_return_source_with_effect_from_function_line(
           trimmed,
         )
+        let glue_params_src = rewrite_mbti_glue_import_alias_refs(
+          params_src, local_package_import_alias_rewrites,
+        )
+        let glue_return_src = rewrite_mbti_glue_import_alias_refs(
+          return_src, local_package_import_alias_rewrites,
+        )
+        let glue_return_src_with_effect = rewrite_mbti_glue_import_alias_refs(
+          return_src_with_effect, local_package_import_alias_rewrites,
+        )
         let fn_type_param_names = type_param_names(fn_type_params)
-        let raw_type_param_suffix = render_mbt_raw_type_param_suffix_from_line(
-          trimmed,
+        let raw_type_param_suffix = rewrite_mbti_glue_import_alias_refs(
+          render_mbt_raw_type_param_suffix_from_line(trimmed),
+          local_package_import_alias_rewrites,
         )
         let type_param_suffix = mbti_qualify_root_type_refs_for_glue(
           raw_type_param_suffix, local_glue_ref_names, fn_type_param_names, source_alias,
@@ -1254,17 +1299,17 @@ fn collect_mbti_autolink_glue_decls(
         match owner_name {
           None => {
             let raw_params = match
-              parse_mbti_raw_facade_params(params_src, "") {
+              parse_mbti_raw_facade_params(glue_params_src, "") {
               Some(params) => params
               None => continue
             }
             if mbti_raw_facade_uses_private_types(
-                raw_params, return_src_with_effect, private_type_names, fn_type_param_names,
+                raw_params, glue_return_src_with_effect, private_type_names, fn_type_param_names,
               ) {
               continue
             }
             let return_ty = mbti_qualify_root_type_refs_for_glue(
-              return_src, local_type_names, fn_type_param_names, source_alias,
+              glue_return_src, local_type_names, fn_type_param_names, source_alias,
             )
             let rendered_mbt_params = render_mbt_glue_params(
               raw_params, local_type_names, fn_type_param_names, source_alias,
@@ -1272,17 +1317,20 @@ fn collect_mbti_autolink_glue_decls(
             let call_args = render_mbt_glue_call_args(raw_params)
             let async_prefix = if is_async { "async " } else { "" }
             let effect_suffix = mbti_qualified_effect_suffix_for_glue(
-              return_src_with_effect, local_type_names, fn_type_param_names, source_alias,
+              glue_return_src_with_effect, local_type_names, fn_type_param_names,
+              source_alias,
             )
+            let runtime_export_name = runtime_export_prefix + fn_name
             let body_expr = if call_args == "" {
               "@\{source_alias}.\{fn_name}()"
             } else {
               "@\{source_alias}.\{fn_name}(\{call_args})"
             }
-            let mbt_decl = "pub \{async_prefix}fn\{type_param_suffix} \{fn_name}(\{rendered_mbt_params}) -> \{return_ty}\{effect_suffix} {\n  \{body_expr}\n}"
+            let mbt_decl = "pub \{async_prefix}fn\{type_param_suffix} \{runtime_export_name}(\{rendered_mbt_params}) -> \{return_ty}\{effect_suffix} {\n  \{body_expr}\n}"
             decls.push({
               package_name,
               export_name: fn_name,
+              runtime_export_name,
               ts_decl: "",
               mbt_decl,
             })
@@ -1306,13 +1354,15 @@ fn collect_mbti_autolink_glue_decls(
                   owner_type_param_names,
                 )
                 let raw_params = match
-                  parse_mbti_raw_facade_params(params_src, owner_name) {
+                  parse_mbti_raw_facade_params(glue_params_src, owner_name) {
                   Some(params) => params
                   None => continue
                 }
                 if mbti_raw_facade_uses_private_types(
                     raw_params,
-                    replace_mbti_self_refs(return_src_with_effect, owner_name),
+                    replace_mbti_self_refs(
+                      glue_return_src_with_effect, owner_name,
+                    ),
                     private_type_names,
                     owner_type_param_names,
                   ) {
@@ -1335,6 +1385,8 @@ fn collect_mbti_autolink_glue_decls(
                 }
                 let rendered_ts_params = render_ts_params(params)
                 let facade_ts_decl = "export function \{unique_export_name}(\{rendered_ts_params}): \{return_ty};"
+                let runtime_unique_export_name = runtime_export_prefix +
+                  unique_export_name
                 let rendered_mbt_params = render_mbt_glue_params(
                   raw_params,
                   local_type_names,
@@ -1342,13 +1394,15 @@ fn collect_mbti_autolink_glue_decls(
                   source_alias,
                 )
                 let rendered_mbt_return = mbti_qualify_root_type_refs_for_glue(
-                  replace_mbti_self_refs(return_src, owner_name),
+                  replace_mbti_self_refs(glue_return_src, owner_name),
                   local_type_names,
                   [],
                   source_alias,
                 )
                 let effect_suffix = mbti_qualified_effect_suffix_for_glue(
-                  replace_mbti_self_refs(return_src_with_effect, owner_name),
+                  replace_mbti_self_refs(
+                    glue_return_src_with_effect, owner_name,
+                  ),
                   local_type_names,
                   [],
                   source_alias,
@@ -1356,27 +1410,22 @@ fn collect_mbti_autolink_glue_decls(
                 let call_args = render_mbt_glue_call_args(raw_params)
                 let body_expr = if raw_params.length() > 0 &&
                   raw_params[0].name == "self" {
-                  let tail_args : Array[String] = []
-                  for idx in 1..<raw_params.length() {
-                    if raw_params[idx].name == "self" {
-                      tail_args.push("self_")
-                    } else {
-                      tail_args.push(raw_params[idx].name)
-                    }
-                  }
-                  if tail_args.length() == 0 {
+                  let tail_args = render_mbt_glue_method_tail_call_args(
+                    raw_params,
+                  )
+                  if tail_args == "" {
                     "self_.\{fn_name}()"
                   } else {
-                    let joined_tail_args = tail_args.join(", ")
-                    "self_.\{fn_name}(\{joined_tail_args})"
+                    "self_.\{fn_name}(\{tail_args})"
                   }
                 } else {
                   "@\{source_alias}.\{owner_name}::\{fn_name}(\{call_args})"
                 }
-                let facade_mbt_decl = "pub fn \{unique_export_name}(\{rendered_mbt_params}) -> \{rendered_mbt_return}\{effect_suffix} {\n  \{body_expr}\n}"
+                let facade_mbt_decl = "pub fn \{runtime_unique_export_name}(\{rendered_mbt_params}) -> \{rendered_mbt_return}\{effect_suffix} {\n  \{body_expr}\n}"
                 decls.push({
                   package_name,
                   export_name: unique_export_name,
+                  runtime_export_name: runtime_unique_export_name,
                   ts_decl: facade_ts_decl,
                   mbt_decl: facade_mbt_decl,
                 })
@@ -1398,6 +1447,13 @@ fn collect_mbti_bundle_autolink_glue_decls(
   include_facades : Bool,
 ) -> Array[MbtiAutolinkGlueDecl] raise MbtiTypescriptDeclError {
   let decls : Array[MbtiAutolinkGlueDecl] = []
+  let local_package_aliases : Map[String, String] = {}
+  for package_name in loaded.ordered_packages {
+    local_package_aliases[package_name] = mbti_source_alias_for_package(
+      loaded.root_package_name,
+      package_name,
+    )
+  }
   for package_name in loaded.ordered_packages {
     let source = match loaded.package_sources.get(package_name) {
       Some(source) => source
@@ -1406,12 +1462,29 @@ fn collect_mbti_bundle_autolink_glue_decls(
           "missing loaded package source for \{package_name}",
         )
     }
-    let source_alias = mbti_source_alias_for_package(
-      loaded.root_package_name,
-      package_name,
-    )
+    let source_alias = match local_package_aliases.get(package_name) {
+      Some(alias_name) => alias_name
+      None =>
+        raise MbtiTypescriptDeclError::ParseError(
+          "missing generated package alias for \{package_name}",
+        )
+    }
+    let local_package_import_alias_rewrites : Map[String, String] = {}
+    for import_ref in parse_mbti_imports(source) {
+      match local_package_aliases.get(import_ref.module_spec) {
+        Some(alias_name) if alias_name != import_ref.alias_name =>
+          local_package_import_alias_rewrites[import_ref.alias_name] = alias_name
+        _ => ()
+      }
+    }
+    let runtime_export_prefix = if package_name == loaded.root_package_name {
+      ""
+    } else {
+      source_alias + "_"
+    }
     let package_decls = collect_mbti_autolink_glue_decls(
-      package_name, source, source_alias, include_facades,
+      package_name, source, source_alias, include_facades, local_package_import_alias_rewrites,
+      runtime_export_prefix,
     )
     for decl in package_decls {
       decls.push(decl)
@@ -2935,6 +3008,41 @@ fn rewrite_import_alias_refs(
 }
 
 ///|
+fn rewrite_mbti_glue_import_alias_refs(
+  source : String,
+  rewrites : Map[String, String],
+) -> String {
+  if source == "" {
+    return source
+  }
+  let mut rewritten = ""
+  let mut idx = 0
+  while idx < source.length() {
+    let c = mbti_char_at(source, idx)
+    if c == '@' &&
+      idx + 1 < source.length() &&
+      mbti_is_identifier_start(mbti_char_at(source, idx + 1)) {
+      let start = idx + 1
+      let mut end_ = start + 1
+      while end_ < source.length() &&
+            mbti_is_identifier_continue(mbti_char_at(source, end_)) {
+        end_ += 1
+      }
+      let alias_name = source[start:end_].to_string()
+      match rewrites.get(alias_name) {
+        Some(rewritten_alias) => rewritten += "@\{rewritten_alias}"
+        None => rewritten += source[idx:end_].to_string()
+      }
+      idx = end_
+    } else {
+      rewritten += c.to_string()
+      idx += 1
+    }
+  }
+  rewritten
+}
+
+///|
 fn is_builtin_ts_bound_name(name : String) -> Bool {
   match name {
     "Array"
@@ -4106,13 +4214,13 @@ fn mbti_runtime_root_import_from_segments(segments : Array[String]) -> String {
 
 ///|
 fn render_runtime_reexport_js(
-  export_names : Array[String],
+  export_items : Array[String],
   root_import : String,
 ) -> String {
-  if export_names.length() == 0 {
+  if export_items.length() == 0 {
     return "export {};\n"
   }
-  let names = export_names.join(", ")
+  let names = export_items.join(", ")
   "export { \{names} } from \"\{root_import}\";\n"
 }
 
@@ -4132,20 +4240,28 @@ fn collect_runtime_reexport_files_for_mbti_bundle(
       Some(segments) => segments
       None => continue
     }
-    let export_names : Array[String] = []
+    let export_items : Array[String] = []
+    let seen_export_names : Array[String] = []
     for decl in glue_decls {
       if decl.package_name == package_name &&
-        !export_names.contains(decl.export_name) {
-        export_names.push(decl.export_name)
+        !seen_export_names.contains(decl.export_name) {
+        seen_export_names.push(decl.export_name)
+        if decl.runtime_export_name == decl.export_name {
+          export_items.push(decl.export_name)
+        } else {
+          export_items.push(
+            "\{decl.runtime_export_name} as \{decl.export_name}",
+          )
+        }
       }
     }
-    if export_names.length() == 0 {
+    if export_items.length() == 0 {
       continue
     }
     files.push({
       relative_path: mbti_bundle_js_relative_path_from_segments(segments),
       content: render_runtime_reexport_js(
-        export_names,
+        export_items,
         mbti_runtime_root_import_from_segments(segments),
       ),
     })
@@ -4173,7 +4289,7 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
   let glue_decls = collect_mbti_bundle_autolink_glue_decls(loaded, false)
   let export_names : Array[String] = []
   for decl in glue_decls {
-    export_names.push(decl.export_name)
+    export_names.push(decl.runtime_export_name)
   }
   let moon_pkg_json = render_moonbit_js_glue_pkg_json(loaded, export_names)
   let files = strip_runtime_inaccessible_typescript_package_files(
@@ -4228,7 +4344,7 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
   let facade_export_names : Array[String] = []
   let facade_ts_decls_by_path : Map[String, Array[String]] = {}
   for decl in glue_decls {
-    facade_export_names.push(decl.export_name)
+    facade_export_names.push(decl.runtime_export_name)
     if decl.ts_decl != "" {
       match mbti_local_package_segments(root_package_name, decl.package_name) {
         Some(segments) => {

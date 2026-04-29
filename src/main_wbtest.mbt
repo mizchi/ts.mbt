@@ -335,6 +335,69 @@ async test "infer_unified_tsmbt_direction detects package names and TypeScript e
 }
 
 ///|
+async test "resolve_unified_mbt_input_path_from_roots prefers ghq package checkout over local fixture" {
+  let root = wbtest_tmp_project_benchmark_root("resolve_mbt_ghq_precedence")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  let local_root = wbtest_join_path(root, "local")
+  let ghq_root = wbtest_join_path(root, "github.com")
+  let fixture_path = wbtest_join_path(
+    local_root, "fixtures/mbti_typescript/realworld_jsonschema.pkg.generated.mbti",
+  )
+  let checkout_pkg = wbtest_join_path(
+    ghq_root, "mizchi/moonbit_jsonschema/src/pkg.generated.mbti",
+  )
+  assert_true(
+    write_text_file(
+      fixture_path, "// Generated using `moon info`, DON'T EDIT IT\npackage \"mizchi/jsonschema\"\n",
+    ),
+  )
+  assert_true(
+    write_text_file(
+      wbtest_join_path(ghq_root, "mizchi/moonbit_jsonschema/moon.mod.json"),
+      "{\"name\":\"mizchi/jsonschema\",\"source\":\"src\"}",
+    ),
+  )
+  assert_true(
+    write_text_file(
+      checkout_pkg, "// Generated using `moon info`, DON'T EDIT IT\npackage \"mizchi/jsonschema\"\n",
+    ),
+  )
+  match
+    resolve_unified_mbt_input_path_from_roots("mizchi/jsonschema", [
+      local_root, ghq_root,
+    ]) {
+    Some(path) => assert_eq(path, checkout_pkg)
+    None => fail("expected mizchi/jsonschema to resolve to ghq checkout")
+  }
+}
+
+///|
+test "rewrite_moonbit_js_runtime_text patches identity externs" {
+  let source = "const cast = %identity;\nconst cast2 = %identity;\n//# sourceMappingURL=glue.js.map\n"
+  let actual = rewrite_moonbit_js_runtime_text(
+    source, "glue.js.map", "index.js.map",
+  )
+  assert_eq(
+    actual, "const cast = (x) => x;\nconst cast2 = (x) => x;\n//# sourceMappingURL=index.js.map\n",
+  )
+}
+
+///|
+test "rewrite_moonbit_js_runtime_text injects require shim for esm output" {
+  let source = "const text = require(\"node:fs\").readFileSync(path, \"utf8\");\n//# sourceMappingURL=glue.js.map\n"
+  let actual = rewrite_moonbit_js_runtime_text(
+    source, "glue.js.map", "index.js.map",
+  )
+  assert_true(
+    actual.has_prefix(
+      "import { createRequire as __tsmbtCreateRequire } from \"node:module\";\nconst require = __tsmbtCreateRequire(import.meta.url);\n",
+    ),
+  )
+  assert_true(actual.contains("require(\"node:fs\")"))
+  assert_true(actual.contains("//# sourceMappingURL=index.js.map"))
+}
+
+///|
 async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold from package name" {
   let root = wbtest_tmp_project_benchmark_root("unified_mbt_to_ts")
   let _ = try? @fs.rmdir(root, recursive=true)

@@ -782,7 +782,30 @@ async fn copy_text_file_with_rewrite(
       return false
     }
   }
-  write_text_file(to, source.replace(old=old_text, new=new_text))
+  write_text_file(
+    to,
+    rewrite_moonbit_js_runtime_text(source, old_text, new_text),
+  )
+}
+
+///|
+fn rewrite_moonbit_js_runtime_text(
+  source : String,
+  old_map_name : String,
+  new_map_name : String,
+) -> String {
+  let with_map_name = source.replace_all(old=old_map_name, new=new_map_name)
+  let rewritten = with_map_name.replace_all(
+    old="= %identity;",
+    new="= (x) => x;",
+  )
+  if rewritten.contains("require(") &&
+    !rewritten.contains("__tsmbtCreateRequire") {
+    "import { createRequire as __tsmbtCreateRequire } from \"node:module\";\nconst require = __tsmbtCreateRequire(import.meta.url);\n" +
+    rewritten
+  } else {
+    rewritten
+  }
 }
 
 ///|
