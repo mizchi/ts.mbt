@@ -27,8 +27,11 @@ corpus without manual edits.
   smoke run for root and subpath exports.
 - [ ] Unsupported exports are either 0 or limited to explicitly-budgeted
   ambiguous surfaces with actionable diagnostics.
-- [ ] `JSValue` usage is classified by reason, and budgets are stable per
+- [x] `JSValue` usage is classified by reason, and budgets are stable per
   package instead of being treated as an opaque quality number.
+  - Real-world TypeScript metrics now split `JSValue` surface usage into
+    unknown / any, overload, conditional / mapped, callback / function,
+    tuple / array, and namespace / value buckets, with per-package budgets.
 - [ ] Generated packages require no manual glue edits for the supported corpus.
 - [ ] `README.md` documents the supported surface, unsupported surface, and
   diagnostic interpretation clearly enough for external users.
@@ -49,6 +52,8 @@ corpus without manual edits.
   - namespace / value fallback
   - Initial breakdown is heuristic over generated `bridge.mbti` surface lines
     in `just bridge-quality`.
+  - Real-world TypeScript verification uses the same buckets in
+    `_build/realworld-typescript/METRICS.md` and fails on unbudgeted growth.
 - [x] Make `SCAFFOLD_DIAGNOSTICS.md` explain what was widened, omitted, or
   bridge-wrapped, and whether each item is runtime-safe.
   - Diagnostics now include a summary table with decision, reason, runtime

@@ -55,6 +55,61 @@ count_decl_jsvalue_refs() {
   ' "$file"
 }
 
+jsvalue_cause_counts() {
+  local file="$1"
+  local surface_total=0
+  local unknown_any=0
+  local overload_fallback=0
+  local conditional_mapped_fallback=0
+  local callback_function_fallback=0
+  local tuple_array_fallback=0
+  local namespace_value_fallback=0
+  local line
+
+  if [ ! -f "$file" ]; then
+    printf '0|0|0|0|0|0|0\n'
+    return
+  fi
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" != *JSValue* ]]; then
+      continue
+    fi
+    if [[ "$line" == "/// Complex or unsupported TypeScript types are widened to JSValue." ]]; then
+      continue
+    fi
+    if [[ "$line" == "declare pub type JSValue" ]]; then
+      continue
+    fi
+
+    surface_total=$((surface_total + 1))
+    if [[ "$line" =~ Array\[JSValue\] || "$line" =~ JSValue\] ]]; then
+      tuple_array_fallback=$((tuple_array_fallback + 1))
+    elif [[ "$line" =~ (Unsupported\ export|namespace|Namespace|default|Default|get_|constants|Constants|meta|Meta|rest|Rest|runtime|Runtime|build|Build) ]]; then
+      namespace_value_fallback=$((namespace_value_fallback + 1))
+    elif [[ "$line" =~ \<call\> ]]; then
+      overload_fallback=$((overload_fallback + 1))
+    elif [[ "$line" =~ (callback|Callback|listener|Listener|handler|Handler|dispatch|Dispatch|reducer|Reducer|action|Action|func|Func|function|Function|component|Component|render|Render|propsAreEqual|Promise|NoParamCallback) ]]; then
+      callback_function_fallback=$((callback_function_fallback + 1))
+    elif [[ "$line" =~ (props|Props|children|Children|Ref|Element|ReactNode|LibraryManaged|Intrinsic|JSX|Partial|Readonly|Record|Exclude|Extract|NonNullable|ReturnType|Parameters|DOMAttributes|Key|source|self) ]]; then
+      conditional_mapped_fallback=$((conditional_mapped_fallback + 1))
+    elif [[ "$line" =~ ^declare\ pub\ fn ]]; then
+      overload_fallback=$((overload_fallback + 1))
+    else
+      unknown_any=$((unknown_any + 1))
+    fi
+  done < "$file"
+
+  printf '%s|%s|%s|%s|%s|%s|%s\n' \
+    "$surface_total" \
+    "$unknown_any" \
+    "$overload_fallback" \
+    "$conditional_mapped_fallback" \
+    "$callback_function_fallback" \
+    "$tuple_array_fallback" \
+    "$namespace_value_fallback"
+}
+
 init_metrics() {
   mkdir -p "$(dirname "$metrics_file")"
   cat > "$metrics_file" <<EOF
@@ -63,8 +118,8 @@ init_metrics() {
 node_modules: \`$node_modules_root\`
 corpus: \`$corpus_file\`
 
-| package | bridge lines | declared types | declared functions | structs | external types | JSValue refs | JSValue functions | unsupported exports |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| package | bridge lines | declared types | declared functions | structs | external types | JSValue refs | JSValue functions | JSValue surface | unknown/any | overload | conditional/mapped | callback/function | tuple/array | namespace/value | unsupported exports |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 EOF
 }
 
@@ -80,6 +135,13 @@ append_metrics() {
   local external_types
   local jsvalue_refs
   local jsvalue_functions
+  local jsvalue_surface
+  local jsvalue_unknown_any
+  local jsvalue_overload
+  local jsvalue_conditional_mapped
+  local jsvalue_callback_function
+  local jsvalue_tuple_array
+  local jsvalue_namespace_value
   local unsupported_exports
 
   bridge_lines="$(wc -l < "$impl")"
@@ -89,9 +151,17 @@ append_metrics() {
   external_types="$(count_lines_matching '^#external$' "$impl")"
   jsvalue_refs="$(count_decl_jsvalue_refs "$decl")"
   jsvalue_functions="$(count_lines_matching '^declare pub fn .*JSValue' "$decl")"
+  IFS='|' read -r \
+    jsvalue_surface \
+    jsvalue_unknown_any \
+    jsvalue_overload \
+    jsvalue_conditional_mapped \
+    jsvalue_callback_function \
+    jsvalue_tuple_array \
+    jsvalue_namespace_value < <(jsvalue_cause_counts "$decl")
   unsupported_exports="$(count_lines_matching '^/// Unsupported export ' "$decl")"
 
-  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
     "$package_spec" \
     "$bridge_lines" \
     "$declared_types" \
@@ -100,9 +170,26 @@ append_metrics() {
     "$external_types" \
     "$jsvalue_refs" \
     "$jsvalue_functions" \
+    "$jsvalue_surface" \
+    "$jsvalue_unknown_any" \
+    "$jsvalue_overload" \
+    "$jsvalue_conditional_mapped" \
+    "$jsvalue_callback_function" \
+    "$jsvalue_tuple_array" \
+    "$jsvalue_namespace_value" \
     "$unsupported_exports" >> "$metrics_file"
 
-  assert_metric_budget "$package_spec" "$jsvalue_functions" "$unsupported_exports"
+  assert_metric_budget \
+    "$package_spec" \
+    "$jsvalue_functions" \
+    "$unsupported_exports" \
+    "$jsvalue_surface" \
+    "$jsvalue_unknown_any" \
+    "$jsvalue_overload" \
+    "$jsvalue_conditional_mapped" \
+    "$jsvalue_callback_function" \
+    "$jsvalue_tuple_array" \
+    "$jsvalue_namespace_value"
 }
 
 jsvalue_function_budget() {
@@ -133,7 +220,7 @@ jsvalue_function_budget() {
     node:assert) printf '25\n' ;;
     node:util) printf '14\n' ;;
     node:buffer) printf '3\n' ;;
-    *) printf '999999\n' ;;
+    *) printf '0\n' ;;
   esac
 }
 
@@ -147,10 +234,105 @@ unsupported_export_budget() {
   esac
 }
 
+jsvalue_cause_budget() {
+  local package_spec="$1"
+
+  case "$package_spec" in
+    clsx) printf '0|0|0|0|0|0|0\n' ;;
+    chalk) printf '9|6|0|0|0|0|3\n' ;;
+    dotenv) printf '2|1|1|0|0|0|0\n' ;;
+    ignore) printf '1|1|0|0|0|0|0\n' ;;
+    hono) printf '0|0|0|0|0|0|0\n' ;;
+    zod) printf '139|14|97|5|0|1|22\n' ;;
+    date-fns) printf '7|0|5|0|0|0|2\n' ;;
+    colorette) printf '1|0|1|0|0|0|0\n' ;;
+    magic-string) printf '14|3|0|4|0|0|7\n' ;;
+    source-map) printf '8|1|0|6|0|0|1\n' ;;
+    valibot) printf '408|377|15|1|14|0|1\n' ;;
+    immer) printf '18|1|6|0|1|1|9\n' ;;
+    execa) printf '0|0|0|0|0|0|0\n' ;;
+    preact) printf '13|7|0|2|3|1|0\n' ;;
+    node:sqlite) printf '11|9|0|0|2|0|0\n' ;;
+    node:fs) printf '110|36|15|5|48|4|2\n' ;;
+    node:path) printf '0|0|0|0|0|0|0\n' ;;
+    node:crypto) printf '43|11|12|11|8|0|1\n' ;;
+    node:os) printf '2|2|0|0|0|0|0\n' ;;
+    node:url) printf '5|3|2|0|0|0|0\n' ;;
+    node:querystring) printf '4|0|0|0|2|0|2\n' ;;
+    node:assert) printf '32|8|16|3|2|0|3\n' ;;
+    node:util) printf '18|5|7|0|3|2|1\n' ;;
+    node:buffer) printf '3|0|2|0|0|0|1\n' ;;
+    *) printf '0|0|0|0|0|0|0\n' ;;
+  esac
+}
+
+assert_jsvalue_cause_budget() {
+  local package_spec="$1"
+  local actual_surface="$2"
+  local actual_unknown_any="$3"
+  local actual_overload="$4"
+  local actual_conditional_mapped="$5"
+  local actual_callback_function="$6"
+  local actual_tuple_array="$7"
+  local actual_namespace_value="$8"
+  local budget_surface
+  local budget_unknown_any
+  local budget_overload
+  local budget_conditional_mapped
+  local budget_callback_function
+  local budget_tuple_array
+  local budget_namespace_value
+
+  IFS='|' read -r \
+    budget_surface \
+    budget_unknown_any \
+    budget_overload \
+    budget_conditional_mapped \
+    budget_callback_function \
+    budget_tuple_array \
+    budget_namespace_value < <(jsvalue_cause_budget "$package_spec")
+
+  if [ "$actual_surface" -gt "$budget_surface" ]; then
+    echo "JSValue surface budget exceeded for $package_spec: $actual_surface > $budget_surface" >&2
+    exit 1
+  fi
+  if [ "$actual_unknown_any" -gt "$budget_unknown_any" ]; then
+    echo "JSValue unknown/any budget exceeded for $package_spec: $actual_unknown_any > $budget_unknown_any" >&2
+    exit 1
+  fi
+  if [ "$actual_overload" -gt "$budget_overload" ]; then
+    echo "JSValue overload budget exceeded for $package_spec: $actual_overload > $budget_overload" >&2
+    exit 1
+  fi
+  if [ "$actual_conditional_mapped" -gt "$budget_conditional_mapped" ]; then
+    echo "JSValue conditional/mapped budget exceeded for $package_spec: $actual_conditional_mapped > $budget_conditional_mapped" >&2
+    exit 1
+  fi
+  if [ "$actual_callback_function" -gt "$budget_callback_function" ]; then
+    echo "JSValue callback/function budget exceeded for $package_spec: $actual_callback_function > $budget_callback_function" >&2
+    exit 1
+  fi
+  if [ "$actual_tuple_array" -gt "$budget_tuple_array" ]; then
+    echo "JSValue tuple/array budget exceeded for $package_spec: $actual_tuple_array > $budget_tuple_array" >&2
+    exit 1
+  fi
+  if [ "$actual_namespace_value" -gt "$budget_namespace_value" ]; then
+    echo "JSValue namespace/value budget exceeded for $package_spec: $actual_namespace_value > $budget_namespace_value" >&2
+    exit 1
+  fi
+}
+
 assert_metric_budget() {
   local package_spec="$1"
   local jsvalue_functions="$2"
   local unsupported_exports="$3"
+  local jsvalue_surface="$4"
+  local jsvalue_unknown_any="$5"
+  local jsvalue_overload="$6"
+  local jsvalue_conditional_mapped="$7"
+  local jsvalue_callback_function="$8"
+  local jsvalue_tuple_array="$9"
+  local jsvalue_namespace_value="${10}"
   local jsvalue_budget
   local unsupported_budget
 
@@ -164,6 +346,15 @@ assert_metric_budget() {
     echo "JSValue function budget exceeded for $package_spec: $jsvalue_functions > $jsvalue_budget" >&2
     exit 1
   fi
+  assert_jsvalue_cause_budget \
+    "$package_spec" \
+    "$jsvalue_surface" \
+    "$jsvalue_unknown_any" \
+    "$jsvalue_overload" \
+    "$jsvalue_conditional_mapped" \
+    "$jsvalue_callback_function" \
+    "$jsvalue_tuple_array" \
+    "$jsvalue_namespace_value"
 }
 
 write_js_any_stub() {
