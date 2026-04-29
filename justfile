@@ -130,6 +130,10 @@ verify-realworld-moonbit:
 verify-realworld-typescript:
     bash scripts/verify_realworld_typescript.sh
 
+# Generate a fixture-backed bridge quality report
+bridge-quality:
+    bash scripts/bridge_quality_report.sh
+
 # Benchmark a local TypeScript project corpus
 benchmark-project root limit="200":
     moon run src -- benchmark-project {{root}} {{limit}}
