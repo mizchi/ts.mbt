@@ -9,6 +9,7 @@ priv struct MoonBitBridgeImport {
   imported_name : String
   local_name : String
   is_default : Bool
+  is_namespace : Bool
 }
 
 ///|
@@ -965,8 +966,10 @@ fn ffi_bridge_import_local_name(export_name : String) -> String {
 }
 
 ///|
-fn ffi_bridge_import_key(export_name : String) -> String {
-  if export_name == "default" {
+fn ffi_bridge_import_key(export_name : String, is_namespace : Bool) -> String {
+  if is_namespace {
+    "namespace:" + export_name
+  } else if export_name == "default" {
     "default:" + export_name
   } else {
     "named:" + export_name
@@ -1040,12 +1043,13 @@ fn ffi_bridge_reexport_line(
 }
 
 ///|
-fn ensure_bridge_import(
+fn ensure_bridge_import_with_kind(
   seen_import_keys : Array[String],
   bridge_imports : Array[MoonBitBridgeImport],
   export_name : String,
+  is_namespace : Bool,
 ) -> String {
-  let key = ffi_bridge_import_key(export_name)
+  let key = ffi_bridge_import_key(export_name, is_namespace)
   let local_name = ffi_bridge_import_local_name(export_name)
   if seen_import_keys.contains(key) {
     return local_name
@@ -1055,24 +1059,83 @@ fn ensure_bridge_import(
     imported_name: export_name,
     local_name,
     is_default: export_name == "default",
+    is_namespace,
   })
   local_name
+}
+
+///|
+fn ensure_bridge_import(
+  seen_import_keys : Array[String],
+  bridge_imports : Array[MoonBitBridgeImport],
+  export_name : String,
+) -> String {
+  ensure_bridge_import_with_kind(
+    seen_import_keys, bridge_imports, export_name, false,
+  )
 }
 
 ///|
 fn ensure_bridge_runtime_access(
   seen_import_keys : Array[String],
   bridge_imports : Array[MoonBitBridgeImport],
+  namespace_import_roots : Array[String],
   runtime_export_name : String,
 ) -> String {
   let root_name = ffi_runtime_export_root_name(runtime_export_name)
-  let mut access = ensure_bridge_import(
-    seen_import_keys, bridge_imports, root_name,
+  let mut access = ensure_bridge_import_with_kind(
+    seen_import_keys,
+    bridge_imports,
+    root_name,
+    namespace_import_roots.contains(root_name),
   )
   for member_name in ffi_runtime_export_member_names(runtime_export_name) {
     access = ffi_js_access(access, member_name)
   }
   access
+}
+
+///|
+fn bridge_namespace_import_roots_for_export_equals(
+  export_surface : Array[ResolvedExport],
+  modules : Map[String, DeclModuleInfo],
+  module_spec : String,
+) -> Array[String] {
+  let roots : Array[String] = []
+  let module_basename = match module_spec.rev_find("/") {
+    Some(idx) => module_spec[idx + 1:].to_string()
+    None =>
+      match module_spec.rev_find(":") {
+        Some(idx) => module_spec[idx + 1:].to_string()
+        None => module_spec
+      }
+  }
+  for export_ in export_surface {
+    if export_.export_name == "default" {
+      continue
+    }
+    match exported_local_namespace_decl(export_, modules) {
+      Some(_) => {
+        let mut has_default_assignment = false
+        for other in export_surface {
+          if other.export_name == "default" &&
+            other.source_path == export_.source_path &&
+            other.local_name == export_.local_name {
+            has_default_assignment = true
+          }
+        }
+        if (
+            has_default_assignment ||
+            export_.source_export_name == module_basename
+          ) &&
+          !roots.contains(export_.source_export_name) {
+          roots.push(export_.source_export_name)
+        }
+      }
+      None => ()
+    }
+  }
+  roots
 }
 
 ///|
@@ -1085,8 +1148,11 @@ fn render_bridge_import_line(
   }
   let mut default_import : String? = None
   let named_imports : Array[String] = []
+  let namespace_imports : Array[String] = []
   for import_ in bridge_imports {
-    if import_.is_default {
+    if import_.is_namespace {
+      namespace_imports.push(import_.local_name)
+    } else if import_.is_default {
       default_import = Some(import_.local_name)
     } else if import_.imported_name == import_.local_name {
       named_imports.push(import_.imported_name)
@@ -1094,22 +1160,32 @@ fn render_bridge_import_line(
       named_imports.push("\{import_.imported_name} as \{import_.local_name}")
     }
   }
+  let lines : Array[String] = []
+  namespace_imports.sort()
+  for local_name in namespace_imports {
+    lines.push("import * as \{local_name} from \"\{module_spec}\";")
+  }
   if named_imports.is_empty() {
     match default_import {
       Some(default_binding) =>
-        Some("import \{default_binding} from \"\{module_spec}\";")
-      None => None
+        lines.push("import \{default_binding} from \"\{module_spec}\";")
+      None => ()
     }
   } else {
     named_imports.sort()
     let named_clause = "{ " + named_imports.join(", ") + " }"
     match default_import {
       Some(default_binding) =>
-        Some(
+        lines.push(
           "import \{default_binding}, \{named_clause} from \"\{module_spec}\";",
         )
-      None => Some("import \{named_clause} from \"\{module_spec}\";")
+      None => lines.push("import \{named_clause} from \"\{module_spec}\";")
     }
+  }
+  if lines.is_empty() {
+    None
+  } else {
+    Some(lines.join("\n"))
   }
 }
 
@@ -1278,6 +1354,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   for exported in exported_classes {
     class_runtime_export_names[exported.export_name] = exported.source_export_name
   }
+  let namespace_import_roots = bridge_namespace_import_roots_for_export_equals(
+    export_surface, modules, module_spec,
+  )
   let tuple_result_field_names : Map[String, Array[String]] = {}
   for spec in tuple_result_interfaces {
     let field_names : Array[String] = []
@@ -1451,7 +1530,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         }
         let params_str = args.join(", ")
         let class_access = ensure_bridge_runtime_access(
-          seen_bridge_import_keys, bridge_imports, class_runtime_export_name,
+          seen_bridge_import_keys, bridge_imports, namespace_import_roots, class_runtime_export_name,
         )
         let ctor_binding_name = ffi_class_ctor_binding_name(class_.name)
         push_unique_bridge_binding(
@@ -1467,7 +1546,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       }
       None if class_.is_constructible => {
         let class_access = ensure_bridge_runtime_access(
-          seen_bridge_import_keys, bridge_imports, class_runtime_export_name,
+          seen_bridge_import_keys, bridge_imports, namespace_import_roots, class_runtime_export_name,
         )
         let ctor_binding_name = ffi_class_ctor_binding_name(class_.name)
         push_unique_bridge_binding(
@@ -1492,7 +1571,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         class_property.name,
       )
       let class_access = ensure_bridge_runtime_access(
-        seen_bridge_import_keys, bridge_imports, class_runtime_export_name,
+        seen_bridge_import_keys, bridge_imports, namespace_import_roots, class_runtime_export_name,
       )
       let getter_access = ffi_js_access(class_access, class_property.name)
       push_unique_bridge_binding(
@@ -1529,7 +1608,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         args.push(ffi_sanitize_identifier(param_name, "arg"))
       }
       let class_access = ensure_bridge_runtime_access(
-        seen_bridge_import_keys, bridge_imports, class_runtime_export_name,
+        seen_bridge_import_keys, bridge_imports, namespace_import_roots, class_runtime_export_name,
       )
       let args_str = args.join(", ")
       let method_access = ffi_js_access(class_access, class_method.name)
@@ -1561,7 +1640,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         let args = ffi_import_param_names(import_)
         let args_str = args.join(", ")
         let runtime_access = ensure_bridge_runtime_access(
-          seen_bridge_import_keys, bridge_imports, runtime_export_name,
+          seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
         )
         let call_expr = "\{runtime_access}(\{args_str})"
         push_unique_ffi_section(
@@ -1611,7 +1690,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                 seen_bridge_binding_names,
                 bridge_lines,
                 binding_name,
-                "export const \{binding_name} = \{ensure_bridge_runtime_access(seen_bridge_import_keys, bridge_imports, runtime_export_name)};",
+                "export const \{binding_name} = \{ensure_bridge_runtime_access(seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name)};",
               )
           }
         }
@@ -1630,7 +1709,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         let args = ffi_func_param_names(func)
         let args_str = args.join(", ")
         let runtime_access = ensure_bridge_runtime_access(
-          seen_bridge_import_keys, bridge_imports, runtime_export_name,
+          seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
         )
         let call_expr = "\{runtime_access}(\{args_str})"
         push_unique_ffi_section(
@@ -1680,7 +1759,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                 seen_bridge_binding_names,
                 bridge_lines,
                 binding_name,
-                "export const \{binding_name} = \{ensure_bridge_runtime_access(seen_bridge_import_keys, bridge_imports, runtime_export_name)};",
+                "export const \{binding_name} = \{ensure_bridge_runtime_access(seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name)};",
               )
           }
         }
@@ -1723,7 +1802,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         getter_name,
         [],
         ensure_bridge_runtime_access(
-          seen_bridge_import_keys, bridge_imports, runtime_export_name,
+          seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
         ),
       ),
     )

@@ -118,6 +118,8 @@ jsvalue_function_budget() {
     date-fns) printf '10\n' ;;
     node:sqlite) printf '2\n' ;;
     node:fs) printf '72\n' ;;
+    node:path) printf '0\n' ;;
+    node:crypto) printf '30\n' ;;
     *) printf '999999\n' ;;
   esac
 }
@@ -321,6 +323,33 @@ test "real-world node:fs bridge smoke" {
 }
 EOF
       ;;
+    node_path)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world node:path bridge smoke" {
+  assert_eq(pathNormalize("a/../b"), "b")
+  assert_eq(pathBasename("/tmp/demo.txt", Some(".txt")), "demo")
+  assert_eq(pathExtname("demo.txt"), ".txt")
+  assert_false(pathIsAbsolute("relative/path"))
+}
+EOF
+      ;;
+    node_crypto)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_node_crypto_binary_like() -> BinaryLike =
+  #| () => "hello"
+
+test "real-world node:crypto bridge smoke" {
+  let digest = hash("sha256", realworld_node_crypto_binary_like(), None)
+  assert_eq(
+    digest,
+    "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+  )
+  if getHashes().length() == 0 {
+    abort("expected crypto hash algorithms")
+  }
+}
+EOF
+      ;;
     *)
       echo "No bridge smoke test configured for $module_name" >&2
       exit 1
@@ -491,6 +520,40 @@ fn main {
 }
 EOF
       ;;
+    node_path)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if @sut.pathNormalize("a/../b") != "b" {
+    abort("unexpected normalize output")
+  }
+  if @sut.pathBasename("/tmp/demo.txt", Some(".txt")) != "demo" {
+    abort("unexpected basename output")
+  }
+  if @sut.pathExtname("demo.txt") != ".txt" {
+    abort("unexpected extname output")
+  }
+  if @sut.pathIsAbsolute("relative/path") {
+    abort("expected relative path")
+  }
+}
+EOF
+      ;;
+    node_crypto)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_node_crypto_binary_like() -> @sut.BinaryLike =
+  #| () => "hello"
+
+fn main {
+  let digest = @sut.hash("sha256", realworld_node_crypto_binary_like(), None)
+  if digest != "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" {
+    abort("unexpected sha256 digest")
+  }
+  if @sut.getHashes().length() == 0 {
+    abort("expected crypto hash algorithms")
+  }
+}
+EOF
+      ;;
     *)
       echo "No build smoke configured for $module_name" >&2
       exit 1
@@ -647,6 +710,38 @@ find_node_fs_types() {
   return 1
 }
 
+find_node_builtin_types() {
+  local package_spec="$1"
+  local configured_path="$2"
+  local env_var="$3"
+  local types_file="$4"
+
+  if [ -n "$configured_path" ]; then
+    if resolve_configured_types_path "$configured_path"; then
+      return 0
+    fi
+    echo "Configured $package_spec types path does not exist: $configured_path" >&2
+    exit 1
+  fi
+
+  local env_path="${!env_var:-}"
+  if [ -n "$env_path" ]; then
+    if [ -f "$env_path" ]; then
+      printf '%s\n' "$env_path"
+      return 0
+    fi
+    echo "$env_var does not exist: $env_path" >&2
+    exit 1
+  fi
+
+  if [ -f "$node_modules_root/@types/node/$types_file" ]; then
+    printf '%s\n' "$node_modules_root/@types/node/$types_file"
+    return 0
+  fi
+
+  return 1
+}
+
 verify_node_sqlite() {
   local configured_types_path="${1:-}"
   local module_name="node_sqlite"
@@ -727,6 +822,49 @@ verify_node_fs() {
   append_metrics "node:fs" "$out"
 }
 
+verify_node_builtin() {
+  local package_spec="$1"
+  local module_name="$2"
+  local configured_types_path="${3:-}"
+  local types_file="$4"
+  local env_var="$5"
+  local root="_build/realworld-typescript"
+  local out="$root/$module_name"
+  local types_path
+
+  if ! types_path="$(find_node_builtin_types "$package_spec" "$configured_types_path" "$env_var" "$types_file")"; then
+    echo "Skipping $package_spec probe: @types/node/$types_file not found" >&2
+    echo "Set $env_var to enable it." >&2
+    return
+  fi
+
+  echo "== $package_spec"
+
+  rm -rf "$out"
+  mkdir -p "$out"
+
+  run_logged "$log_root/${module_name}_generate.log" \
+    moon run src -- \
+    --input "$types_path" \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec "$package_spec"
+
+  write_probe_moon_mod "$out" "$module_name"
+  write_bridge_test "$out" "$module_name"
+
+  run_logged "$log_root/${module_name}_check.log" \
+    moon -C "$out" check --target js
+  run_logged "$log_root/${module_name}_test.log" \
+    moon -C "$out" test --target js
+  run_build_smoke "$out" "$module_name"
+
+  printf "real-world checked %s lines=%s\n" \
+    "$package_spec" \
+    "$(wc -l < "$out/bridge.mbt")"
+  append_metrics "$package_spec" "$out"
+}
+
 rm -rf _build/realworld-typescript
 init_metrics
 
@@ -742,6 +880,8 @@ while IFS='|' read -r kind package_spec module_name types_path; do
       case "$package_spec" in
         node:sqlite) verify_node_sqlite "$types_path" ;;
         node:fs) verify_node_fs "$types_path" ;;
+        node:path) verify_node_builtin "$package_spec" "$module_name" "$types_path" "path.d.ts" "TSMBT_NODE_PATH_TYPES" ;;
+        node:crypto) verify_node_builtin "$package_spec" "$module_name" "$types_path" "crypto.d.ts" "TSMBT_NODE_CRYPTO_TYPES" ;;
         *)
           echo "Unsupported node_builtin corpus entry: $package_spec" >&2
           exit 1

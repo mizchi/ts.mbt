@@ -1185,17 +1185,95 @@ async fn emit_moonbit_bridge_package(
 }
 
 ///|
+fn scaffold_diagnostic_export_name(item : String) -> String {
+  match item.find(" (") {
+    Some(idx) => item[:idx].to_string()
+    None => item
+  }
+}
+
+///|
+fn scaffold_diagnostic_reason(item : String) -> String {
+  if item.contains("ambiguous re-export") {
+    "ambiguous re-export surface"
+  } else {
+    "unsupported export surface"
+  }
+}
+
+///|
+fn scaffold_diagnostic_decision(item : String) -> String {
+  if item.contains("ambiguous re-export") {
+    "widened"
+  } else {
+    "omitted"
+  }
+}
+
+///|
+fn scaffold_diagnostic_runtime_safety(item : String) -> String {
+  if item.contains("ambiguous re-export") {
+    "runtime-unsafe; generated bridge stubs abort instead of guessing a runtime binding"
+  } else {
+    "runtime-safe; the unsupported export is not exposed"
+  }
+}
+
+///|
 fn render_moonbit_scaffold_diagnostics_md(
   unsupported_exports : Array[String],
 ) -> String {
   let lines = [
-    "# Scaffold Diagnostics", "", "The generated MoonBit scaffold omitted or widened unsupported exports.",
+    "# Scaffold Diagnostics", "", "The generated MoonBit scaffold is buildable. Unsupported or ambiguous export surfaces are listed below with the decision taken by the generator.",
+    "", "## Summary",
   ]
   if unsupported_exports.length() > 0 {
+    lines.push("")
+    lines.push("| export | decision | reason | runtime safety |")
+    lines.push("| --- | --- | --- | --- |")
+    for item in unsupported_exports {
+      let export_name = scaffold_diagnostic_export_name(item)
+      let decision = scaffold_diagnostic_decision(item)
+      let reason = scaffold_diagnostic_reason(item)
+      let runtime_safety = scaffold_diagnostic_runtime_safety(item)
+      lines.push(
+        "| `" +
+        export_name +
+        "` | " +
+        decision +
+        " | " +
+        reason +
+        " | " +
+        runtime_safety +
+        " |",
+      )
+    }
+    lines.push("")
+    lines.push("## Runtime Safety")
+    lines.push("")
+    lines.push(
+      "Widened surfaces keep the scaffold buildable, but ambiguous runtime exports are not callable until the source export is made unambiguous.",
+    )
+    lines.push(
+      "Omitted surfaces are intentionally absent from the generated MoonBit API. Bridge-wrapped surfaces are callable through generated `bridge.js` glue when the runtime binding can be resolved.",
+    )
+    lines.push("")
+    lines.push("## Decision Vocabulary")
+    lines.push("")
+    lines.push(
+      "- `widened`: emitted as `JSValue` so dependent code can still build",
+    )
+    lines.push("- `omitted`: not emitted")
+    lines.push("- `bridge-wrapped`: emitted through generated `bridge.js` glue")
+    lines.push("")
+    lines.push("## Raw Entries")
     lines.push("")
     for item in unsupported_exports {
       lines.push("- " + item)
     }
+  } else {
+    lines.push("")
+    lines.push("No unsupported exports were detected.")
   }
   lines.join("\n")
 }

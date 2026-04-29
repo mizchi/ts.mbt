@@ -5586,6 +5586,25 @@ async test "emit_moonbit_scaffold_from_ts keeps ambiguous export surfaces as dia
   }
   assert_true(diagnostics.contains("Shared (ambiguous re-export:"))
   assert_true(
+    diagnostics.contains(
+      "| `Shared` | widened | ambiguous re-export surface | runtime-unsafe; generated bridge stubs abort instead of guessing a runtime binding |",
+    ),
+  )
+  assert_true(diagnostics.contains("## Runtime Safety"))
+  assert_true(
+    diagnostics.contains(
+      "Widened surfaces keep the scaffold buildable, but ambiguous runtime exports are not callable until the source export is made unambiguous.",
+    ),
+  )
+  assert_true(diagnostics.contains("## Decision Vocabulary"))
+  assert_true(diagnostics.contains("- `widened`: emitted as `JSValue`"))
+  assert_true(diagnostics.contains("- `omitted`: not emitted"))
+  assert_true(
+    diagnostics.contains(
+      "- `bridge-wrapped`: emitted through generated `bridge.js` glue",
+    ),
+  )
+  assert_true(
     diagnostics.contains("fixtures/resolver/project/types/ambiguous-a.d.ts"),
   )
   assert_true(

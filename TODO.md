@@ -49,8 +49,11 @@ corpus without manual edits.
   - namespace / value fallback
   - Initial breakdown is heuristic over generated `bridge.mbti` surface lines
     in `just bridge-quality`.
-- [ ] Make `SCAFFOLD_DIAGNOSTICS.md` explain what was widened, omitted, or
+- [x] Make `SCAFFOLD_DIAGNOSTICS.md` explain what was widened, omitted, or
   bridge-wrapped, and whether each item is runtime-safe.
+  - Diagnostics now include a summary table with decision, reason, runtime
+    safety, and a decision vocabulary for widened / omitted / bridge-wrapped
+    surfaces.
 - [x] Add a `just bridge-quality` task that runs the fixture corpus and prints a
   single summary table.
 - [x] Store real-world corpus package versions / paths in one config file so the
@@ -136,6 +139,10 @@ corpus without manual edits.
   - one callback-heavy package
   - one Promise-heavy package
   - one CJS-style package
+  - Current locked probe entries: `clsx`, `chalk`, `dotenv`, `ignore`, `hono`,
+    `zod`, `date-fns`, `node:sqlite`, `node:fs`, `node:path`, `node:crypto`.
+    The remaining gap is expanding this to 20+ entries with callback-heavy,
+    Promise-heavy, CJS-style, and React JSX runtime coverage.
 - [ ] Lock a MoonBit corpus that covers:
   - root-only packages
   - child-package exports

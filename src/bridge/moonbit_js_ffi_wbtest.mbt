@@ -2740,6 +2740,32 @@ async test "bridge: emit MoonBit JS FFI bundle from namespace export assignment"
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle imports export-equals namespace members as namespace" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/export-equals-namespace-members-entry.d.ts",
+    "node:path",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_js.contains("import * as path from \"node:path\";"))
+  assert_false(bundle.bridge_js.contains("import { path } from \"node:path\";"))
+  assert_true(
+    bundle.bridge_js.contains("export const __ts_mbt_path_join = path.join;"),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_path_sep() { return path.sep; }",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace assignment" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-entry.d.ts", "./runtime/react-like.js",

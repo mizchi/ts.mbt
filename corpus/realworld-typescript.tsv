@@ -10,3 +10,5 @@ package|zod|zod|
 package|date-fns|date_fns|
 node_builtin|node:sqlite|node_sqlite|@types/node/sqlite.d.ts
 node_builtin|node:fs|node_fs|@types/node/fs.d.ts
+node_builtin|node:path|node_path|@types/node/path.d.ts
+node_builtin|node:crypto|node_crypto|@types/node/crypto.d.ts
