@@ -1,5 +1,177 @@
 # TODO
 
+## Interop Bridge Quality Roadmap: 60% -> 90%
+
+Current assessment: the project is around 55-60% complete as a practical
+`TypeScript <-> MoonBit` interoperability bridge. It is usable for selected
+packages under supervision, but not yet reliable enough for arbitrary npm or
+MoonBit packages without inspection.
+
+Target: reach about 90% practical quality for the declared supported surface.
+This does not mean "all TypeScript semantics"; it means generated bridges are
+predictable, self-diagnosing, build-backed, and runnable for a broad real-world
+corpus without manual edits.
+
+### 90% Quality Gate
+
+- [ ] `just ci` passes with all fixture-backed bridge/scaffold checks.
+- [ ] `just verify-realworld-typescript` passes with a fixed corpus of at least
+  20 npm / Node entrypoints.
+- [ ] `just verify-realworld-moonbit` passes with a fixed corpus of at least 15
+  local MoonBit packages.
+- [ ] Every generated TS -> MoonBit package in the real-world corpus passes:
+  `moon check --target js`, `moon test --target js`, `moon build --target js`,
+  and a Node smoke run.
+- [ ] Every generated MoonBit -> TS package in the real-world corpus passes:
+  `moon build --target js`, TypeScript declaration typecheck, and a Node import
+  smoke run for root and subpath exports.
+- [ ] Unsupported exports are either 0 or limited to explicitly-budgeted
+  ambiguous surfaces with actionable diagnostics.
+- [ ] `JSValue` usage is classified by reason, and budgets are stable per
+  package instead of being treated as an opaque quality number.
+- [ ] Generated packages require no manual glue edits for the supported corpus.
+- [ ] `README.md` documents the supported surface, unsupported surface, and
+  diagnostic interpretation clearly enough for external users.
+
+### Phase 1: Measurement and Diagnostics (60% -> 65%)
+
+- [ ] Add a persistent quality score report for bridge generation.
+  - Include generated lines, exported declarations, unsupported exports,
+    `JSValue` refs, `JSValue` functions, runtime smoke coverage, and diagnostics.
+- [ ] Split `JSValue` metrics by cause:
+  - unknown / any
+  - overload fallback
+  - conditional / mapped type fallback
+  - callback / function type fallback
+  - tuple / array fallback
+  - namespace / value fallback
+- [ ] Make `SCAFFOLD_DIAGNOSTICS.md` explain what was widened, omitted, or
+  bridge-wrapped, and whether each item is runtime-safe.
+- [ ] Add a `just bridge-quality` task that runs the fixture corpus and prints a
+  single summary table.
+- [ ] Store real-world corpus package versions / paths in one config file so the
+  score is reproducible across machines.
+
+### Phase 2: TypeScript -> MoonBit Surface Coverage (65% -> 72%)
+
+- [ ] Harden npm / Node type resolution:
+  - package `exports`
+  - `types` / `typings`
+  - subpath exports
+  - `typesVersions`
+  - `@types/*` fallback
+  - `node:*` built-in modules
+- [ ] Improve overload handling.
+  - Prefer overloads that can be represented with concrete MoonBit types.
+  - Emit multiple safe wrappers when overloads are materially different and
+    nameable.
+  - Keep a stable fallback rule when overloads collapse to `JSValue`.
+- [ ] Expand common utility type lowering:
+  - `Pick`
+  - `Omit`
+  - `Record`
+  - `Exclude`
+  - `Extract`
+  - `NonNullable`
+  - simple `ReturnType` / `Parameters` when the target is resolvable
+- [ ] Support the common mapped-type subset needed by real declaration files.
+- [ ] Support the common conditional-type subset used by React, Hono, Zod, and
+  Node declarations.
+- [ ] Preserve optional and readonly field information where MoonBit can express
+  it; otherwise emit diagnostics instead of silent widening.
+
+### Phase 3: Runtime Bridge Correctness (72% -> 78%)
+
+- [ ] Make runtime namespace handling complete for declaration-merge patterns:
+  `function x` + `namespace x`, `class X` + `namespace X`, and value namespaces.
+- [ ] Strengthen CJS / ESM interop:
+  - `export =`
+  - `export default`
+  - synthetic default imports
+  - namespace imports
+  - mixed named/default re-exports
+- [ ] Add runtime smokes for async and Promise-returning APIs.
+- [ ] Add runtime smokes for callback APIs where the callback can be represented
+  safely.
+- [ ] Add runtime smokes for object option bags with optional fields.
+- [ ] Add runtime smokes for class instance properties, static properties, and
+  static methods.
+- [ ] Ensure generated `bridge.js` never imports a missing runtime binding
+  without a diagnostic.
+
+### Phase 4: MoonBit -> TypeScript Package Quality (78% -> 84%)
+
+- [ ] Improve method / constructor facade generation beyond the current narrow
+  safe subset.
+- [ ] Define the public rule for traits:
+  - omitted with diagnostics
+  - represented as structural TypeScript interfaces
+  - represented through generated facade functions
+- [ ] Preserve MoonBit `raise` effects in TypeScript declarations as a documented
+  error contract.
+- [ ] Improve child-package and subpath export coverage:
+  - root exports
+  - nested package exports
+  - generated `package.json` `exports`
+  - matching JS and `.d.ts` paths
+- [ ] Add generated source map and package metadata checks to the verification
+  rail.
+- [ ] Make facade generation deterministic and diff-friendly for review.
+
+### Phase 5: Real-World Corpus Expansion (84% -> 88%)
+
+- [ ] Lock a TypeScript corpus that covers different API shapes:
+  - small function libraries: `clsx`, `date-fns`
+  - class/value libraries: `chalk`, `dotenv`
+  - schema libraries: `zod`
+  - web libraries: `hono`, React JSX runtimes
+  - Node built-ins: `node:fs`, `node:sqlite`, `node:path`, `node:crypto`
+  - one callback-heavy package
+  - one Promise-heavy package
+  - one CJS-style package
+- [ ] Lock a MoonBit corpus that covers:
+  - root-only packages
+  - child-package exports
+  - effectful APIs
+  - generic APIs
+  - private root types
+  - packages with external JS bindings
+- [ ] Add per-package smoke programs that use meaningful APIs, not only compile
+  the generated bridge.
+- [ ] Keep each real-world failure as a minimized fixture before fixing it.
+- [ ] Track corpus status in a generated markdown report checked by CI or an
+  opt-in verification task.
+
+### Phase 6: Productization and Safety (88% -> 90%)
+
+- [ ] Define the public CLI contract:
+  - `tsmbt --input mizchi/foo --out dist`
+  - `tsmbt --input npm-package --out dist --direction ts-to-mbt`
+  - `--module-spec`
+  - `--diagnostics`
+  - `--strict`
+- [ ] Add strict mode that fails on any unsupported export or unbudgeted
+  `JSValue` fallback.
+- [ ] Add non-strict mode that always emits a buildable scaffold with diagnostics
+  when possible.
+- [ ] Add snapshot tests for generated file layout and package metadata.
+- [ ] Document supported TypeScript and MoonBit subsets with examples.
+- [ ] Add a release checklist:
+  - fixture CI
+  - real-world TypeScript probe
+  - real-world MoonBit probe
+  - generated docs update
+  - changelog entry
+
+### Explicit Non-Goals Before 90%
+
+- [ ] Do not attempt full TypeScript type-checker parity.
+- [ ] Do not implement arbitrary TypeScript conditional/mapped type semantics
+  unless a real-world target needs the subset.
+- [ ] Do not promise arbitrary npm package conversion without diagnostics.
+- [ ] Do not hide widened or omitted API surfaces; every fallback must be
+  inspectable.
+
 ## Parser / Semantics Real-World Gaps
 
 ### Current bug
