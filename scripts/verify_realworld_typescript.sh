@@ -12,6 +12,7 @@ if [ ! -d "$node_modules_root" ]; then
 fi
 
 log_root="_build/realworld-typescript/logs"
+metrics_file="_build/realworld-typescript/METRICS.md"
 
 run_logged() {
   local log_file="$1"
@@ -22,6 +23,77 @@ run_logged() {
     cat "$log_file" >&2
     exit 1
   fi
+}
+
+count_lines_matching() {
+  local pattern="$1"
+  local file="$2"
+
+  if [ ! -f "$file" ]; then
+    printf '0\n'
+    return
+  fi
+  grep -E -c "$pattern" "$file" || true
+}
+
+count_decl_jsvalue_refs() {
+  local file="$1"
+
+  if [ ! -f "$file" ]; then
+    printf '0\n'
+    return
+  fi
+  awk '
+    /JSValue/ && $0 !~ /Complex or unsupported/ { count += 1 }
+    END { print count + 0 }
+  ' "$file"
+}
+
+init_metrics() {
+  mkdir -p "$(dirname "$metrics_file")"
+  cat > "$metrics_file" <<EOF
+# Real-World TypeScript Bridge Metrics
+
+node_modules: \`$node_modules_root\`
+
+| package | bridge lines | declared types | declared functions | structs | external types | JSValue refs | JSValue functions | unsupported exports |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+EOF
+}
+
+append_metrics() {
+  local package_spec="$1"
+  local out="$2"
+  local decl="$out/bridge.mbti"
+  local impl="$out/bridge.mbt"
+  local bridge_lines
+  local declared_types
+  local declared_functions
+  local structs
+  local external_types
+  local jsvalue_refs
+  local jsvalue_functions
+  local unsupported_exports
+
+  bridge_lines="$(wc -l < "$impl")"
+  declared_types="$(count_lines_matching '^declare pub type ' "$decl")"
+  declared_functions="$(count_lines_matching '^declare pub fn ' "$decl")"
+  structs="$(count_lines_matching '^pub struct ' "$impl")"
+  external_types="$(count_lines_matching '^#external$' "$impl")"
+  jsvalue_refs="$(count_decl_jsvalue_refs "$decl")"
+  jsvalue_functions="$(count_lines_matching '^declare pub fn .*JSValue' "$decl")"
+  unsupported_exports="$(count_lines_matching '^/// Unsupported export ' "$decl")"
+
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+    "$package_spec" \
+    "$bridge_lines" \
+    "$declared_types" \
+    "$declared_functions" \
+    "$structs" \
+    "$external_types" \
+    "$jsvalue_refs" \
+    "$jsvalue_functions" \
+    "$unsupported_exports" >> "$metrics_file"
 }
 
 write_js_any_stub() {
@@ -306,9 +378,11 @@ verify_package() {
   printf "real-world checked %s lines=%s\n" \
     "$package_spec" \
     "$(wc -l < "$out/bridge.mbt")"
+  append_metrics "$package_spec" "$out"
 }
 
 rm -rf _build/realworld-typescript
+init_metrics
 
 while IFS='|' read -r package_spec module_name; do
   verify_package "$package_spec" "$module_name"
@@ -321,3 +395,5 @@ hono|hono
 zod|zod
 date-fns|date_fns
 EOF
+
+echo "metrics written to $metrics_file"
