@@ -91,14 +91,14 @@ corpus without manual edits.
   - Emit multiple safe wrappers when overloads are materially different and
     nameable.
   - Keep a stable fallback rule when overloads collapse to `JSValue`.
-- [ ] Expand common utility type lowering:
-  - `Pick`
-  - `Omit`
-  - `Record`
-  - `Exclude`
-  - `Extract`
-  - `NonNullable`
-  - simple `ReturnType` / `Parameters` when the target is resolvable
+- [x] Expand common utility type lowering:
+  - [x] `Pick` over resolvable interfaces and literal keys.
+  - [x] `Omit` over resolvable interfaces and literal keys.
+  - [x] `Record` as a named opaque JS object boundary.
+  - [x] `Exclude` over directly comparable union members.
+  - [x] `Extract` over directly comparable union members.
+  - [x] `NonNullable` over optional-like unions.
+  - [x] simple `ReturnType` / `Parameters` for direct function types.
 - [ ] Support the common mapped-type subset needed by real declaration files.
 - [ ] Support the common conditional-type subset used by React, Hono, Zod, and
   Node declarations.

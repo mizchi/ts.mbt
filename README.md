@@ -238,12 +238,14 @@ Supported surface:
 
 - Exported functions, classes, interfaces, constants, default exports, package `exports`, `types` / `typings`, common subpath exports, `@types/*` fallbacks, and configured Node built-in declaration files.
 - Primitive values, arrays, optionals, literal string / boolean unions, object option bags, and representable readonly fields.
+- Common utility types including concrete `Pick` / `Omit` projections, `NonNullable`, direct-union `Exclude` / `Extract`, direct function `ReturnType` / `Parameters`, and `Record<K, V>` as named opaque JS object boundary types such as `StringRecordOfFoo`.
+- Non-empty homogeneous rest tuples such as `[T, ...T[]]` are lowered to `Array[T]` for class properties, constructors, functions, and imports.
 - Common real-world package shapes covered by the probe corpus, including function libraries, schema libraries, web libraries, callback-heavy Node APIs, Promise-heavy APIs, CJS-style packages, and Node built-ins.
 - Generated packages are expected to pass `moon check --target js`, `moon test --target js`, `moon build --target js`, and a Node smoke run without editing generated glue.
 
 Fallback and unsupported surface:
 
-- Complex `any` / `unknown`, overloads, conditional / mapped types, function-valued callbacks, tuple edge cases, and namespace/value merge surfaces may be widened to `JSValue`.
+- Complex `any` / `unknown`, overloads, conditional / mapped types, function-valued callbacks, heterogeneous tuple edge cases, and namespace/value merge surfaces may be widened to `JSValue`.
 - Ambiguous re-exports are intentionally not bound unsafely. The generated package remains buildable and reports the candidate source files.
 - Unsupported exports are either absent or explicitly budgeted in verification; new unsupported surfaces should be minimized into fixtures before broadening the generator.
 

@@ -985,6 +985,84 @@ async test "bridge: emit MoonBit declarations from export-as-namespace Component
 }
 
 ///|
+async test "bridge: emit MoonBit declarations lowers Pick and Omit utility types" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/utility-pick-omit-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type User"))
+  assert_true(actual.contains("declare pub type UserPickIdName"))
+  assert_true(actual.contains("/// id : String"))
+  assert_true(actual.contains("/// name : String"))
+  assert_true(actual.contains("declare pub type UserPickIdActive"))
+  assert_true(actual.contains("/// active : Bool?"))
+  assert_true(actual.contains("declare pub type UserOmitAge"))
+  assert_true(actual.contains("declare pub type UserOmitActive"))
+  assert_true(
+    actual.contains(
+      "declare pub fn pickUser(user : UserPickIdName) -> UserPickIdActive",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn omitUser(user : UserOmitAge) -> UserOmitActive",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn requireUser(id : String) -> User"),
+  )
+  assert_true(
+    actual.contains("declare pub fn extractUser(user : User) -> User"),
+  )
+  assert_true(actual.contains("declare pub fn getCount() -> Double"))
+  assert_true(actual.contains("/// TS interface GetArgsResult"))
+  assert_true(actual.contains("/// _0 : String"))
+  assert_true(actual.contains("/// _1 : Bool"))
+  assert_true(actual.contains("declare pub fn getArgs() -> GetArgsResult"))
+  assert_true(actual.contains("declare pub type StringRecordOfString"))
+  assert_true(actual.contains("declare pub type StringRecordOfStringOrDouble"))
+  assert_true(actual.contains("declare pub type StringRecordOfUser"))
+  assert_true(
+    actual.contains("declare pub fn getLabels() -> StringRecordOfString"),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn setLabels(labels : StringRecordOfStringOrDouble) -> Unit",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn getUsersById() -> StringRecordOfUser"),
+  )
+  assert_true(actual.contains("declare pub type UtilityError"))
+  assert_true(
+    actual.contains(
+      "declare pub fn new_utility_error(issues : Array[User]) -> UtilityError",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn get_utility_error_issues(self : UtilityError) -> Array[User]",
+    ),
+  )
+  assert_false(actual.contains("declare pub type JSValue"))
+  assert_false(actual.contains("declare pub type Pick"))
+  assert_false(actual.contains("declare pub type Omit"))
+  assert_false(actual.contains("declare pub type Record"))
+  assert_false(actual.contains("declare pub type NonNullable"))
+  assert_false(actual.contains("declare pub type Extract"))
+  assert_false(actual.contains("declare pub type Exclude"))
+  assert_false(actual.contains("declare pub type ReturnType"))
+  assert_false(actual.contains("declare pub type Parameters"))
+}
+
+///|
 async test "bridge: emit MoonBit declarations from export-as-namespace ComponentPropsWithoutRef members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",

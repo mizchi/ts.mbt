@@ -586,7 +586,7 @@ extern "js" fn realworld_node_sqlite_options() -> DatabaseSyncOptions =
 extern "js" fn realworld_node_sqlite_params() -> Array[SQLInputValue] =
   #| () => []
 
-extern "js" fn realworld_node_sqlite_row_value(row : Record?) -> String =
+extern "js" fn realworld_node_sqlite_row_value(row : StringRecordOfSqloutputValue?) -> String =
   #| (row) => row.value
 
 test "real-world node:sqlite bridge smoke" {
@@ -925,7 +925,7 @@ extern "js" fn realworld_node_sqlite_options() -> @sut.DatabaseSyncOptions =
 extern "js" fn realworld_node_sqlite_params() -> Array[@sut.SQLInputValue] =
   #| () => []
 
-extern "js" fn realworld_node_sqlite_row_value(row : @sut.Record?) -> String =
+extern "js" fn realworld_node_sqlite_row_value(row : @sut.StringRecordOfSqloutputValue?) -> String =
   #| (row) => row.value
 
 fn main {

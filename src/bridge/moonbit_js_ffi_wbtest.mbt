@@ -3056,6 +3056,99 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace Componen
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle lowers Pick and Omit utility types" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/utility-pick-omit-entry.d.ts", "./runtime/utility.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct UserPickIdName"))
+  assert_true(bundle.ffi_mbt.contains("pub struct UserPickIdActive"))
+  assert_true(bundle.ffi_mbt.contains("  active : Bool?"))
+  assert_true(bundle.ffi_mbt.contains("pub struct UserOmitAge"))
+  assert_true(bundle.ffi_mbt.contains("pub struct UserOmitActive"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn pick_user(user : UserPickIdName) -> UserPickIdActive = \"__ts_mbt_pick_user\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn omit_user(user : UserOmitAge) -> UserOmitActive = \"__ts_mbt_omit_user\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn require_user(id : String) -> User = \"__ts_mbt_require_user\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn extract_user(user : User) -> User = \"__ts_mbt_extract_user\"",
+    ),
+  )
+  assert_true(bundle.ffi_mbt.contains("pub struct GetArgsResult"))
+  assert_true(bundle.ffi_mbt.contains("  _0 : String"))
+  assert_true(bundle.ffi_mbt.contains("  _1 : Bool"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_count() -> Double = \"__ts_mbt_get_count\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_args() -> GetArgsResult = \"__ts_mbt_get_args\"",
+    ),
+  )
+  assert_true(bundle.ffi_mbt.contains("#external\ntype StringRecordOfString"))
+  assert_true(
+    bundle.ffi_mbt.contains("#external\ntype StringRecordOfStringOrDouble"),
+  )
+  assert_true(bundle.ffi_mbt.contains("#external\ntype StringRecordOfUser"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_labels() -> StringRecordOfString = \"__ts_mbt_get_labels\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn set_labels(labels : StringRecordOfStringOrDouble) -> Unit = \"__ts_mbt_set_labels\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn get_users_by_id() -> StringRecordOfUser = \"__ts_mbt_get_users_by_id\"",
+    ),
+  )
+  assert_true(bundle.ffi_mbt.contains("#external\ntype UtilityError"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn new_utility_error(issues : Array[User]) -> UtilityError = \"__ts_mbt_new_utility_error\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn UtilityError::get_utility_error_issues(self : UtilityError) -> Array[User]",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("@js.Any"))
+  assert_false(bundle.ffi_mbt.contains("#external\ntype Pick"))
+  assert_false(bundle.ffi_mbt.contains("#external\ntype Omit"))
+  assert_false(bundle.ffi_mbt.contains("#external\ntype Record"))
+  assert_false(bundle.ffi_mbt.contains("#external\ntype NonNullable"))
+  assert_false(bundle.ffi_mbt.contains("#external\ntype Extract"))
+  assert_false(bundle.ffi_mbt.contains("#external\ntype Exclude"))
+  assert_false(bundle.ffi_mbt.contains("#external\ntype ReturnType"))
+  assert_false(bundle.ffi_mbt.contains("#external\ntype Parameters"))
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace ComponentPropsWithoutRef members" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",

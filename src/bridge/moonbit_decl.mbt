@@ -1884,12 +1884,313 @@ fn is_component_props_like_name(name : String) -> Bool {
 }
 
 ///|
+fn utility_literal_key_names(type_ : @ast.TsType) -> Array[String]? {
+  match type_ {
+    Literal(name) => Some([name])
+    Union(items) => {
+      let names : Array[String] = []
+      for item in items {
+        match item {
+          Literal(name) => names.push(name)
+          _ => return None
+        }
+      }
+      Some(names)
+    }
+    _ => None
+  }
+}
+
+///|
+fn utility_source_type_name(type_ : @ast.TsType) -> String? {
+  match type_ {
+    Named(name) => Some(name)
+    _ => None
+  }
+}
+
+///|
+fn utility_projection_interface_name(
+  base_name : String,
+  op_name : String,
+  keys : Array[String],
+) -> String {
+  let mut suffix = ""
+  for key in keys {
+    suffix += decl_to_pascal_case(key)
+  }
+  if suffix == "" {
+    suffix = "Empty"
+  }
+  base_name + op_name + suffix
+}
+
+///|
+fn utility_projection_interface_spec(
+  info : DeclModuleInfo,
+  op_name : String,
+  source_type : @ast.TsType,
+  keys_type : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsInterface? {
+  let source_name = match utility_source_type_name(source_type) {
+    Some(name) => name
+    None => return None
+  }
+  let keys = match utility_literal_key_names(keys_type) {
+    Some(keys) => keys
+    None => return None
+  }
+  match resolve_interface_origin(info, source_name, modules, canonical_types) {
+    Some(origin) => {
+      let fields : Array[(String, @ast.TsType)] = []
+      for field in origin.iface.fields {
+        let (field_name, field_type) = field
+        let should_include = match op_name {
+          "Pick" => keys.contains(field_name)
+          "Omit" => !keys.contains(field_name)
+          _ => false
+        }
+        if should_include {
+          fields.push(
+            (
+              field_name,
+              lower_react_utility_type(
+                origin.info,
+                rewrite_type_refs(origin.info, field_type, canonical_types),
+                modules,
+                canonical_types,
+              ),
+            ),
+          )
+        }
+      }
+      Some({
+        name: utility_projection_interface_name(
+          origin.export_name,
+          op_name,
+          keys,
+        ),
+        fields,
+      })
+    }
+    None => None
+  }
+}
+
+///|
+fn utility_type_list(type_ : @ast.TsType) -> Array[@ast.TsType] {
+  match type_ {
+    Union(items) => items
+    _ => [type_]
+  }
+}
+
+///|
+fn utility_type_list_contains(
+  items : Array[@ast.TsType],
+  target : @ast.TsType,
+) -> Bool {
+  for item in items {
+    if item == target {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn utility_union_from_items(items : Array[@ast.TsType]) -> @ast.TsType? {
+  if items.length() == 0 {
+    None
+  } else if items.length() == 1 {
+    Some(items[0])
+  } else {
+    Some(Union(items))
+  }
+}
+
+///|
+fn utility_filter_union_type(
+  op_name : String,
+  source_type : @ast.TsType,
+  filter_type : @ast.TsType,
+) -> @ast.TsType? {
+  let source_items = utility_type_list(source_type)
+  let filter_items = utility_type_list(filter_type)
+  let result : Array[@ast.TsType] = []
+  for item in source_items {
+    let matched = utility_type_list_contains(filter_items, item)
+    match op_name {
+      "Exclude" => if !matched { result.push(item) }
+      "Extract" => if matched { result.push(item) }
+      _ => return None
+    }
+  }
+  utility_union_from_items(result)
+}
+
+///|
+fn utility_record_key_suffix(type_ : @ast.TsType) -> String? {
+  match type_ {
+    String_ | Literal(_) => Some("String")
+    Number | Int => Some("Number")
+    Symbol => Some("Symbol")
+    Named("PropertyKey") => Some("PropertyKey")
+    _ => None
+  }
+}
+
+///|
+fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
+  match decl_classify_optional_like_union(type_) {
+    Some((inner, _)) => return utility_record_type_suffix(inner) + "Optional"
+    None => ()
+  }
+  match type_ {
+    Literal(value) => {
+      let suffix = decl_to_pascal_case(value)
+      if suffix == "" {
+        "Literal"
+      } else {
+        suffix
+      }
+    }
+    Number => "Double"
+    Int => "Int"
+    Boolean => "Bool"
+    String_ => "String"
+    Void => "Unit"
+    BigInt => "BigInt"
+    Symbol => "Symbol"
+    Any => "Any"
+    Never => "Never"
+    Null => "Null"
+    Undefined => "Undefined"
+    Array(inner) => "ArrayOf" + utility_record_type_suffix(inner)
+    Tuple(items) => {
+      let parts : Array[String] = []
+      for item in items {
+        parts.push(utility_record_type_suffix(item))
+      }
+      "TupleOf" + parts.join("And")
+    }
+    Object(_) => "Object"
+    Struct(name, _) | Named(name) => {
+      let suffix = decl_to_pascal_case(name)
+      if suffix == "" {
+        "Type"
+      } else {
+        suffix
+      }
+    }
+    Func(_, return_type) =>
+      "FunctionTo" + utility_record_type_suffix(return_type)
+    Union(items) => {
+      let parts : Array[String] = []
+      for item in items {
+        parts.push(utility_record_type_suffix(item))
+      }
+      if parts.length() == 0 {
+        "Union"
+      } else {
+        parts.join("Or")
+      }
+    }
+    Intersection(items) => {
+      let parts : Array[String] = []
+      for item in items {
+        parts.push(utility_record_type_suffix(item))
+      }
+      if parts.length() == 0 {
+        "Intersection"
+      } else {
+        parts.join("And")
+      }
+    }
+    Applied(name, args) => {
+      let prefix = {
+        let suffix = decl_to_pascal_case(name)
+        if suffix == "" {
+          "Type"
+        } else {
+          suffix
+        }
+      }
+      if args.length() == 0 {
+        prefix
+      } else {
+        let parts : Array[String] = []
+        for arg in args {
+          parts.push(utility_record_type_suffix(arg))
+        }
+        prefix + "Of" + parts.join("And")
+      }
+    }
+  }
+}
+
+///|
+fn utility_record_type_name(
+  key_type : @ast.TsType,
+  value_type : @ast.TsType,
+) -> String? {
+  match utility_record_key_suffix(key_type) {
+    Some(key_suffix) =>
+      Some(key_suffix + "RecordOf" + utility_record_type_suffix(value_type))
+    None => None
+  }
+}
+
+///|
+fn utility_tuple_rest_array_type(type_ : @ast.TsType) -> @ast.TsType? {
+  match type_ {
+    Tuple(items) => {
+      if items.length() < 2 {
+        return None
+      }
+      let mut item_type : @ast.TsType? = None
+      let mut has_rest_array = false
+      for item in items {
+        let current = match item {
+          Array(inner) => {
+            has_rest_array = true
+            inner
+          }
+          _ => item
+        }
+        match item_type {
+          Some(existing) => if existing != current { return None }
+          None => item_type = Some(current)
+        }
+      }
+      if !has_rest_array {
+        return None
+      }
+      match item_type {
+        Some(inner) => Some(Array(inner))
+        None => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 fn lower_react_utility_type(
   info : DeclModuleInfo,
   type_ : @ast.TsType,
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsType {
+  match utility_tuple_rest_array_type(type_) {
+    Some(array_type) =>
+      return lower_react_utility_type(
+        info, array_type, modules, canonical_types,
+      )
+    None => ()
+  }
   match type_ {
     Named(name) if is_react_node_like_name(name) => Any
     Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
@@ -1931,6 +2232,65 @@ fn lower_react_utility_type(
             lower_react_utility_type(info, inner_type, modules, canonical_types),
           ])
       }
+    Applied(name, [source_type, keys_type]) if name == "Pick" || name == "Omit" =>
+      match
+        utility_projection_interface_spec(
+          info, name, source_type, keys_type, modules, canonical_types,
+        ) {
+        Some(iface) => Named(iface.name)
+        None =>
+          Applied(name, [
+            lower_react_utility_type(
+              info, source_type, modules, canonical_types,
+            ),
+            lower_react_utility_type(info, keys_type, modules, canonical_types),
+          ])
+      }
+    Applied("NonNullable", [inner_type]) => {
+      let lowered = lower_react_utility_type(
+        info, inner_type, modules, canonical_types,
+      )
+      match decl_classify_optional_like_union(lowered) {
+        Some((collapsed, _)) => collapsed
+        None => lowered
+      }
+    }
+    Applied("ReturnType", [Func(_, return_type)]) =>
+      lower_react_utility_type(info, return_type, modules, canonical_types)
+    Applied("Parameters", [Func(params, _)]) => {
+      let lowered_params : Array[@ast.TsType] = []
+      for param in params {
+        lowered_params.push(
+          lower_react_utility_type(info, param, modules, canonical_types),
+        )
+      }
+      Tuple(lowered_params)
+    }
+    Applied("Record", [key_type, value_type]) => {
+      let lowered_key = lower_react_utility_type(
+        info, key_type, modules, canonical_types,
+      )
+      let lowered_value = lower_react_utility_type(
+        info, value_type, modules, canonical_types,
+      )
+      match utility_record_type_name(lowered_key, lowered_value) {
+        Some(name) => Named(name)
+        None => Any
+      }
+    }
+    Applied(name, [source_type, filter_type]) if name == "Exclude" ||
+      name == "Extract" => {
+      let lowered_source = lower_react_utility_type(
+        info, source_type, modules, canonical_types,
+      )
+      let lowered_filter = lower_react_utility_type(
+        info, filter_type, modules, canonical_types,
+      )
+      match utility_filter_union_type(name, lowered_source, lowered_filter) {
+        Some(filtered) => filtered
+        None => Applied(name, [lowered_source, lowered_filter])
+      }
+    }
     Applied(name, args) => {
       let next_args : Array[@ast.TsType] = []
       for arg in args {
@@ -2089,6 +2449,66 @@ fn collect_react_utility_interfaces_from_type(
       }
       collect_react_utility_interfaces_from_type(
         info, inner_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    Applied(name, [source_type, keys_type]) if name == "Pick" || name == "Omit" => {
+      match
+        utility_projection_interface_spec(
+          info, name, source_type, keys_type, modules, canonical_types,
+        ) {
+        Some(iface) => {
+          if !seen_names.contains(iface.name) {
+            seen_names.push(iface.name)
+            interfaces.push(iface)
+          }
+          for field in iface.fields {
+            let (_, field_type) = field
+            collect_react_utility_interfaces_from_type(
+              info, field_type, modules, canonical_types, seen_names, interfaces,
+            )
+          }
+        }
+        None => ()
+      }
+      collect_react_utility_interfaces_from_type(
+        info, source_type, modules, canonical_types, seen_names, interfaces,
+      )
+      collect_react_utility_interfaces_from_type(
+        info, keys_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    Applied("NonNullable", [inner_type]) =>
+      collect_react_utility_interfaces_from_type(
+        info, inner_type, modules, canonical_types, seen_names, interfaces,
+      )
+    Applied("ReturnType", [Func(params, return_type)]) => {
+      for param in params {
+        collect_react_utility_interfaces_from_type(
+          info, param, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+      collect_react_utility_interfaces_from_type(
+        info, return_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    Applied("Parameters", [Func(params, return_type)]) => {
+      for param in params {
+        collect_react_utility_interfaces_from_type(
+          info, param, modules, canonical_types, seen_names, interfaces,
+        )
+      }
+      collect_react_utility_interfaces_from_type(
+        info, return_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
+    Applied("Record", [_, _]) => ()
+    Applied(name, [source_type, filter_type]) if name == "Exclude" ||
+      name == "Extract" => {
+      collect_react_utility_interfaces_from_type(
+        info, source_type, modules, canonical_types, seen_names, interfaces,
+      )
+      collect_react_utility_interfaces_from_type(
+        info, filter_type, modules, canonical_types, seen_names, interfaces,
       )
     }
     Applied(_, args) =>
@@ -2257,9 +2677,14 @@ fn normalize_tuple_result_interfaces(
         match
           tuple_result_interface_spec(
             exported.export_name,
-            rewrite_type_refs(
+            lower_react_utility_type(
               info,
-              exported.import_.return_type,
+              rewrite_type_refs(
+                info,
+                exported.import_.return_type,
+                canonical_types,
+              ),
+              modules,
               canonical_types,
             ),
           ) {
@@ -2279,7 +2704,16 @@ fn normalize_tuple_result_interfaces(
         match
           tuple_result_interface_spec(
             exported.export_name,
-            rewrite_type_refs(info, exported.func.return_type, canonical_types),
+            lower_react_utility_type(
+              info,
+              rewrite_type_refs(
+                info,
+                exported.func.return_type,
+                canonical_types,
+              ),
+              modules,
+              canonical_types,
+            ),
           ) {
           Some(spec) =>
             if !seen_export_names.contains(spec.export_name) {
