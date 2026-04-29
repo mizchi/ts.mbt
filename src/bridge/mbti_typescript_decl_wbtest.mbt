@@ -391,7 +391,7 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export function load_all(keys: Array<string>): Promise<Result<Array<[string, number]>, Error>>;",
+      "export function load_all(keys: Array<string>): Promise<Result<Result<Array<[string, number]>, Error>, Error>>;",
     ),
   )
   assert_true(
@@ -693,7 +693,9 @@ test "bridge: emit TypeScript declarations renders public trait blocks as interf
   assert_true(actual.contains("export interface FileStat {"))
   assert_true(actual.contains("  size: number;"))
   assert_true(actual.contains("export interface FileSystem {"))
-  assert_true(actual.contains("  read_file_sync(arg0: string): string;"))
+  assert_true(
+    actual.contains("  read_file_sync(arg0: string): Result<string, Error>;"),
+  )
   assert_true(actual.contains("  exists_sync(arg0: string): boolean;"))
   assert_true(
     actual.contains(
@@ -1170,6 +1172,30 @@ async test "bridge: emit TypeScript facade scaffold bundle preserves raise effec
     bundle.autolink_glue_mbt.contains(
       "pub fn sem_ver_parse_next(self_ : @tsmbt_source.SemVer, arg1 : String) -> @tsmbt_source.SemVer raise @tsmbt_source.SemVerError {",
     ),
+  )
+}
+
+///|
+async test "bridge: emit TypeScript declarations reflects top-level raise effects as Result" {
+  let actual = emit_typescript_decl_from_mbti_path(
+    "fixtures/mbti_typescript/effect_facade.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI emit error: \{msg}")
+  }
+  assert_true(
+    actual.contains(
+      "export type Result<T, E> = { $tag: \"Ok\"; _0: T } | { $tag: \"Err\"; _0: E };",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "export function parse(arg0: string): Result<SemVer, SemVerError>;",
+    ),
+  )
+  assert_true(
+    actual.contains("parse_next(arg0: string): Result<SemVer, SemVerError>;"),
   )
 }
 

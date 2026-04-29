@@ -967,9 +967,13 @@ fn append_exported_type_namespace_members_with_prefix(
 fn namespace_has_non_type_members(namespace_ : @ast.TsNamespaceDecl) -> Bool {
   if namespace_.module_.imports.length() > 0 ||
     namespace_.module_.funcs.length() > 0 ||
-    namespace_.module_.values.length() > 0 ||
     namespace_.module_.classes.length() > 0 {
     return true
+  }
+  for value in namespace_.module_.values {
+    if value_decl_has_runtime_binding(value) {
+      return true
+    }
   }
   for nested in namespace_.module_.namespaces {
     if namespace_has_non_type_members(nested) {
@@ -977,6 +981,35 @@ fn namespace_has_non_type_members(namespace_ : @ast.TsNamespaceDecl) -> Bool {
     }
   }
   false
+}
+
+///|
+fn value_decl_has_runtime_binding(value : @ast.TsValueDecl) -> Bool {
+  match value.type_ {
+    // The parser emits Symbol for `unique symbol`, which .d.ts files use for
+    // type-level marker keys that often do not exist as runtime exports.
+    Symbol => false
+    _ => true
+  }
+}
+
+///|
+fn resolved_export_is_non_runtime_value(
+  export_ : ResolvedExport,
+  modules : Map[String, DeclModuleInfo],
+) -> Bool {
+  let local_name = match export_.local_name {
+    Some(local_name) => local_name
+    None => return false
+  }
+  match modules.get(export_.source_path) {
+    Some(info) =>
+      match find_value_decl(info.module_, local_name) {
+        Some(value) => !value_decl_has_runtime_binding(value)
+        None => false
+      }
+    None => false
+  }
 }
 
 ///|
@@ -1032,6 +1065,9 @@ fn append_exported_namespace_members_with_prefix(
   }
   for value in namespace_.module_.values {
     if nested_namespace_names.contains(value.name) {
+      continue
+    }
+    if !value_decl_has_runtime_binding(value) {
       continue
     }
     values.push({
@@ -1230,12 +1266,16 @@ fn resolve_decl_from_local_name(
                     None =>
                       match find_value_decl(info.module_, local_name) {
                         Some(value) =>
-                          Value({
-                            source_path,
-                            export_name,
-                            source_export_name,
-                            value,
-                          })
+                          if value_decl_has_runtime_binding(value) {
+                            Value({
+                              source_path,
+                              export_name,
+                              source_export_name,
+                              value,
+                            })
+                          } else {
+                            Missing
+                          }
                         None =>
                           match find_class_decl(info.module_, local_name) {
                             Some(class_) =>

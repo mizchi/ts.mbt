@@ -801,6 +801,24 @@ async test "bridge: emit MoonBit declarations from export-as-namespace ambient m
 }
 
 ///|
+async test "bridge: omit unique symbol marker value exports from MoonBit declarations" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/unique-symbol-runtime-export-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn ok(value : Bool) -> Unit"))
+  assert_false(actual.contains("kOptions"))
+  assert_false(actual.contains("get_k_options"))
+}
+
+///|
 async test "bridge: emit MoonBit declarations from exported runtime namespace members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/exported-runtime-namespace-entry.d.ts",

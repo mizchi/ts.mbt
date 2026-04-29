@@ -501,10 +501,13 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Ident("unique") => {
       // unique symbol
       let _ = self.advance()
-      if self.is_ident() {
-        let _ = self.advance()
+      match self.peek().kind {
+        Ident("symbol") => {
+          let _ = self.advance()
+          Symbol
+        }
+        _ => Any
       }
-      Any
     }
     Ident("asserts") => {
       // asserts x is T

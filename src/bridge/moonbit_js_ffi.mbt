@@ -1820,6 +1820,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     if handled_export_names.contains(export_.export_name) {
       continue
     }
+    if resolved_export_is_non_runtime_value(export_, modules) {
+      continue
+    }
     let fallback_value : @ast.TsValueDecl = {
       name: export_.export_name,
       type_: @ast.TsType::Any,

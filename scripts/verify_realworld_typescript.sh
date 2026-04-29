@@ -120,6 +120,19 @@ jsvalue_function_budget() {
     node:fs) printf '72\n' ;;
     node:path) printf '0\n' ;;
     node:crypto) printf '30\n' ;;
+    colorette) printf '1\n' ;;
+    magic-string) printf '12\n' ;;
+    source-map) printf '8\n' ;;
+    valibot) printf '35\n' ;;
+    immer) printf '15\n' ;;
+    execa) printf '0\n' ;;
+    preact) printf '6\n' ;;
+    node:os) printf '0\n' ;;
+    node:url) printf '2\n' ;;
+    node:querystring) printf '2\n' ;;
+    node:assert) printf '25\n' ;;
+    node:util) printf '14\n' ;;
+    node:buffer) printf '3\n' ;;
     *) printf '999999\n' ;;
   esac
 }
@@ -263,6 +276,79 @@ test "real-world date-fns bridge smoke" {
 }
 EOF
       ;;
+    colorette)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world colorette bridge smoke" {
+  let _ = get_red()
+  let _ = createColors(None)
+  let _ = get_is_color_supported()
+}
+EOF
+      ;;
+    magic_string)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world magic-string bridge smoke" {
+  let s = new_default("hello", None)
+  assert_eq(s.default_to_string(), "hello")
+  let _ = s.default_append("!")
+  assert_eq(s.default_to_string(), "hello!")
+}
+EOF
+      ;;
+    source_map)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world source-map bridge smoke" {
+  let generator = new_source_map_generator(None)
+  if generator.source_map_generator_to_string().length() == 0 {
+    abort("expected source map generator output")
+  }
+}
+EOF
+      ;;
+    valibot)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world valibot bridge smoke" {
+  let _ = string()
+  let _ = number()
+  let _ = boolean()
+  let _ = uuid()
+}
+EOF
+      ;;
+    immer)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_immer_object() -> JSValue =
+  #| () => ({ value: 1 })
+
+extern "js" fn realworld_immer_false() -> JSValue =
+  #| () => false
+
+test "real-world immer bridge smoke" {
+  assert_true(isDraftable(realworld_immer_object()))
+  assert_false(isDraftable(realworld_immer_false()))
+}
+EOF
+      ;;
+    execa)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world execa bridge smoke" {
+  let parts = parseCommandString("node --version")
+  assert_eq(parts.length(), 2)
+  let _ = get_execa()
+}
+EOF
+      ;;
+    preact)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_preact_children() -> Array[ComponentChildren] =
+  #| () => []
+
+test "real-world preact bridge smoke" {
+  let _ = h("div", None, realworld_preact_children())
+  let _ = createRef()
+}
+EOF
+      ;;
     node_sqlite)
       cat > "$out/bridge_test.mbt" <<'EOF'
 extern "js" fn realworld_node_sqlite_memory_path() -> PathLike =
@@ -346,6 +432,77 @@ test "real-world node:crypto bridge smoke" {
   )
   if getHashes().length() == 0 {
     abort("expected crypto hash algorithms")
+  }
+}
+EOF
+      ;;
+    node_os)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world node:os bridge smoke" {
+  if tmpdir().length() == 0 {
+    abort("expected tmpdir")
+  }
+  if homedir().length() == 0 {
+    abort("expected homedir")
+  }
+  if availableParallelism() <= 0.0 {
+    abort("expected available parallelism")
+  }
+}
+EOF
+      ;;
+    node_url)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world node:url bridge smoke" {
+  assert_eq(domainToASCII("example.com"), "example.com")
+  assert_eq(domainToUnicode("example.com"), "example.com")
+  assert_eq(resolve("https://example.com/a/b", "../c"), "https://example.com/c")
+}
+EOF
+      ;;
+    node_querystring)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world node:querystring bridge smoke" {
+  assert_eq(escape("a b"), "a%20b")
+  assert_eq(unescape("a%20b"), "a b")
+}
+EOF
+      ;;
+    node_assert)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_assert_true() -> JSValue =
+  #| () => true
+
+extern "js" fn realworld_assert_one() -> JSValue =
+  #| () => 1
+
+test "real-world node:assert bridge smoke" {
+  let _ = assertOk(realworld_assert_true(), None)
+  assertEqual(realworld_assert_one(), realworld_assert_one(), None)
+}
+EOF
+      ;;
+    node_util)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_util_array() -> JSValue =
+  #| () => []
+
+test "real-world node:util bridge smoke" {
+  assert_eq(toUSVString("ok"), "ok")
+  assert_eq(stripVTControlCharacters("plain"), "plain")
+  assert_true(isArray(realworld_util_array()))
+}
+EOF
+      ;;
+    node_buffer)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_buffer_value() -> JSValue =
+  #| () => Buffer.from("hello")
+
+test "real-world node:buffer bridge smoke" {
+  assert_true(isUtf8(realworld_buffer_value()))
+  if get_k_max_length() <= 0.0 {
+    abort("expected positive buffer max length")
   }
 }
 EOF
@@ -445,6 +602,89 @@ fn main {
   if !@sut.isExists(2020.0, 1.0, 29.0) {
     abort("expected leap day to exist")
   }
+}
+EOF
+      ;;
+    colorette)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let _ = @sut.get_red()
+  let _ = @sut.createColors(None)
+  let _ = @sut.get_is_color_supported()
+}
+EOF
+      ;;
+    magic_string)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let s = @sut.new_default("hello", None)
+  if s.default_to_string() != "hello" {
+    abort("unexpected initial magic-string output")
+  }
+  let _ = s.default_append("!")
+  if s.default_to_string() != "hello!" {
+    abort("unexpected appended magic-string output")
+  }
+}
+EOF
+      ;;
+    source_map)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let generator = @sut.new_source_map_generator(None)
+  if generator.source_map_generator_to_string().length() == 0 {
+    abort("expected source map generator output")
+  }
+}
+EOF
+      ;;
+    valibot)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let _ = @sut.string()
+  let _ = @sut.number()
+  let _ = @sut.boolean()
+  let _ = @sut.uuid()
+}
+EOF
+      ;;
+    immer)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_immer_object() -> @sut.JSValue =
+  #| () => ({ value: 1 })
+
+extern "js" fn realworld_immer_false() -> @sut.JSValue =
+  #| () => false
+
+fn main {
+  if !@sut.isDraftable(realworld_immer_object()) {
+    abort("expected object to be draftable")
+  }
+  if @sut.isDraftable(realworld_immer_false()) {
+    abort("expected false to be non-draftable")
+  }
+}
+EOF
+      ;;
+    execa)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let parts = @sut.parseCommandString("node --version")
+  if parts.length() != 2 {
+    abort("unexpected parsed command length")
+  }
+  let _ = @sut.get_execa()
+}
+EOF
+      ;;
+    preact)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_preact_children() -> Array[@sut.ComponentChildren] =
+  #| () => []
+
+fn main {
+  let _ = @sut.h("div", None, realworld_preact_children())
+  let _ = @sut.createRef()
 }
 EOF
       ;;
@@ -550,6 +790,95 @@ fn main {
   }
   if @sut.getHashes().length() == 0 {
     abort("expected crypto hash algorithms")
+  }
+}
+EOF
+      ;;
+    node_os)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if @sut.tmpdir().length() == 0 {
+    abort("expected tmpdir")
+  }
+  if @sut.homedir().length() == 0 {
+    abort("expected homedir")
+  }
+  if @sut.availableParallelism() <= 0.0 {
+    abort("expected available parallelism")
+  }
+}
+EOF
+      ;;
+    node_url)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if @sut.domainToASCII("example.com") != "example.com" {
+    abort("unexpected ascii domain")
+  }
+  if @sut.domainToUnicode("example.com") != "example.com" {
+    abort("unexpected unicode domain")
+  }
+  if @sut.resolve("https://example.com/a/b", "../c") != "https://example.com/c" {
+    abort("unexpected url resolve output")
+  }
+}
+EOF
+      ;;
+    node_querystring)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  if @sut.escape("a b") != "a%20b" {
+    abort("unexpected escape output")
+  }
+  if @sut.unescape("a%20b") != "a b" {
+    abort("unexpected unescape output")
+  }
+}
+EOF
+      ;;
+    node_assert)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_assert_true() -> @sut.JSValue =
+  #| () => true
+
+extern "js" fn realworld_assert_one() -> @sut.JSValue =
+  #| () => 1
+
+fn main {
+  let _ = @sut.assertOk(realworld_assert_true(), None)
+  @sut.assertEqual(realworld_assert_one(), realworld_assert_one(), None)
+}
+EOF
+      ;;
+    node_util)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_util_array() -> @sut.JSValue =
+  #| () => []
+
+fn main {
+  if @sut.toUSVString("ok") != "ok" {
+    abort("unexpected toUSVString output")
+  }
+  if @sut.stripVTControlCharacters("plain") != "plain" {
+    abort("unexpected stripVTControlCharacters output")
+  }
+  if !@sut.isArray(realworld_util_array()) {
+    abort("expected array")
+  }
+}
+EOF
+      ;;
+    node_buffer)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_buffer_value() -> @sut.JSValue =
+  #| () => Buffer.from("hello")
+
+fn main {
+  if !@sut.isUtf8(realworld_buffer_value()) {
+    abort("expected utf8 buffer")
+  }
+  if @sut.get_k_max_length() <= 0.0 {
+    abort("expected positive buffer max length")
   }
 }
 EOF
@@ -882,6 +1211,12 @@ while IFS='|' read -r kind package_spec module_name types_path; do
         node:fs) verify_node_fs "$types_path" ;;
         node:path) verify_node_builtin "$package_spec" "$module_name" "$types_path" "path.d.ts" "TSMBT_NODE_PATH_TYPES" ;;
         node:crypto) verify_node_builtin "$package_spec" "$module_name" "$types_path" "crypto.d.ts" "TSMBT_NODE_CRYPTO_TYPES" ;;
+        node:os) verify_node_builtin "$package_spec" "$module_name" "$types_path" "os.d.ts" "TSMBT_NODE_OS_TYPES" ;;
+        node:url) verify_node_builtin "$package_spec" "$module_name" "$types_path" "url.d.ts" "TSMBT_NODE_URL_TYPES" ;;
+        node:querystring) verify_node_builtin "$package_spec" "$module_name" "$types_path" "querystring.d.ts" "TSMBT_NODE_QUERYSTRING_TYPES" ;;
+        node:assert) verify_node_builtin "$package_spec" "$module_name" "$types_path" "assert.d.ts" "TSMBT_NODE_ASSERT_TYPES" ;;
+        node:util) verify_node_builtin "$package_spec" "$module_name" "$types_path" "util.d.ts" "TSMBT_NODE_UTIL_TYPES" ;;
+        node:buffer) verify_node_builtin "$package_spec" "$module_name" "$types_path" "buffer.d.ts" "TSMBT_NODE_BUFFER_TYPES" ;;
         *)
           echo "Unsupported node_builtin corpus entry: $package_spec" >&2
           exit 1

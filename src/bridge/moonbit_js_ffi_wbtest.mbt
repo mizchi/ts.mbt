@@ -2766,6 +2766,29 @@ async test "bridge: emit MoonBit JS FFI bundle imports export-equals namespace m
 }
 
 ///|
+async test "bridge: omit unique symbol marker value exports from MoonBit JS FFI bundle" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/unique-symbol-runtime-export-entry.d.ts", "node:assert",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn ok(value : Bool) -> Unit = \"ok\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("kOptions"))
+  assert_false(bundle.bridge_js.contains("kOptions"))
+  assert_false(bundle.bridge_js.contains("k_options"))
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace assignment" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-entry.d.ts", "./runtime/react-like.js",

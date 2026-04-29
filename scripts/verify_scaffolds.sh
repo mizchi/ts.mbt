@@ -190,7 +190,7 @@ import type { Ref } from "moonbitlang/core/ref";
 
 const bytes: Uint8Array = borrow_bytes(new Uint8Array([1, 2, 3]));
 const box: CallbackBox<string> = make_string_box("value");
-const ok: Promise<Result<Array<[string, number]>, LoadError>> = load_all(["a"]);
+const ok: Promise<Result<Result<Array<[string, number]>, LoadError>, LoadError>> = load_all(["a"]);
 const status: Status = ready(1);
 const errorStatus: Status = failed("missing");
 const state: Ref<Array<bigint>> = { val: [] };
@@ -258,7 +258,7 @@ if (box.current !== "value") {
   throw new Error("unexpected CallbackBox output");
 }
 const loaded = await mod.load_all(["aa"]);
-if (!loaded || !("_0" in loaded)) {
+if (!loaded || !("_0" in loaded) || !loaded._0 || !("_0" in loaded._0)) {
   throw new Error("unexpected load_all output");
 }
 const state = { val: [] };

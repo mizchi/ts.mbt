@@ -14,11 +14,14 @@ packages=(
   "mizchi/pixelmatch"
   "mizchi/ripple"
   "mizchi/semver"
+  "mizchi/svg"
   "mizchi/syntree"
   "mizchi/tempfile"
+  "mizchi/threads"
   "mizchi/tui"
   "mizchi/vfs"
   "mizchi/jwt.mbt"
+  "mizchi/zlib"
 )
 
 checked=0
@@ -248,6 +251,27 @@ if (rendered !== "1.2.3" || incremented !== "1.2.4") {
 }
 EOF
       ;;
+    "mizchi/svg")
+      node --input-type=module - "$out" <<'EOF'
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const out = process.argv[2];
+const mod = await import(pathToFileURL(path.resolve(out, "index.js")).href);
+const red = mod.color_rgb(255, 0, 0);
+const node = mod.rect("box", 0, 0, 10, 20);
+const parsed = mod.parse_svg('<svg width="1" height="1"><rect width="1" height="1"/></svg>');
+if (red === null || typeof red !== "object") {
+  throw new Error("color_rgb did not return a color object");
+}
+if (node === null || typeof node !== "object") {
+  throw new Error("rect did not return an SVG node");
+}
+if (parsed === undefined || parsed === null || typeof parsed !== "object") {
+  throw new Error("parse_svg did not return an SVG node");
+}
+EOF
+      ;;
     "mizchi/syntree")
       node --input-type=module - "$out" <<'EOF'
 import path from "node:path";
@@ -282,6 +306,27 @@ if (text !== "hello") {
 }
 EOF
       ;;
+    "mizchi/threads")
+      node --input-type=module - "$out" <<'EOF'
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const out = process.argv[2];
+const mod = await import(pathToFileURL(path.resolve(out, "index.js")).href);
+const platform = mod.multithread_platform_unsupported();
+const capabilities = mod.platform_capabilities();
+const ops = mod.atomic_ops_unsupported();
+if (platform === null || typeof platform !== "object") {
+  throw new Error("multithread_platform_unsupported did not return a platform");
+}
+if (capabilities === null || typeof capabilities !== "object") {
+  throw new Error("platform_capabilities did not return capabilities");
+}
+if (ops === null || typeof ops !== "object") {
+  throw new Error("atomic_ops_unsupported did not return atomic ops");
+}
+EOF
+      ;;
     "mizchi/vfs")
       node --input-type=module - "$out" <<'EOF'
 import path from "node:path";
@@ -293,6 +338,28 @@ const file = mod.snapshot_file("a.txt", new Uint8Array([65, 66]));
 const snapshot = mod.snapshot(["a.txt"], [file]);
 if (file === null || typeof file !== "object" || snapshot === null || typeof snapshot !== "object") {
   throw new Error("vfs snapshot constructors did not return objects");
+}
+EOF
+      ;;
+    "mizchi/zlib")
+      node --input-type=module - "$out" <<'EOF'
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const out = process.argv[2];
+const mod = await import(pathToFileURL(path.resolve(out, "index.js")).href);
+const input = new Uint8Array([104, 101, 108, 108, 111]);
+const compressed = mod.zlib_compress(input);
+const decompressedResult = mod.zlib_decompress(compressed);
+const decompressed = decompressedResult?._0;
+if (!(compressed instanceof Uint8Array) || compressed.length === 0) {
+  throw new Error("zlib_compress did not return compressed bytes");
+}
+if (!(decompressed instanceof Uint8Array) || new TextDecoder().decode(decompressed) !== "hello") {
+  throw new Error("zlib_decompress did not roundtrip bytes");
+}
+if (typeof mod.adler32(input) !== "number") {
+  throw new Error("adler32 did not return a number");
 }
 EOF
       ;;
@@ -591,4 +658,6 @@ done
 
 if [ "$checked" -eq 0 ]; then
   echo "skip real-world MoonBit probe: no target checkouts found" >&2
+else
+  echo "real-world MoonBit checked $checked packages"
 fi

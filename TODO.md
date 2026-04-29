@@ -14,15 +14,15 @@ corpus without manual edits.
 
 ### 90% Quality Gate
 
-- [ ] `just ci` passes with all fixture-backed bridge/scaffold checks.
-- [ ] `just verify-realworld-typescript` passes with a fixed corpus of at least
+- [x] `just ci` passes with all fixture-backed bridge/scaffold checks.
+- [x] `just verify-realworld-typescript` passes with a fixed corpus of at least
   20 npm / Node entrypoints.
-- [ ] `just verify-realworld-moonbit` passes with a fixed corpus of at least 15
+- [x] `just verify-realworld-moonbit` passes with a fixed corpus of at least 15
   local MoonBit packages.
-- [ ] Every generated TS -> MoonBit package in the real-world corpus passes:
+- [x] Every generated TS -> MoonBit package in the real-world corpus passes:
   `moon check --target js`, `moon test --target js`, `moon build --target js`,
   and a Node smoke run.
-- [ ] Every generated MoonBit -> TS package in the real-world corpus passes:
+- [x] Every generated MoonBit -> TS package in the real-world corpus passes:
   `moon build --target js`, TypeScript declaration typecheck, and a Node import
   smoke run for root and subpath exports.
 - [ ] Unsupported exports are either 0 or limited to explicitly-budgeted
@@ -106,8 +106,11 @@ corpus without manual edits.
 - [ ] Add runtime smokes for object option bags with optional fields.
 - [ ] Add runtime smokes for class instance properties, static properties, and
   static methods.
-- [ ] Ensure generated `bridge.js` never imports a missing runtime binding
+- [x] Ensure generated `bridge.js` never imports a missing runtime binding
   without a diagnostic.
+  - `unique symbol` marker exports, such as `node:assert`'s internal
+    `kOptions`, are now treated as non-runtime declarations and are omitted
+    from generated JS glue instead of being imported.
 
 ### Phase 4: MoonBit -> TypeScript Package Quality (78% -> 84%)
 
@@ -117,8 +120,11 @@ corpus without manual edits.
   - omitted with diagnostics
   - represented as structural TypeScript interfaces
   - represented through generated facade functions
-- [ ] Preserve MoonBit `raise` effects in TypeScript declarations as a documented
+- [x] Preserve MoonBit `raise` effects in TypeScript declarations as a documented
   error contract.
+  - Top-level and trait method `raise` effects now render as
+    `Result<Return, ErrorType>` in generated TypeScript declarations, matching
+    the JS backend's result-wrapper runtime shape.
 - [ ] Improve child-package and subpath export coverage:
   - root exports
   - nested package exports
@@ -130,29 +136,43 @@ corpus without manual edits.
 
 ### Phase 5: Real-World Corpus Expansion (84% -> 88%)
 
-- [ ] Lock a TypeScript corpus that covers different API shapes:
+- [x] Lock a TypeScript corpus that covers different API shapes:
   - small function libraries: `clsx`, `date-fns`
   - class/value libraries: `chalk`, `dotenv`
   - schema libraries: `zod`
-  - web libraries: `hono`, React JSX runtimes
-  - Node built-ins: `node:fs`, `node:sqlite`, `node:path`, `node:crypto`
-  - one callback-heavy package
-  - one Promise-heavy package
-  - one CJS-style package
+  - web libraries: `hono`, `preact`
+  - Node built-ins: `node:fs`, `node:sqlite`, `node:path`, `node:crypto`,
+    `node:os`, `node:url`, `node:querystring`, `node:assert`, `node:util`,
+    `node:buffer`
+  - callback-heavy APIs: `node:fs`, `node:util`
+  - Promise-heavy APIs: `execa`
+  - CJS / export-assignment style APIs: `source-map`, Node built-ins
   - Current locked probe entries: `clsx`, `chalk`, `dotenv`, `ignore`, `hono`,
-    `zod`, `date-fns`, `node:sqlite`, `node:fs`, `node:path`, `node:crypto`.
-    The remaining gap is expanding this to 20+ entries with callback-heavy,
-    Promise-heavy, CJS-style, and React JSX runtime coverage.
-- [ ] Lock a MoonBit corpus that covers:
+    `zod`, `date-fns`, `colorette`, `magic-string`, `source-map`, `valibot`,
+    `immer`, `execa`, `preact`, `node:sqlite`, `node:fs`, `node:path`,
+    `node:crypto`, `node:os`, `node:url`, `node:querystring`, `node:assert`,
+    `node:util`, `node:buffer`.
+- [x] Lock a MoonBit corpus that covers:
   - root-only packages
   - child-package exports
   - effectful APIs
   - generic APIs
   - private root types
   - packages with external JS bindings
-- [ ] Add per-package smoke programs that use meaningful APIs, not only compile
+  - Current checked entries: `mizchi/ast_printer`, `mizchi/js`,
+    `mizchi/jsonschema`, `mizchi/markdown`, `mizchi/nom`,
+    `mizchi/pixelmatch`, `mizchi/ripple`, `mizchi/semver`, `mizchi/svg`,
+    `mizchi/syntree`, `mizchi/tempfile`, `mizchi/threads`, `mizchi/vfs`,
+    `mizchi/jwt.mbt`, `mizchi/zlib`.
+- [x] Add per-package smoke programs that use meaningful APIs, not only compile
   the generated bridge.
-- [ ] Keep each real-world failure as a minimized fixture before fixing it.
+  - The TypeScript real-world corpus now emits package-specific MoonBit smoke
+    programs and runs the built JS with Node after `moon build --target js`.
+  - The MoonBit real-world corpus now includes package-specific Node smokes for
+    representative APIs, including `svg`, `threads`, and `zlib`.
+- [x] Keep each real-world failure as a minimized fixture before fixing it.
+  - The `node:assert` missing runtime binding failure is covered by
+    `unique-symbol-runtime-export-entry.d.ts`.
 - [ ] Track corpus status in a generated markdown report checked by CI or an
   opt-in verification task.
 

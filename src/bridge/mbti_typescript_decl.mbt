@@ -112,6 +112,7 @@ priv struct MbtiFunctionDecl {
   type_params : Array[MbtiTypeParam]
   params_src : String
   return_src : String
+  return_src_with_effect : String
   is_async : Bool
 }
 
@@ -2800,12 +2801,9 @@ fn parse_trait_block_decl(
         if trimmed == "" || trimmed == "}" || trimmed.has_prefix("}") {
           continue
         }
+        let synthetic_line = "pub fn \{name}::\{trimmed}"
         match
-          parse_mbti_function_signature(
-            "pub fn \{name}::\{trimmed}",
-            imports,
-            used_aliases,
-          ) {
+          parse_mbti_function_signature(synthetic_line, imports, used_aliases) {
           Some(signature) => {
             let (_, fn_name, type_params, params_src, return_src, is_async) = signature
             let params = parse_mbti_params(
@@ -2841,7 +2839,15 @@ fn parse_trait_block_decl(
               Some(name),
               owner_type_param_names,
             )
-            let rendered_return_ty = render_ts_return_type(return_ty, is_async)
+            let rendered_return_ty = render_ts_return_type_with_effect(
+              mbti_return_source_with_effect_from_function_line(synthetic_line),
+              return_ty,
+              is_async,
+              imports,
+              used_aliases,
+              Some(name),
+              owner_type_param_names,
+            )
             let method_name = sanitize_ts_identifier(fn_name, "method")
             if instance_params.length() == 0 {
               methods.push(
@@ -2904,6 +2910,55 @@ fn render_ts_return_type(return_ty : String, is_async : Bool) -> String {
   } else {
     return_ty
   }
+}
+
+///|
+fn mbti_effect_error_ts_type(
+  return_src_with_effect : String,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+  owner_name : String?,
+  owner_type_params : Array[String],
+) -> String? raise MbtiTypescriptDeclError {
+  let effect_suffix = mbti_top_level_effect_suffix(return_src_with_effect)
+  if effect_suffix == "" || effect_suffix.has_prefix("noraise") {
+    return None
+  }
+  if !effect_suffix.has_prefix("raise") {
+    return None
+  }
+  let error_src = effect_suffix["raise".length():effect_suffix.length()]
+    .trim()
+    .to_string()
+  if error_src == "" {
+    Some("Error")
+  } else {
+    Some(
+      translate_mbti_type(
+        error_src, imports, used_aliases, owner_name, owner_type_params,
+      ),
+    )
+  }
+}
+
+///|
+fn render_ts_return_type_with_effect(
+  return_src_with_effect : String,
+  return_ty : String,
+  is_async : Bool,
+  imports : Array[MbtiImportRef],
+  used_aliases : Array[String],
+  owner_name : String?,
+  owner_type_params : Array[String],
+) -> String raise MbtiTypescriptDeclError {
+  let effect_return_ty = match
+    mbti_effect_error_ts_type(
+      return_src_with_effect, imports, used_aliases, owner_name, owner_type_params,
+    ) {
+    Some(error_ty) => "Result<\{return_ty}, \{error_ty}>"
+    None => return_ty
+  }
+  render_ts_return_type(effect_return_ty, is_async)
 }
 
 ///|
@@ -3701,6 +3756,9 @@ fn parse_mbti_to_typescript_with_import_rewrites(
             type_params,
             params_src,
             return_src,
+            return_src_with_effect: mbti_return_source_with_effect_from_function_line(
+              trimmed,
+            ),
             is_async,
           })
           idx += 1
@@ -3743,9 +3801,14 @@ fn parse_mbti_to_typescript_with_import_rewrites(
               Some(owner),
               owner_type_param_names,
             )
-            let rendered_return_ty = render_ts_return_type(
+            let rendered_return_ty = render_ts_return_type_with_effect(
+              function_decl.return_src_with_effect,
               return_ty,
               function_decl.is_async,
+              imports,
+              used_aliases,
+              Some(owner),
+              owner_type_param_names,
             )
             let member_name = sanitize_ts_identifier(
               function_decl.fn_name,
@@ -3842,9 +3905,14 @@ fn parse_mbti_to_typescript_with_import_rewrites(
           None,
           [],
         )
-        let rendered_return_ty = render_ts_return_type(
+        let rendered_return_ty = render_ts_return_type_with_effect(
+          function_decl.return_src_with_effect,
           return_ty,
           function_decl.is_async,
+          imports,
+          used_aliases,
+          None,
+          [],
         )
         let fn_type_params = render_type_param_suffix(function_decl.type_params)
         let safe_fn_name = sanitize_ts_identifier(function_decl.fn_name, "fn")
