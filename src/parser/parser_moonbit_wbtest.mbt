@@ -106,3 +106,24 @@ test "parser: emit MoonBit declaration type names with leading underscores" {
   }
   assert_true(actual.contains("declare pub type UnderscoreZodType"))
 }
+
+///|
+test "parser: emit MoonBit declarations keeps generic intersections with empty object opaque" {
+  let src =
+    #|declare function isPast(date: DateArg<Date> & {}): boolean;
+    #|declare function isEqual(leftDate: DateArg<Date> & {}, rightDate: DateArg<Date> & {}): boolean;
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type DateArg"))
+  assert_true(actual.contains("declare pub fn isPast(date : DateArg) -> Bool"))
+  assert_true(
+    actual.contains(
+      "declare pub fn isEqual(leftDate : DateArg, rightDate : DateArg) -> Bool",
+    ),
+  )
+  assert_false(actual.contains("date : JSValue"))
+}

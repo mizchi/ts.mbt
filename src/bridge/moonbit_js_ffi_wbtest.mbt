@@ -380,6 +380,25 @@ async test "bridge: emit MoonBit JS FFI bundle with resolved mixed imports as op
 }
 
 ///|
+test "bridge: FFI type name treats generic intersections with empty object as opaque" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    external_type_names: [],
+    needs_js_any: false,
+  }
+  let actual = ffi_type_name(
+    state,
+    @ast.TsType::Intersection([
+      @ast.TsType::Applied("DateArg", [@ast.TsType::Named("Date")]),
+      @ast.TsType::Object([]),
+    ]),
+  )
+  assert_eq(actual, "DateArg")
+  assert_false(state.needs_js_any)
+  assert_true(state.external_type_names.contains("DateArg"))
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle with resolved generic library imports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/resolved-generic-lib-entry.d.ts", "/runtime/resolved-generic-lib.js",

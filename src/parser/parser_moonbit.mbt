@@ -245,12 +245,44 @@ fn classify_optional_like_union(type_ : @ast.TsType) -> (@ast.TsType, Bool)? {
 }
 
 ///|
+fn is_empty_object_type(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Object(fields) => fields.length() == 0
+    _ => false
+  }
+}
+
+///|
+fn classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
+  match type_ {
+    Intersection(items) => {
+      let concrete : Array[@ast.TsType] = []
+      for item in items {
+        if !is_empty_object_type(item) {
+          concrete.push(item)
+        }
+      }
+      if concrete.length() == 1 {
+        Some(concrete[0])
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
   match classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       let suffix = if is_optional { "?" } else { "" }
       return moonbit_type_name(state, collapsed) + suffix
     }
+    None => ()
+  }
+  match classify_transparent_intersection(type_) {
+    Some(inner) => return moonbit_type_name(state, inner)
     None => ()
   }
   match type_ {

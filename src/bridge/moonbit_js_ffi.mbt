@@ -320,12 +320,44 @@ fn ffi_classify_optional_like_union(
 }
 
 ///|
+fn ffi_is_empty_object_type(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Object(fields) => fields.length() == 0
+    _ => false
+  }
+}
+
+///|
+fn ffi_classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
+  match type_ {
+    Intersection(items) => {
+      let concrete : Array[@ast.TsType] = []
+      for item in items {
+        if !ffi_is_empty_object_type(item) {
+          concrete.push(item)
+        }
+      }
+      if concrete.length() == 1 {
+        Some(concrete[0])
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
   match ffi_classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       let suffix = if is_optional { "?" } else { "" }
       return ffi_type_name(state, collapsed) + suffix
     }
+    None => ()
+  }
+  match ffi_classify_transparent_intersection(type_) {
+    Some(inner) => return ffi_type_name(state, inner)
     None => ()
   }
   match type_ {
