@@ -203,6 +203,12 @@ priv struct LocalVar {
 }
 
 ///|
+priv enum IifeBinding {
+  IifeValueBinding(String, UInt, @ast.TsType)
+  IifeFunctionBinding(String, @ast.TsExpr)
+}
+
+///|
 // / codegen
 priv struct CodeGenCtx {
   // variable ( -> )
@@ -921,27 +927,10 @@ fn compile_expr(
       compile_unaryop(ctx, op, operand, expected_type)
     @ast.TsExpr::Call(name, args) =>
       compile_callable_name_expr(ctx, name, args, expected_type)
-    @ast.TsExpr::CallExpr(@ast.TsExpr::Var(name), args) =>
-      compile_callable_name_expr(ctx, name, args, expected_type)
-    @ast.TsExpr::CallExpr(@ast.TsExpr::ArrowFunc(params, body, is_async), args) =>
-      compile_arrow_iife_call_expr(
-        ctx, params, body, is_async, args, expected_type,
-      )
-    @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(func), args) =>
-      compile_func_expr_iife_call_expr(ctx, func, args, expected_type)
-    @ast.TsExpr::CallExpr(
-      @ast.TsExpr::Cond(
-        cond,
-        @ast.TsExpr::Var(then_name),
-        @ast.TsExpr::Var(else_name)
-      ),
-      args
-    ) =>
-      compile_conditional_named_call_expr(
-        ctx, cond, then_name, else_name, args, expected_type,
-      )
-    @ast.TsExpr::CallExpr(_, _) =>
-      raise CodeGenError("call expression is not supported in Wasm compiler")
+    @ast.TsExpr::CallExpr(callee, args) =>
+      if !compile_callable_expr(ctx, callee, args, expected_type, true) {
+        raise CodeGenError("call expression is not supported in Wasm compiler")
+      }
     @ast.TsExpr::Cond(cond, then_expr, else_expr) => {
       // Try constant folding on condition
       match @analysis.eval_const(cond) {
@@ -3591,23 +3580,16 @@ fn compile_unaryop(
 
 ///|
 // / function
-fn register_local_function_value(
+fn resolve_local_function_value(
   ctx : CodeGenCtx,
-  name : String,
   init : @ast.TsExpr,
-) -> Bool {
+) -> @ast.TsExpr? {
   match init {
-    @ast.TsExpr::ArrowFunc(_, _, _) | @ast.TsExpr::FuncExpr(_) => {
-      ctx.local_function_values[name] = init
-      true
-    }
+    @ast.TsExpr::ArrowFunc(_, _, _) | @ast.TsExpr::FuncExpr(_) => Some(init)
     @ast.TsExpr::Var(source_name) =>
       match ctx.local_function_values.get(source_name) {
-        Some(source_func) => {
-          ctx.local_function_values[name] = source_func
-          true
-        }
-        None => false
+        Some(source_func) => Some(source_func)
+        None => if ctx.funcs.contains(source_name) { Some(init) } else { None }
       }
     @ast.TsExpr::Cond(
       _,
@@ -3622,12 +3604,26 @@ fn register_local_function_value(
           ctx.local_function_values.contains(else_name) ||
           ctx.funcs.contains(else_name)
         ) {
-        ctx.local_function_values[name] = init
-        true
+        Some(init)
       } else {
-        false
+        None
       }
-    _ => false
+    _ => None
+  }
+}
+
+///|
+fn register_local_function_value(
+  ctx : CodeGenCtx,
+  name : String,
+  init : @ast.TsExpr,
+) -> Bool {
+  match resolve_local_function_value(ctx, init) {
+    Some(function_value) => {
+      ctx.local_function_values[name] = function_value
+      true
+    }
+    None => false
   }
 }
 
@@ -3647,6 +3643,10 @@ fn compile_local_function_value_call_expr(
     }
     Some(@ast.TsExpr::FuncExpr(func)) => {
       compile_func_expr_iife_call_expr(ctx, func, args, expected_type)
+      true
+    }
+    Some(@ast.TsExpr::Var(source_name)) => {
+      compile_callable_name_expr(ctx, source_name, args, expected_type)
       true
     }
     Some(
@@ -3688,6 +3688,76 @@ fn compile_callable_name_expr(
     ()
   } else {
     compile_named_call_expr(ctx, name, args, expected_type)
+  }
+}
+
+///|
+fn compile_function_value_assignment_call_expr(
+  ctx : CodeGenCtx,
+  name : String,
+  value : @ast.TsExpr,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+) -> Bool raise CodeGenError {
+  match ctx.local_function_values.get(name) {
+    Some(_) =>
+      if register_local_function_value(ctx, name, value) {
+        if compile_local_function_value_call_expr(
+            ctx, name, args, expected_type,
+          ) {
+          true
+        } else {
+          raise CodeGenError(
+            "function value assignment call is only supported for statically known local function values",
+          )
+        }
+      } else {
+        raise CodeGenError(
+          "function value assignment call is only supported for local function values",
+        )
+      }
+    None => false
+  }
+}
+
+///|
+fn compile_callable_expr(
+  ctx : CodeGenCtx,
+  callee : @ast.TsExpr,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+  allow_assignment : Bool,
+) -> Bool raise CodeGenError {
+  match callee {
+    @ast.TsExpr::Var(name) => {
+      compile_callable_name_expr(ctx, name, args, expected_type)
+      true
+    }
+    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+      compile_arrow_iife_call_expr(
+        ctx, params, body, is_async, args, expected_type,
+      )
+      true
+    }
+    @ast.TsExpr::FuncExpr(func) => {
+      compile_func_expr_iife_call_expr(ctx, func, args, expected_type)
+      true
+    }
+    @ast.TsExpr::Cond(cond, then_callee, else_callee) => {
+      compile_conditional_callee_call_expr(
+        ctx, cond, then_callee, else_callee, args, expected_type, allow_assignment,
+      )
+      true
+    }
+    @ast.TsExpr::AssignExpr(name, value) =>
+      if allow_assignment {
+        compile_function_value_assignment_call_expr(
+          ctx, name, value, args, expected_type,
+        )
+      } else {
+        false
+      }
+    _ => false
   }
 }
 
@@ -3743,11 +3813,11 @@ fn bind_iife_params(
   params : Array[@ast.TsParam],
   args : Array[@ast.TsExpr],
   kind : String,
-) -> Array[(String, UInt, @ast.TsType)] raise CodeGenError {
+) -> Array[IifeBinding] raise CodeGenError {
   if params.length() != args.length() {
     raise CodeGenError("\{kind} iife arity mismatch in Wasm compiler")
   }
-  let bindings : Array[(String, UInt, @ast.TsType)] = []
+  let bindings : Array[IifeBinding] = []
   for i, param in params {
     if param.is_rest {
       raise CodeGenError("\{kind} iife rest parameter is not supported")
@@ -3757,11 +3827,17 @@ fn bind_iife_params(
         raise CodeGenError("\{kind} iife default parameter is not supported")
       None => ()
     }
-    let param_type = resolve_any_with_ctx(ctx, param.type_, args[i])
-    let idx = ctx.add_temp_local(param_type)
-    compile_expr(ctx, args[i], param_type)
-    ctx.emit(LocalSet(idx))
-    bindings.push((param.name, idx, param_type))
+    match resolve_local_function_value(ctx, args[i]) {
+      Some(function_value) =>
+        bindings.push(IifeFunctionBinding(param.name, function_value))
+      None => {
+        let param_type = resolve_any_with_ctx(ctx, param.type_, args[i])
+        let idx = ctx.add_temp_local(param_type)
+        compile_expr(ctx, args[i], param_type)
+        ctx.emit(LocalSet(idx))
+        bindings.push(IifeValueBinding(param.name, idx, param_type))
+      }
+    }
   }
   bindings
 }
@@ -3769,13 +3845,20 @@ fn bind_iife_params(
 ///|
 fn make_iife_body_ctx(
   ctx : CodeGenCtx,
-  bindings : Array[(String, UInt, @ast.TsType)],
+  bindings : Array[IifeBinding],
 ) -> CodeGenCtx {
   let body_ctx = make_inline_expr_ctx(ctx)
   for binding in bindings {
-    let (name, idx, type_) = binding
-    body_ctx.locals[name] = { index: idx, type_ }
-    body_ctx.const_values[name] = @analysis.ConstValue::NotConst
+    match binding {
+      IifeValueBinding(name, idx, type_) => {
+        body_ctx.locals[name] = { index: idx, type_ }
+        body_ctx.const_values[name] = @analysis.ConstValue::NotConst
+      }
+      IifeFunctionBinding(name, function_value) => {
+        body_ctx.local_function_values[name] = function_value
+        body_ctx.const_values[name] = @analysis.ConstValue::NotConst
+      }
+    }
   }
   body_ctx
 }
@@ -3835,6 +3918,55 @@ fn compile_conditional_named_call_expr(
   let else_ctx = make_branch_ctx(ctx)
   else_ctx.next_local = then_ctx.next_local
   compile_callable_name_expr(else_ctx, else_name, args, expected_type)
+  ctx.next_local = else_ctx.next_local
+  let result_type = ts_type_to_valtype(expected_type)
+  ctx.emit(If(Value(result_type), then_ctx.instrs, else_ctx.instrs))
+}
+
+///|
+fn compile_conditional_callee_call_expr(
+  ctx : CodeGenCtx,
+  cond : @ast.TsExpr,
+  then_callee : @ast.TsExpr,
+  else_callee : @ast.TsExpr,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+  allow_assignment : Bool,
+) -> Unit raise CodeGenError {
+  match @analysis.eval_const(cond) {
+    @analysis.ConstValue::Boolean(true)
+    | @analysis.ConstValue::Int(_)
+    | @analysis.ConstValue::Number(_)
+    | @analysis.ConstValue::String_(_) => {
+      if !compile_callable_expr(
+          ctx, then_callee, args, expected_type, allow_assignment,
+        ) {
+        raise CodeGenError("conditional callee branch is not callable")
+      }
+      return
+    }
+    @analysis.ConstValue::Boolean(false)
+    | @analysis.ConstValue::Null
+    | @analysis.ConstValue::Undefined => {
+      if !compile_callable_expr(
+          ctx, else_callee, args, expected_type, allow_assignment,
+        ) {
+        raise CodeGenError("conditional callee branch is not callable")
+      }
+      return
+    }
+    @analysis.ConstValue::NotConst => ()
+  }
+  compile_expr(ctx, cond, @ast.TsType::Boolean)
+  let then_ctx = make_branch_ctx(ctx)
+  if !compile_callable_expr(then_ctx, then_callee, args, expected_type, false) {
+    raise CodeGenError("conditional callee branch is not callable")
+  }
+  let else_ctx = make_branch_ctx(ctx)
+  else_ctx.next_local = then_ctx.next_local
+  if !compile_callable_expr(else_ctx, else_callee, args, expected_type, false) {
+    raise CodeGenError("conditional callee branch is not callable")
+  }
   ctx.next_local = else_ctx.next_local
   let result_type = ts_type_to_valtype(expected_type)
   ctx.emit(If(Value(result_type), then_ctx.instrs, else_ctx.instrs))

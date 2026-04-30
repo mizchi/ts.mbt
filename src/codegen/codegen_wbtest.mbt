@@ -381,6 +381,57 @@ test "codegen: reassigned reusable function value calls" {
 }
 
 ///|
+test "codegen: inline conditional and assignment function value callees" {
+  let src =
+    #|function inlineConditional(flag: number, n: number): number {
+    #|  return (flag > 0 ? ((x: number) => x + 1) : ((x: number) => x - 1))(n);
+    #|}
+    #|function assignAndCall(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let fn = inc;
+    #|  return (fn = dec)(n);
+    #|}
+    #|function assignConditionalAndReuse(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let fn = inc;
+    #|  const first: number = (fn = flag > 0 ? inc : dec)(n);
+    #|  return fn(first);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "inlineConditional", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "inlineConditional", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "assignAndCall", [7.0], 6.0)
+  assert_run_f64(wasm, "assignConditionalAndReuse", [1.0, 7.0], 9.0)
+  assert_run_f64(wasm, "assignConditionalAndReuse", [0.0, 7.0], 5.0)
+}
+
+///|
+test "codegen: local function values passed to inline callees" {
+  let src =
+    #|function applyViaArrow(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  return ((fn: any, x: number) => fn(x))(inc, n);
+    #|}
+    #|function applyViaFunctionExpression(n: number): number {
+    #|  const dec = (x: number) => x - 1;
+    #|  return (function (fn: any, x: number): number { return fn(x); })(dec, n);
+    #|}
+    #|function applyConditionalViaParam(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const chosen = flag > 0 ? inc : dec;
+    #|  return ((fn: any, x: number) => fn(x))(chosen, n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "applyViaArrow", [7.0], 8.0)
+  assert_run_f64(wasm, "applyViaFunctionExpression", [7.0], 6.0)
+  assert_run_f64(wasm, "applyConditionalViaParam", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "applyConditionalViaParam", [0.0, 7.0], 6.0)
+}
+
+///|
 test "codegen: conditional local function value call expression" {
   let src =
     #|function choose(flag: number, n: number): number {

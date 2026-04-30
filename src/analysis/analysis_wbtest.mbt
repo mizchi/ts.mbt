@@ -975,6 +975,64 @@ test "can_compile_to_wasm: reassigned reusable function value calls" {
 }
 
 ///|
+test "can_compile_to_wasm: inline conditional and assignment function value callees" {
+  let src =
+    #|function inlineConditional(flag: number, n: number): number {
+    #|  return (flag > 0 ? ((x: number) => x + 1) : ((x: number) => x - 1))(n);
+    #|}
+    #|function assignAndCall(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let fn = inc;
+    #|  return (fn = dec)(n);
+    #|}
+    #|function assignConditionalAndReuse(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let fn = inc;
+    #|  const first: number = (fn = flag > 0 ? inc : dec)(n);
+    #|  return fn(first);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
+test "can_compile_to_wasm: local function values passed to inline callees" {
+  let src =
+    #|function applyViaArrow(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  return ((fn: any, x: number) => fn(x))(inc, n);
+    #|}
+    #|function applyViaFunctionExpression(n: number): number {
+    #|  const dec = (x: number) => x - 1;
+    #|  return (function (fn: any, x: number): number { return fn(x); })(dec, n);
+    #|}
+    #|function applyConditionalViaParam(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const chosen = flag > 0 ? inc : dec;
+    #|  return ((fn: any, x: number) => fn(x))(chosen, n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
 test "can_compile_to_wasm: iife unsupported edge cases" {
   let arity_src =
     #|function bad(n: number): number {

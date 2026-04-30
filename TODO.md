@@ -490,9 +490,19 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
   - Covered shapes include `let fn = inc; fn = dec; fn(x)` and
     `const fn = flag ? inc : dec; fn(x)` when both branches are local
     function values.
+- [x] Inline conditional callees and assignment-expression function value calls.
+  - Covered shapes include
+    `(flag ? ((x) => x + 1) : ((x) => x - 1))(n)`,
+    `(fn = dec)(n)`, and `(fn = flag ? inc : dec)(n)` followed by later
+    `fn(...)` reuse.
+- [x] Static higher-order IIFE calls where local function values are passed as
+  inline parameters and called inside the IIFE body.
+  - Covered shapes include `((fn, x) => fn(x))(inc, n)` and the same pattern
+    through function expressions or conditional local function aliases.
 
 ### Next in order
-1. Continue arbitrary call expression support from local aliases / conditional calls toward reassigned or escaping function values and full closure conversion.
+1. Continue from static local function-value calls toward real escaping function
+   values and full closure conversion.
 
 ### Candidates (need more groundwork)
 - Arbitrary call expressions where function values escape, are reassigned, or require captured mutable environments.

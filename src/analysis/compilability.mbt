@@ -228,23 +228,16 @@ fn can_compile_stmt(stmt : @ast.TsStmt) -> CompilabilityResult {
 }
 
 ///|
-fn register_local_function_value_for_analysis(
+fn resolve_local_function_value_for_analysis(
   local_function_values : Map[String, @ast.TsExpr],
-  name : String,
   init : @ast.TsExpr,
-) -> Bool {
+) -> @ast.TsExpr? {
   match init {
-    @ast.TsExpr::ArrowFunc(_, _, _) | @ast.TsExpr::FuncExpr(_) => {
-      local_function_values[name] = init
-      true
-    }
+    @ast.TsExpr::ArrowFunc(_, _, _) | @ast.TsExpr::FuncExpr(_) => Some(init)
     @ast.TsExpr::Var(source_name) =>
       match local_function_values.get(source_name) {
-        Some(source_func) => {
-          local_function_values[name] = source_func
-          true
-        }
-        None => false
+        Some(source_func) => Some(source_func)
+        None => None
       }
     @ast.TsExpr::Cond(
       _,
@@ -253,12 +246,26 @@ fn register_local_function_value_for_analysis(
     ) =>
       if local_function_values.contains(then_name) &&
         local_function_values.contains(else_name) {
-        local_function_values[name] = init
-        true
+        Some(init)
       } else {
-        false
+        None
       }
-    _ => false
+    _ => None
+  }
+}
+
+///|
+fn register_local_function_value_for_analysis(
+  local_function_values : Map[String, @ast.TsExpr],
+  name : String,
+  init : @ast.TsExpr,
+) -> Bool {
+  match resolve_local_function_value_for_analysis(local_function_values, init) {
+    Some(function_value) => {
+      local_function_values[name] = function_value
+      true
+    }
+    None => false
   }
 }
 
@@ -837,45 +844,10 @@ fn can_compile_expr_with_local_functions(
       can_compile_local_function_call_or_named_call(
         name, args, local_function_values,
       )
-    @ast.TsExpr::CallExpr(@ast.TsExpr::Var(name), args) =>
-      can_compile_local_function_call_or_named_call(
-        name, args, local_function_values,
+    @ast.TsExpr::CallExpr(callee, args) =>
+      can_compile_callable_expr_with_local_functions(
+        callee, args, local_function_values, true,
       )
-    @ast.TsExpr::CallExpr(@ast.TsExpr::ArrowFunc(params, body, is_async), args) =>
-      can_compile_arrow_iife_with_local_functions(
-        params, body, is_async, args, local_function_values,
-      )
-    @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(func), args) =>
-      can_compile_func_expr_iife_with_local_functions(
-        func, args, local_function_values,
-      )
-    @ast.TsExpr::CallExpr(
-      @ast.TsExpr::Cond(
-        cond,
-        @ast.TsExpr::Var(then_name),
-        @ast.TsExpr::Var(else_name)
-      ),
-      args
-    ) => {
-      match can_compile_expr_with_local_functions(cond, local_function_values) {
-        NotCompilable(r) => return NotCompilable(r)
-        Compilable => ()
-      }
-      match
-        can_compile_expr_with_local_functions(
-          @ast.TsExpr::Call(then_name, args),
-          local_function_values,
-        ) {
-        NotCompilable(r) => return NotCompilable(r)
-        Compilable => ()
-      }
-      can_compile_expr_with_local_functions(
-        @ast.TsExpr::Call(else_name, args),
-        local_function_values,
-      )
-    }
-    @ast.TsExpr::CallExpr(_, _) =>
-      NotCompilable("arbitrary call expression not supported")
     @ast.TsExpr::MethodCall(receiver, method_name, args) => {
       match
         can_compile_expr_with_local_functions(receiver, local_function_values) {
@@ -1021,6 +993,102 @@ fn can_compile_local_function_call_or_named_call(
 }
 
 ///|
+fn can_compile_function_value_assignment_call(
+  name : String,
+  value : @ast.TsExpr,
+  args : Array[@ast.TsExpr],
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  match local_function_values.get(name) {
+    Some(_) =>
+      if register_local_function_value_for_analysis(
+          local_function_values, name, value,
+        ) {
+        can_compile_local_function_call_or_named_call(
+          name, args, local_function_values,
+        )
+      } else {
+        NotCompilable("function value assignment call not supported")
+      }
+    None => NotCompilable("function value assignment call not supported")
+  }
+}
+
+///|
+fn can_compile_callable_expr_with_local_functions(
+  callee : @ast.TsExpr,
+  args : Array[@ast.TsExpr],
+  local_function_values : Map[String, @ast.TsExpr],
+  allow_assignment : Bool,
+) -> CompilabilityResult {
+  match callee {
+    @ast.TsExpr::Var(name) =>
+      can_compile_local_function_call_or_named_call(
+        name, args, local_function_values,
+      )
+    @ast.TsExpr::ArrowFunc(params, body, is_async) =>
+      can_compile_arrow_iife_with_local_functions(
+        params, body, is_async, args, local_function_values,
+      )
+    @ast.TsExpr::FuncExpr(func) =>
+      can_compile_func_expr_iife_with_local_functions(
+        func, args, local_function_values,
+      )
+    @ast.TsExpr::Cond(cond, then_callee, else_callee) => {
+      match can_compile_expr_with_local_functions(cond, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      let then_values = local_function_values.copy()
+      match
+        can_compile_callable_expr_with_local_functions(
+          then_callee, args, then_values, false,
+        ) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      let else_values = local_function_values.copy()
+      can_compile_callable_expr_with_local_functions(
+        else_callee, args, else_values, false,
+      )
+    }
+    @ast.TsExpr::AssignExpr(name, value) =>
+      if allow_assignment {
+        can_compile_function_value_assignment_call(
+          name, value, args, local_function_values,
+        )
+      } else {
+        NotCompilable(
+          "function value assignment in conditional callee not supported",
+        )
+      }
+    _ => NotCompilable("arbitrary call expression not supported")
+  }
+}
+
+///|
+fn prepare_iife_local_function_values_for_analysis(
+  params : Array[@ast.TsParam],
+  args : Array[@ast.TsExpr],
+  local_function_values : Map[String, @ast.TsExpr],
+) -> (CompilabilityResult, Map[String, @ast.TsExpr]) {
+  let body_function_values = local_function_values.copy()
+  for i, param in params {
+    match
+      resolve_local_function_value_for_analysis(local_function_values, args[i]) {
+      Some(function_value) => body_function_values[param.name] = function_value
+      None =>
+        match
+          can_compile_expr_with_local_functions(args[i], local_function_values) {
+          NotCompilable(r) => return (NotCompilable(r), body_function_values)
+          Compilable => ()
+        }
+    }
+  }
+  (Compilable, body_function_values)
+}
+
+///|
 fn can_compile_arrow_iife_with_local_functions(
   params : Array[@ast.TsParam],
   body : @ast.TsArrowBody,
@@ -1044,17 +1112,19 @@ fn can_compile_arrow_iife_with_local_functions(
       None => ()
     }
   }
-  match
-    can_compile_call_args_with_local_functions(args, local_function_values) {
+  let (arg_result, body_function_values) = prepare_iife_local_function_values_for_analysis(
+    params, args, local_function_values,
+  )
+  match arg_result {
     NotCompilable(r) => return NotCompilable(r)
     Compilable => ()
   }
   match body {
     @ast.TsArrowBody::ArrowExpr(expr) =>
-      can_compile_expr_with_local_functions(expr, local_function_values)
+      can_compile_expr_with_local_functions(expr, body_function_values)
     @ast.TsArrowBody::ArrowBlock(block) =>
       can_compile_iife_return_block_with_local_functions(
-        block, local_function_values,
+        block, body_function_values,
       )
   }
 }
@@ -1088,14 +1158,18 @@ fn can_compile_func_expr_iife_with_local_functions(
       None => ()
     }
   }
-  match
-    can_compile_call_args_with_local_functions(args, local_function_values) {
+  let (arg_result, body_function_values) = prepare_iife_local_function_values_for_analysis(
+    func.params,
+    args,
+    local_function_values,
+  )
+  match arg_result {
     NotCompilable(r) => return NotCompilable(r)
     Compilable => ()
   }
   can_compile_iife_return_block_with_local_functions(
     func.body,
-    local_function_values,
+    body_function_values,
   )
 }
 
