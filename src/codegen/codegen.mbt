@@ -3608,6 +3608,92 @@ fn resolve_local_function_value(
       } else {
         None
       }
+    @ast.TsExpr::CallExpr(producer, producer_args) =>
+      resolve_returned_local_function_value(ctx, producer, producer_args)
+    _ => None
+  }
+}
+
+///|
+fn static_iife_return_expr(block : @ast.TsBlock) -> @ast.TsExpr? {
+  if block.stmts.length() != 1 {
+    return None
+  }
+  match block.stmts[0] {
+    @ast.TsStmt::Return(Some(expr)) => Some(expr)
+    _ => None
+  }
+}
+
+///|
+fn make_static_function_value_iife_ctx(
+  ctx : CodeGenCtx,
+  params : Array[@ast.TsParam],
+  args : Array[@ast.TsExpr],
+) -> CodeGenCtx? {
+  if params.length() != args.length() {
+    return None
+  }
+  let body_ctx = make_inline_expr_ctx(ctx)
+  for i, param in params {
+    if param.is_rest {
+      return None
+    }
+    match param.default {
+      Some(_) => return None
+      None => ()
+    }
+    match resolve_local_function_value(ctx, args[i]) {
+      Some(function_value) => {
+        body_ctx.local_function_values[param.name] = function_value
+        body_ctx.const_values[param.name] = @analysis.ConstValue::NotConst
+      }
+      None => return None
+    }
+  }
+  Some(body_ctx)
+}
+
+///|
+fn resolve_returned_local_function_value(
+  ctx : CodeGenCtx,
+  producer : @ast.TsExpr,
+  producer_args : Array[@ast.TsExpr],
+) -> @ast.TsExpr? {
+  match producer {
+    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+      if is_async {
+        return None
+      }
+      match make_static_function_value_iife_ctx(ctx, params, producer_args) {
+        Some(body_ctx) => {
+          let returned_expr = match body {
+            @ast.TsArrowBody::ArrowExpr(expr) => Some(expr)
+            @ast.TsArrowBody::ArrowBlock(block) =>
+              static_iife_return_expr(block)
+          }
+          match returned_expr {
+            Some(expr) => resolve_local_function_value(body_ctx, expr)
+            None => None
+          }
+        }
+        None => None
+      }
+    }
+    @ast.TsExpr::FuncExpr(func) => {
+      if func.is_async || func.is_generator {
+        return None
+      }
+      match
+        make_static_function_value_iife_ctx(ctx, func.params, producer_args) {
+        Some(body_ctx) =>
+          match static_iife_return_expr(func.body) {
+            Some(expr) => resolve_local_function_value(body_ctx, expr)
+            None => None
+          }
+        None => None
+      }
+    }
     _ => None
   }
 }
@@ -3743,6 +3829,10 @@ fn compile_callable_expr(
       compile_func_expr_iife_call_expr(ctx, func, args, expected_type)
       true
     }
+    @ast.TsExpr::CallExpr(producer, producer_args) =>
+      compile_returned_function_value_call_expr(
+        ctx, producer, producer_args, args, expected_type,
+      )
     @ast.TsExpr::Cond(cond, then_callee, else_callee) => {
       compile_conditional_callee_call_expr(
         ctx, cond, then_callee, else_callee, args, expected_type, allow_assignment,
@@ -3757,6 +3847,84 @@ fn compile_callable_expr(
       } else {
         false
       }
+    _ => false
+  }
+}
+
+///|
+fn compile_returned_function_value_call_expr(
+  ctx : CodeGenCtx,
+  producer : @ast.TsExpr,
+  producer_args : Array[@ast.TsExpr],
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+) -> Bool raise CodeGenError {
+  match producer {
+    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+      if is_async {
+        raise CodeGenError(
+          "async arrow returned function value is not supported in Wasm compiler",
+        )
+      }
+      let bindings = bind_iife_params(ctx, params, producer_args, "arrow")
+      let body_ctx = make_iife_body_ctx(ctx, bindings)
+      let returned_expr = match body {
+        @ast.TsArrowBody::ArrowExpr(expr) => expr
+        @ast.TsArrowBody::ArrowBlock(block) =>
+          iife_return_expr(block, "arrow returned function value")
+      }
+      match resolve_local_function_value(body_ctx, returned_expr) {
+        Some(function_value) =>
+          if compile_callable_expr(
+              body_ctx, function_value, args, expected_type, false,
+            ) {
+            ctx.next_local = body_ctx.next_local
+            true
+          } else {
+            raise CodeGenError(
+              "returned function value is not callable in Wasm compiler",
+            )
+          }
+        None => false
+      }
+    }
+    @ast.TsExpr::FuncExpr(func) => {
+      if func.is_async {
+        raise CodeGenError(
+          "async function expression returned function value is not supported in Wasm compiler",
+        )
+      }
+      if func.is_generator {
+        raise CodeGenError(
+          "generator function expression returned function value is not supported in Wasm compiler",
+        )
+      }
+      let bindings = bind_iife_params(
+        ctx,
+        func.params,
+        producer_args,
+        "function expression",
+      )
+      let body_ctx = make_iife_body_ctx(ctx, bindings)
+      let returned_expr = iife_return_expr(
+        func.body,
+        "function expression returned function value",
+      )
+      match resolve_local_function_value(body_ctx, returned_expr) {
+        Some(function_value) =>
+          if compile_callable_expr(
+              body_ctx, function_value, args, expected_type, false,
+            ) {
+            ctx.next_local = body_ctx.next_local
+            true
+          } else {
+            raise CodeGenError(
+              "returned function value is not callable in Wasm compiler",
+            )
+          }
+        None => false
+      }
+    }
     _ => false
   }
 }
@@ -3861,6 +4029,25 @@ fn make_iife_body_ctx(
     }
   }
   body_ctx
+}
+
+///|
+fn iife_return_expr(
+  block : @ast.TsBlock,
+  kind : String,
+) -> @ast.TsExpr raise CodeGenError {
+  if block.stmts.length() != 1 {
+    raise CodeGenError(
+      "\{kind} block must contain exactly one return statement in Wasm compiler",
+    )
+  }
+  match block.stmts[0] {
+    @ast.TsStmt::Return(Some(expr)) => expr
+    _ =>
+      raise CodeGenError(
+        "\{kind} block must contain exactly one return statement in Wasm compiler",
+      )
+  }
 }
 
 ///|

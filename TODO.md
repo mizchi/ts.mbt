@@ -499,10 +499,20 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
   inline parameters and called inside the IIFE body.
   - Covered shapes include `((fn, x) => fn(x))(inc, n)` and the same pattern
     through function expressions or conditional local function aliases.
+- [x] Static returned function-value calls where an inline IIFE returns a local
+  function value and the result is immediately called.
+  - Covered shapes include `((() => inc)())(n)`,
+    `((function () { return dec })())(n)`, `(((fn) => fn)(inc))(n)`, and
+    conditional returned aliases such as `((() => flag ? inc : dec)())(n)`.
+- [x] Static returned function values stored across statement boundaries.
+  - Covered shapes include `const fn = (() => inc)(); fn(n)`,
+    `const fn = ((value) => value)(inc); fn(n)`, conditional returned aliases,
+    and reassignment via `fn = (() => dec)()` before a later call.
 
 ### Next in order
-1. Continue from static local function-value calls toward real escaping function
-   values and full closure conversion.
+1. Continue from statement-local returned function values toward function
+   values stored in data structures or returned across function boundaries,
+   then full closure conversion.
 
 ### Candidates (need more groundwork)
 - Arbitrary call expressions where function values escape, are reassigned, or require captured mutable environments.

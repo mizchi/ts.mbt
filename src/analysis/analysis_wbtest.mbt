@@ -1033,6 +1033,79 @@ test "can_compile_to_wasm: local function values passed to inline callees" {
 }
 
 ///|
+test "can_compile_to_wasm: returned local function value callees" {
+  let src =
+    #|function returnedArrow(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  return ((() => inc)())(n);
+    #|}
+    #|function returnedFunctionExpression(n: number): number {
+    #|  const dec = (x: number) => x - 1;
+    #|  return ((function (): any { return dec; })())(n);
+    #|}
+    #|function returnedParam(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  return (((fn: any) => fn)(inc))(n);
+    #|}
+    #|function returnedConditional(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  return ((() => (flag > 0 ? inc : dec))())(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
+test "can_compile_to_wasm: stored returned local function value callees" {
+  let src =
+    #|function storedArrow(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const fn = (() => inc)();
+    #|  return fn(n);
+    #|}
+    #|function storedFunctionExpression(n: number): number {
+    #|  const dec = (x: number) => x - 1;
+    #|  const fn = (function (): any { return dec; })();
+    #|  return fn(n);
+    #|}
+    #|function storedParam(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const fn = ((value: any) => value)(inc);
+    #|  return fn(n);
+    #|}
+    #|function storedConditional(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const fn = (() => flag > 0 ? inc : dec)();
+    #|  return fn(n);
+    #|}
+    #|function reassignedStoredReturned(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let fn = (() => inc)();
+    #|  fn = (() => dec)();
+    #|  return fn(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
 test "can_compile_to_wasm: iife unsupported edge cases" {
   let arity_src =
     #|function bad(n: number): number {

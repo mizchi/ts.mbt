@@ -432,6 +432,74 @@ test "codegen: local function values passed to inline callees" {
 }
 
 ///|
+test "codegen: returned local function value callees" {
+  let src =
+    #|function returnedArrow(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  return ((() => inc)())(n);
+    #|}
+    #|function returnedFunctionExpression(n: number): number {
+    #|  const dec = (x: number) => x - 1;
+    #|  return ((function (): any { return dec; })())(n);
+    #|}
+    #|function returnedParam(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  return (((fn: any) => fn)(inc))(n);
+    #|}
+    #|function returnedConditional(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  return ((() => (flag > 0 ? inc : dec))())(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "returnedArrow", [7.0], 8.0)
+  assert_run_f64(wasm, "returnedFunctionExpression", [7.0], 6.0)
+  assert_run_f64(wasm, "returnedParam", [7.0], 8.0)
+  assert_run_f64(wasm, "returnedConditional", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "returnedConditional", [0.0, 7.0], 6.0)
+}
+
+///|
+test "codegen: stored returned local function value callees" {
+  let src =
+    #|function storedArrow(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const fn = (() => inc)();
+    #|  return fn(n);
+    #|}
+    #|function storedFunctionExpression(n: number): number {
+    #|  const dec = (x: number) => x - 1;
+    #|  const fn = (function (): any { return dec; })();
+    #|  return fn(n);
+    #|}
+    #|function storedParam(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const fn = ((value: any) => value)(inc);
+    #|  return fn(n);
+    #|}
+    #|function storedConditional(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const fn = (() => flag > 0 ? inc : dec)();
+    #|  return fn(n);
+    #|}
+    #|function reassignedStoredReturned(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let fn = (() => inc)();
+    #|  fn = (() => dec)();
+    #|  return fn(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "storedArrow", [7.0], 8.0)
+  assert_run_f64(wasm, "storedFunctionExpression", [7.0], 6.0)
+  assert_run_f64(wasm, "storedParam", [7.0], 8.0)
+  assert_run_f64(wasm, "storedConditional", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "storedConditional", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "reassignedStoredReturned", [7.0], 6.0)
+}
+
+///|
 test "codegen: conditional local function value call expression" {
   let src =
     #|function choose(flag: number, n: number): number {

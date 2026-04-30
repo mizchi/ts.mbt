@@ -250,6 +250,94 @@ fn resolve_local_function_value_for_analysis(
       } else {
         None
       }
+    @ast.TsExpr::CallExpr(producer, producer_args) =>
+      resolve_returned_local_function_value_for_analysis(
+        local_function_values, producer, producer_args,
+      )
+    _ => None
+  }
+}
+
+///|
+fn make_static_function_value_iife_map_for_analysis(
+  local_function_values : Map[String, @ast.TsExpr],
+  params : Array[@ast.TsParam],
+  args : Array[@ast.TsExpr],
+) -> Map[String, @ast.TsExpr]? {
+  if params.length() != args.length() {
+    return None
+  }
+  let body_function_values = local_function_values.copy()
+  for i, param in params {
+    if param.is_rest {
+      return None
+    }
+    match param.default {
+      Some(_) => return None
+      None => ()
+    }
+    match
+      resolve_local_function_value_for_analysis(local_function_values, args[i]) {
+      Some(function_value) => body_function_values[param.name] = function_value
+      None => return None
+    }
+  }
+  Some(body_function_values)
+}
+
+///|
+fn resolve_returned_local_function_value_for_analysis(
+  local_function_values : Map[String, @ast.TsExpr],
+  producer : @ast.TsExpr,
+  producer_args : Array[@ast.TsExpr],
+) -> @ast.TsExpr? {
+  match producer {
+    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+      if is_async {
+        return None
+      }
+      match
+        make_static_function_value_iife_map_for_analysis(
+          local_function_values, params, producer_args,
+        ) {
+        Some(body_function_values) => {
+          let returned_expr = match body {
+            @ast.TsArrowBody::ArrowExpr(expr) => Some(expr)
+            @ast.TsArrowBody::ArrowBlock(block) =>
+              iife_return_expr_for_analysis(block)
+          }
+          match returned_expr {
+            Some(expr) =>
+              resolve_local_function_value_for_analysis(
+                body_function_values, expr,
+              )
+            None => None
+          }
+        }
+        None => None
+      }
+    }
+    @ast.TsExpr::FuncExpr(func) => {
+      if func.is_async || func.is_generator {
+        return None
+      }
+      match
+        make_static_function_value_iife_map_for_analysis(
+          local_function_values,
+          func.params,
+          producer_args,
+        ) {
+        Some(body_function_values) =>
+          match iife_return_expr_for_analysis(func.body) {
+            Some(expr) =>
+              resolve_local_function_value_for_analysis(
+                body_function_values, expr,
+              )
+            None => None
+          }
+        None => None
+      }
+    }
     _ => None
   }
 }
@@ -1034,6 +1122,10 @@ fn can_compile_callable_expr_with_local_functions(
       can_compile_func_expr_iife_with_local_functions(
         func, args, local_function_values,
       )
+    @ast.TsExpr::CallExpr(producer, producer_args) =>
+      can_compile_returned_function_value_call_with_local_functions(
+        producer, producer_args, args, local_function_values,
+      )
     @ast.TsExpr::Cond(cond, then_callee, else_callee) => {
       match can_compile_expr_with_local_functions(cond, local_function_values) {
         NotCompilable(r) => return NotCompilable(r)
@@ -1062,6 +1154,130 @@ fn can_compile_callable_expr_with_local_functions(
           "function value assignment in conditional callee not supported",
         )
       }
+    _ => NotCompilable("arbitrary call expression not supported")
+  }
+}
+
+///|
+fn iife_return_expr_for_analysis(block : @ast.TsBlock) -> @ast.TsExpr? {
+  if block.stmts.length() != 1 {
+    return None
+  }
+  match block.stmts[0] {
+    @ast.TsStmt::Return(Some(expr)) => Some(expr)
+    _ => None
+  }
+}
+
+///|
+fn can_compile_returned_function_value_call_with_local_functions(
+  producer : @ast.TsExpr,
+  producer_args : Array[@ast.TsExpr],
+  args : Array[@ast.TsExpr],
+  local_function_values : Map[String, @ast.TsExpr],
+) -> CompilabilityResult {
+  match producer {
+    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+      if is_async {
+        return NotCompilable("async returned function value not supported")
+      }
+      if params.length() != producer_args.length() {
+        return NotCompilable("returned function value iife arity mismatch")
+      }
+      for param in params {
+        if param.is_rest {
+          return NotCompilable(
+            "rest parameter returned function value iife not supported",
+          )
+        }
+        match param.default {
+          Some(_) =>
+            return NotCompilable(
+              "default parameter returned function value iife not supported",
+            )
+          None => ()
+        }
+      }
+      let (arg_result, body_function_values) = prepare_iife_local_function_values_for_analysis(
+        params, producer_args, local_function_values,
+      )
+      match arg_result {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      let returned_expr = match body {
+        @ast.TsArrowBody::ArrowExpr(expr) => expr
+        @ast.TsArrowBody::ArrowBlock(block) =>
+          match iife_return_expr_for_analysis(block) {
+            Some(expr) => expr
+            None =>
+              return NotCompilable(
+                "returned function value iife must contain exactly one return statement",
+              )
+          }
+      }
+      match
+        resolve_local_function_value_for_analysis(
+          body_function_values, returned_expr,
+        ) {
+        Some(function_value) =>
+          can_compile_callable_expr_with_local_functions(
+            function_value, args, body_function_values, false,
+          )
+        None => NotCompilable("returned function value call not supported")
+      }
+    }
+    @ast.TsExpr::FuncExpr(func) => {
+      if func.is_async {
+        return NotCompilable("async returned function value not supported")
+      }
+      if func.is_generator {
+        return NotCompilable("generator returned function value not supported")
+      }
+      if func.params.length() != producer_args.length() {
+        return NotCompilable("returned function value iife arity mismatch")
+      }
+      for param in func.params {
+        if param.is_rest {
+          return NotCompilable(
+            "rest parameter returned function value iife not supported",
+          )
+        }
+        match param.default {
+          Some(_) =>
+            return NotCompilable(
+              "default parameter returned function value iife not supported",
+            )
+          None => ()
+        }
+      }
+      let (arg_result, body_function_values) = prepare_iife_local_function_values_for_analysis(
+        func.params,
+        producer_args,
+        local_function_values,
+      )
+      match arg_result {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      let returned_expr = match iife_return_expr_for_analysis(func.body) {
+        Some(expr) => expr
+        None =>
+          return NotCompilable(
+            "returned function value iife must contain exactly one return statement",
+          )
+      }
+      match
+        resolve_local_function_value_for_analysis(
+          body_function_values, returned_expr,
+        ) {
+        Some(function_value) =>
+          can_compile_callable_expr_with_local_functions(
+            function_value, args, body_function_values, false,
+          )
+        None => NotCompilable("returned function value call not supported")
+      }
+    }
     _ => NotCompilable("arbitrary call expression not supported")
   }
 }
