@@ -377,6 +377,146 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
   - `= "Counter.from"` / `= "Counter.version"` style dotted import names compile poorly in the current JS backend.
   - `#module(...)` combined with inline `#|` JS also does not lower correctly for imported module bindings in the current backend.
 
+## TS Enum / Literal Union Design
+
+Goal: represent the safe TypeScript enum-like subset as MoonBit `enum` without
+lying at the JS boundary. The generated public MoonBit API should be pleasant to
+use, while the generated bridge must still pass the exact primitive values that
+TypeScript runtimes expect.
+
+### Scope
+
+- [ ] Support string literal unions as closed MoonBit enums:
+  - `type Variant = "primary" | "secondary"` ->
+    `pub(all) enum Variant { Primary; Secondary }`.
+  - Optional unions preserve optionality:
+    `"primary" | "secondary" | undefined` -> `Variant?`.
+- [ ] Support boolean literal unions only when they are not just `boolean`:
+  - `true | false` remains `Bool`.
+  - `true | undefined` remains `Bool?`.
+- [ ] Support numeric literal unions only when every member is an integer-like
+  literal and the runtime bridge can convert losslessly.
+- [ ] Support ambient / declaration enum surfaces:
+  - `declare enum Mode { Read = "read" }`
+  - `declare const enum Mode { Read = "read" }`
+  - implicit numeric members are allowed only when all previous values can be
+    evaluated statically.
+- [ ] Defer heterogeneous enum unions and non-literal computed enum values to
+  the existing primitive / `JSValue` fallback with diagnostics.
+
+### Internal Model
+
+- [ ] Replace or extend the current `TsType::Literal(String)` representation.
+  - Current parser stores string `"1"` and numeric `1` both as `Literal("1")`,
+    which is not precise enough for bridge conversion.
+  - Add a typed literal model, e.g. `TsLiteralValue::{String, Number, BigInt,
+    Bool}`, and keep helper functions so existing `keyof` / object-key logic
+    can continue treating string keys uniformly.
+- [ ] Add AST nodes for enum declarations:
+  - `TsEnumDecl { name, members, is_const, is_declare }`
+  - `TsEnumMember { name, value : TsLiteralValue? }`
+  - Store them in `TsModule` and `TsModuleBlock`, parallel to interfaces and
+    type aliases.
+- [ ] Normalize type aliases that are pure literal unions into an enum-lowering
+  candidate before `emit_moonbit_decl` / `emit_moonbit_js_ffi` renders types.
+  - Keep the original alias name as the MoonBit enum name.
+  - If the alias is anonymous inside a parameter or field, keep the current
+    primitive fallback until a stable synthetic naming rule is needed.
+
+### MoonBit Surface
+
+- [ ] Emit public enum declarations in both `bridge.mbt` and `bridge.mbti`.
+  - This must mirror the recent struct rule: generated implementation and
+    interface files expose the same public shape.
+- [ ] Generate stable constructor names:
+  - sanitize to PascalCase;
+  - suffix MoonBit keywords;
+  - disambiguate collisions deterministically;
+  - preserve the original TS literal in generated conversion helpers.
+- [ ] Keep raw externs primitive and wrap them:
+  - Params: public function accepts `Variant`, private/raw extern accepts
+    `String` or `Int`.
+  - Returns: raw extern returns primitive, public wrapper converts to
+    `Variant`.
+  - Optional params / returns use `Variant?` wrappers and keep JS `undefined`
+    behavior.
+
+Example target shape:
+
+```moonbit
+pub(all) enum ButtonVariant {
+  Primary
+  Secondary
+} derive(Eq, Debug)
+
+fn ButtonVariant::to_js(self : ButtonVariant) -> String {
+  match self {
+    Primary => "primary"
+    Secondary => "secondary"
+  }
+}
+
+fn button_variant_from_js(value : String) -> ButtonVariant {
+  match value {
+    "primary" => Primary
+    "secondary" => Secondary
+    _ => abort("unexpected ButtonVariant value")
+  }
+}
+
+extern "js" fn render_button_raw(variant : String) -> Unit = "__ts_mbt_render_button"
+
+pub fn renderButton(variant : ButtonVariant) -> Unit {
+  render_button_raw(variant.to_js())
+}
+```
+
+### JS Bridge Rules
+
+- [ ] Do not pass MoonBit enum runtime objects directly to JS APIs.
+  - MoonBit JS backend enums are tagged values; TypeScript libraries expect the
+    primitive literal value.
+- [ ] Prefer MoonBit-side conversion wrappers over JS-side enum construction.
+  - JS bridge code cannot reliably construct MoonBit enum values unless those
+    constructors are exported by the compiled MoonBit package.
+  - Return conversion should therefore happen in generated MoonBit wrapper
+    code from raw primitive externs.
+- [ ] Reuse the existing optional object-field converter only after enum values
+  have been converted to primitives.
+
+### Diagnostics and Safety
+
+- [ ] Add diagnostics for every enum-like surface that is not lowered:
+  - mixed string/number enum;
+  - computed enum member;
+  - duplicate literal values after sanitization;
+  - anonymous literal union without a stable public name.
+- [ ] Keep strict mode behavior unchanged: unsupported enum lowering in a
+  public surface must either fall back within budget or fail with an actionable
+  diagnostic.
+- [ ] Add real-world probes after fixtures pass:
+  - Node string modes / flags;
+  - React string literal props;
+  - Hono option modes;
+  - TypeScript AST `SyntaxKind` as a numeric enum stress case.
+
+### TDD Order
+
+- [ ] Red: parser tests for string/numeric/const enum declarations and typed
+  literal unions.
+- [ ] Green: AST + parser support without bridge lowering.
+- [ ] Red: declaration generation tests for named literal-union aliases.
+- [ ] Green: emit MoonBit enum declarations in `.mbt` / `.mbti`.
+- [ ] Red: JS-target smoke where a MoonBit enum argument reaches a TS function
+  expecting a string literal.
+- [ ] Green: raw extern + public wrapper conversion for params.
+- [ ] Red: JS-target smoke where a TS function returns a literal union and
+  MoonBit pattern matches the result.
+- [ ] Green: primitive return conversion with an explicit unexpected-value
+  abort path.
+- [ ] Refactor: share enum metadata between decl, FFI, and package bridge
+  emitters so literal-union and `declare enum` use the same lowering path.
+
 ## Normalized DTS Shape-Merge Scope
 
 - [x] Keep object-shape compatibility checks inside `src/bridge/object_shape_merge.mbt`.
