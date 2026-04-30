@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
+source "$repo_root/scripts/warning_guard.sh"
 js_module_root="${HOME}/ghq/github.com/mizchi/js.mbt"
 
 verify_mbti_fixture_typescript() {

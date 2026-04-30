@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
+source "$repo_root/scripts/warning_guard.sh"
 
 verify_moonbit_to_typescript_example() {
   local root="_build/examples/moonbit-to-typescript"

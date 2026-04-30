@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
+source "$repo_root/scripts/warning_guard.sh"
 
 assert_declared_value_exports_present() {
   local module_path="$1"
