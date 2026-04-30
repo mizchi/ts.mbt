@@ -1,23 +1,10 @@
 extern "js" fn latest_script_target() -> @sut.JSValue =
   #| () => globalThis.__tsmbt_ast_adapter.latestScriptTarget()
 
-extern "js" fn identifier_text(identifier : @sut.Identifier) -> String =
-  #| (identifier) => globalThis.__tsmbt_ast_adapter.identifierText(identifier)
-
-extern "js" fn create_identifier(text : String) -> @sut.Identifier =
-  #| (text) => globalThis.__tsmbt_ast_adapter.createIdentifier(text)
-
-extern "js" fn first_transformed_source_file(
-  result : @sut.TransformationResult
-) -> @sut.SourceFile =
-  #| (result) => globalThis.__tsmbt_ast_adapter.firstTransformedSourceFile(result)
-
-extern "js" fn print_source_file(source_file : @sut.SourceFile) -> String =
-  #| (sourceFile) => globalThis.__tsmbt_ast_adapter.printSourceFile(sourceFile)
-
 fn rename_identifier(identifier : @sut.Identifier) -> @sut.Node {
-  if identifier_text(identifier) == "value" {
-    @sut.unsafeCast(create_identifier("renamed"))
+  let text : String = @sut.unsafeCast(identifier.escapedText)
+  if text == "value" {
+    @sut.unsafeCast(@sut.get_factory().createIdentifier("renamed"))
   } else {
     @sut.unsafeCast(identifier)
   }
@@ -62,7 +49,9 @@ fn main {
     [@sut.unsafeCast(transformer_factory)],
     None,
   )
-  let printed = print_source_file(first_transformed_source_file(transformed))
+  let source_file : @sut.SourceFile = @sut.unsafeCast(transformed.transformed[0])
+  transformed.dispose()
+  let printed = @sut.createPrinter(None, None).printFile(source_file)
   if !printed.contains("const renamed = 1") {
     abort("expected MoonBit transformer to rename declaration identifier")
   }

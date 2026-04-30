@@ -192,6 +192,47 @@ fn bridge_value_fn_name(name : String) -> String {
 }
 
 ///|
+fn bridge_split_top_level_commas(source : String) -> Array[String] {
+  let parts : Array[String] = []
+  let mut current = ""
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut brace_depth = 0
+  for c in source {
+    if c == ',' && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+      parts.push(current.trim().to_string())
+      current = ""
+      continue
+    }
+    current += c.to_string()
+    if c == '(' {
+      paren_depth += 1
+    } else if c == ')' {
+      if paren_depth > 0 {
+        paren_depth -= 1
+      }
+    } else if c == '[' {
+      bracket_depth += 1
+    } else if c == ']' {
+      if bracket_depth > 0 {
+        bracket_depth -= 1
+      }
+    } else if c == '{' {
+      brace_depth += 1
+    } else if c == '}' {
+      if brace_depth > 0 {
+        brace_depth -= 1
+      }
+    }
+  }
+  let tail = current.trim().to_string()
+  if tail != "" || source.trim() != "" {
+    parts.push(tail)
+  }
+  parts
+}
+
+///|
 fn bridge_to_upper_ascii(c : Char) -> Char {
   if c >= 'a' && c <= 'z' {
     (c.to_int() - 32).unsafe_to_char()
@@ -243,8 +284,7 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
           let return_type = after[2:].to_string().trim().to_string()
           let arg_names : Array[String] = []
           if params_src.trim() != "" {
-            for item_view in params_src.split(",") {
-              let item = item_view.to_string().trim().to_string()
+            for item in bridge_split_top_level_commas(params_src) {
               if item == "" {
                 continue
               }

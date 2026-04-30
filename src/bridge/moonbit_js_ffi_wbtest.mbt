@@ -429,6 +429,7 @@ test "bridge: FFI type name treats generic intersections with empty object as op
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     external_type_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
   }
   let actual = ffi_type_name(
@@ -3213,10 +3214,20 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   assert_true(bundle.ffi_mbt.contains("  startTransition : TransitionFunction"))
   assert_true(bundle.ffi_mbt.contains("pub struct UseOptimisticResult"))
   assert_true(bundle.ffi_mbt.contains("  state : State"))
-  assert_true(bundle.ffi_mbt.contains("  dispatch : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  dispatch : (State) -> Unit"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub fn UseOptimisticResult::dispatch(self : UseOptimisticResult, arg0 : State) -> Unit",
+    ),
+  )
   assert_true(bundle.ffi_mbt.contains("pub struct UseActionStateResult"))
   assert_true(bundle.ffi_mbt.contains("  state : State"))
-  assert_true(bundle.ffi_mbt.contains("  dispatch : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  dispatch : () -> Unit"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub fn UseActionStateResult::dispatch(self : UseActionStateResult) -> Unit",
+    ),
+  )
   assert_true(bundle.ffi_mbt.contains("  isPending : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -3957,6 +3968,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     external_type_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -4001,6 +4013,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     external_type_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -4032,6 +4045,59 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   assert_true(actual.contains("  field : OpaqueType"))
   assert_true(actual.contains("  references : Array[BaseNode]"))
   assert_false(actual.contains("  _ : Scope"))
+}
+
+///|
+test "bridge: FFI struct generation adds method wrappers for function fields" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    external_type_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  let iface : @ast.TsInterface = {
+    name: "NodeFactory",
+    fields: [
+      (
+        "createIdentifier",
+        @ast.TsType::Func(
+          [@ast.TsType::String_],
+          @ast.TsType::Named("Identifier"),
+        ),
+      ),
+    ],
+    readonly_fields: [],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  assert_true(actual.contains("  createIdentifier : (String) -> Identifier"))
+  assert_true(
+    actual.contains(
+      "pub fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier {\n  (self.createIdentifier)(arg0)\n}",
+    ),
+  )
+}
+
+///|
+test "bridge: FFI struct generation caps method wrappers but keeps function fields" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    external_type_names: [],
+    function_field_method_wrapper_limit: 2,
+    needs_js_any: false,
+  }
+  let iface : @ast.TsInterface = {
+    name: "LargeApi",
+    fields: [
+      ("call0", @ast.TsType::Func([], @ast.TsType::Void)),
+      ("call1", @ast.TsType::Func([], @ast.TsType::Void)),
+      ("call2", @ast.TsType::Func([], @ast.TsType::Void)),
+    ],
+    readonly_fields: [],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  assert_true(actual.contains("  call2 : () -> Unit"))
+  assert_eq(count_occurrences_in_ffi_output(actual, "pub fn LargeApi::"), 2)
+  assert_false(actual.contains("pub fn LargeApi::call2("))
 }
 
 ///|

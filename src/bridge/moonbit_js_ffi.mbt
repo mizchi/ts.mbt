@@ -16,8 +16,12 @@ priv struct MoonBitBridgeImport {
 priv struct MoonBitJsFfiState {
   declared_type_names : Array[String]
   external_type_names : Array[String]
+  function_field_method_wrapper_limit : Int
   mut needs_js_any : Bool
 }
+
+///|
+let ffi_function_field_method_wrapper_limit : Int = 16
 
 ///|
 fn ffi_is_ascii_letter(c : Char) -> Bool {
@@ -354,8 +358,11 @@ fn ffi_classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
   match ffi_classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
-      let suffix = if is_optional { "?" } else { "" }
-      return ffi_type_name(state, collapsed) + suffix
+      let rendered = ffi_type_name(state, collapsed)
+      if is_optional {
+        return rendered + "?"
+      }
+      return rendered
     }
     None => ()
   }
@@ -371,6 +378,10 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     String_ => "String"
     Void => "Unit"
     Array(inner) => "Array[" + ffi_type_name(state, inner) + "]"
+    Func(_, _) => {
+      state.needs_js_any = true
+      "@js.Any"
+    }
     Struct(name, _) => ffi_type_identifier(name, "OpaqueType")
     Named("any") | Named("Function") => {
       state.needs_js_any = true
@@ -394,12 +405,89 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
 }
 
 ///|
+fn ffi_function_field_type_name(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> String {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      let rendered = ffi_function_field_type_name(state, collapsed)
+      if is_optional {
+        return match collapsed {
+          Func(_, _) => "(\{rendered})?"
+          _ => rendered + "?"
+        }
+      }
+      return rendered
+    }
+    None => ()
+  }
+  match type_ {
+    Func(params, return_type) => {
+      let param_types : Array[String] = []
+      for param in params {
+        param_types.push(ffi_type_name(state, param))
+      }
+      let params_src = param_types.join(", ")
+      let return_src = ffi_type_name(state, return_type)
+      "(\{params_src}) -> \{return_src}"
+    }
+    _ => ffi_type_name(state, type_)
+  }
+}
+
+///|
+fn ffi_function_type_parts(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> (Array[String], String)? {
+  match type_ {
+    Func(params, return_type) => {
+      let param_types : Array[String] = []
+      for param in params {
+        param_types.push(ffi_type_name(state, param))
+      }
+      Some((param_types, ffi_type_name(state, return_type)))
+    }
+    _ => None
+  }
+}
+
+///|
+fn ffi_function_field_method_decl(
+  state : MoonBitJsFfiState,
+  receiver_type : String,
+  field_name : String,
+  field_type : @ast.TsType,
+) -> String? {
+  match ffi_function_type_parts(state, field_type) {
+    Some((param_types, return_type)) => {
+      let params : Array[String] = ["self : \{receiver_type}"]
+      let args : Array[String] = []
+      for i, param_type in param_types {
+        let arg_name = "arg" + i.to_string()
+        params.push("\{arg_name} : \{param_type}")
+        args.push(arg_name)
+      }
+      let params_src = params.join(", ")
+      let args_src = args.join(", ")
+      Some(
+        "pub fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
+      )
+    }
+    None => None
+  }
+}
+
+///|
 fn ffi_struct_decl_to_moonbit(
   state : MoonBitJsFfiState,
   iface : @ast.TsInterface,
 ) -> String {
   let type_name = ffi_type_identifier(iface.name, "OpaqueType")
   let lines : Array[String] = ["#warnings(\"-9\")", "pub struct \{type_name} {"]
+  let method_lines : Array[String] = []
+  let mut method_wrapper_count = 0
   let seen_fields : Array[String] = []
   for field in iface.fields {
     let (name, type_) = field
@@ -408,16 +496,30 @@ fn ffi_struct_decl_to_moonbit(
       continue
     }
     seen_fields.push(field_name)
-    let field_type = ffi_type_name(state, type_)
+    let field_type = ffi_function_field_type_name(state, type_)
     if iface.readonly_fields.contains(name) {
       lines.push(
         "  // readonly in TypeScript; not enforced by generated MoonBit struct",
       )
     }
     lines.push("  \{field_name} : \{field_type}")
+    if method_wrapper_count < state.function_field_method_wrapper_limit {
+      match
+        ffi_function_field_method_decl(state, type_name, field_name, type_) {
+        Some(method_decl) => {
+          method_lines.push(method_decl)
+          method_wrapper_count += 1
+        }
+        None => ()
+      }
+    }
   }
   lines.push("}")
-  lines.join("\n")
+  if method_lines.length() == 0 {
+    lines.join("\n")
+  } else {
+    lines.join("\n") + "\n\n" + method_lines.join("\n\n")
+  }
 }
 
 ///|
@@ -436,7 +538,7 @@ fn ffi_named_struct_decl_to_moonbit(
       continue
     }
     seen_fields.push(safe_name)
-    let safe_type = ffi_type_name(state, field_type)
+    let safe_type = ffi_function_field_type_name(state, field_type)
     lines.push("  \{safe_name} : \{safe_type}")
   }
   lines.push("}")
@@ -1643,6 +1745,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let state : MoonBitJsFfiState = {
     declared_type_names,
     external_type_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
   }
   let emitted_type_names : Array[String] = []

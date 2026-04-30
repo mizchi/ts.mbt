@@ -1482,8 +1482,7 @@ fn returned_function_value_init_mutates_captures_for_analysis(
       returned_function_value_init_mutates_captures_for_analysis(
         local_function_values, operand,
       )
-    @ast.TsExpr::BinOp(_, left, right)
-    | @ast.TsExpr::Seq(left, right) =>
+    @ast.TsExpr::BinOp(_, left, right) | @ast.TsExpr::Seq(left, right) =>
       returned_function_value_init_mutates_captures_for_analysis(
         local_function_values, left,
       ) ||
@@ -2177,8 +2176,7 @@ fn can_compile_expr_with_local_functions(
   local_function_values : Map[String, @ast.TsExpr],
 ) -> CompilabilityResult {
   if returned_function_value_init_mutates_captures_for_analysis(
-      local_function_values,
-      expr,
+      local_function_values, expr,
     ) {
     return NotCompilable(
       "mutable capture in returned function value not supported",

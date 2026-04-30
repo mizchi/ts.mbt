@@ -21,6 +21,18 @@ fn parse_assign_binding_from(src : String) -> @ast.TsBinding {
 }
 
 ///|
+fn count_occurrences_in_parser_output(
+  haystack : String,
+  needle : String,
+) -> Int {
+  let mut count = 0
+  for _ in haystack.split(needle) {
+    count += 1
+  }
+  count - 1
+}
+
+///|
 test "lexer: tokenize simple" {
   let lexer = Lexer::new("let x: number = 42;")
   let tokens = lexer.tokenize()
@@ -757,7 +769,75 @@ test "parser: parse interface method with template literal return type" {
   assert_eq(iface.fields.length(), 1)
   let (name, type_) = iface.fields[0]
   assert_eq(name, "randomUUID")
-  assert_eq(type_, String_)
+  assert_eq(type_, @ast.TsType::Func([], String_))
+}
+
+///|
+test "parser: parse interface method signature as function field" {
+  let src =
+    #|interface Printer {
+    #|  printFile(sourceFile: SourceFile): string;
+    #|  printNode(hint: EmitHint, node: Node, sourceFile?: SourceFile): string;
+    #|}
+  let iface = Parser::from_source(src).parse_interface() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(iface.name, "Printer")
+  assert_eq(iface.fields.length(), 2)
+  assert_eq(
+    iface.fields[0],
+    (
+      "printFile",
+      @ast.TsType::Func([@ast.TsType::Named("SourceFile")], String_),
+    ),
+  )
+  assert_eq(
+    iface.fields[1],
+    (
+      "printNode",
+      @ast.TsType::Func(
+        [
+          @ast.TsType::Named("EmitHint"),
+          @ast.TsType::Named("Node"),
+          @ast.TsType::Union([
+            @ast.TsType::Named("SourceFile"),
+            @ast.TsType::Undefined,
+          ]),
+        ],
+        String_,
+      ),
+    ),
+  )
+}
+
+///|
+test "parser: emit MoonBit declarations caps function field method helpers" {
+  let mut src = "export interface LargeApi {\n"
+  for i in 0..<(moonbit_function_field_method_wrapper_limit + 1) {
+    src += "  call\{i}(): void;\n"
+  }
+  src += "}"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected LargeApi interface to parse: \{e}")
+  }
+  let actual = emit_moonbit_decl(module_)
+  assert_true(
+    actual.contains(
+      "/// call\{moonbit_function_field_method_wrapper_limit} : () -> Unit",
+    ),
+  )
+  assert_eq(
+    count_occurrences_in_parser_output(actual, "declare pub fn LargeApi::call"),
+    moonbit_function_field_method_wrapper_limit,
+  )
+  assert_false(
+    actual.contains(
+      "declare pub fn LargeApi::call\{moonbit_function_field_method_wrapper_limit}(",
+    ),
+  )
 }
 
 ///|

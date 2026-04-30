@@ -157,3 +157,26 @@ test "bridge: bridge public wrapper skips reserved public names" {
     None => ()
   }
 }
+
+///|
+test "bridge: bridge top-level fn parser keeps function-typed parameters intact" {
+  let line = "declare pub fn forEachLeadingCommentRange(text : String, pos : Double, cb : (Double, Double, CommentKind, Bool) -> U) -> U?"
+  match parse_bridge_top_level_fn_decl_line(line) {
+    Some(decl) => {
+      assert_eq(decl.public_name, "forEachLeadingCommentRange")
+      assert_eq(decl.arg_names, ["text", "pos", "cb"])
+      assert_eq(
+        decl.params_src,
+        "text : String, pos : Double, cb : (Double, Double, CommentKind, Bool) -> U",
+      )
+      match render_bridge_public_wrapper(decl) {
+        Some(wrapper) =>
+          assert_true(
+            wrapper.contains("for_each_leading_comment_range(text, pos, cb)"),
+          )
+        None => fail("expected wrapper for camelCase function")
+      }
+    }
+    None => fail("expected function declaration to parse")
+  }
+}

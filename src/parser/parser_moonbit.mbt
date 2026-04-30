@@ -6,6 +6,9 @@ priv struct MoonBitDeclState {
 }
 
 ///|
+let moonbit_function_field_method_wrapper_limit : Int = 16
+
+///|
 fn is_ascii_letter(c : Char) -> Bool {
   (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
@@ -276,8 +279,11 @@ fn classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
 fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
   match classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
-      let suffix = if is_optional { "?" } else { "" }
-      return moonbit_type_name(state, collapsed) + suffix
+      let rendered = moonbit_type_name(state, collapsed)
+      if is_optional {
+        return rendered + "?"
+      }
+      return rendered
     }
     None => ()
   }
@@ -294,6 +300,10 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     String_ => "String"
     Void => "Unit"
     Array(inner) => "Array[" + moonbit_type_name(state, inner) + "]"
+    Func(_, _) => {
+      state.needs_jsvalue = true
+      "JSValue"
+    }
     Struct(name, _) => {
       mark_referenced_type(state, name)
       moonbit_type_identifier(name, "OpaqueType")
@@ -326,23 +336,121 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
 }
 
 ///|
+fn moonbit_function_field_type_name(
+  state : MoonBitDeclState,
+  type_ : @ast.TsType,
+) -> String {
+  match classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      let rendered = moonbit_function_field_type_name(state, collapsed)
+      if is_optional {
+        return match collapsed {
+          Func(_, _) => "(\{rendered})?"
+          _ => rendered + "?"
+        }
+      }
+      return rendered
+    }
+    None => ()
+  }
+  match type_ {
+    Func(params, return_type) => {
+      let param_types : Array[String] = []
+      for param in params {
+        param_types.push(moonbit_type_name(state, param))
+      }
+      let params_src = param_types.join(", ")
+      let return_src = moonbit_type_name(state, return_type)
+      "(\{params_src}) -> \{return_src}"
+    }
+    _ => moonbit_type_name(state, type_)
+  }
+}
+
+///|
+fn moonbit_function_type_parts(
+  state : MoonBitDeclState,
+  type_ : @ast.TsType,
+) -> (Array[String], String)? {
+  match type_ {
+    Func(params, return_type) => {
+      let param_types : Array[String] = []
+      for param in params {
+        param_types.push(moonbit_type_name(state, param))
+      }
+      Some((param_types, moonbit_type_name(state, return_type)))
+    }
+    _ => None
+  }
+}
+
+///|
+fn interface_function_field_method_decl(
+  state : MoonBitDeclState,
+  receiver_type : String,
+  field_name : String,
+  field_type : @ast.TsType,
+) -> String? {
+  match moonbit_function_type_parts(state, field_type) {
+    Some((param_types, return_type)) => {
+      let params : Array[String] = []
+      for i, param_type in param_types {
+        let arg_name = "arg" + i.to_string()
+        params.push("\{arg_name} : \{param_type}")
+      }
+      let params_src = if params.length() == 0 {
+        "self : \{receiver_type}"
+      } else {
+        "self : \{receiver_type}, " + params.join(", ")
+      }
+      Some(
+        "///|\ndeclare pub fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type}",
+      )
+    }
+    None => None
+  }
+}
+
+///|
 fn interface_decl_to_moonbit(
   state : MoonBitDeclState,
   iface : @ast.TsInterface,
 ) -> String {
   let lines : Array[String] = ["///|", "/// TS interface \{iface.name}"]
+  let method_decls : Array[String] = []
+  let seen_method_names : Array[String] = []
+  let mut method_wrapper_count = 0
+  let type_name = moonbit_type_identifier(iface.name, "OpaqueType")
   for field in iface.fields {
     let (name, type_) = field
-    let moonbit_type = moonbit_type_name(state, type_)
+    let moonbit_type = moonbit_function_field_type_name(state, type_)
     if iface.readonly_fields.contains(name) {
       lines.push("/// readonly \{name} : \{moonbit_type}")
     } else {
       lines.push("/// \{name} : \{moonbit_type}")
     }
+    let method_name = sanitize_value_identifier(name, "field")
+    if method_wrapper_count < moonbit_function_field_method_wrapper_limit &&
+      !seen_method_names.contains(method_name) {
+      match
+        interface_function_field_method_decl(
+          state, type_name, method_name, type_,
+        ) {
+        Some(method_decl) => {
+          seen_method_names.push(method_name)
+          method_decls.push(method_decl)
+          method_wrapper_count += 1
+        }
+        None => ()
+      }
+    }
   }
-  let type_name = moonbit_type_identifier(iface.name, "OpaqueType")
   lines.push("declare pub type \{type_name}")
-  lines.join("\n")
+  if method_decls.length() == 0 {
+    lines.join("\n")
+  } else {
+    lines.join("\n") + "\n\n" + method_decls.join("\n\n")
+  }
 }
 
 ///|

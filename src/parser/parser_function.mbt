@@ -728,50 +728,30 @@ pub fn Parser::parse_interface(
     // Method signature: name(...): T or name<T>(...): U
     if self.check(LParen) {
       let _ = self.advance()
-      // Skip parameters
-      let mut paren_depth = 1
-      while paren_depth > 0 && !self.check(Eof) {
-        match self.peek().kind {
-          LParen => {
-            paren_depth += 1
-            let _ = self.advance()
-          }
-          RParen => {
-            paren_depth -= 1
-            let _ = self.advance()
-          }
-          _ => {
-            let _ = self.advance()
-          }
-        }
-      }
+      let method_params = self.parse_params()
+      let _ = self.expect(RParen)
       // Return type
-      if self.check(Colon) {
+      let return_type = if self.check(Colon) {
         let _ = self.advance()
-        let field_type = self.parse_type()
-        fields.push(
-          (
-            field_name,
-            if is_optional {
-              wrap_optional_ts_type(field_type)
-            } else {
-              field_type
-            },
-          ),
-        )
+        self.parse_type()
       } else {
-        let field_type = @ast.TsType::Void
-        fields.push(
-          (
-            field_name,
-            if is_optional {
-              wrap_optional_ts_type(field_type)
-            } else {
-              field_type
-            },
-          ),
-        )
+        @ast.TsType::Void
       }
+      let param_types : Array[@ast.TsType] = []
+      for param in method_params {
+        param_types.push(param.type_)
+      }
+      let field_type = @ast.TsType::Func(param_types, return_type)
+      fields.push(
+        (
+          field_name,
+          if is_optional {
+            wrap_optional_ts_type(field_type)
+          } else {
+            field_type
+          },
+        ),
+      )
     } else if self.check(Colon) {
       // Property: name: T
       let _ = self.advance()
