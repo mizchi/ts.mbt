@@ -209,6 +209,12 @@ priv enum IifeBinding {
 }
 
 ///|
+priv struct StaticFunctionValueIifeScope {
+  body_ctx : CodeGenCtx
+  value_bindings : Map[String, @ast.TsExpr]
+}
+
+///|
 // / codegen
 priv struct CodeGenCtx {
   // variable ( -> )
@@ -221,6 +227,8 @@ priv struct CodeGenCtx {
   mut next_local : UInt
   // function ( -> )
   funcs : Map[String, UInt]
+  // top-level function definitions for static factory resolution
+  function_defs : Map[String, @ast.TsFunc]
   // function signature map (name -> (param types, return type))
   func_types : Map[String, (Array[@ast.TsType], @ast.TsType)]
   // interface ( -> field)
@@ -251,6 +259,7 @@ priv struct CodeGenCtx {
 // / create
 fn CodeGenCtx::new(
   funcs : Map[String, UInt],
+  function_defs : Map[String, @ast.TsFunc],
   interfaces : Map[String, Array[(String, @ast.TsType)]],
   import_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
   func_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
@@ -263,6 +272,7 @@ fn CodeGenCtx::new(
     local_types: [],
     next_local: 0,
     funcs,
+    function_defs,
     func_types,
     interfaces,
     import_types,
@@ -326,6 +336,7 @@ fn ts_type_to_valtype(t : @ast.TsType) -> @core.ValType {
     @ast.TsType::Boolean => I32
     @ast.TsType::String_ => I32 // string
     @ast.TsType::Array(_) => I32 // array
+    @ast.TsType::Func(_, _) => I32 // static function reference tag
     @ast.TsType::Named(_) => I32 // struct reference
     @ast.TsType::Applied(_, _) => I32 // generic reference
     @ast.TsType::Void => I32 // void
@@ -346,6 +357,7 @@ fn ts_type_to_valtype_gc(
     @ast.TsType::Int => I32
     @ast.TsType::Boolean => I32
     @ast.TsType::String_ => I32 // string (still i32 pointer for now)
+    @ast.TsType::Func(_, _) => I32 // static function reference tag
     @ast.TsType::Array(elem_type) => {
       // Get GC array type index based on element type
       let type_key = if is_f64_type(elem_type) { "f64" } else { "i32" }
@@ -689,6 +701,7 @@ fn element_size(t : @ast.TsType) -> Int {
     @ast.TsType::Boolean => 4 // i32 = 4 bytes
     @ast.TsType::String_ => 4 // = 4 bytes
     @ast.TsType::Array(_) => 4 // = 4 bytes
+    @ast.TsType::Func(_, _) => 4 // static function reference tag
     @ast.TsType::Named(_) => 4 // struct = 4 bytes
     @ast.TsType::Struct(_, _) => 4 // struct = 4 bytes
     _ => 8
@@ -839,29 +852,40 @@ fn compile_expr(
     }
     @ast.TsExpr::Var(name) =>
       // Constant propagation: emit constant directly if known
-      match ctx.const_values.get(name) {
-        Some(@analysis.ConstValue::Int(n)) =>
-          if is_f64_type(expected_type) {
-            ctx.emit(F64Const(n.to_double()))
-          } else {
-            ctx.emit(I32Const(n.reinterpret_as_uint()))
+      match expected_type {
+        @ast.TsType::Func(_, _) =>
+          match ctx.funcs.get(name) {
+            Some(idx) => ctx.emit(I32Const(idx))
+            None =>
+              raise CodeGenError(
+                "local function value cannot escape as a Wasm function reference: \{name}",
+              )
           }
-        Some(@analysis.ConstValue::Number(f)) => ctx.emit(F64Const(f))
-        Some(@analysis.ConstValue::Boolean(b)) =>
-          ctx.emit(I32Const(if b { 1U } else { 0U }))
-        Some(@analysis.ConstValue::String_(s)) => {
-          let offset = ctx.string_pool.add(s)
-          ctx.emit(I32Const(offset.reinterpret_as_uint()))
-        }
-        Some(@analysis.ConstValue::Null)
-        | Some(@analysis.ConstValue::Undefined) => ctx.emit(I32Const(0U)) // null/undefined as 0
-        Some(@analysis.ConstValue::NotConst) | None =>
-          match ctx.get_local(name) {
-            Some(local_var) => {
-              ctx.emit(LocalGet(local_var.index))
-              emit_coerce(ctx, local_var.type_, expected_type)
+        _ =>
+          match ctx.const_values.get(name) {
+            Some(@analysis.ConstValue::Int(n)) =>
+              if is_f64_type(expected_type) {
+                ctx.emit(F64Const(n.to_double()))
+              } else {
+                ctx.emit(I32Const(n.reinterpret_as_uint()))
+              }
+            Some(@analysis.ConstValue::Number(f)) => ctx.emit(F64Const(f))
+            Some(@analysis.ConstValue::Boolean(b)) =>
+              ctx.emit(I32Const(if b { 1U } else { 0U }))
+            Some(@analysis.ConstValue::String_(s)) => {
+              let offset = ctx.string_pool.add(s)
+              ctx.emit(I32Const(offset.reinterpret_as_uint()))
             }
-            None => raise CodeGenError("Undefined variable: \{name}")
+            Some(@analysis.ConstValue::Null)
+            | Some(@analysis.ConstValue::Undefined) => ctx.emit(I32Const(0U)) // null/undefined as 0
+            Some(@analysis.ConstValue::NotConst) | None =>
+              match ctx.get_local(name) {
+                Some(local_var) => {
+                  ctx.emit(LocalGet(local_var.index))
+                  emit_coerce(ctx, local_var.type_, expected_type)
+                }
+                None => raise CodeGenError("Undefined variable: \{name}")
+              }
           }
       }
     @ast.TsExpr::Yield(_) =>
@@ -959,6 +983,7 @@ fn compile_expr(
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
+        function_defs: ctx.function_defs,
         func_types: ctx.func_types,
         interfaces: ctx.interfaces,
         import_types: ctx.import_types,
@@ -979,6 +1004,7 @@ fn compile_expr(
         local_types: ctx.local_types,
         next_local: then_ctx.next_local,
         funcs: ctx.funcs,
+        function_defs: ctx.function_defs,
         func_types: ctx.func_types,
         interfaces: ctx.interfaces,
         import_types: ctx.import_types,
@@ -1016,7 +1042,18 @@ fn compile_expr(
     @ast.TsExpr::NewExpr(_, _) =>
       raise CodeGenError("new expression is not supported in Wasm compiler")
     @ast.TsExpr::MethodCall(receiver, method_name, args) =>
-      compile_method_call(ctx, receiver, method_name, args, expected_type)
+      match resolve_static_function_prop_access(ctx, receiver, method_name) {
+        Some(function_value) =>
+          if !compile_callable_expr(
+              ctx, function_value, args, expected_type, false,
+            ) {
+            raise CodeGenError(
+              "static function value object member is not callable in Wasm compiler",
+            )
+          }
+        None =>
+          compile_method_call(ctx, receiver, method_name, args, expected_type)
+      }
     // Wasm(interpreter)
     @ast.TsExpr::NullLit => ctx.emit(I32Const(0U)) // null = 0
     @ast.TsExpr::ArrayHole => ctx.emit(I32Const(0U))
@@ -2755,6 +2792,7 @@ fn make_branch_ctx(ctx : CodeGenCtx) -> CodeGenCtx {
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
+    function_defs: ctx.function_defs,
     func_types: ctx.func_types,
     interfaces: ctx.interfaces,
     import_types: ctx.import_types,
@@ -2778,6 +2816,7 @@ fn make_inline_expr_ctx(ctx : CodeGenCtx) -> CodeGenCtx {
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
+    function_defs: ctx.function_defs,
     func_types: ctx.func_types,
     interfaces: ctx.interfaces,
     import_types: ctx.import_types,
@@ -3210,6 +3249,7 @@ fn compile_binop(
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
+        function_defs: ctx.function_defs,
         func_types: ctx.func_types,
         interfaces: ctx.interfaces,
         import_types: ctx.import_types,
@@ -3253,6 +3293,7 @@ fn compile_binop(
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
+        function_defs: ctx.function_defs,
         func_types: ctx.func_types,
         interfaces: ctx.interfaces,
         import_types: ctx.import_types,
@@ -3300,6 +3341,7 @@ fn compile_binop(
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
+        function_defs: ctx.function_defs,
         func_types: ctx.func_types,
         interfaces: ctx.interfaces,
         import_types: ctx.import_types,
@@ -3608,8 +3650,390 @@ fn resolve_local_function_value(
       } else {
         None
       }
+    @ast.TsExpr::ArrayLit(elements) =>
+      resolve_static_function_array(ctx, elements)
+    @ast.TsExpr::ObjectLit(fields) =>
+      resolve_static_function_object(ctx, fields)
+    @ast.TsExpr::IndexAccess(container, index) =>
+      resolve_static_function_index_access(ctx, container, index)
+    @ast.TsExpr::PropAccess(container, prop) =>
+      resolve_static_function_prop_access(ctx, container, prop)
+    @ast.TsExpr::Call(name, args) =>
+      resolve_returned_local_function_value(ctx, @ast.TsExpr::Var(name), args)
     @ast.TsExpr::CallExpr(producer, producer_args) =>
       resolve_returned_local_function_value(ctx, producer, producer_args)
+    _ => None
+  }
+}
+
+///|
+fn static_function_index_to_int(index : @ast.TsExpr) -> Int? {
+  match @analysis.eval_const(index) {
+    @analysis.ConstValue::Int(n) => Some(n)
+    @analysis.ConstValue::Number(n) => Some(n.to_int())
+    _ => None
+  }
+}
+
+///|
+fn is_stable_static_function_value_arg(
+  ctx : CodeGenCtx,
+  expr : @ast.TsExpr,
+) -> Bool {
+  match expr {
+    @ast.TsExpr::IntLit(_)
+    | @ast.TsExpr::NumberLit(_)
+    | @ast.TsExpr::BoolLit(_)
+    | @ast.TsExpr::StringLit(_)
+    | @ast.TsExpr::NullLit => true
+    @ast.TsExpr::Var(name) => !ctx.local_function_values.contains(name)
+    @ast.TsExpr::BinOp(_, left, right) =>
+      is_stable_static_function_value_arg(ctx, left) &&
+      is_stable_static_function_value_arg(ctx, right)
+    @ast.TsExpr::UnaryOp(op, operand) =>
+      match op {
+        @ast.TsUnaryOp::Delete => false
+        _ => is_stable_static_function_value_arg(ctx, operand)
+      }
+    @ast.TsExpr::Cond(cond, then_expr, else_expr) =>
+      is_stable_static_function_value_arg(ctx, cond) &&
+      is_stable_static_function_value_arg(ctx, then_expr) &&
+      is_stable_static_function_value_arg(ctx, else_expr)
+    _ => false
+  }
+}
+
+///|
+fn substitute_static_function_value_args(
+  expr : @ast.TsExpr,
+  value_bindings : Map[String, @ast.TsExpr],
+) -> @ast.TsExpr {
+  match expr {
+    @ast.TsExpr::Var(name) =>
+      match value_bindings.get(name) {
+        Some(replacement) => replacement
+        None => expr
+      }
+    @ast.TsExpr::BinOp(op, left, right) =>
+      @ast.TsExpr::BinOp(
+        op,
+        substitute_static_function_value_args(left, value_bindings),
+        substitute_static_function_value_args(right, value_bindings),
+      )
+    @ast.TsExpr::UnaryOp(op, operand) =>
+      @ast.TsExpr::UnaryOp(
+        op,
+        substitute_static_function_value_args(operand, value_bindings),
+      )
+    @ast.TsExpr::Cond(cond, then_expr, else_expr) =>
+      @ast.TsExpr::Cond(
+        substitute_static_function_value_args(cond, value_bindings),
+        substitute_static_function_value_args(then_expr, value_bindings),
+        substitute_static_function_value_args(else_expr, value_bindings),
+      )
+    @ast.TsExpr::Call(name, args) => {
+      let out : Array[@ast.TsExpr] = []
+      for arg in args {
+        out.push(substitute_static_function_value_args(arg, value_bindings))
+      }
+      @ast.TsExpr::Call(name, out)
+    }
+    @ast.TsExpr::CallExpr(callee, args) => {
+      let out : Array[@ast.TsExpr] = []
+      for arg in args {
+        out.push(substitute_static_function_value_args(arg, value_bindings))
+      }
+      @ast.TsExpr::CallExpr(
+        substitute_static_function_value_args(callee, value_bindings),
+        out,
+      )
+    }
+    @ast.TsExpr::ArrayLit(elements) => {
+      let out : Array[@ast.TsExpr] = []
+      for elem in elements {
+        out.push(substitute_static_function_value_args(elem, value_bindings))
+      }
+      @ast.TsExpr::ArrayLit(out)
+    }
+    @ast.TsExpr::ObjectLit(fields) => {
+      let out : Array[(String, @ast.TsExpr)] = []
+      for item in fields {
+        let (key, value) = item
+        out.push(
+          (key, substitute_static_function_value_args(value, value_bindings)),
+        )
+      }
+      @ast.TsExpr::ObjectLit(out)
+    }
+    @ast.TsExpr::ComputedProp(key, value) =>
+      @ast.TsExpr::ComputedProp(
+        substitute_static_function_value_args(key, value_bindings),
+        substitute_static_function_value_args(value, value_bindings),
+      )
+    @ast.TsExpr::IndexAccess(container, index) =>
+      @ast.TsExpr::IndexAccess(
+        substitute_static_function_value_args(container, value_bindings),
+        substitute_static_function_value_args(index, value_bindings),
+      )
+    @ast.TsExpr::PropAccess(container, prop) =>
+      @ast.TsExpr::PropAccess(
+        substitute_static_function_value_args(container, value_bindings),
+        prop,
+      )
+    @ast.TsExpr::MethodCall(receiver, method_name, args) => {
+      let out : Array[@ast.TsExpr] = []
+      for arg in args {
+        out.push(substitute_static_function_value_args(arg, value_bindings))
+      }
+      @ast.TsExpr::MethodCall(
+        substitute_static_function_value_args(receiver, value_bindings),
+        method_name,
+        out,
+      )
+    }
+    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+      let scoped = shadow_static_function_value_params(value_bindings, params)
+      let body = match body {
+        @ast.TsArrowBody::ArrowExpr(expr) =>
+          @ast.TsArrowBody::ArrowExpr(
+            substitute_static_function_value_args(expr, scoped),
+          )
+        @ast.TsArrowBody::ArrowBlock(block) =>
+          @ast.TsArrowBody::ArrowBlock(
+            substitute_static_function_value_args_in_block(block, scoped),
+          )
+      }
+      @ast.TsExpr::ArrowFunc(params, body, is_async)
+    }
+    @ast.TsExpr::FuncExpr(func) => {
+      let scoped = shadow_static_function_value_params(
+        value_bindings,
+        func.params,
+      )
+      @ast.TsExpr::FuncExpr({
+        ..func,
+        body: substitute_static_function_value_args_in_block(func.body, scoped),
+      })
+    }
+    _ => expr
+  }
+}
+
+///|
+fn shadow_static_function_value_params(
+  value_bindings : Map[String, @ast.TsExpr],
+  params : Array[@ast.TsParam],
+) -> Map[String, @ast.TsExpr] {
+  let scoped = value_bindings.copy()
+  for param in params {
+    let _ = scoped.remove(param.name)
+  }
+  scoped
+}
+
+///|
+fn substitute_static_function_value_args_in_block(
+  block : @ast.TsBlock,
+  value_bindings : Map[String, @ast.TsExpr],
+) -> @ast.TsBlock {
+  let stmts : Array[@ast.TsStmt] = []
+  for stmt in block.stmts {
+    stmts.push(
+      substitute_static_function_value_args_in_stmt(stmt, value_bindings),
+    )
+  }
+  { stmts, }
+}
+
+///|
+fn substitute_static_function_value_args_in_stmt(
+  stmt : @ast.TsStmt,
+  value_bindings : Map[String, @ast.TsExpr],
+) -> @ast.TsStmt {
+  match stmt {
+    @ast.TsStmt::Var(binding, type_, init) =>
+      @ast.TsStmt::Var(
+        binding,
+        type_,
+        substitute_static_function_value_args(init, value_bindings),
+      )
+    @ast.TsStmt::Let(binding, type_, init) =>
+      @ast.TsStmt::Let(
+        binding,
+        type_,
+        substitute_static_function_value_args(init, value_bindings),
+      )
+    @ast.TsStmt::Const(binding, type_, init) =>
+      @ast.TsStmt::Const(
+        binding,
+        type_,
+        substitute_static_function_value_args(init, value_bindings),
+      )
+    @ast.TsStmt::Assign(name, expr) =>
+      @ast.TsStmt::Assign(
+        name,
+        substitute_static_function_value_args(expr, value_bindings),
+      )
+    @ast.TsStmt::CompoundAssign(name, op, expr) =>
+      @ast.TsStmt::CompoundAssign(
+        name,
+        op,
+        substitute_static_function_value_args(expr, value_bindings),
+      )
+    @ast.TsStmt::IndexAssign(arr, idx, value) =>
+      @ast.TsStmt::IndexAssign(
+        substitute_static_function_value_args(arr, value_bindings),
+        substitute_static_function_value_args(idx, value_bindings),
+        substitute_static_function_value_args(value, value_bindings),
+      )
+    @ast.TsStmt::PropAssign(obj, prop, value) =>
+      @ast.TsStmt::PropAssign(
+        substitute_static_function_value_args(obj, value_bindings),
+        prop,
+        substitute_static_function_value_args(value, value_bindings),
+      )
+    @ast.TsStmt::Expr(expr) =>
+      @ast.TsStmt::Expr(
+        substitute_static_function_value_args(expr, value_bindings),
+      )
+    @ast.TsStmt::Return(Some(expr)) =>
+      @ast.TsStmt::Return(
+        Some(substitute_static_function_value_args(expr, value_bindings)),
+      )
+    @ast.TsStmt::Return(None) => stmt
+    @ast.TsStmt::If(cond, then_block, else_block) =>
+      @ast.TsStmt::If(
+        substitute_static_function_value_args(cond, value_bindings),
+        substitute_static_function_value_args_in_block(
+          then_block, value_bindings,
+        ),
+        match else_block {
+          Some(block) =>
+            Some(
+              substitute_static_function_value_args_in_block(
+                block, value_bindings,
+              ),
+            )
+          None => None
+        },
+      )
+    @ast.TsStmt::Block(block) =>
+      @ast.TsStmt::Block(
+        substitute_static_function_value_args_in_block(block, value_bindings),
+      )
+    @ast.TsStmt::Label(label, inner) =>
+      @ast.TsStmt::Label(
+        label,
+        substitute_static_function_value_args_in_stmt(inner, value_bindings),
+      )
+    _ => stmt
+  }
+}
+
+///|
+fn resolve_static_function_array(
+  ctx : CodeGenCtx,
+  elements : Array[@ast.TsExpr],
+) -> @ast.TsExpr? {
+  let resolved : Array[@ast.TsExpr] = []
+  for elem in elements {
+    match elem {
+      @ast.TsExpr::Spread(_) => return None
+      _ =>
+        match resolve_local_function_value(ctx, elem) {
+          Some(function_value) => resolved.push(function_value)
+          None => return None
+        }
+    }
+  }
+  Some(@ast.TsExpr::ArrayLit(resolved))
+}
+
+///|
+fn resolve_static_function_object(
+  ctx : CodeGenCtx,
+  fields : Array[(String, @ast.TsExpr)],
+) -> @ast.TsExpr? {
+  let resolved : Array[(String, @ast.TsExpr)] = []
+  for item in fields {
+    let (key, value) = item
+    if key.has_prefix("@@") {
+      return None
+    }
+    match resolve_local_function_value(ctx, value) {
+      Some(function_value) => resolved.push((key, function_value))
+      None => return None
+    }
+  }
+  Some(@ast.TsExpr::ObjectLit(resolved))
+}
+
+///|
+fn resolve_static_function_array_index(
+  ctx : CodeGenCtx,
+  array_expr : @ast.TsExpr,
+  index : @ast.TsExpr,
+) -> @ast.TsExpr? {
+  match array_expr {
+    @ast.TsExpr::ArrayLit(elements) =>
+      match index {
+        @ast.TsExpr::Cond(cond, then_index, else_index) => {
+          let then_value = match
+            resolve_static_function_array_index(ctx, array_expr, then_index) {
+            Some(value) => value
+            None => return None
+          }
+          let else_value = match
+            resolve_static_function_array_index(ctx, array_expr, else_index) {
+            Some(value) => value
+            None => return None
+          }
+          Some(@ast.TsExpr::Cond(cond, then_value, else_value))
+        }
+        _ =>
+          match static_function_index_to_int(index) {
+            Some(idx) =>
+              if idx >= 0 && idx < elements.length() {
+                resolve_local_function_value(ctx, elements[idx])
+              } else {
+                None
+              }
+            None => None
+          }
+      }
+    _ => None
+  }
+}
+
+///|
+fn resolve_static_function_index_access(
+  ctx : CodeGenCtx,
+  container : @ast.TsExpr,
+  index : @ast.TsExpr,
+) -> @ast.TsExpr? {
+  match resolve_local_function_value(ctx, container) {
+    Some(array_expr) =>
+      resolve_static_function_array_index(ctx, array_expr, index)
+    None => None
+  }
+}
+
+///|
+fn resolve_static_function_prop_access(
+  ctx : CodeGenCtx,
+  container : @ast.TsExpr,
+  prop : String,
+) -> @ast.TsExpr? {
+  match resolve_local_function_value(ctx, container) {
+    Some(@ast.TsExpr::ObjectLit(fields)) => {
+      for item in fields {
+        let (key, value) = item
+        if key == prop {
+          return resolve_local_function_value(ctx, value)
+        }
+      }
+      None
+    }
     _ => None
   }
 }
@@ -3626,15 +4050,16 @@ fn static_iife_return_expr(block : @ast.TsBlock) -> @ast.TsExpr? {
 }
 
 ///|
-fn make_static_function_value_iife_ctx(
+fn make_static_function_value_iife_scope(
   ctx : CodeGenCtx,
   params : Array[@ast.TsParam],
   args : Array[@ast.TsExpr],
-) -> CodeGenCtx? {
+) -> StaticFunctionValueIifeScope? {
   if params.length() != args.length() {
     return None
   }
   let body_ctx = make_inline_expr_ctx(ctx)
+  let value_bindings : Map[String, @ast.TsExpr] = {}
   for i, param in params {
     if param.is_rest {
       return None
@@ -3648,10 +4073,16 @@ fn make_static_function_value_iife_ctx(
         body_ctx.local_function_values[param.name] = function_value
         body_ctx.const_values[param.name] = @analysis.ConstValue::NotConst
       }
-      None => return None
+      None =>
+        if is_stable_static_function_value_arg(ctx, args[i]) {
+          value_bindings[param.name] = args[i]
+          body_ctx.const_values[param.name] = @analysis.ConstValue::NotConst
+        } else {
+          return None
+        }
     }
   }
-  Some(body_ctx)
+  Some({ body_ctx, value_bindings })
 }
 
 ///|
@@ -3661,19 +4092,52 @@ fn resolve_returned_local_function_value(
   producer_args : Array[@ast.TsExpr],
 ) -> @ast.TsExpr? {
   match producer {
+    @ast.TsExpr::Var(name) =>
+      match ctx.local_function_values.get(name) {
+        Some(@ast.TsExpr::Var(source_name)) =>
+          if source_name == name {
+            None
+          } else {
+            resolve_returned_local_function_value(
+              ctx,
+              @ast.TsExpr::Var(source_name),
+              producer_args,
+            )
+          }
+        Some(function_value) =>
+          resolve_returned_local_function_value(
+            ctx, function_value, producer_args,
+          )
+        None =>
+          resolve_returned_top_level_function_value(ctx, name, producer_args)
+      }
     @ast.TsExpr::ArrowFunc(params, body, is_async) => {
       if is_async {
         return None
       }
-      match make_static_function_value_iife_ctx(ctx, params, producer_args) {
-        Some(body_ctx) => {
+      match make_static_function_value_iife_scope(ctx, params, producer_args) {
+        Some(scope) => {
           let returned_expr = match body {
             @ast.TsArrowBody::ArrowExpr(expr) => Some(expr)
             @ast.TsArrowBody::ArrowBlock(block) =>
               static_iife_return_expr(block)
           }
           match returned_expr {
-            Some(expr) => resolve_local_function_value(body_ctx, expr)
+            Some(expr) =>
+              if @analysis.function_value_expr_mutates_static_bindings(
+                  expr,
+                  scope.value_bindings,
+                ) {
+                None
+              } else {
+                resolve_local_function_value(
+                  scope.body_ctx,
+                  substitute_static_function_value_args(
+                    expr,
+                    scope.value_bindings,
+                  ),
+                )
+              }
             None => None
           }
         }
@@ -3685,16 +4149,211 @@ fn resolve_returned_local_function_value(
         return None
       }
       match
-        make_static_function_value_iife_ctx(ctx, func.params, producer_args) {
-        Some(body_ctx) =>
+        make_static_function_value_iife_scope(ctx, func.params, producer_args) {
+        Some(scope) =>
           match static_iife_return_expr(func.body) {
-            Some(expr) => resolve_local_function_value(body_ctx, expr)
+            Some(expr) =>
+              if @analysis.function_value_expr_mutates_static_bindings(
+                  expr,
+                  scope.value_bindings,
+                ) {
+                None
+              } else {
+                resolve_local_function_value(
+                  scope.body_ctx,
+                  substitute_static_function_value_args(
+                    expr,
+                    scope.value_bindings,
+                  ),
+                )
+              }
             None => None
           }
         None => None
       }
     }
     _ => None
+  }
+}
+
+///|
+fn resolve_returned_top_level_function_value(
+  ctx : CodeGenCtx,
+  name : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsExpr? {
+  match ctx.function_defs.get(name) {
+    Some(func) => {
+      if func.is_async || func.is_generator {
+        return None
+      }
+      match make_static_function_value_iife_scope(ctx, func.params, args) {
+        Some(scope) =>
+          match static_iife_return_expr(func.body) {
+            Some(expr) =>
+              if @analysis.function_value_expr_mutates_static_bindings(
+                  expr,
+                  scope.value_bindings,
+                ) {
+                None
+              } else {
+                resolve_local_function_value(
+                  scope.body_ctx,
+                  substitute_static_function_value_args(
+                    expr,
+                    scope.value_bindings,
+                  ),
+                )
+              }
+            None => None
+          }
+        None => None
+      }
+    }
+    None => None
+  }
+}
+
+///|
+fn returned_function_value_mutates_captures(
+  ctx : CodeGenCtx,
+  producer : @ast.TsExpr,
+  producer_args : Array[@ast.TsExpr],
+) -> Bool {
+  match producer {
+    @ast.TsExpr::Var(name) =>
+      match ctx.local_function_values.get(name) {
+        Some(@ast.TsExpr::Var(source_name)) =>
+          if source_name == name {
+            false
+          } else {
+            returned_function_value_mutates_captures(
+              ctx,
+              @ast.TsExpr::Var(source_name),
+              producer_args,
+            )
+          }
+        Some(function_value) =>
+          returned_function_value_mutates_captures(
+            ctx, function_value, producer_args,
+          )
+        None =>
+          match ctx.function_defs.get(name) {
+            Some(func) =>
+              if func.is_async || func.is_generator {
+                false
+              } else {
+                match
+                  make_static_function_value_iife_scope(
+                    ctx,
+                    func.params,
+                    producer_args,
+                  ) {
+                  Some(scope) =>
+                    match static_iife_return_expr(func.body) {
+                      Some(expr) =>
+                        @analysis.function_value_expr_mutates_static_bindings(
+                          expr,
+                          scope.value_bindings,
+                        )
+                      None => false
+                    }
+                  None => false
+                }
+              }
+            None => false
+          }
+      }
+    @ast.TsExpr::ArrowFunc(params, body, is_async) =>
+      if is_async {
+        false
+      } else {
+        match
+          make_static_function_value_iife_scope(ctx, params, producer_args) {
+          Some(scope) => {
+            let returned_expr = match body {
+              @ast.TsArrowBody::ArrowExpr(expr) => Some(expr)
+              @ast.TsArrowBody::ArrowBlock(block) =>
+                static_iife_return_expr(block)
+            }
+            match returned_expr {
+              Some(expr) =>
+                @analysis.function_value_expr_mutates_static_bindings(
+                  expr,
+                  scope.value_bindings,
+                )
+              None => false
+            }
+          }
+          None => false
+        }
+      }
+    @ast.TsExpr::FuncExpr(func) =>
+      if func.is_async || func.is_generator {
+        false
+      } else {
+        match
+          make_static_function_value_iife_scope(ctx, func.params, producer_args) {
+          Some(scope) =>
+            match static_iife_return_expr(func.body) {
+              Some(expr) =>
+                @analysis.function_value_expr_mutates_static_bindings(
+                  expr,
+                  scope.value_bindings,
+                )
+              None => false
+            }
+          None => false
+        }
+      }
+    _ => false
+  }
+}
+
+///|
+fn returned_function_value_init_mutates_captures(
+  ctx : CodeGenCtx,
+  init : @ast.TsExpr,
+) -> Bool {
+  match init {
+    @ast.TsExpr::Call(name, args) =>
+      returned_function_value_mutates_captures(
+        ctx,
+        @ast.TsExpr::Var(name),
+        args,
+      )
+    @ast.TsExpr::CallExpr(producer, producer_args) =>
+      returned_function_value_mutates_captures(ctx, producer, producer_args)
+    @ast.TsExpr::ArrayLit(elements) => {
+      for elem in elements {
+        if returned_function_value_init_mutates_captures(ctx, elem) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::ObjectLit(fields) => {
+      for item in fields {
+        let (_, value) = item
+        if returned_function_value_init_mutates_captures(ctx, value) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::ComputedProp(key, value) =>
+      returned_function_value_init_mutates_captures(ctx, key) ||
+      returned_function_value_init_mutates_captures(ctx, value)
+    @ast.TsExpr::IndexAccess(container, index) =>
+      returned_function_value_init_mutates_captures(ctx, container) ||
+      returned_function_value_init_mutates_captures(ctx, index)
+    @ast.TsExpr::PropAccess(container, _) =>
+      returned_function_value_init_mutates_captures(ctx, container)
+    @ast.TsExpr::Cond(cond, then_expr, else_expr) =>
+      returned_function_value_init_mutates_captures(ctx, cond) ||
+      returned_function_value_init_mutates_captures(ctx, then_expr) ||
+      returned_function_value_init_mutates_captures(ctx, else_expr)
+    _ => false
   }
 }
 
@@ -3735,15 +4394,9 @@ fn compile_local_function_value_call_expr(
       compile_callable_name_expr(ctx, source_name, args, expected_type)
       true
     }
-    Some(
-      @ast.TsExpr::Cond(
-        cond,
-        @ast.TsExpr::Var(then_name),
-        @ast.TsExpr::Var(else_name)
-      )
-    ) => {
-      compile_conditional_named_call_expr(
-        ctx, cond, then_name, else_name, args, expected_type,
+    Some(@ast.TsExpr::Cond(cond, then_callee, else_callee)) => {
+      compile_conditional_callee_call_expr(
+        ctx, cond, then_callee, else_callee, args, expected_type, false,
       )
       true
     }
@@ -3829,10 +4482,32 @@ fn compile_callable_expr(
       compile_func_expr_iife_call_expr(ctx, func, args, expected_type)
       true
     }
+    @ast.TsExpr::Call(name, producer_args) =>
+      compile_returned_function_value_call_expr(
+        ctx,
+        @ast.TsExpr::Var(name),
+        producer_args,
+        args,
+        expected_type,
+      )
     @ast.TsExpr::CallExpr(producer, producer_args) =>
       compile_returned_function_value_call_expr(
         ctx, producer, producer_args, args, expected_type,
       )
+    @ast.TsExpr::IndexAccess(_, _) | @ast.TsExpr::PropAccess(_, _) =>
+      match resolve_local_function_value(ctx, callee) {
+        Some(function_value) =>
+          if compile_callable_expr(
+              ctx, function_value, args, expected_type, false,
+            ) {
+            true
+          } else {
+            raise CodeGenError(
+              "static function value container member is not callable in Wasm compiler",
+            )
+          }
+        None => false
+      }
     @ast.TsExpr::Cond(cond, then_callee, else_callee) => {
       compile_conditional_callee_call_expr(
         ctx, cond, then_callee, else_callee, args, expected_type, allow_assignment,
@@ -3859,7 +4534,46 @@ fn compile_returned_function_value_call_expr(
   args : Array[@ast.TsExpr],
   expected_type : @ast.TsType,
 ) -> Bool raise CodeGenError {
+  if returned_function_value_mutates_captures(ctx, producer, producer_args) {
+    raise CodeGenError(
+      "mutable capture in returned function value is not supported in Wasm compiler",
+    )
+  }
   match producer {
+    @ast.TsExpr::Var(name) =>
+      match ctx.local_function_values.get(name) {
+        Some(@ast.TsExpr::Var(source_name)) =>
+          if source_name == name {
+            false
+          } else {
+            compile_returned_function_value_call_expr(
+              ctx,
+              @ast.TsExpr::Var(source_name),
+              producer_args,
+              args,
+              expected_type,
+            )
+          }
+        Some(function_value) =>
+          compile_returned_function_value_call_expr(
+            ctx, function_value, producer_args, args, expected_type,
+          )
+        None =>
+          match
+            resolve_returned_top_level_function_value(ctx, name, producer_args) {
+            Some(function_value) =>
+              if compile_callable_expr(
+                  ctx, function_value, args, expected_type, false,
+                ) {
+                true
+              } else {
+                raise CodeGenError(
+                  "top-level returned function value is not callable in Wasm compiler",
+                )
+              }
+            None => false
+          }
+      }
     @ast.TsExpr::ArrowFunc(params, body, is_async) => {
       if is_async {
         raise CodeGenError(
@@ -4072,42 +4786,6 @@ fn compile_iife_return_block(
         "iife block must contain exactly one return statement in Wasm compiler",
       )
   }
-}
-
-///|
-fn compile_conditional_named_call_expr(
-  ctx : CodeGenCtx,
-  cond : @ast.TsExpr,
-  then_name : String,
-  else_name : String,
-  args : Array[@ast.TsExpr],
-  expected_type : @ast.TsType,
-) -> Unit raise CodeGenError {
-  match @analysis.eval_const(cond) {
-    @analysis.ConstValue::Boolean(true)
-    | @analysis.ConstValue::Int(_)
-    | @analysis.ConstValue::Number(_)
-    | @analysis.ConstValue::String_(_) => {
-      compile_callable_name_expr(ctx, then_name, args, expected_type)
-      return
-    }
-    @analysis.ConstValue::Boolean(false)
-    | @analysis.ConstValue::Null
-    | @analysis.ConstValue::Undefined => {
-      compile_callable_name_expr(ctx, else_name, args, expected_type)
-      return
-    }
-    @analysis.ConstValue::NotConst => ()
-  }
-  compile_expr(ctx, cond, @ast.TsType::Boolean)
-  let then_ctx = make_branch_ctx(ctx)
-  compile_callable_name_expr(then_ctx, then_name, args, expected_type)
-  let else_ctx = make_branch_ctx(ctx)
-  else_ctx.next_local = then_ctx.next_local
-  compile_callable_name_expr(else_ctx, else_name, args, expected_type)
-  ctx.next_local = else_ctx.next_local
-  let result_type = ts_type_to_valtype(expected_type)
-  ctx.emit(If(Value(result_type), then_ctx.instrs, else_ctx.instrs))
 }
 
 ///|
@@ -4441,6 +5119,11 @@ fn compile_stmt(
     | @ast.TsStmt::Let(binding, type_, init) =>
       match binding {
         @ast.TsBinding::Ident(name) => {
+          if returned_function_value_init_mutates_captures(ctx, init) {
+            raise CodeGenError(
+              "mutable capture in returned function value is not supported in Wasm compiler",
+            )
+          }
           if register_local_function_value(ctx, name, init) {
             return
           }
@@ -4460,6 +5143,11 @@ fn compile_stmt(
     @ast.TsStmt::Const(binding, type_, init) =>
       match binding {
         @ast.TsBinding::Ident(name) => {
+          if returned_function_value_init_mutates_captures(ctx, init) {
+            raise CodeGenError(
+              "mutable capture in returned function value is not supported in Wasm compiler",
+            )
+          }
           if register_local_function_value(ctx, name, init) {
             return
           }
@@ -4485,7 +5173,11 @@ fn compile_stmt(
     @ast.TsStmt::Assign(name, expr) =>
       match ctx.local_function_values.get(name) {
         Some(_) =>
-          if register_local_function_value(ctx, name, expr) {
+          if returned_function_value_init_mutates_captures(ctx, expr) {
+            raise CodeGenError(
+              "mutable capture in returned function value is not supported in Wasm compiler",
+            )
+          } else if register_local_function_value(ctx, name, expr) {
             return
           } else {
             raise CodeGenError(
@@ -4570,7 +5262,11 @@ fn compile_stmt(
     @ast.TsStmt::Expr(@ast.TsExpr::AssignExpr(name, value)) =>
       match ctx.local_function_values.get(name) {
         Some(_) =>
-          if register_local_function_value(ctx, name, value) {
+          if returned_function_value_init_mutates_captures(ctx, value) {
+            raise CodeGenError(
+              "mutable capture in returned function value is not supported in Wasm compiler",
+            )
+          } else if register_local_function_value(ctx, name, value) {
             return
           } else {
             raise CodeGenError(
@@ -4718,6 +5414,7 @@ fn compile_while(
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
+    function_defs: ctx.function_defs,
     func_types: ctx.func_types,
     interfaces: ctx.interfaces,
     import_types: ctx.import_types,
@@ -4774,6 +5471,7 @@ fn compile_do_while(
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
+    function_defs: ctx.function_defs,
     func_types: ctx.func_types,
     interfaces: ctx.interfaces,
     import_types: ctx.import_types,
@@ -4823,6 +5521,7 @@ fn compile_for(
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
+        function_defs: ctx.function_defs,
         func_types: ctx.func_types,
         interfaces: ctx.interfaces,
         import_types: ctx.import_types,
@@ -4861,6 +5560,7 @@ fn compile_for(
         local_types: ctx.local_types,
         next_local: ctx.next_local,
         funcs: ctx.funcs,
+        function_defs: ctx.function_defs,
         func_types: ctx.func_types,
         interfaces: ctx.interfaces,
         import_types: ctx.import_types,
@@ -5051,6 +5751,7 @@ fn compile_switch_cases(
           local_types: ctx.local_types,
           next_local: ctx.next_local,
           funcs: ctx.funcs,
+          function_defs: ctx.function_defs,
           func_types: ctx.func_types,
           interfaces: ctx.interfaces,
           import_types: ctx.import_types,
@@ -5112,6 +5813,7 @@ fn compile_block_to_instrs(
     local_types: ctx.local_types,
     next_local: ctx.next_local,
     funcs: ctx.funcs,
+    function_defs: ctx.function_defs,
     func_types: ctx.func_types,
     interfaces: ctx.interfaces,
     import_types: ctx.import_types,
@@ -5159,6 +5861,7 @@ fn emit_default_return(ctx : CodeGenCtx, return_type : @ast.TsType) -> Unit {
 fn compile_function(
   func : @ast.TsFunc,
   func_map : Map[String, UInt],
+  function_defs : Map[String, @ast.TsFunc],
   interfaces : Map[String, Array[(String, @ast.TsType)]],
   import_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
   func_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
@@ -5166,7 +5869,7 @@ fn compile_function(
   builtins_used : Map[String, Bool],
 ) -> (@core.TypeDef, @core.Code) raise CodeGenError {
   let ctx = CodeGenCtx::new(
-    func_map, interfaces, import_types, func_types, string_pool, builtins_used,
+    func_map, function_defs, interfaces, import_types, func_types, string_pool, builtins_used,
   )
 
   // parametervariable
@@ -5235,6 +5938,11 @@ pub fn experimental_compile_module(
     func_map[func.name] = i.reinterpret_as_uint() + num_imports
   }
 
+  let function_defs : Map[String, @ast.TsFunc] = {}
+  for func in module_.funcs {
+    function_defs[func.name] = func
+  }
+
   // function signature map
   let func_types : Map[String, (Array[@ast.TsType], @ast.TsType)] = {}
   for func in module_.funcs {
@@ -5285,7 +5993,8 @@ pub fn experimental_compile_module(
   let builtins_used : Map[String, Bool] = {}
   for i, func in module_.funcs {
     let (func_type, code) = compile_function(
-      func, func_map, interface_map, import_types, func_types, string_pool, builtins_used,
+      func, func_map, function_defs, interface_map, import_types, func_types, string_pool,
+      builtins_used,
     )
     types.push(func_type)
     codes.push(code)
@@ -5377,6 +6086,11 @@ pub fn experimental_compile_module_gc(
   }
   for i, func in module_.funcs {
     func_map[func.name] = i.reinterpret_as_uint() + num_imports
+  }
+
+  let function_defs : Map[String, @ast.TsFunc] = {}
+  for func in module_.funcs {
+    function_defs[func.name] = func
   }
 
   // Function signature map
@@ -5548,8 +6262,8 @@ pub fn experimental_compile_module_gc(
           None => {
             // Fallback: compile as regular function (will fail at runtime for yield)
             let (func_type, code) = compile_function_gc(
-              func, func_map, interface_map, import_types, func_types, string_pool,
-              builtins_used, gc_array_types, gc_struct_types, gc_struct_fields,
+              func, func_map, function_defs, interface_map, import_types, func_types,
+              string_pool, builtins_used, gc_array_types, gc_struct_types, gc_struct_fields,
             )
             types.push(func_type)
             codes.push(code)
@@ -5567,8 +6281,8 @@ pub fn experimental_compile_module_gc(
       None => {
         // Regular function
         let (func_type, code) = compile_function_gc(
-          func, func_map, interface_map, import_types, func_types, string_pool, builtins_used,
-          gc_array_types, gc_struct_types, gc_struct_fields,
+          func, func_map, function_defs, interface_map, import_types, func_types,
+          string_pool, builtins_used, gc_array_types, gc_struct_types, gc_struct_fields,
         )
         types.push(func_type)
         codes.push(code)
@@ -5627,6 +6341,7 @@ pub fn experimental_compile_module_gc(
 fn compile_function_gc(
   func : @ast.TsFunc,
   func_map : Map[String, UInt],
+  function_defs : Map[String, @ast.TsFunc],
   interfaces : Map[String, Array[(String, @ast.TsType)]],
   import_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
   func_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
@@ -5642,6 +6357,7 @@ fn compile_function_gc(
     local_types: [],
     next_local: 0,
     funcs: func_map,
+    function_defs,
     func_types,
     interfaces,
     import_types,
@@ -5704,6 +6420,7 @@ fn compile_function_gc(
 fn compile_typed_function(
   typed_func : @ast.TypedFunc,
   func_map : Map[String, UInt],
+  function_defs : Map[String, @ast.TsFunc],
   interfaces : Map[String, Array[(String, @ast.TsType)]],
   import_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
   func_types : Map[String, (Array[@ast.TsType], @ast.TsType)],
@@ -5712,7 +6429,7 @@ fn compile_typed_function(
 ) -> (@core.TypeDef, @core.Code) raise CodeGenError {
   let func = typed_func.func
   let ctx = CodeGenCtx::new(
-    func_map, interfaces, import_types, func_types, string_pool, builtins_used,
+    func_map, function_defs, interfaces, import_types, func_types, string_pool, builtins_used,
   )
 
   // Register parameters
@@ -5785,6 +6502,11 @@ pub fn experimental_compile_typed_module(
     func_map[func.name] = i.reinterpret_as_uint() + num_imports
   }
 
+  let function_defs : Map[String, @ast.TsFunc] = {}
+  for func in original_module.funcs {
+    function_defs[func.name] = func
+  }
+
   // Build function signature map
   let func_types : Map[String, (Array[@ast.TsType], @ast.TsType)] = {}
   for typed_func in typed_module.funcs {
@@ -5834,8 +6556,8 @@ pub fn experimental_compile_typed_module(
   let builtins_used : Map[String, Bool] = {}
   for i, typed_func in typed_module.funcs {
     let (func_type, code) = compile_typed_function(
-      typed_func, func_map, interface_map, import_types, func_types, string_pool,
-      builtins_used,
+      typed_func, func_map, function_defs, interface_map, import_types, func_types,
+      string_pool, builtins_used,
     )
     types.push(func_type)
     codes.push(code)

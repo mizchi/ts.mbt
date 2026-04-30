@@ -328,7 +328,7 @@ async fn experimental_analyze_aot(file_path : String) -> Unit {
   let compilable_funcs : Array[String] = []
   let not_compilable_funcs : Array[(String, String)] = []
   for func in ts_module.funcs {
-    match @analysis.can_compile_to_wasm(func) {
+    match @analysis.can_compile_to_wasm_in_module(func, ts_module) {
       @analysis.CompilabilityResult::Compilable => {
         compilable_count += 1
         compilable_funcs.push(func.name)

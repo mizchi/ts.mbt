@@ -500,6 +500,235 @@ test "codegen: stored returned local function value callees" {
 }
 
 ///|
+test "codegen: function values stored in static data structures" {
+  let src =
+    #|function fromArray(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const fns = [inc];
+    #|  return fns[0](n);
+    #|}
+    #|function fromObject(n: number): number {
+    #|  const dec = (x: number) => x - 1;
+    #|  const box = { fn: dec };
+    #|  return box.fn(n);
+    #|}
+    #|function fromConditionalArray(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const fns = [inc, dec];
+    #|  return fns[flag > 0 ? 0 : 1](n);
+    #|}
+    #|function fromReturnedObject(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const box = { fn: (() => inc)() };
+    #|  return box.fn(n);
+    #|}
+    #|function reassignedObject(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let box = { fn: inc };
+    #|  box = { fn: dec };
+    #|  return box.fn(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "fromArray", [7.0], 8.0)
+  assert_run_f64(wasm, "fromObject", [7.0], 6.0)
+  assert_run_f64(wasm, "fromConditionalArray", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "fromConditionalArray", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "fromReturnedObject", [7.0], 8.0)
+  assert_run_f64(wasm, "reassignedObject", [7.0], 6.0)
+}
+
+///|
+test "codegen: local function factories returning function values" {
+  let src =
+    #|function arrowFactory(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = (pick: number) => pick > 0 ? inc : dec;
+    #|  return choose(flag)(n);
+    #|}
+    #|function functionFactory(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = function(pick: number) {
+    #|    return pick > 0 ? inc : dec;
+    #|  };
+    #|  return choose(flag)(n);
+    #|}
+    #|function storedFactory(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = ((fn) => fn)((pick: number) => pick > 0 ? inc : dec);
+    #|  return choose(flag)(n);
+    #|}
+    #|function storedProducedFunction(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = (pick: number) => pick > 0 ? inc : dec;
+    #|  const fn = choose(flag);
+    #|  return fn(n);
+    #|}
+    #|function objectProducedFunction(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = (pick: number) => pick > 0 ? inc : dec;
+    #|  const box = { fn: choose(flag) };
+    #|  return box.fn(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "arrowFactory", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "arrowFactory", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "functionFactory", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "functionFactory", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "storedFactory", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "storedFactory", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "storedProducedFunction", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "storedProducedFunction", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "objectProducedFunction", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "objectProducedFunction", [0.0, 7.0], 6.0)
+}
+
+///|
+test "codegen: top-level factories returning function values" {
+  let src =
+    #|function inc(x: number): number {
+    #|  return x + 1;
+    #|}
+    #|function dec(x: number): number {
+    #|  return x - 1;
+    #|}
+    #|function choose(flag: number): (x: number) => number {
+    #|  return flag > 0 ? inc : dec;
+    #|}
+    #|function callTopLevelFactory(flag: number, n: number): number {
+    #|  return choose(flag)(n);
+    #|}
+    #|function storeTopLevelFactory(flag: number, n: number): number {
+    #|  const fn = choose(flag);
+    #|  return fn(n);
+    #|}
+    #|function objectTopLevelFactory(flag: number, n: number): number {
+    #|  const box = { fn: choose(flag) };
+    #|  return box.fn(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "callTopLevelFactory", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "callTopLevelFactory", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "storeTopLevelFactory", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "storeTopLevelFactory", [0.0, 7.0], 6.0)
+  assert_run_f64(wasm, "objectTopLevelFactory", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "objectTopLevelFactory", [0.0, 7.0], 6.0)
+}
+
+///|
+test "codegen: immutable captures in returned function values" {
+  let src =
+    #|function capturedArrowFactory(seed: number, n: number): number {
+    #|  const make = (base: number) => (x: number) => x + base;
+    #|  const fn = make(seed);
+    #|  return fn(n);
+    #|}
+    #|function capturedFunctionFactory(seed: number, n: number): number {
+    #|  const make = function(base: number) {
+    #|    return function(x: number) {
+    #|      return x + base;
+    #|    };
+    #|  };
+    #|  const fn = make(seed + 1);
+    #|  return fn(n);
+    #|}
+    #|function capturedObjectFactory(seed: number, n: number): number {
+    #|  const make = (base: number) => {
+    #|    return { fn: (x: number) => x + base };
+    #|  };
+    #|  const box = make(seed);
+    #|  return box.fn(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "capturedArrowFactory", [3.0, 7.0], 10.0)
+  assert_run_f64(wasm, "capturedFunctionFactory", [3.0, 7.0], 11.0)
+  assert_run_f64(wasm, "capturedObjectFactory", [3.0, 7.0], 10.0)
+}
+
+///|
+test "codegen: mutable captures in returned function values are rejected" {
+  assert_compile_error_contains(
+    (
+      #|function mutableArrowCapture(seed: number, n: number): number {
+      #|  const make = (base: number) => (x: number) => {
+      #|    base = base + 1;
+      #|    return x + base;
+      #|  };
+      #|  const fn = make(seed);
+      #|  return fn(n);
+      #|}
+    ),
+    "mutable capture",
+  )
+  assert_compile_error_contains(
+    (
+      #|function mutableFunctionCapture(seed: number, n: number): number {
+      #|  const make = function(base: number) {
+      #|    return function(x: number) {
+      #|      base += 1;
+      #|      return x + base;
+      #|    };
+      #|  };
+      #|  const fn = make(seed);
+      #|  return fn(n);
+      #|}
+    ),
+    "mutable capture",
+  )
+  assert_compile_error_contains(
+    (
+      #|function mutableDirectCapture(seed: number, n: number): number {
+      #|  const make = (base: number) => (x: number) => {
+      #|    base++;
+      #|    return x + base;
+      #|  };
+      #|  return make(seed)(n);
+      #|}
+    ),
+    "mutable capture",
+  )
+  assert_compile_error_contains(
+    (
+      #|function mutableObjectCapture(seed: number, n: number): number {
+      #|  const make = (base: number) => {
+      #|    return {
+      #|      fn: (x: number) => {
+      #|        base += 1;
+      #|        return x + base;
+      #|      },
+      #|    };
+      #|  };
+      #|  const box = make(seed);
+      #|  return box.fn(n);
+      #|}
+    ),
+    "mutable capture",
+  )
+}
+
+///|
+test "codegen: top-level closure factories remain unsupported" {
+  assert_compile_error_contains(
+    (
+      #|function make(base: number): (x: number) => number {
+      #|  return (x: number) => x + base;
+      #|}
+      #|function use(seed: number, n: number): number {
+      #|  const fn = make(seed);
+      #|  return fn(n);
+      #|}
+    ),
+    "ArrowFunc is not supported",
+  )
+}
+
+///|
 test "codegen: conditional local function value call expression" {
   let src =
     #|function choose(flag: number, n: number): number {

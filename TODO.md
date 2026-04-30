@@ -508,14 +508,36 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
   - Covered shapes include `const fn = (() => inc)(); fn(n)`,
     `const fn = ((value) => value)(inc); fn(n)`, conditional returned aliases,
     and reassignment via `fn = (() => dec)()` before a later call.
+- [x] Static function values stored in data structures.
+  - Covered shapes include `const fns = [inc]; fns[0](n)`, `box.fn(n)`,
+    conditional static array indexes, returned function values inside object
+    fields, and reassigned object tables.
+- [x] Local function factories returning static function values across a local
+  function-expression boundary.
+  - Covered shapes include `choose(flag)(n)` where `choose` is an arrow or
+    function expression, factories returned from an IIFE, `const fn =
+    choose(flag); fn(n)`, and `const box = { fn: choose(flag) }; box.fn(n)`.
+- [x] Top-level factories returning top-level function references.
+  - Covered codegen shapes include `choose(flag)(n)`, `const fn =
+    choose(flag); fn(n)`, and `const box = { fn: choose(flag) }; box.fn(n)`
+    when `choose` returns top-level function references such as `inc` / `dec`.
+- [x] Module-aware compilability for top-level factory object storage.
+  - `can_compile_to_wasm_in_module(func, mod)` and the module-level analysis
+    rail now resolve `const box = { fn: choose(flag) }; box.fn(n)` when
+    `choose` returns top-level function references.
+- [x] Immutable captured values in returned local function values.
+  - Covered shapes include `const make = (base) => (x) => x + base; const fn =
+    make(seed); fn(n)`, function-expression factories, and object factories
+    that store captured returned functions in fields.
 
 ### Next in order
-1. Continue from statement-local returned function values toward function
-   values stored in data structures or returned across function boundaries,
-   then full closure conversion.
+1. Continue from substitution-based immutable captures toward real closure
+   values that can cross top-level function boundaries, or add conservative
+   rejection tests for mutable captures.
 
 ### Candidates (need more groundwork)
-- Arbitrary call expressions where function values escape, are reassigned, or require captured mutable environments.
+- Arbitrary call expressions where function values escape, are reassigned, or
+  require captured mutable environments.
 
 ## Real-World MoonBit Package Probe
 

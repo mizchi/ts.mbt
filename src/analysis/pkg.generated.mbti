@@ -75,6 +75,8 @@ pub fn build_cfg(@ast.TsFunc) -> CFG
 
 pub fn can_compile_to_wasm(@ast.TsFunc) -> CompilabilityResult
 
+pub fn can_compile_to_wasm_in_module(@ast.TsFunc, @ast.TsModule) -> CompilabilityResult
+
 pub fn check(String) -> Array[AnalysisError]
 
 pub fn check_aot_compilable(@ast.TsModule) -> AOTCheckResult
@@ -104,6 +106,8 @@ pub fn format_error(AnalysisError, String) -> String
 pub fn format_errors(Array[AnalysisError], String) -> String
 
 pub fn format_leak_report(LeakAnalysis) -> String
+
+pub fn function_value_expr_mutates_static_bindings(@ast.TsExpr, Map[String, @ast.TsExpr]) -> Bool
 
 pub fn get_capture_names(ClosureInfo) -> Array[String]
 

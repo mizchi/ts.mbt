@@ -89,7 +89,7 @@ pub fn experimental_get_compilation_info(
   let compilable : Array[String] = []
   let not_compilable : Array[String] = []
   for func in mod.funcs {
-    match @analysis.can_compile_to_wasm(func) {
+    match @analysis.can_compile_to_wasm_in_module(func, mod) {
       @analysis.CompilabilityResult::Compilable => compilable.push(func.name)
       @analysis.CompilabilityResult::NotCompilable(reason) =>
         not_compilable.push("\{func.name}: \{reason}")

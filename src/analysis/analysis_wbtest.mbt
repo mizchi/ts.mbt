@@ -1106,6 +1106,238 @@ test "can_compile_to_wasm: stored returned local function value callees" {
 }
 
 ///|
+test "can_compile_to_wasm: function values stored in static data structures" {
+  let src =
+    #|function fromArray(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const fns = [inc];
+    #|  return fns[0](n);
+    #|}
+    #|function fromObject(n: number): number {
+    #|  const dec = (x: number) => x - 1;
+    #|  const box = { fn: dec };
+    #|  return box.fn(n);
+    #|}
+    #|function fromConditionalArray(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const fns = [inc, dec];
+    #|  return fns[flag > 0 ? 0 : 1](n);
+    #|}
+    #|function fromReturnedObject(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const box = { fn: (() => inc)() };
+    #|  return box.fn(n);
+    #|}
+    #|function reassignedObject(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let box = { fn: inc };
+    #|  box = { fn: dec };
+    #|  return box.fn(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
+test "can_compile_to_wasm: local function factories returning function values" {
+  let src =
+    #|function arrowFactory(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = (pick: number) => pick > 0 ? inc : dec;
+    #|  return choose(flag)(n);
+    #|}
+    #|function functionFactory(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = function(pick: number) {
+    #|    return pick > 0 ? inc : dec;
+    #|  };
+    #|  return choose(flag)(n);
+    #|}
+    #|function storedFactory(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = ((fn) => fn)((pick: number) => pick > 0 ? inc : dec);
+    #|  return choose(flag)(n);
+    #|}
+    #|function storedProducedFunction(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = (pick: number) => pick > 0 ? inc : dec;
+    #|  const fn = choose(flag);
+    #|  return fn(n);
+    #|}
+    #|function objectProducedFunction(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const choose = (pick: number) => pick > 0 ? inc : dec;
+    #|  const box = { fn: choose(flag) };
+    #|  return box.fn(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
+test "can_compile_to_wasm: top-level factories returning function values" {
+  let src =
+    #|function inc(x: number): number {
+    #|  return x + 1;
+    #|}
+    #|function dec(x: number): number {
+    #|  return x - 1;
+    #|}
+    #|function choose(flag: number): (x: number) => number {
+    #|  return flag > 0 ? inc : dec;
+    #|}
+    #|function callTopLevelFactory(flag: number, n: number): number {
+    #|  return choose(flag)(n);
+    #|}
+    #|function storeTopLevelFactory(flag: number, n: number): number {
+    #|  const fn = choose(flag);
+    #|  return fn(n);
+    #|}
+    #|function objectTopLevelFactory(flag: number, n: number): number {
+    #|  const box = { fn: choose(flag) };
+    #|  return box.fn(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm_in_module(func, mod) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
+test "can_compile_to_wasm: immutable captures in returned function values" {
+  let src =
+    #|function capturedArrowFactory(seed: number, n: number): number {
+    #|  const make = (base: number) => (x: number) => x + base;
+    #|  const fn = make(seed);
+    #|  return fn(n);
+    #|}
+    #|function capturedFunctionFactory(seed: number, n: number): number {
+    #|  const make = function(base: number) {
+    #|    return function(x: number) {
+    #|      return x + base;
+    #|    };
+    #|  };
+    #|  const fn = make(seed + 1);
+    #|  return fn(n);
+    #|}
+    #|function capturedObjectFactory(seed: number, n: number): number {
+    #|  const make = (base: number) => {
+    #|    return { fn: (x: number) => x + base };
+    #|  };
+    #|  const box = make(seed);
+    #|  return box.fn(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
+test "can_compile_to_wasm: mutable captures in returned function values are rejected" {
+  let src =
+    #|function mutableArrowCapture(seed: number, n: number): number {
+    #|  const make = (base: number) => (x: number) => {
+    #|    base = base + 1;
+    #|    return x + base;
+    #|  };
+    #|  const fn = make(seed);
+    #|  return fn(n);
+    #|}
+    #|function mutableDirectCapture(seed: number, n: number): number {
+    #|  const make = (base: number) => (x: number) => {
+    #|    base++;
+    #|    return x + base;
+    #|  };
+    #|  return make(seed)(n);
+    #|}
+    #|function mutableObjectCapture(seed: number, n: number): number {
+    #|  const make = (base: number) => {
+    #|    return {
+    #|      fn: (x: number) => {
+    #|        base += 1;
+    #|        return x + base;
+    #|      },
+    #|    };
+    #|  };
+    #|  const box = make(seed);
+    #|  return box.fn(n);
+    #|}
+    #|function mutableFunctionCapture(seed: number, n: number): number {
+    #|  const make = function(base: number) {
+    #|    return function(x: number) {
+    #|      base += 1;
+    #|      return x + base;
+    #|    };
+    #|  };
+    #|  const fn = make(seed);
+    #|  return fn(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => fail("expected \{func.name} not compilable")
+      NotCompilable(reason) =>
+        if !reason.contains("mutable capture") {
+          fail(
+            "expected mutable capture reason for \{func.name}, got \{reason}",
+          )
+        }
+    }
+  }
+}
+
+///|
+test "can_compile_to_wasm: top-level closure factories remain unsupported" {
+  let src =
+    #|function make(base: number): (x: number) => number {
+    #|  return (x: number) => x + base;
+    #|}
+    #|function use(seed: number, n: number): number {
+    #|  const fn = make(seed);
+    #|  return fn(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  match can_compile_to_wasm_in_module(mod.funcs[0], mod) {
+    Compilable => fail("expected top-level closure factory not compilable")
+    NotCompilable(reason) => assert_true(reason.contains("closures"))
+  }
+}
+
+///|
 test "can_compile_to_wasm: iife unsupported edge cases" {
   let arity_src =
     #|function bad(n: number): number {
