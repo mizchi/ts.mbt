@@ -31,7 +31,6 @@ Input:
 - `typescript-to-moonbit/react/src/index.d.ts`
 - `typescript-to-moonbit/react/runtime/react-like.js`
 - `node_modules/@types/react/index.d.ts`
-- `typescript-to-moonbit/react-types/runtime/react/index.js`
 - `typescript-to-moonbit/react-types/smoke/main.mbt`
 - `typescript-to-moonbit/result/src/index.d.ts`
 - `typescript-to-moonbit/result/runtime/result.js`

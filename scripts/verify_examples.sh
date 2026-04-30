@@ -331,9 +331,7 @@ verify_typescript_to_moonbit_react_types_example() {
   local out="$root/dist"
 
   rm -rf "$root"
-  mkdir -p "$out/node_modules"
-
-  cp -R examples/typescript-to-moonbit/react-types/runtime/react "$out/node_modules/react"
+  mkdir -p "$root"
 
   moon run src -- \
     --input node_modules/@types/react/index.d.ts \
@@ -365,6 +363,9 @@ extern "js" fn test_props() -> JSValue =
 extern "js" fn test_function_component() -> FunctionComponent =
   #| () => (props) => ({ type: "component", props, key: null, ref: null })
 
+extern "js" fn test_forward_ref_render() -> ForwardRefRenderFunction =
+  #| () => (props, ref) => ({ type: "forward", props, key: null, ref })
+
 extern "js" fn test_transition_scope() -> TransitionFunction =
   #| () => () => undefined
 
@@ -373,10 +374,7 @@ test "generated @types/react bridge smoke" {
   let _ = cloneElement(element, None, test_children())
   assert_true(isValidElement(Some(unsafeCast(element))))
   let _ = memo(test_function_component(), None)
-  let state = useState()
-  let _ = state.state
-  let transition = useTransition()
-  assert_false(transition.isPending)
+  let _ = forwardRef(test_forward_ref_render())
   startTransition(test_transition_scope())
   let _ = get_default()
 }
@@ -390,6 +388,7 @@ EOF
   grep -F 'pub fn createElement(type_ : String, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement' "$out/bridge.mbt" >/dev/null
   grep -F 'pub fn cloneElement(element : DetailedReactHTMLElement, props : P?, children : Array[JSValue]) -> DetailedReactHTMLElement' "$out/bridge.mbt" >/dev/null
   grep -F 'pub extern "js" fn memo(component : FunctionComponent, propsAreEqual : @js.Any?) -> NamedExoticComponent' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn forwardRef(render : ForwardRefRenderFunction) -> ForwardRefExoticComponent' "$out/bridge.mbt" >/dev/null
   grep -F 'pub fn useState() -> UseStateResult' "$out/bridge.mbt" >/dev/null
   grep -F 'pub fn useTransition() -> UseTransitionResult' "$out/bridge.mbt" >/dev/null
   grep -F 'pub fn startTransition(scope : TransitionFunction) -> Unit' "$out/bridge.mbt" >/dev/null
@@ -407,6 +406,9 @@ extern "js" fn test_props() -> @sut.JSValue =
 extern "js" fn test_function_component() -> @sut.FunctionComponent =
   #| () => (props) => ({ type: "component", props, key: null, ref: null })
 
+extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderFunction =
+  #| () => (props, ref) => ({ type: "forward", props, key: null, ref })
+
 extern "js" fn test_transition_scope() -> @sut.TransitionFunction =
   #| () => () => undefined
 
@@ -417,12 +419,7 @@ fn main {
     abort("expected generated React element to be valid")
   }
   let _ = @sut.memo(test_function_component(), None)
-  let state = @sut.useState()
-  let _ = state.state
-  let transition = @sut.useTransition()
-  if transition.isPending {
-    abort("stub transition should not be pending")
-  }
+  let _ = @sut.forwardRef(test_forward_ref_render())
   @sut.startTransition(test_transition_scope())
   let _ = @sut.get_default()
 }

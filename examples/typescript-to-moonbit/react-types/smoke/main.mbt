@@ -7,6 +7,9 @@ extern "js" fn test_props() -> @sut.JSValue =
 extern "js" fn test_function_component() -> @sut.FunctionComponent =
   #| () => (props) => ({ type: "component", props, key: null, ref: null })
 
+extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderFunction =
+  #| () => (props, ref) => ({ type: "forward", props, key: null, ref })
+
 extern "js" fn test_transition_scope() -> @sut.TransitionFunction =
   #| () => () => undefined
 
@@ -17,12 +20,7 @@ fn main {
     abort("expected generated React element to be valid")
   }
   let _ = @sut.memo(test_function_component(), None)
-  let state = @sut.useState()
-  let _ = state.state
-  let transition = @sut.useTransition()
-  if transition.isPending {
-    abort("stub transition should not be pending")
-  }
+  let _ = @sut.forwardRef(test_forward_ref_render())
   @sut.startTransition(test_transition_scope())
   let _ = @sut.get_default()
 }
