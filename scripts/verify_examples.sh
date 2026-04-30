@@ -274,6 +274,61 @@ fn main {
 EOF
 }
 
+verify_typescript_to_moonbit_hono_real_example() {
+  local root="_build/examples/typescript-to-moonbit-hono-real"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root"
+
+  moon run src -- \
+    --input node_modules/hono/dist/types/index.d.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec hono >/dev/null
+
+  write_js_any_stub "$out"
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_hono_real",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn test_hono_route(app : Hono) -> String =
+  #| (app) => {
+  #|   app.get("/hello", c => c.text("hi"));
+  #|   const res = app.request("/hello");
+  #|   const route = app.routes[0];
+  #|   return `${res.status}:${route.method}:${route.path}:${res.headers.get("content-type")}`;
+  #| }
+
+test "generated real Hono bridge smoke" {
+  let app = new_hono(None)
+  assert_eq(test_hono_route(app), "200:GET:/hello:text/plain;charset=UTF-8")
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
+  grep -F 'pub extern "js" fn new_hono(options : HonoOptions?) -> Hono' "$out/bridge.mbt" >/dev/null
+  grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_hono_real" < \
+    examples/typescript-to-moonbit/hono-real/smoke/main.mbt
+}
+
 verify_typescript_to_moonbit_react_example() {
   local root="_build/examples/typescript-to-moonbit-react"
   local out="$root/dist"
@@ -424,6 +479,75 @@ fn main {
   let _ = @sut.get_default()
 }
 EOF
+}
+
+verify_typescript_to_moonbit_vitest_example() {
+  local root="_build/examples/typescript-to-moonbit-vitest"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root"
+
+  moon run src -- \
+    --input node_modules/vitest/dist/index.d.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec vitest >/dev/null
+
+  write_js_any_stub "$out"
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_vitest",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn test_vitest_expect(expect : JSValue) -> Unit =
+  #| (expect) => {
+  #|   expect(1 + 1).toBe(2);
+  #|   expect({ value: "ok" }).toEqual({ value: "ok" });
+  #| }
+
+extern "js" fn test_vitest_assert(assert_ : JSValue) -> Unit =
+  #| (assert_) => {
+  #|   assert_.equal("a".toUpperCase(), "A");
+  #| }
+
+extern "js" fn test_vitest_vi(vi : JSValue) -> Unit =
+  #| (vi) => {
+  #|   const fn = vi.fn((x) => x + 1);
+  #|   if (fn(2) !== 3) throw new Error("unexpected vi.fn output");
+  #|   if (!vi.isMockFunction(fn)) throw new Error("expected vi.fn mock");
+  #| }
+
+test "generated real Vitest bridge smoke" {
+  test_vitest_expect(unsafeCast(get_expect()))
+  test_vitest_assert(unsafeCast(get_assert()))
+  test_vitest_vi(unsafeCast(get_vi()))
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
+  grep -F 'pub extern "js" fn get_expect() -> ExpectStatic' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn get_assert() -> Chai_Assert' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn get_vi() -> VitestUtils' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn VitestUtils::isFakeTimers(self : VitestUtils) -> Bool' "$out/bridge.mbt" >/dev/null
+  grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_vitest" < \
+    examples/typescript-to-moonbit/vitest/smoke/main.mbt
 }
 
 verify_typescript_to_moonbit_result_example() {
@@ -645,8 +769,10 @@ EOF
 verify_moonbit_to_typescript_example
 verify_typescript_to_moonbit_example
 verify_typescript_to_moonbit_hono_example
+verify_typescript_to_moonbit_hono_real_example
 verify_typescript_to_moonbit_react_example
 verify_typescript_to_moonbit_react_types_example
+verify_typescript_to_moonbit_vitest_example
 verify_typescript_to_moonbit_result_example
 verify_typescript_to_moonbit_default_class_example
 verify_typescript_to_moonbit_const_table_example

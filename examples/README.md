@@ -28,10 +28,14 @@ Input:
 - `typescript-to-moonbit/runtime/greetings.js`
 - `typescript-to-moonbit/hono/src/index.d.ts`
 - `typescript-to-moonbit/hono/runtime/hono.js`
+- `node_modules/hono/dist/types/index.d.ts`
+- `typescript-to-moonbit/hono-real/smoke/main.mbt`
 - `typescript-to-moonbit/react/src/index.d.ts`
 - `typescript-to-moonbit/react/runtime/react-like.js`
 - `node_modules/@types/react/index.d.ts`
 - `typescript-to-moonbit/react-types/smoke/main.mbt`
+- `node_modules/vitest/dist/index.d.ts`
+- `typescript-to-moonbit/vitest/smoke/main.mbt`
 - `typescript-to-moonbit/result/src/index.d.ts`
 - `typescript-to-moonbit/result/runtime/result.js`
 - `typescript-to-moonbit/default-class/src/index.ts`
@@ -65,6 +69,12 @@ moon run src -- \
   --module-spec ../runtime/hono.js
 
 moon run src -- \
+  --input node_modules/hono/dist/types/index.d.ts \
+  --out _build/examples/typescript-to-moonbit-hono-real/dist \
+  --direction ts-to-mbt \
+  --module-spec hono
+
+moon run src -- \
   --input examples/typescript-to-moonbit/react/src/index.d.ts \
   --out examples/typescript-to-moonbit/react/dist \
   --direction ts-to-mbt \
@@ -75,6 +85,12 @@ moon run src -- \
   --out _build/examples/typescript-to-moonbit-react-types/dist \
   --direction ts-to-mbt \
   --module-spec react
+
+moon run src -- \
+  --input node_modules/vitest/dist/index.d.ts \
+  --out _build/examples/typescript-to-moonbit-vitest/dist \
+  --direction ts-to-mbt \
+  --module-spec vitest
 
 moon run src -- \
   --input examples/typescript-to-moonbit/result/src/index.d.ts \
