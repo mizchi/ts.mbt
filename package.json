@@ -6,6 +6,7 @@
     "extract": "node scripts/extract-interfaces.mjs"
   },
   "devDependencies": {
+    "@types/react": "^19.2.14",
     "typescript": "^5.7.0"
   }
 }

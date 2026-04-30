@@ -25,6 +25,7 @@ Additional TypeScript -> MoonBit patterns are available under:
 
 - `hono/`
 - `react/`
+- `react-types/`
 - `result/`
 - `default-class/`
 - `const-table/`

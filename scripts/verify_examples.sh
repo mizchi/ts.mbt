@@ -326,6 +326,109 @@ fn main {
 EOF
 }
 
+verify_typescript_to_moonbit_react_types_example() {
+  local root="_build/examples/typescript-to-moonbit-react-types"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$out/node_modules"
+
+  cp -R examples/typescript-to-moonbit/react-types/runtime/react "$out/node_modules/react"
+
+  moon run src -- \
+    --input node_modules/@types/react/index.d.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec react >/dev/null
+
+  write_js_any_stub "$out"
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_react_types",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn test_children() -> Array[JSValue] =
+  #| () => ["child"]
+
+extern "js" fn test_props() -> JSValue =
+  #| () => ({ id: "root" })
+
+extern "js" fn test_function_component() -> FunctionComponent =
+  #| () => (props) => ({ type: "component", props, key: null, ref: null })
+
+extern "js" fn test_transition_scope() -> TransitionFunction =
+  #| () => () => undefined
+
+test "generated @types/react bridge smoke" {
+  let element = createElement("div", Some(test_props()), test_children())
+  let _ = cloneElement(element, None, test_children())
+  assert_true(isValidElement(Some(unsafeCast(element))))
+  let _ = memo(test_function_component(), None)
+  let state = useState()
+  let _ = state.state
+  let transition = useTransition()
+  assert_false(transition.isPending)
+  startTransition(test_transition_scope())
+  let _ = get_default()
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
+  grep -F 'pub fn createElement(type_ : String, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn cloneElement(element : DetailedReactHTMLElement, props : P?, children : Array[JSValue]) -> DetailedReactHTMLElement' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn memo(component : FunctionComponent, propsAreEqual : @js.Any?) -> NamedExoticComponent' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn useState() -> UseStateResult' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn useTransition() -> UseTransitionResult' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn startTransition(scope : TransitionFunction) -> Unit' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn get_default() -> @js.Any' "$out/bridge.mbt" >/dev/null
+  grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_react_types" <<'EOF'
+extern "js" fn test_children() -> Array[@sut.JSValue] =
+  #| () => ["child"]
+
+extern "js" fn test_props() -> @sut.JSValue =
+  #| () => ({ id: "root" })
+
+extern "js" fn test_function_component() -> @sut.FunctionComponent =
+  #| () => (props) => ({ type: "component", props, key: null, ref: null })
+
+extern "js" fn test_transition_scope() -> @sut.TransitionFunction =
+  #| () => () => undefined
+
+fn main {
+  let element = @sut.createElement("div", Some(test_props()), test_children())
+  let _ = @sut.cloneElement(element, None, test_children())
+  if !@sut.isValidElement(Some(@sut.unsafeCast(element))) {
+    abort("expected generated React element to be valid")
+  }
+  let _ = @sut.memo(test_function_component(), None)
+  let state = @sut.useState()
+  let _ = state.state
+  let transition = @sut.useTransition()
+  if transition.isPending {
+    abort("stub transition should not be pending")
+  }
+  @sut.startTransition(test_transition_scope())
+  let _ = @sut.get_default()
+}
+EOF
+}
+
 verify_typescript_to_moonbit_result_example() {
   local root="_build/examples/typescript-to-moonbit-result"
   local out="$root/dist"
@@ -546,6 +649,7 @@ verify_moonbit_to_typescript_example
 verify_typescript_to_moonbit_example
 verify_typescript_to_moonbit_hono_example
 verify_typescript_to_moonbit_react_example
+verify_typescript_to_moonbit_react_types_example
 verify_typescript_to_moonbit_result_example
 verify_typescript_to_moonbit_default_class_example
 verify_typescript_to_moonbit_const_table_example

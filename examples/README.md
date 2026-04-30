@@ -30,6 +30,9 @@ Input:
 - `typescript-to-moonbit/hono/runtime/hono.js`
 - `typescript-to-moonbit/react/src/index.d.ts`
 - `typescript-to-moonbit/react/runtime/react-like.js`
+- `node_modules/@types/react/index.d.ts`
+- `typescript-to-moonbit/react-types/runtime/react/index.js`
+- `typescript-to-moonbit/react-types/smoke/main.mbt`
 - `typescript-to-moonbit/result/src/index.d.ts`
 - `typescript-to-moonbit/result/runtime/result.js`
 - `typescript-to-moonbit/default-class/src/index.ts`
@@ -38,7 +41,6 @@ Input:
 - `typescript-to-moonbit/const-table/runtime/index.js`
 - `typescript-to-moonbit/node-sqlite/smoke/main.mbt`
 - `typescript-to-moonbit/node-fs/smoke/main.mbt`
-- `typescript-to-moonbit/typescript-ast/runtime/ast-transformer.js`
 - `typescript-to-moonbit/typescript-ast/smoke/main.mbt`
 
 Generate a MoonBit bridge package:
@@ -68,6 +70,12 @@ moon run src -- \
   --out examples/typescript-to-moonbit/react/dist \
   --direction ts-to-mbt \
   --module-spec ../runtime/react-like.js
+
+moon run src -- \
+  --input node_modules/@types/react/index.d.ts \
+  --out _build/examples/typescript-to-moonbit-react-types/dist \
+  --direction ts-to-mbt \
+  --module-spec react
 
 moon run src -- \
   --input examples/typescript-to-moonbit/result/src/index.d.ts \
