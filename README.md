@@ -134,6 +134,10 @@ tsmbt --input neverthrow --out dist --direction ts-to-mbt
 # File input also works; pass the runtime module when it differs from the
 # declaration entry path.
 tsmbt --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist --direction ts-to-mbt
+
+# Diagnostics can be redirected. Strict mode fails when unsupported exports,
+# omitted MoonBit autolink members, or unbudgeted TS JSValue fallbacks are found.
+tsmbt --input neverthrow --out dist --direction ts-to-mbt --diagnostics dist/diagnostics.md --strict
 ```
 
 `--direction auto` is the default. It resolves MoonBit package names by scanning
@@ -142,6 +146,22 @@ bare TypeScript inputs through the TypeScript package resolver. The MoonBit ->
 TypeScript unified path emits facade glue by default, builds it with
 `moon build --target js`, and copies the built JS to `index.js`; pass
 `--no-facade` to emit only top-level free-function glue.
+
+Unified CLI contract:
+
+- `--input <pkg-or-entry>` accepts a MoonBit package name, `pkg.generated.mbti`
+  path, TypeScript declaration/source entrypoint, or installed package specifier.
+- `--out <dir>` writes a complete scaffold package.
+- `--direction auto|mbt-to-ts|ts-to-mbt` defaults to `auto`.
+- `--module-spec <specifier>` overrides the runtime import used by generated
+  TypeScript -> MoonBit bridge code.
+- `--diagnostics <path>` redirects the generated diagnostics report. Without it,
+  TS -> MoonBit writes `SCAFFOLD_DIAGNOSTICS.md` and MoonBit -> TypeScript writes
+  `AUTOLINK_DIAGNOSTICS.md` in the output directory.
+- `--strict` fails the command when diagnostics contain unsupported exports,
+  omitted autolink members, or unbudgeted `JSValue` fallbacks. The default
+  non-strict mode still emits a buildable scaffold with diagnostics when
+  possible.
 
 ### MoonBit -> TypeScript
 
@@ -186,7 +206,9 @@ Current export model:
 - JS autolink is generated from top-level public free functions across the root package and recursively discovered local child packages.
 - Runtime-inaccessible method / namespace declarations are stripped from scaffold `.d.ts` output unless wrapper glue is generated for them.
 - Scaffold output includes `AUTOLINK_DIAGNOSTICS.md` so omitted public members are explicit.
-- `emit-typescript-facade-scaffold-from-mbti` is an opt-in variant that adds generated top-level wrappers for local non-generic methods and constructors to the temporary glue package, then exposes those wrappers from the built JS and the matching package `.d.ts`.
+- `emit-typescript-facade-scaffold-from-mbti` is an opt-in variant that adds generated top-level wrappers for local non-generic methods and constructors to the temporary glue package, then exposes those wrappers from the built JS and the matching package `.d.ts`. Async wrappers are exposed as Promise-returning JavaScript functions.
+- Public MoonBit traits are declaration-only structural TypeScript interfaces. `pub impl Trait for Type` is represented by `extends Trait` / type intersections in `.d.ts` output, but trait methods are not generated as runtime bridge exports.
+- Generated glue declarations, runtime export lists, package `exports`, and child-package re-export files are sorted deterministically to keep scaffold diffs reviewable.
 - The temporary `moon.pkg.json` and wrapper `.mbt` files are build inputs only; they are not written to the final TypeScript package.
 - Recursive `.mbti` resolution only rewrites imports that stay under the same root package prefix. External imports remain bare specifiers.
 - `emit-typescript-package-from-mbti` and `emit-typescript-scaffold-from-mbti` accept an optional JSON object for external import rewrites, for example `{ "moonbitlang/core/debug": "demo-debug" }`.
@@ -195,14 +217,15 @@ Current export model:
 Supported surface:
 
 - Top-level public free functions whose parameter and return types can cross the MoonBit JS backend boundary.
-- Root and local child-package exports, with generated `package.json` subpath exports.
+- Root and nested local child-package exports, with generated `package.json` subpath exports.
 - `raise` effects in `.mbti`, represented in TypeScript declarations as `Result<Return, ErrorType>`.
 - Opaque MoonBit-defined types in TypeScript declarations.
-- Opt-in facade wrappers for local non-generic methods and constructors via `emit-typescript-facade-scaffold-from-mbti`.
+- Declaration-only structural interfaces for public MoonBit traits and local trait impl relationships.
+- Opt-in facade wrappers for local non-generic methods and constructors via `emit-typescript-facade-scaffold-from-mbti`, including async constructors and methods.
 
 Unsupported or limited surface:
 
-- Arbitrary methods, constructors, trait methods, and generic functions are not exported directly by JS autolink.
+- Generic methods, generic constructors, trait methods, and generic functions are not exported directly by JS autolink.
 - Public members omitted from the runtime export surface are listed in `AUTOLINK_DIAGNOSTICS.md`.
 - External MoonBit imports are left as bare TypeScript imports unless an import rewrite map is provided.
 - The final package should not contain temporary glue files such as `moon.pkg.json` or generated facade `.mbt`; those are build inputs only.
@@ -249,6 +272,40 @@ Fallback and unsupported surface:
 - Ambiguous re-exports are intentionally not bound unsafely. The generated package remains buildable and reports the candidate source files.
 - Unsupported exports are either absent or explicitly budgeted in verification; new unsupported surfaces should be minimized into fixtures before broadening the generator.
 
+Supported subset examples:
+
+```ts
+// TypeScript -> MoonBit: supported declaration shapes
+export interface User {
+  readonly id: string;
+  name?: string;
+}
+
+export type UserPatch = Partial<Pick<User, "name">>;
+export declare function parseUser(input: string): User;
+export declare function listUsers(): Promise<User[]>;
+```
+
+```moonbit
+// MoonBit -> TypeScript: supported JS-exportable public surface
+pub struct User {
+  id : String
+  name : String?
+}
+
+pub fn parse_user(input : String) -> User {
+  { id: input, name: None }
+}
+
+pub async fn list_users() -> Array[User] {
+  []
+}
+```
+
+Keep unsupported surfaces inspectable. Callback-heavy TypeScript parameters and
+generic MoonBit methods can remain in source packages, but the bridge may widen
+or omit them and report the decision in diagnostics.
+
 Diagnostics and quality reports:
 
 - `SCAFFOLD_DIAGNOSTICS.md` explains each widened, omitted, or bridge-wrapped TypeScript export, including whether the generated decision is runtime-safe.
@@ -288,6 +345,14 @@ just experimental-aot-check      # Check AOT compilability
 just experimental-aot-compile    # Compile fixtures to wasm
 just experimental-aot-test       # Run with wasmtime
 ```
+
+Release checklist:
+
+- Run `moon fmt`, `moon info`, `just check`, and `just test`.
+- Run `just verify-scaffolds`, `just verify-mbti-dts`, `just verify-generated-fixtures`, and `just verify-examples`.
+- Run or review `just bridge-quality`, `just verify-realworld-typescript`, and `just verify-realworld-moonbit` before claiming broader package coverage.
+- Refresh generated docs/reports and confirm `TODO.md` reflects the current quality gate.
+- Add a changelog entry covering CLI contract, bridge behavior changes, fallback budgets, and known unsupported surfaces.
 
 ## License
 

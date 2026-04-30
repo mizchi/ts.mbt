@@ -1,7 +1,13 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "examples/counter/child"
 
+import {
+  "examples/counter/child/grand",
+}
+
 // Values
+pub fn item_tag(Item) -> @grand.Tag
+
 pub fn make_item(Int, String) -> Item
 
 // Errors

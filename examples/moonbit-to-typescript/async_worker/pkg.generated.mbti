@@ -1,0 +1,18 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "examples/async_worker"
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct Worker {
+  name : String
+}
+pub async fn Worker::load(Self, key? : String) -> String
+pub async fn Worker::new(String) -> Self
+
+// Type aliases
+
+// Traits
+

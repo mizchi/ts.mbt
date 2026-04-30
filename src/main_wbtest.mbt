@@ -18,6 +18,52 @@ fn wbtest_tmp_project_benchmark_root(name : String) -> String {
 }
 
 ///|
+async fn wbtest_collect_relative_files(
+  root : String,
+  relative_dir : String,
+  out : Array[String],
+) -> Unit {
+  let dir = if relative_dir == "" {
+    root
+  } else {
+    wbtest_join_path(root, relative_dir)
+  }
+  let entries = @fs.readdir(
+    dir,
+    include_hidden=false,
+    include_special=false,
+    sort=true,
+  ) catch {
+    _ => return
+  }
+  for name in entries {
+    let relative_path = if relative_dir == "" {
+      name
+    } else {
+      relative_dir + "/" + name
+    }
+    let path = wbtest_join_path(root, relative_path)
+    let kind = @fs.kind(path, follow_symlink=false) catch {
+      _ => @fs.FileKind::Unknown
+    }
+    match kind {
+      @fs.FileKind::Directory =>
+        wbtest_collect_relative_files(root, relative_path, out)
+      @fs.FileKind::Regular => out.push(relative_path)
+      _ => ()
+    }
+  }
+}
+
+///|
+async fn wbtest_relative_file_snapshot(root : String) -> String {
+  let files : Array[String] = []
+  wbtest_collect_relative_files(root, "", files)
+  files.sort()
+  files.join("\n")
+}
+
+///|
 async fn wbtest_prepare_tmp_neverthrow_like_fixture(
   root : String,
 ) -> String raise Error {
@@ -173,7 +219,7 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
   )
   assert_true(
     lines.contains(
-      "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] Generate a complete build-backed bridge scaffold in either direction",
+      "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] [--module-spec <specifier>] [--diagnostics <path>] [--strict] Generate a complete build-backed bridge scaffold in either direction",
     ),
   )
   assert_true(
@@ -203,7 +249,8 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
 test "parse_unified_tsmbt_options accepts input out and direction flags" {
   let args = [
     "tsmbt", "--input", "mizchi/foo", "--out", "dist", "--direction", "mbt-to-ts",
-    "--import-rewrites", "rewrites.json", "--no-facade",
+    "--import-rewrites", "rewrites.json", "--diagnostics", "dist/diagnostics.md",
+    "--strict", "--no-facade",
   ]
   match parse_unified_tsmbt_options(args, 1) {
     (Some(options), None) => {
@@ -211,6 +258,8 @@ test "parse_unified_tsmbt_options accepts input out and direction flags" {
       assert_eq(options.out, Some("dist"))
       assert_true(options.direction is TsmbtDirection::MbtToTs)
       assert_eq(options.import_rewrite_path, Some("rewrites.json"))
+      assert_eq(options.diagnostics_path, Some("dist/diagnostics.md"))
+      assert_true(options.strict)
       assert_false(options.facade)
     }
     (_, Some(message)) => fail(message)
@@ -222,7 +271,7 @@ test "parse_unified_tsmbt_options accepts input out and direction flags" {
 test "parse_unified_tsmbt_options accepts positional generate args and equals flags" {
   let args = [
     "tsmbt", "generate", "neverthrow", "dist/generated", "--direction=ts", "--module-spec=/runtime/neverthrow.js",
-    "--import-rewrite=rewrites.json",
+    "--import-rewrite=rewrites.json", "--diagnostics=dist/diagnostics.md",
   ]
   match parse_unified_tsmbt_options(args, 2) {
     (Some(options), None) => {
@@ -231,6 +280,8 @@ test "parse_unified_tsmbt_options accepts positional generate args and equals fl
       assert_true(options.direction is TsmbtDirection::TsToMbt)
       assert_eq(options.module_spec, Some("/runtime/neverthrow.js"))
       assert_eq(options.import_rewrite_path, Some("rewrites.json"))
+      assert_eq(options.diagnostics_path, Some("dist/diagnostics.md"))
+      assert_false(options.strict)
       assert_true(options.facade)
     }
     (_, Some(message)) => fail(message)
@@ -417,8 +468,25 @@ async test "emit_unified_tsmbt_scaffold emits MoonBit to TypeScript scaffold fro
   let root_js = @fs.read_file(wbtest_join_path(root, "index.js")).text() catch {
     e => fail("failed to read unified index.js: \{e}")
   }
+  let package_json = @fs.read_file(wbtest_join_path(root, "package.json")).text() catch {
+    e => fail("failed to read unified package.json: \{e}")
+  }
+  assert_eq(
+    wbtest_relative_file_snapshot(root),
+    [
+      "index.js", "index.d.ts", "index.js.map", "package.json", "child/index.js",
+      "child/index.d.ts", "child/grand/index.js", "child/grand/index.d.ts", "AUTOLINK_DIAGNOSTICS.md",
+    ].join("\n"),
+  )
   assert_true(root_decl.contains("import type * as child from \"./child\";"))
   assert_true(root_js.contains("export {"))
+  assert_true(package_json.contains("\"name\": \"@examples/counter\""))
+  assert_true(package_json.contains("\"type\": \"module\""))
+  assert_true(
+    package_json.contains(
+      "\"./child/grand\": { \"types\": \"./child/grand/index.d.ts\", \"import\": \"./child/grand/index.js\" }",
+    ),
+  )
 }
 
 ///|
@@ -441,8 +509,99 @@ async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read unified TS bridge.mbt: \{e}")
   }
+  let diagnostics = @fs.read_file(
+    wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md"),
+  ).text() catch {
+    e => fail("failed to read unified TS diagnostics: \{e}")
+  }
+  assert_eq(
+    wbtest_relative_file_snapshot(root),
+    [
+      "bridge.js", "bridge.mbt", "bridge.mbti", "moon.pkg.json", "SCAFFOLD_DIAGNOSTICS.md",
+    ].join("\n"),
+  )
   assert_eq(moon_pkg_json, "{}")
   assert_true(bridge_mbt.contains("#module(\"/runtime/neverthrow-like.js\")"))
+  assert_true(diagnostics.contains("No unsupported exports were detected."))
+}
+
+///|
+async test "emit_unified_tsmbt_scaffold writes requested TypeScript diagnostics" {
+  let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt_diagnostics")
+  let diagnostics_path = wbtest_join_path(root, "reports/scaffold.md")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  assert_true(
+    emit_unified_tsmbt_scaffold(
+      "fixtures/resolver/project/types/export-equals-entry.d.ts",
+      wbtest_join_path(root, "generated"),
+      direction=TsmbtDirection::TsToMbt,
+      module_spec=Some("./runtime/export-equals.js"),
+      import_rewrite_path=None,
+      diagnostics_path=Some(diagnostics_path),
+      strict=false,
+      facade=true,
+    ),
+  )
+  let diagnostics = @fs.read_file(diagnostics_path).text() catch {
+    e => fail("failed to read requested unified diagnostics: \{e}")
+  }
+  assert_true(diagnostics.contains("No unsupported exports were detected."))
+  assert_true(diagnostics.contains("## JSValue Fallbacks"))
+  assert_true(diagnostics.contains("bridge.mbti"))
+}
+
+///|
+async test "emit_unified_tsmbt_scaffold strict mode rejects JSValue fallbacks" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "unified_ts_to_mbt_strict_jsvalue",
+  )
+  let diagnostics_path = wbtest_join_path(root, "strict.md")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  assert_false(
+    emit_unified_tsmbt_scaffold(
+      "fixtures/resolver/project/types/export-equals-entry.d.ts",
+      wbtest_join_path(root, "generated"),
+      direction=TsmbtDirection::TsToMbt,
+      module_spec=Some("./runtime/export-equals.js"),
+      import_rewrite_path=None,
+      diagnostics_path=Some(diagnostics_path),
+      strict=true,
+      facade=true,
+    ),
+  )
+  let diagnostics = @fs.read_file(diagnostics_path).text() catch {
+    e => fail("failed to read strict JSValue diagnostics: \{e}")
+  }
+  assert_true(diagnostics.contains("## JSValue Fallbacks"))
+  assert_true(diagnostics.contains("bridge.mbti"))
+}
+
+///|
+async test "emit_unified_tsmbt_scaffold strict mode rejects unsupported exports" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "unified_ts_to_mbt_strict_unsupported",
+  )
+  let diagnostics_path = wbtest_join_path(root, "strict.md")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  assert_false(
+    emit_unified_tsmbt_scaffold(
+      "fixtures/resolver/project/types/ambiguous-entry.d.ts",
+      wbtest_join_path(root, "generated"),
+      direction=TsmbtDirection::TsToMbt,
+      module_spec=Some("./runtime/ambiguous.js"),
+      import_rewrite_path=None,
+      diagnostics_path=Some(diagnostics_path),
+      strict=true,
+      facade=true,
+    ),
+  )
+  let diagnostics = @fs.read_file(diagnostics_path).text() catch {
+    e => fail("failed to read strict unsupported diagnostics: \{e}")
+  }
+  assert_true(diagnostics.contains("Shared (ambiguous re-export:"))
+  assert_true(
+    diagnostics.contains("| `Shared` | widened | ambiguous re-export surface |"),
+  )
 }
 
 ///|
@@ -5389,7 +5548,9 @@ async test "emit_moonbit_scaffold_from_ts sanitizes reserved exported function a
     ),
   )
   assert_true(
-    bridge_mbti.contains("declare pub fn use_(promise : Promise) -> String"),
+    bridge_mbti.contains(
+      "declare pub fn use_(promise : @js.Promise[String]) -> String",
+    ),
   )
   assert_true(
     bridge_mbti.contains(

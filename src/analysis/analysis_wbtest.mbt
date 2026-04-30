@@ -1070,6 +1070,7 @@ test "find_compilable_functions: filters async/generator" {
   let mod : @ast.TsModule = {
     funcs: [pure_func, async_func, gen_func],
     interfaces: [],
+    type_aliases: [],
     imports: [],
     values: [],
     classes: [],

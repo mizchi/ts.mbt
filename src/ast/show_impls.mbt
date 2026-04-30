@@ -97,6 +97,11 @@ pub impl Show for TsInterface with output(self, logger) {
 }
 
 ///|
+pub impl Show for TsTypeAlias with output(self, logger) {
+  write_debug_show(logger, self)
+}
+
+///|
 pub impl Show for TsImport with output(self, logger) {
   write_debug_show(logger, self)
 }

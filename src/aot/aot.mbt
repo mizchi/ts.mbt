@@ -58,6 +58,7 @@ fn compile_single_function(func : @ast.TsFunc) -> (Bytes, UInt)? {
   let mod : @ast.TsModule = {
     funcs: [func],
     interfaces: [],
+    type_aliases: [],
     imports: [],
     values: [],
     classes: [],

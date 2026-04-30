@@ -25,6 +25,12 @@ fixtures/resolver/project/node_modules/*
 !fixtures/resolver/project/node_modules/react/**
 !fixtures/resolver/project/node_modules/hono/
 !fixtures/resolver/project/node_modules/hono/**
+!fixtures/resolver/project/node_modules/pkg-untyped/
+!fixtures/resolver/project/node_modules/pkg-untyped/**
+!fixtures/resolver/project/node_modules/@scope/
+!fixtures/resolver/project/node_modules/@scope/**
+!fixtures/resolver/project/node_modules/@types/
+!fixtures/resolver/project/node_modules/@types/**
 
 # Example generated outputs
 examples/**/dist/

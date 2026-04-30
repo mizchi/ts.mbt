@@ -143,6 +143,7 @@ pub fn experimental_compile_module_to_wasm(
   let compile_mod : @ast.TsModule = {
     funcs,
     interfaces: mod.interfaces,
+    type_aliases: mod.type_aliases,
     imports: mod.imports,
     values: mod.values,
     classes: mod.classes,

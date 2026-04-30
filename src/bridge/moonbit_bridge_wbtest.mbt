@@ -68,6 +68,9 @@ async test "bridge: emit MoonBit TS bridge package bundle wraps camelCase export
     ),
   )
   assert_true(
+    bundle.bridge_mbt.contains("#warnings(\"-9\")\npub struct RuntimePoint"),
+  )
+  assert_true(
     bundle.bridge_mbt.contains(
       "#module(\"/runtime/runtime-function.js\")\nextern \"js\" fn scale_point(point : RuntimePoint, factor : Double) -> RuntimePoint = \"scalePoint\"",
     ),

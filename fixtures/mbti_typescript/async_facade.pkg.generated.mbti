@@ -1,0 +1,16 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/async_facade"
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct Worker {
+}
+pub async fn Worker::new(String) -> Self
+pub async fn Worker::load(Self, key? : String) -> String
+
+// Type aliases
+
+// Traits

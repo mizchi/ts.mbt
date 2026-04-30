@@ -895,14 +895,25 @@ async test "bridge: emit TypeScript scaffold bundle exposes child package runtim
       "\"./child\": { \"types\": \"./child/index.d.ts\", \"import\": \"./child/index.js\" }",
     ),
   )
+  assert_true(
+    bundle.package_json.contains(
+      "\"./child/grand\": { \"types\": \"./child/grand/index.d.ts\", \"import\": \"./child/grand/index.js\" }",
+    ),
+  )
   let mut child_js = ""
+  let mut grand_child_js = ""
   for file in bundle.files {
     if file.relative_path == "child/index.js" {
       child_js = file.content
+    } else if file.relative_path == "child/grand/index.js" {
+      grand_child_js = file.content
     }
   }
   assert_eq(
-    child_js, "import * as __tsmbtRoot from \"../index.js\";\nexport const make_item = __tsmbtRoot.tsmbt_source_child_make_item;\n",
+    child_js, "import * as __tsmbtRoot from \"../index.js\";\nexport const item_tag = __tsmbtRoot.tsmbt_source_child_item_tag;\nexport const make_item = __tsmbtRoot.tsmbt_source_child_make_item;\n",
+  )
+  assert_eq(
+    grand_child_js, "import * as __tsmbtRoot from \"../../index.js\";\nexport const make_tag = __tsmbtRoot.tsmbt_source_child_grand_make_tag;\n",
   )
 }
 
@@ -1083,6 +1094,9 @@ async test "bridge: emit TypeScript facade scaffold bundle adds child package fa
     bundle.moon_pkg_json.contains("\"tsmbt_source_child_item_display\""),
   )
   assert_true(
+    bundle.moon_pkg_json.contains("\"tsmbt_source_child_grand_tag_label\""),
+  )
+  assert_true(
     bundle.autolink_glue_mbt.contains(
       "pub fn tsmbt_source_child_item_display(self_ : @tsmbt_source_child.Item) -> String {",
     ),
@@ -1090,19 +1104,85 @@ async test "bridge: emit TypeScript facade scaffold bundle adds child package fa
   assert_true(bundle.autolink_glue_mbt.contains("self_.display()"))
   let mut child_content = ""
   let mut child_js = ""
+  let mut grand_child_content = ""
+  let mut grand_child_js = ""
   for file in bundle.files {
     if file.relative_path == "child/index.d.ts" {
       child_content = file.content
     } else if file.relative_path == "child/index.js" {
       child_js = file.content
+    } else if file.relative_path == "child/grand/index.d.ts" {
+      grand_child_content = file.content
+    } else if file.relative_path == "child/grand/index.js" {
+      grand_child_js = file.content
     }
   }
   assert_true(
     child_content.contains("export function item_display(self: Item): string;"),
   )
-  assert_eq(
-    child_js, "import * as __tsmbtRoot from \"../index.js\";\nexport const make_item = __tsmbtRoot.tsmbt_source_child_make_item;\nexport const item_display = __tsmbtRoot.tsmbt_source_child_item_display;\n",
+  assert_true(
+    grand_child_content.contains(
+      "export function tag_label(self: Tag): string;",
+    ),
   )
+  assert_eq(
+    child_js, "import * as __tsmbtRoot from \"../index.js\";\nexport const item_display = __tsmbtRoot.tsmbt_source_child_item_display;\nexport const item_tag = __tsmbtRoot.tsmbt_source_child_item_tag;\nexport const make_item = __tsmbtRoot.tsmbt_source_child_make_item;\n",
+  )
+  assert_eq(
+    grand_child_js, "import * as __tsmbtRoot from \"../../index.js\";\nexport const make_tag = __tsmbtRoot.tsmbt_source_child_grand_make_tag;\nexport const tag_label = __tsmbtRoot.tsmbt_source_child_grand_tag_label;\n",
+  )
+}
+
+///|
+async test "bridge: emit TypeScript facade scaffold bundle sorts review-facing facade outputs" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/facade_order.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade scaffold bundle emit error: \{msg}")
+  }
+  let expected_exports =
+    #|      "exports": [
+    #|        "alpha",
+    #|        "worker_a",
+    #|        "worker_new",
+    #|        "worker_z",
+    #|        "zeta"
+    #|      ]
+  assert_true(bundle.moon_pkg_json.contains(expected_exports))
+  let expected_glue =
+    #|pub fn alpha() -> String {
+    #|  @tsmbt_source.alpha()
+    #|}
+    #|
+    #|pub fn worker_a(self_ : @tsmbt_source.Worker) -> String {
+    #|  self_.a()
+    #|}
+    #|
+    #|pub fn worker_new(arg0 : String) -> @tsmbt_source.Worker {
+    #|  @tsmbt_source.Worker::new(arg0)
+    #|}
+    #|
+    #|pub fn worker_z(self_ : @tsmbt_source.Worker) -> String {
+    #|  self_.z()
+    #|}
+    #|
+    #|pub fn zeta() -> String {
+    #|  @tsmbt_source.zeta()
+    #|}
+  assert_true(bundle.autolink_glue_mbt.contains(expected_glue))
+  let mut root_content = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  let expected_facade_decls =
+    #|export function worker_a(self: Worker): string;
+    #|export function worker_new(arg0: string): Worker;
+    #|export function worker_z(self: Worker): string;
+  assert_true(root_content.contains(expected_facade_decls))
 }
 
 ///|
@@ -1171,6 +1251,49 @@ async test "bridge: emit TypeScript facade scaffold bundle preserves raise effec
   assert_true(
     bundle.autolink_glue_mbt.contains(
       "pub fn sem_ver_parse_next(self_ : @tsmbt_source.SemVer, arg1 : String) -> @tsmbt_source.SemVer raise @tsmbt_source.SemVerError {",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit TypeScript facade scaffold bundle includes async methods" {
+  let bundle = emit_typescript_facade_scaffold_bundle_from_mbti_path(
+    "fixtures/mbti_typescript/async_facade.pkg.generated.mbti",
+  ) catch {
+    MbtiTypescriptDeclError::ReadError(msg)
+    | MbtiTypescriptDeclError::ParseError(msg) =>
+      fail("MBTI facade scaffold bundle emit error: \{msg}")
+  }
+  assert_true(bundle.moon_pkg_json.contains("\"worker_new\""))
+  assert_true(bundle.moon_pkg_json.contains("\"worker_load\""))
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub async fn worker_new(arg0 : String) -> @tsmbt_source.Worker {",
+    ),
+  )
+  assert_true(
+    bundle.autolink_glue_mbt.contains("@tsmbt_source.Worker::new(arg0)"),
+  )
+  assert_true(
+    bundle.autolink_glue_mbt.contains(
+      "pub async fn worker_load(self_ : @tsmbt_source.Worker, key : (String)?) -> String {",
+    ),
+  )
+  assert_true(bundle.autolink_glue_mbt.contains("self_.load(key?)"))
+  let mut root_content = ""
+  for file in bundle.files {
+    if file.relative_path == "index.d.ts" {
+      root_content = file.content
+    }
+  }
+  assert_true(
+    root_content.contains(
+      "export function worker_new(arg0: string): Promise<Worker>;",
+    ),
+  )
+  assert_true(
+    root_content.contains(
+      "export function worker_load(self: Worker, key?: string): Promise<string>;",
     ),
   )
 }

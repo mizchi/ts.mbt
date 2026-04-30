@@ -1,0 +1,18 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "examples/counter/child/grand"
+
+// Values
+pub fn make_tag(String) -> Tag
+
+// Errors
+
+// Types and methods
+pub struct Tag {
+  value : String
+}
+pub fn Tag::label(Self) -> String
+
+// Type aliases
+
+// Traits
+

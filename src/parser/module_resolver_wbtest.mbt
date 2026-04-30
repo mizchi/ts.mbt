@@ -83,6 +83,57 @@ async test "parser: resolver supports scoped packages" {
 }
 
 ///|
+async test "parser: resolver falls back to @types package for untyped packages" {
+  let typed = resolve_type_module_specifier(
+    resolver_nested_base_path, "pkg-untyped",
+  )
+  assert_eq(
+    typed,
+    Some("fixtures/resolver/project/node_modules/@types/pkg-untyped/index.d.ts"),
+  )
+  let runtime = resolve_runtime_module_specifier(
+    resolver_nested_base_path, "pkg-untyped",
+  )
+  assert_eq(
+    runtime,
+    Some("fixtures/resolver/project/node_modules/pkg-untyped/dist/index.js"),
+  )
+}
+
+///|
+async test "parser: resolver falls back to scoped @types package names" {
+  let typed = resolve_type_module_specifier(
+    resolver_nested_base_path, "@scope/untyped",
+  )
+  assert_eq(
+    typed,
+    Some(
+      "fixtures/resolver/project/node_modules/@types/scope__untyped/index.d.ts",
+    ),
+  )
+}
+
+///|
+async test "parser: resolver maps node builtin specifiers to @types/node declarations" {
+  let fs = resolve_type_module_specifier(resolver_nested_base_path, "node:fs")
+  assert_eq(
+    fs,
+    Some("fixtures/resolver/project/node_modules/@types/node/fs.d.ts"),
+  )
+  let fs_promises = resolve_type_module_specifier(
+    resolver_nested_base_path, "node:fs/promises",
+  )
+  assert_eq(
+    fs_promises,
+    Some("fixtures/resolver/project/node_modules/@types/node/fs/promises.d.ts"),
+  )
+  let runtime = resolve_runtime_module_specifier(
+    resolver_nested_base_path, "node:fs",
+  )
+  assert_eq(runtime, None)
+}
+
+///|
 async test "parser: resolver supports pnpm-style symlinked packages" {
   let resolved = resolve_type_module_specifier(
     resolver_nested_base_path, "pkg-symlink",

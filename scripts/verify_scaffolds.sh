@@ -47,7 +47,8 @@ verify_typescript_scaffold_fixture() {
   },
   "files": [
     "out/index.d.ts",
-    "out/child/index.d.ts"
+    "out/child/index.d.ts",
+    "out/child/grand/index.d.ts"
   ]
 }
 EOF
@@ -56,6 +57,7 @@ EOF
   [ -f "$root/out/index.js" ]
   [ -f "$root/out/index.js.map" ]
   [ -f "$root/out/child/index.js" ]
+  [ -f "$root/out/child/grand/index.js" ]
   [ -f "$root/out/AUTOLINK_DIAGNOSTICS.md" ]
   [ ! -f "$root/out/moon.pkg.json" ]
   [ ! -f "$root/out/moon.pkg" ]
@@ -64,6 +66,7 @@ EOF
   grep -F '"name": "@examples/counter"' "$root/out/package.json" >/dev/null
   grep -F '"import": "./index.js"' "$root/out/package.json" >/dev/null
   grep -F '"./child": { "types": "./child/index.d.ts", "import": "./child/index.js" }' "$root/out/package.json" >/dev/null
+  grep -F '"./child/grand": { "types": "./child/grand/index.d.ts", "import": "./child/grand/index.js" }' "$root/out/package.json" >/dev/null
   grep -F 'Counter::label' "$root/out/AUTOLINK_DIAGNOSTICS.md" >/dev/null
   if grep -F 'counter_label' "$root/out/index.d.ts" >/dev/null; then
     echo "base scaffold should not emit facade declarations" >&2
@@ -71,10 +74,12 @@ EOF
   fi
   assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
   assert_declared_value_exports_present "./$root/out/child/index.js" "$root/out/child/index.d.ts"
+  assert_declared_value_exports_present "./$root/out/child/grand/index.js" "$root/out/child/grand/index.d.ts"
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
   node --input-type=module <<'EOF'
 const mod = await import("./_build/scaffold_mbti_to_ts/out/index.js");
 const child = await import("./_build/scaffold_mbti_to_ts/out/child/index.js");
+const grand = await import("./_build/scaffold_mbti_to_ts/out/child/grand/index.js");
 const counter = mod.create("demo", { id: 7, name: "item" });
 if (mod.summarize(counter) !== "demo:item#7") {
   throw new Error("unexpected summarize output");
@@ -82,6 +87,14 @@ if (mod.summarize(counter) !== "demo:item#7") {
 const item = child.make_item(8, "child");
 if (item.name !== "child" || item.id !== 8) {
   throw new Error("unexpected child make_item output");
+}
+const tag = child.item_tag(item);
+if (tag.value !== "child#8") {
+  throw new Error("unexpected child item_tag output");
+}
+const directTag = grand.make_tag("direct");
+if (directTag.value !== "direct") {
+  throw new Error("unexpected grand make_tag output");
 }
 if ("counter_label" in mod) {
   throw new Error("base scaffold unexpectedly exported counter_label");
@@ -112,7 +125,8 @@ verify_typescript_facade_scaffold_fixture() {
   },
   "files": [
     "out/index.d.ts",
-    "out/child/index.d.ts"
+    "out/child/index.d.ts",
+    "out/child/grand/index.d.ts"
   ]
 }
 EOF
@@ -121,6 +135,7 @@ EOF
   [ -f "$root/out/index.js" ]
   [ -f "$root/out/index.js.map" ]
   [ -f "$root/out/child/index.js" ]
+  [ -f "$root/out/child/grand/index.js" ]
   [ -f "$root/out/AUTOLINK_DIAGNOSTICS.md" ]
   [ ! -f "$root/out/moon.pkg.json" ]
   [ ! -f "$root/out/moon.pkg" ]
@@ -129,14 +144,18 @@ EOF
   grep -F '"name": "@examples/counter"' "$root/out/package.json" >/dev/null
   grep -F '"import": "./index.js"' "$root/out/package.json" >/dev/null
   grep -F '"./child": { "types": "./child/index.d.ts", "import": "./child/index.js" }' "$root/out/package.json" >/dev/null
+  grep -F '"./child/grand": { "types": "./child/grand/index.d.ts", "import": "./child/grand/index.js" }' "$root/out/package.json" >/dev/null
   grep -F 'export function counter_label(self: Counter): string;' "$root/out/index.d.ts" >/dev/null
   grep -F 'export function item_display(self: Item): string;' "$root/out/child/index.d.ts" >/dev/null
+  grep -F 'export function tag_label(self: Tag): string;' "$root/out/child/grand/index.d.ts" >/dev/null
   assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
   assert_declared_value_exports_present "./$root/out/child/index.js" "$root/out/child/index.d.ts"
+  assert_declared_value_exports_present "./$root/out/child/grand/index.js" "$root/out/child/grand/index.d.ts"
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false
   node --input-type=module <<'EOF'
 const mod = await import("./_build/scaffold_mbti_to_ts_facade/out/index.js");
 const child = await import("./_build/scaffold_mbti_to_ts_facade/out/child/index.js");
+const grand = await import("./_build/scaffold_mbti_to_ts_facade/out/child/grand/index.js");
 const counter = mod.create("demo", { id: 7, name: "item" });
 if (mod.counter_label(counter) !== "demo") {
   throw new Error("unexpected counter_label output");
@@ -147,6 +166,72 @@ if (mod.summarize(counter) !== "demo:item#7") {
 const item = child.make_item(8, "child");
 if (child.item_display(item) !== "child#8") {
   throw new Error("unexpected item_display output");
+}
+const tag = child.item_tag(item);
+if (grand.tag_label(tag) !== "child#8") {
+  throw new Error("unexpected grand tag_label output");
+}
+EOF
+}
+
+verify_typescript_async_facade_scaffold_fixture() {
+  local root="_build/scaffold_mbti_to_ts_async_facade"
+  local mbti_path="$repo_root/examples/moonbit-to-typescript/async_worker/pkg.generated.mbti"
+
+  rm -rf "$root"
+  mkdir -p "$root"
+
+  moon run src -- emit-typescript-facade-scaffold-from-mbti \
+    "$mbti_path" \
+    "$root/out" >/dev/null
+
+  cat > "$root/consumer.ts" <<'EOF'
+import { worker_load, worker_new, type Worker } from "./out/index.js";
+
+async function main() {
+  const worker: Worker = await worker_new("demo");
+  const loaded: string = await worker_load(worker, "key");
+  const fallback: string = await worker_load(worker);
+  void loaded;
+  void fallback;
+}
+
+void main;
+EOF
+
+  cat > "$root/tsconfig.json" <<'EOF'
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "lib": ["es2020"]
+  },
+  "files": [
+    "consumer.ts",
+    "out/index.d.ts"
+  ]
+}
+EOF
+
+  grep -F 'export function worker_new(arg0: string): Promise<Worker>;' "$root/out/index.d.ts" >/dev/null
+  grep -F 'export function worker_load(self: Worker, key?: string): Promise<string>;' "$root/out/index.d.ts" >/dev/null
+  assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
+  pnpm exec tsc -p "$root/tsconfig.json" --pretty false
+  node --input-type=module <<'EOF'
+const mod = await import("./_build/scaffold_mbti_to_ts_async_facade/out/index.js");
+const workerPromise = mod.worker_new("demo");
+if (!(workerPromise instanceof Promise)) {
+  throw new Error("worker_new should return a Promise");
+}
+const worker = await workerPromise;
+if ((await mod.worker_load(worker, "key")) !== "demo:key") {
+  throw new Error("unexpected worker_load output");
+}
+if ((await mod.worker_load(worker)) !== "demo:default") {
+  throw new Error("unexpected worker_load fallback output");
 }
 EOF
 }
@@ -502,6 +587,9 @@ EOF
 extern "js" fn test_dom_attributes() -> DOMAttributes =
   #| () => ({ id: "app" })
 
+extern "js" fn test_dom_attributes_partial() -> DOMAttributesPartial =
+  #| () => ({ id: "app" })
+
 extern "js" fn test_button_attributes() -> ButtonHTMLAttributes =
   #| () => ({ disabled: true })
 
@@ -523,7 +611,7 @@ test "generated React package scaffold smoke" {
     Some(test_dom_attributes()),
     test_children(),
   )
-  let _ = cloneElement(element, Some(test_dom_attributes()), test_children())
+  let _ = cloneElement(element, Some(test_dom_attributes_partial()), test_children())
   let _ = forwardRef(test_forward_ref_render())
   let _ = memo(test_function_component(), None)
   let _ = normalizeProps(test_button_attributes())
@@ -533,12 +621,15 @@ test "generated React package scaffold smoke" {
 EOF
 
   grep -F 'pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement' "$root/bridge.mbt" >/dev/null
-  grep -F 'pub fn cloneElement(element : ReactElement, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement' "$root/bridge.mbt" >/dev/null
+  grep -F 'pub fn cloneElement(element : ReactElement, props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement' "$root/bridge.mbt" >/dev/null
   grep -F '#external' "$root/bridge.mbt" >/dev/null
   moon -C "$root" check --target js
   moon -C "$root" test --target js
   run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_react_package" true <<'EOF'
 extern "js" fn test_dom_attributes() -> @sut.DOMAttributes =
+  #| () => ({ id: "app" })
+
+extern "js" fn test_dom_attributes_partial() -> @sut.DOMAttributesPartial =
   #| () => ({ id: "app" })
 
 extern "js" fn test_button_attributes() -> @sut.ButtonHTMLAttributes =
@@ -562,7 +653,7 @@ fn main {
     Some(test_dom_attributes()),
     test_children(),
   )
-  let _ = @sut.cloneElement(element, Some(test_dom_attributes()), test_children())
+  let _ = @sut.cloneElement(element, Some(test_dom_attributes_partial()), test_children())
   let _ = @sut.forwardRef(test_forward_ref_render())
   let _ = @sut.memo(test_function_component(), None)
   let _ = @sut.normalizeProps(test_button_attributes())
@@ -887,6 +978,7 @@ EOF
 
 verify_typescript_scaffold_fixture
 verify_typescript_facade_scaffold_fixture
+verify_typescript_async_facade_scaffold_fixture
 verify_typescript_reverse_edge_scaffold_fixture
 verify_moonbit_scaffold_fixture
 verify_moonbit_scaffold_external_package_fixture

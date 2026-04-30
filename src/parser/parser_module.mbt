@@ -117,6 +117,7 @@ fn empty_ts_module() -> @ast.TsModule {
   {
     funcs: [],
     interfaces: [],
+    type_aliases: [],
     imports: [],
     values: [],
     classes: [],
@@ -187,6 +188,7 @@ fn append_module_decls(
   module_ : @ast.TsModule,
   funcs : Array[@ast.TsFunc],
   interfaces : Array[@ast.TsInterface],
+  type_aliases : Array[@ast.TsTypeAlias],
   imports : Array[@ast.TsImport],
   values : Array[@ast.TsValueDecl],
   classes : Array[@ast.TsClassDecl],
@@ -197,6 +199,9 @@ fn append_module_decls(
   }
   for iface in module_.interfaces {
     interfaces.push(iface)
+  }
+  for type_alias in module_.type_aliases {
+    type_aliases.push(type_alias)
   }
   for import_ in module_.imports {
     imports.push(import_)
@@ -222,6 +227,9 @@ fn append_ambient_external_module_exports(
   }
   for iface in module_.interfaces {
     exports.push({ local_name: iface.name, export_name: iface.name })
+  }
+  for type_alias in module_.type_aliases {
+    exports.push({ local_name: type_alias.name, export_name: type_alias.name })
   }
   for import_ in module_.imports {
     exports.push({ local_name: import_.name, export_name: import_.name })
@@ -2130,6 +2138,7 @@ fn Parser::parse_export_stmt(
   self : Parser,
   funcs : Array[@ast.TsFunc],
   interfaces : Array[@ast.TsInterface],
+  type_aliases : Array[@ast.TsTypeAlias],
   imports : Array[@ast.TsImport],
   values : Array[@ast.TsValueDecl],
   classes : Array[@ast.TsClassDecl],
@@ -2162,7 +2171,9 @@ fn Parser::parse_export_stmt(
       self.consume_semicolon()
       return
     }
-    match self.parse_type_alias_interface_after_type_keyword() {
+    let type_alias = self.parse_type_alias_after_type_keyword()
+    type_aliases.push(type_alias)
+    match type_alias_to_interface(type_alias) {
       Some(iface) => interfaces.push(iface)
       None => ()
     }
@@ -2274,11 +2285,14 @@ fn Parser::parse_export_stmt(
       }
       Interface => interfaces.push(self.parse_interface())
       Class => classes.push(self.parse_declare_class(false))
-      Type =>
-        match self.parse_type_alias_interface() {
+      Type => {
+        let type_alias = self.parse_type_alias()
+        type_aliases.push(type_alias)
+        match type_alias_to_interface(type_alias) {
           Some(iface) => interfaces.push(iface)
           None => ()
         }
+      }
       Ident(name) =>
         if name == "abstract" && self.peek_at(1).kind == Class {
           classes.push(self.parse_declare_class_with_optional_abstract())
@@ -2390,6 +2404,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
 ) -> @ast.TsModule raise ParseError {
   let funcs : Array[@ast.TsFunc] = []
   let interfaces : Array[@ast.TsInterface] = []
+  let type_aliases : Array[@ast.TsTypeAlias] = []
   let imports : Array[@ast.TsImport] = []
   let values : Array[@ast.TsValueDecl] = []
   let classes : Array[@ast.TsClassDecl] = []
@@ -2439,11 +2454,14 @@ fn Parser::parse_module_with_seeded_const_values_internal(
         }
         Interface => interfaces.push(self.parse_interface())
         Class => classes.push(self.parse_declare_class(false))
-        Type =>
-          match self.parse_type_alias_interface() {
+        Type => {
+          let type_alias = self.parse_type_alias()
+          type_aliases.push(type_alias)
+          match type_alias_to_interface(type_alias) {
             Some(iface) => interfaces.push(iface)
             None => ()
           }
+        }
         Ident(name) =>
           if name == "abstract" && self.peek_at(1).kind == Class {
             classes.push(self.parse_declare_class_with_optional_abstract())
@@ -2455,7 +2473,8 @@ fn Parser::parse_module_with_seeded_const_values_internal(
             match self.parse_ambient_external_module_decl() {
               Some(module_) =>
                 append_module_decls(
-                  module_, funcs, interfaces, imports, values, classes, namespaces,
+                  module_, funcs, interfaces, type_aliases, imports, values, classes,
+                  namespaces,
                 )
               None => ()
             }
@@ -2486,10 +2505,12 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       self.parse_import_stmt()
     } else if self.check(Export) {
       self.parse_export_stmt(
-        funcs, interfaces, imports, values, classes, namespaces, const_values,
+        funcs, interfaces, type_aliases, imports, values, classes, namespaces, const_values,
       )
     } else if self.check(Type) {
-      match self.parse_type_alias_interface() {
+      let type_alias = self.parse_type_alias()
+      type_aliases.push(type_alias)
+      match type_alias_to_interface(type_alias) {
         Some(iface) => interfaces.push(iface)
         None => ()
       }
@@ -2537,7 +2558,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       )
     }
   }
-  { funcs, interfaces, imports, values, classes, namespaces }
+  { funcs, interfaces, type_aliases, imports, values, classes, namespaces }
 }
 
 ///|

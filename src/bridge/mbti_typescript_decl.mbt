@@ -1432,9 +1432,6 @@ fn collect_mbti_autolink_glue_decls(
           Some(owner_name) if include_facades =>
             match local_type_params.get(owner_name) {
               Some(owner_type_params) => {
-                if is_async {
-                  continue
-                }
                 if owner_type_params.length() > 0 || fn_type_params.length() > 0 {
                   continue
                 }
@@ -1468,6 +1465,15 @@ fn collect_mbti_autolink_glue_decls(
                   Some(owner_name),
                   owner_type_param_names,
                 )
+                let rendered_return_ty = render_ts_return_type_with_effect(
+                  return_src_with_effect,
+                  return_ty,
+                  is_async,
+                  imports,
+                  used_aliases,
+                  Some(owner_name),
+                  owner_type_param_names,
+                )
                 let export_name = "\{mbti_to_snake_case(owner_name)}_\{mbti_to_snake_case(fn_name)}"
                 let mut unique_export_name = export_name
                 while free_function_names.contains(unique_export_name) ||
@@ -1477,9 +1483,10 @@ fn collect_mbti_autolink_glue_decls(
                   unique_export_name += "_facade"
                 }
                 let rendered_ts_params = render_ts_params(params)
-                let facade_ts_decl = "export function \{unique_export_name}(\{rendered_ts_params}): \{return_ty};"
+                let facade_ts_decl = "export function \{unique_export_name}(\{rendered_ts_params}): \{rendered_return_ty};"
                 let runtime_unique_export_name = runtime_export_prefix +
                   unique_export_name
+                let async_prefix = if is_async { "async " } else { "" }
                 let rendered_mbt_params = render_mbt_glue_params(
                   raw_params,
                   local_type_names,
@@ -1514,7 +1521,7 @@ fn collect_mbti_autolink_glue_decls(
                 } else {
                   "@\{source_alias}.\{owner_name}::\{fn_name}(\{call_args})"
                 }
-                let facade_mbt_decl = "pub fn \{runtime_unique_export_name}(\{rendered_mbt_params}) -> \{rendered_mbt_return}\{effect_suffix} {\n  \{body_expr}\n}"
+                let facade_mbt_decl = "pub \{async_prefix}fn \{runtime_unique_export_name}(\{rendered_mbt_params}) -> \{rendered_mbt_return}\{effect_suffix} {\n  \{body_expr}\n}"
                 decls.push({
                   package_name,
                   export_name: unique_export_name,
@@ -1583,7 +1590,66 @@ fn collect_mbti_bundle_autolink_glue_decls(
       decls.push(decl)
     }
   }
-  decls
+  sort_mbti_autolink_glue_decls(decls)
+}
+
+///|
+fn mbti_compare_string_ascending(lhs : String, rhs : String) -> Int {
+  let min_len = if lhs.length() < rhs.length() {
+    lhs.length()
+  } else {
+    rhs.length()
+  }
+  for idx in 0..<min_len {
+    let lhs_code = lhs[idx].to_int()
+    let rhs_code = rhs[idx].to_int()
+    if lhs_code < rhs_code {
+      return -1
+    }
+    if lhs_code > rhs_code {
+      return 1
+    }
+  }
+  if lhs.length() < rhs.length() {
+    -1
+  } else if lhs.length() > rhs.length() {
+    1
+  } else {
+    0
+  }
+}
+
+///|
+fn sort_strings_ascending(items : Array[String]) -> Unit {
+  items.sort_by(fn(lhs, rhs) { mbti_compare_string_ascending(lhs, rhs) })
+}
+
+///|
+fn sort_mbti_autolink_glue_decls(
+  decls : Array[MbtiAutolinkGlueDecl],
+) -> Array[MbtiAutolinkGlueDecl] {
+  let sorted = decls.copy()
+  sorted.sort_by(fn(lhs, rhs) {
+    let package_cmp = mbti_compare_string_ascending(
+      lhs.package_name,
+      rhs.package_name,
+    )
+    if package_cmp != 0 {
+      return package_cmp
+    }
+    let export_cmp = mbti_compare_string_ascending(
+      lhs.export_name,
+      rhs.export_name,
+    )
+    if export_cmp != 0 {
+      return export_cmp
+    }
+    mbti_compare_string_ascending(
+      lhs.runtime_export_name,
+      rhs.runtime_export_name,
+    )
+  })
+  sorted
 }
 
 ///|
@@ -1673,6 +1739,9 @@ fn render_moonbit_js_glue_pkg_json(
       )
     }
   }
+  sort_strings_ascending(import_entries)
+  let sorted_export_names = export_names.copy()
+  sort_strings_ascending(sorted_export_names)
   let lines : Array[String] = ["{"]
   lines.push("  \"import\": [")
   for idx in 0..<import_entries.length() {
@@ -1683,9 +1752,11 @@ fn render_moonbit_js_glue_pkg_json(
   lines.push("  \"link\": {")
   lines.push("    \"js\": {")
   lines.push("      \"exports\": [")
-  for idx in 0..<export_names.length() {
-    let suffix = if idx + 1 < export_names.length() { "," } else { "" }
-    lines.push("        \"\{json_escape_string(export_names[idx])}\"\{suffix}")
+  for idx in 0..<sorted_export_names.length() {
+    let suffix = if idx + 1 < sorted_export_names.length() { "," } else { "" }
+    lines.push(
+      "        \"\{json_escape_string(sorted_export_names[idx])}\"\{suffix}",
+    )
   }
   lines.push("      ],")
   lines.push("      \"format\": \"esm\"")
@@ -2002,6 +2073,7 @@ fn render_typescript_package_json(
       None => ()
     }
   }
+  sort_strings_ascending(exports_lines)
   let lines : Array[String] = [
     "{",
     "  \"name\": \"\{package_name}\",",
@@ -4504,6 +4576,7 @@ fn collect_runtime_reexport_files_for_mbti_bundle(
     if export_items.length() == 0 {
       continue
     }
+    sort_strings_ascending(export_items)
     files.push({
       relative_path: mbti_bundle_js_relative_path_from_segments(segments),
       content: render_runtime_reexport_js(
@@ -4512,6 +4585,9 @@ fn collect_runtime_reexport_files_for_mbti_bundle(
       ),
     })
   }
+  files.sort_by(fn(lhs, rhs) {
+    mbti_compare_string_ascending(lhs.relative_path, rhs.relative_path)
+  })
   files
 }
 

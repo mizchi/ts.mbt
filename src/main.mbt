@@ -295,7 +295,7 @@ fn command_help_lines() -> Array[String] {
     "  emit-typescript-package-from-mbti <file> <out-dir> [import-rewrite-json] Emit a recursive TypeScript declaration package from a root .mbti interface",
     "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold from a MoonBit package interface",
     "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold plus facade wrappers for omitted local methods",
-    "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] Generate a complete build-backed bridge scaffold in either direction",
+    "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] [--module-spec <specifier>] [--diagnostics <path>] [--strict] Generate a complete build-backed bridge scaffold in either direction",
     "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
     "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
@@ -838,6 +838,164 @@ async fn remove_moonbit_js_glue_dir(path : String) -> Unit {
 }
 
 ///|
+fn collect_async_js_export_modes_from_glue(
+  glue_mbt : String,
+) -> Map[String, Bool] {
+  let modes : Map[String, Bool] = {}
+  for line_view in glue_mbt.split("\n") {
+    let trimmed = line_view.trim().to_string()
+    if !trimmed.has_prefix("pub async fn ") {
+      continue
+    }
+    let rest = trimmed["pub async fn ".length():trimmed.length()]
+      .trim()
+      .to_string()
+    match rest.find("(") {
+      Some(open_idx) => {
+        let name = rest[:open_idx].trim().to_string()
+        if name != "" {
+          modes[name] = trimmed.contains(" raise")
+        }
+      }
+      None => ()
+    }
+  }
+  modes
+}
+
+///|
+fn render_async_js_export_wrappers(
+  async_exports : Array[(String, String, Bool)],
+) -> Array[String] {
+  if async_exports.length() == 0 {
+    return []
+  }
+  let lines : Array[String] = []
+  lines.push(
+    "function __tsmbt_async_finish(value, resolve, reject, preserveResult) {",
+  )
+  lines.push(
+    "  if (!preserveResult && value && typeof value === \"object\" && \"$tag\" in value && \"_0\" in value) {",
+  )
+  lines.push(
+    "    if (value.$tag === 1) { resolve(value._0); } else { reject(value._0); }",
+  )
+  lines.push("  } else {")
+  lines.push("    resolve(value);")
+  lines.push("  }")
+  lines.push("}")
+  lines.push(
+    "function __tsmbt_async_result_to_promise(start, preserveResult) {",
+  )
+  lines.push("  return new Promise((resolve, reject) => {")
+  lines.push("    let settled = false;")
+  lines.push(
+    "    const ok = (value) => { if (!settled) { settled = true; __tsmbt_async_finish(value, resolve, reject, preserveResult); } };",
+  )
+  lines.push(
+    "    const err = (error) => { if (!settled) { settled = true; reject(error); } };",
+  )
+  lines.push("    try {")
+  lines.push("      const value = start(ok, err);")
+  lines.push("      if (value !== undefined) { ok(value); }")
+  lines.push("    } catch (error) {")
+  lines.push("      err(error);")
+  lines.push("    }")
+  lines.push("  });")
+  lines.push("}")
+  for item in async_exports {
+    let (local_name, export_name, preserve_result) = item
+    let preserve_result_js = if preserve_result { "true" } else { "false" }
+    lines.push(
+      "export function \{export_name}(...args) { const callArgs = args.slice(); while (callArgs.length < \{local_name}.length - 2) { callArgs.push(undefined); } return __tsmbt_async_result_to_promise((ok, err) => \{local_name}(...callArgs, ok, err), \{preserve_result_js}); }",
+    )
+  }
+  lines
+}
+
+///|
+fn rewrite_async_js_exports(
+  source : String,
+  async_modes : Map[String, Bool],
+) -> String {
+  if async_modes.length() == 0 {
+    return source
+  }
+  let output_lines : Array[String] = []
+  let async_exports : Array[(String, String, Bool)] = []
+  let mut inserted_wrappers = false
+  for line_view in source.split("\n") {
+    let line = line_view.to_string()
+    let trimmed = line.trim().to_string()
+    if trimmed.has_prefix("export {") && trimmed.contains(" as ") {
+      match (line.find("{"), line.rev_find("}")) {
+        (Some(open_idx), Some(close_idx)) if close_idx > open_idx => {
+          let inner = line[open_idx + 1:close_idx].to_string()
+          let kept_specs : Array[String] = []
+          for raw_spec in inner.split(",") {
+            let spec = raw_spec.trim().to_string()
+            if spec == "" {
+              continue
+            }
+            match spec.find(" as ") {
+              Some(as_idx) => {
+                let local_name = spec[:as_idx].trim().to_string()
+                let export_name = spec[as_idx + " as ".length():spec.length()]
+                  .trim()
+                  .to_string()
+                match async_modes.get(export_name) {
+                  Some(preserve_result) =>
+                    async_exports.push(
+                      (local_name, export_name, preserve_result),
+                    )
+                  None => kept_specs.push(spec)
+                }
+              }
+              None => kept_specs.push(spec)
+            }
+          }
+          if kept_specs.length() > 0 {
+            output_lines.push("export { " + kept_specs.join(", ") + " }")
+          }
+          continue
+        }
+        _ => ()
+      }
+    }
+    if !inserted_wrappers && trimmed.has_prefix("//# sourceMappingURL=") {
+      for wrapper_line in render_async_js_export_wrappers(async_exports) {
+        output_lines.push(wrapper_line)
+      }
+      inserted_wrappers = true
+    }
+    output_lines.push(line)
+  }
+  if !inserted_wrappers {
+    for wrapper_line in render_async_js_export_wrappers(async_exports) {
+      output_lines.push(wrapper_line)
+    }
+  }
+  output_lines.join("\n")
+}
+
+///|
+async fn rewrite_async_js_exports_file(
+  path : String,
+  async_modes : Map[String, Bool],
+) -> Bool {
+  if async_modes.length() == 0 {
+    return true
+  }
+  let source = @fs.read_file(path).text() catch {
+    e => {
+      println("Read error: \{e}")
+      return false
+    }
+  }
+  write_text_file(path, rewrite_async_js_exports(source, async_modes))
+}
+
+///|
 async fn build_moonbit_js_runtime_from_mbti(
   mbti_path : String,
   output_dir : String,
@@ -899,6 +1057,13 @@ async fn build_moonbit_js_runtime_from_mbti(
       output_js_path,
       built_js_name + ".map",
       "index.js.map",
+    ) {
+    remove_moonbit_js_glue_dir(context.glue_dir_path)
+    return false
+  }
+  if !rewrite_async_js_exports_file(
+      output_js_path,
+      collect_async_js_export_modes_from_glue(bundle.autolink_glue_mbt),
     ) {
     remove_moonbit_js_glue_dir(context.glue_dir_path)
     return false

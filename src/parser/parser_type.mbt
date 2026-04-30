@@ -128,6 +128,85 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
 }
 
 ///|
+fn mapped_object_key_names(type_ : @ast.TsType) -> Array[String]? {
+  match type_ {
+    Literal(name) => Some([name])
+    Union(items) => {
+      let names : Array[String] = []
+      for item in items {
+        match item {
+          Literal(name) => names.push(name)
+          _ => return None
+        }
+      }
+      Some(names)
+    }
+    _ => None
+  }
+}
+
+///|
+fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
+  self : Parser,
+) -> @ast.TsType? {
+  let saved_pos = self.pos
+  try {
+    let _ = self.match_ident("readonly")
+    let _ = self.expect(LBracket)
+    if self.is_ident() {
+      let _ = self.advance()
+    } else {
+      self.pos = saved_pos
+      return None
+    }
+    if !(self.match_(In) || self.match_ident("in")) {
+      self.pos = saved_pos
+      return None
+    }
+    let keys_type = self.parse_type()
+    if self.match_(As) || self.match_ident("as") {
+      self.pos = saved_pos
+      return None
+    }
+    let _ = self.expect(RBracket)
+    let optional = if self.match_(Question) {
+      true
+    } else if self.match_(Minus) {
+      let _ = self.match_(Question)
+      false
+    } else {
+      false
+    }
+    let _ = self.expect(Colon)
+    let value_type = self.parse_type()
+    let _ = self.match_(Semicolon) || self.match_(Comma)
+    let _ = self.expect(RBrace)
+    let keys = match mapped_object_key_names(keys_type) {
+      Some(keys) => keys
+      None => {
+        self.pos = saved_pos
+        return None
+      }
+    }
+    let fields : Array[(@ast.TsType, @ast.TsType)] = []
+    let field_type = if optional {
+      wrap_optional_ts_type(value_type)
+    } else {
+      value_type
+    }
+    for key in keys {
+      fields.push((Literal(key), field_type))
+    }
+    Some(Object(fields))
+  } catch {
+    _ => {
+      self.pos = saved_pos
+      None
+    }
+  }
+}
+
+///|
 fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
   if !self.check(LBrace) {
     return None
@@ -136,6 +215,10 @@ fn Parser::try_parse_simple_object_type(self : Parser) -> @ast.TsType? {
   let fields : Array[(@ast.TsType, @ast.TsType)] = []
   try {
     let _ = self.expect(LBrace)
+    match self.try_parse_simple_mapped_object_type_after_lbrace() {
+      Some(type_) => return Some(type_)
+      None => ()
+    }
     while !self.check(Eof) && !self.check(RBrace) {
       let field_name = match self.advance().kind {
         Ident(name) => name
@@ -479,15 +562,13 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // Special identifier-like keywords
     Ident("infer") => {
       let _ = self.advance()
-      if self.is_ident() {
+      let name = if self.is_ident() { self.parse_binding_ident() } else { "_" }
+      // May have extends constraint.
+      if self.check(Extends) {
         let _ = self.advance()
-        // May have extends constraint
-        if self.check(Extends) {
-          let _ = self.advance()
-          let _ = self.parse_primary_type()
-        }
+        let _ = self.parse_primary_type()
       }
-      Any
+      Applied("__tsmbt_infer", [Named(name)])
     }
     Ident("keyof") => {
       let _ = self.advance()
@@ -626,6 +707,263 @@ fn Parser::parse_intersection_type(
 }
 
 ///|
+fn is_definite_primitive_type(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Number
+    | Int
+    | Boolean
+    | String_
+    | Void
+    | BigInt
+    | Symbol
+    | Null
+    | Undefined => true
+    _ => false
+  }
+}
+
+///|
+fn type_extends_simple(source : @ast.TsType, target : @ast.TsType) -> Bool? {
+  if source == target {
+    return Some(true)
+  }
+  match target {
+    Any => return Some(true)
+    Union(items) => {
+      let mut saw_unknown = false
+      for item in items {
+        match type_extends_simple(source, item) {
+          Some(true) => return Some(true)
+          Some(false) => ()
+          None => saw_unknown = true
+        }
+      }
+      return if saw_unknown { None } else { Some(false) }
+    }
+    _ => ()
+  }
+  match source {
+    Never => return Some(true)
+    Union(items) => {
+      let mut saw_unknown = false
+      for item in items {
+        match type_extends_simple(item, target) {
+          Some(true) => ()
+          Some(false) => return Some(false)
+          None => saw_unknown = true
+        }
+      }
+      return if saw_unknown { None } else { Some(true) }
+    }
+    Int if target == Number => return Some(true)
+    _ => ()
+  }
+  if is_definite_primitive_type(source) && is_definite_primitive_type(target) {
+    Some(false)
+  } else {
+    None
+  }
+}
+
+///|
+fn infer_marker_name(type_ : @ast.TsType) -> String? {
+  match type_ {
+    Applied("__tsmbt_infer", [Named(name)]) => Some(name)
+    _ => None
+  }
+}
+
+///|
+fn bind_inferred_type(
+  bindings : Map[String, @ast.TsType],
+  name : String,
+  type_ : @ast.TsType,
+) -> Bool {
+  match bindings.get(name) {
+    Some(existing) => existing == type_
+    None => {
+      bindings[name] = type_
+      true
+    }
+  }
+}
+
+///|
+fn match_infer_pattern(
+  source : @ast.TsType,
+  pattern : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> Bool {
+  match infer_marker_name(pattern) {
+    Some(name) => return bind_inferred_type(bindings, name, source)
+    None => ()
+  }
+  if source == pattern {
+    return true
+  }
+  match (source, pattern) {
+    (_, Any) => true
+    (Array(source_inner), Array(pattern_inner)) =>
+      match_infer_pattern(source_inner, pattern_inner, bindings)
+    (Array(source_inner), Applied("Array", [pattern_inner])) =>
+      match_infer_pattern(source_inner, pattern_inner, bindings)
+    (Applied("Array", [source_inner]), Array(pattern_inner)) =>
+      match_infer_pattern(source_inner, pattern_inner, bindings)
+    (Applied(source_name, source_args), Applied(pattern_name, pattern_args)) =>
+      if source_name != pattern_name ||
+        source_args.length() != pattern_args.length() {
+        false
+      } else {
+        for i in 0..<source_args.length() {
+          if !match_infer_pattern(source_args[i], pattern_args[i], bindings) {
+            return false
+          }
+        }
+        true
+      }
+    (Tuple(source_items), Tuple(pattern_items)) =>
+      if source_items.length() != pattern_items.length() {
+        false
+      } else {
+        for i in 0..<source_items.length() {
+          if !match_infer_pattern(source_items[i], pattern_items[i], bindings) {
+            return false
+          }
+        }
+        true
+      }
+    (Func(source_params, source_ret), Func(pattern_params, pattern_ret)) =>
+      if source_params.length() != pattern_params.length() {
+        false
+      } else {
+        for i in 0..<source_params.length() {
+          if !match_infer_pattern(source_params[i], pattern_params[i], bindings) {
+            return false
+          }
+        }
+        match_infer_pattern(source_ret, pattern_ret, bindings)
+      }
+    (_, Union(pattern_items)) => {
+      for pattern_item in pattern_items {
+        let branch_bindings : Map[String, @ast.TsType] = {}
+        if match_infer_pattern(source, pattern_item, branch_bindings) {
+          for entry in branch_bindings {
+            let (name, type_) = entry
+            if !bind_inferred_type(bindings, name, type_) {
+              return false
+            }
+          }
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn substitute_inferred_type(
+  type_ : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> @ast.TsType {
+  match infer_marker_name(type_) {
+    Some(name) =>
+      match bindings.get(name) {
+        Some(type_) => return type_
+        None => ()
+      }
+    None => ()
+  }
+  match type_ {
+    Conditional(source, target, true_type, false_type) =>
+      Conditional(
+        substitute_inferred_type(source, bindings),
+        substitute_inferred_type(target, bindings),
+        substitute_inferred_type(true_type, bindings),
+        substitute_inferred_type(false_type, bindings),
+      )
+    Named(name) =>
+      match bindings.get(name) {
+        Some(type_) => type_
+        None => type_
+      }
+    Array(inner) => Array(substitute_inferred_type(inner, bindings))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(substitute_inferred_type(item, bindings))
+      }
+      Tuple(out)
+    }
+    Object(fields) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for field in fields {
+        let (key, value) = field
+        out.push(
+          (
+            substitute_inferred_type(key, bindings),
+            substitute_inferred_type(value, bindings),
+          ),
+        )
+      }
+      Object(out)
+    }
+    Func(params, ret) => {
+      let out : Array[@ast.TsType] = []
+      for param in params {
+        out.push(substitute_inferred_type(param, bindings))
+      }
+      Func(out, substitute_inferred_type(ret, bindings))
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(substitute_inferred_type(item, bindings))
+      }
+      Union(out)
+    }
+    Intersection(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(substitute_inferred_type(item, bindings))
+      }
+      Intersection(out)
+    }
+    Applied(name, args) => {
+      let out : Array[@ast.TsType] = []
+      for arg in args {
+        out.push(substitute_inferred_type(arg, bindings))
+      }
+      Applied(name, out)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn Parser::parse_conditional_type_tail(
+  self : Parser,
+  source : @ast.TsType,
+) -> @ast.TsType raise ParseError {
+  let _ = self.expect(Extends)
+  let target = self.parse_intersection_type()
+  let _ = self.expect(Question)
+  let true_type = self.parse_type()
+  let _ = self.expect(Colon)
+  let false_type = self.parse_type()
+  let infer_bindings : Map[String, @ast.TsType] = {}
+  if match_infer_pattern(source, target, infer_bindings) {
+    return substitute_inferred_type(true_type, infer_bindings)
+  }
+  match type_extends_simple(source, target) {
+    Some(true) => true_type
+    Some(false) => false_type
+    None => Conditional(source, target, true_type, false_type)
+  }
+}
+
+///|
 /// Parse full type including union/intersection
 fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
   if self.check(Pipe) {
@@ -646,8 +984,16 @@ fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
   }
   let base = self.parse_intersection_type()
   if self.check(Extends) {
-    self.skip_conditional_type_tail()
-    return Any
+    let saved_pos = self.pos
+    try {
+      return self.parse_conditional_type_tail(base)
+    } catch {
+      _ => {
+        self.pos = saved_pos
+        self.skip_conditional_type_tail()
+        return Any
+      }
+    }
   }
   // Union type: T | U
   if self.check(Pipe) {
@@ -656,8 +1002,16 @@ fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
       items.push(self.parse_intersection_type())
     }
     if self.check(Extends) {
-      self.skip_conditional_type_tail()
-      return Any
+      let saved_pos = self.pos
+      try {
+        return self.parse_conditional_type_tail(Union(items))
+      } catch {
+        _ => {
+          self.pos = saved_pos
+          self.skip_conditional_type_tail()
+          return Any
+        }
+      }
     }
     return Union(items)
   }

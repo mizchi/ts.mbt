@@ -1,0 +1,20 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "demo/facade_order"
+
+// Values
+pub fn zeta() -> String
+
+pub fn alpha() -> String
+
+// Errors
+
+// Types and methods
+pub struct Worker {
+}
+pub fn Worker::z(Self) -> String
+pub fn Worker::a(Self) -> String
+pub fn Worker::new(String) -> Self
+
+// Type aliases
+
+// Traits

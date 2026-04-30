@@ -201,12 +201,14 @@ pub impl Show for TsImportDecl
 pub(all) struct TsInterface {
   name : String
   fields : Array[(String, TsType)]
+  readonly_fields : Array[String]
 } derive(@debug.Debug)
 pub impl Show for TsInterface
 
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
+  type_aliases : Array[TsTypeAlias]
   imports : Array[TsImport]
   values : Array[TsValueDecl]
   classes : Array[TsClassDecl]
@@ -319,10 +321,18 @@ pub(all) enum TsType {
   Func(Array[TsType], TsType)
   Union(Array[TsType])
   Intersection(Array[TsType])
+  Conditional(TsType, TsType, TsType, TsType)
   Named(String)
   Applied(String, Array[TsType])
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
+
+pub(all) struct TsTypeAlias {
+  name : String
+  type_params : Array[String]
+  type_ : TsType
+} derive(@debug.Debug)
+pub impl Show for TsTypeAlias
 
 pub(all) enum TsUnaryOp {
   Neg

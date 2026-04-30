@@ -565,6 +565,11 @@ fn has_known_extension(path : String) -> Bool {
 }
 
 ///|
+fn is_runtime_js_path(path : String) -> Bool {
+  path.has_suffix(".js") || path.has_suffix(".mjs") || path.has_suffix(".cjs")
+}
+
+///|
 fn strip_suffix(path : String, suffix : String) -> String {
   path[:path.length() - suffix.length()].to_string()
 }
@@ -832,6 +837,24 @@ fn split_package_specifier(specifier : String) -> (String, String) {
     rest.push(parts[i].to_string())
   }
   (package_name, rest.join("/"))
+}
+
+///|
+fn types_package_name(package_name : String) -> String? {
+  if package_name.has_prefix("@types/") {
+    return None
+  }
+  if package_name.has_prefix("@") {
+    let parts : Array[String] = []
+    for part in package_name.split("/") {
+      parts.push(part.to_string())
+    }
+    if parts.length() < 2 {
+      return None
+    }
+    return Some("@types/" + parts[0][1:].to_string() + "__" + parts[1])
+  }
+  Some("@types/" + package_name)
 }
 
 ///|
@@ -1185,19 +1208,42 @@ async fn resolve_path_like(
 }
 
 ///|
-async fn resolve_bare_specifier(
+async fn resolve_at_types_package_entry(
+  node_modules_root : String,
+  package_name : String,
+  subpath : String,
+) -> String? {
+  let types_name = match types_package_name(package_name) {
+    Some(types_name) => types_name
+    None => return None
+  }
+  let types_root = normalize_path(join_path(node_modules_root, types_name))
+  if !dir_exists(types_root) {
+    return None
+  }
+  resolve_package_entry(types_root, subpath, ModuleResolutionMode::Types)
+}
+
+///|
+async fn resolve_node_builtin_type_specifier(
   base_path : String,
   specifier : String,
-  mode : ModuleResolutionMode,
 ) -> String? {
-  let (package_name, subpath) = split_package_specifier(specifier)
+  let builtin_path = specifier["node:".length():].to_string()
+  if builtin_path == "" {
+    return None
+  }
   let mut current = dirname(base_path)
   while true {
-    let package_root = normalize_path(
-      join_path(join_path(current, "node_modules"), package_name),
+    let types_node_root = normalize_path(
+      join_path(join_path(current, "node_modules"), "@types/node"),
     )
-    if dir_exists(package_root) {
-      match resolve_package_entry(package_root, subpath, mode) {
+    if dir_exists(types_node_root) {
+      match
+        resolve_path_like(
+          normalize_path(join_path(types_node_root, builtin_path)),
+          ModuleResolutionMode::Types,
+        ) {
         Some(path) => return Some(path)
         None => ()
       }
@@ -1209,6 +1255,61 @@ async fn resolve_bare_specifier(
     current = parent
   }
   None
+}
+
+///|
+async fn resolve_bare_specifier(
+  base_path : String,
+  specifier : String,
+  mode : ModuleResolutionMode,
+) -> String? {
+  let (package_name, subpath) = split_package_specifier(specifier)
+  let mut current = dirname(base_path)
+  let mut js_fallback : String? = None
+  while true {
+    let node_modules_root = normalize_path(join_path(current, "node_modules"))
+    let package_root = normalize_path(
+      join_path(node_modules_root, package_name),
+    )
+    if dir_exists(package_root) {
+      match resolve_package_entry(package_root, subpath, mode) {
+        Some(path) =>
+          match mode {
+            Runtime => return Some(path)
+            Types =>
+              if is_runtime_js_path(path) {
+                match js_fallback {
+                  Some(_) => ()
+                  None => js_fallback = Some(path)
+                }
+              } else {
+                return Some(path)
+              }
+          }
+        None => ()
+      }
+    }
+    match mode {
+      Types =>
+        match
+          resolve_at_types_package_entry(
+            node_modules_root, package_name, subpath,
+          ) {
+          Some(path) => return Some(path)
+          None => ()
+        }
+      Runtime => ()
+    }
+    let parent = dirname(current)
+    if parent == current {
+      break
+    }
+    current = parent
+  }
+  match mode {
+    Types => js_fallback
+    Runtime => None
+  }
 }
 
 ///|
@@ -1229,6 +1330,12 @@ async fn resolve_module_specifier(
   }
   if specifier.has_prefix("#") {
     return resolve_package_imports_specifier(normalized_base, specifier, mode)
+  }
+  if specifier.has_prefix("node:") {
+    return match mode {
+      Types => resolve_node_builtin_type_specifier(normalized_base, specifier)
+      Runtime => None
+    }
   }
   match resolve_tsconfig_specifier(normalized_base, specifier, mode) {
     Some(path) => return Some(path)

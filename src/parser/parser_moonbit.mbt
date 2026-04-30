@@ -308,6 +308,8 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     }
     Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
       "Array[" + moonbit_type_name(state, inner) + "]"
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
+      "@js.Promise[" + moonbit_type_name(state, inner) + "]"
     Named(name) => {
       mark_referenced_type(state, name)
       moonbit_type_identifier(name, "OpaqueType")
@@ -332,7 +334,11 @@ fn interface_decl_to_moonbit(
   for field in iface.fields {
     let (name, type_) = field
     let moonbit_type = moonbit_type_name(state, type_)
-    lines.push("/// \{name} : \{moonbit_type}")
+    if iface.readonly_fields.contains(name) {
+      lines.push("/// readonly \{name} : \{moonbit_type}")
+    } else {
+      lines.push("/// \{name} : \{moonbit_type}")
+    }
   }
   let type_name = moonbit_type_identifier(iface.name, "OpaqueType")
   lines.push("declare pub type \{type_name}")

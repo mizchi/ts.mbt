@@ -12,6 +12,8 @@ priv struct UnifiedTsmbtOptions {
   direction : TsmbtDirection
   module_spec : String?
   import_rewrite_path : String?
+  diagnostics_path : String?
+  strict : Bool
   facade : Bool
 }
 
@@ -35,6 +37,8 @@ fn parse_unified_tsmbt_options(
   let mut direction = TsmbtDirection::Auto
   let mut module_spec : String? = None
   let mut import_rewrite_path : String? = None
+  let mut diagnostics_path : String? = None
+  let mut strict = false
   let mut facade = true
   let mut idx = start
   while idx < args.length() {
@@ -90,6 +94,24 @@ fn parse_unified_tsmbt_options(
         idx += 2
         continue
       }
+      "--diagnostics" => {
+        if idx + 1 >= args.length() {
+          return (None, Some("missing value for --diagnostics"))
+        }
+        diagnostics_path = Some(args[idx + 1])
+        idx += 2
+        continue
+      }
+      "--strict" => {
+        strict = true
+        idx += 1
+        continue
+      }
+      "--no-strict" => {
+        strict = false
+        idx += 1
+        continue
+      }
       "--facade" => {
         facade = true
         idx += 1
@@ -134,6 +156,10 @@ fn parse_unified_tsmbt_options(
       import_rewrite_path = Some(
         arg["--import-rewrite=".length():arg.length()].to_string(),
       )
+    } else if arg.has_prefix("--diagnostics=") {
+      diagnostics_path = Some(
+        arg["--diagnostics=".length():arg.length()].to_string(),
+      )
     } else if !arg.has_prefix("-") && input is None {
       input = Some(arg)
     } else if !arg.has_prefix("-") && out is None {
@@ -144,7 +170,16 @@ fn parse_unified_tsmbt_options(
     idx += 1
   }
   (
-    Some({ input, out, direction, module_spec, import_rewrite_path, facade }),
+    Some({
+      input,
+      out,
+      direction,
+      module_spec,
+      import_rewrite_path,
+      diagnostics_path,
+      strict,
+      facade,
+    }),
     None,
   )
 }
@@ -386,12 +421,124 @@ async fn infer_unified_tsmbt_direction(input : String) -> TsmbtDirection? {
 }
 
 ///|
+fn unified_ts_scaffold_diagnostics_path(
+  output_dir : String,
+  diagnostics_path : String?,
+) -> String {
+  match diagnostics_path {
+    Some(path) => path
+    None => main_join_path(output_dir, "SCAFFOLD_DIAGNOSTICS.md")
+  }
+}
+
+///|
+fn render_unified_ts_scaffold_diagnostics_md(
+  unsupported_exports : Array[String],
+  jsvalue_fallbacks : Array[String],
+) -> String {
+  let base = render_moonbit_scaffold_diagnostics_md(unsupported_exports)
+  if jsvalue_fallbacks.length() == 0 {
+    return base
+  }
+  let lines = [
+    base, "", "## JSValue Fallbacks", "", "Strict mode treats these generated `JSValue` occurrences as unbudgeted TypeScript boundary fallbacks.",
+    "",
+  ]
+  for item in jsvalue_fallbacks {
+    lines.push("- " + item)
+  }
+  lines.join("\n")
+}
+
+///|
+async fn write_unified_ts_scaffold_diagnostics(
+  output_dir : String,
+  diagnostics_path : String?,
+  unsupported_exports : Array[String],
+  jsvalue_fallbacks : Array[String],
+) -> Bool {
+  let path = unified_ts_scaffold_diagnostics_path(output_dir, diagnostics_path)
+  if !write_text_file(
+      path,
+      render_unified_ts_scaffold_diagnostics_md(
+        unsupported_exports, jsvalue_fallbacks,
+      ),
+    ) {
+    return false
+  }
+  println("Wrote scaffold diagnostics to \{path}")
+  true
+}
+
+///|
+fn collect_unified_jsvalue_fallbacks_from_source(
+  relative_path : String,
+  source : String,
+  out : Array[String],
+) -> Unit {
+  let mut line_no = 1
+  for line_view in source.split("\n") {
+    let line = line_view.trim().to_string()
+    if line.contains("JSValue") {
+      out.push("\{relative_path}:\{line_no}: \{line}")
+    }
+    line_no += 1
+  }
+}
+
+///|
+async fn collect_unified_moonbit_scaffold_jsvalue_fallbacks(
+  output_dir : String,
+) -> Array[String] {
+  let fallbacks : Array[String] = []
+  for relative_path in ["bridge.mbti", "bridge.mbt"] {
+    let path = main_join_path(output_dir, relative_path)
+    let source = @fs.read_file(path).text() catch { _ => continue }
+    collect_unified_jsvalue_fallbacks_from_source(
+      relative_path, source, fallbacks,
+    )
+  }
+  fallbacks.sort()
+  fallbacks
+}
+
+///|
+fn unified_autolink_diagnostics_has_omissions(source : String) -> Bool {
+  source.contains("\n## ")
+}
+
+///|
+async fn write_requested_unified_autolink_diagnostics(
+  output_dir : String,
+  diagnostics_path : String?,
+) -> Bool {
+  let path = match diagnostics_path {
+    Some(path) => path
+    None => return true
+  }
+  let autolink_path = main_join_path(output_dir, "AUTOLINK_DIAGNOSTICS.md")
+  let diagnostics_md = @fs.read_file(autolink_path).text() catch {
+    e => {
+      println("Read error: \{e}")
+      return false
+    }
+  }
+  if !write_text_file(path, diagnostics_md) {
+    return false
+  }
+  println("Wrote autolink diagnostics to \{path}")
+  true
+}
+
+///|
 async fn emit_unified_tsmbt_scaffold(
   input : String,
   out : String,
   direction~ : TsmbtDirection,
   module_spec~ : String?,
   import_rewrite_path~ : String?,
+  diagnostics_path? : String? = None,
+  strict? : Bool = false,
   facade~ : Bool,
 ) -> Bool {
   let resolved_direction = match direction {
@@ -418,13 +565,34 @@ async fn emit_unified_tsmbt_scaffold(
           return false
         }
       }
-      if facade {
+      let ok = if facade {
         emit_typescript_facade_scaffold_from_mbti(
           mbti_path, out, import_rewrite_path,
         )
       } else {
         emit_typescript_scaffold_from_mbti(mbti_path, out, import_rewrite_path)
       }
+      if !ok {
+        return false
+      }
+      let diagnostics_md = @fs.read_file(
+        main_join_path(out, "AUTOLINK_DIAGNOSTICS.md"),
+      ).text() catch {
+        e => {
+          println("Read error: \{e}")
+          return false
+        }
+      }
+      if !write_requested_unified_autolink_diagnostics(out, diagnostics_path) {
+        return false
+      }
+      if strict && unified_autolink_diagnostics_has_omissions(diagnostics_md) {
+        println(
+          "Strict mode rejected MoonBit scaffold: omitted autolink members detected.",
+        )
+        return false
+      }
+      true
     }
     TsmbtDirection::TsToMbt => {
       let entry_path = match resolve_unified_ts_input_path(input) {
@@ -440,7 +608,45 @@ async fn emit_unified_tsmbt_scaffold(
         Some(spec) => spec
         None => input
       }
+      let unsupported_exports = collect_moonbit_ts_scaffold_unsupported_exports(
+        entry_path,
+      ) catch {
+        @bridge.ModuleGraphError::ReadError(msg)
+        | @bridge.ModuleGraphError::ParseError(msg)
+        | @bridge.ModuleGraphError::ResolveError(msg) => {
+          println("Emit error: \{msg}")
+          return false
+        }
+      }
+      if strict && unsupported_exports.length() > 0 {
+        if !write_unified_ts_scaffold_diagnostics(
+            out,
+            diagnostics_path,
+            unsupported_exports,
+            [],
+          ) {
+          return false
+        }
+        println(
+          "Strict mode rejected TypeScript scaffold: unsupported exports detected.",
+        )
+        return false
+      }
       emit_moonbit_scaffold_from_ts(entry_path, runtime_module_spec, out)
+      let jsvalue_fallbacks = collect_unified_moonbit_scaffold_jsvalue_fallbacks(
+        out,
+      )
+      if !write_unified_ts_scaffold_diagnostics(
+          out, diagnostics_path, unsupported_exports, jsvalue_fallbacks,
+        ) {
+        return false
+      }
+      if strict && jsvalue_fallbacks.length() > 0 {
+        println(
+          "Strict mode rejected TypeScript scaffold: JSValue fallbacks detected.",
+        )
+        return false
+      }
       true
     }
     TsmbtDirection::Auto => true
@@ -487,6 +693,8 @@ async fn run_unified_tsmbt_cli(args : Array[String], start : Int) -> Bool {
     direction=options.direction,
     module_spec=options.module_spec,
     import_rewrite_path=options.import_rewrite_path,
+    diagnostics_path=options.diagnostics_path,
+    strict=options.strict,
     facade=options.facade,
   )
 }

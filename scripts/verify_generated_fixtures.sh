@@ -168,6 +168,236 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_bridge_declaration_merge_namespace_fixture() {
+  local root="_build/bridge_fixture_declaration_merge_namespace"
+  local fixture_path="$repo_root/fixtures/resolver/project/types/declaration-merge-namespace-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/declaration-merge-namespace.js"
+
+  if [ ! -d "$js_module_root" ]; then
+    echo "Missing mizchi/js module at $js_module_root" >&2
+    return 1
+  fi
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/declaration-merge-namespace.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/declaration-merge-namespace.js"
+
+  cat > "$root/moon.mod.json" <<EOF
+{
+  "name": "fixture/bridge_declaration_merge_namespace",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "$js_module_root" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+extern "js" fn test_make_options() -> MakeOptions =
+  #| () => ({ uppercase: true })
+
+///|
+test "generated bridge package calls declaration-merged namespace members" {
+  assert_eq(make("ok"), "make:ok")
+  assert_eq(get_make_version(), "1.0.0")
+  assert_eq(makeWithOptions("ok", test_make_options()), "OK")
+  assert_eq(get_tool_version(), "2.0.0")
+  let _ = toolParse("tool")
+  let current_settings = get_settings()
+  assert_eq(current_settings.mode, "prod")
+  assert_eq(get_settings_default_mode(), "prod")
+  assert_eq(settingsNormalize(" Prod "), "prod")
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
+verify_bridge_promise_return_fixture() {
+  local root="_build/bridge_fixture_promise_return"
+  local fixture_path="$repo_root/fixtures/resolver/project/types/promise-return-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/promise-return.js"
+
+  if [ ! -d "$js_module_root" ]; then
+    echo "Missing mizchi/js module at $js_module_root" >&2
+    return 1
+  fi
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/promise-return.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/promise-return.js"
+
+  cat > "$root/moon.mod.json" <<EOF
+{
+  "name": "fixture/bridge_promise_return",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "$js_module_root" },
+    "moonbitlang/async": "0.18.0"
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/moon.pkg.json" <<'EOF'
+{
+  "import": [
+    { "path": "mizchi/js/core", "alias": "js" }
+  ],
+  "test-import": [
+    "moonbitlang/async"
+  ]
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+///|
+async test "generated bridge package awaits Promise-returning APIs" {
+  assert_eq(fetchLabel("a").wait(), "label:a")
+  assert_eq(fetchCount().wait(), 42.0)
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
+verify_bridge_callback_fixture() {
+  local root="_build/bridge_fixture_callback"
+  local fixture_path="$repo_root/fixtures/resolver/project/types/callback-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/callback.js"
+
+  if [ ! -d "$js_module_root" ]; then
+    echo "Missing mizchi/js module at $js_module_root" >&2
+    return 1
+  fi
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/callback.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/callback.js"
+
+  cat > "$root/moon.mod.json" <<EOF
+{
+  "name": "fixture/bridge_callback",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "$js_module_root" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+extern "js" fn test_listener() -> @js.Any =
+  #| () => (label, count) => {
+  #|   globalThis.__tsmbtCallbackSeen = `${label}:${count}`;
+  #| }
+
+extern "js" fn test_callback_seen() -> String =
+  #| () => globalThis.__tsmbtCallbackSeen ?? ""
+
+///|
+test "generated bridge package calls callback APIs" {
+  assert_eq(emitEvent("evt", 3.0, test_listener()), "evt:3")
+  assert_eq(test_callback_seen(), "evt:3")
+  assert_eq(maybeEmit("empty", None), "empty:none")
+  assert_eq(maybeEmit("once", Some(test_listener())), "once:called")
+  assert_eq(test_callback_seen(), "once:1")
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
+verify_bridge_cjs_export_equals_fixture() {
+  local root="_build/bridge_fixture_cjs_export_equals"
+  local fixture_path="$repo_root/fixtures/resolver/project/types/cjs-export-equals-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/cjs-export-equals.cjs"
+
+  if [ ! -d "$js_module_root" ]; then
+    echo "Missing mizchi/js module at $js_module_root" >&2
+    return 1
+  fi
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/cjs-export-equals.cjs" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/cjs-export-equals.cjs"
+
+  cat > "$root/moon.mod.json" <<EOF
+{
+  "name": "fixture/bridge_cjs_export_equals",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "$js_module_root" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+///|
+test "generated bridge package calls CJS export-equals namespace members" {
+  assert_eq(format("ok"), "fmt:ok")
+  assert_eq(get_version(), "cjs1")
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
+verify_bridge_node_path_namespace_import_fixture() {
+  local root="_build/bridge_fixture_node_path_namespace_import"
+  local fixture_path="$repo_root/fixtures/resolver/project/types/export-equals-namespace-members-entry.d.ts"
+
+  if [ ! -d "$js_module_root" ]; then
+    echo "Missing mizchi/js module at $js_module_root" >&2
+    return 1
+  fi
+
+  rm -rf "$root"
+  mkdir -p "$root"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "node:path" "$root" >/dev/null
+
+  cat > "$root/moon.mod.json" <<EOF
+{
+  "name": "fixture/bridge_node_path_namespace_import",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "$js_module_root" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+///|
+test "generated bridge package reads node:path through namespace import" {
+  assert_true(get_path_sep().length() > 0)
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_bridge_parent_relative_default_function_fixture() {
   local root="_build/bridge_fixture_parent_relative"
   local pkg_root="$root/pkg"
@@ -1851,6 +2081,11 @@ EOF
 verify_mbti_fixture_typescript
 verify_bridge_smoke_fixture
 verify_bridge_default_export_fixture
+verify_bridge_declaration_merge_namespace_fixture
+verify_bridge_promise_return_fixture
+verify_bridge_callback_fixture
+verify_bridge_cjs_export_equals_fixture
+verify_bridge_node_path_namespace_import_fixture
 verify_bridge_parent_relative_default_function_fixture
 verify_bridge_class_property_fixture
 verify_bridge_rooted_class_property_reexport_fixture

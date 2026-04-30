@@ -542,6 +542,59 @@ test "parser: parse keyof object surface as string-like key" {
 }
 
 ///|
+test "parser: lowers statically decidable conditional types" {
+  let true_parser = Parser::from_source(
+    "string extends string ? number : boolean",
+  )
+  assert_eq(true_parser.parse_type(), Number)
+  let false_parser = Parser::from_source(
+    "number extends string ? number : boolean",
+  )
+  assert_eq(false_parser.parse_type(), Boolean)
+}
+
+///|
+test "parser: resolves concrete infer conditional types" {
+  let parser = Parser::from_source(
+    "Promise<string> extends Promise<infer Name> ? Name : never",
+  )
+  assert_eq(parser.parse_type(), String_)
+}
+
+///|
+test "parser: preserves generic infer conditional type aliases" {
+  let module_ = Parser::from_source(
+    "export type UnwrapPromise<T> = T extends Promise<infer Value> ? Value : never;",
+  ).parse_module() catch {
+    e => fail("expected generic infer conditional alias to parse: \{e}")
+  }
+  assert_eq(module_.type_aliases.length(), 1)
+  assert_eq(module_.type_aliases[0].name, "UnwrapPromise")
+  assert_eq(module_.type_aliases[0].type_params, ["T"])
+  assert_eq(
+    module_.type_aliases[0].type_,
+    Conditional(
+      Named("T"),
+      Applied("Promise", [Applied("__tsmbt_infer", [Named("Value")])]),
+      Named("Value"),
+      Never,
+    ),
+  )
+}
+
+///|
+test "parser: parse literal-key mapped object type as fields" {
+  let parser = Parser::from_source("{ [K in \"id\" | \"name\"]?: string }")
+  assert_eq(
+    parser.parse_type(),
+    Object([
+      (Literal("id"), Union([String_, Undefined])),
+      (Literal("name"), Union([String_, Undefined])),
+    ]),
+  )
+}
+
+///|
 test "parser: parse array literal" {
   let parser = Parser::from_source("[1, 2, 3]")
   let expr = parser.parse_expr()
@@ -5136,6 +5189,19 @@ test "parser: parse interface optional readonly field name" {
     e => fail("expected readonly field name in interface to parse: \{e}")
   }
   assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].fields[0].0, "readonly")
+  assert_eq(module_.interfaces[0].readonly_fields.length(), 0)
+}
+
+///|
+test "parser: preserves readonly interface field modifiers" {
+  let module_ = Parser::from_source(
+    "export interface User { readonly id: string; name: string; }",
+  ).parse_module() catch {
+    e => fail("expected readonly interface field modifier to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].readonly_fields, ["id"])
 }
 
 ///|

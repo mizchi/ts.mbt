@@ -79,18 +79,29 @@ corpus without manual edits.
 
 ### Phase 2: TypeScript -> MoonBit Surface Coverage (65% -> 72%)
 
-- [ ] Harden npm / Node type resolution:
-  - package `exports`
-  - `types` / `typings`
-  - subpath exports
-  - `typesVersions`
-  - `@types/*` fallback
-  - `node:*` built-in modules
-- [ ] Improve overload handling.
-  - Prefer overloads that can be represented with concrete MoonBit types.
-  - Emit multiple safe wrappers when overloads are materially different and
+- [x] Harden npm / Node type resolution:
+  - [x] package `exports`
+  - [x] `types` / `typings`
+  - [x] subpath exports
+  - [x] `typesVersions`
+  - [x] `@types/*` fallback
+  - [x] `node:*` built-in modules
+  - Resolver tests now cover package fields, exports conditions, wildcard
+    exports, subpaths, `typesVersions`, unscoped and scoped `@types` fallback,
+    and `node:*` built-in declarations via `@types/node`.
+- [x] Improve overload handling.
+  - [x] Prefer overloads that can be represented with concrete MoonBit types.
+    - Direct local overload resolution now uses the same widening score as the
+      final generated binding collapse, so broad `unknown` / `any` signatures no
+      longer hide later concrete signatures.
+  - [x] Emit multiple safe wrappers when overloads are materially different and
     nameable.
-  - Keep a stable fallback rule when overloads collapse to `JSValue`.
+    - Nameable non-preferred signatures now emit stable suffixed wrappers, e.g.
+      `makeCounter_number`, while preserving the original runtime export name in
+      generated JS FFI glue.
+  - [x] Keep a stable fallback rule when overloads collapse to `JSValue`.
+    - Equal-score overloads keep declaration order and still collapse to one
+      generated binding.
 - [x] Expand common utility type lowering:
   - [x] `Pick` over resolvable interfaces and literal keys.
   - [x] `Omit` over resolvable interfaces and literal keys.
@@ -99,28 +110,71 @@ corpus without manual edits.
   - [x] `Extract` over directly comparable union members.
   - [x] `NonNullable` over optional-like unions.
   - [x] simple `ReturnType` / `Parameters` for direct function types.
-- [ ] Support the common mapped-type subset needed by real declaration files.
-- [ ] Support the common conditional-type subset used by React, Hono, Zod, and
+- [x] Support the common mapped-type subset needed by real declaration files.
+  - [x] Lower `Partial<T>`, `Required<T>`, and `Readonly<T>` over resolvable
+    interfaces into named MoonBit option-bag structs.
+  - [x] Parse and lower inline mapped object types with literal keys such as
+    `{ [K in "a" | "b"]: T }`.
+- [x] Support the common conditional-type subset used by React, Hono, Zod, and
   Node declarations.
-- [ ] Preserve optional and readonly field information where MoonBit can express
+  - [x] Lower statically decidable `A extends B ? X : Y` when both sides are
+    direct primitive / union types.
+  - [x] Lower `Awaited<Promise<T>>` / `Awaited<PromiseLike<T>>`.
+  - [x] Cover standard conditional utilities already represented as direct
+    utility forms: `NonNullable`, `Exclude`, `Extract`, direct `ReturnType`, and
+    direct `Parameters`.
+  - [x] Preserve or resolve infer-based conditional aliases instead of widening
+    them to `JSValue`.
+    - [x] Resolve concrete infer patterns such as
+      `Promise<string> extends Promise<infer T> ? T : never`.
+    - [x] Preserve generic infer aliases that still depend on type parameters.
+      - Generic conditional aliases are retained in the AST and resolved when
+        applied to concrete type arguments, e.g. `UnwrapPromise<Promise<string>>`.
+- [x] Preserve optional and readonly field information where MoonBit can express
   it; otherwise emit diagnostics instead of silent widening.
+  - Optional fields are preserved as optional-like MoonBit surface types.
+  - Interface `readonly` fields are retained as metadata and emitted as
+    declaration / FFI diagnostics because generated MoonBit structs do not
+    enforce TypeScript readonly semantics.
 
 ### Phase 3: Runtime Bridge Correctness (72% -> 78%)
 
-- [ ] Make runtime namespace handling complete for declaration-merge patterns:
+- [x] Make runtime namespace handling complete for declaration-merge patterns:
   `function x` + `namespace x`, `class X` + `namespace X`, and value namespaces.
-- [ ] Strengthen CJS / ESM interop:
+  - Declaration-merged namespace fixtures now cover root function/class/value
+    exports, runtime namespace member glue, and namespace-local type references
+    such as `make.Options` lowering to `MakeOptions` without leaking
+    unqualified helper types.
+- [x] Strengthen CJS / ESM interop:
   - `export =`
   - `export default`
   - synthetic default imports
   - namespace imports
   - mixed named/default re-exports
-- [ ] Add runtime smokes for async and Promise-returning APIs.
-- [ ] Add runtime smokes for callback APIs where the callback can be represented
+  - Generated fixture smokes now cover `.cjs` `export = namespace`
+    runtimes through synthetic default import, `node:path` namespace imports,
+    relative/parent-relative default exports, and mixed default/named class
+    re-exports.
+- [x] Add runtime smokes for async and Promise-returning APIs.
+  - `Promise<T>` / `PromiseLike<T>` now lower to `@js.Promise[T]` in
+    declaration and FFI generation, and a generated JS-target fixture awaits
+    Promise-returning APIs with `.wait()`.
+- [x] Add runtime smokes for callback APIs where the callback can be represented
   safely.
-- [ ] Add runtime smokes for object option bags with optional fields.
-- [ ] Add runtime smokes for class instance properties, static properties, and
+  - Callback parameters are currently represented as `JSValue` / `@js.Any`;
+    the generated fixture passes required and optional JS callbacks through
+    MoonBit, verifies the runtime side effect on the JS target, and covers
+    MoonBit `Option` unwrapping to JS `undefined` / raw callback values.
+- [x] Add runtime smokes for object option bags with optional fields.
+  - Generated fixture smoke now calls a declaration-merged namespace function
+    with a runtime-created `MakeOptions` object containing an optional field,
+    then checks the JS target bridge through `moon check` and
+    `moon test --target js`.
+- [x] Add runtime smokes for class instance properties, static properties, and
   static methods.
+  - Existing generated fixtures exercise instance getters/setters, mutable
+    static properties, readonly static properties, and static factory methods
+    across direct and re-exported class bindings.
 - [x] Ensure generated `bridge.js` never imports a missing runtime binding
   without a diagnostic.
   - `unique symbol` marker exports, such as `node:assert`'s internal
@@ -129,25 +183,41 @@ corpus without manual edits.
 
 ### Phase 4: MoonBit -> TypeScript Package Quality (78% -> 84%)
 
-- [ ] Improve method / constructor facade generation beyond the current narrow
+- [x] Improve method / constructor facade generation beyond the current narrow
   safe subset.
-- [ ] Define the public rule for traits:
-  - omitted with diagnostics
-  - represented as structural TypeScript interfaces
-  - represented through generated facade functions
+  - Facade generation now includes non-generic async constructors and instance
+    methods, emits Promise-returning TypeScript declarations, and post-processes
+    generated JS so plain async exports return Promises while async+raise exports
+    preserve the Result wrapper expected by the declaration contract.
+- [x] Define the public rule for traits:
+  - Public traits are represented as declaration-only structural TypeScript
+    interfaces.
+  - Local `impl Trait for Type` relationships are represented in `.d.ts` output
+    as `extends Trait` or type intersections where possible.
+  - Trait methods are not generated as runtime bridge exports or facade
+    functions; omitted runtime members remain visible through autolink
+    diagnostics.
 - [x] Preserve MoonBit `raise` effects in TypeScript declarations as a documented
   error contract.
   - Top-level and trait method `raise` effects now render as
     `Result<Return, ErrorType>` in generated TypeScript declarations, matching
     the JS backend's result-wrapper runtime shape.
-- [ ] Improve child-package and subpath export coverage:
-  - root exports
-  - nested package exports
-  - generated `package.json` `exports`
-  - matching JS and `.d.ts` paths
-- [ ] Add generated source map and package metadata checks to the verification
+- [x] Improve child-package and subpath export coverage:
+  - [x] root exports
+  - [x] nested package exports
+  - [x] generated `package.json` `exports`
+  - [x] matching JS and `.d.ts` paths
+  - The counter scaffold fixture now includes `./child/grand`, and
+    `verify-scaffolds` imports the generated nested subpath through Node while
+    checking matching package metadata and `.d.ts` declarations.
+- [x] Add generated source map and package metadata checks to the verification
   rail.
-- [ ] Make facade generation deterministic and diff-friendly for review.
+  - `verify-scaffolds` checks generated `package.json` package names, subpath
+    exports, runtime JS files, and source map files for the scaffold fixtures.
+- [x] Make facade generation deterministic and diff-friendly for review.
+  - Glue declarations, `link.js.exports`, generated package `exports`, and
+    child-package runtime re-export files are sorted with an explicit ascending
+    string comparator instead of relying on source or map iteration order.
 
 ### Phase 5: Real-World Corpus Expansion (84% -> 88%)
 
@@ -197,24 +267,37 @@ corpus without manual edits.
 
 ### Phase 6: Productization and Safety (88% -> 90%)
 
-- [ ] Define the public CLI contract:
-  - `tsmbt --input mizchi/foo --out dist`
-  - `tsmbt --input npm-package --out dist --direction ts-to-mbt`
-  - `--module-spec`
-  - `--diagnostics`
-  - `--strict`
-- [ ] Add strict mode that fails on any unsupported export or unbudgeted
+- [x] Define the public CLI contract:
+  - [x] `tsmbt --input mizchi/foo --out dist`
+  - [x] `tsmbt --input npm-package --out dist --direction ts-to-mbt`
+  - [x] `--module-spec`
+  - [x] `--diagnostics`
+  - [x] `--strict`
+  - Unified CLI help, parser tests, and README now document the public contract.
+- [x] Add strict mode that fails on any unsupported export or unbudgeted
   `JSValue` fallback.
-- [ ] Add non-strict mode that always emits a buildable scaffold with diagnostics
+  - TS -> MoonBit strict mode rejects ambiguous/unsupported export surfaces
+    before generation and generated `JSValue` fallback occurrences after
+    generation, while writing diagnostics.
+  - MoonBit -> TypeScript strict mode rejects omitted autolink members reported
+    in `AUTOLINK_DIAGNOSTICS.md`.
+- [x] Add non-strict mode that always emits a buildable scaffold with diagnostics
   when possible.
-- [ ] Add snapshot tests for generated file layout and package metadata.
-- [ ] Document supported TypeScript and MoonBit subsets with examples.
-- [ ] Add a release checklist:
-  - fixture CI
-  - real-world TypeScript probe
-  - real-world MoonBit probe
-  - generated docs update
-  - changelog entry
+  - Unified TS -> MoonBit now always writes `SCAFFOLD_DIAGNOSTICS.md` or the
+    requested `--diagnostics` path after scaffold generation.
+  - Unified MoonBit -> TypeScript continues to write `AUTOLINK_DIAGNOSTICS.md`
+    and can mirror it to `--diagnostics`.
+- [x] Add snapshot tests for generated file layout and package metadata.
+  - Unified MoonBit -> TypeScript and TypeScript -> MoonBit tests now assert
+    generated file layouts and package metadata for the public CLI path.
+- [x] Document supported TypeScript and MoonBit subsets with examples.
+  - README now includes supported subset examples for both bridge directions.
+- [x] Add a release checklist:
+  - [x] fixture CI
+  - [x] real-world TypeScript probe
+  - [x] real-world MoonBit probe
+  - [x] generated docs update
+  - [x] changelog entry
 
 ### Explicit Non-Goals Before 90%
 

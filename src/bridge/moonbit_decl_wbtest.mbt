@@ -483,12 +483,27 @@ async test "bridge: emit MoonBit declarations collapse overloads by generated bi
     }
   }
   assert_eq(
-    count_occurrences_in_decl_output(actual, "declare pub fn makeCounter"),
+    count_occurrences_in_decl_output(actual, "declare pub fn makeCounter("),
     1,
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn makeCounter_number(value : Double) -> Counter",
+    ),
   )
   assert_eq(
     count_occurrences_in_decl_output(actual, "declare pub fn counter_value"),
     1,
+  )
+  assert_eq(
+    count_occurrences_in_decl_output(actual, "declare pub fn chooseConcrete"),
+    1,
+  )
+  assert_true(
+    actual.contains("declare pub fn chooseConcrete(value : String) -> Double"),
+  )
+  assert_false(
+    actual.contains("declare pub fn chooseConcrete(value : JSValue) -> JSValue"),
   )
 }
 
@@ -761,6 +776,27 @@ async test "bridge: emit MoonBit declarations from namespace export assignment" 
 }
 
 ///|
+async test "bridge: emit MoonBit declarations from CJS export-equals namespace members" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/cjs-export-equals-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn get_version() -> String"))
+  assert_true(
+    actual.contains("declare pub fn format(label : String) -> String"),
+  )
+  assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
+  assert_false(actual.contains("Unsupported export toolkit"))
+}
+
+///|
 async test "bridge: emit MoonBit declarations from export-as-namespace assignment" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-entry.d.ts",
@@ -839,6 +875,102 @@ async test "bridge: emit MoonBit declarations from exported runtime namespace me
   assert_true(actual.contains("declare pub fn get_constants_read() -> Double"))
   assert_false(actual.contains("Unsupported export task"))
   assert_false(actual.contains("Unsupported export constants"))
+}
+
+///|
+async test "bridge: emit MoonBit declarations from declaration-merged namespaces" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/declaration-merge-namespace-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn make(input : String) -> String"))
+  assert_true(actual.contains("declare pub type MakeOptions"))
+  assert_false(actual.contains("declare pub type Options"))
+  assert_true(actual.contains("declare pub fn get_make_version() -> String"))
+  assert_true(
+    actual.contains(
+      "declare pub fn makeWithOptions(input : String, options : MakeOptions) -> String",
+    ),
+  )
+  assert_true(actual.contains("declare pub type Tool"))
+  assert_true(actual.contains("declare pub type ToolConfig"))
+  assert_true(actual.contains("declare pub fn get_tool_version() -> String"))
+  assert_true(
+    actual.contains("declare pub fn toolParse(input : String) -> Tool"),
+  )
+  assert_true(actual.contains("declare pub type Settings"))
+  assert_true(actual.contains("declare pub fn get_settings() -> Settings"))
+  assert_true(actual.contains("declare pub type SettingsMeta"))
+  assert_true(
+    actual.contains("declare pub fn get_settings_default_mode() -> String"),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn settingsNormalize(input : String) -> String",
+    ),
+  )
+  assert_false(actual.contains("Unsupported export make"))
+  assert_false(actual.contains("Unsupported export Tool"))
+  assert_false(actual.contains("Unsupported export settings"))
+}
+
+///|
+async test "bridge: emit MoonBit declarations from Promise-returning APIs" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/promise-return-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    actual.contains(
+      "declare pub fn fetchLabel(id : String) -> @js.Promise[String]",
+    ),
+  )
+  assert_true(
+    actual.contains("declare pub fn fetchCount() -> @js.Promise[Double]"),
+  )
+  assert_false(actual.contains("declare pub type Promise"))
+}
+
+///|
+async test "bridge: emit MoonBit declarations from callback APIs as JSValue" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/callback-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type JSValue"))
+  assert_true(
+    actual.contains(
+      "declare pub fn emitEvent(label : String, count : Double, listener : JSValue) -> String",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn maybeEmit(label : String, listener : JSValue?) -> String",
+    ),
+  )
+  assert_false(actual.contains("Unsupported export emitEvent"))
+  assert_false(actual.contains("Unsupported export maybeEmit"))
 }
 
 ///|
@@ -998,6 +1130,10 @@ async test "bridge: emit MoonBit declarations lowers Pick and Omit utility types
     }
   }
   assert_true(actual.contains("declare pub type User"))
+  assert_true(actual.contains("/// readonly createdAt : String"))
+  assert_true(actual.contains("declare pub type InlineMapped"))
+  assert_true(actual.contains("/// id : String?"))
+  assert_true(actual.contains("/// name : String?"))
   assert_true(actual.contains("declare pub type UserPickIdName"))
   assert_true(actual.contains("/// id : String"))
   assert_true(actual.contains("/// name : String"))
@@ -1005,6 +1141,12 @@ async test "bridge: emit MoonBit declarations lowers Pick and Omit utility types
   assert_true(actual.contains("/// active : Bool?"))
   assert_true(actual.contains("declare pub type UserOmitAge"))
   assert_true(actual.contains("declare pub type UserOmitActive"))
+  assert_true(actual.contains("declare pub type UserPartial"))
+  assert_true(actual.contains("/// age : Double?"))
+  assert_true(actual.contains("declare pub type UserReadonly"))
+  assert_true(actual.contains("/// readonly name : String"))
+  assert_true(actual.contains("declare pub type UserRequired"))
+  assert_true(actual.contains("/// active : Bool"))
   assert_true(
     actual.contains(
       "declare pub fn pickUser(user : UserPickIdName) -> UserPickIdActive",
@@ -1013,6 +1155,21 @@ async test "bridge: emit MoonBit declarations lowers Pick and Omit utility types
   assert_true(
     actual.contains(
       "declare pub fn omitUser(user : UserOmitAge) -> UserOmitActive",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn patchUser(user : UserPartial) -> UserPartial",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn readonlyUser(user : UserReadonly) -> UserReadonly",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn requiredUser(user : UserRequired) -> UserRequired",
     ),
   )
   assert_true(
@@ -1026,6 +1183,22 @@ async test "bridge: emit MoonBit declarations lowers Pick and Omit utility types
   assert_true(actual.contains("/// _0 : String"))
   assert_true(actual.contains("/// _1 : Bool"))
   assert_true(actual.contains("declare pub fn getArgs() -> GetArgsResult"))
+  assert_true(
+    actual.contains("declare pub fn getStaticConditionalTrue() -> Double"),
+  )
+  assert_true(
+    actual.contains("declare pub fn getStaticConditionalFalse() -> Bool"),
+  )
+  assert_true(actual.contains("declare pub fn getAwaitedName() -> String"))
+  assert_true(
+    actual.contains("declare pub fn getInferredPromiseName() -> String"),
+  )
+  assert_true(
+    actual.contains("declare pub fn getGenericInferredPromiseName() -> String"),
+  )
+  assert_true(
+    actual.contains("declare pub fn getInlineMapped() -> InlineMapped"),
+  )
   assert_true(actual.contains("declare pub type StringRecordOfString"))
   assert_true(actual.contains("declare pub type StringRecordOfStringOrDouble"))
   assert_true(actual.contains("declare pub type StringRecordOfUser"))
@@ -1060,6 +1233,12 @@ async test "bridge: emit MoonBit declarations lowers Pick and Omit utility types
   assert_false(actual.contains("declare pub type Exclude"))
   assert_false(actual.contains("declare pub type ReturnType"))
   assert_false(actual.contains("declare pub type Parameters"))
+  assert_false(actual.contains("declare pub type Partial"))
+  assert_false(actual.contains("declare pub type Readonly"))
+  assert_false(actual.contains("declare pub type Required"))
+  assert_false(actual.contains("declare pub type Awaited"))
+  assert_false(actual.contains("declare pub type Promise"))
+  assert_false(actual.contains("declare pub type UnwrapPromise"))
 }
 
 ///|
@@ -1250,7 +1429,9 @@ async test "bridge: emit MoonBit declarations sanitizes reserved exported functi
     ),
   )
   assert_true(
-    actual.contains("declare pub fn use_(promise : Promise) -> String"),
+    actual.contains(
+      "declare pub fn use_(promise : @js.Promise[String]) -> String",
+    ),
   )
   assert_true(
     actual.contains("declare pub fn forwardRef(component : JSValue) -> JSValue"),
@@ -1346,7 +1527,7 @@ async test "bridge: emit MoonBit declarations from fixture React package surface
   )
   assert_true(
     actual.contains(
-      "declare pub fn cloneElement(element : ReactElement, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement",
+      "declare pub fn cloneElement(element : ReactElement, props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement",
     ),
   )
   assert_true(

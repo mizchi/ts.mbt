@@ -511,10 +511,13 @@ pub fn Parser::parse_interface(
   self.skip_extends_clause()
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
+  let readonly_fields : Array[String] = []
   while !self.check(RBrace) && !self.check(Eof) {
     // Skip readonly modifier
+    let mut is_readonly_field = false
     if self.can_consume_interface_readonly_modifier() {
       let _ = self.advance()
+      is_readonly_field = true
     }
     // Parse field/method name
     let field_name : String = match self.peek().kind {
@@ -797,13 +800,16 @@ pub fn Parser::parse_interface(
         ),
       )
     }
+    if is_readonly_field {
+      readonly_fields.push(field_name)
+    }
     // Skip trailing semicolon or comma (both optional)
     if self.check(Semicolon) || self.check(Comma) {
       let _ = self.advance()
     }
   }
   let _ = self.expect(RBrace)
-  { name, fields }
+  { name, fields, readonly_fields }
 }
 
 ///|
@@ -936,43 +942,48 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
 }
 
 ///|
-fn Parser::skip_type_param_clause(self : Parser) -> Unit {
+fn Parser::parse_type_param_names(self : Parser) -> Array[String] {
+  let names : Array[String] = []
   if !self.check(Lt) {
-    return
+    return names
   }
-  let mut angle_depth = 0
-  while !self.check(Eof) {
+  let _ = self.advance()
+  let mut depth = 1
+  let mut at_param_start = true
+  while depth > 0 && !self.check(Eof) {
+    if depth == 1 && at_param_start && self.is_qualified_type_name_part(0) {
+      let name = self.parse_binding_ident() catch { _ => "_" }
+      names.push(name)
+      at_param_start = false
+      continue
+    }
     match self.peek().kind {
       Lt => {
-        angle_depth += 1
+        depth += 1
         let _ = self.advance()
       }
       Gt => {
-        angle_depth -= 1
+        depth -= 1
         let _ = self.advance()
-        if angle_depth <= 0 {
-          break
-        }
       }
       GtGt => {
-        angle_depth -= 2
+        depth = if depth >= 2 { depth - 2 } else { 0 }
         let _ = self.advance()
-        if angle_depth <= 0 {
-          break
-        }
       }
       GtGtGt => {
-        angle_depth -= 3
+        depth = if depth >= 3 { depth - 3 } else { 0 }
         let _ = self.advance()
-        if angle_depth <= 0 {
-          break
-        }
+      }
+      Comma if depth == 1 => {
+        at_param_start = true
+        let _ = self.advance()
       }
       _ => {
         let _ = self.advance()
       }
     }
   }
+  names
 }
 
 ///|
@@ -991,22 +1002,35 @@ fn type_alias_object_fields_to_interface(
           _ => return None
         }
       }
-      Some({ name, fields: iface_fields })
+      Some({ name, fields: iface_fields, readonly_fields: [] })
     }
     _ => None
   }
 }
 
 ///|
-fn Parser::parse_type_alias_interface_after_type_keyword(
+fn type_alias_to_interface(type_alias : @ast.TsTypeAlias) -> @ast.TsInterface? {
+  type_alias_object_fields_to_interface(type_alias.name, type_alias.type_)
+}
+
+///|
+fn Parser::parse_type_alias_after_type_keyword(
   self : Parser,
-) -> @ast.TsInterface? raise ParseError {
+) -> @ast.TsTypeAlias raise ParseError {
   let name = self.parse_binding_ident()
-  self.skip_type_param_clause()
+  let type_params = self.parse_type_param_names()
   let _ = self.expect(Eq)
   let alias_type = self.parse_type()
   self.consume_semicolon()
-  type_alias_object_fields_to_interface(name, alias_type)
+  { name, type_params, type_: alias_type }
+}
+
+///|
+fn Parser::parse_type_alias_interface_after_type_keyword(
+  self : Parser,
+) -> @ast.TsInterface? raise ParseError {
+  let type_alias = self.parse_type_alias_after_type_keyword()
+  type_alias_to_interface(type_alias)
 }
 
 ///|
@@ -1015,6 +1039,12 @@ fn Parser::parse_type_alias_interface(
 ) -> @ast.TsInterface? raise ParseError {
   let _ = self.expect(Type)
   self.parse_type_alias_interface_after_type_keyword()
+}
+
+///|
+fn Parser::parse_type_alias(self : Parser) -> @ast.TsTypeAlias raise ParseError {
+  let _ = self.expect(Type)
+  self.parse_type_alias_after_type_keyword()
 }
 
 ///|

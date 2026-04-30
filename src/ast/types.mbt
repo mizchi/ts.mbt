@@ -27,6 +27,7 @@ pub(all) enum TsType {
   // Type operators
   Union(Array[TsType]) // A | B
   Intersection(Array[TsType]) // A & B
+  Conditional(TsType, TsType, TsType, TsType) // A extends B ? X : Y
   // Type reference
   Named(String)
   Applied(String, Array[TsType])
@@ -343,6 +344,15 @@ pub(all) struct TsFunc {
 pub(all) struct TsInterface {
   name : String
   fields : Array[(String, TsType)] // (fieldName, type)
+  readonly_fields : Array[String]
+} derive(Debug)
+
+///|
+// / type alias declaration
+pub(all) struct TsTypeAlias {
+  name : String
+  type_params : Array[String]
+  type_ : TsType
 } derive(Debug)
 
 ///|
@@ -401,6 +411,7 @@ pub(all) struct TsNamespaceDecl {
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
   interfaces : Array[TsInterface]
+  type_aliases : Array[TsTypeAlias]
   imports : Array[TsImport] // externalimport
   values : Array[TsValueDecl] // ambient value declarations
   classes : Array[TsClassDecl] // ambient class declarations

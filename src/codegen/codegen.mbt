@@ -93,6 +93,7 @@ fn encode_type(t : @ast.TsType) -> Byte {
     @ast.TsType::Object(_) => b'\x11'
     @ast.TsType::Union(_) => b'\x12'
     @ast.TsType::Intersection(_) => b'\x13'
+    @ast.TsType::Conditional(_, _, _, _) => b'\x14'
   }
 }
 

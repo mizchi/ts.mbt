@@ -622,5 +622,10 @@ pub fn needs_gc(type_ : @ast.TsType) -> Bool {
     @ast.TsType::Union(types) | @ast.TsType::Intersection(types) =>
       types.iter().any(fn(t) { needs_gc(t) })
     @ast.TsType::Tuple(types) => types.iter().any(fn(t) { needs_gc(t) })
+    @ast.TsType::Conditional(source, target, true_type, false_type) =>
+      needs_gc(source) ||
+      needs_gc(target) ||
+      needs_gc(true_type) ||
+      needs_gc(false_type)
   }
 }

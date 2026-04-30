@@ -30,7 +30,7 @@ test "parser: emit MoonBit declarations from interface and declare function" {
 }
 
 ///|
-test "parser: emit MoonBit declarations widens unsupported types" {
+test "parser: emit MoonBit declarations widens callbacks and preserves Promise payloads" {
   let src =
     #|declare function later(
     #|  callback: (value: number) => void,
@@ -51,10 +51,7 @@ test "parser: emit MoonBit declarations widens unsupported types" {
     #|declare pub type JSValue
     #|
     #|///|
-    #|declare pub type Promise
-    #|
-    #|///|
-    #|declare pub fn later(callback : JSValue, promise : Promise) -> Promise
+    #|declare pub fn later(callback : JSValue, promise : @js.Promise[String]) -> @js.Promise[Double]
   assert_eq(actual, expected)
 }
 

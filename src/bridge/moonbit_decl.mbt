@@ -22,6 +22,7 @@ priv struct ExportedInterfaceDecl {
 ///|
 priv struct ExportedImportDecl {
   source_path : String
+  local_name_prefix : String
   export_name : String
   source_export_name : String
   import_ : @ast.TsImport
@@ -30,6 +31,7 @@ priv struct ExportedImportDecl {
 ///|
 priv struct ExportedFuncDecl {
   source_path : String
+  local_name_prefix : String
   export_name : String
   source_export_name : String
   func : @ast.TsFunc
@@ -38,6 +40,7 @@ priv struct ExportedFuncDecl {
 ///|
 priv struct ExportedValueDecl {
   source_path : String
+  local_name_prefix : String
   export_name : String
   source_export_name : String
   value : @ast.TsValueDecl
@@ -47,6 +50,7 @@ priv struct ExportedValueDecl {
 priv struct ExportedClassDecl {
   source_path : String
   local_name : String
+  local_name_prefix : String
   export_name : String
   source_export_name : String
   class_ : @ast.TsClassDecl
@@ -251,6 +255,7 @@ async fn load_decl_module_info(
         {
           funcs: [],
           interfaces: [],
+          type_aliases: [],
           imports: [],
           values: [],
           classes: [],
@@ -531,12 +536,34 @@ fn find_interface_decl_recursive(
 
 ///|
 fn find_import_decl(module_ : @ast.TsModule, name : String) -> @ast.TsImport? {
+  let mut found : @ast.TsImport? = None
   for import_ in module_.imports {
     if import_.name == name {
-      return Some(import_)
+      match found {
+        Some(existing) =>
+          if decl_import_widening_score(import_) <
+            decl_import_widening_score(existing) {
+            found = Some(import_)
+          }
+        None => found = Some(import_)
+      }
     }
   }
-  None
+  found
+}
+
+///|
+fn find_import_decls(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Array[@ast.TsImport] {
+  let found : Array[@ast.TsImport] = []
+  for import_ in module_.imports {
+    if import_.name == name {
+      found.push(import_)
+    }
+  }
+  found
 }
 
 ///|
@@ -573,12 +600,33 @@ fn find_jsx_intrinsic_elements_decl(
 
 ///|
 fn find_func_decl(module_ : @ast.TsModule, name : String) -> @ast.TsFunc? {
+  let mut found : @ast.TsFunc? = None
   for func in module_.funcs {
     if func.name == name {
-      return Some(func)
+      match found {
+        Some(existing) =>
+          if decl_func_widening_score(func) < decl_func_widening_score(existing) {
+            found = Some(func)
+          }
+        None => found = Some(func)
+      }
     }
   }
-  None
+  found
+}
+
+///|
+fn find_func_decls(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Array[@ast.TsFunc] {
+  let found : Array[@ast.TsFunc] = []
+  for func in module_.funcs {
+    if func.name == name {
+      found.push(func)
+    }
+  }
+  found
 }
 
 ///|
@@ -847,6 +895,28 @@ fn find_class_decl(module_ : @ast.TsModule, name : String) -> @ast.TsClassDecl? 
 }
 
 ///|
+fn module_has_runtime_value_decl(
+  module_ : @ast.TsModule,
+  name : String,
+) -> Bool {
+  let has_namespace = match find_namespace_decl(module_, name) {
+    Some(_) => true
+    None => false
+  }
+  let mut runtime_value_count = 0
+  for value in module_.values {
+    if value.name != name || !value_decl_has_runtime_binding(value) {
+      continue
+    }
+    runtime_value_count += 1
+    if !has_namespace || value.type_ != @ast.TsType::Any {
+      return true
+    }
+  }
+  runtime_value_count > 1
+}
+
+///|
 fn module_has_non_namespace_runtime_decl(
   module_ : @ast.TsModule,
   name : String,
@@ -862,6 +932,9 @@ fn module_has_non_namespace_runtime_decl(
   match find_class_decl(module_, name) {
     Some(_) => return true
     None => ()
+  }
+  if module_has_runtime_value_decl(module_, name) {
+    return true
   }
   false
 }
@@ -1041,6 +1114,7 @@ fn append_exported_namespace_members_with_prefix(
   for import_ in namespace_.module_.imports {
     imports.push({
       source_path,
+      local_name_prefix,
       export_name: namespace_value_export_name(
         value_export_prefix,
         import_.name,
@@ -1055,6 +1129,7 @@ fn append_exported_namespace_members_with_prefix(
   for func in namespace_.module_.funcs {
     funcs.push({
       source_path,
+      local_name_prefix,
       export_name: namespace_value_export_name(value_export_prefix, func.name),
       source_export_name: namespace_member_runtime_export_name(
         runtime_prefix,
@@ -1072,6 +1147,7 @@ fn append_exported_namespace_members_with_prefix(
     }
     values.push({
       source_path,
+      local_name_prefix,
       export_name: namespace_value_export_name(value_export_prefix, value.name),
       source_export_name: namespace_member_runtime_export_name(
         runtime_prefix,
@@ -1084,6 +1160,7 @@ fn append_exported_namespace_members_with_prefix(
     classes.push({
       source_path,
       local_name: namespace_local_export_name(local_name_prefix, class_.name),
+      local_name_prefix,
       export_name: namespace_type_export_name(type_export_prefix, class_.name),
       source_export_name: namespace_member_runtime_export_name(
         runtime_prefix,
@@ -1240,7 +1317,13 @@ fn resolve_decl_from_local_name(
         None =>
           match find_import_decl(info.module_, local_name) {
             Some(import_) =>
-              Import({ source_path, export_name, source_export_name, import_ })
+              Import({
+                source_path,
+                local_name_prefix: "",
+                export_name,
+                source_export_name,
+                import_,
+              })
             None => {
               let stmt_func = find_func_decl_from_stmts(
                 info.record.module_block.block.stmts,
@@ -1250,6 +1333,7 @@ fn resolve_decl_from_local_name(
                 Some(func) =>
                   Function({
                     source_path,
+                    local_name_prefix: "",
                     export_name,
                     source_export_name,
                     func,
@@ -1259,6 +1343,7 @@ fn resolve_decl_from_local_name(
                     Some(func) =>
                       Function({
                         source_path,
+                        local_name_prefix: "",
                         export_name,
                         source_export_name,
                         func,
@@ -1269,6 +1354,7 @@ fn resolve_decl_from_local_name(
                           if value_decl_has_runtime_binding(value) {
                             Value({
                               source_path,
+                              local_name_prefix: "",
                               export_name,
                               source_export_name,
                               value,
@@ -1282,6 +1368,7 @@ fn resolve_decl_from_local_name(
                               Class({
                                 source_path,
                                 local_name,
+                                local_name_prefix: "",
                                 export_name,
                                 source_export_name,
                                 class_,
@@ -1337,6 +1424,7 @@ fn resolve_decl_from_local_name(
                                     if imported_local_name == local_name {
                                       resolved = Value({
                                         source_path,
+                                        local_name_prefix: "",
                                         export_name,
                                         source_export_name,
                                         value: {
@@ -1584,6 +1672,23 @@ fn resolve_exported_type_name(
 }
 
 ///|
+fn resolve_exported_type_name_in_scope(
+  info : DeclModuleInfo,
+  local_name_prefix : String,
+  name : String,
+  canonical_types : Map[String, String],
+) -> String? {
+  if local_name_prefix != "" {
+    match
+      canonical_types.get(decl_key(info.record.path, local_name_prefix + name)) {
+      Some(export_name) => return Some(export_name)
+      None => ()
+    }
+  }
+  resolve_exported_type_name(info, name, canonical_types)
+}
+
+///|
 fn resolve_interface_origin(
   info : DeclModuleInfo,
   name : String,
@@ -1644,10 +1749,12 @@ fn component_props_with_ref_interface_name(base_name : String) -> String {
 
 ///|
 fn is_props_passthrough_name(name : String) -> Bool {
-  name == "PropsWithoutRef" ||
-  name == "PropsWithRef" ||
-  name == "Partial" ||
-  name == "Readonly"
+  name == "PropsWithoutRef" || name == "PropsWithRef"
+}
+
+///|
+fn is_mapped_interface_utility_name(name : String) -> Bool {
+  name == "Partial" || name == "Required" || name == "Readonly"
 }
 
 ///|
@@ -1720,6 +1827,10 @@ fn props_with_children_named_interface_spec(
       Some({
         name: props_with_children_interface_name(origin.export_name),
         fields,
+        readonly_fields: readonly_fields_for_fields(
+          origin.iface.readonly_fields,
+          fields,
+        ),
       })
     }
     None => None
@@ -1764,6 +1875,7 @@ fn props_with_children_interface_spec(
       Some({
         name: props_with_children_object_interface_name(inner_fields),
         fields,
+        readonly_fields: [],
       })
     }
     _ =>
@@ -1870,6 +1982,10 @@ fn component_props_with_ref_interface_spec(
           Some({
             name: component_props_with_ref_interface_name(origin.export_name),
             fields,
+            readonly_fields: readonly_fields_for_fields(
+              origin.iface.readonly_fields,
+              fields,
+            ),
           })
         }
         None => None
@@ -1926,6 +2042,117 @@ fn utility_projection_interface_name(
 }
 
 ///|
+fn utility_mapped_interface_name(
+  base_name : String,
+  op_name : String,
+) -> String {
+  base_name + op_name
+}
+
+///|
+fn readonly_fields_for_fields(
+  source_readonly_fields : Array[String],
+  fields : Array[(String, @ast.TsType)],
+) -> Array[String] {
+  let readonly_fields : Array[String] = []
+  for field in fields {
+    let (field_name, _) = field
+    if source_readonly_fields.contains(field_name) &&
+      !readonly_fields.contains(field_name) {
+      readonly_fields.push(field_name)
+    }
+  }
+  readonly_fields
+}
+
+///|
+fn all_field_names(fields : Array[(String, @ast.TsType)]) -> Array[String] {
+  let names : Array[String] = []
+  for field in fields {
+    let (field_name, _) = field
+    if !names.contains(field_name) {
+      names.push(field_name)
+    }
+  }
+  names
+}
+
+///|
+fn utility_optional_type(type_ : @ast.TsType) -> @ast.TsType {
+  match decl_classify_optional_like_union(type_) {
+    Some(_) => type_
+    None => Union([type_, Undefined])
+  }
+}
+
+///|
+fn utility_required_type(type_ : @ast.TsType) -> @ast.TsType {
+  match decl_classify_optional_like_union(type_) {
+    Some((inner, _)) => inner
+    None => type_
+  }
+}
+
+///|
+fn utility_mapped_field_type(
+  op_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match op_name {
+    "Partial" => utility_optional_type(type_)
+    "Required" => utility_required_type(type_)
+    "Readonly" => type_
+    _ => type_
+  }
+}
+
+///|
+fn utility_mapped_interface_spec(
+  info : DeclModuleInfo,
+  op_name : String,
+  source_type : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsInterface? {
+  let source_name = match utility_source_type_name(source_type) {
+    Some(name) => name
+    None => return None
+  }
+  match resolve_interface_origin(info, source_name, modules, canonical_types) {
+    Some(origin) => {
+      let fields : Array[(String, @ast.TsType)] = []
+      for field in origin.iface.fields {
+        let (field_name, field_type) = field
+        fields.push(
+          (
+            field_name,
+            utility_mapped_field_type(
+              op_name,
+              lower_react_utility_type(
+                origin.info,
+                rewrite_type_refs(origin.info, field_type, canonical_types),
+                modules,
+                canonical_types,
+              ),
+            ),
+          ),
+        )
+      }
+      Some({
+        name: utility_mapped_interface_name(origin.export_name, op_name),
+        fields,
+        readonly_fields: if op_name == "Readonly" {
+          all_field_names(fields)
+        } else {
+          readonly_fields_for_fields(origin.iface.readonly_fields, fields)
+        },
+      })
+    }
+    None => None
+  }
+}
+
+///|
 fn utility_projection_interface_spec(
   info : DeclModuleInfo,
   op_name : String,
@@ -1973,6 +2200,10 @@ fn utility_projection_interface_spec(
           keys,
         ),
         fields,
+        readonly_fields: readonly_fields_for_fields(
+          origin.iface.readonly_fields,
+          fields,
+        ),
       })
     }
     None => None
@@ -2109,6 +2340,11 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
         parts.join("And")
       }
     }
+    Conditional(_, _, true_type, false_type) =>
+      "ConditionalOf" +
+      utility_record_type_suffix(true_type) +
+      "Or" +
+      utility_record_type_suffix(false_type)
     Applied(name, args) => {
       let prefix = {
         let suffix = decl_to_pascal_case(name)
@@ -2178,6 +2414,396 @@ fn utility_tuple_rest_array_type(type_ : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
+fn utility_awaited_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
+      utility_awaited_type(inner)
+    _ => type_
+  }
+}
+
+///|
+fn find_type_alias_decl(
+  module_ : @ast.TsModule,
+  name : String,
+) -> @ast.TsTypeAlias? {
+  for type_alias in module_.type_aliases {
+    if type_alias.name == name {
+      return Some(type_alias)
+    }
+  }
+  None
+}
+
+///|
+fn type_alias_param_binding(
+  params : Array[String],
+  args : Array[@ast.TsType],
+  name : String,
+) -> @ast.TsType? {
+  for i, param_name in params {
+    if param_name == name {
+      if i < args.length() {
+        return Some(args[i])
+      }
+      return None
+    }
+  }
+  None
+}
+
+///|
+fn substitute_type_alias_params(
+  type_ : @ast.TsType,
+  params : Array[String],
+  args : Array[@ast.TsType],
+) -> @ast.TsType {
+  match type_ {
+    Applied("__tsmbt_infer", _) => type_
+    Named(name) =>
+      match type_alias_param_binding(params, args, name) {
+        Some(arg) => arg
+        None => type_
+      }
+    Array(inner) => Array(substitute_type_alias_params(inner, params, args))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(substitute_type_alias_params(item, params, args))
+      }
+      Tuple(out)
+    }
+    Object(fields) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for field in fields {
+        let (key, value) = field
+        out.push(
+          (
+            substitute_type_alias_params(key, params, args),
+            substitute_type_alias_params(value, params, args),
+          ),
+        )
+      }
+      Object(out)
+    }
+    Func(fn_params, ret) => {
+      let out : Array[@ast.TsType] = []
+      for param in fn_params {
+        out.push(substitute_type_alias_params(param, params, args))
+      }
+      Func(out, substitute_type_alias_params(ret, params, args))
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(substitute_type_alias_params(item, params, args))
+      }
+      Union(out)
+    }
+    Intersection(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(substitute_type_alias_params(item, params, args))
+      }
+      Intersection(out)
+    }
+    Conditional(source, target, true_type, false_type) =>
+      Conditional(
+        substitute_type_alias_params(source, params, args),
+        substitute_type_alias_params(target, params, args),
+        substitute_type_alias_params(true_type, params, args),
+        substitute_type_alias_params(false_type, params, args),
+      )
+    Applied(name, applied_args) => {
+      let out : Array[@ast.TsType] = []
+      for arg in applied_args {
+        out.push(substitute_type_alias_params(arg, params, args))
+      }
+      Applied(name, out)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn applied_type_alias(
+  info : DeclModuleInfo,
+  name : String,
+  args : Array[@ast.TsType],
+) -> @ast.TsType? {
+  match find_type_alias_decl(info.module_, name) {
+    Some(type_alias) =>
+      if type_alias.type_params.length() == args.length() {
+        let substituted = substitute_type_alias_params(
+          type_alias.type_,
+          type_alias.type_params,
+          args,
+        )
+        if substituted == Applied(name, args) {
+          None
+        } else {
+          Some(substituted)
+        }
+      } else {
+        None
+      }
+    None => None
+  }
+}
+
+///|
+fn decl_infer_marker_name(type_ : @ast.TsType) -> String? {
+  match type_ {
+    Applied("__tsmbt_infer", [Named(name)]) => Some(name)
+    _ => None
+  }
+}
+
+///|
+fn decl_bind_inferred_type(
+  bindings : Map[String, @ast.TsType],
+  name : String,
+  type_ : @ast.TsType,
+) -> Bool {
+  match bindings.get(name) {
+    Some(existing) => existing == type_
+    None => {
+      bindings[name] = type_
+      true
+    }
+  }
+}
+
+///|
+fn decl_match_infer_pattern(
+  source : @ast.TsType,
+  pattern : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> Bool {
+  match decl_infer_marker_name(pattern) {
+    Some(name) => return decl_bind_inferred_type(bindings, name, source)
+    None => ()
+  }
+  if source == pattern {
+    return true
+  }
+  match (source, pattern) {
+    (_, Any) => true
+    (Array(source_inner), Array(pattern_inner)) =>
+      decl_match_infer_pattern(source_inner, pattern_inner, bindings)
+    (Array(source_inner), Applied("Array", [pattern_inner])) =>
+      decl_match_infer_pattern(source_inner, pattern_inner, bindings)
+    (Applied("Array", [source_inner]), Array(pattern_inner)) =>
+      decl_match_infer_pattern(source_inner, pattern_inner, bindings)
+    (Applied(source_name, source_args), Applied(pattern_name, pattern_args)) =>
+      if source_name != pattern_name ||
+        source_args.length() != pattern_args.length() {
+        false
+      } else {
+        for i in 0..<source_args.length() {
+          if !decl_match_infer_pattern(
+              source_args[i],
+              pattern_args[i],
+              bindings,
+            ) {
+            return false
+          }
+        }
+        true
+      }
+    (Tuple(source_items), Tuple(pattern_items)) =>
+      if source_items.length() != pattern_items.length() {
+        false
+      } else {
+        for i in 0..<source_items.length() {
+          if !decl_match_infer_pattern(
+              source_items[i],
+              pattern_items[i],
+              bindings,
+            ) {
+            return false
+          }
+        }
+        true
+      }
+    (Func(source_params, source_ret), Func(pattern_params, pattern_ret)) =>
+      if source_params.length() != pattern_params.length() {
+        false
+      } else {
+        for i in 0..<source_params.length() {
+          if !decl_match_infer_pattern(
+              source_params[i],
+              pattern_params[i],
+              bindings,
+            ) {
+            return false
+          }
+        }
+        decl_match_infer_pattern(source_ret, pattern_ret, bindings)
+      }
+    (_, Union(pattern_items)) => {
+      for pattern_item in pattern_items {
+        let branch_bindings : Map[String, @ast.TsType] = {}
+        if decl_match_infer_pattern(source, pattern_item, branch_bindings) {
+          for entry in branch_bindings {
+            let (name, type_) = entry
+            if !decl_bind_inferred_type(bindings, name, type_) {
+              return false
+            }
+          }
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn decl_substitute_inferred_type(
+  type_ : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> @ast.TsType {
+  match decl_infer_marker_name(type_) {
+    Some(name) =>
+      match bindings.get(name) {
+        Some(type_) => return type_
+        None => ()
+      }
+    None => ()
+  }
+  match type_ {
+    Named(name) =>
+      match bindings.get(name) {
+        Some(type_) => type_
+        None => type_
+      }
+    Array(inner) => Array(decl_substitute_inferred_type(inner, bindings))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(decl_substitute_inferred_type(item, bindings))
+      }
+      Tuple(out)
+    }
+    Object(fields) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for field in fields {
+        let (key, value) = field
+        out.push(
+          (
+            decl_substitute_inferred_type(key, bindings),
+            decl_substitute_inferred_type(value, bindings),
+          ),
+        )
+      }
+      Object(out)
+    }
+    Func(params, ret) => {
+      let out : Array[@ast.TsType] = []
+      for param in params {
+        out.push(decl_substitute_inferred_type(param, bindings))
+      }
+      Func(out, decl_substitute_inferred_type(ret, bindings))
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(decl_substitute_inferred_type(item, bindings))
+      }
+      Union(out)
+    }
+    Intersection(items) => {
+      let out : Array[@ast.TsType] = []
+      for item in items {
+        out.push(decl_substitute_inferred_type(item, bindings))
+      }
+      Intersection(out)
+    }
+    Conditional(source, target, true_type, false_type) =>
+      Conditional(
+        decl_substitute_inferred_type(source, bindings),
+        decl_substitute_inferred_type(target, bindings),
+        decl_substitute_inferred_type(true_type, bindings),
+        decl_substitute_inferred_type(false_type, bindings),
+      )
+    Applied(name, args) => {
+      let out : Array[@ast.TsType] = []
+      for arg in args {
+        out.push(decl_substitute_inferred_type(arg, bindings))
+      }
+      Applied(name, out)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn decl_type_extends_simple(
+  source : @ast.TsType,
+  target : @ast.TsType,
+) -> Bool? {
+  if source == target {
+    return Some(true)
+  }
+  match target {
+    Any => return Some(true)
+    Union(items) => {
+      let mut saw_unknown = false
+      for item in items {
+        match decl_type_extends_simple(source, item) {
+          Some(true) => return Some(true)
+          Some(false) => ()
+          None => saw_unknown = true
+        }
+      }
+      return if saw_unknown { None } else { Some(false) }
+    }
+    _ => ()
+  }
+  match source {
+    Never => return Some(true)
+    Union(items) => {
+      let mut saw_unknown = false
+      for item in items {
+        match decl_type_extends_simple(item, target) {
+          Some(true) => ()
+          Some(false) => return Some(false)
+          None => saw_unknown = true
+        }
+      }
+      return if saw_unknown { None } else { Some(true) }
+    }
+    Int if target == Number => return Some(true)
+    _ => ()
+  }
+  match (source, target) {
+    (
+      Number
+      | Int
+      | Boolean
+      | String_
+      | Void
+      | BigInt
+      | Symbol
+      | Null
+      | Undefined,
+      Number
+      | Int
+      | Boolean
+      | String_
+      | Void
+      | BigInt
+      | Symbol
+      | Null
+      | Undefined,
+    ) => Some(false)
+    _ => None
+  }
+}
+
+///|
 fn lower_react_utility_type(
   info : DeclModuleInfo,
   type_ : @ast.TsType,
@@ -2195,6 +2821,19 @@ fn lower_react_utility_type(
     Named(name) if is_react_node_like_name(name) => Any
     Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
+    Applied(name, [source_type]) if is_mapped_interface_utility_name(name) =>
+      match
+        utility_mapped_interface_spec(
+          info, name, source_type, modules, canonical_types,
+        ) {
+        Some(iface) => Named(iface.name)
+        None =>
+          Applied(name, [
+            lower_react_utility_type(
+              info, source_type, modules, canonical_types,
+            ),
+          ])
+      }
     Applied("PropsWithChildren", [inner_type]) =>
       match
         props_with_children_interface_spec(
@@ -2257,6 +2896,10 @@ fn lower_react_utility_type(
     }
     Applied("ReturnType", [Func(_, return_type)]) =>
       lower_react_utility_type(info, return_type, modules, canonical_types)
+    Applied("Awaited", [inner_type]) =>
+      utility_awaited_type(
+        lower_react_utility_type(info, inner_type, modules, canonical_types),
+      )
     Applied("Parameters", [Func(params, _)]) => {
       let lowered_params : Array[@ast.TsType] = []
       for param in params {
@@ -2291,15 +2934,57 @@ fn lower_react_utility_type(
         None => Applied(name, [lowered_source, lowered_filter])
       }
     }
-    Applied(name, args) => {
-      let next_args : Array[@ast.TsType] = []
-      for arg in args {
-        next_args.push(
-          lower_react_utility_type(info, arg, modules, canonical_types),
+    Conditional(source, target, true_type, false_type) => {
+      let lowered_source = lower_react_utility_type(
+        info, source, modules, canonical_types,
+      )
+      let lowered_target = lower_react_utility_type(
+        info, target, modules, canonical_types,
+      )
+      let infer_bindings : Map[String, @ast.TsType] = {}
+      if decl_match_infer_pattern(
+          lowered_source, lowered_target, infer_bindings,
+        ) {
+        lower_react_utility_type(
+          info,
+          decl_substitute_inferred_type(true_type, infer_bindings),
+          modules,
+          canonical_types,
         )
+      } else {
+        match decl_type_extends_simple(lowered_source, lowered_target) {
+          Some(true) =>
+            lower_react_utility_type(info, true_type, modules, canonical_types)
+          Some(false) =>
+            lower_react_utility_type(info, false_type, modules, canonical_types)
+          None =>
+            Conditional(
+              lowered_source,
+              lowered_target,
+              lower_react_utility_type(
+                info, true_type, modules, canonical_types,
+              ),
+              lower_react_utility_type(
+                info, false_type, modules, canonical_types,
+              ),
+            )
+        }
       }
-      Applied(name, next_args)
     }
+    Applied(name, args) =>
+      match applied_type_alias(info, name, args) {
+        Some(resolved) =>
+          lower_react_utility_type(info, resolved, modules, canonical_types)
+        None => {
+          let next_args : Array[@ast.TsType] = []
+          for arg in args {
+            next_args.push(
+              lower_react_utility_type(info, arg, modules, canonical_types),
+            )
+          }
+          Applied(name, next_args)
+        }
+      }
     Array(inner) =>
       Array(lower_react_utility_type(info, inner, modules, canonical_types))
     Tuple(items) => {
@@ -2385,6 +3070,29 @@ fn collect_react_utility_interfaces_from_type(
       collect_react_utility_interfaces_from_type(
         info, inner_type, modules, canonical_types, seen_names, interfaces,
       )
+    Applied(name, [source_type]) if is_mapped_interface_utility_name(name) => {
+      match
+        utility_mapped_interface_spec(
+          info, name, source_type, modules, canonical_types,
+        ) {
+        Some(iface) => {
+          if !seen_names.contains(iface.name) {
+            seen_names.push(iface.name)
+            interfaces.push(iface)
+          }
+          for field in iface.fields {
+            let (_, field_type) = field
+            collect_react_utility_interfaces_from_type(
+              info, field_type, modules, canonical_types, seen_names, interfaces,
+            )
+          }
+        }
+        None => ()
+      }
+      collect_react_utility_interfaces_from_type(
+        info, source_type, modules, canonical_types, seen_names, interfaces,
+      )
+    }
     Applied("PropsWithChildren", [inner_type]) => {
       match
         props_with_children_interface_spec(
@@ -2564,27 +3272,56 @@ fn rewrite_type_refs(
   type_ : @ast.TsType,
   canonical_types : Map[String, String],
 ) -> @ast.TsType {
+  rewrite_type_refs_in_scope(info, "", type_, canonical_types)
+}
+
+///|
+fn rewrite_type_refs_in_scope(
+  info : DeclModuleInfo,
+  local_name_prefix : String,
+  type_ : @ast.TsType,
+  canonical_types : Map[String, String],
+) -> @ast.TsType {
   match type_ {
     Named(name) =>
-      match resolve_exported_type_name(info, name, canonical_types) {
+      match
+        resolve_exported_type_name_in_scope(
+          info, local_name_prefix, name, canonical_types,
+        ) {
         Some(export_name) => Named(export_name)
         None => type_
       }
     Applied(name, args) => {
       let next_args : Array[@ast.TsType] = []
       for arg in args {
-        next_args.push(rewrite_type_refs(info, arg, canonical_types))
+        next_args.push(
+          rewrite_type_refs_in_scope(
+            info, local_name_prefix, arg, canonical_types,
+          ),
+        )
       }
-      match resolve_exported_type_name(info, name, canonical_types) {
+      match
+        resolve_exported_type_name_in_scope(
+          info, local_name_prefix, name, canonical_types,
+        ) {
         Some(export_name) => Applied(export_name, next_args)
         None => Applied(name, next_args)
       }
     }
-    Array(inner) => Array(rewrite_type_refs(info, inner, canonical_types))
+    Array(inner) =>
+      Array(
+        rewrite_type_refs_in_scope(
+          info, local_name_prefix, inner, canonical_types,
+        ),
+      )
     Tuple(items) => {
       let next_items : Array[@ast.TsType] = []
       for item in items {
-        next_items.push(rewrite_type_refs(info, item, canonical_types))
+        next_items.push(
+          rewrite_type_refs_in_scope(
+            info, local_name_prefix, item, canonical_types,
+          ),
+        )
       }
       Tuple(next_items)
     }
@@ -2594,8 +3331,12 @@ fn rewrite_type_refs(
         let (key_type, value_type) = field
         next_fields.push(
           (
-            rewrite_type_refs(info, key_type, canonical_types),
-            rewrite_type_refs(info, value_type, canonical_types),
+            rewrite_type_refs_in_scope(
+              info, local_name_prefix, key_type, canonical_types,
+            ),
+            rewrite_type_refs_in_scope(
+              info, local_name_prefix, value_type, canonical_types,
+            ),
           ),
         )
       }
@@ -2603,7 +3344,9 @@ fn rewrite_type_refs(
     }
     Struct(name, fields) => {
       let next_name = match
-        resolve_exported_type_name(info, name, canonical_types) {
+        resolve_exported_type_name_in_scope(
+          info, local_name_prefix, name, canonical_types,
+        ) {
         Some(export_name) => export_name
         None => name
       }
@@ -2611,7 +3354,12 @@ fn rewrite_type_refs(
       for field in fields {
         let (field_name, field_type) = field
         next_fields.push(
-          (field_name, rewrite_type_refs(info, field_type, canonical_types)),
+          (
+            field_name,
+            rewrite_type_refs_in_scope(
+              info, local_name_prefix, field_type, canonical_types,
+            ),
+          ),
         )
       }
       Struct(next_name, next_fields)
@@ -2619,21 +3367,38 @@ fn rewrite_type_refs(
     Func(params, return_type) => {
       let next_params : Array[@ast.TsType] = []
       for param in params {
-        next_params.push(rewrite_type_refs(info, param, canonical_types))
+        next_params.push(
+          rewrite_type_refs_in_scope(
+            info, local_name_prefix, param, canonical_types,
+          ),
+        )
       }
-      Func(next_params, rewrite_type_refs(info, return_type, canonical_types))
+      Func(
+        next_params,
+        rewrite_type_refs_in_scope(
+          info, local_name_prefix, return_type, canonical_types,
+        ),
+      )
     }
     Union(types) => {
       let next_types : Array[@ast.TsType] = []
       for item in types {
-        next_types.push(rewrite_type_refs(info, item, canonical_types))
+        next_types.push(
+          rewrite_type_refs_in_scope(
+            info, local_name_prefix, item, canonical_types,
+          ),
+        )
       }
       Union(next_types)
     }
     Intersection(types) => {
       let next_types : Array[@ast.TsType] = []
       for item in types {
-        next_types.push(rewrite_type_refs(info, item, canonical_types))
+        next_types.push(
+          rewrite_type_refs_in_scope(
+            info, local_name_prefix, item, canonical_types,
+          ),
+        )
       }
       Intersection(next_types)
     }
@@ -2655,7 +3420,11 @@ fn tuple_result_interface_spec(
       }
       Some({
         export_name,
-        iface: { name: tuple_result_interface_name(export_name), fields },
+        iface: {
+          name: tuple_result_interface_name(export_name),
+          fields,
+          readonly_fields: [],
+        },
       })
     }
     _ => None
@@ -2679,8 +3448,9 @@ fn normalize_tuple_result_interfaces(
             exported.export_name,
             lower_react_utility_type(
               info,
-              rewrite_type_refs(
+              rewrite_type_refs_in_scope(
                 info,
+                exported.local_name_prefix,
                 exported.import_.return_type,
                 canonical_types,
               ),
@@ -2706,8 +3476,9 @@ fn normalize_tuple_result_interfaces(
             exported.export_name,
             lower_react_utility_type(
               info,
-              rewrite_type_refs(
+              rewrite_type_refs_in_scope(
                 info,
+                exported.local_name_prefix,
                 exported.func.return_type,
                 canonical_types,
               ),
@@ -2764,7 +3535,12 @@ fn normalize_react_utility_interfaces(
           let (_, param_type) = param
           collect_react_utility_interfaces_from_type(
             info,
-            rewrite_type_refs(info, param_type, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              param_type,
+              canonical_types,
+            ),
             modules,
             canonical_types,
             seen_names,
@@ -2773,7 +3549,12 @@ fn normalize_react_utility_interfaces(
         }
         collect_react_utility_interfaces_from_type(
           info,
-          rewrite_type_refs(info, exported.import_.return_type, canonical_types),
+          rewrite_type_refs_in_scope(
+            info,
+            exported.local_name_prefix,
+            exported.import_.return_type,
+            canonical_types,
+          ),
           modules,
           canonical_types,
           seen_names,
@@ -2789,7 +3570,12 @@ fn normalize_react_utility_interfaces(
         for param in exported.func.params {
           collect_react_utility_interfaces_from_type(
             info,
-            rewrite_type_refs(info, param.type_, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              param.type_,
+              canonical_types,
+            ),
             modules,
             canonical_types,
             seen_names,
@@ -2798,7 +3584,12 @@ fn normalize_react_utility_interfaces(
         }
         collect_react_utility_interfaces_from_type(
           info,
-          rewrite_type_refs(info, exported.func.return_type, canonical_types),
+          rewrite_type_refs_in_scope(
+            info,
+            exported.local_name_prefix,
+            exported.func.return_type,
+            canonical_types,
+          ),
           modules,
           canonical_types,
           seen_names,
@@ -2813,7 +3604,12 @@ fn normalize_react_utility_interfaces(
       Some(info) =>
         collect_react_utility_interfaces_from_type(
           info,
-          rewrite_type_refs(info, exported.value.type_, canonical_types),
+          rewrite_type_refs_in_scope(
+            info,
+            exported.local_name_prefix,
+            exported.value.type_,
+            canonical_types,
+          ),
           modules,
           canonical_types,
           seen_names,
@@ -2828,7 +3624,12 @@ fn normalize_react_utility_interfaces(
         for class_property in exported.class_.properties {
           collect_react_utility_interfaces_from_type(
             info,
-            rewrite_type_refs(info, class_property.type_, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              class_property.type_,
+              canonical_types,
+            ),
             modules,
             canonical_types,
             seen_names,
@@ -2840,7 +3641,12 @@ fn normalize_react_utility_interfaces(
             let (_, param_type) = param
             collect_react_utility_interfaces_from_type(
               info,
-              rewrite_type_refs(info, param_type, canonical_types),
+              rewrite_type_refs_in_scope(
+                info,
+                exported.local_name_prefix,
+                param_type,
+                canonical_types,
+              ),
               modules,
               canonical_types,
               seen_names,
@@ -2849,7 +3655,12 @@ fn normalize_react_utility_interfaces(
           }
           collect_react_utility_interfaces_from_type(
             info,
-            rewrite_type_refs(info, class_method.return_type, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              class_method.return_type,
+              canonical_types,
+            ),
             modules,
             canonical_types,
             seen_names,
@@ -2862,7 +3673,12 @@ fn normalize_react_utility_interfaces(
               let (_, param_type) = param
               collect_react_utility_interfaces_from_type(
                 info,
-                rewrite_type_refs(info, param_type, canonical_types),
+                rewrite_type_refs_in_scope(
+                  info,
+                  exported.local_name_prefix,
+                  param_type,
+                  canonical_types,
+                ),
                 modules,
                 canonical_types,
                 seen_names,
@@ -2899,7 +3715,14 @@ fn clone_resolved_interface_origin(
       ),
     )
   }
-  { name: origin.export_name, fields }
+  {
+    name: origin.export_name,
+    fields,
+    readonly_fields: readonly_fields_for_fields(
+      origin.iface.readonly_fields,
+      fields,
+    ),
+  }
 }
 
 ///|
@@ -3056,7 +3879,12 @@ fn collect_interface_dependencies(
           let (_, param_type) = param
           collect_interface_dependencies_from_type(
             info,
-            rewrite_type_refs(info, param_type, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              param_type,
+              canonical_types,
+            ),
             modules,
             canonical_types,
             seen_names,
@@ -3065,7 +3893,12 @@ fn collect_interface_dependencies(
         }
         collect_interface_dependencies_from_type(
           info,
-          rewrite_type_refs(info, exported.import_.return_type, canonical_types),
+          rewrite_type_refs_in_scope(
+            info,
+            exported.local_name_prefix,
+            exported.import_.return_type,
+            canonical_types,
+          ),
           modules,
           canonical_types,
           seen_names,
@@ -3081,7 +3914,12 @@ fn collect_interface_dependencies(
         for param in exported.func.params {
           collect_interface_dependencies_from_type(
             info,
-            rewrite_type_refs(info, param.type_, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              param.type_,
+              canonical_types,
+            ),
             modules,
             canonical_types,
             seen_names,
@@ -3090,7 +3928,12 @@ fn collect_interface_dependencies(
         }
         collect_interface_dependencies_from_type(
           info,
-          rewrite_type_refs(info, exported.func.return_type, canonical_types),
+          rewrite_type_refs_in_scope(
+            info,
+            exported.local_name_prefix,
+            exported.func.return_type,
+            canonical_types,
+          ),
           modules,
           canonical_types,
           seen_names,
@@ -3105,7 +3948,12 @@ fn collect_interface_dependencies(
       Some(info) =>
         collect_interface_dependencies_from_type(
           info,
-          rewrite_type_refs(info, exported.value.type_, canonical_types),
+          rewrite_type_refs_in_scope(
+            info,
+            exported.local_name_prefix,
+            exported.value.type_,
+            canonical_types,
+          ),
           modules,
           canonical_types,
           seen_names,
@@ -3120,7 +3968,12 @@ fn collect_interface_dependencies(
         for class_property in exported.class_.properties {
           collect_interface_dependencies_from_type(
             info,
-            rewrite_type_refs(info, class_property.type_, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              class_property.type_,
+              canonical_types,
+            ),
             modules,
             canonical_types,
             seen_names,
@@ -3132,7 +3985,12 @@ fn collect_interface_dependencies(
             let (_, param_type) = param
             collect_interface_dependencies_from_type(
               info,
-              rewrite_type_refs(info, param_type, canonical_types),
+              rewrite_type_refs_in_scope(
+                info,
+                exported.local_name_prefix,
+                param_type,
+                canonical_types,
+              ),
               modules,
               canonical_types,
               seen_names,
@@ -3141,7 +3999,12 @@ fn collect_interface_dependencies(
           }
           collect_interface_dependencies_from_type(
             info,
-            rewrite_type_refs(info, class_method.return_type, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              class_method.return_type,
+              canonical_types,
+            ),
             modules,
             canonical_types,
             seen_names,
@@ -3154,7 +4017,12 @@ fn collect_interface_dependencies(
               let (_, param_type) = param
               collect_interface_dependencies_from_type(
                 info,
-                rewrite_type_refs(info, param_type, canonical_types),
+                rewrite_type_refs_in_scope(
+                  info,
+                  exported.local_name_prefix,
+                  param_type,
+                  canonical_types,
+                ),
                 modules,
                 canonical_types,
                 seen_names,
@@ -3192,7 +4060,14 @@ fn clone_exported_interface(
       ),
     )
   }
-  { name: exported.export_name, fields }
+  {
+    name: exported.export_name,
+    fields,
+    readonly_fields: readonly_fields_for_fields(
+      exported.iface.readonly_fields,
+      fields,
+    ),
+  }
 }
 
 ///|
@@ -3210,7 +4085,12 @@ fn clone_exported_import(
         param_name,
         lower_react_utility_type(
           info,
-          rewrite_type_refs(info, param_type, canonical_types),
+          rewrite_type_refs_in_scope(
+            info,
+            exported.local_name_prefix,
+            param_type,
+            canonical_types,
+          ),
           modules,
           canonical_types,
         ),
@@ -3219,7 +4099,12 @@ fn clone_exported_import(
   }
   let return_type = lower_react_utility_type(
     info,
-    rewrite_type_refs(info, exported.import_.return_type, canonical_types),
+    rewrite_type_refs_in_scope(
+      info,
+      exported.local_name_prefix,
+      exported.import_.return_type,
+      canonical_types,
+    ),
     modules,
     canonical_types,
   )
@@ -3377,6 +4262,95 @@ fn push_preferred_func_decl(
 }
 
 ///|
+fn decl_overload_type_suffix(type_ : @ast.TsType) -> String? {
+  match decl_classify_optional_like_union(type_) {
+    Some((inner, _)) =>
+      match decl_overload_type_suffix(inner) {
+        Some(suffix) => return Some(suffix + "_optional")
+        None => return None
+      }
+    None => ()
+  }
+  match type_ {
+    Literal(_) | String_ => Some("string")
+    Number => Some("number")
+    Int => Some("int")
+    Boolean => Some("bool")
+    BigInt => Some("bigint")
+    Symbol => Some("symbol")
+    Named(name) if name != "any" && name != "Function" =>
+      Some(decl_to_snake_case(name))
+    Array(inner) =>
+      match decl_overload_type_suffix(inner) {
+        Some(suffix) => Some(suffix + "_array")
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn decl_overload_suffix_from_types(types : Array[@ast.TsType]) -> String? {
+  if types.length() == 0 {
+    return Some("no_args")
+  }
+  let parts : Array[String] = []
+  for type_ in types {
+    match decl_overload_type_suffix(type_) {
+      Some(suffix) => parts.push(suffix)
+      None => return None
+    }
+  }
+  Some(parts.join("_"))
+}
+
+///|
+fn decl_import_signature_types(import_ : @ast.TsImport) -> Array[@ast.TsType] {
+  let types : Array[@ast.TsType] = []
+  for param in import_.params {
+    types.push(param.1)
+  }
+  types
+}
+
+///|
+fn decl_func_signature_types(func : @ast.TsFunc) -> Array[@ast.TsType] {
+  let types : Array[@ast.TsType] = []
+  for param in func.params {
+    types.push(param.type_)
+  }
+  types
+}
+
+///|
+fn decl_import_same_signature(lhs : @ast.TsImport, rhs : @ast.TsImport) -> Bool {
+  if lhs.return_type != rhs.return_type ||
+    lhs.params.length() != rhs.params.length() {
+    return false
+  }
+  for i in 0..<lhs.params.length() {
+    if lhs.params[i].1 != rhs.params[i].1 {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn decl_func_same_signature(lhs : @ast.TsFunc, rhs : @ast.TsFunc) -> Bool {
+  if lhs.return_type != rhs.return_type ||
+    lhs.params.length() != rhs.params.length() {
+    return false
+  }
+  for i in 0..<lhs.params.length() {
+    if lhs.params[i].type_ != rhs.params[i].type_ {
+      return false
+    }
+  }
+  true
+}
+
+///|
 fn clone_exported_func(
   exported : ExportedFuncDecl,
   info : DeclModuleInfo,
@@ -3391,7 +4365,12 @@ fn clone_exported_func(
       is_rest: param.is_rest,
       type_: lower_react_utility_type(
         info,
-        rewrite_type_refs(info, param.type_, canonical_types),
+        rewrite_type_refs_in_scope(
+          info,
+          exported.local_name_prefix,
+          param.type_,
+          canonical_types,
+        ),
         modules,
         canonical_types,
       ),
@@ -3400,7 +4379,12 @@ fn clone_exported_func(
   }
   let return_type = lower_react_utility_type(
     info,
-    rewrite_type_refs(info, exported.func.return_type, canonical_types),
+    rewrite_type_refs_in_scope(
+      info,
+      exported.local_name_prefix,
+      exported.func.return_type,
+      canonical_types,
+    ),
     modules,
     canonical_types,
   )
@@ -3418,6 +4402,198 @@ fn clone_exported_func(
 }
 
 ///|
+fn exported_import_overload_wrappers(
+  exported_imports : Array[ExportedImportDecl],
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> Array[ExportedImportDecl] {
+  let wrappers : Array[ExportedImportDecl] = []
+  let blocked_names : Array[String] = []
+  for exported in exported_imports {
+    if !blocked_names.contains(exported.export_name) {
+      blocked_names.push(exported.export_name)
+    }
+  }
+  for exported in exported_imports {
+    let info = match modules.get(exported.source_path) {
+      Some(info) => info
+      None => continue
+    }
+    let overloads = find_import_decls(info.module_, exported.import_.name)
+    if overloads.length() < 2 {
+      continue
+    }
+    let preferred : Array[@ast.TsImport] = []
+    for import_ in overloads {
+      push_preferred_import_decl(
+        preferred,
+        clone_exported_import(
+          {
+            source_path: exported.source_path,
+            local_name_prefix: exported.local_name_prefix,
+            export_name: exported.export_name,
+            source_export_name: exported.source_export_name,
+            import_,
+          },
+          info,
+          modules,
+          canonical_types,
+        ),
+      )
+    }
+    if preferred.length() == 0 {
+      continue
+    }
+    for import_ in overloads {
+      let clone = clone_exported_import(
+        {
+          source_path: exported.source_path,
+          local_name_prefix: exported.local_name_prefix,
+          export_name: exported.export_name,
+          source_export_name: exported.source_export_name,
+          import_,
+        },
+        info,
+        modules,
+        canonical_types,
+      )
+      if decl_import_same_signature(clone, preferred[0]) {
+        continue
+      }
+      let suffix = match
+        decl_overload_suffix_from_types(decl_import_signature_types(clone)) {
+        Some(suffix) => suffix
+        None => continue
+      }
+      let wrapper_name = exported.export_name + "_" + suffix
+      if blocked_names.contains(wrapper_name) {
+        continue
+      }
+      blocked_names.push(wrapper_name)
+      wrappers.push({
+        source_path: exported.source_path,
+        local_name_prefix: exported.local_name_prefix,
+        export_name: wrapper_name,
+        source_export_name: exported.source_export_name,
+        import_,
+      })
+    }
+  }
+  wrappers
+}
+
+///|
+fn exported_func_overload_wrappers(
+  exported_funcs : Array[ExportedFuncDecl],
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> Array[ExportedFuncDecl] {
+  let wrappers : Array[ExportedFuncDecl] = []
+  let blocked_names : Array[String] = []
+  for exported in exported_funcs {
+    if !blocked_names.contains(exported.export_name) {
+      blocked_names.push(exported.export_name)
+    }
+  }
+  for exported in exported_funcs {
+    let info = match modules.get(exported.source_path) {
+      Some(info) => info
+      None => continue
+    }
+    let overloads = find_func_decls(info.module_, exported.func.name)
+    if overloads.length() < 2 {
+      continue
+    }
+    let preferred : Array[@ast.TsFunc] = []
+    for func in overloads {
+      push_preferred_func_decl(
+        preferred,
+        clone_exported_func(
+          {
+            source_path: exported.source_path,
+            local_name_prefix: exported.local_name_prefix,
+            export_name: exported.export_name,
+            source_export_name: exported.source_export_name,
+            func,
+          },
+          info,
+          modules,
+          canonical_types,
+        ),
+      )
+    }
+    if preferred.length() == 0 {
+      continue
+    }
+    for func in overloads {
+      let clone = clone_exported_func(
+        {
+          source_path: exported.source_path,
+          local_name_prefix: exported.local_name_prefix,
+          export_name: exported.export_name,
+          source_export_name: exported.source_export_name,
+          func,
+        },
+        info,
+        modules,
+        canonical_types,
+      )
+      if decl_func_same_signature(clone, preferred[0]) {
+        continue
+      }
+      let suffix = match
+        decl_overload_suffix_from_types(decl_func_signature_types(clone)) {
+        Some(suffix) => suffix
+        None => continue
+      }
+      let wrapper_name = exported.export_name + "_" + suffix
+      if blocked_names.contains(wrapper_name) {
+        continue
+      }
+      blocked_names.push(wrapper_name)
+      wrappers.push({
+        source_path: exported.source_path,
+        local_name_prefix: exported.local_name_prefix,
+        export_name: wrapper_name,
+        source_export_name: exported.source_export_name,
+        func,
+      })
+    }
+  }
+  wrappers
+}
+
+///|
+fn append_exported_imports(
+  base : Array[ExportedImportDecl],
+  extra : Array[ExportedImportDecl],
+) -> Array[ExportedImportDecl] {
+  let out : Array[ExportedImportDecl] = []
+  for item in base {
+    out.push(item)
+  }
+  for item in extra {
+    out.push(item)
+  }
+  out
+}
+
+///|
+fn append_exported_funcs(
+  base : Array[ExportedFuncDecl],
+  extra : Array[ExportedFuncDecl],
+) -> Array[ExportedFuncDecl] {
+  let out : Array[ExportedFuncDecl] = []
+  for item in base {
+    out.push(item)
+  }
+  for item in extra {
+    out.push(item)
+  }
+  out
+}
+
+///|
 fn clone_exported_value(
   exported : ExportedValueDecl,
   info : DeclModuleInfo,
@@ -3428,7 +4604,12 @@ fn clone_exported_value(
     name: exported.export_name,
     type_: lower_react_utility_type(
       info,
-      rewrite_type_refs(info, exported.value.type_, canonical_types),
+      rewrite_type_refs_in_scope(
+        info,
+        exported.local_name_prefix,
+        exported.value.type_,
+        canonical_types,
+      ),
       modules,
       canonical_types,
     ),
@@ -3448,7 +4629,12 @@ fn clone_exported_class(
       name: class_property.name,
       type_: lower_react_utility_type(
         info,
-        rewrite_type_refs(info, class_property.type_, canonical_types),
+        rewrite_type_refs_in_scope(
+          info,
+          exported.local_name_prefix,
+          class_property.type_,
+          canonical_types,
+        ),
         modules,
         canonical_types,
       ),
@@ -3466,7 +4652,12 @@ fn clone_exported_class(
           param_name,
           lower_react_utility_type(
             info,
-            rewrite_type_refs(info, param_type, canonical_types),
+            rewrite_type_refs_in_scope(
+              info,
+              exported.local_name_prefix,
+              param_type,
+              canonical_types,
+            ),
             modules,
             canonical_types,
           ),
@@ -3478,7 +4669,12 @@ fn clone_exported_class(
       params,
       return_type: lower_react_utility_type(
         info,
-        rewrite_type_refs(info, class_method.return_type, canonical_types),
+        rewrite_type_refs_in_scope(
+          info,
+          exported.local_name_prefix,
+          class_method.return_type,
+          canonical_types,
+        ),
         modules,
         canonical_types,
       ),
@@ -3495,7 +4691,12 @@ fn clone_exported_class(
             param_name,
             lower_react_utility_type(
               info,
-              rewrite_type_refs(info, param_type, canonical_types),
+              rewrite_type_refs_in_scope(
+                info,
+                exported.local_name_prefix,
+                param_type,
+                canonical_types,
+              ),
               modules,
               canonical_types,
             ),
@@ -3534,12 +4735,22 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_classes,
   )
+  let emitted_exported_imports = append_exported_imports(
+    exported_imports,
+    exported_import_overload_wrappers(
+      exported_imports, modules, canonical_types,
+    ),
+  )
+  let emitted_exported_funcs = append_exported_funcs(
+    exported_funcs,
+    exported_func_overload_wrappers(exported_funcs, modules, canonical_types),
+  )
   let tuple_result_interfaces = normalize_tuple_result_interfaces(
-    exported_imports, exported_funcs, modules, canonical_types,
+    emitted_exported_imports, emitted_exported_funcs, modules, canonical_types,
   )
   let react_utility_interfaces = normalize_react_utility_interfaces(
-    exported_interfaces, exported_imports, exported_funcs, exported_values, exported_classes,
-    modules, canonical_types,
+    exported_interfaces, emitted_exported_imports, emitted_exported_funcs, exported_values,
+    exported_classes, modules, canonical_types,
   )
   let interfaces : Array[@ast.TsInterface] = []
   for exported in exported_interfaces {
@@ -3559,13 +4770,13 @@ pub async fn emit_moonbit_decl_from_entry_path(
   }
   for
     iface in collect_interface_dependencies(
-      exported_interfaces, exported_imports, exported_funcs, exported_values, exported_classes,
-      modules, canonical_types, interfaces,
+      exported_interfaces, emitted_exported_imports, emitted_exported_funcs, exported_values,
+      exported_classes, modules, canonical_types, interfaces,
     ) {
     interfaces.push(iface)
   }
   let imports : Array[@ast.TsImport] = []
-  for exported in exported_imports {
+  for exported in emitted_exported_imports {
     match modules.get(exported.source_path) {
       Some(info) =>
         push_preferred_import_decl(
@@ -3576,7 +4787,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     }
   }
   let funcs : Array[@ast.TsFunc] = []
-  for exported in exported_funcs {
+  for exported in emitted_exported_funcs {
     match modules.get(exported.source_path) {
       Some(info) =>
         push_preferred_func_decl(
@@ -3607,7 +4818,15 @@ pub async fn emit_moonbit_decl_from_entry_path(
     }
   }
   @parser.emit_moonbit_decl_with_sections(
-    { funcs, interfaces, imports, values, classes, namespaces: [] },
+    {
+      funcs,
+      interfaces,
+      type_aliases: [],
+      imports,
+      values,
+      classes,
+      namespaces: [],
+    },
     notes,
     notes.length() > 0,
   )
