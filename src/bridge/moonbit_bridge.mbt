@@ -34,6 +34,12 @@ priv struct BridgeTypeGuardHelper {
 }
 
 ///|
+priv struct BridgeStructDecl {
+  name : String
+  fields : Array[String]
+}
+
+///|
 fn render_bridge_pkg_json(needs_js_import : Bool) -> String {
   if needs_js_import {
     let content =
@@ -306,10 +312,24 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
 ///|
 fn parse_bridge_public_type_name_line(line : String) -> String? {
   let prefix = "declare pub type "
-  if !line.has_prefix(prefix) {
-    return None
+  let rest = if line.has_prefix(prefix) {
+    line[prefix.length():].to_string().trim().to_string()
+  } else {
+    let struct_prefixes = ["pub(all) struct ", "pub struct "]
+    let mut parsed : String? = None
+    for struct_prefix in struct_prefixes {
+      if line.has_prefix(struct_prefix) {
+        parsed = Some(
+          line[struct_prefix.length():].to_string().trim().to_string(),
+        )
+        break
+      }
+    }
+    match parsed {
+      Some(rest) => rest
+      None => return None
+    }
   }
-  let rest = line[prefix.length():].to_string().trim().to_string()
   if rest == "" {
     return None
   }
@@ -345,7 +365,9 @@ fn collect_bridge_public_type_names(bridge_mbti : String) -> Array[String] {
 
 ///|
 fn parse_bridge_implemented_type_name_line(line : String) -> String? {
-  let prefixes = ["pub struct ", "struct ", "pub type ", "type "]
+  let prefixes = [
+    "pub(all) struct ", "pub struct ", "struct ", "pub type ", "type ",
+  ]
   for prefix in prefixes {
     if !line.has_prefix(prefix) {
       continue
@@ -390,6 +412,117 @@ fn collect_bridge_implemented_type_names(bridge_mbt : String) -> Array[String] {
     }
   }
   names
+}
+
+///|
+fn parse_bridge_struct_header_line(line : String) -> String? {
+  let prefixes = ["pub(all) struct ", "pub struct "]
+  for prefix in prefixes {
+    if !line.has_prefix(prefix) {
+      continue
+    }
+    let rest = line[prefix.length():].to_string().trim().to_string()
+    if rest == "" {
+      continue
+    }
+    let mut end_ = rest.length()
+    match rest.find("{") {
+      Some(idx) => end_ = idx
+      None => ()
+    }
+    match rest.find("[") {
+      Some(idx) => if idx < end_ { end_ = idx }
+      None => ()
+    }
+    match rest.find(" ") {
+      Some(idx) => if idx < end_ { end_ = idx }
+      None => ()
+    }
+    let name = rest[:end_].to_string().trim().to_string()
+    if name != "" {
+      return Some(name)
+    }
+  }
+  None
+}
+
+///|
+fn collect_bridge_struct_decls(bridge_mbt : String) -> Array[BridgeStructDecl] {
+  let decls : Array[BridgeStructDecl] = []
+  let mut current_name : String? = None
+  let mut fields : Array[String] = []
+  for line_view in bridge_mbt.split("\n") {
+    let line = line_view.to_string().trim().to_string()
+    match current_name {
+      Some(name) =>
+        if line == "}" {
+          decls.push({ name, fields })
+          current_name = None
+          fields = []
+        } else if line.has_prefix("//") || line == "" {
+          continue
+        } else if line.contains(" : ") {
+          fields.push(line)
+        }
+      None =>
+        match parse_bridge_struct_header_line(line) {
+          Some(name) => {
+            current_name = Some(name)
+            fields = []
+          }
+          None => ()
+        }
+    }
+  }
+  decls
+}
+
+///|
+fn find_bridge_struct_decl(
+  decls : Array[BridgeStructDecl],
+  name : String,
+) -> BridgeStructDecl? {
+  for decl in decls {
+    if decl.name == name {
+      return Some(decl)
+    }
+  }
+  None
+}
+
+///|
+fn render_bridge_struct_mbti_decl(decl : BridgeStructDecl) -> String {
+  let lines : Array[String] = ["pub(all) struct \{decl.name} {"]
+  for field in decl.fields {
+    lines.push("  " + field)
+  }
+  lines.push("}")
+  lines.join("\n")
+}
+
+///|
+fn expose_bridge_struct_decls_in_mbti(
+  bridge_mbti : String,
+  bridge_mbt : String,
+) -> String {
+  let struct_decls = collect_bridge_struct_decls(bridge_mbt)
+  if struct_decls.is_empty() {
+    return bridge_mbti
+  }
+  let lines : Array[String] = []
+  for line_view in bridge_mbti.split("\n") {
+    let line = line_view.to_string()
+    let trimmed = line.trim().to_string()
+    match parse_bridge_public_type_name_line(trimmed) {
+      Some(name) =>
+        match find_bridge_struct_decl(struct_decls, name) {
+          Some(decl) => lines.push(render_bridge_struct_mbti_decl(decl))
+          None => lines.push(line)
+        }
+      None => lines.push(line)
+    }
+  }
+  lines.join("\n")
 }
 
 ///|
@@ -670,8 +803,11 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     export_surface,
   )
   let bridge_mbt = add_bridge_public_wrappers(base_bridge_mbti, bundle.ffi_mbt)
-  let bridge_mbti = add_bridge_ergonomic_helper_decls(
+  let public_bridge_mbti = expose_bridge_struct_decls_in_mbti(
     base_bridge_mbti, bridge_mbt,
+  )
+  let bridge_mbti = add_bridge_ergonomic_helper_decls(
+    public_bridge_mbti, bridge_mbt,
   )
   {
     entry_path: bundle.entry_path,

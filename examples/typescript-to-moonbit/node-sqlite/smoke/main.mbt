@@ -1,8 +1,21 @@
 extern "js" fn node_sqlite_memory_path() -> @sut.PathLike =
   #| () => ":memory:"
 
-extern "js" fn node_sqlite_options() -> @sut.DatabaseSyncOptions =
-  #| () => ({})
+fn node_sqlite_options() -> @sut.DatabaseSyncOptions {
+  @sut.DatabaseSyncOptions::{
+    open: Some(true),
+    enableForeignKeyConstraints: None,
+    enableDoubleQuotedStringLiterals: None,
+    readOnly: None,
+    allowExtension: None,
+    timeout: None,
+    readBigInts: None,
+    returnArrays: None,
+    allowBareNamedParameters: None,
+    allowUnknownNamedParameters: None,
+    defensive: None,
+  }
+}
 
 extern "js" fn node_sqlite_params() -> Array[@sut.SQLInputValue] =
   #| () => []

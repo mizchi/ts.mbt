@@ -15,6 +15,7 @@ priv struct MoonBitBridgeImport {
 ///|
 priv struct MoonBitJsFfiState {
   declared_type_names : Array[String]
+  struct_type_names : Array[String]
   external_type_names : Array[String]
   function_field_method_wrapper_limit : Int
   mut needs_js_any : Bool
@@ -510,7 +511,10 @@ fn ffi_struct_decl_to_moonbit(
   iface : @ast.TsInterface,
 ) -> String {
   let type_name = ffi_type_identifier(iface.name, "OpaqueType")
-  let lines : Array[String] = ["#warnings(\"-9\")", "pub struct \{type_name} {"]
+  let lines : Array[String] = [
+    "#warnings(\"-9\")",
+    "pub(all) struct \{type_name} {",
+  ]
   let method_lines : Array[String] = []
   let mut method_wrapper_count = 0
   let seen_fields : Array[String] = []
@@ -560,7 +564,10 @@ fn ffi_named_struct_decl_to_moonbit(
   fields : Array[(String, @ast.TsType)],
 ) -> String {
   let type_name = ffi_type_identifier(name, "OpaqueType")
-  let lines : Array[String] = ["#warnings(\"-9\")", "pub struct \{type_name} {"]
+  let lines : Array[String] = [
+    "#warnings(\"-9\")",
+    "pub(all) struct \{type_name} {",
+  ]
   let seen_fields : Array[String] = []
   for field in fields {
     let (field_name, field_type) = field
@@ -777,10 +784,136 @@ fn ffi_type_is_optional(type_ : @ast.TsType) -> Bool {
 }
 
 ///|
-fn ffi_import_has_optional_params(import_ : @ast.TsImport) -> Bool {
+fn ffi_struct_fields_need_js_converter(
+  fields : Array[(String, @ast.TsType)],
+) -> Bool {
+  for field in fields {
+    let (field_name, field_type) = field
+    if ffi_sanitize_identifier(field_name, "field") != field_name ||
+      ffi_type_is_optional(field_type) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn ffi_struct_converter_name(type_name : String) -> String {
+  "__ts_mbt_to_js_" + ffi_to_snake_case(type_name)
+}
+
+///|
+fn ffi_struct_converter_call_expr(name : String, expr : String) -> String {
+  let type_name = ffi_type_identifier(name, "OpaqueType")
+  let converter_name = ffi_struct_converter_name(type_name)
+  "\{converter_name}(\{expr})"
+}
+
+///|
+fn ffi_named_type_is_generated_struct(
+  state : MoonBitJsFfiState,
+  name : String,
+) -> Bool {
+  state.struct_type_names.contains(ffi_type_identifier(name, "OpaqueType"))
+}
+
+///|
+fn ffi_type_js_converter_expr(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+  expr : String,
+) -> String {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      if !is_optional {
+        return ffi_type_js_converter_expr(state, collapsed, expr)
+      }
+      return match collapsed {
+        Boolean => "__ts_mbt_unwrap_bool_option(\{expr})"
+        Struct(name, _) => ffi_struct_converter_call_expr(name, expr)
+        Named(name) if ffi_named_type_is_generated_struct(state, name) =>
+          ffi_struct_converter_call_expr(name, expr)
+        Applied(name, _) if ffi_named_type_is_generated_struct(state, name) =>
+          ffi_struct_converter_call_expr(name, expr)
+        _ => "__ts_mbt_unwrap_option(\{expr})"
+      }
+    }
+    None => ()
+  }
+  match ffi_classify_transparent_intersection(type_) {
+    Some(inner) => return ffi_type_js_converter_expr(state, inner, expr)
+    None => ()
+  }
+  match type_ {
+    Struct(name, _) => ffi_struct_converter_call_expr(name, expr)
+    Named(name) if ffi_named_type_is_generated_struct(state, name) =>
+      ffi_struct_converter_call_expr(name, expr)
+    Applied(name, _) if ffi_named_type_is_generated_struct(state, name) =>
+      ffi_struct_converter_call_expr(name, expr)
+    Array(inner) => {
+      let item_expr = ffi_type_js_converter_expr(state, inner, "item")
+      if item_expr == "item" {
+        expr
+      } else {
+        "Array.isArray(\{expr}) ? \{expr}.map((item) => \{item_expr}) : \{expr}"
+      }
+    }
+    _ => expr
+  }
+}
+
+///|
+fn ffi_struct_js_converter_decl(
+  state : MoonBitJsFfiState,
+  name : String,
+  fields : Array[(String, @ast.TsType)],
+) -> String {
+  let type_name = ffi_type_identifier(name, "OpaqueType")
+  let converter_name = ffi_struct_converter_name(type_name)
+  let lines : Array[String] = [
+    "function \{converter_name}(value) {",
+    "  value = __ts_mbt_unwrap_option(value);",
+    "  if (value == null) return undefined;",
+    "  const result = {};",
+    "  let field;",
+  ]
+  for field in fields {
+    let (field_name, field_type) = field
+    let safe_name = ffi_sanitize_identifier(field_name, "field")
+    let source_key = json_escape_string(safe_name)
+    let target_key = json_escape_string(field_name)
+    let converted_field = ffi_type_js_converter_expr(state, field_type, "field")
+    lines.push("  field = value[\"\{source_key}\"];")
+    lines.push("  field = \{converted_field};")
+    if ffi_type_is_optional(field_type) {
+      lines.push(
+        "  if (field !== undefined) result[\"\{target_key}\"] = field;",
+      )
+    } else {
+      lines.push("  result[\"\{target_key}\"] = field;")
+    }
+  }
+  lines.push("  return result;")
+  lines.push("}")
+  lines.join("\n")
+}
+
+///|
+fn ffi_type_needs_js_arg_conversion(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> Bool {
+  ffi_type_js_converter_expr(state, type_, "arg") != "arg"
+}
+
+///|
+fn ffi_import_needs_js_arg_conversion(
+  state : MoonBitJsFfiState,
+  import_ : @ast.TsImport,
+) -> Bool {
   for item in import_.params {
     let (_, type_) = item
-    if ffi_type_is_optional(type_) {
+    if ffi_type_needs_js_arg_conversion(state, type_) {
       return true
     }
   }
@@ -788,9 +921,12 @@ fn ffi_import_has_optional_params(import_ : @ast.TsImport) -> Bool {
 }
 
 ///|
-fn ffi_func_has_optional_params(func : @ast.TsFunc) -> Bool {
+fn ffi_func_needs_js_arg_conversion(
+  state : MoonBitJsFfiState,
+  func : @ast.TsFunc,
+) -> Bool {
   for param in func.params {
-    if ffi_type_is_optional(param.type_) {
+    if ffi_type_needs_js_arg_conversion(state, param.type_) {
       return true
     }
   }
@@ -798,35 +934,42 @@ fn ffi_func_has_optional_params(func : @ast.TsFunc) -> Bool {
 }
 
 ///|
-fn ffi_optional_call_arg(name : String, type_ : @ast.TsType) -> String {
-  if ffi_type_is_optional(type_) {
-    "__ts_mbt_unwrap_option(\{name})"
-  } else {
-    name
+fn ffi_params_call_args_with_names(
+  state : MoonBitJsFfiState,
+  params : Array[(String, @ast.TsType)],
+  names : Array[String],
+) -> Array[String] {
+  let args : Array[String] = []
+  for i, param in params {
+    let (_, type_) = param
+    args.push(ffi_type_js_converter_expr(state, type_, names[i]))
   }
+  args
 }
 
 ///|
 fn ffi_import_call_args_with_names(
+  state : MoonBitJsFfiState,
   import_ : @ast.TsImport,
   names : Array[String],
 ) -> Array[String] {
   let args : Array[String] = []
   for i, item in import_.params {
     let (_, type_) = item
-    args.push(ffi_optional_call_arg(names[i], type_))
+    args.push(ffi_type_js_converter_expr(state, type_, names[i]))
   }
   args
 }
 
 ///|
 fn ffi_func_call_args_with_names(
+  state : MoonBitJsFfiState,
   func : @ast.TsFunc,
   names : Array[String],
 ) -> Array[String] {
   let args : Array[String] = []
   for i, param in func.params {
-    args.push(ffi_optional_call_arg(names[i], param.type_))
+    args.push(ffi_type_js_converter_expr(state, param.type_, names[i]))
   }
   args
 }
@@ -1821,14 +1964,21 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
 
   let declared_type_names : Array[String] = []
+  let struct_type_names : Array[String] = []
   for iface in interfaces {
-    declared_type_names.push(ffi_type_identifier(iface.name, "OpaqueType"))
+    let type_name = ffi_type_identifier(iface.name, "OpaqueType")
+    declared_type_names.push(type_name)
+    if !ffi_is_react_callable_component_interface(iface.name) &&
+      ffi_struct_fields_need_js_converter(iface.fields) {
+      struct_type_names.push(type_name)
+    }
   }
   for class_ in classes {
     declared_type_names.push(ffi_class_type_name(class_.name))
   }
   let state : MoonBitJsFfiState = {
     declared_type_names,
+    struct_type_names,
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -1840,6 +1990,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   ]
   let seen_ffi_binding_names : Array[String] = []
   let bridge_lines : Array[String] = []
+  let bridge_struct_converter_lines : Array[String] = []
   let mut bridge_needs_option_unwrap = false
   let bridge_imports : Array[MoonBitBridgeImport] = []
   let seen_bridge_import_keys : Array[String] = []
@@ -1907,6 +2058,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         ffi_sections.push(ffi_interface_type_decl_to_moonbit(iface))
       } else {
         ffi_sections.push(ffi_struct_decl_to_moonbit(state, iface))
+        if state.struct_type_names.contains(type_name) {
+          bridge_struct_converter_lines.push(
+            ffi_struct_js_converter_decl(state, iface.name, iface.fields),
+          )
+        }
       }
     }
     handled_export_names.push(iface.name)
@@ -1984,7 +2140,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           let (param_name, _) = param
           args.push(ffi_sanitize_identifier(param_name, "arg"))
         }
-        let params_str = args.join(", ")
+        let call_args = ffi_params_call_args_with_names(
+          state, constructor_params, args,
+        )
+        let params_str = call_args.join(", ")
         let class_access = ensure_bridge_runtime_access(
           seen_bridge_import_keys, bridge_imports, namespace_import_roots, class_runtime_export_name,
         )
@@ -2066,7 +2225,12 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       let class_access = ensure_bridge_runtime_access(
         seen_bridge_import_keys, bridge_imports, namespace_import_roots, class_runtime_export_name,
       )
-      let args_str = args.join(", ")
+      let call_args = ffi_params_call_args_with_names(
+        state,
+        class_method.params,
+        args,
+      )
+      let args_str = call_args.join(", ")
       let method_access = ffi_js_access(class_access, class_method.name)
       let binding_name = ffi_class_method_binding_name(
         class_.name,
@@ -2090,15 +2254,17 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       import_runtime_export_names,
       import_.name,
     )
-    let has_optional_params = ffi_import_has_optional_params(import_)
-    if has_optional_params {
+    let needs_js_arg_conversion = ffi_import_needs_js_arg_conversion(
+      state, import_,
+    )
+    if needs_js_arg_conversion {
       bridge_needs_option_unwrap = true
     }
     match tuple_result_field_names.get(import_.name) {
       Some(field_names) => {
         let binding_name = ffi_binding_name(import_.name)
         let args = ffi_import_bridge_param_names(import_, runtime_export_name)
-        let call_args = ffi_import_call_args_with_names(import_, args)
+        let call_args = ffi_import_call_args_with_names(state, import_, args)
         let args_str = call_args.join(", ")
         let runtime_access = ensure_bridge_runtime_access(
           seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
@@ -2122,7 +2288,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       None =>
         if ffi_can_use_direct_module(module_spec) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
-          !has_optional_params {
+          !needs_js_arg_conversion {
           push_unique_ffi_section(
             seen_ffi_binding_names,
             ffi_sections,
@@ -2144,7 +2310,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
               module_spec, runtime_export_name, binding_name,
             ) {
             Some(reexport_line) =>
-              if !has_optional_params {
+              if !needs_js_arg_conversion {
                 push_unique_bridge_binding(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
@@ -2152,7 +2318,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                 let args = ffi_import_bridge_param_names(
                   import_, runtime_export_name,
                 )
-                let call_args = ffi_import_call_args_with_names(import_, args)
+                let call_args = ffi_import_call_args_with_names(
+                  state, import_, args,
+                )
                 let call_args_str = call_args.join(", ")
                 let runtime_access = ensure_bridge_runtime_access(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
@@ -2170,11 +2338,13 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                 )
               }
             None =>
-              if has_optional_params {
+              if needs_js_arg_conversion {
                 let args = ffi_import_bridge_param_names(
                   import_, runtime_export_name,
                 )
-                let call_args = ffi_import_call_args_with_names(import_, args)
+                let call_args = ffi_import_call_args_with_names(
+                  state, import_, args,
+                )
                 let call_args_str = call_args.join(", ")
                 let runtime_access = ensure_bridge_runtime_access(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
@@ -2209,15 +2379,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       func_runtime_export_names,
       func.name,
     )
-    let has_optional_params = ffi_func_has_optional_params(func)
-    if has_optional_params {
+    let needs_js_arg_conversion = ffi_func_needs_js_arg_conversion(state, func)
+    if needs_js_arg_conversion {
       bridge_needs_option_unwrap = true
     }
     match tuple_result_field_names.get(func.name) {
       Some(field_names) => {
         let binding_name = ffi_binding_name(func.name)
         let args = ffi_func_bridge_param_names(func, runtime_export_name)
-        let call_args = ffi_func_call_args_with_names(func, args)
+        let call_args = ffi_func_call_args_with_names(state, func, args)
         let args_str = call_args.join(", ")
         let runtime_access = ensure_bridge_runtime_access(
           seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
@@ -2241,7 +2411,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       None =>
         if ffi_can_use_direct_module(module_spec) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
-          !has_optional_params {
+          !needs_js_arg_conversion {
           push_unique_ffi_section(
             seen_ffi_binding_names,
             ffi_sections,
@@ -2263,7 +2433,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
               module_spec, runtime_export_name, binding_name,
             ) {
             Some(reexport_line) =>
-              if !has_optional_params {
+              if !needs_js_arg_conversion {
                 push_unique_bridge_binding(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
@@ -2271,7 +2441,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                 let args = ffi_func_bridge_param_names(
                   func, runtime_export_name,
                 )
-                let call_args = ffi_func_call_args_with_names(func, args)
+                let call_args = ffi_func_call_args_with_names(state, func, args)
                 let call_args_str = call_args.join(", ")
                 let runtime_access = ensure_bridge_runtime_access(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
@@ -2289,11 +2459,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                 )
               }
             None =>
-              if has_optional_params {
+              if needs_js_arg_conversion {
                 let args = ffi_func_bridge_param_names(
                   func, runtime_export_name,
                 )
-                let call_args = ffi_func_call_args_with_names(func, args)
+                let call_args = ffi_func_call_args_with_names(state, func, args)
                 let call_args_str = call_args.join(", ")
                 let runtime_access = ensure_bridge_runtime_access(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
@@ -2330,12 +2500,21 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         if !state.declared_type_names.contains(type_name) {
           state.declared_type_names.push(type_name)
         }
+        if ffi_struct_fields_need_js_converter(fields) &&
+          !state.struct_type_names.contains(type_name) {
+          state.struct_type_names.push(type_name)
+        }
         push_unique_ffi_section(
           seen_ffi_binding_names,
           ffi_sections,
           "struct:" + type_name,
           ffi_named_struct_decl_to_moonbit(state, name, fields),
         )
+        if state.struct_type_names.contains(type_name) {
+          bridge_struct_converter_lines.push(
+            ffi_struct_js_converter_decl(state, name, fields),
+          )
+        }
       }
       _ => ()
     }
@@ -2439,10 +2618,17 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     }
     None => ()
   }
-  if bridge_needs_option_unwrap {
+  if bridge_needs_option_unwrap || !bridge_struct_converter_lines.is_empty() {
     rendered_bridge_lines.push(
       "function __ts_mbt_unwrap_option(value) { if (value == null) return undefined; if (typeof value === \"object\" && \"$tag\" in value) return value.$tag === 1 ? value._0 : undefined; return value; }",
     )
+    rendered_bridge_lines.push(
+      "function __ts_mbt_unwrap_bool_option(value) { return value === -1 ? undefined : __ts_mbt_unwrap_option(value); }",
+    )
+    rendered_bridge_lines.push("")
+  }
+  for line in bridge_struct_converter_lines {
+    rendered_bridge_lines.push(line)
     rendered_bridge_lines.push("")
   }
   for line in bridge_lines {

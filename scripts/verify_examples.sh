@@ -556,8 +556,8 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
-  grep -F 'pub struct ExpectStatic' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub struct Assertion' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub(all) struct ExpectStatic' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub(all) struct Assertion' "$out/bridge.mbt" >/dev/null
   grep -F 'pub extern "js" fn ExpectStatic::_call_(self : ExpectStatic' "$out/bridge.mbt" >/dev/null
   grep -F 'pub extern "js" fn Assertion::toBe(self : Assertion' "$out/bridge.mbt" >/dev/null
   grep -F 'pub extern "js" fn Assertion::toEqual(self : Assertion' "$out/bridge.mbt" >/dev/null

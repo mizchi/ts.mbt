@@ -68,7 +68,9 @@ async test "bridge: emit MoonBit TS bridge package bundle wraps camelCase export
     ),
   )
   assert_true(
-    bundle.bridge_mbt.contains("#warnings(\"-9\")\npub struct RuntimePoint"),
+    bundle.bridge_mbt.contains(
+      "#warnings(\"-9\")\npub(all) struct RuntimePoint",
+    ),
   )
   assert_true(
     bundle.bridge_mbt.contains(
@@ -80,6 +82,44 @@ async test "bridge: emit MoonBit TS bridge package bundle wraps camelCase export
       "pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint {\n  scale_point(point, factor)\n}",
     ),
   )
+}
+
+///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes interface structs in mbti" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct RuntimePoint {"))
+  assert_true(bundle.bridge_mbti.contains("  x : Double"))
+  assert_true(bundle.bridge_mbti.contains("  y : Double"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type RuntimePoint"))
+}
+
+///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes object type aliases as structs in mbti" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/hono-options-entry.d.ts", "./runtime/hono.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct HonoOptions {"))
+  assert_true(bundle.bridge_mbti.contains("  strict : Bool?"))
+  assert_true(bundle.bridge_mbti.contains("  bindings : E?"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type HonoOptions"))
 }
 
 ///|

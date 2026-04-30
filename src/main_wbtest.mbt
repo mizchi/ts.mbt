@@ -3029,7 +3029,7 @@ async test "emit_moonbit_bridge_package rewrites object-rest destructured value 
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> RestMeta = \"__ts_mbt_get_rest_meta\"",
@@ -3074,7 +3074,7 @@ async test "emit_moonbit_bridge_package rewrites computed-key destructured value
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3129,7 +3129,7 @@ async test "emit_moonbit_bridge_package rewrites template-literal computed-key d
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3184,7 +3184,7 @@ async test "emit_moonbit_bridge_package rewrites concatenated computed-key destr
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3239,7 +3239,7 @@ async test "emit_moonbit_bridge_package rewrites primitive-literal computed-key 
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_truthy() -> String = \"__ts_mbt_get_truthy\"",
@@ -3304,7 +3304,7 @@ async test "emit_moonbit_bridge_package rewrites void-and-negative-bigint comput
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_undefined_value() -> String = \"__ts_mbt_get_undefined_value\"",
@@ -3359,7 +3359,7 @@ async test "emit_moonbit_bridge_package rewrites const-reference computed-key de
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3414,7 +3414,7 @@ async test "emit_moonbit_bridge_package rewrites destructured-const-reference co
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3469,7 +3469,7 @@ async test "emit_moonbit_bridge_package rewrites const-object-access computed-ke
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3524,7 +3524,7 @@ async test "emit_moonbit_bridge_package rewrites nested-const-object-access comp
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3579,7 +3579,7 @@ async test "emit_moonbit_bridge_package rewrites const-array-access computed-key
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3634,7 +3634,7 @@ async test "emit_moonbit_bridge_package rewrites nested-const-array-access compu
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3689,7 +3689,7 @@ async test "emit_moonbit_bridge_package rewrites const-index-alias computed-key 
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3744,7 +3744,7 @@ async test "emit_moonbit_bridge_package rewrites const-index-table computed-key 
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3799,7 +3799,7 @@ async test "emit_moonbit_bridge_package rewrites nested-index-table computed-key
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3854,7 +3854,7 @@ async test "emit_moonbit_bridge_package rewrites imported const-table computed-k
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3909,7 +3909,7 @@ async test "emit_moonbit_bridge_package rewrites imported namespace const-table 
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -3964,7 +3964,7 @@ async test "emit_moonbit_bridge_package rewrites imported default const-table co
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4019,7 +4019,7 @@ async test "emit_moonbit_bridge_package rewrites imported inline default const-t
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4074,7 +4074,7 @@ async test "emit_moonbit_bridge_package rewrites imported inline default const-t
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4129,7 +4129,7 @@ async test "emit_moonbit_bridge_package rewrites imported iife default const-tab
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4184,7 +4184,7 @@ async test "emit_moonbit_bridge_package rewrites imported iife local const-table
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4239,7 +4239,7 @@ async test "emit_moonbit_bridge_package rewrites imported function iife local co
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4294,7 +4294,7 @@ async test "emit_moonbit_bridge_package rewrites imported iife local let-table c
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4349,7 +4349,7 @@ async test "emit_moonbit_bridge_package rewrites imported function iife local le
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4404,7 +4404,7 @@ async test "emit_moonbit_bridge_package widens imported reassigned local let-tab
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_false(bridge_mbt.contains("pub struct RestMeta"))
+  assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
@@ -4454,7 +4454,7 @@ async test "emit_moonbit_bridge_package widens imported prop-mutated local let-t
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_false(bridge_mbt.contains("pub struct RestMeta"))
+  assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
@@ -4504,7 +4504,7 @@ async test "emit_moonbit_bridge_package widens imported index-mutated local let-
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_false(bridge_mbt.contains("pub struct RestMeta"))
+  assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
@@ -4554,7 +4554,7 @@ async test "emit_moonbit_bridge_package rewrites imported reexported const-table
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4609,7 +4609,7 @@ async test "emit_moonbit_bridge_package rewrites imported chained const-table co
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4664,7 +4664,7 @@ async test "emit_moonbit_bridge_package rewrites imported star const-table compu
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4719,7 +4719,7 @@ async test "emit_moonbit_bridge_package rewrites imported deep star const-table 
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4774,7 +4774,7 @@ async test "emit_moonbit_bridge_package rewrites imported mixed barrel const-tab
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(bridge_mbt.contains("pub struct RestMeta"))
+  assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -4829,7 +4829,7 @@ async test "emit_moonbit_bridge_package widens conflicting star const-table comp
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_false(bridge_mbt.contains("pub struct RestMeta"))
+  assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
@@ -5027,7 +5027,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace declaratio
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read export-as-namespace bridge.mbt: \{e}")
   }
-  assert_true(bridge_mbti.contains("declare pub type Context"))
+  assert_true(bridge_mbti.contains("pub(all) struct Context"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn createContext(defaultValue : T) -> Context",
@@ -5081,16 +5081,16 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read export-as-namespace hook tuple bridge.mbt: \{e}")
   }
-  assert_true(bridge_mbti.contains("declare pub type UseStateResult"))
+  assert_true(bridge_mbti.contains("pub(all) struct UseStateResult"))
   assert_true(bridge_mbti.contains("/// state : S"))
   assert_true(bridge_mbti.contains("/// setState : Dispatch"))
-  assert_true(bridge_mbti.contains("declare pub type UseReducerResult"))
+  assert_true(bridge_mbti.contains("pub(all) struct UseReducerResult"))
   assert_true(bridge_mbti.contains("/// dispatch : ActionDispatch"))
-  assert_true(bridge_mbti.contains("declare pub type UseTransitionResult"))
+  assert_true(bridge_mbti.contains("pub(all) struct UseTransitionResult"))
   assert_true(bridge_mbti.contains("/// isPending : Bool"))
   assert_true(bridge_mbti.contains("/// startTransition : TransitionFunction"))
-  assert_true(bridge_mbti.contains("declare pub type UseOptimisticResult"))
-  assert_true(bridge_mbti.contains("declare pub type UseActionStateResult"))
+  assert_true(bridge_mbti.contains("pub(all) struct UseOptimisticResult"))
+  assert_true(bridge_mbti.contains("pub(all) struct UseActionStateResult"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn useState(initialState : S) -> UseStateResult",
@@ -5161,14 +5161,14 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace JSX namesp
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read export-as-namespace jsx bridge.mbt: \{e}")
   }
-  assert_true(bridge_mbti.contains("declare pub type JsxElement"))
-  assert_true(bridge_mbti.contains("declare pub type JsxIntrinsicElements"))
+  assert_true(bridge_mbti.contains("pub(all) struct JsxElement"))
+  assert_true(bridge_mbti.contains("pub(all) struct JsxIntrinsicElements"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn createElement(tag : String) -> JsxElement",
     ),
   )
-  assert_true(bridge_mbt.contains("pub struct JsxElement {"))
+  assert_true(bridge_mbt.contains("pub(all) struct JsxElement {"))
   assert_true(
     bridge_mbt.contains(
       "pub fn createElement(tag : String) -> JsxElement {\n  create_element(tag)\n}",
@@ -5236,8 +5236,8 @@ async test "emit_moonbit_scaffold_from_ts handles exported JSX namespace members
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read exported jsx namespace bridge.mbt: \{e}")
   }
-  assert_true(bridge_mbti.contains("declare pub type JsxElement"))
-  assert_true(bridge_mbti.contains("declare pub type JsxIntrinsicElements"))
+  assert_true(bridge_mbti.contains("pub(all) struct JsxElement"))
+  assert_true(bridge_mbti.contains("pub(all) struct JsxIntrinsicElements"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn jsx(tag : String, props : BadgeProps) -> JsxElement",
@@ -5276,14 +5276,14 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace PropsWithC
         "failed to read export-as-namespace props-with-children bridge.mbt: \{e}",
       )
   }
-  assert_true(bridge_mbti.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(bridge_mbti.contains("pub(all) struct BadgePropsWithChildren"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
     ),
   )
   assert_false(bridge_mbti.contains("declare pub type PropsWithChildren"))
-  assert_true(bridge_mbt.contains("pub struct BadgePropsWithChildren {"))
+  assert_true(bridge_mbt.contains("pub(all) struct BadgePropsWithChildren {"))
   assert_true(
     bridge_mbt.contains(
       "pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren {\n  create_badge(props)\n}",
@@ -5315,7 +5315,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentP
         "failed to read export-as-namespace component-props bridge.mbt: \{e}",
       )
   }
-  assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
+  assert_true(bridge_mbti.contains("pub(all) struct BadgeProps"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn createBadge(props : BadgeProps) -> BadgeProps",
@@ -5347,7 +5347,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentP
         "failed to read export-as-namespace component-props-without-ref bridge.mbti: \{e}",
       )
   }
-  assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
+  assert_true(bridge_mbti.contains("pub(all) struct BadgeProps"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn createBadge(props : BadgeProps) -> BadgeProps",
@@ -5382,14 +5382,14 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ComponentP
         "failed to read export-as-namespace component-props-with-ref bridge.mbt: \{e}",
       )
   }
-  assert_true(bridge_mbti.contains("declare pub type BadgePropsWithRef"))
-  assert_true(bridge_mbti.contains("declare pub type Ref"))
+  assert_true(bridge_mbti.contains("pub(all) struct BadgePropsWithRef"))
+  assert_true(bridge_mbti.contains("pub(all) struct Ref"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn createBadge(props : BadgePropsWithRef) -> BadgePropsWithRef",
     ),
   )
-  assert_true(bridge_mbt.contains("pub struct BadgePropsWithRef {"))
+  assert_true(bridge_mbt.contains("pub(all) struct BadgePropsWithRef {"))
   assert_false(bridge_mbti.contains("declare pub type ComponentPropsWithRef"))
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
@@ -5417,13 +5417,13 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace nested Pro
         "failed to read export-as-namespace nested props-with-children bridge.mbt: \{e}",
       )
   }
-  assert_true(bridge_mbti.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(bridge_mbti.contains("pub(all) struct BadgePropsWithChildren"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn createBadge(props : BadgePropsWithChildren) -> BadgePropsWithChildren",
     ),
   )
-  assert_true(bridge_mbt.contains("pub struct BadgePropsWithChildren {"))
+  assert_true(bridge_mbt.contains("pub(all) struct BadgePropsWithChildren {"))
   assert_false(bridge_mbti.contains("declare pub type PropsWithChildren"))
   assert_false(
     bridge_mbti.contains("declare pub type ComponentPropsWithoutRef"),
@@ -5448,8 +5448,8 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace PropsWitho
         "failed to read export-as-namespace props-ref-alias bridge.mbti: \{e}",
       )
   }
-  assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
-  assert_true(bridge_mbti.contains("declare pub type BadgePropsWithChildren"))
+  assert_true(bridge_mbti.contains("pub(all) struct BadgeProps"))
+  assert_true(bridge_mbti.contains("pub(all) struct BadgePropsWithChildren"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn stripRef(props : BadgeProps) -> BadgeProps",
@@ -5487,7 +5487,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace optional R
         "failed to read export-as-namespace optional-react-fields bridge.mbti: \{e}",
       )
   }
-  assert_true(bridge_mbti.contains("declare pub type BadgeProps"))
+  assert_true(bridge_mbti.contains("pub(all) struct BadgeProps"))
   assert_true(bridge_mbti.contains("/// label : String?"))
   assert_true(bridge_mbti.contains("/// children : JSValue?"))
   assert_true(bridge_mbti.contains("/// ref : Ref?"))
@@ -5513,7 +5513,7 @@ async test "emit_moonbit_scaffold_from_ts handles exported jsx-dev-runtime signa
   let bridge_mbti = @fs.read_file(wbtest_join_path(root, "bridge.mbti")).text() catch {
     e => fail("failed to read exported jsx-dev-runtime bridge.mbti: \{e}")
   }
-  assert_true(bridge_mbti.contains("declare pub type JSXSource"))
+  assert_true(bridge_mbti.contains("pub(all) struct JSXSource"))
   assert_true(bridge_mbti.contains("/// fileName : String?"))
   assert_true(
     bridge_mbti.contains(
@@ -5547,14 +5547,16 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace inline Pro
       )
   }
   assert_true(
-    bridge_mbti.contains("declare pub type LabelCountPropsWithChildren"),
+    bridge_mbti.contains("pub(all) struct LabelCountPropsWithChildren"),
   )
   assert_true(
     bridge_mbti.contains(
       "declare pub fn createBadge(props : LabelCountPropsWithChildren) -> LabelCountPropsWithChildren",
     ),
   )
-  assert_true(bridge_mbt.contains("pub struct LabelCountPropsWithChildren {"))
+  assert_true(
+    bridge_mbt.contains("pub(all) struct LabelCountPropsWithChildren {"),
+  )
   assert_false(bridge_mbti.contains("declare pub type PropsWithChildren"))
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
@@ -5627,10 +5629,10 @@ async test "emit_moonbit_scaffold_from_ts handles imported object type alias mem
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read hono-options bridge.mbt: \{e}")
   }
-  assert_true(bridge_mbti.contains("declare pub type HonoOptions"))
+  assert_true(bridge_mbti.contains("pub(all) struct HonoOptions"))
   assert_true(bridge_mbti.contains("/// strict : Bool?"))
   assert_true(bridge_mbti.contains("/// bindings : E?"))
-  assert_true(bridge_mbt.contains("pub struct HonoOptions {"))
+  assert_true(bridge_mbt.contains("pub(all) struct HonoOptions {"))
   assert_true(bridge_mbt.contains("  strict : Bool?"))
   assert_true(bridge_mbt.contains("  bindings : E?"))
   assert_true(

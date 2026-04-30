@@ -183,7 +183,7 @@ append_metrics() {
   bridge_lines="$(wc -l < "$impl")"
   declared_types="$(count_lines_matching '^declare pub type ' "$decl")"
   declared_functions="$(count_lines_matching '^declare pub fn ' "$decl")"
-  structs="$(count_lines_matching '^pub struct ' "$impl")"
+  structs="$(count_lines_matching '^pub(\(all\))? struct ' "$impl")"
   external_types="$(count_lines_matching '^#external$' "$impl")"
   jsvalue_refs="$(count_decl_jsvalue_refs "$decl")"
   jsvalue_functions="$(count_lines_matching '^declare pub fn .*JSValue' "$decl")"
@@ -585,8 +585,21 @@ EOF
 extern "js" fn realworld_node_sqlite_memory_path() -> PathLike =
   #| () => ":memory:"
 
-extern "js" fn realworld_node_sqlite_options() -> DatabaseSyncOptions =
-  #| () => ({})
+fn realworld_node_sqlite_options() -> DatabaseSyncOptions {
+  {
+    open: Some(true),
+    enableForeignKeyConstraints: None,
+    enableDoubleQuotedStringLiterals: None,
+    readOnly: None,
+    allowExtension: None,
+    timeout: None,
+    readBigInts: None,
+    returnArrays: None,
+    allowBareNamedParameters: None,
+    allowUnknownNamedParameters: None,
+    defensive: None,
+  }
+}
 
 extern "js" fn realworld_node_sqlite_params() -> Array[SQLInputValue] =
   #| () => []
@@ -924,8 +937,21 @@ EOF
 extern "js" fn realworld_node_sqlite_memory_path() -> @sut.PathLike =
   #| () => ":memory:"
 
-extern "js" fn realworld_node_sqlite_options() -> @sut.DatabaseSyncOptions =
-  #| () => ({})
+fn realworld_node_sqlite_options() -> @sut.DatabaseSyncOptions {
+  @sut.DatabaseSyncOptions::{
+    open: Some(true),
+    enableForeignKeyConstraints: None,
+    enableDoubleQuotedStringLiterals: None,
+    readOnly: None,
+    allowExtension: None,
+    timeout: None,
+    readBigInts: None,
+    returnArrays: None,
+    allowBareNamedParameters: None,
+    allowUnknownNamedParameters: None,
+    defensive: None,
+  }
+}
 
 extern "js" fn realworld_node_sqlite_params() -> Array[@sut.SQLInputValue] =
   #| () => []

@@ -21,9 +21,9 @@ async test "bridge: emit MoonBit JS FFI bundle for function reexports" {
     }
   }
   assert_true(
-    bundle.ffi_mbt.contains("#warnings(\"-9\")\npub struct PublicPoint"),
+    bundle.ffi_mbt.contains("#warnings(\"-9\")\npub(all) struct PublicPoint"),
   )
-  assert_true(bundle.ffi_mbt.contains("pub struct PublicPoint"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct PublicPoint"))
   assert_true(
     bundle.ffi_mbt.contains(
       "#module(\"/runtime/mod.js\")\npub extern \"js\" fn render(point : PublicPoint) -> PublicPoint = \"draw\"",
@@ -74,7 +74,7 @@ async test "bridge: emit MoonBit JS FFI bundle from ambient external module" {
   }
   assert_true(bundle.ffi_mbt.contains("#external\ntype DatabaseSync"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype StatementSync"))
-  assert_true(bundle.ffi_mbt.contains("pub struct DatabaseSyncOptions"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct DatabaseSyncOptions"))
   assert_true(bundle.ffi_mbt.contains("  open : Bool?"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -98,6 +98,24 @@ async test "bridge: emit MoonBit JS FFI bundle from ambient external module" {
   )
   assert_true(bundle.bridge_js.contains("from \"node:sqlite\";"))
   assert_true(bundle.bridge_js.contains("DatabaseSync"))
+  assert_true(
+    bundle.bridge_js.contains("function __ts_mbt_unwrap_bool_option(value)"),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "function __ts_mbt_to_js_database_sync_options(value)",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "field = __ts_mbt_unwrap_bool_option(field);\n  if (field !== undefined) result[\"open\"] = field;",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "return new DatabaseSync(path, __ts_mbt_to_js_database_sync_options(options));",
+    ),
+  )
   assert_true(bundle.bridge_js.contains("SQLITE_OK"))
 }
 
@@ -360,7 +378,7 @@ async test "bridge: emit MoonBit JS FFI bundle with unresolved external library 
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct User"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct User"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype Result"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype ResultAsync"))
   assert_true(
@@ -389,7 +407,7 @@ async test "bridge: emit MoonBit JS FFI bundle with resolved bare-package types 
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct User"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct User"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype PkgTypesValue"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -434,7 +452,7 @@ async test "bridge: emit MoonBit JS FFI bundle with resolved mixed imports as op
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct User"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct User"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype PkgResult"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype PkgResultAsync"))
   assert_true(
@@ -454,6 +472,7 @@ async test "bridge: emit MoonBit JS FFI bundle with resolved mixed imports as op
 test "bridge: FFI type name treats generic intersections with empty object as opaque" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
+    struct_type_names: [],
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -483,7 +502,7 @@ async test "bridge: emit MoonBit JS FFI bundle with resolved generic library imp
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct User"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct User"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype PkgResult"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype PkgResultAsync"))
   assert_true(
@@ -511,7 +530,7 @@ async test "bridge: emit MoonBit JS FFI bundle with resolved symlinked library i
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct User"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct User"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype PkgSymlinkResult"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype PkgSymlinkResultAsync"))
   assert_true(
@@ -539,7 +558,7 @@ async test "bridge: emit MoonBit JS FFI bundle with neverthrow-like package impo
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct User"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct User"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype Result"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype ResultAsync"))
   assert_true(
@@ -567,8 +586,8 @@ async test "bridge: emit MoonBit JS FFI bundle through package exports subpath" 
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct FeatureOptions"))
-  assert_true(bundle.ffi_mbt.contains("pub struct FeatureResult"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct FeatureOptions"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct FeatureResult"))
   assert_true(
     bundle.ffi_mbt.contains(
       "#module(\"/runtime/subpath-package.js\")\npub extern \"js\" fn execute_feature(options : FeatureOptions) -> FeatureResult = \"runFeature\"",
@@ -589,8 +608,8 @@ async test "bridge: emit MoonBit JS FFI bundle through package barrel reexports"
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BarrelOptions"))
-  assert_true(bundle.ffi_mbt.contains("pub struct BarrelResult"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BarrelOptions"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BarrelResult"))
   assert_true(
     bundle.ffi_mbt.contains(
       "#module(\"/runtime/barrel-package.js\")\npub extern \"js\" fn create_barrel(options : BarrelOptions) -> BarrelResult = \"buildBarrel\"",
@@ -611,7 +630,7 @@ async test "bridge: emit MoonBit JS FFI bundle with node-like ambient qualified 
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RuntimeConfig"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RuntimeConfig"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype NodeJS_ProcessEnv"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -721,7 +740,7 @@ async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported function
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RuntimePoint"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RuntimePoint"))
   assert_true(
     bundle.ffi_mbt.contains(
       "#module(\"/runtime/runtime-function.js\")\npub extern \"js\" fn scale_point(point : RuntimePoint, factor : Double) -> RuntimePoint = \"scalePoint\"",
@@ -768,7 +787,7 @@ async test "bridge: emit MoonBit JS FFI bundle from runtime tsx exported functio
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgeProps"))
   assert_true(bundle.ffi_mbt.contains("#external\ntype JSX_Element"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -791,7 +810,7 @@ async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported const ar
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RuntimeArrowPoint"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RuntimeArrowPoint"))
   assert_true(
     bundle.ffi_mbt.contains(
       "#module(\"/runtime/runtime-arrow.js\")\npub extern \"js\" fn scale_arrow_point(point : RuntimeArrowPoint, factor : Double) -> RuntimeArrowPoint = \"scaleArrowPoint\"",
@@ -1118,7 +1137,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles object-rest destructured 
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  build : Double"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
@@ -1157,7 +1176,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles computed-key destructured
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1200,7 +1219,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles template-literal computed
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1243,7 +1262,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles concatenated computed-key
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1286,7 +1305,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles primitive-literal compute
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1339,7 +1358,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles void-and-negative-bigint 
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1382,7 +1401,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles const-reference computed-
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1425,7 +1444,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles destructured-const-refere
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1468,7 +1487,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles const-object-access compu
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1511,7 +1530,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles nested-const-object-acces
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1554,7 +1573,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles const-array-access comput
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1597,7 +1616,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles nested-const-array-access
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1640,7 +1659,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles const-index-alias compute
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1683,7 +1702,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles const-index-table compute
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1726,7 +1745,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles nested-index-table comput
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1768,7 +1787,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported const-table comp
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1811,7 +1830,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported namespace const-
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1854,7 +1873,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported default const-ta
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1897,7 +1916,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported inline default c
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1940,7 +1959,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported inline default c
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -1983,7 +2002,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported iife default con
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2026,7 +2045,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported iife local const
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2069,7 +2088,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported function iife lo
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2112,7 +2131,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported iife local let-t
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2155,7 +2174,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported function iife lo
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2198,7 +2217,7 @@ async test "bridge: emit MoonBit JS FFI bundle widens imported reassigned local 
       return
     }
   }
-  assert_false(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_false(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
@@ -2235,7 +2254,7 @@ async test "bridge: emit MoonBit JS FFI bundle widens imported prop-mutated loca
       return
     }
   }
-  assert_false(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_false(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
@@ -2272,7 +2291,7 @@ async test "bridge: emit MoonBit JS FFI bundle widens imported index-mutated loc
       return
     }
   }
-  assert_false(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_false(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
@@ -2309,7 +2328,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported reexported const
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2352,7 +2371,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported chained const-ta
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2395,7 +2414,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported star const-table
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2438,7 +2457,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported deep star const-
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2481,7 +2500,7 @@ async test "bridge: emit MoonBit JS FFI bundle handles imported mixed barrel con
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(bundle.ffi_mbt.contains("  enabled : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -2524,7 +2543,7 @@ async test "bridge: emit MoonBit JS FFI bundle widens conflicting star const-tab
       return
     }
   }
-  assert_false(bundle.ffi_mbt.contains("pub struct RestMeta"))
+  assert_false(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
@@ -3036,7 +3055,7 @@ async test "bridge: emit MoonBit JS FFI bundle from exported runtime namespace m
       "pub extern \"js\" fn task(input : String) -> String",
     ),
   )
-  assert_true(bundle.ffi_mbt.contains("pub struct TaskOptions"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct TaskOptions"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn task_extra(input : String) -> String = \"__ts_mbt_task_extra\"",
@@ -3106,8 +3125,8 @@ async test "bridge: emit MoonBit JS FFI bundle from declaration-merged namespace
       "pub extern \"js\" fn make(input : String) -> String",
     ),
   )
-  assert_true(bundle.ffi_mbt.contains("pub struct MakeOptions"))
-  assert_false(bundle.ffi_mbt.contains("pub struct Options"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct MakeOptions"))
+  assert_false(bundle.ffi_mbt.contains("pub(all) struct Options"))
   assert_true(
     bundle.bridge_js.contains(
       "export function __ts_mbt_get_make_version() { return make.version; }",
@@ -3115,11 +3134,11 @@ async test "bridge: emit MoonBit JS FFI bundle from declaration-merged namespace
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export const __ts_mbt_make_with_options = make.withOptions;",
+      "export function __ts_mbt_make_with_options(input, options) { return make.withOptions(input, __ts_mbt_to_js_make_options(options)); }",
     ),
   )
   assert_true(bundle.ffi_mbt.contains("#external\ntype Tool"))
-  assert_true(bundle.ffi_mbt.contains("pub struct ToolConfig"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct ToolConfig"))
   assert_true(
     bundle.bridge_js.contains(
       "export function __ts_mbt_get_tool_version() { return Tool.version; }",
@@ -3128,7 +3147,7 @@ async test "bridge: emit MoonBit JS FFI bundle from declaration-merged namespace
   assert_true(
     bundle.bridge_js.contains("export const __ts_mbt_tool_parse = Tool.parse;"),
   )
-  assert_true(bundle.ffi_mbt.contains("pub struct Settings"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct Settings"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn get_settings() -> Settings = \"__ts_mbt_get_settings\"",
@@ -3139,7 +3158,7 @@ async test "bridge: emit MoonBit JS FFI bundle from declaration-merged namespace
       "export function __ts_mbt_get_settings() { return settings; }",
     ),
   )
-  assert_true(bundle.ffi_mbt.contains("pub struct SettingsMeta"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct SettingsMeta"))
   assert_true(
     bundle.bridge_js.contains(
       "export function __ts_mbt_get_settings_default_mode() { return settings.defaultMode; }",
@@ -3244,16 +3263,16 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct UseStateResult"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UseStateResult"))
   assert_true(bundle.ffi_mbt.contains("  state : S"))
   assert_true(bundle.ffi_mbt.contains("  setState : Dispatch"))
-  assert_true(bundle.ffi_mbt.contains("pub struct UseReducerResult"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UseReducerResult"))
   assert_true(bundle.ffi_mbt.contains("  state : S"))
   assert_true(bundle.ffi_mbt.contains("  dispatch : ActionDispatch"))
-  assert_true(bundle.ffi_mbt.contains("pub struct UseTransitionResult"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UseTransitionResult"))
   assert_true(bundle.ffi_mbt.contains("  isPending : Bool"))
   assert_true(bundle.ffi_mbt.contains("  startTransition : TransitionFunction"))
-  assert_true(bundle.ffi_mbt.contains("pub struct UseOptimisticResult"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UseOptimisticResult"))
   assert_true(bundle.ffi_mbt.contains("  state : State"))
   assert_true(bundle.ffi_mbt.contains("  dispatch : (State) -> Unit"))
   assert_true(
@@ -3261,7 +3280,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
       "pub fn UseOptimisticResult::dispatch(self : UseOptimisticResult, arg0 : State) -> Unit",
     ),
   )
-  assert_true(bundle.ffi_mbt.contains("pub struct UseActionStateResult"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UseActionStateResult"))
   assert_true(bundle.ffi_mbt.contains("  state : State"))
   assert_true(bundle.ffi_mbt.contains("  dispatch : () -> Unit"))
   assert_true(
@@ -3335,11 +3354,13 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace JSX name
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct JsxElement"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct JsxElement"))
   assert_true(bundle.ffi_mbt.contains("  kind : String"))
-  assert_true(bundle.ffi_mbt.contains("pub struct JsxIntrinsicElements"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct JsxIntrinsicElements"))
   assert_true(bundle.ffi_mbt.contains("  badge : BadgeProps"))
-  assert_true(bundle.ffi_mbt.contains("pub struct JsxLibraryManagedAttributes"))
+  assert_true(
+    bundle.ffi_mbt.contains("pub(all) struct JsxLibraryManagedAttributes"),
+  )
   assert_true(bundle.ffi_mbt.contains("  props : P"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -3366,9 +3387,11 @@ async test "bridge: emit MoonBit JS FFI bundle from exported JSX namespace membe
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct JsxElement"))
-  assert_true(bundle.ffi_mbt.contains("pub struct JsxIntrinsicElements"))
-  assert_true(bundle.ffi_mbt.contains("pub struct JsxLibraryManagedAttributes"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct JsxElement"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct JsxIntrinsicElements"))
+  assert_true(
+    bundle.ffi_mbt.contains("pub(all) struct JsxLibraryManagedAttributes"),
+  )
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn jsx(tag : String, props : BadgeProps) -> JsxElement = \"jsx\"",
@@ -3392,7 +3415,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace PropsWit
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithChildren"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgePropsWithChildren"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
   assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
   assert_true(
@@ -3422,7 +3445,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace Componen
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgeProps"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : BadgeProps) -> BadgeProps = \"__ts_mbt_create_badge\"",
@@ -3449,23 +3472,23 @@ async test "bridge: emit MoonBit JS FFI bundle lowers Pick and Omit utility type
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct UserPickIdName"))
-  assert_true(bundle.ffi_mbt.contains("pub struct InlineMapped"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UserPickIdName"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct InlineMapped"))
   assert_true(bundle.ffi_mbt.contains("  id : String?"))
   assert_true(bundle.ffi_mbt.contains("  name : String?"))
-  assert_true(bundle.ffi_mbt.contains("pub struct UserPickIdActive"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UserPickIdActive"))
   assert_true(bundle.ffi_mbt.contains("  active : Bool?"))
-  assert_true(bundle.ffi_mbt.contains("pub struct UserOmitAge"))
-  assert_true(bundle.ffi_mbt.contains("pub struct UserOmitActive"))
-  assert_true(bundle.ffi_mbt.contains("pub struct UserPartial"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UserOmitAge"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UserOmitActive"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UserPartial"))
   assert_true(bundle.ffi_mbt.contains("  age : Double?"))
-  assert_true(bundle.ffi_mbt.contains("pub struct UserReadonly"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UserReadonly"))
   assert_true(
     bundle.ffi_mbt.contains(
       "  // readonly in TypeScript; not enforced by generated MoonBit struct",
     ),
   )
-  assert_true(bundle.ffi_mbt.contains("pub struct UserRequired"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct UserRequired"))
   assert_true(bundle.ffi_mbt.contains("  active : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -3502,7 +3525,7 @@ async test "bridge: emit MoonBit JS FFI bundle lowers Pick and Omit utility type
       "pub extern \"js\" fn extract_user(user : User) -> User = \"__ts_mbt_extract_user\"",
     ),
   )
-  assert_true(bundle.ffi_mbt.contains("pub struct GetArgsResult"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct GetArgsResult"))
   assert_true(bundle.ffi_mbt.contains("  _0 : String"))
   assert_true(bundle.ffi_mbt.contains("  _1 : Bool"))
   assert_true(
@@ -3607,7 +3630,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace Componen
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgeProps"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : BadgeProps) -> BadgeProps = \"__ts_mbt_create_badge\"",
@@ -3630,7 +3653,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace Componen
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithRef"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgePropsWithRef"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
   assert_true(bundle.ffi_mbt.contains("  ref_ : Ref"))
   assert_true(
@@ -3655,7 +3678,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace nested P
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithChildren"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgePropsWithChildren"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
   assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
   assert_true(
@@ -3681,8 +3704,8 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace PropsWit
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgePropsWithChildren"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgeProps"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgePropsWithChildren"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn strip_ref(props : BadgeProps) -> BadgeProps = \"__ts_mbt_strip_ref\"",
@@ -3719,7 +3742,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace optional
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct BadgeProps"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgeProps"))
   assert_true(bundle.ffi_mbt.contains("  label : String?"))
   assert_true(bundle.ffi_mbt.contains("  children : @js.Any?"))
   assert_true(bundle.ffi_mbt.contains("  ref_ : Ref?"))
@@ -3743,7 +3766,7 @@ async test "bridge: emit MoonBit JS FFI bundle from exported jsx-dev-runtime sig
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct JSXSource"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct JSXSource"))
   assert_true(bundle.ffi_mbt.contains("  fileName : String?"))
   assert_true(bundle.ffi_mbt.contains("  lineNumber : Double?"))
   assert_true(bundle.ffi_mbt.contains("  columnNumber : Double?"))
@@ -3754,7 +3777,7 @@ async test "bridge: emit MoonBit JS FFI bundle from exported jsx-dev-runtime sig
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_jsx_dev(type_, props, key, isStatic, source, self) { return jsxDEV(type_, props, __ts_mbt_unwrap_option(key), isStatic, __ts_mbt_unwrap_option(source), __ts_mbt_unwrap_option(self)); }",
+      "export function __ts_mbt_jsx_dev(type_, props, key, isStatic, source, self) { return jsxDEV(type_, props, __ts_mbt_unwrap_option(key), isStatic, __ts_mbt_to_js_jsxsource(source), __ts_mbt_unwrap_option(self)); }",
     ),
   )
 }
@@ -3773,7 +3796,9 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace inline P
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct LabelCountPropsWithChildren"))
+  assert_true(
+    bundle.ffi_mbt.contains("pub(all) struct LabelCountPropsWithChildren"),
+  )
   assert_true(bundle.ffi_mbt.contains("  label : String"))
   assert_true(bundle.ffi_mbt.contains("  count : Double"))
   assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
@@ -3798,10 +3823,10 @@ async test "bridge: emit MoonBit JS FFI bundle sanitizes reserved exported funct
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct Props"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct Props"))
   assert_true(bundle.ffi_mbt.contains("  type_ : String"))
   assert_true(bundle.ffi_mbt.contains("  ref_ : String"))
-  assert_true(bundle.ffi_mbt.contains("pub struct ReactElement"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct ReactElement"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn jsx(type_ : String, props : Props) -> ReactElement = \"__ts_mbt_jsx\"",
@@ -3850,7 +3875,7 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct HonoOptions"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct HonoOptions"))
   assert_true(bundle.ffi_mbt.contains("  strict : Bool?"))
   assert_true(bundle.ffi_mbt.contains("  bindings : E?"))
   assert_true(
@@ -3907,7 +3932,7 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React package surfac
     bundle.ffi_mbt.contains("#external\ntype ForwardRefExoticComponent"),
   )
   assert_true(bundle.ffi_mbt.contains("#external\ntype MemoExoticComponent"))
-  assert_false(bundle.ffi_mbt.contains("pub struct FunctionComponent"))
+  assert_false(bundle.ffi_mbt.contains("pub(all) struct FunctionComponent"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_element(type_ : String, props : DOMAttributes?, children : Array[@js.Any]) -> ReactElement = \"__ts_mbt_create_element\"",
@@ -3954,8 +3979,8 @@ async test "bridge: emit MoonBit JS FFI bundle expands callable interface inheri
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct ExpectStatic"))
-  assert_true(bundle.ffi_mbt.contains("pub struct Assertion"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct ExpectStatic"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct Assertion"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn ExpectStatic::_call_(self : ExpectStatic",
@@ -3986,7 +4011,7 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React JSX runtime pa
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct JsxElement"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct JsxElement"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn jsx(type_ : String, props : ButtonHTMLAttributes, key : Key?) -> ReactElement = \"__ts_mbt_jsx\"",
@@ -3999,12 +4024,12 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React JSX runtime pa
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_jsx(type_, props, key) { return jsx(type_, props, __ts_mbt_unwrap_option(key)); }",
+      "export function __ts_mbt_jsx(type_, props, key) { return jsx(type_, __ts_mbt_to_js_button_htmlattributes(props), __ts_mbt_unwrap_option(key)); }",
     ),
   )
   assert_true(
     bundle.bridge_js.contains(
-      "export function __ts_mbt_jsxs(type_, props, key) { return jsxs(type_, props, __ts_mbt_unwrap_option(key)); }",
+      "export function __ts_mbt_jsxs(type_, props, key) { return jsxs(type_, __ts_mbt_to_js_button_htmlattributes(props), __ts_mbt_unwrap_option(key)); }",
     ),
   )
 }
@@ -4022,11 +4047,11 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture Hono JSX package sub
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct JsxElement"))
-  assert_true(bundle.ffi_mbt.contains("pub struct ButtonAttributes"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct JsxElement"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct ButtonAttributes"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn jsx(tag : String, props : ButtonAttributes) -> JsxElement = \"jsx\"",
+      "pub extern \"js\" fn jsx(tag : String, props : ButtonAttributes) -> JsxElement = \"__ts_mbt_jsx\"",
     ),
   )
   assert_true(
@@ -4040,6 +4065,7 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture Hono JSX package sub
 test "bridge: FFI struct generation deduplicates sanitized field names" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
+    struct_type_names: [],
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -4086,6 +4112,7 @@ test "bridge: FFI type identifier avoids invalid and core type names" {
 test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
+    struct_type_names: [],
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -4126,6 +4153,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
 test "bridge: FFI struct generation adds method wrappers for function fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
+    struct_type_names: [],
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -4157,6 +4185,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
 test "bridge: FFI struct generation caps method wrappers but keeps function fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
+    struct_type_names: [],
     external_type_names: [],
     function_field_method_wrapper_limit: 2,
     needs_js_any: false,
@@ -4181,6 +4210,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
 test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
+    struct_type_names: [],
     external_type_names: [],
     function_field_method_wrapper_limit: 1,
     needs_js_any: false,
@@ -4224,6 +4254,6 @@ async test "bridge: emit MoonBit JS FFI bundle avoids duplicate class/interface 
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("pub struct Location"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct Location"))
   assert_eq(count_occurrences_in_ffi_output(bundle.ffi_mbt, "type Location"), 0)
 }
