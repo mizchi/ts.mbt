@@ -13,9 +13,10 @@ moon run src -- \
 
 The smoke program in `smoke/main.mbt` creates a TypeScript `SourceFile`, builds a
 `TransformerFactory` in MoonBit, traverses children through the generated
-`visitEachChild` bridge, renames `Identifier` nodes, then prints the transformed
-file through the TypeScript printer.
+`visitEachChild` bridge, narrows nodes with the generated `Node::asIdentifier`
+helper, renames `Identifier` nodes, then prints the transformed file through the
+TypeScript printer.
 
 The runtime adapter in `runtime/ast-transformer.js` only supplies small JS
-helpers for TypeScript enum values, printer/factory conveniences, and identity
-casts around TypeScript's generic visitor APIs.
+helpers for TypeScript enum values plus printer/factory conveniences. Structural
+casts and Node type-guard helpers are generated into the MoonBit bridge package.

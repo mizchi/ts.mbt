@@ -4,20 +4,12 @@ export function latestScriptTarget() {
   return ts.ScriptTarget.Latest;
 }
 
-export function makeMoonBitTransformer(visit) {
-  return (context) => (sourceFile) => visit(sourceFile, context);
-}
-
 export function identifierText(identifier) {
   return identifier.text;
 }
 
 export function createIdentifier(text) {
   return ts.factory.createIdentifier(text);
-}
-
-export function sourceFileAsJsValue(sourceFile) {
-  return sourceFile;
 }
 
 export function firstTransformedSourceFile(result) {

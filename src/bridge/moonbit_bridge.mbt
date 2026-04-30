@@ -26,6 +26,14 @@ priv struct BridgeTopLevelFnDecl {
 }
 
 ///|
+priv struct BridgeTypeGuardHelper {
+  source_type : String
+  target_type : String
+  guard_name : String
+  helper_name : String
+}
+
+///|
 fn render_bridge_pkg_json(needs_js_import : Bool) -> String {
   if needs_js_import {
     let content =
@@ -128,6 +136,7 @@ fn bridge_value_identifier_needs_suffix(name : String) -> Bool {
     | "fn"
     | "for"
     | "if"
+    | "include"
     | "import"
     | "in"
     | "interface"
@@ -255,6 +264,161 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
 }
 
 ///|
+fn parse_bridge_public_type_name_line(line : String) -> String? {
+  let prefix = "declare pub type "
+  if !line.has_prefix(prefix) {
+    return None
+  }
+  let rest = line[prefix.length():].to_string().trim().to_string()
+  if rest == "" {
+    return None
+  }
+  let mut end_ = rest.length()
+  match rest.find("[") {
+    Some(idx) => end_ = idx
+    None => ()
+  }
+  match rest.find(" ") {
+    Some(idx) => if idx < end_ { end_ = idx }
+    None => ()
+  }
+  let type_name = rest[:end_].to_string().trim().to_string()
+  if type_name == "" {
+    None
+  } else {
+    Some(type_name)
+  }
+}
+
+///|
+fn collect_bridge_public_type_names(bridge_mbti : String) -> Array[String] {
+  let names : Array[String] = []
+  for line_view in bridge_mbti.split("\n") {
+    let line = line_view.to_string().trim().to_string()
+    match parse_bridge_public_type_name_line(line) {
+      Some(name) => if !names.contains(name) { names.push(name) }
+      None => ()
+    }
+  }
+  names
+}
+
+///|
+fn parse_bridge_first_param_type(params_src : String) -> String? {
+  if params_src.trim() == "" {
+    return None
+  }
+  let first_param_src = match params_src.find(",") {
+    Some(index) => params_src[:index].to_string()
+    None => params_src
+  }
+  let first_param = first_param_src.trim().to_string()
+  match first_param.find(":") {
+    Some(index) => {
+      let type_src = first_param[index + 1:].to_string().trim().to_string()
+      if type_src == "" {
+        return None
+      }
+      let normalized = if type_src.has_suffix("?") {
+        type_src[:type_src.length() - 1].to_string()
+      } else {
+        type_src
+      }
+      Some(normalized.trim().to_string())
+    }
+    None => None
+  }
+}
+
+///|
+fn bridge_type_guard_target_name(
+  public_name : String,
+  type_names : Array[String],
+) -> String? {
+  if !public_name.has_prefix("is") || public_name.length() <= 2 {
+    return None
+  }
+  let target_name = public_name[2:].to_string()
+  if type_names.contains(target_name) {
+    Some(target_name)
+  } else {
+    None
+  }
+}
+
+///|
+fn collect_bridge_type_guard_helpers(
+  bridge_mbti : String,
+) -> Array[BridgeTypeGuardHelper] {
+  let type_names = collect_bridge_public_type_names(bridge_mbti)
+  let helpers : Array[BridgeTypeGuardHelper] = []
+  let seen_helpers : Array[String] = []
+  for line_view in bridge_mbti.split("\n") {
+    let line = line_view.to_string().trim().to_string()
+    match parse_bridge_top_level_fn_decl_line(line) {
+      Some(fn_decl) => {
+        if fn_decl.return_type != "Bool" {
+          continue
+        }
+        if fn_decl.arg_names.length() != 1 {
+          continue
+        }
+        let source_type = match
+          parse_bridge_first_param_type(fn_decl.params_src) {
+          Some(source_type) => source_type
+          None => continue
+        }
+        // The current parser lowers TS type predicates to Bool. Restricting
+        // helpers to Node-based guards keeps the generated casts aligned with
+        // the common TypeScript AST narrowing pattern and avoids broad false
+        // positives such as arbitrary boolean predicates.
+        if source_type != "Node" {
+          continue
+        }
+        let target_type = match
+          bridge_type_guard_target_name(fn_decl.public_name, type_names) {
+          Some(target_type) => target_type
+          None => continue
+        }
+        if target_type == source_type {
+          continue
+        }
+        let helper_name = "as" + target_type
+        let helper_key = source_type + "::" + helper_name
+        if seen_helpers.contains(helper_key) {
+          continue
+        }
+        seen_helpers.push(helper_key)
+        helpers.push({
+          source_type,
+          target_type,
+          guard_name: fn_decl.public_name,
+          helper_name,
+        })
+      }
+      None => ()
+    }
+  }
+  helpers
+}
+
+///|
+fn add_bridge_ergonomic_helper_decls(bridge_mbti : String) -> String {
+  let mut next_bridge_mbti = bridge_mbti
+  let unsafe_cast_decl = "declare pub fn[A, B] unsafeCast(value : A) -> B"
+  if !next_bridge_mbti.contains(unsafe_cast_decl) {
+    next_bridge_mbti += "\n\n///|\n" + unsafe_cast_decl
+  }
+  for helper in collect_bridge_type_guard_helpers(bridge_mbti) {
+    let helper_decl = "declare pub fn \{helper.helper_name}(self : \{helper.source_type}) -> \{helper.target_type}?"
+    if !next_bridge_mbti.contains(helper_decl) {
+      next_bridge_mbti += "\n\n///|\n" + helper_decl
+    }
+  }
+  next_bridge_mbti
+}
+
+///|
 fn add_bridge_namespace_public_decls(
   bridge_mbti : String,
   export_surface : Array[ResolvedExport],
@@ -352,10 +516,27 @@ fn add_bridge_public_wrappers(
       None => ()
     }
   }
-  if wrappers.length() == 0 {
+  let helpers : Array[String] = [
+    "pub fn[A, B] unsafeCast(value : A) -> B = \"%identity\"",
+  ]
+  for helper in collect_bridge_type_guard_helpers(bridge_mbti) {
+    helpers.push(
+      "pub fn \{helper.source_type}::\{helper.helper_name}(self : \{helper.source_type}) -> \{helper.target_type}? {\n  if \{helper.guard_name}(self) {\n    Some(unsafeCast(self))\n  } else {\n    None\n  }\n}",
+    )
+  }
+  let sections : Array[String] = []
+  for wrapper in wrappers {
+    sections.push(wrapper)
+  }
+  for helper in helpers {
+    if !next_bridge_mbt.contains(helper) {
+      sections.push(helper)
+    }
+  }
+  if sections.length() == 0 {
     next_bridge_mbt
   } else {
-    next_bridge_mbt + "\n\n" + wrappers.join("\n\n")
+    next_bridge_mbt + "\n\n" + sections.join("\n\n")
   }
 }
 
@@ -387,9 +568,8 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
   )
   let graph = load_type_module_graph(entry_path)
   let export_surface = resolve_export_surface(graph)
-  let bridge_mbti = add_bridge_namespace_public_decls(
-    bundle.decl_mbt,
-    export_surface,
+  let bridge_mbti = add_bridge_ergonomic_helper_decls(
+    add_bridge_namespace_public_decls(bundle.decl_mbt, export_surface),
   )
   let bridge_mbt = add_bridge_public_wrappers(bridge_mbti, bundle.ffi_mbt)
   {

@@ -535,6 +535,8 @@ EOF
   grep -F 'pub extern "js" fn transform(source : @js.Any, transformers : Array[TransformerFactory], compilerOptions : CompilerOptions?) -> TransformationResult' "$out/bridge.mbt" >/dev/null
   grep -F 'pub fn visitEachChild(node : T, visitor : Visitor, context : TransformationContext?) -> T' "$out/bridge.mbt" >/dev/null
   grep -F 'pub fn isIdentifier(node : Node) -> Bool' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn[A, B] unsafeCast(value : A) -> B = "%identity"' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn Node::asIdentifier(self : Node) -> Identifier?' "$out/bridge.mbt" >/dev/null
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast" "$root/runtime/ast-transformer.js"

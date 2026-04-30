@@ -108,6 +108,43 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes namespace expo
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle adds ergonomic cast and guard helpers" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/type-guard-entry.d.ts", "/runtime/type-guard.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn[A, B] unsafeCast(value : A) -> B",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn[A, B] unsafeCast(value : A) -> B = \"%identity\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn asIdentifier(self : Node) -> Identifier?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn Node::asIdentifier(self : Node) -> Identifier? {",
+    ),
+  )
+  assert_true(bundle.bridge_mbt.contains("if isIdentifier(self) {"))
+  assert_true(bundle.bridge_mbt.contains("Some(unsafeCast(self))"))
+}
+
+///|
 test "bridge: bridge public wrapper skips reserved public names" {
   let decl : BridgeTopLevelFnDecl = {
     public_name: "enum",
