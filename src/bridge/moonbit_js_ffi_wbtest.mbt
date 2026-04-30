@@ -3979,6 +3979,7 @@ test "bridge: FFI value identifier sanitizes MoonBit keywords and discard names"
   assert_eq(ffi_sanitize_identifier("and", "field"), "and_")
   assert_eq(ffi_sanitize_identifier("is", "field"), "is_")
   assert_eq(ffi_sanitize_identifier("with", "field"), "with_")
+  assert_eq(ffi_sanitize_identifier("include", "field"), "include_")
   assert_eq(ffi_sanitize_identifier("override", "field"), "override_")
   assert_eq(ffi_sanitize_identifier("method", "field"), "method_")
   assert_eq(ffi_sanitize_identifier("constructor", "field"), "constructor_")
@@ -4009,6 +4010,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
       ("import", @ast.TsType::Named("Module")),
       ("and", @ast.TsType::Named("NaryIntersectionParser")),
       ("with", @ast.TsType::Named("Scheduler")),
+      ("include", @ast.TsType::Array(@ast.TsType::String_)),
       ("override", @ast.TsType::Boolean),
       ("method", @ast.TsType::String_),
       ("_", @ast.TsType::Named("_")),
@@ -4024,6 +4026,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   assert_true(actual.contains("  import_ : Module"))
   assert_true(actual.contains("  and_ : NaryIntersectionParser"))
   assert_true(actual.contains("  with_ : Scheduler"))
+  assert_true(actual.contains("  include_ : Array[String]"))
   assert_true(actual.contains("  override_ : Bool"))
   assert_true(actual.contains("  method_ : String"))
   assert_true(actual.contains("  field : OpaqueType"))

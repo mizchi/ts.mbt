@@ -106,6 +106,7 @@ fn ffi_value_identifier_needs_suffix(name : String) -> Bool {
     | "fn"
     | "for"
     | "if"
+    | "include"
     | "import"
     | "in"
     | "interface"

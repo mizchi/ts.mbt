@@ -30,3 +30,4 @@ Additional TypeScript -> MoonBit patterns are available under:
 - `const-table/`
 - `node-sqlite/`
 - `node-fs/`
+- `typescript-ast/`

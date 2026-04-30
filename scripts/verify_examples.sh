@@ -186,6 +186,43 @@ EOF
   node "$built_js"
 }
 
+run_typescript_ast_build_smoke() {
+  local root="$1"
+  local module_name="$2"
+  local adapter_js="$3"
+  local smoke_pkg="__tsmbt_build_smoke__"
+  local smoke_dir="$root/$smoke_pkg"
+
+  rm -rf "$smoke_dir" "$root/_build/js/debug/build"
+  mkdir -p "$smoke_dir"
+
+  cat > "$smoke_dir/moon.pkg.json" <<EOF
+{
+  "is-main": true,
+  "import": [
+    { "path": "$module_name", "alias": "sut" }
+  ]
+}
+EOF
+
+  cp examples/typescript-to-moonbit/typescript-ast/smoke/main.mbt "$smoke_dir/main.mbt"
+
+  moon -C "$root" build --target js "$smoke_pkg"
+
+  local built_js
+  built_js="$(find "$root/_build/js/debug/build" -type f -name '*.js' | head -n 1)"
+  if [ -z "$built_js" ]; then
+    echo "moon build --target js did not emit a runnable JS file for $module_name" >&2
+    exit 1
+  fi
+
+  printf '{ "type": "module" }\n' > "$(dirname "$built_js")/package.json"
+  node --input-type=module - <<EOF
+globalThis.__tsmbt_ast_adapter = await import("./$adapter_js");
+await import("./$built_js");
+EOF
+}
+
 verify_typescript_to_moonbit_hono_example() {
   local root="_build/examples/typescript-to-moonbit-hono"
   local out="$root/dist"
@@ -460,6 +497,49 @@ fn main {
 EOF
 }
 
+verify_typescript_to_moonbit_typescript_ast_example() {
+  local root="_build/examples/typescript-to-moonbit-typescript-ast"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  cp examples/typescript-to-moonbit/typescript-ast/runtime/ast-transformer.js "$root/runtime/ast-transformer.js"
+
+  moon run src -- \
+    --input node_modules/typescript/lib/typescript.d.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec typescript >/dev/null
+
+  write_js_any_stub "$out"
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_typescript_ast",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
+  grep -F 'pub fn createSourceFile(fileName : String, sourceText : String, languageVersionOrOptions : JSValue, setParentNodes : Bool?, scriptKind : ScriptKind?) -> SourceFile' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn transform(source : @js.Any, transformers : Array[TransformerFactory], compilerOptions : CompilerOptions?) -> TransformationResult' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn visitEachChild(node : T, visitor : Visitor, context : TransformationContext?) -> T' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub fn isIdentifier(node : Node) -> Bool' "$out/bridge.mbt" >/dev/null
+  grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  moon -C "$out" check --target js
+  run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast" "$root/runtime/ast-transformer.js"
+}
+
 verify_moonbit_to_typescript_example
 verify_typescript_to_moonbit_example
 verify_typescript_to_moonbit_hono_example
@@ -467,3 +547,4 @@ verify_typescript_to_moonbit_react_example
 verify_typescript_to_moonbit_result_example
 verify_typescript_to_moonbit_default_class_example
 verify_typescript_to_moonbit_const_table_example
+verify_typescript_to_moonbit_typescript_ast_example

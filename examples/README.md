@@ -38,6 +38,8 @@ Input:
 - `typescript-to-moonbit/const-table/runtime/index.js`
 - `typescript-to-moonbit/node-sqlite/smoke/main.mbt`
 - `typescript-to-moonbit/node-fs/smoke/main.mbt`
+- `typescript-to-moonbit/typescript-ast/runtime/ast-transformer.js`
+- `typescript-to-moonbit/typescript-ast/smoke/main.mbt`
 
 Generate a MoonBit bridge package:
 
@@ -96,6 +98,12 @@ moon run src -- \
   --out _build/examples/node-fs/dist \
   --direction ts-to-mbt \
   --module-spec node:fs
+
+moon run src -- \
+  --input node_modules/typescript/lib/typescript.d.ts \
+  --out _build/examples/typescript-to-moonbit-typescript-ast/dist \
+  --direction ts-to-mbt \
+  --module-spec typescript
 ```
 
 Run `just verify-examples` from the repository root to verify these examples
