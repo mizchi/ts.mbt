@@ -551,6 +551,32 @@ async test "emit_unified_tsmbt_scaffold writes requested TypeScript diagnostics"
 }
 
 ///|
+test "unified JSValue diagnostics ignore shared declarations" {
+  let out : Array[String] = []
+  collect_unified_jsvalue_fallbacks_from_source(
+    "bridge.mbti",
+    [
+      "/// Complex or unsupported TypeScript types are widened to JSValue.", "declare pub type JSValue",
+      "declare pub fn parse(input : String) -> JSValue",
+    ].join("\n"),
+    out,
+  )
+  collect_unified_jsvalue_fallbacks_from_source(
+    "bridge.mbt",
+    [
+      "pub type JSValue = @js.Any", "pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\"",
+    ].join("\n"),
+    out,
+  )
+  inspect(
+    out,
+    content=(
+      #|["bridge.mbti:3: declare pub fn parse(input : String) -> JSValue", "bridge.mbt:2: pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\""]
+    ),
+  )
+}
+
+///|
 async test "emit_unified_tsmbt_scaffold strict mode rejects JSValue fallbacks" {
   let root = wbtest_tmp_project_benchmark_root(
     "unified_ts_to_mbt_strict_jsvalue",

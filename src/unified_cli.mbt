@@ -479,10 +479,23 @@ fn collect_unified_jsvalue_fallbacks_from_source(
   let mut line_no = 1
   for line_view in source.split("\n") {
     let line = line_view.trim().to_string()
-    if line.contains("JSValue") {
+    if unified_jsvalue_line_is_fallback(line) {
       out.push("\{relative_path}:\{line_no}: \{line}")
     }
     line_no += 1
+  }
+}
+
+///|
+fn unified_jsvalue_line_is_fallback(line : String) -> Bool {
+  if !line.contains("JSValue") {
+    return false
+  }
+  match line {
+    "/// Complex or unsupported TypeScript types are widened to JSValue."
+    | "declare pub type JSValue"
+    | "pub type JSValue = @js.Any" => false
+    _ => true
   }
 }
 

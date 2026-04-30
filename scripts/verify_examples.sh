@@ -139,6 +139,10 @@ EOF
 ///|
 #external
 pub type Any
+
+///|
+#external
+pub type Promise[T]
 EOF
 }
 

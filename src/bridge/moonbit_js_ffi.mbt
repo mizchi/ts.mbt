@@ -113,6 +113,7 @@ fn ffi_value_identifier_needs_suffix(name : String) -> Bool {
     | "guard"
     | "lazy"
     | "let"
+    | "local"
     | "loop"
     | "match"
     | "method"
@@ -582,6 +583,58 @@ fn ffi_func_param_names(func : @ast.TsFunc) -> Array[String] {
 }
 
 ///|
+fn ffi_bridge_runtime_avoid_names(
+  runtime_export_name : String,
+) -> Array[String] {
+  if runtime_export_name.contains(".") {
+    [ffi_runtime_export_root_name(runtime_export_name)]
+  } else {
+    []
+  }
+}
+
+///|
+fn ffi_avoid_bridge_param_name_collisions(
+  names : Array[String],
+  avoid_names : Array[String],
+) -> Array[String] {
+  let safe_names : Array[String] = []
+  for name in names {
+    let mut candidate = name
+    if avoid_names.contains(candidate) {
+      candidate += "_"
+    }
+    while safe_names.contains(candidate) {
+      candidate += "_"
+    }
+    safe_names.push(candidate)
+  }
+  safe_names
+}
+
+///|
+fn ffi_import_bridge_param_names(
+  import_ : @ast.TsImport,
+  runtime_export_name : String,
+) -> Array[String] {
+  ffi_avoid_bridge_param_name_collisions(
+    ffi_import_param_names(import_),
+    ffi_bridge_runtime_avoid_names(runtime_export_name),
+  )
+}
+
+///|
+fn ffi_func_bridge_param_names(
+  func : @ast.TsFunc,
+  runtime_export_name : String,
+) -> Array[String] {
+  ffi_avoid_bridge_param_name_collisions(
+    ffi_func_param_names(func),
+    ffi_bridge_runtime_avoid_names(runtime_export_name),
+  )
+}
+
+///|
 fn ffi_type_is_optional(type_ : @ast.TsType) -> Bool {
   match ffi_classify_optional_like_union(type_) {
     Some((_, is_optional)) => is_optional
@@ -620,8 +673,10 @@ fn ffi_optional_call_arg(name : String, type_ : @ast.TsType) -> String {
 }
 
 ///|
-fn ffi_import_call_args(import_ : @ast.TsImport) -> Array[String] {
-  let names = ffi_import_param_names(import_)
+fn ffi_import_call_args_with_names(
+  import_ : @ast.TsImport,
+  names : Array[String],
+) -> Array[String] {
   let args : Array[String] = []
   for i, item in import_.params {
     let (_, type_) = item
@@ -631,8 +686,10 @@ fn ffi_import_call_args(import_ : @ast.TsImport) -> Array[String] {
 }
 
 ///|
-fn ffi_func_call_args(func : @ast.TsFunc) -> Array[String] {
-  let names = ffi_func_param_names(func)
+fn ffi_func_call_args_with_names(
+  func : @ast.TsFunc,
+  names : Array[String],
+) -> Array[String] {
   let args : Array[String] = []
   for i, param in func.params {
     args.push(ffi_optional_call_arg(names[i], param.type_))
@@ -1088,6 +1145,38 @@ fn runtime_export_name_for(
 }
 
 ///|
+fn ffi_module_spec_uses_public_exports(module_spec : String) -> Bool {
+  !module_spec.has_prefix("./") &&
+  !module_spec.has_prefix("../") &&
+  !module_spec.has_prefix("/")
+}
+
+///|
+fn ffi_runtime_export_name_for_module(
+  module_spec : String,
+  runtime_module_resolved_path : String?,
+  source_path : String,
+  public_name : String,
+  source_name : String,
+) -> String {
+  if source_name.contains(".") {
+    return source_name
+  }
+  match runtime_module_resolved_path {
+    Some(resolved_path) if source_path == resolved_path => return source_name
+    _ => ()
+  }
+  if source_path == module_spec {
+    return source_name
+  }
+  if ffi_module_spec_uses_public_exports(module_spec) {
+    public_name
+  } else {
+    source_name
+  }
+}
+
+///|
 fn ffi_bridge_reexport_line(
   module_spec : String,
   runtime_export_name : String,
@@ -1160,6 +1249,51 @@ fn ensure_bridge_runtime_access(
     access = ffi_js_access(access, member_name)
   }
   access
+}
+
+///|
+fn ensure_bridge_module_runtime_access(
+  seen_import_keys : Array[String],
+  bridge_imports : Array[MoonBitBridgeImport],
+  runtime_export_name : String,
+) -> String {
+  let mut access = ensure_bridge_import_with_kind(
+    seen_import_keys, bridge_imports, "__ts_mbt_module", true,
+  )
+  access = ffi_js_access(
+    access,
+    ffi_runtime_export_root_name(runtime_export_name),
+  )
+  for member_name in ffi_runtime_export_member_names(runtime_export_name) {
+    access = ffi_js_access(access, member_name)
+  }
+  access
+}
+
+///|
+fn ensure_bridge_value_runtime_access(
+  seen_import_keys : Array[String],
+  bridge_imports : Array[MoonBitBridgeImport],
+  namespace_import_roots : Array[String],
+  module_spec : String,
+  runtime_export_name : String,
+) -> String {
+  let root_name = ffi_runtime_export_root_name(runtime_export_name)
+  if ffi_runtime_export_requires_bridge(runtime_export_name) ||
+    namespace_import_roots.contains(root_name) {
+    return ensure_bridge_runtime_access(
+      seen_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
+    )
+  }
+  if ffi_module_spec_uses_public_exports(module_spec) {
+    ensure_bridge_module_runtime_access(
+      seen_import_keys, bridge_imports, runtime_export_name,
+    )
+  } else {
+    ensure_bridge_runtime_access(
+      seen_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
+    )
+  }
 }
 
 ///|
@@ -1417,21 +1551,74 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let classes = normalize_classes_for_ffi(
     exported_classes, modules, canonical_types,
   )
+  let runtime_module_resolved_path = @parser.resolve_type_module_specifier(
+    entry_path, module_spec,
+  ) catch {
+    _ => None
+  }
+  let base_import_export_names : Array[String] = []
+  for exported in exported_imports {
+    if !base_import_export_names.contains(exported.export_name) {
+      base_import_export_names.push(exported.export_name)
+    }
+  }
+  let base_func_export_names : Array[String] = []
+  for exported in exported_funcs {
+    if !base_func_export_names.contains(exported.export_name) {
+      base_func_export_names.push(exported.export_name)
+    }
+  }
   let import_runtime_export_names : Map[String, String] = {}
   for exported in emitted_exported_imports {
-    import_runtime_export_names[exported.export_name] = exported.source_export_name
+    import_runtime_export_names[exported.export_name] = if base_import_export_names.contains(
+        exported.export_name,
+      ) {
+      ffi_runtime_export_name_for_module(
+        module_spec,
+        runtime_module_resolved_path,
+        exported.source_path,
+        exported.export_name,
+        exported.source_export_name,
+      )
+    } else {
+      exported.source_export_name
+    }
   }
   let func_runtime_export_names : Map[String, String] = {}
   for exported in emitted_exported_funcs {
-    func_runtime_export_names[exported.export_name] = exported.source_export_name
+    func_runtime_export_names[exported.export_name] = if base_func_export_names.contains(
+        exported.export_name,
+      ) {
+      ffi_runtime_export_name_for_module(
+        module_spec,
+        runtime_module_resolved_path,
+        exported.source_path,
+        exported.export_name,
+        exported.source_export_name,
+      )
+    } else {
+      exported.source_export_name
+    }
   }
   let value_runtime_export_names : Map[String, String] = {}
   for exported in exported_values {
-    value_runtime_export_names[exported.export_name] = exported.source_export_name
+    value_runtime_export_names[exported.export_name] = ffi_runtime_export_name_for_module(
+      module_spec,
+      runtime_module_resolved_path,
+      exported.source_path,
+      exported.export_name,
+      exported.source_export_name,
+    )
   }
   let class_runtime_export_names : Map[String, String] = {}
   for exported in exported_classes {
-    class_runtime_export_names[exported.export_name] = exported.source_export_name
+    class_runtime_export_names[exported.export_name] = ffi_runtime_export_name_for_module(
+      module_spec,
+      runtime_module_resolved_path,
+      exported.source_path,
+      exported.export_name,
+      exported.source_export_name,
+    )
   }
   let namespace_import_roots = bridge_namespace_import_roots_for_export_equals(
     export_surface, modules, module_spec,
@@ -1721,8 +1908,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     match tuple_result_field_names.get(import_.name) {
       Some(field_names) => {
         let binding_name = ffi_binding_name(import_.name)
-        let args = ffi_import_param_names(import_)
-        let call_args = ffi_import_call_args(import_)
+        let args = ffi_import_bridge_param_names(import_, runtime_export_name)
+        let call_args = ffi_import_call_args_with_names(import_, args)
         let args_str = call_args.join(", ")
         let runtime_access = ensure_bridge_runtime_access(
           seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
@@ -1773,8 +1960,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
               } else {
-                let args = ffi_import_param_names(import_)
-                let call_args = ffi_import_call_args(import_)
+                let args = ffi_import_bridge_param_names(
+                  import_, runtime_export_name,
+                )
+                let call_args = ffi_import_call_args_with_names(import_, args)
                 let call_args_str = call_args.join(", ")
                 let runtime_access = ensure_bridge_runtime_access(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
@@ -1793,8 +1982,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
               }
             None =>
               if has_optional_params {
-                let args = ffi_import_param_names(import_)
-                let call_args = ffi_import_call_args(import_)
+                let args = ffi_import_bridge_param_names(
+                  import_, runtime_export_name,
+                )
+                let call_args = ffi_import_call_args_with_names(import_, args)
                 let call_args_str = call_args.join(", ")
                 let runtime_access = ensure_bridge_runtime_access(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
@@ -1836,8 +2027,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     match tuple_result_field_names.get(func.name) {
       Some(field_names) => {
         let binding_name = ffi_binding_name(func.name)
-        let args = ffi_func_param_names(func)
-        let call_args = ffi_func_call_args(func)
+        let args = ffi_func_bridge_param_names(func, runtime_export_name)
+        let call_args = ffi_func_call_args_with_names(func, args)
         let args_str = call_args.join(", ")
         let runtime_access = ensure_bridge_runtime_access(
           seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
@@ -1888,8 +2079,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
               } else {
-                let args = ffi_func_param_names(func)
-                let call_args = ffi_func_call_args(func)
+                let args = ffi_func_bridge_param_names(
+                  func, runtime_export_name,
+                )
+                let call_args = ffi_func_call_args_with_names(func, args)
                 let call_args_str = call_args.join(", ")
                 let runtime_access = ensure_bridge_runtime_access(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
@@ -1908,8 +2101,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
               }
             None =>
               if has_optional_params {
-                let args = ffi_func_param_names(func)
-                let call_args = ffi_func_call_args(func)
+                let args = ffi_func_bridge_param_names(
+                  func, runtime_export_name,
+                )
+                let call_args = ffi_func_call_args_with_names(func, args)
                 let call_args_str = call_args.join(", ")
                 let runtime_access = ensure_bridge_runtime_access(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
@@ -1973,8 +2168,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_bridge_function_line(
         getter_name,
         [],
-        ensure_bridge_runtime_access(
-          seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
+        ensure_bridge_value_runtime_access(
+          seen_bridge_import_keys, bridge_imports, namespace_import_roots, module_spec,
+          runtime_export_name,
         ),
       ),
     )
@@ -2013,11 +2209,19 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_bridge_function_line(
         getter_name,
         [],
-        ensure_bridge_import(
-          seen_bridge_import_keys,
-          bridge_imports,
-          export_.export_name,
-        ),
+        if ffi_module_spec_uses_public_exports(module_spec) {
+          ensure_bridge_module_runtime_access(
+            seen_bridge_import_keys,
+            bridge_imports,
+            export_.export_name,
+          )
+        } else {
+          ensure_bridge_import(
+            seen_bridge_import_keys,
+            bridge_imports,
+            export_.export_name,
+          )
+        },
       ),
     )
   }
@@ -2048,7 +2252,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
   if bridge_needs_option_unwrap {
     rendered_bridge_lines.push(
-      "function __ts_mbt_unwrap_option(value) { return value && value.$tag === 1 ? value._0 : undefined; }",
+      "function __ts_mbt_unwrap_option(value) { if (value == null) return undefined; if (typeof value === \"object\" && \"$tag\" in value) return value.$tag === 1 ? value._0 : undefined; return value; }",
     )
     rendered_bridge_lines.push("")
   }

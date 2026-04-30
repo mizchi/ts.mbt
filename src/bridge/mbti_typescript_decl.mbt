@@ -1731,11 +1731,23 @@ fn render_moonbit_js_glue_pkg_json(
       mbti_source_alias_for_package(loaded.root_package_name, package_name),
     )
     for import_ref in parse_mbti_imports(source) {
+      let alias_name = match
+        mbti_local_package_segments(
+          loaded.root_package_name,
+          import_ref.module_spec,
+        ) {
+        Some(_) =>
+          mbti_source_alias_for_package(
+            loaded.root_package_name,
+            import_ref.module_spec,
+          )
+        None => import_ref.alias_name
+      }
       push_unique_glue_import_entry(
         import_entries,
         seen_import_entries,
         import_ref.module_spec,
-        import_ref.alias_name,
+        alias_name,
       )
     }
   }

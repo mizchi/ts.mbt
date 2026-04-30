@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
+source "$repo_root/scripts/warning_guard.sh"
 
 report_root="_build/bridge-quality"
 log_root="$report_root/logs"

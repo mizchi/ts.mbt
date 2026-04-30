@@ -1640,3 +1640,24 @@ async test "bridge: emit MoonBit declarations from import-equals export assignme
   assert_true(actual.contains("declare pub type JSValue"))
   assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
 }
+
+///|
+async test "bridge: recursive type alias overload wrappers do not overflow" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/recursive-overload-alias-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn format(value : T) -> Format"))
+  assert_true(
+    actual.contains(
+      "declare pub fn format_t_string_optional(value : T, fallback : String?) -> Format",
+    ),
+  )
+}

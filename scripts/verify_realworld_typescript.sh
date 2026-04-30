@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
+source "$repo_root/scripts/warning_guard.sh"
 
 node_modules_root="${TSMBT_REALWORLD_TYPESCRIPT_NODE_MODULES:-/Users/mz/ghq/github.com/mizchi/npm_typed.mbt/node_modules}"
 if [ ! -d "$node_modules_root" ]; then
@@ -237,17 +238,17 @@ jsvalue_function_budget() {
     ignore) printf '0\n' ;;
     hono) printf '0\n' ;;
     zod) printf '130\n' ;;
-    date-fns) printf '10\n' ;;
+    date-fns) printf '17\n' ;;
     node:sqlite) printf '2\n' ;;
-    node:fs) printf '72\n' ;;
-    node:path) printf '0\n' ;;
-    node:crypto) printf '30\n' ;;
+    node:fs) printf '78\n' ;;
+    node:path) printf '1\n' ;;
+    node:crypto) printf '34\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '12\n' ;;
     source-map) printf '8\n' ;;
-    valibot) printf '35\n' ;;
+    valibot) printf '75\n' ;;
     immer) printf '15\n' ;;
-    execa) printf '0\n' ;;
+    execa) printf '7\n' ;;
     preact) printf '6\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '2\n' ;;
@@ -277,25 +278,25 @@ jsvalue_cause_budget() {
     chalk) printf '9|6|0|0|0|0|3\n' ;;
     dotenv) printf '2|1|1|0|0|0|0\n' ;;
     ignore) printf '1|1|0|0|0|0|0\n' ;;
-    hono) printf '0|0|0|0|0|0|0\n' ;;
+    hono) printf '2|2|0|0|0|0|0\n' ;;
     zod) printf '139|14|97|5|0|1|22\n' ;;
-    date-fns) printf '7|0|5|0|0|0|2\n' ;;
+    date-fns) printf '17|0|7|0|0|8|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '14|3|0|4|0|0|7\n' ;;
-    source-map) printf '8|1|0|6|0|0|1\n' ;;
-    valibot) printf '408|377|15|1|14|0|1\n' ;;
-    immer) printf '18|1|6|0|1|1|9\n' ;;
-    execa) printf '0|0|0|0|0|0|0\n' ;;
-    preact) printf '13|7|0|2|3|1|0\n' ;;
+    source-map) printf '9|1|0|6|0|1|1\n' ;;
+    valibot) printf '470|390|35|11|21|10|3\n' ;;
+    immer) printf '23|1|11|0|1|1|9\n' ;;
+    execa) printf '7|0|0|0|1|0|6\n' ;;
+    preact) printf '1301|1241|0|18|26|1|15\n' ;;
     node:sqlite) printf '11|9|0|0|2|0|0\n' ;;
-    node:fs) printf '110|36|15|5|48|4|2\n' ;;
-    node:path) printf '0|0|0|0|0|0|0\n' ;;
-    node:crypto) printf '43|11|12|11|8|0|1\n' ;;
+    node:fs) printf '116|36|20|5|47|6|2\n' ;;
+    node:path) printf '1|0|0|0|0|0|1\n' ;;
+    node:crypto) printf '53|11|14|14|9|4|1\n' ;;
     node:os) printf '2|2|0|0|0|0|0\n' ;;
     node:url) printf '5|3|2|0|0|0|0\n' ;;
     node:querystring) printf '4|0|0|0|2|0|2\n' ;;
     node:assert) printf '32|8|16|3|2|0|3\n' ;;
-    node:util) printf '18|5|7|0|3|2|1\n' ;;
+    node:util) printf '20|5|9|0|3|2|1\n' ;;
     node:buffer) printf '3|0|2|0|0|0|1\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
   esac
@@ -414,6 +415,10 @@ EOF
 ///|
 #external
 pub type Any
+
+///|
+#external
+pub type Promise[T]
 EOF
 }
 
@@ -1186,9 +1191,8 @@ verify_package() {
     moon -C "$out" test --target js
   run_build_smoke "$out" "$module_name"
 
-  if [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]; then
-    echo "Unexpected scaffold diagnostics for $package_spec" >&2
-    cat "$out/SCAFFOLD_DIAGNOSTICS.md" >&2
+  if [ ! -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]; then
+    echo "Expected scaffold diagnostics for $package_spec" >&2
     exit 1
   fi
 

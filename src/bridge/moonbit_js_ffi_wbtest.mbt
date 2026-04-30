@@ -661,6 +661,27 @@ async test "bridge: emit MoonBit JS FFI bundle collapse overloads by generated b
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle keeps bare package overload variants bound to source names" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/overload-entry.d.ts", "overload-pkg",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "#module(\"overload-pkg\")\npub extern \"js\" fn make_counter_number(value : Double) -> Counter = \"makeCounter\"",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("makeCounterNumber"))
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
@@ -2669,7 +2690,7 @@ async test "bridge: emit MoonBit JS FFI bundle keeps mixed default class imports
   )
   assert_true(
     bundle.bridge_js.contains(
-      "import default_, { version } from \"../../runtime/runtime-default-class-mixed.js\";",
+      "import default_, { version, surroundMaybe } from \"../../runtime/runtime-default-class-mixed.js\";",
     ),
   )
   assert_true(
@@ -2721,7 +2742,7 @@ async test "bridge: emit MoonBit JS FFI bundle keeps aliased reexports bound to 
   )
   assert_true(
     bundle.bridge_js.contains(
-      "import default_, { version } from \"../../runtime/runtime-default-class-mixed.js\";",
+      "import default_, { version, surroundMaybe } from \"../../runtime/runtime-default-class-mixed.js\";",
     ),
   )
   assert_true(
@@ -2739,6 +2760,83 @@ async test "bridge: emit MoonBit JS FFI bundle keeps aliased reexports bound to 
       "export function __ts_mbt_get_runtime_version() { return version; }",
     ),
   )
+}
+
+///|
+async test "bridge: emit MoonBit JS FFI bundle binds bare package aliases to public names" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-default-class-mixed-reexport-entry.ts",
+    "pkg-alias",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "#module(\"pkg-alias\")\npub extern \"js\" fn decorate(label : String, prefix : String) -> String = \"decorate\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_decorate_maybe(label, prefix) { return decorateMaybe(label, __ts_mbt_unwrap_option(prefix)); }",
+    ),
+  )
+  assert_false(bundle.bridge_js.contains("surround as __ts_mbt_decorate"))
+  assert_false(bundle.bridge_js.contains("surroundMaybe"))
+}
+
+///|
+async test "bridge: emit MoonBit JS FFI bundle does not import type-only aliases" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/type-only-alias-value-entry.d.ts", "type-only-alias-value",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype Color"))
+  assert_true(
+    bundle.bridge_js.contains(
+      "import * as __ts_mbt_module from \"type-only-alias-value\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_red() { return __ts_mbt_module.red; }",
+    ),
+  )
+  assert_false(bundle.bridge_js.contains("Color"))
+}
+
+///|
+async test "bridge: emit MoonBit JS FFI bundle does not import export-import type aliases" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/type-only-export-import-entry.d.ts", "preact-like",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "#module(\"preact-like\")\npub extern \"js\" fn h(type_ : String) -> String = \"h\"",
+    ),
+  )
+  assert_false(bundle.bridge_js.contains("JSX"))
+  assert_false(bundle.ffi_mbt.contains("get_jsx"))
 }
 
 ///|
@@ -2784,6 +2882,11 @@ async test "bridge: emit MoonBit JS FFI bundle imports export-equals namespace m
   assert_false(bundle.bridge_js.contains("import { path } from \"node:path\";"))
   assert_true(
     bundle.bridge_js.contains("export const __ts_mbt_path_join = path.join;"),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_path_basename(path_, suffix) { return path.basename(path_, __ts_mbt_unwrap_option(suffix)); }",
+    ),
   )
   assert_true(
     bundle.bridge_js.contains(
@@ -2920,6 +3023,30 @@ async test "bridge: emit MoonBit JS FFI bundle from exported runtime namespace m
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle keeps bare package namespace members on root imports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/exported-runtime-namespace-entry.d.ts", "runtime-namespace",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.bridge_js.contains("constants } from \"runtime-namespace\""),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_get_constants_read() { return constants.read; }",
+    ),
+  )
+  assert_false(bundle.bridge_js.contains("constantsRead"))
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from declaration-merged namespaces" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/declaration-merge-namespace-entry.d.ts", "./runtime/declaration-merge-namespace.js",
@@ -3049,7 +3176,7 @@ async test "bridge: emit MoonBit JS FFI bundle from callback APIs as js.Any" {
   assert_true(bundle.bridge_js.contains("__ts_mbt_maybe_emit"))
   assert_true(
     bundle.bridge_js.contains(
-      "function __ts_mbt_unwrap_option(value) { return value && value.$tag === 1 ? value._0 : undefined; }",
+      "function __ts_mbt_unwrap_option(value) { if (value == null) return undefined; if (typeof value === \"object\" && \"$tag\" in value) return value.$tag === 1 ? value._0 : undefined; return value; }",
     ),
   )
   assert_true(
@@ -3855,6 +3982,7 @@ test "bridge: FFI value identifier sanitizes MoonBit keywords and discard names"
   assert_eq(ffi_sanitize_identifier("override", "field"), "override_")
   assert_eq(ffi_sanitize_identifier("method", "field"), "method_")
   assert_eq(ffi_sanitize_identifier("constructor", "field"), "constructor_")
+  assert_eq(ffi_sanitize_identifier("local", "field"), "local_")
   assert_eq(ffi_sanitize_identifier("_", "field"), "field")
   assert_eq(ffi_value_fn_name("enum"), "enum_")
 }

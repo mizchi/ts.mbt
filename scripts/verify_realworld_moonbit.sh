@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
+source "$repo_root/scripts/warning_guard.sh"
 
 github_root="$(cd "$repo_root/../.." && pwd)"
 report_root="_build/realworld-moonbit"
@@ -543,6 +544,12 @@ import path from "node:path";
 const out = path.resolve(process.argv[2]);
 const rootJs = fs.readFileSync(path.join(out, "index.js"), "utf8");
 const rootExports = new Set([...rootJs.matchAll(/\bas\s+([A-Za-z_$][\w$]*)/g)].map((match) => match[1]));
+for (const match of rootJs.matchAll(/\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\b/g)) {
+  rootExports.add(match[1]);
+}
+for (const match of rootJs.matchAll(/\bexport\s+(?:const|let|var|class)\s+([A-Za-z_$][\w$]*)\b/g)) {
+  rootExports.add(match[1]);
+}
 
 function walk(dir, acc = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

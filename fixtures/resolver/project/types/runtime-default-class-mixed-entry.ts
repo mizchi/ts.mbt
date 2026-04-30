@@ -15,3 +15,7 @@ export const version: string = "v2"
 export function surround(label: string, prefix: string): string {
   return `${prefix}${label}${prefix}`
 }
+
+export function surroundMaybe(label: string, prefix?: string): string {
+  return `${prefix ?? ""}${label}${prefix ?? ""}`
+}

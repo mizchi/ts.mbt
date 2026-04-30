@@ -1079,7 +1079,11 @@ fn resolved_export_is_non_runtime_value(
     Some(info) =>
       match find_value_decl(info.module_, local_name) {
         Some(value) => !value_decl_has_runtime_binding(value)
-        None => false
+        None =>
+          match find_type_alias_decl(info.module_, local_name) {
+            Some(_) => true
+            None => false
+          }
       }
     None => false
   }
@@ -2436,6 +2440,114 @@ fn find_type_alias_decl(
 }
 
 ///|
+fn type_name_references_alias(
+  module_ : @ast.TsModule,
+  name : String,
+  target : String,
+  seen_aliases : Array[String],
+) -> Bool {
+  if name == target {
+    return true
+  }
+  if seen_aliases.contains(name) {
+    return false
+  }
+  match find_type_alias_decl(module_, name) {
+    Some(type_alias) => {
+      seen_aliases.push(name)
+      let found = type_references_alias(
+        module_,
+        type_alias.type_,
+        target,
+        seen_aliases,
+      )
+      let _ = seen_aliases.pop()
+      found
+    }
+    None => false
+  }
+}
+
+///|
+fn type_references_alias(
+  module_ : @ast.TsModule,
+  type_ : @ast.TsType,
+  target : String,
+  seen_aliases : Array[String],
+) -> Bool {
+  match type_ {
+    Named(name) =>
+      type_name_references_alias(module_, name, target, seen_aliases)
+    Applied(name, args) => {
+      if type_name_references_alias(module_, name, target, seen_aliases) {
+        return true
+      }
+      for arg in args {
+        if type_references_alias(module_, arg, target, seen_aliases) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) => type_references_alias(module_, inner, target, seen_aliases)
+    Tuple(items) | Union(items) | Intersection(items) => {
+      for item in items {
+        if type_references_alias(module_, item, target, seen_aliases) {
+          return true
+        }
+      }
+      false
+    }
+    Object(fields) => {
+      for field in fields {
+        if type_references_alias(module_, field.0, target, seen_aliases) ||
+          type_references_alias(module_, field.1, target, seen_aliases) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for field in fields {
+        if type_references_alias(module_, field.1, target, seen_aliases) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, return_type) => {
+      for param in params {
+        if type_references_alias(module_, param, target, seen_aliases) {
+          return true
+        }
+      }
+      type_references_alias(module_, return_type, target, seen_aliases)
+    }
+    Conditional(source, constraint, true_type, false_type) =>
+      type_references_alias(module_, source, target, seen_aliases) ||
+      type_references_alias(module_, constraint, target, seen_aliases) ||
+      type_references_alias(module_, true_type, target, seen_aliases) ||
+      type_references_alias(module_, false_type, target, seen_aliases)
+    _ => false
+  }
+}
+
+///|
+fn type_alias_is_recursive(
+  module_ : @ast.TsModule,
+  type_alias : @ast.TsTypeAlias,
+) -> Bool {
+  let seen_aliases : Array[String] = []
+  seen_aliases.push(type_alias.name)
+  type_references_alias(
+    module_,
+    type_alias.type_,
+    type_alias.name,
+    seen_aliases,
+  )
+}
+
+///|
 fn type_alias_param_binding(
   params : Array[String],
   args : Array[@ast.TsType],
@@ -2534,6 +2646,9 @@ fn applied_type_alias(
   match find_type_alias_decl(info.module_, name) {
     Some(type_alias) =>
       if type_alias.type_params.length() == args.length() {
+        if type_alias_is_recursive(info.module_, type_alias) {
+          return None
+        }
         let substituted = substitute_type_alias_params(
           type_alias.type_,
           type_alias.type_params,

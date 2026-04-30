@@ -890,6 +890,16 @@ async test "bridge: emit TypeScript scaffold bundle exposes child package runtim
       "\"path\": \"examples/counter/child\", \"alias\": \"tsmbt_source_child\"",
     ),
   )
+  assert_false(
+    bundle.moon_pkg_json.contains(
+      "\"path\": \"examples/counter/child\", \"alias\": \"child\"",
+    ),
+  )
+  assert_false(
+    bundle.moon_pkg_json.contains(
+      "\"path\": \"examples/counter/child/grand\", \"alias\": \"grand\"",
+    ),
+  )
   assert_true(
     bundle.package_json.contains(
       "\"./child\": { \"types\": \"./child/index.d.ts\", \"import\": \"./child/index.js\" }",

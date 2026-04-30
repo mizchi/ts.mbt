@@ -2331,8 +2331,9 @@ fn Parser::parse_export_stmt(
     return
   }
   if self.match_(Import) || self.match_ident("import") {
-    let _ = self.parse_binding_ident()
+    let name = self.parse_binding_ident()
     let _ = self.expect(Eq)
+    type_aliases.push({ name, type_params: [], type_: @ast.TsType::Any })
     self.skip_until_semicolon()
     return
   }
