@@ -1,5 +1,6 @@
-extern "js" fn latest_script_target() -> @sut.JSValue =
-  #| () => globalThis.__tsmbt_ast_adapter.latestScriptTarget()
+fn latest_script_target() -> @sut.JSValue {
+  @sut.unsafeCast(99.0)
+}
 
 fn rename_identifier(identifier : @sut.Identifier) -> @sut.Node {
   let text : String = @sut.unsafeCast(identifier.escapedText)

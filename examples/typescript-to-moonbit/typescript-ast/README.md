@@ -17,7 +17,6 @@ The smoke program in `smoke/main.mbt` creates a TypeScript `SourceFile`, builds 
 helper, renames `Identifier` nodes, then prints the transformed file through the
 TypeScript printer.
 
-The runtime adapter in `runtime/ast-transformer.js` only supplies the
-`ScriptTarget.Latest` enum value. Structural casts, Node type-guard helpers, and
-function-field method wrappers for TypeScript objects are generated into the
-MoonBit bridge package.
+The smoke uses the generated bridge directly. Structural casts, Node type-guard
+helpers, and function-field method wrappers for TypeScript objects are generated
+into the MoonBit bridge package.

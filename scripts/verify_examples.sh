@@ -189,7 +189,6 @@ EOF
 run_typescript_ast_build_smoke() {
   local root="$1"
   local module_name="$2"
-  local adapter_js="$3"
   local smoke_pkg="__tsmbt_build_smoke__"
   local smoke_dir="$root/$smoke_pkg"
 
@@ -218,7 +217,6 @@ EOF
 
   printf '{ "type": "module" }\n' > "$(dirname "$built_js")/package.json"
   node --input-type=module - <<EOF
-globalThis.__tsmbt_ast_adapter = await import("./$adapter_js");
 await import("./$built_js");
 EOF
 }
@@ -502,9 +500,7 @@ verify_typescript_to_moonbit_typescript_ast_example() {
   local out="$root/dist"
 
   rm -rf "$root"
-  mkdir -p "$root/runtime"
-
-  cp examples/typescript-to-moonbit/typescript-ast/runtime/ast-transformer.js "$root/runtime/ast-transformer.js"
+  mkdir -p "$root"
 
   moon run src -- \
     --input node_modules/typescript/lib/typescript.d.ts \
@@ -543,7 +539,7 @@ EOF
   grep -F 'pub fn TransformationResult::dispose(self : TransformationResult) -> Unit' "$out/bridge.mbt" >/dev/null
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
-  run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast" "$root/runtime/ast-transformer.js"
+  run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast"
 }
 
 verify_moonbit_to_typescript_example
