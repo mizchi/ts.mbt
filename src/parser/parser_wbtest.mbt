@@ -1013,7 +1013,12 @@ test "parser: parse export type star in module block" {
     }
   }
   assert_eq(module_.exports.length(), 0)
-  assert_eq(module_.reexports.length(), 0)
+  assert_eq(module_.reexports.length(), 1)
+  assert_eq(module_.reexports[0].module_spec, "./types")
+  match module_.reexports[0].kind {
+    All => ()
+    _ => fail("expected type star re-export metadata")
+  }
 }
 
 ///|
@@ -2975,6 +2980,29 @@ test "parser: parse new expression with private constructor property and type ar
 }
 
 ///|
+test "parser: parse module block type re-export metadata" {
+  let src =
+    #|export type { ExpectStatic, Assertion as TestAssertion } from "@vitest/expect";
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.exports.length(), 0)
+  assert_eq(module_.reexports.length(), 1)
+  assert_eq(module_.reexports[0].module_spec, "@vitest/expect")
+  match module_.reexports[0].kind {
+    Named(items) => {
+      assert_eq(items.length(), 2)
+      assert_eq(items[0], ("ExpectStatic", "ExpectStatic"))
+      assert_eq(items[1], ("Assertion", "TestAssertion"))
+    }
+    _ => fail("expected named type re-export")
+  }
+}
+
+///|
 test "parser: parse generic call with array type arg" {
   match parse_expr_from("signal<number[]>([])") {
     Call("signal", args) => assert_eq(args.length(), 1)
@@ -3275,13 +3303,34 @@ test "parser: parse interface extends nested generic object type" {
     #|export interface Context<T> extends FC<PropsWithChildren<{ value: T }>> {
     #|  Provider: FC<PropsWithChildren<{ value: T }>>
     #|}
-  let module_ = Parser::from_source(src).parse_module_block() catch {
+  let module_ = Parser::from_source(src).parse_module() catch {
     e => {
       fail("Parse error: \{e}")
       return
     }
   }
-  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].extends_names, ["FC"])
+}
+
+///|
+test "parser: parse generic function property type" {
+  let src =
+    #|export interface Assertion<T> {
+    #|  toBe: <E>(expected: E) => void;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].fields.length(), 1)
+  match module_.interfaces[0].fields[0].1 {
+    Func(params, Void) => assert_eq(params.length(), 1)
+    _ => fail("expected generic function property to lower to Func")
+  }
 }
 
 ///|
@@ -5501,7 +5550,28 @@ test "parser: parse exported JSX namespace followed by extending interface" {
         "expected exported JSX namespace and interface extends to parse: \{e}",
       )
   }
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e =>
+      fail(
+        "expected exported JSX namespace and interface extends to parse: \{e}",
+      )
+  }
   assert_eq(module_block.exports.length(), 2)
+  assert_eq(module_.interfaces[0].extends_names, ["JSX.IntrinsicElements"])
+}
+
+///|
+test "parser: preserve declare class extends base names" {
+  let src =
+    #|import { BaseApp } from "./base"
+    #|export declare class App extends BaseApp<Env> {
+    #|  constructor()
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected declare class extends to parse: \{e}")
+  }
+  assert_eq(module_.classes.length(), 1)
+  assert_eq(module_.classes[0].base_names, ["BaseApp"])
 }
 
 ///|

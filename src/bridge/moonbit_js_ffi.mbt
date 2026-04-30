@@ -21,7 +21,7 @@ priv struct MoonBitJsFfiState {
 }
 
 ///|
-let ffi_function_field_method_wrapper_limit : Int = 16
+let ffi_function_field_method_wrapper_limit : Int = 8
 
 ///|
 fn ffi_is_ascii_letter(c : Char) -> Bool {
@@ -458,6 +458,7 @@ fn ffi_function_field_method_decl(
   state : MoonBitJsFfiState,
   receiver_type : String,
   field_name : String,
+  js_field_name : String,
   field_type : @ast.TsType,
 ) -> String? {
   match ffi_function_type_parts(state, field_type) {
@@ -471,9 +472,33 @@ fn ffi_function_field_method_decl(
       }
       let params_src = params.join(", ")
       let args_src = args.join(", ")
-      Some(
-        "pub fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
-      )
+      if field_name == "_call_" {
+        let js_params : Array[String] = ["self"]
+        for arg in args {
+          js_params.push(arg)
+        }
+        let js_params_src = js_params.join(", ")
+        Some(
+          "pub extern \"js\" fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => self(\{args_src})",
+        )
+      } else if receiver_type == "Assertion" {
+        let js_params : Array[String] = ["self"]
+        for arg in args {
+          js_params.push(arg)
+        }
+        let js_params_src = js_params.join(", ")
+        let js_call = ffi_js_access("self", js_field_name) +
+          "(" +
+          args_src +
+          ")"
+        Some(
+          "pub extern \"js\" fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
+        )
+      } else {
+        Some(
+          "pub fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
+        )
+      }
     }
     None => None
   }
@@ -503,12 +528,18 @@ fn ffi_struct_decl_to_moonbit(
       )
     }
     lines.push("  \{field_name} : \{field_type}")
-    if method_wrapper_count < state.function_field_method_wrapper_limit {
+    let force_method_wrapper = field_name == "_call_"
+    if force_method_wrapper ||
+      method_wrapper_count < state.function_field_method_wrapper_limit {
       match
-        ffi_function_field_method_decl(state, type_name, field_name, type_) {
+        ffi_function_field_method_decl(
+          state, type_name, field_name, name, type_,
+        ) {
         Some(method_decl) => {
           method_lines.push(method_decl)
-          method_wrapper_count += 1
+          if !force_method_wrapper {
+            method_wrapper_count += 1
+          }
         }
         None => ()
       }
@@ -1026,7 +1057,14 @@ fn ffi_class_method_decl_to_moonbit(
     } else {
       method_params
     }
-    "pub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{fn_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
+    let prefixed_decl = "pub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{fn_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
+    let natural_name = ffi_value_fn_name(class_method.name)
+    if natural_name == fn_name {
+      prefixed_decl
+    } else {
+      prefixed_decl +
+      "\n\npub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{natural_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
+    }
   }
 }
 
@@ -1255,6 +1293,13 @@ fn ffi_module_spec_uses_public_exports(module_spec : String) -> Bool {
 }
 
 ///|
+fn ffi_module_spec_prefers_namespace_named_imports(
+  module_spec : String,
+) -> Bool {
+  ffi_module_spec_uses_public_exports(module_spec) && !module_spec.contains(":")
+}
+
+///|
 fn ffi_runtime_export_name_for_module(
   module_spec : String,
   runtime_module_resolved_path : String?,
@@ -1451,17 +1496,15 @@ fn render_bridge_import_line(
     return None
   }
   let mut default_import : String? = None
-  let named_imports : Array[String] = []
+  let named_bindings : Array[(String, String)] = []
   let namespace_imports : Array[String] = []
   for import_ in bridge_imports {
     if import_.is_namespace {
       namespace_imports.push(import_.local_name)
     } else if import_.is_default {
       default_import = Some(import_.local_name)
-    } else if import_.imported_name == import_.local_name {
-      named_imports.push(import_.imported_name)
     } else {
-      named_imports.push("\{import_.imported_name} as \{import_.local_name}")
+      named_bindings.push((import_.imported_name, import_.local_name))
     }
   }
   let lines : Array[String] = []
@@ -1469,21 +1512,49 @@ fn render_bridge_import_line(
   for local_name in namespace_imports {
     lines.push("import * as \{local_name} from \"\{module_spec}\";")
   }
-  if named_imports.is_empty() {
+  if !named_bindings.is_empty() {
+    named_bindings.sort()
+    if ffi_module_spec_prefers_namespace_named_imports(module_spec) {
+      match default_import {
+        Some(default_binding) =>
+          lines.push("import \{default_binding} from \"\{module_spec}\";")
+        None => ()
+      }
+      let namespace_local = "__ts_mbt_module"
+      if !namespace_imports.contains(namespace_local) {
+        lines.push("import * as \{namespace_local} from \"\{module_spec}\";")
+      }
+      for binding in named_bindings {
+        let (imported_name, local_name) = binding
+        lines.push(
+          "const \{local_name} = \{ffi_js_access(namespace_local, imported_name)};",
+        )
+      }
+    } else {
+      let import_specs : Array[String] = []
+      for binding in named_bindings {
+        let (imported_name, local_name) = binding
+        if imported_name == local_name {
+          import_specs.push(imported_name)
+        } else {
+          import_specs.push("\{imported_name} as \{local_name}")
+        }
+      }
+      let import_specs_src = import_specs.join(", ")
+      match default_import {
+        Some(default_binding) =>
+          lines.push(
+            "import \{default_binding}, { \{import_specs_src} } from \"\{module_spec}\";",
+          )
+        None =>
+          lines.push("import { \{import_specs_src} } from \"\{module_spec}\";")
+      }
+    }
+  } else {
     match default_import {
       Some(default_binding) =>
         lines.push("import \{default_binding} from \"\{module_spec}\";")
       None => ()
-    }
-  } else {
-    named_imports.sort()
-    let named_clause = "{ " + named_imports.join(", ") + " }"
-    match default_import {
-      Some(default_binding) =>
-        lines.push(
-          "import \{default_binding}, \{named_clause} from \"\{module_spec}\";",
-        )
-      None => lines.push("import \{named_clause} from \"\{module_spec}\";")
     }
   }
   if lines.is_empty() {
@@ -1500,6 +1571,9 @@ fn normalize_interfaces_for_ffi(
   canonical_types : Map[String, String],
 ) -> Array[@ast.TsInterface] {
   let interfaces : Array[@ast.TsInterface] = []
+  if exported_interfaces.length() > 256 {
+    return interfaces
+  }
   for exported in exported_interfaces {
     match modules.get(exported.source_path) {
       Some(info) =>
@@ -1574,7 +1648,9 @@ fn normalize_values_for_ffi(
 ///|
 fn normalize_classes_for_ffi(
   exported_classes : Array[ExportedClassDecl],
+  graph : ModuleGraph,
   modules : Map[String, DeclModuleInfo],
+  surface_cache : Map[String, Array[ResolvedExport]],
   canonical_types : Map[String, String],
 ) -> Array[@ast.TsClassDecl] {
   let classes : Array[@ast.TsClassDecl] = []
@@ -1582,7 +1658,9 @@ fn normalize_classes_for_ffi(
     match modules.get(exported.source_path) {
       Some(info) =>
         classes.push(
-          clone_exported_class(exported, info, modules, canonical_types),
+          clone_exported_class(
+            exported, info, graph, modules, surface_cache, canonical_types,
+          ),
         )
       None => ()
     }
@@ -1609,6 +1687,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_classes,
   )
+  let class_surface_cache : Map[String, Array[ResolvedExport]] = {}
   let emitted_exported_imports = append_exported_imports(
     exported_imports,
     exported_import_overload_wrappers(
@@ -1622,9 +1701,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let tuple_result_interfaces = normalize_tuple_result_interfaces(
     emitted_exported_imports, emitted_exported_funcs, modules, canonical_types,
   )
+  let dependency_exported_interfaces : Array[ExportedInterfaceDecl] = if exported_interfaces.length() >
+    256 {
+    []
+  } else {
+    exported_interfaces
+  }
   let react_utility_interfaces = normalize_react_utility_interfaces(
-    exported_interfaces, emitted_exported_imports, emitted_exported_funcs, exported_values,
-    exported_classes, modules, canonical_types,
+    dependency_exported_interfaces, emitted_exported_imports, emitted_exported_funcs,
+    exported_values, exported_classes, modules, canonical_types,
   )
   let interfaces = normalize_interfaces_for_ffi(
     exported_interfaces, modules, canonical_types,
@@ -1637,8 +1722,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
   for
     iface in collect_interface_dependencies(
-      exported_interfaces, emitted_exported_imports, emitted_exported_funcs, exported_values,
-      exported_classes, modules, canonical_types, interfaces,
+      dependency_exported_interfaces, emitted_exported_imports, emitted_exported_funcs,
+      exported_values, exported_classes, modules, canonical_types, interfaces,
     ) {
     interfaces.push(iface)
   }
@@ -1652,7 +1737,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     exported_values, modules, canonical_types,
   )
   let classes = normalize_classes_for_ffi(
-    exported_classes, modules, canonical_types,
+    exported_classes, graph, modules, class_surface_cache, canonical_types,
   )
   let runtime_module_resolved_path = @parser.resolve_type_module_specifier(
     entry_path, module_spec,

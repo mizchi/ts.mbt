@@ -343,6 +343,7 @@ pub(all) struct TsFunc {
 // / interface (structtype)
 pub(all) struct TsInterface {
   name : String
+  extends_names : Array[String]
   fields : Array[(String, TsType)] // (fieldName, type)
   readonly_fields : Array[String]
 } derive(Debug)
@@ -393,6 +394,7 @@ pub(all) struct TsClassMethodDecl {
 // / class declaration
 pub(all) struct TsClassDecl {
   name : String
+  base_names : Array[String]
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
@@ -449,6 +451,7 @@ pub(all) enum TsReExportKind {
 pub(all) struct TsReExportSpec {
   module_spec : String
   kind : TsReExportKind
+  type_only : Bool
 } derive(Debug)
 
 ///|

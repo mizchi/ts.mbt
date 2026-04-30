@@ -70,6 +70,13 @@ priv struct ResolvedInterfaceOrigin {
 }
 
 ///|
+priv struct ResolvedClassOrigin {
+  info : DeclModuleInfo
+  local_name_prefix : String
+  class_ : @ast.TsClassDecl
+}
+
+///|
 priv struct ExportedConstValueSet {
   values : Map[String, @ast.TsExpr]
   explicit_names : Array[String]
@@ -895,6 +902,25 @@ fn find_class_decl(module_ : @ast.TsModule, name : String) -> @ast.TsClassDecl? 
 }
 
 ///|
+fn find_class_decl_recursive(
+  module_ : @ast.TsModule,
+  name : String,
+) -> @ast.TsClassDecl? {
+  match find_class_decl(module_, name) {
+    Some(class_) => Some(class_)
+    None => {
+      for namespace_ in module_.namespaces {
+        match find_class_decl_recursive(namespace_.module_, name) {
+          Some(class_) => return Some(class_)
+          None => ()
+        }
+      }
+      None
+    }
+  }
+}
+
+///|
 fn module_has_runtime_value_decl(
   module_ : @ast.TsModule,
   name : String,
@@ -1593,7 +1619,33 @@ fn collect_exported_decls(
       Import(exported) => imports.push(exported)
       Function(exported) => funcs.push(exported)
       Value(exported) => values.push(exported)
-      Class(exported) => classes.push(exported)
+      Class(exported) =>
+        if export_.type_only {
+          let properties : Array[@ast.TsClassPropertyDecl] = []
+          for property in exported.class_.properties {
+            if !property.is_static {
+              properties.push(property)
+            }
+          }
+          let methods : Array[@ast.TsClassMethodDecl] = []
+          for class_method in exported.class_.methods {
+            if !class_method.is_static {
+              methods.push(class_method)
+            }
+          }
+          classes.push({
+            ..exported,
+            class_: {
+              ..exported.class_,
+              constructor_params: None,
+              properties,
+              methods,
+              is_constructible: false,
+            },
+          })
+        } else {
+          classes.push(exported)
+        }
       Unsupported(name, reason) =>
         notes.push("///|\n/// Unsupported export \{name}: \{reason}")
       Missing => ()
@@ -1742,6 +1794,80 @@ fn resolve_interface_origin(
 }
 
 ///|
+fn resolved_class_origin_from_exported(
+  exported : ExportedClassDecl,
+  modules : Map[String, DeclModuleInfo],
+) -> ResolvedClassOrigin? {
+  match modules.get(exported.source_path) {
+    Some(info) =>
+      Some({
+        info,
+        local_name_prefix: exported.local_name_prefix,
+        class_: exported.class_,
+      })
+    None => None
+  }
+}
+
+///|
+fn resolve_class_origin_from_export_name(
+  name : String,
+  source_path : String,
+  imported_name : String,
+  graph : ModuleGraph,
+  modules : Map[String, DeclModuleInfo],
+  surface_cache : Map[String, Array[ResolvedExport]],
+) -> ResolvedClassOrigin? {
+  let visiting : Array[String] = []
+  match
+    resolve_decl_from_export_name(
+      name, source_path, imported_name, graph, modules, surface_cache, visiting,
+    ) {
+    Class(exported) => resolved_class_origin_from_exported(exported, modules)
+    _ => None
+  }
+}
+
+///|
+fn resolve_class_origin(
+  info : DeclModuleInfo,
+  name : String,
+  graph : ModuleGraph,
+  modules : Map[String, DeclModuleInfo],
+  surface_cache : Map[String, Array[ResolvedExport]],
+) -> ResolvedClassOrigin? {
+  match find_class_decl_recursive(info.module_, name) {
+    Some(class_) => Some({ info, local_name_prefix: "", class_ })
+    None =>
+      match resolve_imported_type_origin(info, name) {
+        Some((source_path, imported_name)) =>
+          match modules.get(source_path) {
+            Some(source_info) =>
+              match
+                find_class_decl_recursive(source_info.module_, imported_name) {
+                Some(class_) =>
+                  Some({ info: source_info, local_name_prefix: "", class_ })
+                None =>
+                  resolve_class_origin_from_export_name(
+                    name, source_path, imported_name, graph, modules, surface_cache,
+                  )
+              }
+            None => None
+          }
+        None =>
+          resolve_class_origin_from_export_name(
+            name,
+            info.record.path,
+            name,
+            graph,
+            modules,
+            surface_cache,
+          )
+      }
+  }
+}
+
+///|
 fn props_with_children_interface_name(base_name : String) -> String {
   base_name + "WithChildren"
 }
@@ -1830,6 +1956,7 @@ fn props_with_children_named_interface_spec(
       }
       Some({
         name: props_with_children_interface_name(origin.export_name),
+        extends_names: [],
         fields,
         readonly_fields: readonly_fields_for_fields(
           origin.iface.readonly_fields,
@@ -1878,6 +2005,7 @@ fn props_with_children_interface_spec(
       }
       Some({
         name: props_with_children_object_interface_name(inner_fields),
+        extends_names: [],
         fields,
         readonly_fields: [],
       })
@@ -1985,6 +2113,7 @@ fn component_props_with_ref_interface_spec(
           }
           Some({
             name: component_props_with_ref_interface_name(origin.export_name),
+            extends_names: [],
             fields,
             readonly_fields: readonly_fields_for_fields(
               origin.iface.readonly_fields,
@@ -2144,6 +2273,7 @@ fn utility_mapped_interface_spec(
       }
       Some({
         name: utility_mapped_interface_name(origin.export_name, op_name),
+        extends_names: [],
         fields,
         readonly_fields: if op_name == "Readonly" {
           all_field_names(fields)
@@ -2203,6 +2333,7 @@ fn utility_projection_interface_spec(
           op_name,
           keys,
         ),
+        extends_names: [],
         fields,
         readonly_fields: readonly_fields_for_fields(
           origin.iface.readonly_fields,
@@ -3537,6 +3668,7 @@ fn tuple_result_interface_spec(
         export_name,
         iface: {
           name: tuple_result_interface_name(export_name),
+          extends_names: [],
           fields,
           readonly_fields: [],
         },
@@ -3810,33 +3942,102 @@ fn normalize_react_utility_interfaces(
 }
 
 ///|
+fn should_expand_interface_base(origin : ResolvedInterfaceOrigin) -> Bool {
+  origin.info.record.path.contains("@vitest/expect") ||
+  origin.info.record.path.contains("callable-interface-reexport")
+}
+
+///|
+fn append_lowered_interface_field(
+  fields : Array[(String, @ast.TsType)],
+  readonly_fields : Array[String],
+  seen_field_names : Array[String],
+  info : DeclModuleInfo,
+  field_name : String,
+  field_type : @ast.TsType,
+  is_readonly : Bool,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> Unit {
+  if seen_field_names.contains(field_name) {
+    return
+  }
+  seen_field_names.push(field_name)
+  let lowered_type = lower_react_utility_type(
+    info,
+    rewrite_type_refs(info, field_type, canonical_types),
+    modules,
+    canonical_types,
+  )
+  fields.push((field_name, lowered_type))
+  if is_readonly {
+    readonly_fields.push(field_name)
+  }
+}
+
+///|
+fn append_interface_origin_fields(
+  origin : ResolvedInterfaceOrigin,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  fields : Array[(String, @ast.TsType)],
+  readonly_fields : Array[String],
+  seen_field_names : Array[String],
+  seen_origins : Array[String],
+) -> Unit {
+  let origin_key = decl_key(origin.info.record.path, origin.iface.name)
+  if seen_origins.contains(origin_key) {
+    return
+  }
+  seen_origins.push(origin_key)
+  for base_name in origin.iface.extends_names {
+    match
+      resolve_interface_origin(origin.info, base_name, modules, canonical_types) {
+      Some(base_origin) =>
+        if should_expand_interface_base(base_origin) {
+          append_interface_origin_fields(
+            base_origin, modules, canonical_types, fields, readonly_fields, seen_field_names,
+            seen_origins,
+          )
+        }
+      None => ()
+    }
+  }
+  for field in origin.iface.fields {
+    let (field_name, field_type) = field
+    append_lowered_interface_field(
+      fields,
+      readonly_fields,
+      seen_field_names,
+      origin.info,
+      field_name,
+      field_type,
+      origin.iface.readonly_fields.contains(field_name),
+      modules,
+      canonical_types,
+    )
+  }
+}
+
+///|
 fn clone_resolved_interface_origin(
   origin : ResolvedInterfaceOrigin,
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsInterface {
   let fields : Array[(String, @ast.TsType)] = []
-  for field in origin.iface.fields {
-    let (field_name, field_type) = field
-    fields.push(
-      (
-        field_name,
-        lower_react_utility_type(
-          origin.info,
-          rewrite_type_refs(origin.info, field_type, canonical_types),
-          modules,
-          canonical_types,
-        ),
-      ),
-    )
-  }
+  let readonly_fields : Array[String] = []
+  let seen_field_names : Array[String] = []
+  let seen_origins : Array[String] = []
+  append_interface_origin_fields(
+    origin, modules, canonical_types, fields, readonly_fields, seen_field_names,
+    seen_origins,
+  )
   {
     name: origin.export_name,
+    extends_names: [],
     fields,
-    readonly_fields: readonly_fields_for_fields(
-      origin.iface.readonly_fields,
-      fields,
-    ),
+    readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
   }
 }
 
@@ -4161,27 +4362,23 @@ fn clone_exported_interface(
   canonical_types : Map[String, String],
 ) -> @ast.TsInterface {
   let fields : Array[(String, @ast.TsType)] = []
-  for field in exported.iface.fields {
-    let (field_name, field_type) = field
-    fields.push(
-      (
-        field_name,
-        lower_react_utility_type(
-          info,
-          rewrite_type_refs(info, field_type, canonical_types),
-          modules,
-          canonical_types,
-        ),
-      ),
-    )
-  }
+  let readonly_fields : Array[String] = []
+  let seen_field_names : Array[String] = []
+  let seen_origins : Array[String] = []
+  append_interface_origin_fields(
+    { info, export_name: exported.export_name, iface: exported.iface },
+    modules,
+    canonical_types,
+    fields,
+    readonly_fields,
+    seen_field_names,
+    seen_origins,
+  )
   {
     name: exported.export_name,
+    extends_names: [],
     fields,
-    readonly_fields: readonly_fields_for_fields(
-      exported.iface.readonly_fields,
-      fields,
-    ),
+    readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
   }
 }
 
@@ -4732,70 +4929,325 @@ fn clone_exported_value(
 }
 
 ///|
+fn clone_class_property_in_scope(
+  class_property : @ast.TsClassPropertyDecl,
+  info : DeclModuleInfo,
+  local_name_prefix : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsClassPropertyDecl {
+  {
+    name: class_property.name,
+    type_: lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info,
+        local_name_prefix,
+        class_property.type_,
+        canonical_types,
+      ),
+      modules,
+      canonical_types,
+    ),
+    is_static: class_property.is_static,
+    is_readonly: class_property.is_readonly,
+  }
+}
+
+///|
+fn clone_class_method_in_scope(
+  class_method : @ast.TsClassMethodDecl,
+  info : DeclModuleInfo,
+  local_name_prefix : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsClassMethodDecl {
+  let params : Array[(String, @ast.TsType)] = []
+  for param in class_method.params {
+    let (param_name, param_type) = param
+    params.push(
+      (
+        param_name,
+        lower_react_utility_type(
+          info,
+          rewrite_type_refs_in_scope(
+            info, local_name_prefix, param_type, canonical_types,
+          ),
+          modules,
+          canonical_types,
+        ),
+      ),
+    )
+  }
+  {
+    name: class_method.name,
+    params,
+    return_type: lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info,
+        local_name_prefix,
+        class_method.return_type,
+        canonical_types,
+      ),
+      modules,
+      canonical_types,
+    ),
+    is_static: class_method.is_static,
+  }
+}
+
+///|
+fn callable_method_from_func_type(
+  method_name : String,
+  is_static : Bool,
+  params : Array[@ast.TsType],
+  return_type : @ast.TsType,
+  info : DeclModuleInfo,
+  local_name_prefix : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsClassMethodDecl {
+  let method_params : Array[(String, @ast.TsType)] = []
+  for i, param_type in params {
+    method_params.push(
+      (
+        "arg" + i.to_string(),
+        lower_react_utility_type(
+          info,
+          rewrite_type_refs_in_scope(
+            info, local_name_prefix, param_type, canonical_types,
+          ),
+          modules,
+          canonical_types,
+        ),
+      ),
+    )
+  }
+  {
+    name: method_name,
+    params: method_params,
+    return_type: lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info, local_name_prefix, return_type, canonical_types,
+      ),
+      modules,
+      canonical_types,
+    ),
+    is_static,
+  }
+}
+
+///|
+fn preferred_callable_interface_field(iface : @ast.TsInterface) -> @ast.TsType? {
+  let mut best : @ast.TsType? = None
+  let mut best_param_count = -1
+  for field in iface.fields {
+    let (field_name, field_type) = field
+    if field_name != "<call>" {
+      continue
+    }
+    match field_type {
+      Func(params, _) =>
+        if params.length() > best_param_count {
+          best = Some(field_type)
+          best_param_count = params.length()
+        }
+      _ => ()
+    }
+  }
+  best
+}
+
+///|
+fn callable_method_from_property(
+  class_property : @ast.TsClassPropertyDecl,
+  info : DeclModuleInfo,
+  local_name_prefix : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsClassMethodDecl? {
+  match class_property.type_ {
+    Func(params, return_type) =>
+      Some(
+        callable_method_from_func_type(
+          class_property.name,
+          class_property.is_static,
+          params,
+          return_type,
+          info,
+          local_name_prefix,
+          modules,
+          canonical_types,
+        ),
+      )
+    Named(type_name) | Applied(type_name, _) =>
+      match
+        resolve_interface_origin(info, type_name, modules, canonical_types) {
+        Some(origin) =>
+          match preferred_callable_interface_field(origin.iface) {
+            Some(Func(params, return_type)) =>
+              Some(
+                callable_method_from_func_type(
+                  class_property.name,
+                  class_property.is_static,
+                  params,
+                  return_type,
+                  origin.info,
+                  "",
+                  modules,
+                  canonical_types,
+                ),
+              )
+            _ => None
+          }
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn class_property_key(class_property : @ast.TsClassPropertyDecl) -> String {
+  class_property.name + "\n" + class_property.is_static.to_string()
+}
+
+///|
+fn class_method_key(class_method : @ast.TsClassMethodDecl) -> String {
+  class_method.name + "\n" + class_method.is_static.to_string()
+}
+
+///|
+fn append_class_property_once(
+  properties : Array[@ast.TsClassPropertyDecl],
+  seen_property_keys : Array[String],
+  class_property : @ast.TsClassPropertyDecl,
+) -> Unit {
+  let key = class_property_key(class_property)
+  if seen_property_keys.contains(key) {
+    return
+  }
+  seen_property_keys.push(key)
+  properties.push(class_property)
+}
+
+///|
+fn append_class_method_once(
+  methods : Array[@ast.TsClassMethodDecl],
+  seen_method_keys : Array[String],
+  class_method : @ast.TsClassMethodDecl,
+) -> Unit {
+  let key = class_method_key(class_method)
+  if seen_method_keys.contains(key) {
+    return
+  }
+  seen_method_keys.push(key)
+  methods.push(class_method)
+}
+
+///|
+fn append_class_origin_members(
+  origin : ResolvedClassOrigin,
+  graph : ModuleGraph,
+  modules : Map[String, DeclModuleInfo],
+  surface_cache : Map[String, Array[ResolvedExport]],
+  canonical_types : Map[String, String],
+  properties : Array[@ast.TsClassPropertyDecl],
+  methods : Array[@ast.TsClassMethodDecl],
+  seen_property_keys : Array[String],
+  seen_method_keys : Array[String],
+  seen_origins : Array[String],
+) -> Unit {
+  let origin_key = decl_key(origin.info.record.path, origin.class_.name)
+  if seen_origins.contains(origin_key) {
+    return
+  }
+  seen_origins.push(origin_key)
+  for base_name in origin.class_.base_names {
+    match
+      resolve_class_origin(
+        origin.info,
+        base_name,
+        graph,
+        modules,
+        surface_cache,
+      ) {
+      Some(base_origin) =>
+        append_class_origin_members(
+          base_origin, graph, modules, surface_cache, canonical_types, properties,
+          methods, seen_property_keys, seen_method_keys, seen_origins,
+        )
+      None => ()
+    }
+  }
+  for class_property in origin.class_.properties {
+    let cloned_property = clone_class_property_in_scope(
+      class_property,
+      origin.info,
+      origin.local_name_prefix,
+      modules,
+      canonical_types,
+    )
+    append_class_property_once(properties, seen_property_keys, cloned_property)
+    match
+      callable_method_from_property(
+        class_property,
+        origin.info,
+        origin.local_name_prefix,
+        modules,
+        canonical_types,
+      ) {
+      Some(class_method) =>
+        append_class_method_once(methods, seen_method_keys, class_method)
+      None => ()
+    }
+  }
+  for class_method in origin.class_.methods {
+    append_class_method_once(
+      methods,
+      seen_method_keys,
+      clone_class_method_in_scope(
+        class_method,
+        origin.info,
+        origin.local_name_prefix,
+        modules,
+        canonical_types,
+      ),
+    )
+  }
+}
+
+///|
 fn clone_exported_class(
   exported : ExportedClassDecl,
   info : DeclModuleInfo,
+  graph : ModuleGraph,
   modules : Map[String, DeclModuleInfo],
+  surface_cache : Map[String, Array[ResolvedExport]],
   canonical_types : Map[String, String],
 ) -> @ast.TsClassDecl {
   let properties : Array[@ast.TsClassPropertyDecl] = []
-  for class_property in exported.class_.properties {
-    properties.push({
-      name: class_property.name,
-      type_: lower_react_utility_type(
-        info,
-        rewrite_type_refs_in_scope(
-          info,
-          exported.local_name_prefix,
-          class_property.type_,
-          canonical_types,
-        ),
-        modules,
-        canonical_types,
-      ),
-      is_static: class_property.is_static,
-      is_readonly: class_property.is_readonly,
-    })
-  }
   let methods : Array[@ast.TsClassMethodDecl] = []
-  for class_method in exported.class_.methods {
-    let params : Array[(String, @ast.TsType)] = []
-    for param in class_method.params {
-      let (param_name, param_type) = param
-      params.push(
-        (
-          param_name,
-          lower_react_utility_type(
-            info,
-            rewrite_type_refs_in_scope(
-              info,
-              exported.local_name_prefix,
-              param_type,
-              canonical_types,
-            ),
-            modules,
-            canonical_types,
-          ),
-        ),
-      )
-    }
-    methods.push({
-      name: class_method.name,
-      params,
-      return_type: lower_react_utility_type(
-        info,
-        rewrite_type_refs_in_scope(
-          info,
-          exported.local_name_prefix,
-          class_method.return_type,
-          canonical_types,
-        ),
-        modules,
-        canonical_types,
-      ),
-      is_static: class_method.is_static,
-    })
-  }
+  let seen_property_keys : Array[String] = []
+  let seen_method_keys : Array[String] = []
+  let seen_origins : Array[String] = []
+  append_class_origin_members(
+    {
+      info,
+      local_name_prefix: exported.local_name_prefix,
+      class_: exported.class_,
+    },
+    graph,
+    modules,
+    surface_cache,
+    canonical_types,
+    properties,
+    methods,
+    seen_property_keys,
+    seen_method_keys,
+    seen_origins,
+  )
   let constructor_params = match exported.class_.constructor_params {
     Some(params) => {
       let next_params : Array[(String, @ast.TsType)] = []
@@ -4824,6 +5276,7 @@ fn clone_exported_class(
   }
   {
     name: exported.export_name,
+    base_names: [],
     constructor_params,
     properties,
     methods,
@@ -4850,6 +5303,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_classes,
   )
+  let class_surface_cache : Map[String, Array[ResolvedExport]] = {}
   let emitted_exported_imports = append_exported_imports(
     exported_imports,
     exported_import_overload_wrappers(
@@ -4917,7 +5371,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
     match modules.get(exported.source_path) {
       Some(info) =>
         classes.push(
-          clone_exported_class(exported, info, modules, canonical_types),
+          clone_exported_class(
+            exported, info, graph, modules, class_surface_cache, canonical_types,
+          ),
         )
       None => ()
     }

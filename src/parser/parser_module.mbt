@@ -1729,17 +1729,41 @@ fn Parser::parse_export_decl_for_module(
   }
   if self.match_(Type) || self.match_ident("type") {
     if self.match_(Star) {
-      if self.match_(From) || self.match_ident("from") {
-        let _ = self.expect_str_literal()
+      if self.match_(As) || self.match_ident("as") {
+        let name = self.parse_binding_ident()
+        self.expect_from()
+        let module_spec = self.expect_str_literal()
+        reexports.push({
+          module_spec,
+          kind: @ast.TsReExportKind::Namespace(name),
+          type_only: true,
+        })
+      } else if self.match_(From) || self.match_ident("from") {
+        let module_spec = self.expect_str_literal()
+        reexports.push({
+          module_spec,
+          kind: @ast.TsReExportKind::All,
+          type_only: true,
+        })
       }
       self.consume_semicolon()
       return (stmts, exports, reexports)
     }
     if self.match_(LBrace) {
-      let _ = self.parse_named_exports()
+      let items = self.parse_named_exports()
       let _ = self.expect(RBrace)
       if self.match_(From) || self.match_ident("from") {
-        let _ = self.expect_str_literal()
+        let module_spec = self.expect_str_literal()
+        reexports.push({
+          module_spec,
+          kind: @ast.TsReExportKind::Named(items),
+          type_only: true,
+        })
+      } else {
+        for item in items {
+          let (local_name, export_name) = item
+          exports.push({ local_name, export_name })
+        }
       }
       self.consume_semicolon()
       return (stmts, exports, reexports)
@@ -1825,13 +1849,21 @@ fn Parser::parse_export_decl_for_module(
       let name = self.parse_binding_ident()
       self.expect_from()
       let module_spec = self.expect_str_literal()
-      reexports.push({ module_spec, kind: @ast.TsReExportKind::Namespace(name) })
+      reexports.push({
+        module_spec,
+        kind: @ast.TsReExportKind::Namespace(name),
+        type_only: false,
+      })
       self.consume_semicolon()
       return (stmts, exports, reexports)
     }
     self.expect_from()
     let module_spec = self.expect_str_literal()
-    reexports.push({ module_spec, kind: @ast.TsReExportKind::All })
+    reexports.push({
+      module_spec,
+      kind: @ast.TsReExportKind::All,
+      type_only: false,
+    })
     self.consume_semicolon()
     return (stmts, exports, reexports)
   }
@@ -1840,7 +1872,11 @@ fn Parser::parse_export_decl_for_module(
     let _ = self.expect(RBrace)
     if self.match_(From) || self.match_ident("from") {
       let module_spec = self.expect_str_literal()
-      reexports.push({ module_spec, kind: @ast.TsReExportKind::Named(items) })
+      reexports.push({
+        module_spec,
+        kind: @ast.TsReExportKind::Named(items),
+        type_only: false,
+      })
     } else {
       for item in items {
         let (local_name, export_name) = item

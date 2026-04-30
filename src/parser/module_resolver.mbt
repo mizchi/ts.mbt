@@ -1341,7 +1341,19 @@ async fn resolve_module_specifier(
     Some(path) => return Some(path)
     None => ()
   }
-  resolve_bare_specifier(normalized_base, specifier, mode)
+  match resolve_bare_specifier(normalized_base, specifier, mode) {
+    Some(path) => Some(path)
+    None => {
+      let real_base = @fs.realpath(normalized_base) catch {
+        _ => normalized_base
+      }
+      if real_base == normalized_base {
+        None
+      } else {
+        resolve_bare_specifier(real_base, specifier, mode)
+      }
+    }
+  }
 }
 
 ///|

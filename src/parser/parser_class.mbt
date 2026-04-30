@@ -109,6 +109,7 @@ fn build_runtime_class_decl(
   }
   {
     name,
+    base_names: [],
     constructor_params,
     properties,
     methods,

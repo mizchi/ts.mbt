@@ -344,6 +344,55 @@ fn collect_bridge_public_type_names(bridge_mbti : String) -> Array[String] {
 }
 
 ///|
+fn parse_bridge_implemented_type_name_line(line : String) -> String? {
+  let prefixes = ["pub struct ", "struct ", "pub type ", "type "]
+  for prefix in prefixes {
+    if !line.has_prefix(prefix) {
+      continue
+    }
+    let rest = line[prefix.length():].to_string().trim().to_string()
+    if rest == "" {
+      continue
+    }
+    let mut end_ = rest.length()
+    match rest.find("[") {
+      Some(idx) => end_ = idx
+      None => ()
+    }
+    match rest.find(" ") {
+      Some(idx) => if idx < end_ { end_ = idx }
+      None => ()
+    }
+    match rest.find("{") {
+      Some(idx) => if idx < end_ { end_ = idx }
+      None => ()
+    }
+    match rest.find("=") {
+      Some(idx) => if idx < end_ { end_ = idx }
+      None => ()
+    }
+    let type_name = rest[:end_].to_string().trim().to_string()
+    if type_name != "" {
+      return Some(type_name)
+    }
+  }
+  None
+}
+
+///|
+fn collect_bridge_implemented_type_names(bridge_mbt : String) -> Array[String] {
+  let names : Array[String] = []
+  for line_view in bridge_mbt.split("\n") {
+    let line = line_view.to_string().trim().to_string()
+    match parse_bridge_implemented_type_name_line(line) {
+      Some(name) => if !names.contains(name) { names.push(name) }
+      None => ()
+    }
+  }
+  names
+}
+
+///|
 fn parse_bridge_first_param_type(params_src : String) -> String? {
   if params_src.trim() == "" {
     return None
@@ -389,8 +438,10 @@ fn bridge_type_guard_target_name(
 ///|
 fn collect_bridge_type_guard_helpers(
   bridge_mbti : String,
+  bridge_mbt : String,
 ) -> Array[BridgeTypeGuardHelper] {
   let type_names = collect_bridge_public_type_names(bridge_mbti)
+  let implemented_type_names = collect_bridge_implemented_type_names(bridge_mbt)
   let helpers : Array[BridgeTypeGuardHelper] = []
   let seen_helpers : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
@@ -420,6 +471,9 @@ fn collect_bridge_type_guard_helpers(
           Some(target_type) => target_type
           None => continue
         }
+        if !implemented_type_names.contains(target_type) {
+          continue
+        }
         if target_type == source_type {
           continue
         }
@@ -443,13 +497,16 @@ fn collect_bridge_type_guard_helpers(
 }
 
 ///|
-fn add_bridge_ergonomic_helper_decls(bridge_mbti : String) -> String {
+fn add_bridge_ergonomic_helper_decls(
+  bridge_mbti : String,
+  bridge_mbt : String,
+) -> String {
   let mut next_bridge_mbti = bridge_mbti
   let unsafe_cast_decl = "declare pub fn[A, B] unsafeCast(value : A) -> B"
   if !next_bridge_mbti.contains(unsafe_cast_decl) {
     next_bridge_mbti += "\n\n///|\n" + unsafe_cast_decl
   }
-  for helper in collect_bridge_type_guard_helpers(bridge_mbti) {
+  for helper in collect_bridge_type_guard_helpers(bridge_mbti, bridge_mbt) {
     let helper_decl = "declare pub fn \{helper.helper_name}(self : \{helper.source_type}) -> \{helper.target_type}?"
     if !next_bridge_mbti.contains(helper_decl) {
       next_bridge_mbti += "\n\n///|\n" + helper_decl
@@ -559,7 +616,7 @@ fn add_bridge_public_wrappers(
   let helpers : Array[String] = [
     "pub fn[A, B] unsafeCast(value : A) -> B = \"%identity\"",
   ]
-  for helper in collect_bridge_type_guard_helpers(bridge_mbti) {
+  for helper in collect_bridge_type_guard_helpers(bridge_mbti, next_bridge_mbt) {
     helpers.push(
       "pub fn \{helper.source_type}::\{helper.helper_name}(self : \{helper.source_type}) -> \{helper.target_type}? {\n  if \{helper.guard_name}(self) {\n    Some(unsafeCast(self))\n  } else {\n    None\n  }\n}",
     )
@@ -608,10 +665,14 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
   )
   let graph = load_type_module_graph(entry_path)
   let export_surface = resolve_export_surface(graph)
-  let bridge_mbti = add_bridge_ergonomic_helper_decls(
-    add_bridge_namespace_public_decls(bundle.decl_mbt, export_surface),
+  let base_bridge_mbti = add_bridge_namespace_public_decls(
+    bundle.decl_mbt,
+    export_surface,
   )
-  let bridge_mbt = add_bridge_public_wrappers(bridge_mbti, bundle.ffi_mbt)
+  let bridge_mbt = add_bridge_public_wrappers(base_bridge_mbti, bundle.ffi_mbt)
+  let bridge_mbti = add_bridge_ergonomic_helper_decls(
+    base_bridge_mbti, bridge_mbt,
+  )
   {
     entry_path: bundle.entry_path,
     module_spec: bundle.module_spec,

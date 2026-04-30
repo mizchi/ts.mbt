@@ -363,13 +363,13 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Lt => {
       self.skip_type_args()
       if self.check(LParen) {
-        self.skip_paren_type()
+        match self.parse_paren_or_function_type() {
+          Func(_, _) as func_type => func_type
+          _ => Any
+        }
+      } else {
+        Any
       }
-      if self.check(Arrow) {
-        let _ = self.advance()
-        let _ = self.parse_type()
-      }
-      Any
     }
     NumberType => {
       let _ = self.advance()

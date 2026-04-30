@@ -72,6 +72,7 @@ pub impl Show for TsBlock
 
 pub(all) struct TsClassDecl {
   name : String
+  base_names : Array[String]
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]
@@ -200,6 +201,7 @@ pub impl Show for TsImportDecl
 
 pub(all) struct TsInterface {
   name : String
+  extends_names : Array[String]
   fields : Array[(String, TsType)]
   readonly_fields : Array[String]
 } derive(@debug.Debug)
@@ -262,6 +264,7 @@ pub impl Show for TsReExportKind
 pub(all) struct TsReExportSpec {
   module_spec : String
   kind : TsReExportKind
+  type_only : Bool
 } derive(@debug.Debug)
 pub impl Show for TsReExportSpec
 

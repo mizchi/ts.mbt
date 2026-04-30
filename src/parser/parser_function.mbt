@@ -378,19 +378,40 @@ fn Parser::skip_type_params(self : Parser) -> Unit {
 }
 
 ///|
-/// Skip extends clause: extends Foo, Bar<T>
-fn Parser::skip_extends_clause(self : Parser) -> Unit {
+/// Parse simple `extends` names while still skipping complex generic clauses.
+fn Parser::parse_extends_names_until_body(self : Parser) -> Array[String] {
+  let names : Array[String] = []
   if !self.check(Extends) {
-    return
+    return names
   }
   let _ = self.advance() // consume extends
   let mut paren_depth = 0
   let mut bracket_depth = 0
   let mut angle_depth = 0
+  let mut expect_name = true
   while !self.check(Eof) {
     match self.peek().kind {
       LBrace if paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 =>
         break
+      Ident(name) if expect_name &&
+        paren_depth == 0 &&
+        bracket_depth == 0 &&
+        angle_depth == 0 => {
+        let mut full_name = name
+        let _ = self.advance()
+        while self.check(Dot) {
+          match self.peek_at(1).kind {
+            Ident(part) => {
+              let _ = self.advance()
+              let _ = self.advance()
+              full_name = full_name + "." + part
+            }
+            _ => break
+          }
+        }
+        names.push(full_name)
+        expect_name = false
+      }
       LParen => {
         paren_depth += 1
         let _ = self.advance()
@@ -430,6 +451,9 @@ fn Parser::skip_extends_clause(self : Parser) -> Unit {
         let _ = self.advance()
       }
       Comma => {
+        if paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
+          expect_name = true
+        }
         let _ = self.advance()
       }
       _ => {
@@ -437,6 +461,7 @@ fn Parser::skip_extends_clause(self : Parser) -> Unit {
       }
     }
   }
+  names
 }
 
 ///|
@@ -507,8 +532,7 @@ pub fn Parser::parse_interface(
   }
   // Skip generic type parameters <T, U>
   self.skip_type_params()
-  // Skip extends clause
-  self.skip_extends_clause()
+  let extends_names = self.parse_extends_names_until_body()
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
   let readonly_fields : Array[String] = []
@@ -789,7 +813,7 @@ pub fn Parser::parse_interface(
     }
   }
   let _ = self.expect(RBrace)
-  { name, fields, readonly_fields }
+  { name, extends_names, fields, readonly_fields }
 }
 
 ///|
@@ -982,7 +1006,12 @@ fn type_alias_object_fields_to_interface(
           _ => return None
         }
       }
-      Some({ name, fields: iface_fields, readonly_fields: [] })
+      Some({
+        name,
+        extends_names: [],
+        fields: iface_fields,
+        readonly_fields: [],
+      })
     }
     _ => None
   }
@@ -1315,17 +1344,57 @@ fn Parser::parse_declare_class_member_name(
 }
 
 ///|
-fn Parser::skip_declare_class_heritage(self : Parser) -> Unit {
+fn Parser::parse_declare_class_base_names(self : Parser) -> Array[String] {
+  let names : Array[String] = []
   let mut paren_depth = 0
   let mut bracket_depth = 0
   let mut brace_depth = 0
   let mut angle_depth = 0
+  let mut in_extends = false
+  let mut expect_name = false
   while !self.check(Eof) {
     match self.peek().kind {
       LBrace if paren_depth == 0 &&
         bracket_depth == 0 &&
         brace_depth == 0 &&
         angle_depth == 0 => break
+      Extends if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 &&
+        angle_depth == 0 => {
+        in_extends = true
+        expect_name = true
+        let _ = self.advance()
+      }
+      Ident("implements") if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 &&
+        angle_depth == 0 => {
+        in_extends = false
+        expect_name = false
+        let _ = self.advance()
+      }
+      Ident(name) if in_extends &&
+        expect_name &&
+        paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 &&
+        angle_depth == 0 => {
+        let mut full_name = name
+        let _ = self.advance()
+        while self.check(Dot) {
+          match self.peek_at(1).kind {
+            Ident(part) => {
+              let _ = self.advance()
+              let _ = self.advance()
+              full_name = full_name + "." + part
+            }
+            _ => break
+          }
+        }
+        names.push(full_name)
+        expect_name = false
+      }
       LParen => {
         paren_depth += 1
         let _ = self.advance()
@@ -1374,11 +1443,22 @@ fn Parser::skip_declare_class_heritage(self : Parser) -> Unit {
         angle_depth = if angle_depth >= 3 { angle_depth - 3 } else { 0 }
         let _ = self.advance()
       }
+      Comma => {
+        if in_extends &&
+          paren_depth == 0 &&
+          bracket_depth == 0 &&
+          brace_depth == 0 &&
+          angle_depth == 0 {
+          expect_name = true
+        }
+        let _ = self.advance()
+      }
       _ => {
         let _ = self.advance()
       }
     }
   }
+  names
 }
 
 ///|
@@ -1416,7 +1496,7 @@ fn Parser::parse_declare_class(
   if self.check(Lt) {
     self.skip_type_params()
   }
-  self.skip_declare_class_heritage()
+  let base_names = self.parse_declare_class_base_names()
   let _ = self.expect(LBrace)
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
@@ -1560,6 +1640,7 @@ fn Parser::parse_declare_class(
   }
   {
     name,
+    base_names,
     constructor_params,
     properties,
     methods,

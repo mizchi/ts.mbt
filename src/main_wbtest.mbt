@@ -1557,7 +1557,12 @@ async test "emit_moonbit_bridge_package rewrites bare class-property alias reexp
     ),
   )
   assert_true(
-    bridge_js.contains("import { CounterState } from \"pkg-class-property\";"),
+    bridge_js.contains(
+      "import * as __ts_mbt_module from \"pkg-class-property\";",
+    ),
+  )
+  assert_true(
+    bridge_js.contains("const CounterState = __ts_mbt_module.CounterState;"),
   )
   assert_true(
     bridge_js.contains(
@@ -1721,8 +1726,11 @@ async test "emit_moonbit_bridge_package rewrites subpath class alias reexport ge
   )
   assert_true(
     bridge_js.contains(
-      "import { CounterState } from \"pkg-class-subpath/state\";",
+      "import * as __ts_mbt_module from \"pkg-class-subpath/state\";",
     ),
+  )
+  assert_true(
+    bridge_js.contains("const CounterState = __ts_mbt_module.CounterState;"),
   )
   let _ = try? @fs.rmdir(root, recursive=true)
 }

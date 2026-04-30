@@ -18,6 +18,7 @@ struct ResolvedReExportEdge {
   specifier : String
   resolved_path : String
   kind : @ast.TsReExportKind
+  type_only : Bool
 } derive(Debug)
 
 ///|
@@ -52,6 +53,7 @@ struct ResolvedExport {
   kind : ResolvedExportKind
   via_path : String?
   ambiguous_source_paths : Array[String]
+  type_only : Bool
 } derive(Debug)
 
 ///|
@@ -90,6 +92,7 @@ fn make_ambiguous_export(
     kind: Ambiguous,
     via_path: None,
     ambiguous_source_paths,
+    type_only: existing.type_only && incoming.type_only,
   }
 }
 
@@ -153,10 +156,17 @@ async fn load_module_record(
     @parser.ParseError(msg) =>
       raise ParseError("Failed to parse module '\{path}': \{msg}")
   }
+  let reexport_module_specs : Array[String] = []
+  for reexport in module_block.reexports {
+    if !reexport_module_specs.contains(reexport.module_spec) {
+      reexport_module_specs.push(reexport.module_spec)
+    }
+  }
   let imports : Array[ResolvedImportEdge] = []
   for decl in module_block.imports {
     let should_resolve_import = import_binding_is_exported(module_block, decl) ||
-      module_specifier_is_path_like(decl.module_spec)
+      module_specifier_is_path_like(decl.module_spec) ||
+      reexport_module_specs.contains(decl.module_spec)
     if !should_resolve_import {
       imports.push({
         specifier: decl.module_spec,
@@ -204,6 +214,7 @@ async fn load_module_record(
           specifier: reexport.module_spec,
           resolved_path: dep_path,
           kind: reexport.kind,
+          type_only: reexport.type_only,
         })
         load_module_record(dep_path, loaded, visiting)
       }
@@ -271,6 +282,7 @@ fn clone_export_with_name(
   export_name : String,
   kind : ResolvedExportKind,
   via_path : String?,
+  type_only : Bool,
 ) -> ResolvedExport {
   {
     export_name,
@@ -280,6 +292,7 @@ fn clone_export_with_name(
     kind,
     via_path,
     ambiguous_source_paths: export_.ambiguous_source_paths,
+    type_only: export_.type_only || type_only,
   }
 }
 
@@ -322,6 +335,7 @@ fn fallback_imported_binding_export(
     kind: NamedReExport,
     via_path: None,
     ambiguous_source_paths: [],
+    type_only: false,
   }
 }
 
@@ -461,6 +475,7 @@ fn resolve_export_surface_from_map(
             spec.export_name,
             kind,
             Some(path),
+            false,
           ),
         )
       }
@@ -473,6 +488,7 @@ fn resolve_export_surface_from_map(
           kind: Local,
           via_path: None,
           ambiguous_source_paths: [],
+          type_only: false,
         })
     }
   }
@@ -497,6 +513,7 @@ fn resolve_export_surface_from_map(
                   export_name,
                   NamedReExport,
                   Some(path),
+                  reexport.type_only,
                 ),
               )
             None => ()
@@ -512,6 +529,7 @@ fn resolve_export_surface_from_map(
           kind: Namespace,
           via_path: Some(path),
           ambiguous_source_paths: [],
+          type_only: reexport.type_only,
         })
       @ast.TsReExportKind::All => star_edges.push(reexport)
     }
@@ -534,6 +552,7 @@ fn resolve_export_surface_from_map(
           dep_export.export_name,
           StarReExport,
           Some(path),
+          reexport.type_only,
         ),
       )
     }

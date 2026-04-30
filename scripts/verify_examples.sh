@@ -302,17 +302,32 @@ verify_typescript_to_moonbit_hono_real_example() {
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_hono_route(app : Hono) -> String =
-  #| (app) => {
-  #|   app.get("/hello", c => c.text("hi"));
-  #|   const res = app.request("/hello");
+extern "js" fn test_hono_handler() -> JSValue =
+  #| () => (c) => c.text("hi")
+
+extern "js" fn test_undefined() -> JSValue =
+  #| () => undefined
+
+extern "js" fn test_hono_route_response(app : Hono, res : JSValue) -> String =
+  #| (app, res) => {
   #|   const route = app.routes[0];
   #|   return `${res.status}:${route.method}:${route.path}:${res.headers.get("content-type")}`;
   #| }
 
 test "generated real Hono bridge smoke" {
   let app = new_hono(None)
-  assert_eq(test_hono_route(app), "200:GET:/hello:text/plain;charset=UTF-8")
+  let _ = app.get(unsafeCast("/hello"), test_hono_handler())
+  let undefined_ = test_undefined()
+  let res = app.request(
+    unsafeCast("/hello"),
+    unsafeCast(undefined_),
+    unsafeCast(undefined_),
+    unsafeCast(undefined_),
+  )
+  assert_eq(
+    test_hono_route_response(app, res),
+    "200:GET:/hello:text/plain;charset=UTF-8",
+  )
 }
 EOF
 
@@ -322,6 +337,8 @@ EOF
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
   grep -F 'pub extern "js" fn new_hono(options : HonoOptions?) -> Hono' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn Hono::get(self : Hono' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn Hono::request(self : Hono' "$out/bridge.mbt" >/dev/null
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
@@ -509,18 +526,13 @@ verify_typescript_to_moonbit_vitest_example() {
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_vitest_expect(expect : JSValue) -> Unit =
-  #| (expect) => {
-  #|   expect(1 + 1).toBe(2);
-  #|   expect({ value: "ok" }).toEqual({ value: "ok" });
-  #| }
+extern "js" fn test_number() -> JSValue =
+  #| () => 2
 
-extern "js" fn test_vitest_assert(assert_ : JSValue) -> Unit =
-  #| (assert_) => {
-  #|   assert_.equal("a".toUpperCase(), "A");
-  #| }
+extern "js" fn test_object() -> JSValue =
+  #| () => ({ value: "ok" })
 
-extern "js" fn test_vitest_vi(vi : JSValue) -> Unit =
+extern "js" fn test_vitest_vi(vi : VitestUtils) -> Unit =
   #| (vi) => {
   #|   const fn = vi.fn((x) => x + 1);
   #|   if (fn(2) !== 3) throw new Error("unexpected vi.fn output");
@@ -528,9 +540,14 @@ extern "js" fn test_vitest_vi(vi : JSValue) -> Unit =
   #| }
 
 test "generated real Vitest bridge smoke" {
-  test_vitest_expect(unsafeCast(get_expect()))
-  test_vitest_assert(unsafeCast(get_assert()))
-  test_vitest_vi(unsafeCast(get_vi()))
+  let expect = get_expect()
+  expect._call_(unsafeCast(test_number()), None).toBe(
+    unsafeCast(test_number()),
+  )
+  expect._call_(unsafeCast(test_object()), None).toEqual(
+    unsafeCast(test_object()),
+  )
+  test_vitest_vi(get_vi())
 }
 EOF
 
@@ -539,6 +556,11 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
+  grep -F 'pub struct ExpectStatic' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub struct Assertion' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn ExpectStatic::_call_(self : ExpectStatic' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn Assertion::toBe(self : Assertion' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn Assertion::toEqual(self : Assertion' "$out/bridge.mbt" >/dev/null
   grep -F 'pub extern "js" fn get_expect() -> ExpectStatic' "$out/bridge.mbt" >/dev/null
   grep -F 'pub extern "js" fn get_assert() -> Chai_Assert' "$out/bridge.mbt" >/dev/null
   grep -F 'pub extern "js" fn get_vi() -> VitestUtils' "$out/bridge.mbt" >/dev/null

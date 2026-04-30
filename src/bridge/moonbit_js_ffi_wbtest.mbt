@@ -322,6 +322,32 @@ async test "bridge: emit MoonBit JS FFI bundle for exported class properties" {
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle expands inherited callable class properties" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/class-callable-property-alias-entry.d.ts", "./runtime/app.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype App"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn App::get(self : App, arg0 : String, arg1 : Handler) -> Router",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn App::request(self : App, input : String) -> Response",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle with unresolved external library types as opaque types" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/external-lib-entry.d.ts", "/runtime/external-lib.js",
@@ -883,7 +909,12 @@ async test "bridge: emit MoonBit JS FFI bundle keeps bare class-property reexpor
   )
   assert_true(
     bundle.bridge_js.contains(
-      "import { CounterState } from \"pkg-class-property\";",
+      "import * as __ts_mbt_module from \"pkg-class-property\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "const CounterState = __ts_mbt_module.CounterState;",
     ),
   )
   assert_true(
@@ -973,7 +1004,12 @@ async test "bridge: emit MoonBit JS FFI bundle keeps subpath class reexports bou
   )
   assert_true(
     bundle.bridge_js.contains(
-      "import { CounterState } from \"pkg-class-subpath/state\";",
+      "import * as __ts_mbt_module from \"pkg-class-subpath/state\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "const CounterState = __ts_mbt_module.CounterState;",
     ),
   )
   assert_true(
@@ -3037,7 +3073,12 @@ async test "bridge: emit MoonBit JS FFI bundle keeps bare package namespace memb
     }
   }
   assert_true(
-    bundle.bridge_js.contains("constants } from \"runtime-namespace\""),
+    bundle.bridge_js.contains(
+      "import * as __ts_mbt_module from \"runtime-namespace\";",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains("const constants = __ts_mbt_module.constants;"),
   )
   assert_true(
     bundle.bridge_js.contains(
@@ -3901,6 +3942,38 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React package surfac
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle expands callable interface inheritance" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/callable-interface-reexport-entry.d.ts", "./runtime/expect.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub struct ExpectStatic"))
+  assert_true(bundle.ffi_mbt.contains("pub struct Assertion"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn ExpectStatic::_call_(self : ExpectStatic",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn Assertion::toBe(self : Assertion",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn Assertion::toEqual(self : Assertion",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from fixture React JSX runtime package subpath" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/node_modules/react/jsx-runtime.d.ts", "react/jsx-runtime",
@@ -3973,6 +4046,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
   }
   let iface : @ast.TsInterface = {
     name: "GenericDateConstructor",
+    extends_names: [],
     fields: [
       ("<new>", @ast.TsType::Named("DateType")),
       ("<new>", @ast.TsType::Named("DateType")),
@@ -4018,6 +4092,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   }
   let iface : @ast.TsInterface = {
     name: "Scope",
+    extends_names: [],
     fields: [
       ("declare", @ast.TsType::Named("DeclarationParser")),
       ("import", @ast.TsType::Named("Module")),
@@ -4057,6 +4132,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
   }
   let iface : @ast.TsInterface = {
     name: "NodeFactory",
+    extends_names: [],
     fields: [
       (
         "createIdentifier",
@@ -4087,6 +4163,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
   }
   let iface : @ast.TsInterface = {
     name: "LargeApi",
+    extends_names: [],
     fields: [
       ("call0", @ast.TsType::Func([], @ast.TsType::Void)),
       ("call1", @ast.TsType::Func([], @ast.TsType::Void)),
@@ -4098,6 +4175,40 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
   assert_true(actual.contains("  call2 : () -> Unit"))
   assert_eq(count_occurrences_in_ffi_output(actual, "pub fn LargeApi::"), 2)
   assert_false(actual.contains("pub fn LargeApi::call2("))
+}
+
+///|
+test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    external_type_names: [],
+    function_field_method_wrapper_limit: 1,
+    needs_js_any: false,
+  }
+  let iface : @ast.TsInterface = {
+    name: "ExpectStatic",
+    extends_names: [],
+    fields: [
+      ("helper0", @ast.TsType::Func([], @ast.TsType::Void)),
+      ("helper1", @ast.TsType::Func([], @ast.TsType::Void)),
+      (
+        "_call_",
+        @ast.TsType::Func(
+          [@ast.TsType::String_],
+          @ast.TsType::Named("Assertion"),
+        ),
+      ),
+    ],
+    readonly_fields: [],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  assert_true(actual.contains("  _call_ : (String) -> Assertion"))
+  assert_true(
+    actual.contains(
+      "pub extern \"js\" fn ExpectStatic::_call_(self : ExpectStatic, arg0 : String) -> Assertion =",
+    ),
+  )
+  assert_false(actual.contains("pub fn ExpectStatic::helper1("))
 }
 
 ///|
