@@ -359,6 +359,28 @@ test "codegen: aliased reusable function value calls" {
 }
 
 ///|
+test "codegen: reassigned reusable function value calls" {
+  let src =
+    #|function applyReassigned(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let fn = inc;
+    #|  fn = dec;
+    #|  return fn(n);
+    #|}
+    #|function applyConditionalAlias(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const fn = flag > 0 ? inc : dec;
+    #|  return fn(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "applyReassigned", [7.0], 6.0)
+  assert_run_f64(wasm, "applyConditionalAlias", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "applyConditionalAlias", [0.0, 7.0], 6.0)
+}
+
+///|
 test "codegen: conditional local function value call expression" {
   let src =
     #|function choose(flag: number, n: number): number {

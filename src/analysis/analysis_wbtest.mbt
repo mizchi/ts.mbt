@@ -948,6 +948,33 @@ test "can_compile_to_wasm: reusable function value direct calls" {
 }
 
 ///|
+test "can_compile_to_wasm: reassigned reusable function value calls" {
+  let src =
+    #|function applyReassigned(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  let fn = inc;
+    #|  fn = dec;
+    #|  return fn(n);
+    #|}
+    #|function applyConditionalAlias(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  const fn = flag > 0 ? inc : dec;
+    #|  return fn(n);
+    #|}
+  let parser = @parser.Parser::from_source(src)
+  let mod = parser.parse_module()
+  for func in mod.funcs {
+    match can_compile_to_wasm(func) {
+      Compilable => ()
+      NotCompilable(reason) =>
+        fail("expected \{func.name} compilable: \{reason}")
+    }
+  }
+}
+
+///|
 test "can_compile_to_wasm: iife unsupported edge cases" {
   let arity_src =
     #|function bad(n: number): number {

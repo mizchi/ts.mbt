@@ -486,6 +486,10 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
   - Covered shapes include `const fn = inc; fn(x)` and
     `(flag ? inc : dec)(x)` where `inc` / `dec` are local arrow or function
     expression values.
+- [x] Static reassignment and conditional aliasing of local reusable function values.
+  - Covered shapes include `let fn = inc; fn = dec; fn(x)` and
+    `const fn = flag ? inc : dec; fn(x)` when both branches are local
+    function values.
 
 ### Next in order
 1. Continue arbitrary call expression support from local aliases / conditional calls toward reassigned or escaping function values and full closure conversion.

@@ -3609,6 +3609,24 @@ fn register_local_function_value(
         }
         None => false
       }
+    @ast.TsExpr::Cond(
+      _,
+      @ast.TsExpr::Var(then_name),
+      @ast.TsExpr::Var(else_name)
+    ) =>
+      if (
+          ctx.local_function_values.contains(then_name) ||
+          ctx.funcs.contains(then_name)
+        ) &&
+        (
+          ctx.local_function_values.contains(else_name) ||
+          ctx.funcs.contains(else_name)
+        ) {
+        ctx.local_function_values[name] = init
+        true
+      } else {
+        false
+      }
     _ => false
   }
 }
@@ -3629,6 +3647,18 @@ fn compile_local_function_value_call_expr(
     }
     Some(@ast.TsExpr::FuncExpr(func)) => {
       compile_func_expr_iife_call_expr(ctx, func, args, expected_type)
+      true
+    }
+    Some(
+      @ast.TsExpr::Cond(
+        cond,
+        @ast.TsExpr::Var(then_name),
+        @ast.TsExpr::Var(else_name)
+      )
+    ) => {
+      compile_conditional_named_call_expr(
+        ctx, cond, then_name, else_name, args, expected_type,
+      )
       true
     }
     Some(_) => false
@@ -4134,12 +4164,23 @@ fn compile_stmt(
         _ => raise CodeGenError("Unsupported const binding pattern")
       }
     @ast.TsStmt::Assign(name, expr) =>
-      match ctx.get_local(name) {
-        Some(lvar) => {
-          compile_expr(ctx, expr, lvar.type_)
-          ctx.emit(LocalSet(lvar.index))
-        }
-        None => raise CodeGenError("Undefined variable: \{name}")
+      match ctx.local_function_values.get(name) {
+        Some(_) =>
+          if register_local_function_value(ctx, name, expr) {
+            return
+          } else {
+            raise CodeGenError(
+              "function value reassignment is only supported for local function values",
+            )
+          }
+        None =>
+          match ctx.get_local(name) {
+            Some(lvar) => {
+              compile_expr(ctx, expr, lvar.type_)
+              ctx.emit(LocalSet(lvar.index))
+            }
+            None => raise CodeGenError("Undefined variable: \{name}")
+          }
       }
     @ast.TsStmt::CompoundAssign(name, op, expr) =>
       match op {
@@ -4207,6 +4248,21 @@ fn compile_stmt(
       compile_index_assign(ctx, arr, index, value)
     @ast.TsStmt::PropAssign(obj, prop, value) =>
       compile_prop_assign(ctx, obj, prop, value)
+    @ast.TsStmt::Expr(@ast.TsExpr::AssignExpr(name, value)) =>
+      match ctx.local_function_values.get(name) {
+        Some(_) =>
+          if register_local_function_value(ctx, name, value) {
+            return
+          } else {
+            raise CodeGenError(
+              "function value reassignment is only supported for local function values",
+            )
+          }
+        None => {
+          compile_expr(ctx, @ast.TsExpr::AssignExpr(name, value), return_type)
+          ctx.emit(Drop)
+        }
+      }
     @ast.TsStmt::Expr(expr) => {
       compile_expr(ctx, expr, return_type)
       ctx.emit(Drop)

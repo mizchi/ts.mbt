@@ -238,6 +238,26 @@ fn register_local_function_value_for_analysis(
       local_function_values[name] = init
       true
     }
+    @ast.TsExpr::Var(source_name) =>
+      match local_function_values.get(source_name) {
+        Some(source_func) => {
+          local_function_values[name] = source_func
+          true
+        }
+        None => false
+      }
+    @ast.TsExpr::Cond(
+      _,
+      @ast.TsExpr::Var(then_name),
+      @ast.TsExpr::Var(else_name)
+    ) =>
+      if local_function_values.contains(then_name) &&
+        local_function_values.contains(else_name) {
+        local_function_values[name] = init
+        true
+      } else {
+        false
+      }
     _ => false
   }
 }
@@ -270,7 +290,13 @@ fn can_compile_stmt_with_local_functions(
     @ast.TsStmt::Assign(name, expr) => {
       match local_function_values.get(name) {
         Some(_) =>
-          return NotCompilable("function value reassignment not supported")
+          if register_local_function_value_for_analysis(
+              local_function_values, name, expr,
+            ) {
+            return Compilable
+          } else {
+            return NotCompilable("function value reassignment not supported")
+          }
         None => ()
       }
       can_compile_expr_with_local_functions(expr, local_function_values)
@@ -769,7 +795,13 @@ fn can_compile_expr_with_local_functions(
     @ast.TsExpr::AssignExpr(name, value) => {
       match local_function_values.get(name) {
         Some(_) =>
-          return NotCompilable("function value reassignment not supported")
+          if register_local_function_value_for_analysis(
+              local_function_values, name, value,
+            ) {
+            return Compilable
+          } else {
+            return NotCompilable("function value reassignment not supported")
+          }
         None => ()
       }
       can_compile_expr_with_local_functions(value, local_function_values)
@@ -954,6 +986,28 @@ fn can_compile_local_function_call_or_named_call(
       can_compile_func_expr_iife_with_local_functions(
         func, args, local_function_values,
       )
+    Some(
+      @ast.TsExpr::Cond(
+        cond,
+        @ast.TsExpr::Var(then_name),
+        @ast.TsExpr::Var(else_name)
+      )
+    ) => {
+      match can_compile_expr_with_local_functions(cond, local_function_values) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      match
+        can_compile_local_function_call_or_named_call(
+          then_name, args, local_function_values,
+        ) {
+        NotCompilable(r) => return NotCompilable(r)
+        Compilable => ()
+      }
+      can_compile_local_function_call_or_named_call(
+        else_name, args, local_function_values,
+      )
+    }
     Some(_) => NotCompilable("function value call not supported")
     None => {
       match
