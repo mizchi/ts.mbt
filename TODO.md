@@ -482,9 +482,13 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - [x] Conditional named function call expressions, e.g. `(flag ? f : g)(x)`
 - [x] IIFE call expressions for arrow/function expressions with expression or single-return block bodies
   - Covered shapes now include zero-arg wrappers, multi-arg wrappers, named function IIFEs, nested IIFEs, and reusable function values when they are called directly without escaping.
+- [x] Local reusable function value aliases and conditional calls over local function values.
+  - Covered shapes include `const fn = inc; fn(x)` and
+    `(flag ? inc : dec)(x)` where `inc` / `dec` are local arrow or function
+    expression values.
 
 ### Next in order
-1. Continue arbitrary call expression support from direct reusable function calls toward escaping function values / full closure conversion.
+1. Continue arbitrary call expression support from local aliases / conditional calls toward reassigned or escaping function values and full closure conversion.
 
 ### Candidates (need more groundwork)
 - Arbitrary call expressions where function values escape, are reassigned, or require captured mutable environments.

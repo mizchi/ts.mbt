@@ -920,17 +920,9 @@ fn compile_expr(
     @ast.TsExpr::UnaryOp(op, operand) =>
       compile_unaryop(ctx, op, operand, expected_type)
     @ast.TsExpr::Call(name, args) =>
-      if compile_local_function_value_call_expr(ctx, name, args, expected_type) {
-        ()
-      } else {
-        compile_named_call_expr(ctx, name, args, expected_type)
-      }
+      compile_callable_name_expr(ctx, name, args, expected_type)
     @ast.TsExpr::CallExpr(@ast.TsExpr::Var(name), args) =>
-      if compile_local_function_value_call_expr(ctx, name, args, expected_type) {
-        ()
-      } else {
-        compile_named_call_expr(ctx, name, args, expected_type)
-      }
+      compile_callable_name_expr(ctx, name, args, expected_type)
     @ast.TsExpr::CallExpr(@ast.TsExpr::ArrowFunc(params, body, is_async), args) =>
       compile_arrow_iife_call_expr(
         ctx, params, body, is_async, args, expected_type,
@@ -996,7 +988,7 @@ fn compile_expr(
         locals: ctx.locals,
         local_function_values: ctx.local_function_values,
         local_types: ctx.local_types,
-        next_local: ctx.next_local,
+        next_local: then_ctx.next_local,
         funcs: ctx.funcs,
         func_types: ctx.func_types,
         interfaces: ctx.interfaces,
@@ -1012,6 +1004,7 @@ fn compile_expr(
         gc_struct_fields: ctx.gc_struct_fields,
       }
       compile_expr(else_ctx, else_expr, expected_type)
+      ctx.next_local = else_ctx.next_local
       let result_type = ts_type_to_valtype(expected_type)
       ctx.emit(If(Value(result_type), then_ctx.instrs, else_ctx.instrs))
     }
@@ -3608,6 +3601,14 @@ fn register_local_function_value(
       ctx.local_function_values[name] = init
       true
     }
+    @ast.TsExpr::Var(source_name) =>
+      match ctx.local_function_values.get(source_name) {
+        Some(source_func) => {
+          ctx.local_function_values[name] = source_func
+          true
+        }
+        None => false
+      }
     _ => false
   }
 }
@@ -3644,6 +3645,20 @@ fn compile_named_call_expr(
 ) -> Unit raise CodeGenError {
   let return_type = compile_call(ctx, name, args, expected_type)
   emit_coerce(ctx, return_type, expected_type)
+}
+
+///|
+fn compile_callable_name_expr(
+  ctx : CodeGenCtx,
+  name : String,
+  args : Array[@ast.TsExpr],
+  expected_type : @ast.TsType,
+) -> Unit raise CodeGenError {
+  if compile_local_function_value_call_expr(ctx, name, args, expected_type) {
+    ()
+  } else {
+    compile_named_call_expr(ctx, name, args, expected_type)
+  }
 }
 
 ///|
@@ -3773,22 +3788,24 @@ fn compile_conditional_named_call_expr(
     | @analysis.ConstValue::Int(_)
     | @analysis.ConstValue::Number(_)
     | @analysis.ConstValue::String_(_) => {
-      compile_named_call_expr(ctx, then_name, args, expected_type)
+      compile_callable_name_expr(ctx, then_name, args, expected_type)
       return
     }
     @analysis.ConstValue::Boolean(false)
     | @analysis.ConstValue::Null
     | @analysis.ConstValue::Undefined => {
-      compile_named_call_expr(ctx, else_name, args, expected_type)
+      compile_callable_name_expr(ctx, else_name, args, expected_type)
       return
     }
     @analysis.ConstValue::NotConst => ()
   }
   compile_expr(ctx, cond, @ast.TsType::Boolean)
   let then_ctx = make_branch_ctx(ctx)
-  compile_named_call_expr(then_ctx, then_name, args, expected_type)
+  compile_callable_name_expr(then_ctx, then_name, args, expected_type)
   let else_ctx = make_branch_ctx(ctx)
-  compile_named_call_expr(else_ctx, else_name, args, expected_type)
+  else_ctx.next_local = then_ctx.next_local
+  compile_callable_name_expr(else_ctx, else_name, args, expected_type)
+  ctx.next_local = else_ctx.next_local
   let result_type = ts_type_to_valtype(expected_type)
   ctx.emit(If(Value(result_type), then_ctx.instrs, else_ctx.instrs))
 }

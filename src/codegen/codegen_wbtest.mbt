@@ -341,6 +341,37 @@ test "codegen: reusable function value direct calls" {
 }
 
 ///|
+test "codegen: aliased reusable function value calls" {
+  let src =
+    #|function applyAlias(n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const fn = inc;
+    #|  return fn(n);
+    #|}
+    #|function applyFunctionAlias(n: number): number {
+    #|  const double = function (x: number): number { return x * 2; };
+    #|  const fn = double;
+    #|  return fn(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "applyAlias", [7.0], 8.0)
+  assert_run_f64(wasm, "applyFunctionAlias", [7.0], 14.0)
+}
+
+///|
+test "codegen: conditional local function value call expression" {
+  let src =
+    #|function choose(flag: number, n: number): number {
+    #|  const inc = (x: number) => x + 1;
+    #|  const dec = (x: number) => x - 1;
+    #|  return (flag > 0 ? inc : dec)(n);
+    #|}
+  let wasm = experimental_compile_to_wasm(src)
+  assert_run_f64(wasm, "choose", [1.0, 7.0], 8.0)
+  assert_run_f64(wasm, "choose", [0.0, 7.0], 6.0)
+}
+
+///|
 test "codegen: real-world iife wrapper patterns" {
   let src =
     #|function normalize(n: number): number {
