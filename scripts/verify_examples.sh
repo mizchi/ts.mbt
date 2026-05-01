@@ -5,6 +5,18 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 source "$repo_root/scripts/warning_guard.sh"
 
+grep_generated_mbt() {
+  local root="$1"
+  local pattern="$2"
+  local file
+
+  for file in "$root"/bridge.mbt "$root"/types.mbt "$root"/converters.mbt "$root"/externs.mbt "$root"/guards.mbt; do
+    [ -f "$file" ] || continue
+    grep -F "$pattern" "$file" >/dev/null && return 0
+  done
+  return 1
+}
+
 verify_moonbit_to_typescript_example() {
   local root="_build/examples/moonbit-to-typescript"
 
@@ -101,8 +113,8 @@ EOF
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
-  grep -F 'pub extern "js" fn greet(name : String) -> String' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn double(value : Double) -> Double' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub extern "js" fn greet(name : String) -> String'
+  grep_generated_mbt "$out" 'pub extern "js" fn double(value : Double) -> Double'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit" <<'EOF'
@@ -236,10 +248,15 @@ verify_typescript_to_moonbit_hono_example() {
     --direction ts-to-mbt \
     --module-spec ../runtime/hono.js >/dev/null
 
+  write_js_any_stub "$out"
+
   cat > "$out/moon.mod.json" <<'EOF'
 {
   "name": "examples/typescript_to_moonbit_hono",
   "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
   "source": ".",
   "preferred-target": "js"
 }
@@ -259,8 +276,8 @@ EOF
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
-  grep -F 'pub extern "js" fn new_hono(options : HonoOptions?) -> Hono' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn createApp(options : HonoOptions) -> Hono' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub extern "js" fn new_hono(options : HonoOptions?) -> Hono'
+  grep_generated_mbt "$out" 'pub fn createApp(options : HonoOptions) -> Hono'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_hono" <<'EOF'
@@ -336,9 +353,9 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
-  grep -F 'pub extern "js" fn new_hono(options : HonoOptions?) -> Hono' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn Hono::get(self : Hono' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn Hono::request(self : Hono' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub extern "js" fn new_hono(options : HonoOptions?) -> Hono'
+  grep_generated_mbt "$out" 'pub extern "js" fn Hono::get(self : Hono'
+  grep_generated_mbt "$out" 'pub extern "js" fn Hono::request(self : Hono'
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
@@ -386,8 +403,8 @@ EOF
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
-  grep -F 'pub fn createElement(tag : String) -> JsxElement' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn get_default() -> @js.Any' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub fn createElement(tag : String) -> JsxElement'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_default() -> @js.Any'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_react" <<'EOF'
@@ -457,14 +474,14 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
-  grep -F 'pub fn createElement(type_ : String, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn cloneElement(element : DetailedReactHTMLElement, props : P?, children : Array[JSValue]) -> DetailedReactHTMLElement' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn memo(component : FunctionComponent, propsAreEqual : @js.Any?) -> NamedExoticComponent' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn forwardRef(render : ForwardRefRenderFunction) -> ForwardRefExoticComponent' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn useState() -> UseStateResult' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn useTransition() -> UseTransitionResult' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn startTransition(scope : TransitionFunction) -> Unit' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn get_default() -> @js.Any' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub fn createElement(type_ : String, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement'
+  grep_generated_mbt "$out" 'pub fn cloneElement(element : DetailedReactHTMLElement, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement'
+  grep_generated_mbt "$out" 'pub extern "js" fn memo(component : FunctionComponent, propsAreEqual : MemoPropsAreEqualCallback?) -> NamedExoticComponent'
+  grep_generated_mbt "$out" 'pub fn forwardRef(render : ForwardRefRenderFunction) -> ForwardRefExoticComponent'
+  grep_generated_mbt "$out" 'pub fn useState() -> UseStateResult'
+  grep_generated_mbt "$out" 'pub fn useTransition() -> UseTransitionResult'
+  grep_generated_mbt "$out" 'pub fn startTransition(scope : TransitionFunction) -> Unit'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_default() -> @js.Any'
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
@@ -556,15 +573,15 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
-  grep -F 'pub(all) struct ExpectStatic' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub(all) struct Assertion' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn ExpectStatic::_call_(self : ExpectStatic' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn Assertion::toBe(self : Assertion' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn Assertion::toEqual(self : Assertion' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn get_expect() -> ExpectStatic' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn get_assert() -> Chai_Assert' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn get_vi() -> VitestUtils' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn VitestUtils::isFakeTimers(self : VitestUtils) -> Bool' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub(all) struct ExpectStatic'
+  grep_generated_mbt "$out" 'pub(all) struct Assertion'
+  grep_generated_mbt "$out" 'pub extern "js" fn ExpectStatic::_call_(self : ExpectStatic'
+  grep_generated_mbt "$out" 'pub extern "js" fn Assertion::toBe(self : Assertion'
+  grep_generated_mbt "$out" 'pub extern "js" fn Assertion::toEqual(self : Assertion'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_expect() -> ExpectStatic'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_assert() -> Chai_Assert'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_vi() -> VitestUtils'
+  grep_generated_mbt "$out" 'pub fn VitestUtils::isFakeTimers(self : VitestUtils) -> Bool'
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
@@ -612,8 +629,8 @@ EOF
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
-  grep -F 'pub fn parseUser(input : String)' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn fetchUser(id : String)' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub fn parseUser(input : String)'
+  grep_generated_mbt "$out" 'pub fn fetchUser(id : String)'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_result" <<'EOF'
@@ -682,10 +699,10 @@ EOF
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
-  grep -F 'pub(all) struct IncrementAction' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub(all) enum IncrementActionType' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn counter_action_from_increment_action(value : IncrementAction) -> CounterAction' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn reducer(state : CounterState, action : CounterAction) -> CounterState' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub(all) struct IncrementAction'
+  grep_generated_mbt "$out" 'pub(all) enum IncrementActionType'
+  grep_generated_mbt "$out" 'pub extern "js" fn counter_action_from_increment_action(value : IncrementAction) -> CounterAction'
+  grep_generated_mbt "$out" 'pub extern "js" fn reducer(state : CounterState, action : CounterAction) -> CounterState'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_reducer" <<'EOF'
@@ -745,9 +762,9 @@ EOF
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
-  grep -F 'pub extern "js" fn new_default(initial : Double) -> Default' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn Default::default_inc(self : Default, delta : Double) -> Double' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn default_from(seed : Double) -> Default' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub extern "js" fn new_default(initial : Double) -> Default'
+  grep_generated_mbt "$out" 'pub extern "js" fn Default::default_inc(self : Default, delta : Double) -> Double'
+  grep_generated_mbt "$out" 'pub extern "js" fn default_from(seed : Double) -> Default'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_default_class" <<'EOF'
@@ -805,9 +822,9 @@ EOF
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
-  grep -F 'pub extern "js" fn get_runtime_version() -> String' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn get_build() -> Double' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn get_rest_meta() -> RestMeta' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub extern "js" fn get_runtime_version() -> String'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_build() -> Double'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_rest_meta() -> RestMeta'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_const_table" <<'EOF'
@@ -855,16 +872,16 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
-  grep -F 'pub fn createSourceFile(fileName : String, sourceText : String, languageVersionOrOptions : JSValue, setParentNodes : Bool?, scriptKind : ScriptKind?) -> SourceFile' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub extern "js" fn transform(source : @js.Any, transformers : Array[TransformerFactory], compilerOptions : CompilerOptions?) -> TransformationResult' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn visitEachChild(node : T, visitor : Visitor, context : TransformationContext?) -> T' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn isIdentifier(node : Node) -> Bool' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn[A, B] unsafeCast(value : A) -> B = "%identity"' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn Node::asIdentifier(self : Node) -> Identifier?' "$out/bridge.mbt" >/dev/null
-  grep -F '  createIdentifier : (String) -> Identifier' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn Printer::printFile(self : Printer, arg0 : SourceFile) -> String' "$out/bridge.mbt" >/dev/null
-  grep -F 'pub fn TransformationResult::dispose(self : TransformationResult) -> Unit' "$out/bridge.mbt" >/dev/null
+  grep_generated_mbt "$out" 'pub fn createSourceFile(fileName : String, sourceText : String, languageVersionOrOptions : JSValue, setParentNodes : Bool?, scriptKind : ScriptKind?) -> SourceFile'
+  grep_generated_mbt "$out" 'pub extern "js" fn transform(source : @js.Any, transformers : Array[TransformerFactory], compilerOptions : CompilerOptions?) -> TransformationResult'
+  grep_generated_mbt "$out" 'pub fn visitEachChild(node : JSValue, visitor : Visitor, context : TransformationContext?) -> JSValue'
+  grep_generated_mbt "$out" 'pub fn isIdentifier(node : Node) -> Bool'
+  grep_generated_mbt "$out" 'pub fn[A, B] unsafeCast(value : A) -> B = "%identity"'
+  grep_generated_mbt "$out" 'pub fn Node::asIdentifier(self : Node) -> Identifier?'
+  grep_generated_mbt "$out" '  createIdentifier : (String) -> Identifier'
+  grep_generated_mbt "$out" 'pub fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier'
+  grep_generated_mbt "$out" 'pub fn Printer::printFile(self : Printer, arg0 : SourceFile) -> String'
+  grep_generated_mbt "$out" 'pub fn TransformationResult::dispose(self : TransformationResult) -> Unit'
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast"

@@ -686,6 +686,22 @@ test "parser: parse interface" {
 }
 
 ///|
+test "parser: parse interface type parameters" {
+  let src =
+    #|interface Box<T, U extends string = string> {
+    #|  value: T;
+    #|  label: U;
+    #|}
+  let parser = Parser::from_source(src)
+  let iface = parser.parse_interface()
+  assert_eq(iface.name, "Box")
+  assert_eq(iface.type_params, ["T", "U"])
+  assert_eq(iface.fields.length(), 2)
+  assert_eq(iface.fields[0], ("value", @ast.TsType::Named("T")))
+  assert_eq(iface.fields[1], ("label", @ast.TsType::Named("U")))
+}
+
+///|
 test "parser: parse default parameters" {
   let src =
     #|function greet(name: int, times: int = 1): int {

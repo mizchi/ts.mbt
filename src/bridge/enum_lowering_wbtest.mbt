@@ -39,3 +39,18 @@ test "bridge: enum lowering builds enum declarations from literal aliases" {
     None => fail("expected numeric literal alias to lower to enum")
   }
 }
+
+///|
+test "bridge: enum lowering synthetic names avoid converter name collisions" {
+  let used_type_names : Array[String] = []
+  let first = enum_lowering_synthetic_enum_name(
+    ["SVGAttributes", "alignmentBaseline", "Member0"],
+    used_type_names,
+  )
+  let second = enum_lowering_synthetic_enum_name(
+    ["SVGAttributes", "alignment_baseline", "Member0"],
+    used_type_names,
+  )
+  assert_false(first == second)
+  assert_false(ffi_to_snake_case(first) == ffi_to_snake_case(second))
+}

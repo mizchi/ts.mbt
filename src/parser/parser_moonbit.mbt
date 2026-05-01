@@ -2,6 +2,7 @@
 priv struct MoonBitDeclState {
   declared_type_names : Array[String]
   referenced_type_names : Array[String]
+  local_type_param_names : Array[String]
   mut needs_jsvalue : Bool
 }
 
@@ -61,6 +62,7 @@ fn value_identifier_needs_suffix(name : String) -> Bool {
     | "continue"
     | "defer"
     | "else"
+    | "final"
     | "fn"
     | "for"
     | "if"
@@ -70,6 +72,7 @@ fn value_identifier_needs_suffix(name : String) -> Bool {
     | "loop"
     | "match"
     | "method"
+    | "move"
     | "constructor"
     | "override"
     | "pub"
@@ -208,6 +211,53 @@ fn mark_referenced_type(state : MoonBitDeclState, name : String) -> Unit {
 }
 
 ///|
+fn push_local_type_params(
+  state : MoonBitDeclState,
+  names : Array[String],
+) -> Int {
+  let old_len = state.local_type_param_names.length()
+  for name in names {
+    if !state.local_type_param_names.contains(name) {
+      state.local_type_param_names.push(name)
+    }
+  }
+  old_len
+}
+
+///|
+fn restore_local_type_params(state : MoonBitDeclState, old_len : Int) -> Unit {
+  while state.local_type_param_names.length() > old_len {
+    let _ = state.local_type_param_names.pop()
+  }
+}
+
+///|
+fn is_local_type_param(state : MoonBitDeclState, name : String) -> Bool {
+  state.local_type_param_names.contains(name)
+}
+
+///|
+fn is_likely_discarded_type_param_name(name : String) -> Bool {
+  if name == "SS" {
+    return true
+  }
+  if name.length() != 1 {
+    return false
+  }
+  let c = name[0].unsafe_to_char()
+  c >= 'A' && c <= 'Z'
+}
+
+///|
+fn should_widen_unresolved_type_param(
+  state : MoonBitDeclState,
+  name : String,
+) -> Bool {
+  !state.declared_type_names.contains(name) &&
+  is_likely_discarded_type_param_name(name)
+}
+
+///|
 fn normalize_literal_type_for_moonbit_bridge(
   type_ : @ast.TsType,
 ) -> @ast.TsType {
@@ -227,6 +277,7 @@ fn classify_optional_like_union(type_ : @ast.TsType) -> (@ast.TsType, Bool)? {
       let mut concrete : @ast.TsType? = None
       let mut has_any = false
       let mut is_optional = false
+      let mut has_conflicting_concrete = false
       for item in items {
         match item {
           Any => has_any = true
@@ -234,15 +285,35 @@ fn classify_optional_like_union(type_ : @ast.TsType) -> (@ast.TsType, Bool)? {
           _ => {
             let normalized = normalize_literal_type_for_moonbit_bridge(item)
             match concrete {
-              Some(existing) => if existing != normalized { return None }
+              Some(existing) =>
+                if existing != normalized {
+                  has_conflicting_concrete = true
+                }
               None => concrete = Some(normalized)
             }
           }
         }
       }
-      match concrete {
-        Some(inner) => if has_any { None } else { Some((inner, is_optional)) }
-        None => if has_any { Some((Any, is_optional)) } else { None }
+      if has_conflicting_concrete {
+        if is_optional {
+          Some((Any, true))
+        } else {
+          None
+        }
+      } else {
+        match concrete {
+          Some(inner) =>
+            if has_any {
+              if is_optional {
+                Some((Any, true))
+              } else {
+                None
+              }
+            } else {
+              Some((inner, is_optional))
+            }
+          None => if has_any { Some((Any, is_optional)) } else { None }
+        }
       }
     }
     _ => None
@@ -262,13 +333,20 @@ fn classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
   match type_ {
     Intersection(items) => {
       let concrete : Array[@ast.TsType] = []
+      let named_constraints : Array[@ast.TsType] = []
       for item in items {
         if !is_empty_object_type(item) {
           concrete.push(item)
+          match item {
+            Named(_) | Applied(_, _) => named_constraints.push(item)
+            _ => ()
+          }
         }
       }
       if concrete.length() == 1 {
         Some(concrete[0])
+      } else if named_constraints.length() == 1 {
+        Some(named_constraints[0])
       } else {
         None
       }
@@ -322,6 +400,22 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       "Array[" + moonbit_type_name(state, inner) + "]"
     Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
       "@js.Promise[" + moonbit_type_name(state, inner) + "]"
+    Named(name) if is_local_type_param(state, name) => {
+      state.needs_jsvalue = true
+      "JSValue"
+    }
+    Applied(name, _) if is_local_type_param(state, name) => {
+      state.needs_jsvalue = true
+      "JSValue"
+    }
+    Named(name) if should_widen_unresolved_type_param(state, name) => {
+      state.needs_jsvalue = true
+      "JSValue"
+    }
+    Applied(name, _) if should_widen_unresolved_type_param(state, name) => {
+      state.needs_jsvalue = true
+      "JSValue"
+    }
     Named(name) => {
       mark_referenced_type(state, name)
       moonbit_type_identifier(name, "OpaqueType")
@@ -418,6 +512,7 @@ fn interface_decl_to_moonbit(
   state : MoonBitDeclState,
   iface : @ast.TsInterface,
 ) -> String {
+  let local_type_param_len = push_local_type_params(state, iface.type_params)
   let lines : Array[String] = ["///|", "/// TS interface \{iface.name}"]
   let method_decls : Array[String] = []
   let seen_method_names : Array[String] = []
@@ -448,6 +543,7 @@ fn interface_decl_to_moonbit(
     }
   }
   lines.push("declare pub type \{type_name}")
+  restore_local_type_params(state, local_type_param_len)
   if method_decls.length() == 0 {
     lines.join("\n")
   } else {
@@ -694,6 +790,7 @@ pub fn emit_moonbit_decl_with_sections(
   let state : MoonBitDeclState = {
     declared_type_names,
     referenced_type_names: [],
+    local_type_param_names: [],
     needs_jsvalue: false,
   }
   let interface_sections : Array[String] = []

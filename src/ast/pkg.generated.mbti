@@ -224,6 +224,7 @@ pub impl Show for TsImportDecl
 
 pub(all) struct TsInterface {
   name : String
+  type_params : Array[String]
   extends_names : Array[String]
   fields : Array[(String, TsType)]
   readonly_fields : Array[String]

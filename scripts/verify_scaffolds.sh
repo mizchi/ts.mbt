@@ -5,6 +5,18 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 source "$repo_root/scripts/warning_guard.sh"
 
+grep_generated_mbt() {
+  local root="$1"
+  local pattern="$2"
+  local file
+
+  for file in "$root"/bridge.mbt "$root"/types.mbt "$root"/converters.mbt "$root"/externs.mbt "$root"/guards.mbt; do
+    [ -f "$file" ] || continue
+    grep -F "$pattern" "$file" >/dev/null && return 0
+  done
+  return 1
+}
+
 assert_declared_value_exports_present() {
   local module_path="$1"
   local decl_path="$2"
@@ -601,7 +613,7 @@ extern "js" fn test_button_attributes() -> ButtonHTMLAttributes =
 extern "js" fn test_function_component() -> FunctionComponent =
   #| () => (props) => ({ type: "component", props, key: null })
 
-extern "js" fn test_forward_ref_render() -> @js.Any =
+extern "js" fn test_forward_ref_render() -> ForwardRefRenderCallback =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
 extern "js" fn test_ref() -> Ref =
@@ -625,12 +637,12 @@ test "generated React package scaffold smoke" {
 }
 EOF
 
-  grep -F 'pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement' "$root/bridge.mbt" >/dev/null
-  grep -F 'pub fn cloneElement(element : ReactElement, props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement' "$root/bridge.mbt" >/dev/null
-  grep -F '#external' "$root/bridge.mbt" >/dev/null
+  grep_generated_mbt "$root" 'pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement'
+  grep_generated_mbt "$root" 'pub fn cloneElement(element : ReactElement, props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement'
+  grep_generated_mbt "$root" '#external'
   moon -C "$root" check --target js
   moon -C "$root" test --target js
-  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_react_package" true <<'EOF'
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_react_package" <<'EOF'
 extern "js" fn test_dom_attributes() -> @sut.DOMAttributes =
   #| () => ({ id: "app" })
 
@@ -643,7 +655,7 @@ extern "js" fn test_button_attributes() -> @sut.ButtonHTMLAttributes =
 extern "js" fn test_function_component() -> @sut.FunctionComponent =
   #| () => (props) => ({ type: "component", props, key: null })
 
-extern "js" fn test_forward_ref_render() -> @js.Any =
+extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderCallback =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
 extern "js" fn test_ref() -> @sut.Ref =
@@ -826,7 +838,7 @@ EOF
 extern "js" fn test_button_attributes() -> ButtonAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_component() -> @js.Any =
+extern "js" fn test_component() -> MemoComponentCallback =
   #| () => (props) => ({ tag: "button", props })
 
 test "generated Hono JSX scaffold smoke" {
@@ -837,11 +849,11 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" test --target js
-  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_hono_jsx" true <<'EOF'
+  run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_hono_jsx" <<'EOF'
 extern "js" fn test_button_attributes() -> @sut.ButtonAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_component() -> @js.Any =
+extern "js" fn test_component() -> @sut.MemoComponentCallback =
   #| () => (props) => ({ tag: "button", props })
 
 fn main {
@@ -862,10 +874,15 @@ verify_moonbit_scaffold_hono_options_fixture() {
     ./runtime/hono.js \
     "$root" >/dev/null
 
+  write_js_any_stub "$root"
+
   cat > "$root/moon.mod.json" <<'EOF'
 {
   "name": "fixture/scaffold_ts_to_moonbit_hono_options",
   "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
   "source": ".",
   "preferred-target": "js"
 }
@@ -977,7 +994,7 @@ EOF
   grep -F 'fixtures/resolver/project/types/ambiguous-a.d.ts' "$root/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   grep -F 'fixtures/resolver/project/types/ambiguous-b.d.ts' "$root/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   grep -F 'Unsupported export Shared: ambiguous re-export surface is widened to JSValue' "$root/bridge.mbti" >/dev/null
-  grep -F 'Unsupported export Shared: ambiguous re-export surface cannot be bound safely' "$root/bridge.mbt" >/dev/null
+  grep_generated_mbt "$root" 'Unsupported export Shared: ambiguous re-export surface cannot be bound safely'
   moon -C "$root" check --target js
 }
 

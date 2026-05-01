@@ -530,8 +530,7 @@ pub fn Parser::parse_interface(
     Ident(n) => n
     k => raise ParseError("Expected interface name, got \{k}")
   }
-  // Skip generic type parameters <T, U>
-  self.skip_type_params()
+  let type_params = self.parse_type_param_names()
   let extends_names = self.parse_extends_names_until_body()
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
@@ -813,7 +812,7 @@ pub fn Parser::parse_interface(
     }
   }
   let _ = self.expect(RBrace)
-  { name, extends_names, fields, readonly_fields }
+  { name, type_params, extends_names, fields, readonly_fields }
 }
 
 ///|
@@ -993,6 +992,7 @@ fn Parser::parse_type_param_names(self : Parser) -> Array[String] {
 ///|
 fn type_alias_object_fields_to_interface(
   name : String,
+  type_params : Array[String],
   type_ : @ast.TsType,
 ) -> @ast.TsInterface? {
   match type_ {
@@ -1008,6 +1008,7 @@ fn type_alias_object_fields_to_interface(
       }
       Some({
         name,
+        type_params,
         extends_names: [],
         fields: iface_fields,
         readonly_fields: [],
@@ -1019,7 +1020,11 @@ fn type_alias_object_fields_to_interface(
 
 ///|
 fn type_alias_to_interface(type_alias : @ast.TsTypeAlias) -> @ast.TsInterface? {
-  type_alias_object_fields_to_interface(type_alias.name, type_alias.type_)
+  type_alias_object_fields_to_interface(
+    type_alias.name,
+    type_alias.type_params,
+    type_alias.type_,
+  )
 }
 
 ///|

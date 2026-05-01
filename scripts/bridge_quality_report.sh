@@ -64,6 +64,19 @@ find_metric_dirs() {
   find "${metric_roots[@]}" -type d -name "$pattern"
 }
 
+find_generated_moonbit_sources() {
+  if [ "${#metric_roots[@]}" -eq 0 ]; then
+    return
+  fi
+  find "${metric_roots[@]}" -type f \( \
+    -name 'bridge.mbt' -o \
+    -name 'types.mbt' -o \
+    -name 'converters.mbt' -o \
+    -name 'externs.mbt' -o \
+    -name 'guards.mbt' \
+  \)
+}
+
 count_files() {
   local pattern="$1"
 
@@ -72,6 +85,14 @@ count_files() {
     return
   fi
   find_metric_files "$pattern" | wc -l | tr -d ' '
+}
+
+count_generated_moonbit_sources() {
+  if [ "${#metric_roots[@]}" -eq 0 ]; then
+    printf '0\n'
+    return
+  fi
+  find_generated_moonbit_sources | wc -l | tr -d ' '
 }
 
 sum_lines() {
@@ -86,6 +107,19 @@ sum_lines() {
   while IFS= read -r file; do
     total=$((total + $(wc -l < "$file")))
   done < <(find_metric_files "$name_pattern")
+  printf '%s\n' "$total"
+}
+
+sum_generated_moonbit_lines() {
+  if [ "${#metric_roots[@]}" -eq 0 ]; then
+    printf '0\n'
+    return
+  fi
+  local total=0
+  local file
+  while IFS= read -r file; do
+    total=$((total + $(wc -l < "$file")))
+  done < <(find_generated_moonbit_sources)
   printf '%s\n' "$total"
 }
 
@@ -222,7 +256,8 @@ moonbit_bridge_files="$(count_files 'bridge.mbt')"
 moonbit_decl_files="$(count_files 'bridge.mbti')"
 typescript_decl_files="$(count_files '*.d.ts')"
 javascript_files="$(count_files '*.js')"
-moonbit_bridge_lines="$(sum_lines 'bridge.mbt')"
+moonbit_bridge_source_files="$(count_generated_moonbit_sources)"
+moonbit_bridge_lines="$(sum_generated_moonbit_lines)"
 moonbit_decl_lines="$(sum_lines 'bridge.mbti')"
 typescript_decl_lines="$(sum_lines '*.d.ts')"
 javascript_lines="$(sum_lines '*.js')"
@@ -282,6 +317,7 @@ fi
   printf '| metric | value |\n'
   printf '| --- | ---: |\n'
   printf '| MoonBit bridge implementations | %s |\n' "$moonbit_bridge_files"
+  printf '| MoonBit bridge source files | %s |\n' "$moonbit_bridge_source_files"
   printf '| MoonBit bridge interfaces | %s |\n' "$moonbit_decl_files"
   printf '| TypeScript declarations | %s |\n' "$typescript_decl_files"
   printf '| JavaScript files | %s |\n' "$javascript_files"

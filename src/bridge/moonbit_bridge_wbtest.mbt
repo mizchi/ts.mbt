@@ -153,7 +153,7 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes object type al
   }
   assert_true(bundle.bridge_mbti.contains("pub(all) struct HonoOptions {"))
   assert_true(bundle.bridge_mbti.contains("  strict : Bool?"))
-  assert_true(bundle.bridge_mbti.contains("  bindings : E?"))
+  assert_true(bundle.bridge_mbti.contains("  bindings : @js.Any?"))
   assert_false(bundle.bridge_mbti.contains("declare pub type HonoOptions"))
 }
 

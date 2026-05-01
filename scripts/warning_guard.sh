@@ -18,7 +18,7 @@ tsmbt_run_no_warnings() {
   fi
 
   cat "$tmp"
-  if grep -E '(^|[[:space:]])([Ww]arning):' "$tmp" >&2; then
+  if grep -E '(^|[[:space:]])([Ww]arning):|forwardRef requires a render function' "$tmp" >&2; then
     printf 'warning output detected while running:' >&2
     printf ' %q' "$@" >&2
     printf '\n' >&2

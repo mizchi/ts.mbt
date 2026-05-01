@@ -1330,12 +1330,14 @@ async fn emit_moonbit_bridge_package(
     bundle.bridge_mbt,
     bridge_js_output_path,
   )
-  let files = [
+  let files : Array[(String, String)] = [
     ("moon.pkg.json", bundle.moon_pkg_json),
     ("bridge.mbti", bundle.bridge_mbti),
-    ("bridge.mbt", bridge_mbt),
-    ("bridge.js", bundle.bridge_js),
   ]
+  for file in bridge_package_mbt_files(bridge_mbt, force_split=false) {
+    files.push(file)
+  }
+  files.push(("bridge.js", bundle.bridge_js))
   for file in files {
     let (name, content) = file
     let path = join_output_path(output_dir, name)
@@ -1525,6 +1527,130 @@ fn rewrite_bridge_package_module_path(
     rewritten.push(line)
   }
   rewritten.join("\n")
+}
+
+///|
+let bridge_package_split_line_threshold : Int = 2000
+
+///|
+fn bridge_package_mbt_line_count(source : String) -> Int {
+  if source == "" {
+    0
+  } else {
+    let mut count = 0
+    for _ in source.split("\n") {
+      count += 1
+    }
+    count
+  }
+}
+
+///|
+fn bridge_package_split_top_level_blocks(source : String) -> Array[String] {
+  let blocks : Array[String] = []
+  let mut current : Array[String] = []
+  for line_view in source.split("\n") {
+    let line = line_view.to_string()
+    if line.trim() == "" {
+      if current.length() > 0 {
+        blocks.push(current.join("\n"))
+        current = []
+      }
+    } else {
+      current.push(line)
+    }
+  }
+  if current.length() > 0 {
+    blocks.push(current.join("\n"))
+  }
+  blocks
+}
+
+///|
+fn bridge_package_is_type_block(block : String) -> Bool {
+  let trimmed = block.trim()
+  trimmed.has_prefix("pub type ") ||
+  trimmed.contains("#external\ntype ") ||
+  trimmed.contains("#external\npub type ") ||
+  trimmed.contains("\npub(all) enum ") ||
+  trimmed.has_prefix("pub(all) enum ") ||
+  trimmed.contains("\npub(all) struct ") ||
+  trimmed.has_prefix("pub(all) struct ") ||
+  trimmed.contains("Unsupported export ")
+}
+
+///|
+fn bridge_package_is_converter_block(block : String) -> Bool {
+  let trimmed = block.trim()
+  trimmed.has_prefix("fn __ts_mbt_") ||
+  (
+    trimmed.contains("extern \"js\" fn __ts_mbt_") &&
+    (trimmed.contains("_to_js") || trimmed.contains("_from_js"))
+  )
+}
+
+///|
+fn bridge_package_is_guard_block(block : String) -> Bool {
+  block.contains("unsafeCast") ||
+  (block.contains("::as") && block.contains(" -> ") && block.contains("?"))
+}
+
+///|
+fn bridge_package_review_file_content(
+  section_name : String,
+  blocks : Array[String],
+) -> String {
+  if blocks.length() == 0 {
+    "///|\n/// Generated bridge \{section_name} section is empty."
+  } else {
+    blocks.join("\n\n")
+  }
+}
+
+///|
+fn bridge_package_mbt_files(
+  bridge_mbt : String,
+  force_split~ : Bool,
+) -> Array[(String, String)] {
+  if !force_split &&
+    bridge_package_mbt_line_count(bridge_mbt) <=
+    bridge_package_split_line_threshold {
+    return [("bridge.mbt", bridge_mbt)]
+  }
+  let type_blocks : Array[String] = []
+  let converter_blocks : Array[String] = []
+  let extern_blocks : Array[String] = []
+  let guard_blocks : Array[String] = []
+  let bridge_blocks : Array[String] = []
+  for block in bridge_package_split_top_level_blocks(bridge_mbt) {
+    if bridge_package_is_type_block(block) {
+      type_blocks.push(block)
+    } else if bridge_package_is_converter_block(block) {
+      converter_blocks.push(block)
+    } else if bridge_package_is_guard_block(block) {
+      guard_blocks.push(block)
+    } else if block.contains("extern \"js\" fn ") {
+      extern_blocks.push(block)
+    } else {
+      bridge_blocks.push(block)
+    }
+  }
+  [
+    ("types.mbt", bridge_package_review_file_content("types", type_blocks)),
+    (
+      "converters.mbt",
+      bridge_package_review_file_content("converters", converter_blocks),
+    ),
+    (
+      "externs.mbt",
+      bridge_package_review_file_content("externs", extern_blocks),
+    ),
+    ("guards.mbt", bridge_package_review_file_content("guards", guard_blocks)),
+    (
+      "bridge.mbt",
+      bridge_package_review_file_content("public wrappers", bridge_blocks),
+    ),
+  ]
 }
 
 ///|

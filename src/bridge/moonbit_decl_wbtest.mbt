@@ -179,6 +179,35 @@ async test "bridge: emit MoonBit declarations names anonymous literal unions" {
 }
 
 ///|
+async test "bridge: emit MoonBit declarations names anonymous string literal unions with unsafe case names" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/anonymous-string-literal-union-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("pub(all) enum OrderedListPropsType {"))
+  assert_true(actual.contains("pub(all) enum OrderedListPropsSetModeArg0 {"))
+  assert_true(actual.contains("pub(all) enum SetListTypeType {"))
+  assert_true(actual.contains("pub(all) enum SetListTypeReturn {"))
+  assert_true(actual.contains("/// type : OrderedListPropsType?"))
+  assert_true(
+    actual.contains("/// setMode : (OrderedListPropsSetModeArg0) -> Unit"),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn setListType(type_ : SetListTypeType) -> SetListTypeReturn",
+    ),
+  )
+  assert_false(actual.contains("anonymous literal union in public surface"))
+}
+
+///|
 async test "bridge: emit MoonBit declarations for exported classes" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/class-entry.d.ts",
@@ -886,7 +915,9 @@ async test "bridge: emit MoonBit declarations from export-as-namespace assignmen
   }
   assert_true(actual.contains("declare pub type Context"))
   assert_true(
-    actual.contains("declare pub fn createContext(defaultValue : T) -> Context"),
+    actual.contains(
+      "declare pub fn createContext(defaultValue : JSValue) -> Context",
+    ),
   )
   assert_true(actual.contains("declare pub fn get_default() -> JSValue"))
 }
@@ -907,7 +938,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace ambient m
   assert_true(actual.contains("declare pub fn get_version() -> String"))
   assert_true(actual.contains("declare pub type Component"))
   assert_true(
-    actual.contains("declare pub fn useContext(context : Context) -> T"),
+    actual.contains("declare pub fn useContext(context : Context) -> JSValue"),
   )
 }
 
@@ -1021,7 +1052,7 @@ async test "bridge: emit MoonBit declarations from Promise-returning APIs" {
 }
 
 ///|
-async test "bridge: emit MoonBit declarations from callback APIs as JSValue" {
+async test "bridge: emit MoonBit declarations from callback APIs with synthetic callback types" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/callback-entry.d.ts",
   ) catch {
@@ -1033,17 +1064,19 @@ async test "bridge: emit MoonBit declarations from callback APIs as JSValue" {
       return
     }
   }
-  assert_true(actual.contains("declare pub type JSValue"))
+  assert_true(actual.contains("declare pub type EmitEventListenerCallback"))
+  assert_true(actual.contains("declare pub type MaybeEmitListenerCallback"))
   assert_true(
     actual.contains(
-      "declare pub fn emitEvent(label : String, count : Double, listener : JSValue) -> String",
+      "declare pub fn emitEvent(label : String, count : Double, listener : EmitEventListenerCallback) -> String",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn maybeEmit(label : String, listener : JSValue?) -> String",
+      "declare pub fn maybeEmit(label : String, listener : MaybeEmitListenerCallback?) -> String",
     ),
   )
+  assert_false(actual.contains("declare pub type JSValue"))
   assert_false(actual.contains("Unsupported export emitEvent"))
   assert_false(actual.contains("Unsupported export maybeEmit"))
 }
@@ -1062,7 +1095,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace hook tupl
     }
   }
   assert_true(actual.contains("declare pub type UseStateResult"))
-  assert_true(actual.contains("/// state : S"))
+  assert_true(actual.contains("/// state : JSValue"))
   assert_true(actual.contains("/// setState : Dispatch"))
   assert_true(actual.contains("declare pub type UseReducerResult"))
   assert_true(actual.contains("/// dispatch : ActionDispatch"))
@@ -1075,12 +1108,12 @@ async test "bridge: emit MoonBit declarations from export-as-namespace hook tupl
   assert_true(actual.contains("/// isPending : Bool"))
   assert_true(
     actual.contains(
-      "declare pub fn useState(initialState : S) -> UseStateResult",
+      "declare pub fn useState(initialState : JSValue) -> UseStateResult",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn useReducer(reducer : JSValue, initialState : S) -> UseReducerResult",
+      "declare pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult",
     ),
   )
   assert_true(
@@ -1093,7 +1126,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace hook tupl
   )
   assert_true(
     actual.contains(
-      "declare pub fn useActionState(action : JSValue, initialState : State, permalink : String?) -> UseActionStateResult",
+      "declare pub fn useActionState(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
 }
@@ -1545,7 +1578,7 @@ async test "bridge: emit MoonBit declarations from imported object type alias me
   }
   assert_true(actual.contains("declare pub type HonoOptions"))
   assert_true(actual.contains("/// strict : Bool?"))
-  assert_true(actual.contains("/// bindings : E?"))
+  assert_true(actual.contains("/// bindings : JSValue?"))
   assert_true(actual.contains("declare pub type Hono"))
   assert_true(
     actual.contains("declare pub fn new_hono(options : HonoOptions?) -> Hono"),
@@ -1610,12 +1643,12 @@ async test "bridge: emit MoonBit declarations from fixture React package surface
   )
   assert_true(
     actual.contains(
-      "declare pub fn forwardRef(render : JSValue) -> ForwardRefExoticComponent",
+      "declare pub fn forwardRef(render : ForwardRefRenderCallback) -> ForwardRefExoticComponent",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn memo(component : FunctionComponent, propsAreEqual : JSValue?) -> MemoExoticComponent",
+      "declare pub fn memo(component : FunctionComponent, propsAreEqual : MemoPropsAreEqualCallback?) -> MemoExoticComponent",
     ),
   )
   assert_true(
@@ -1698,7 +1731,9 @@ async test "bridge: emit MoonBit declarations from fixture Hono JSX package subp
     ),
   )
   assert_true(
-    actual.contains("declare pub fn memo(component : JSValue) -> JSValue"),
+    actual.contains(
+      "declare pub fn memo(component : MemoComponentCallback) -> JSValue",
+    ),
   )
 }
 
@@ -1732,10 +1767,12 @@ async test "bridge: recursive type alias overload wrappers do not overflow" {
       return
     }
   }
-  assert_true(actual.contains("declare pub fn format(value : T) -> Format"))
+  assert_true(
+    actual.contains("declare pub fn format(value : JSValue) -> Format"),
+  )
   assert_true(
     actual.contains(
-      "declare pub fn format_t_string_optional(value : T, fallback : String?) -> Format",
+      "declare pub fn format_t_string_optional(value : JSValue, fallback : String?) -> Format",
     ),
   )
 }

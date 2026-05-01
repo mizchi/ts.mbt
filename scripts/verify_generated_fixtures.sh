@@ -614,7 +614,12 @@ verify_bridge_callback_fixture() {
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_listener() -> @js.Any =
+extern "js" fn test_listener() -> EmitEventListenerCallback =
+  #| () => (label, count) => {
+  #|   globalThis.__tsmbtCallbackSeen = `${label}:${count}`;
+  #| }
+
+extern "js" fn test_maybe_listener() -> MaybeEmitListenerCallback =
   #| () => (label, count) => {
   #|   globalThis.__tsmbtCallbackSeen = `${label}:${count}`;
   #| }
@@ -627,7 +632,7 @@ test "generated bridge package calls callback APIs" {
   assert_eq(emitEvent("evt", 3.0, test_listener()), "evt:3")
   assert_eq(test_callback_seen(), "evt:3")
   assert_eq(maybeEmit("empty", None), "empty:none")
-  assert_eq(maybeEmit("once", Some(test_listener())), "once:called")
+  assert_eq(maybeEmit("once", Some(test_maybe_listener())), "once:called")
   assert_eq(test_callback_seen(), "once:1")
 }
 EOF

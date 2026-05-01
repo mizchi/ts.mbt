@@ -346,6 +346,7 @@ pub(all) struct TsFunc {
 // / interface (structtype)
 pub(all) struct TsInterface {
   name : String
+  type_params : Array[String]
   extends_names : Array[String]
   fields : Array[(String, TsType)] // (fieldName, type)
   readonly_fields : Array[String]

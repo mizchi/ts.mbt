@@ -64,6 +64,20 @@ async fn wbtest_relative_file_snapshot(root : String) -> String {
 }
 
 ///|
+fn wbtest_find_file_content(
+  files : Array[(String, String)],
+  name : String,
+) -> String {
+  for file in files {
+    let (file_name, content) = file
+    if file_name == name {
+      return content
+    }
+  }
+  abort("expected generated file: \{name}")
+}
+
+///|
 async fn wbtest_prepare_tmp_neverthrow_like_fixture(
   root : String,
 ) -> String raise Error {
@@ -1361,6 +1375,55 @@ async test "emit_moonbit_bridge_package_texts generates a compileable package bu
   assert_true(bundle.bridge_mbti.contains("declare pub fn get_default()"))
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
   assert_true(bundle.bridge_js.contains("export function __ts_mbt_get_default"))
+}
+
+///|
+test "emit_moonbit_bridge_package splits large generated source into review files" {
+  let bridge_mbt =
+    #|pub type JSValue = @js.Any
+    #|
+    #|#external
+    #|type RuntimePoint
+    #|
+    #|fn __ts_mbt_mode_to_js(value : Mode) -> String {
+    #|  match value {
+    #|    Read => "read"
+    #|  }
+    #|}
+    #|
+    #|#module("/runtime/bridge.js")
+    #|extern "js" fn __ts_mbt_mode_from_js(value : String) -> Mode = "__ts_mbt_mode_from_js"
+    #|
+    #|#module("/runtime/bridge.js")
+    #|pub extern "js" fn parse(input : String) -> JSValue = "__ts_mbt_parse"
+    #|
+    #|pub fn[A, B] unsafeCast(value : A) -> B = "%identity"
+    #|
+    #|pub fn Node::asIdentifier(self : Node) -> Identifier? {
+    #|  if isIdentifier(self) {
+    #|    Some(unsafeCast(self))
+    #|  } else {
+    #|    None
+    #|  }
+    #|}
+    #|
+    #|pub fn scalePoint(point : RuntimePoint, factor : Double) -> RuntimePoint {
+    #|  scale_point(point, factor)
+    #|}
+  let files = bridge_package_mbt_files(bridge_mbt, force_split=true)
+  let types_mbt = wbtest_find_file_content(files, "types.mbt")
+  let converters_mbt = wbtest_find_file_content(files, "converters.mbt")
+  let externs_mbt = wbtest_find_file_content(files, "externs.mbt")
+  let guards_mbt = wbtest_find_file_content(files, "guards.mbt")
+  let bridge_mbt = wbtest_find_file_content(files, "bridge.mbt")
+  assert_true(types_mbt.contains("pub type JSValue = @js.Any"))
+  assert_true(types_mbt.contains("#external\ntype RuntimePoint"))
+  assert_true(converters_mbt.contains("fn __ts_mbt_mode_to_js"))
+  assert_true(converters_mbt.contains("__ts_mbt_mode_from_js"))
+  assert_true(externs_mbt.contains("pub extern \"js\" fn parse"))
+  assert_true(guards_mbt.contains("unsafeCast"))
+  assert_true(guards_mbt.contains("Node::asIdentifier"))
+  assert_true(bridge_mbt.contains("pub fn scalePoint"))
 }
 
 ///|
@@ -5064,13 +5127,13 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace declaratio
   assert_true(bridge_mbti.contains("pub(all) struct Context"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn createContext(defaultValue : T) -> Context",
+      "declare pub fn createContext(defaultValue : JSValue) -> Context",
     ),
   )
   assert_true(bridge_mbti.contains("declare pub fn get_default() -> JSValue"))
   assert_true(
     bridge_mbt.contains(
-      "pub fn createContext(defaultValue : T) -> Context {\n  create_context(defaultValue)\n}",
+      "pub fn createContext(defaultValue : JSValue) -> Context {\n  create_context(defaultValue)\n}",
     ),
   )
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
@@ -5093,7 +5156,9 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ambient me
   assert_true(bridge_mbti.contains("declare pub fn get_version() -> String"))
   assert_true(bridge_mbti.contains("declare pub type Component"))
   assert_true(
-    bridge_mbti.contains("declare pub fn useContext(context : Context) -> T"),
+    bridge_mbti.contains(
+      "declare pub fn useContext(context : Context) -> JSValue",
+    ),
   )
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
@@ -5116,7 +5181,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
     e => fail("failed to read export-as-namespace hook tuple bridge.mbt: \{e}")
   }
   assert_true(bridge_mbti.contains("pub(all) struct UseStateResult"))
-  assert_true(bridge_mbti.contains("/// state : S"))
+  assert_true(bridge_mbti.contains("/// state : JSValue"))
   assert_true(bridge_mbti.contains("/// setState : Dispatch"))
   assert_true(bridge_mbti.contains("pub(all) struct UseReducerResult"))
   assert_true(bridge_mbti.contains("/// dispatch : ActionDispatch"))
@@ -5127,12 +5192,12 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   assert_true(bridge_mbti.contains("pub(all) struct UseActionStateResult"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useState(initialState : S) -> UseStateResult",
+      "declare pub fn useState(initialState : JSValue) -> UseStateResult",
     ),
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useReducer(reducer : JSValue, initialState : S) -> UseReducerResult",
+      "declare pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult",
     ),
   )
   assert_true(
@@ -5147,17 +5212,17 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useActionState(action : JSValue, initialState : State, permalink : String?) -> UseActionStateResult",
+      "declare pub fn useActionState(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useState(initialState : S) -> UseStateResult {\n  use_state(initialState)\n}",
+      "pub fn useState(initialState : JSValue) -> UseStateResult {\n  use_state(initialState)\n}",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useReducer(reducer : JSValue, initialState : S) -> UseReducerResult {\n  use_reducer(reducer, initialState)\n}",
+      "pub fn useReducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult {\n  use_reducer(reducer, initialState)\n}",
     ),
   )
   assert_true(
@@ -5172,7 +5237,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace hook tuple
   )
   assert_true(
     bridge_mbt.contains(
-      "pub fn useActionState(action : JSValue, initialState : State, permalink : String?) -> UseActionStateResult {\n  use_action_state(action, initialState, permalink)\n}",
+      "pub fn useActionState(action : UseActionStateActionCallback, initialState : State, permalink : String?) -> UseActionStateResult {\n  use_action_state(action, initialState, permalink)\n}",
     ),
   )
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
@@ -5283,7 +5348,7 @@ async test "emit_moonbit_scaffold_from_ts handles exported JSX namespace members
       "#module(\"react/jsx-runtime\")\npub extern \"js\" fn jsx(tag : String, props : BadgeProps) -> JsxElement = \"jsx\"",
     ),
   )
-  assert_false(bridge_mbt.contains("pub type JSValue = @js.Any"))
+  assert_true(bridge_mbt.contains("pub type JSValue = @js.Any"))
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
 
@@ -5665,10 +5730,10 @@ async test "emit_moonbit_scaffold_from_ts handles imported object type alias mem
   }
   assert_true(bridge_mbti.contains("pub(all) struct HonoOptions"))
   assert_true(bridge_mbti.contains("/// strict : Bool?"))
-  assert_true(bridge_mbti.contains("/// bindings : E?"))
+  assert_true(bridge_mbti.contains("/// bindings : JSValue?"))
   assert_true(bridge_mbt.contains("pub(all) struct HonoOptions {"))
   assert_true(bridge_mbt.contains("  strict : Bool?"))
-  assert_true(bridge_mbt.contains("  bindings : E?"))
+  assert_true(bridge_mbt.contains("  bindings : @js.Any?"))
   assert_true(
     bridge_mbt.contains(
       "pub extern \"js\" fn new_hono(options : HonoOptions?) -> Hono = \"__ts_mbt_new_hono\"",

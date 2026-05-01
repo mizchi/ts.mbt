@@ -30,6 +30,9 @@ corpus without manual edits.
   - `just bridge-quality` now fails on unbudgeted unsupported exports and
     budgets only the single fixture-backed ambiguous re-export surface with
     explicit candidate diagnostics.
+  - `just verify-realworld-typescript` also budgets the single zod
+    `ZodFirstPartyTypeKind` empty compatibility enum stub as an omitted,
+    runtime-safe unsupported surface.
 - [x] `JSValue` usage is classified by reason, and budgets are stable per
   package instead of being treated as an opaque quality number.
   - Real-world TypeScript metrics now split `JSValue` surface usage into
@@ -45,6 +48,78 @@ corpus without manual edits.
   - README now documents the supported MoonBit -> TypeScript and TypeScript ->
     MoonBit bridge surfaces, known fallbacks, diagnostics files, quality
     reports, and the no-arbitrary-package-conversion caveat.
+
+### Generated Code Review Follow-up (2026-05-01)
+
+Review status:
+
+- `just verify-examples` passes, including JS build smokes.
+- `just bridge-quality` passes with 0 unbudgeted unsupported exports.
+- `just verify-realworld-typescript` passes with package-local `JSValue` cause
+  budgets and warning-free MoonBit checks.
+- A node:fs-only real-world probe builds and runs with 0 unsupported exports.
+  Current metrics after callback/option-bag cleanup: 2192 bridge lines, 322
+  declared functions, 115 `JSValue` refs, 55 `JSValue` functions, and 114
+  `JSValue` surface lines.
+
+Next implementation tasks:
+
+- [x] Fix callable interface conversion at the JS boundary.
+  - Current symptom: React `forwardRef` receives an object converted from
+    `ForwardRefRenderFunction` instead of a callable JS function, producing
+    `forwardRef requires a render function but was given object.`
+  - Target: generated converters for interfaces with a `<call>` / `_call_`
+    signature should pass through existing JS functions and wrap MoonBit
+    records as callable JS functions while preserving optional properties.
+  - Done: `ffi_struct_js_converter_decl` now emits callable wrappers for
+    `<call>` interfaces, and the React examples no longer emit the runtime
+    `forwardRef` warning.
+- [x] Remove package-global opaque generic placeholders such as `type T`,
+  `type P`, and `type S` from generated public APIs.
+  - Target: preserve representable generics as MoonBit type parameters; if a
+    TypeScript generic cannot be represented safely, widen only that local
+    boundary to `JSValue` with diagnostics.
+  - Done: interface type parameters are preserved in the AST and local generic
+    placeholders are widened at the specific boundary instead of emitted as
+    package-global opaque types; generated Hono/React/TypeScript AST examples no
+    longer leak `type T` / `type P` style placeholders.
+- [x] Lower or explicitly budget remaining anonymous literal-union public
+  surfaces.
+  - Current unbudgeted examples include React `OlHTMLAttributes`, Vitest
+    `Assertion` / `VitestUtils` / `SerializedConfig`, and TypeScript AST
+    `UserPreferences` / encoded classification request args.
+  - Target: create stable synthetic names when a public owner can be inferred,
+    otherwise keep the fallback but require an explicit budget and diagnostic.
+  - Done: anonymous string literal unions now get stable synthetic enum names
+    even when literal values are unsafe as MoonBit case names or appear inside
+    function/object/union surfaces. `just bridge-quality` now has 0 unbudgeted
+    unsupported exports.
+- [x] Reduce node:fs JSValue regressions.
+  - Previous node:fs metrics: 2015 bridge lines, 312 declared functions,
+    117 JSValue refs, 81 JSValue functions, 0 unsupported exports.
+  - Priority: callback aliases, overload-selected sync/promisify wrappers, and
+    common option bag aliases such as stat/read/write options.
+  - Done: inline callback parameters now receive stable synthetic callback
+    opaque types instead of `JSValue`, and named option intersections such as
+    `StatOptions & { bigint?: false }` collapse back to the named option bag.
+    Current node:fs budget is 115 `JSValue` refs, 55 `JSValue` functions, and
+    114 surface lines.
+  - Remaining quality debt: `StatsBase<T>` / `StatsFsBase<T>` generic fields
+    and event-map fields still account for most `unknown/any` `JSValue` lines.
+- [x] Split large generated MoonBit packages into reviewable files.
+  - Target layout: `types.mbt`, `externs.mbt`, `converters.mbt`, and
+    `guards.mbt` for large TS -> MoonBit scaffolds, while preserving generated
+    `bridge.mbti` and package metadata.
+  - Done: generated TS -> MoonBit packages over the review threshold now split
+    MoonBit implementation code into `types.mbt`, `converters.mbt`,
+    `externs.mbt`, `guards.mbt`, and `bridge.mbt`. Example/scaffold checks,
+    real-world manifests, and bridge quality metrics now count the split source
+    files instead of assuming all implementation code lives in `bridge.mbt`.
+- [ ] Add regression rails for generated-code ergonomics.
+  - [x] React `forwardRef` warning should fail the smoke rail.
+  - [ ] TypeScript AST transformer smoke should reduce required `unsafeCast`
+    usage around `ScriptTarget`, `transform`, visitors, and transformed arrays.
+  - [x] node:fs budget regressions should fail with package-local diagnostics.
 
 ### Phase 1: Measurement and Diagnostics (60% -> 65%)
 

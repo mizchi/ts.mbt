@@ -2043,6 +2043,7 @@ fn props_with_children_named_interface_spec(
       }
       Some({
         name: props_with_children_interface_name(origin.export_name),
+        type_params: [],
         extends_names: [],
         fields,
         readonly_fields: readonly_fields_for_fields(
@@ -2092,6 +2093,7 @@ fn props_with_children_interface_spec(
       }
       Some({
         name: props_with_children_object_interface_name(inner_fields),
+        type_params: [],
         extends_names: [],
         fields,
         readonly_fields: [],
@@ -2200,6 +2202,7 @@ fn component_props_with_ref_interface_spec(
           }
           Some({
             name: component_props_with_ref_interface_name(origin.export_name),
+            type_params: [],
             extends_names: [],
             fields,
             readonly_fields: readonly_fields_for_fields(
@@ -2360,6 +2363,7 @@ fn utility_mapped_interface_spec(
       }
       Some({
         name: utility_mapped_interface_name(origin.export_name, op_name),
+        type_params: [],
         extends_names: [],
         fields,
         readonly_fields: if op_name == "Readonly" {
@@ -2420,6 +2424,7 @@ fn utility_projection_interface_spec(
           op_name,
           keys,
         ),
+        type_params: [],
         extends_names: [],
         fields,
         readonly_fields: readonly_fields_for_fields(
@@ -3936,6 +3941,7 @@ fn tuple_result_interface_spec(
         export_name,
         iface: {
           name: tuple_result_interface_name(export_name),
+          type_params: [],
           extends_names: [],
           fields,
           readonly_fields: [],
@@ -4221,6 +4227,7 @@ fn append_lowered_interface_field(
   readonly_fields : Array[String],
   seen_field_names : Array[String],
   info : DeclModuleInfo,
+  owner_name : String,
   field_name : String,
   field_type : @ast.TsType,
   is_readonly : Bool,
@@ -4237,7 +4244,15 @@ fn append_lowered_interface_field(
     modules,
     canonical_types,
   )
-  fields.push((field_name, lowered_type))
+  fields.push(
+    (
+      field_name,
+      decl_rewrite_inline_callback_params_in_func_type(
+        owner_name + "_" + field_name,
+        lowered_type,
+      ),
+    ),
+  )
   if is_readonly {
     readonly_fields.push(field_name)
   }
@@ -4278,6 +4293,7 @@ fn append_interface_origin_fields(
       readonly_fields,
       seen_field_names,
       origin.info,
+      origin.export_name,
       field_name,
       field_type,
       origin.iface.readonly_fields.contains(field_name),
@@ -4303,6 +4319,7 @@ fn clone_resolved_interface_origin(
   )
   {
     name: origin.export_name,
+    type_params: origin.iface.type_params,
     extends_names: [],
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
@@ -4644,6 +4661,7 @@ fn clone_exported_interface(
   )
   {
     name: exported.export_name,
+    type_params: exported.iface.type_params,
     extends_names: [],
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
@@ -4663,6 +4681,13 @@ fn clone_exported_import(
   canonical_types : Map[String, String],
 ) -> @ast.TsImport {
   let params : Array[(String, @ast.TsType)] = []
+  let callback_owner_name = if exported.source_export_name == "" ||
+    exported.source_export_name == "default" ||
+    exported.source_export_name.has_prefix("default.") {
+    exported.export_name
+  } else {
+    exported.source_export_name
+  }
   for param_index, param in exported.import_.params {
     let (param_name, param_type) = param
     let lowered = lower_react_utility_type(
@@ -4679,10 +4704,15 @@ fn clone_exported_import(
     params.push(
       (
         param_name,
-        decl_widen_react_factory_tag_param(
-          exported.export_name,
+        decl_rewrite_inline_callback_param_type(
+          callback_owner_name,
+          param_name,
           param_index,
-          lowered,
+          decl_widen_react_factory_tag_param(
+            exported.export_name,
+            param_index,
+            lowered,
+          ),
         ),
       ),
     )
@@ -4751,6 +4781,101 @@ fn decl_widen_react_factory_tag_param(
 }
 
 ///|
+fn decl_inline_callback_type_name(
+  owner_name : String,
+  param_name : String,
+  param_index : Int,
+) -> String {
+  let safe_param_name = if param_name == "" {
+    "arg" + param_index.to_string()
+  } else {
+    param_name
+  }
+  decl_to_pascal_case(owner_name) +
+  decl_to_pascal_case(safe_param_name) +
+  "Callback"
+}
+
+///|
+fn decl_synthetic_callback_type_for_param(
+  owner_name : String,
+  param_name : String,
+  param_index : Int,
+) -> @ast.TsType? {
+  if owner_name.length() > 10 && owner_name != "useActionState" {
+    return None
+  }
+  let callback_type_name = decl_inline_callback_type_name(
+    owner_name, param_name, param_index,
+  )
+  if callback_type_name.length() > 64 {
+    None
+  } else {
+    Some(Named(callback_type_name))
+  }
+}
+
+///|
+fn decl_rewrite_inline_callback_param_type(
+  owner_name : String,
+  param_name : String,
+  param_index : Int,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match decl_classify_optional_like_union(type_) {
+    Some((Func(_, _), is_optional)) =>
+      match
+        decl_synthetic_callback_type_for_param(
+          owner_name, param_name, param_index,
+        ) {
+        Some(named) =>
+          if is_optional {
+            Union([named, Undefined])
+          } else {
+            named
+          }
+        None => type_
+      }
+    _ =>
+      match type_ {
+        Func(_, _) =>
+          match
+            decl_synthetic_callback_type_for_param(
+              owner_name, param_name, param_index,
+            ) {
+            Some(named) => named
+            None => type_
+          }
+        _ => type_
+      }
+  }
+}
+
+///|
+fn decl_rewrite_inline_callback_params_in_func_type(
+  owner_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Func(params, return_type) => {
+      let rewritten_params : Array[@ast.TsType] = []
+      for param_index, param in params {
+        rewritten_params.push(
+          decl_rewrite_inline_callback_param_type(
+            owner_name,
+            "arg" + param_index.to_string(),
+            param_index,
+            param,
+          ),
+        )
+      }
+      Func(rewritten_params, return_type)
+    }
+    _ => type_
+  }
+}
+
+///|
 fn decl_classify_optional_like_union(
   type_ : @ast.TsType,
 ) -> (@ast.TsType, Bool)? {
@@ -4759,20 +4884,41 @@ fn decl_classify_optional_like_union(
       let mut concrete : @ast.TsType? = None
       let mut has_any = false
       let mut is_optional = false
+      let mut has_conflicting_concrete = false
       for item in items {
         match item {
           Any => has_any = true
           Undefined | Null => is_optional = true
           _ =>
             match concrete {
-              Some(_) => return None
+              Some(existing) =>
+                if existing != item {
+                  has_conflicting_concrete = true
+                }
               None => concrete = Some(item)
             }
         }
       }
-      match concrete {
-        Some(inner) => if has_any { None } else { Some((inner, is_optional)) }
-        None => if has_any { Some((Any, is_optional)) } else { None }
+      if has_conflicting_concrete {
+        if is_optional {
+          Some((Any, true))
+        } else {
+          None
+        }
+      } else {
+        match concrete {
+          Some(inner) =>
+            if has_any {
+              if is_optional {
+                Some((Any, true))
+              } else {
+                None
+              }
+            } else {
+              Some((inner, is_optional))
+            }
+          None => if has_any { Some((Any, is_optional)) } else { None }
+        }
       }
     }
     _ => None
@@ -4989,6 +5135,13 @@ fn clone_exported_func(
   canonical_types : Map[String, String],
 ) -> @ast.TsFunc {
   let params : Array[@ast.TsParam] = []
+  let callback_owner_name = if exported.source_export_name == "" ||
+    exported.source_export_name == "default" ||
+    exported.source_export_name.has_prefix("default.") {
+    exported.export_name
+  } else {
+    exported.source_export_name
+  }
   for param_index, param in exported.func.params {
     let lowered = lower_react_utility_type(
       info,
@@ -5005,10 +5158,15 @@ fn clone_exported_func(
       name: param.name,
       binding: param.binding,
       is_rest: param.is_rest,
-      type_: decl_widen_react_factory_tag_param(
-        exported.export_name,
+      type_: decl_rewrite_inline_callback_param_type(
+        callback_owner_name,
+        param.name,
         param_index,
-        lowered,
+        decl_widen_react_factory_tag_param(
+          exported.export_name,
+          param_index,
+          lowered,
+        ),
       ),
       default: param.default,
     })
@@ -5281,24 +5439,30 @@ fn clone_class_property_in_scope(
 ///|
 fn clone_class_method_in_scope(
   class_method : @ast.TsClassMethodDecl,
+  class_name : String,
   info : DeclModuleInfo,
   local_name_prefix : String,
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
 ) -> @ast.TsClassMethodDecl {
   let params : Array[(String, @ast.TsType)] = []
-  for param in class_method.params {
+  for param_index, param in class_method.params {
     let (param_name, param_type) = param
     params.push(
       (
         param_name,
-        lower_react_utility_type(
-          info,
-          rewrite_type_refs_in_scope(
-            info, local_name_prefix, param_type, canonical_types,
+        decl_rewrite_inline_callback_param_type(
+          class_name + "_" + class_method.name,
+          param_name,
+          param_index,
+          lower_react_utility_type(
+            info,
+            rewrite_type_refs_in_scope(
+              info, local_name_prefix, param_type, canonical_types,
+            ),
+            modules,
+            canonical_types,
           ),
-          modules,
-          canonical_types,
         ),
       ),
     )
@@ -5533,6 +5697,7 @@ fn append_class_origin_members(
       seen_method_keys,
       clone_class_method_in_scope(
         class_method,
+        origin.class_.name,
         origin.info,
         origin.local_name_prefix,
         modules,

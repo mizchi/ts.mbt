@@ -27,6 +27,7 @@ priv struct MoonBitJsFfiState {
   struct_type_names : Array[String]
   enums : Array[@ast.TsEnumDecl]
   external_type_names : Array[String]
+  local_type_param_names : Array[String]
   function_field_method_wrapper_limit : Int
   mut needs_js_any : Bool
 }
@@ -117,6 +118,7 @@ fn ffi_value_identifier_needs_suffix(name : String) -> Bool {
     | "export"
     | "extern"
     | "false"
+    | "final"
     | "finally"
     | "fn"
     | "for"
@@ -134,6 +136,7 @@ fn ffi_value_identifier_needs_suffix(name : String) -> Bool {
     | "match"
     | "method"
     | "module"
+    | "move"
     | "namespace"
     | "new"
     | "constructor"
@@ -298,6 +301,57 @@ fn ffi_mark_external_type(state : MoonBitJsFfiState, name : String) -> String {
 }
 
 ///|
+fn ffi_push_local_type_params(
+  state : MoonBitJsFfiState,
+  names : Array[String],
+) -> Int {
+  let old_len = state.local_type_param_names.length()
+  for name in names {
+    if !state.local_type_param_names.contains(name) {
+      state.local_type_param_names.push(name)
+    }
+  }
+  old_len
+}
+
+///|
+fn ffi_restore_local_type_params(
+  state : MoonBitJsFfiState,
+  old_len : Int,
+) -> Unit {
+  while state.local_type_param_names.length() > old_len {
+    let _ = state.local_type_param_names.pop()
+  }
+}
+
+///|
+fn ffi_is_local_type_param(state : MoonBitJsFfiState, name : String) -> Bool {
+  state.local_type_param_names.contains(name)
+}
+
+///|
+fn ffi_is_likely_discarded_type_param_name(name : String) -> Bool {
+  if name == "SS" {
+    return true
+  }
+  if name.length() != 1 {
+    return false
+  }
+  let c = name[0].unsafe_to_char()
+  c >= 'A' && c <= 'Z'
+}
+
+///|
+fn ffi_should_widen_unresolved_type_param(
+  state : MoonBitJsFfiState,
+  name : String,
+) -> Bool {
+  !state.declared_type_names.contains(ffi_type_identifier(name, "OpaqueType")) &&
+  !ffi_named_type_is_primitive_enum_in(state.enums, name) &&
+  ffi_is_likely_discarded_type_param_name(name)
+}
+
+///|
 fn ffi_find_enum_decl(
   state : MoonBitJsFfiState,
   name : String,
@@ -339,6 +393,7 @@ fn ffi_classify_optional_like_union(
       let mut concrete : @ast.TsType? = None
       let mut has_any = false
       let mut is_optional = false
+      let mut has_conflicting_concrete = false
       for item in items {
         match item {
           Any => has_any = true
@@ -346,15 +401,35 @@ fn ffi_classify_optional_like_union(
           _ => {
             let normalized = ffi_normalize_literal_type(item)
             match concrete {
-              Some(existing) => if existing != normalized { return None }
+              Some(existing) =>
+                if existing != normalized {
+                  has_conflicting_concrete = true
+                }
               None => concrete = Some(normalized)
             }
           }
         }
       }
-      match concrete {
-        Some(inner) => if has_any { None } else { Some((inner, is_optional)) }
-        None => if has_any { Some((Any, is_optional)) } else { None }
+      if has_conflicting_concrete {
+        if is_optional {
+          Some((Any, true))
+        } else {
+          None
+        }
+      } else {
+        match concrete {
+          Some(inner) =>
+            if has_any {
+              if is_optional {
+                Some((Any, true))
+              } else {
+                None
+              }
+            } else {
+              Some((inner, is_optional))
+            }
+          None => if has_any { Some((Any, is_optional)) } else { None }
+        }
       }
     }
     _ => None
@@ -374,13 +449,20 @@ fn ffi_classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
   match type_ {
     Intersection(items) => {
       let concrete : Array[@ast.TsType] = []
+      let named_constraints : Array[@ast.TsType] = []
       for item in items {
         if !ffi_is_empty_object_type(item) {
           concrete.push(item)
+          match item {
+            Named(_) | Applied(_, _) => named_constraints.push(item)
+            _ => ()
+          }
         }
       }
       if concrete.length() == 1 {
         Some(concrete[0])
+      } else if named_constraints.length() == 1 {
+        Some(named_constraints[0])
       } else {
         None
       }
@@ -580,6 +662,22 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       "Array[" + ffi_type_name(state, inner) + "]"
     Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
       "@js.Promise[" + ffi_type_name(state, inner) + "]"
+    Named(name) if ffi_is_local_type_param(state, name) => {
+      state.needs_js_any = true
+      "@js.Any"
+    }
+    Applied(name, _) if ffi_is_local_type_param(state, name) => {
+      state.needs_js_any = true
+      "@js.Any"
+    }
+    Named(name) if ffi_should_widen_unresolved_type_param(state, name) => {
+      state.needs_js_any = true
+      "@js.Any"
+    }
+    Applied(name, _) if ffi_should_widen_unresolved_type_param(state, name) => {
+      state.needs_js_any = true
+      "@js.Any"
+    }
     Named(name) if ffi_named_type_is_string_enum(state, name) => "String"
     Applied(name, _) if ffi_named_type_is_string_enum(state, name) => "String"
     Named(name) if ffi_named_type_is_int_enum(state, name) => "Int"
@@ -733,6 +831,10 @@ fn ffi_struct_decl_to_moonbit(
   state : MoonBitJsFfiState,
   iface : @ast.TsInterface,
 ) -> String {
+  let local_type_param_len = ffi_push_local_type_params(
+    state,
+    iface.type_params,
+  )
   let type_name = ffi_type_identifier(iface.name, "OpaqueType")
   let lines : Array[String] = [
     "#warnings(\"-9\")",
@@ -773,6 +875,7 @@ fn ffi_struct_decl_to_moonbit(
     }
   }
   lines.push("}")
+  ffi_restore_local_type_params(state, local_type_param_len)
   if method_lines.length() == 0 {
     lines.join("\n")
   } else {
@@ -1756,6 +1859,31 @@ fn ffi_type_js_struct_field_converter_expr(
 }
 
 ///|
+fn ffi_struct_field_is_call_signature(
+  field_name : String,
+  field_type : @ast.TsType,
+) -> Bool {
+  if ffi_sanitize_identifier(field_name, "field") != "_call_" {
+    return false
+  }
+  match field_type {
+    Func(_, _) => true
+    _ => false
+  }
+}
+
+///|
+fn ffi_struct_has_call_signature(fields : Array[(String, @ast.TsType)]) -> Bool {
+  for field in fields {
+    let (field_name, field_type) = field
+    if ffi_struct_field_is_call_signature(field_name, field_type) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn ffi_struct_js_converter_decl(
   state : MoonBitJsFfiState,
   name : String,
@@ -1763,16 +1891,26 @@ fn ffi_struct_js_converter_decl(
 ) -> String {
   let type_name = ffi_type_identifier(name, "OpaqueType")
   let converter_name = ffi_struct_converter_name(type_name)
+  let has_call_signature = ffi_struct_has_call_signature(fields)
   let lines : Array[String] = [
     "function \{converter_name}(value) {",
     "  value = __ts_mbt_unwrap_option(value);",
     "  if (value == null) return undefined;",
-    "  const result = {};",
-    "  let field;",
   ]
+  if has_call_signature {
+    lines.push("  if (typeof value === \"function\") return value;")
+    lines.push("  const result = (...args) => value[\"_call_\"](...args);")
+  } else {
+    lines.push("  const result = {};")
+  }
+  lines.push("  let field;")
   for field in fields {
     let (field_name, field_type) = field
     let safe_name = ffi_sanitize_identifier(field_name, "field")
+    if has_call_signature &&
+      ffi_struct_field_is_call_signature(field_name, field_type) {
+      continue
+    }
     let source_key = json_escape_string(safe_name)
     let target_key = json_escape_string(field_name)
     let converted_field = ffi_type_js_struct_field_converter_expr(
@@ -2920,6 +3058,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     struct_type_names,
     enums,
     external_type_names: [],
+    local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
   }
