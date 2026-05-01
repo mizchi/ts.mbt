@@ -1122,6 +1122,144 @@ async test "bridge: emit callable wrappers for natural function-valued const exp
 }
 
 ///|
+async test "bridge: emit string subset wrappers for function params with string array unions" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/function-string-array-entry.d.ts", "node:util",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct DiffEntry"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn diff(actual : @js.Any, expected : @js.Any) -> Array[DiffEntry] = \"diff\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn diff_string(actual : String, expected : String) -> Array[DiffEntry] = \"diff\"",
+    ),
+  )
+  assert_false(bundle.bridge_js.contains("__ts_mbt_diff_string"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn is_array_string_array(value : Array[String]) -> Bool = \"__ts_mbt_is_array_string_array\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_is_array_string_array(value) { return isArray(value); }",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit primitive node assert wrappers without widening values to JSValue" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/node-assert-primitive-entry.d.ts", "node:assert",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn ok_bool(value : Bool, message : String?) -> Unit = \"__ts_mbt_ok_bool\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_ok_bool(value, message) { return ok(value, __ts_mbt_unwrap_option(message)); }",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn equal_double(actual : Double, expected : Double, message : String?) -> Unit = \"__ts_mbt_equal_double\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn strict_equal_string(actual : String, expected : String, message : String?) -> Unit = \"__ts_mbt_strict_equal_string\"",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit React Router params helpers for generatePath" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/react-router-params-entry.d.ts", "react-router",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("#external\ntype Params"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn params_from_pairs(keys : Array[String], values : Array[String]) -> Params = \"__ts_mbt_params_from_pairs\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn generate_path_params(originalPath : String, params : Params) -> String = \"__ts_mbt_generate_path_params\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_params_from_pairs(keys, values) { const out = {}; for (let i = 0; i < keys.length; i++) out[keys[i]] = values[i]; return out; }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_generate_path_params(originalPath, params) { return generatePath(originalPath, params); }",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit JOSE issued-at number helpers" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/jose-issued-at-entry.d.ts", "jose",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn unsecured_jwt_set_issued_at_double(jwt : UnsecuredJWT, input : Double) -> UnsecuredJWT = \"__ts_mbt_unsecured_jwt_set_issued_at_double\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_unsecured_jwt_set_issued_at_double(jwt, input) { return jwt.setIssuedAt(input); }",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn sign_jwt_set_issued_at_double(signer : SignJWT, input : Double) -> SignJWT = \"__ts_mbt_sign_jwt_set_issued_at_double\"",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported untyped const arrow functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts", "/runtime/runtime-untyped-arrow.js",

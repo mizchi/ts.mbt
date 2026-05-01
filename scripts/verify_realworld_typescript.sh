@@ -865,9 +865,6 @@ EOF
       ;;
     react_router)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_react_router_params() -> JSValue =
-  #| () => ({ id: "42" })
-
 test "real-world react-router bridge smoke" {
   let path = PathPartial::{
     pathname: Some("/docs"),
@@ -885,7 +882,7 @@ test "real-world react-router bridge smoke" {
   }
   assert_eq(createPath(full_path), "/docs?tab=api#top")
   assert_eq(
-    generatePath("/users/:id", Some(realworld_react_router_params())),
+    generate_path_params("/users/:id", params_from_pairs(["id"], ["42"])),
     "/users/42",
   )
   let resolved = resolvePath(to_from_string("../api"), Some("/docs/reference"))
@@ -897,15 +894,12 @@ EOF
       ;;
     jose)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_jose_timestamp() -> JSValue =
-  #| () => 1710000000
-
 test "real-world jose bridge smoke" {
   let jwt = new_unsecured_jwt(None)
   let _ = jwt.unsecured_jwt_set_issuer("https://issuer.example")
   let _ = jwt.unsecured_jwt_set_subject("user-42")
   let _ = jwt.unsecured_jwt_set_jti("token-1")
-  let _ = jwt.unsecured_jwt_set_issued_at(Some(realworld_jose_timestamp()))
+  let _ = unsecured_jwt_set_issued_at_double(jwt, 1710000000.0)
   let encoded = jwt.unsecured_jwt_encode()
   let decoded = unsecured_jwt_decode(encoded, None)
   let _ = decoded.header
@@ -914,7 +908,7 @@ test "real-world jose bridge smoke" {
   let _ = signer.sign_jwt_set_issuer("https://issuer.example")
   let _ = signer.sign_jwt_set_subject("user-42")
   let _ = signer.sign_jwt_set_jti("token-1")
-  let _ = signer.sign_jwt_set_issued_at(Some(realworld_jose_timestamp()))
+  let _ = sign_jwt_set_issued_at_double(signer, 1710000000.0)
 }
 EOF
       ;;
@@ -1038,25 +1032,16 @@ EOF
       ;;
     node_fs)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_node_fs_path_like() -> PathLike =
-  #| () => process.cwd() + "/node-fs-test.txt"
-
-extern "js" fn realworld_node_fs_path_or_fd() -> PathOrFileDescriptor =
-  #| () => process.cwd() + "/node-fs-test.txt"
-
-extern "js" fn realworld_node_fs_data() -> String =
-  #| () => "hello from moonbit"
-
 extern "js" fn realworld_node_fs_to_string(data : NonSharedBuffer) -> String =
   #| (data) => data.toString("utf8")
 
 test "real-world node:fs bridge smoke" {
-  let path = realworld_node_fs_path_like()
-  let file = realworld_node_fs_path_or_fd()
+  let path = path_like_from_string("node-fs-test.txt")
+  let file = path_or_file_descriptor_from_path_like(path)
   if existsSync(path) {
     unlinkSync(path)
   }
-  writeFileSync(file, realworld_node_fs_data(), None)
+  writeFileSync(file, "hello from moonbit", None)
   assert_true(existsSync(path))
   let data = readFileSync(file, None)
   assert_eq(realworld_node_fs_to_string(data), "hello from moonbit")
@@ -1126,27 +1111,22 @@ EOF
       ;;
     node_assert)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_assert_true() -> JSValue =
-  #| () => true
-
-extern "js" fn realworld_assert_one() -> JSValue =
-  #| () => 1
-
 test "real-world node:assert bridge smoke" {
-  let _ = assertOk(realworld_assert_true(), None)
-  assertEqual(realworld_assert_one(), realworld_assert_one(), None)
+  assert_ok_bool(true, None)
+  assert_equal_double(1.0, 1.0, None)
+  assert_strict_equal_string("ok", "ok", None)
 }
 EOF
       ;;
     node_util)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_util_array() -> JSValue =
-  #| () => []
-
 test "real-world node:util bridge smoke" {
   assert_eq(toUSVString("ok"), "ok")
   assert_eq(stripVTControlCharacters("plain"), "plain")
-  assert_true(isArray(realworld_util_array()))
+  if diff_string("alpha", "alps").length() == 0 {
+    abort("expected util.diff string wrapper to produce chunks")
+  }
+  assert_true(is_array_string_array(["ok"]))
 }
 EOF
       ;;
@@ -1427,9 +1407,6 @@ EOF
       ;;
     react_router)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_react_router_params() -> @sut.JSValue =
-  #| () => ({ id: "42" })
-
 fn main {
   let path = @sut.PathPartial::{
     pathname: Some("/docs"),
@@ -1454,9 +1431,9 @@ fn main {
   if @sut.createPath(full_path) != "/docs?tab=api#top" {
     abort("unexpected react-router full createPath output")
   }
-  if @sut.generatePath(
+  if @sut.generate_path_params(
     "/users/:id",
-    Some(realworld_react_router_params()),
+    @sut.params_from_pairs(["id"], ["42"]),
   ) != "/users/42" {
     abort("unexpected react-router param generatePath output")
   }
@@ -1475,15 +1452,12 @@ EOF
       ;;
     jose)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_jose_timestamp() -> @sut.JSValue =
-  #| () => 1710000000
-
 fn main {
   let jwt = @sut.new_unsecured_jwt(None)
   let _ = jwt.unsecured_jwt_set_issuer("https://issuer.example")
   let _ = jwt.unsecured_jwt_set_subject("user-42")
   let _ = jwt.unsecured_jwt_set_jti("token-1")
-  let _ = jwt.unsecured_jwt_set_issued_at(Some(realworld_jose_timestamp()))
+  let _ = @sut.unsecured_jwt_set_issued_at_double(jwt, 1710000000.0)
   let encoded = jwt.unsecured_jwt_encode()
   let decoded = @sut.unsecured_jwt_decode(encoded, None)
   let _ = decoded.header
@@ -1492,7 +1466,7 @@ fn main {
   let _ = signer.sign_jwt_set_issuer("https://issuer.example")
   let _ = signer.sign_jwt_set_subject("user-42")
   let _ = signer.sign_jwt_set_jti("token-1")
-  let _ = signer.sign_jwt_set_issued_at(Some(realworld_jose_timestamp()))
+  let _ = @sut.sign_jwt_set_issued_at_double(signer, 1710000000.0)
 }
 EOF
       ;;
@@ -1626,25 +1600,16 @@ EOF
       ;;
     node_fs)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_node_fs_path_like() -> @sut.PathLike =
-  #| () => process.cwd() + "/node-fs-build-smoke.txt"
-
-extern "js" fn realworld_node_fs_path_or_fd() -> @sut.PathOrFileDescriptor =
-  #| () => process.cwd() + "/node-fs-build-smoke.txt"
-
-extern "js" fn realworld_node_fs_data() -> String =
-  #| () => "hello from moonbit"
-
 extern "js" fn realworld_node_fs_to_string(data : @sut.NonSharedBuffer) -> String =
   #| (data) => data.toString("utf8")
 
 fn main {
-  let path = realworld_node_fs_path_like()
-  let file = realworld_node_fs_path_or_fd()
+  let path = @sut.path_like_from_string("node-fs-build-smoke.txt")
+  let file = @sut.path_or_file_descriptor_from_path_like(path)
   if @sut.existsSync(path) {
     @sut.unlinkSync(path)
   }
-  @sut.writeFileSync(file, realworld_node_fs_data(), None)
+  @sut.writeFileSync(file, "hello from moonbit", None)
   if !@sut.existsSync(path) {
     abort("expected file to exist")
   }
@@ -1737,23 +1702,15 @@ EOF
       ;;
     node_assert)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_assert_true() -> @sut.JSValue =
-  #| () => true
-
-extern "js" fn realworld_assert_one() -> @sut.JSValue =
-  #| () => 1
-
 fn main {
-  let _ = @sut.assertOk(realworld_assert_true(), None)
-  @sut.assertEqual(realworld_assert_one(), realworld_assert_one(), None)
+  @sut.assert_ok_bool(true, None)
+  @sut.assert_equal_double(1.0, 1.0, None)
+  @sut.assert_strict_equal_string("ok", "ok", None)
 }
 EOF
       ;;
     node_util)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_util_array() -> @sut.JSValue =
-  #| () => []
-
 fn main {
   if @sut.toUSVString("ok") != "ok" {
     abort("unexpected toUSVString output")
@@ -1761,7 +1718,10 @@ fn main {
   if @sut.stripVTControlCharacters("plain") != "plain" {
     abort("unexpected stripVTControlCharacters output")
   }
-  if !@sut.isArray(realworld_util_array()) {
+  if @sut.diff_string("alpha", "alps").length() == 0 {
+    abort("expected util.diff string wrapper to produce chunks")
+  }
+  if !@sut.is_array_string_array(["ok"]) {
     abort("expected array")
   }
 }

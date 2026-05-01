@@ -432,16 +432,101 @@ fn unified_ts_scaffold_diagnostics_path(
 }
 
 ///|
+fn unified_ts_fallback_policy_for_package(
+  package_spec : String,
+) -> (String, String) {
+  match package_spec {
+    "clsx"
+    | "node:path"
+    | "node:crypto"
+    | "node:os"
+    | "node:url"
+    | "node:querystring"
+    | "node:buffer" =>
+      (
+        "zero-target", "Keep public JSValue surface at zero; any fallback is a regression.",
+      )
+    "hono" =>
+      (
+        "naturalize-target", "Reduce generic context/router fallbacks while keeping route handlers and response helpers natural.",
+      )
+    "react-router" =>
+      (
+        "naturalize-target", "Reduce route/path utility overload and option-object fallbacks; keep typed navigation helpers usable from MoonBit.",
+      )
+    "jose" =>
+      (
+        "naturalize-target", "Reduce builder option and compact JWS/JWT overload fallbacks around the smoke-tested APIs.",
+      )
+    "glob" =>
+      (
+        "naturalize-target", "Reduce pattern/options namespace fallbacks for common sync glob calls.",
+      )
+    "node:assert" | "node:util" =>
+      (
+        "naturalize-target", "Shrink remaining Node built-in overload/unknown fallbacks toward zero for the common API surface.",
+      )
+    "date-fns" | "magic-string" | "source-map" | "node:sqlite" | "node:fs" =>
+      (
+        "naturalize-target", "Keep reducing fallback around finite option bags, tuple results, and class/value helper APIs.",
+      )
+    "zod" | "valibot" =>
+      (
+        "budgeted-fallback", "Schema/parser generics are intentionally smoke-tested and budgeted, not treated as naturally typed MoonBit APIs yet.",
+      )
+    "preact" =>
+      (
+        "budgeted-fallback", "JSX/component/children generics are intentionally budgeted until a dedicated JSX/component binding layer exists.",
+      )
+    "playwright" =>
+      (
+        "budgeted-fallback", "Large event/callback-heavy API is smoke-tested; only selected launch/device/options surfaces are naturalization targets.",
+      )
+    "chalk"
+    | "dotenv"
+    | "ignore"
+    | "colorette"
+    | "immer"
+    | "execa"
+    | "vitest/runtime"
+    | "express" =>
+      (
+        "low-fallback-maintain", "Current fallback is small and explicitly budgeted; naturalize only when a real smoke use case needs it.",
+      )
+    _ =>
+      (
+        "unclassified", "Add an explicit fallback policy before accepting this package into the real-world corpus.",
+      )
+  }
+}
+
+///|
+fn render_unified_ts_fallback_policy_md(module_spec : String) -> String {
+  let (class_name, policy) = unified_ts_fallback_policy_for_package(module_spec)
+  [
+    "## Fallback Policy",
+    "",
+    "This classification mirrors the real-world bridge quality policy. It is informational in non-strict mode; strict mode still rejects generated `JSValue` fallbacks.",
+    "",
+    "| package | class | policy |",
+    "| --- | --- | --- |",
+    "| `\{module_spec}` | \{class_name} | \{policy} |",
+  ].join("\n")
+}
+
+///|
 fn render_unified_ts_scaffold_diagnostics_md(
+  module_spec : String,
   unsupported_exports : Array[String],
   jsvalue_fallbacks : Array[String],
 ) -> String {
   let base = render_moonbit_scaffold_diagnostics_md(unsupported_exports)
+  let fallback_policy = render_unified_ts_fallback_policy_md(module_spec)
   if jsvalue_fallbacks.length() == 0 {
-    return base
+    return [base, "", fallback_policy].join("\n")
   }
   let lines = [
-    base, "", "## JSValue Fallbacks", "", "Strict mode treats these generated `JSValue` occurrences as unbudgeted TypeScript boundary fallbacks.",
+    base, "", fallback_policy, "", "## JSValue Fallbacks", "", "Strict mode treats these generated `JSValue` occurrences as unbudgeted TypeScript boundary fallbacks.",
     "",
   ]
   for item in jsvalue_fallbacks {
@@ -454,6 +539,7 @@ fn render_unified_ts_scaffold_diagnostics_md(
 async fn write_unified_ts_scaffold_diagnostics(
   output_dir : String,
   diagnostics_path : String?,
+  module_spec : String,
   unsupported_exports : Array[String],
   jsvalue_fallbacks : Array[String],
 ) -> Bool {
@@ -461,7 +547,7 @@ async fn write_unified_ts_scaffold_diagnostics(
   if !write_text_file(
       path,
       render_unified_ts_scaffold_diagnostics_md(
-        unsupported_exports, jsvalue_fallbacks,
+        module_spec, unsupported_exports, jsvalue_fallbacks,
       ),
     ) {
     return false
@@ -635,6 +721,7 @@ async fn emit_unified_tsmbt_scaffold(
         if !write_unified_ts_scaffold_diagnostics(
             out,
             diagnostics_path,
+            runtime_module_spec,
             unsupported_exports,
             [],
           ) {
@@ -650,7 +737,7 @@ async fn emit_unified_tsmbt_scaffold(
         out,
       )
       if !write_unified_ts_scaffold_diagnostics(
-          out, diagnostics_path, unsupported_exports, jsvalue_fallbacks,
+          out, diagnostics_path, runtime_module_spec, unsupported_exports, jsvalue_fallbacks,
         ) {
         return false
       }

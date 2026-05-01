@@ -742,6 +742,18 @@ fn ffi_callable_value_param_type_name(
 }
 
 ///|
+fn ffi_func_string_subset_param_type_name(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> String {
+  if ffi_type_is_string_or_string_array_union(type_) {
+    "String"
+  } else {
+    ffi_type_name(state, type_)
+  }
+}
+
+///|
 fn ffi_rendered_type_uses_js_any(type_name : String) -> Bool {
   type_name.contains("@js.Any") || type_name.contains("JSValue")
 }
@@ -2331,6 +2343,47 @@ fn ffi_import_decl_to_moonbit_direct(
 }
 
 ///|
+fn ffi_import_string_subset_decl_to_moonbit(
+  state : MoonBitJsFfiState,
+  import_ : @ast.TsImport,
+) -> String {
+  let params : Array[String] = []
+  for item in import_.params {
+    let (name, type_) = item
+    let param_name = ffi_sanitize_identifier(name, "arg")
+    let param_type = ffi_func_string_subset_param_type_name(state, type_)
+    params.push("\{param_name} : \{param_type}")
+  }
+  let return_type = ffi_type_name(state, import_.return_type)
+  let fn_name = ffi_func_string_subset_name(import_.name)
+  let params_str = params.join(", ")
+  "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{ffi_func_string_subset_binding_name(import_.name)}\""
+}
+
+///|
+fn ffi_import_string_subset_decl_to_moonbit_direct(
+  state : MoonBitJsFfiState,
+  import_ : @ast.TsImport,
+  runtime_export_name : String,
+  module_spec : String,
+) -> String {
+  let params : Array[String] = []
+  for item in import_.params {
+    let (name, type_) = item
+    let param_name = ffi_sanitize_identifier(name, "arg")
+    let param_type = ffi_func_string_subset_param_type_name(state, type_)
+    params.push("\{param_name} : \{param_type}")
+  }
+  let return_type = ffi_type_name(state, import_.return_type)
+  let fn_name = ffi_func_string_subset_name(import_.name)
+  let params_str = params.join(", ")
+  ffi_direct_module_decl(
+    module_spec,
+    "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{runtime_export_name}\"",
+  )
+}
+
+///|
 fn ffi_func_decl_to_moonbit(
   state : MoonBitJsFfiState,
   func : @ast.TsFunc,
@@ -2378,6 +2431,141 @@ fn ffi_func_decl_to_moonbit_direct(
   }
   let return_type = ffi_type_name(state, func.return_type)
   let fn_name = ffi_value_fn_name(func.name)
+  let params_str = params.join(", ")
+  ffi_direct_module_decl(
+    module_spec,
+    "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{runtime_export_name}\"",
+  )
+}
+
+///|
+fn ffi_func_string_subset_name(func_name : String) -> String {
+  ffi_value_fn_name(func_name) + "_string"
+}
+
+///|
+fn ffi_func_string_subset_binding_name(func_name : String) -> String {
+  "__ts_mbt_" + ffi_func_string_subset_name(func_name)
+}
+
+///|
+fn ffi_is_node_assert_module_spec(module_spec : String) -> Bool {
+  module_spec == "node:assert" || module_spec == "assert"
+}
+
+///|
+fn ffi_is_node_util_module_spec(module_spec : String) -> Bool {
+  module_spec == "node:util" || module_spec == "util"
+}
+
+///|
+fn ffi_is_react_router_module_spec(module_spec : String) -> Bool {
+  module_spec == "react-router" || module_spec.contains("/react-router")
+}
+
+///|
+fn ffi_is_jose_module_spec(module_spec : String) -> Bool {
+  module_spec == "jose" || module_spec.contains("/jose")
+}
+
+///|
+fn ffi_node_assert_primitive_wrapper(
+  source_name : String,
+) -> (String, Array[String], Array[String], Array[String])? {
+  let base_name = ffi_value_fn_name(source_name)
+  match source_name {
+    "ok" | "assertOk" =>
+      Some(
+        (
+          base_name + "_bool",
+          ["value : Bool", "message : String?"],
+          ["value", "message"],
+          ["value", "__ts_mbt_unwrap_option(message)"],
+        ),
+      )
+    "equal" | "assertEqual" =>
+      Some(
+        (
+          base_name + "_double",
+          ["actual : Double", "expected : Double", "message : String?"],
+          ["actual", "expected", "message"],
+          ["actual", "expected", "__ts_mbt_unwrap_option(message)"],
+        ),
+      )
+    "strictEqual" | "assertStrictEqual" =>
+      Some(
+        (
+          base_name + "_string",
+          ["actual : String", "expected : String", "message : String?"],
+          ["actual", "expected", "message"],
+          ["actual", "expected", "__ts_mbt_unwrap_option(message)"],
+        ),
+      )
+    _ => None
+  }
+}
+
+///|
+fn ffi_node_assert_primitive_decl(source_name : String) -> String? {
+  match ffi_node_assert_primitive_wrapper(source_name) {
+    Some((fn_name, moonbit_params, _, _)) => {
+      let params_src = moonbit_params.join(", ")
+      Some(
+        "pub extern \"js\" fn \{fn_name}(\{params_src}) -> Unit = \"__ts_mbt_\{fn_name}\"",
+      )
+    }
+    None => None
+  }
+}
+
+///|
+fn ffi_func_string_subset_decl_to_moonbit(
+  state : MoonBitJsFfiState,
+  func : @ast.TsFunc,
+) -> String {
+  let params : Array[String] = []
+  let mut next_index = 0
+  for param in func.params {
+    let param_name = if param.name == "" {
+      let generated = "arg" + next_index.to_string()
+      next_index += 1
+      generated
+    } else {
+      param.name
+    }
+    let safe_name = ffi_sanitize_identifier(param_name, "arg")
+    let safe_type = ffi_func_string_subset_param_type_name(state, param.type_)
+    params.push("\{safe_name} : \{safe_type}")
+  }
+  let return_type = ffi_type_name(state, func.return_type)
+  let fn_name = ffi_func_string_subset_name(func.name)
+  let params_str = params.join(", ")
+  "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type} = \"\{ffi_func_string_subset_binding_name(func.name)}\""
+}
+
+///|
+fn ffi_func_string_subset_decl_to_moonbit_direct(
+  state : MoonBitJsFfiState,
+  func : @ast.TsFunc,
+  runtime_export_name : String,
+  module_spec : String,
+) -> String {
+  let params : Array[String] = []
+  let mut next_index = 0
+  for param in func.params {
+    let param_name = if param.name == "" {
+      let generated = "arg" + next_index.to_string()
+      next_index += 1
+      generated
+    } else {
+      param.name
+    }
+    let safe_name = ffi_sanitize_identifier(param_name, "arg")
+    let safe_type = ffi_func_string_subset_param_type_name(state, param.type_)
+    params.push("\{safe_name} : \{safe_type}")
+  }
+  let return_type = ffi_type_name(state, func.return_type)
+  let fn_name = ffi_func_string_subset_name(func.name)
   let params_str = params.join(", ")
   ffi_direct_module_decl(
     module_spec,
@@ -2633,6 +2821,51 @@ fn ffi_is_js_ident(name : String) -> Bool {
     }
   }
   true
+}
+
+///|
+fn ffi_func_string_subset_should_emit_wrapper(
+  state : MoonBitJsFfiState,
+  func : @ast.TsFunc,
+) -> Bool {
+  let mut has_subset_param = false
+  for param in func.params {
+    if ffi_type_is_string_or_string_array_union(param.type_) {
+      has_subset_param = true
+    }
+    let param_type = ffi_func_string_subset_param_type_name(state, param.type_)
+    if ffi_rendered_type_uses_js_any(param_type) {
+      return false
+    }
+  }
+  if !has_subset_param {
+    return false
+  }
+  let return_type = ffi_type_name(state, func.return_type)
+  !ffi_rendered_type_uses_js_any(return_type)
+}
+
+///|
+fn ffi_import_string_subset_should_emit_wrapper(
+  state : MoonBitJsFfiState,
+  import_ : @ast.TsImport,
+) -> Bool {
+  let mut has_subset_param = false
+  for item in import_.params {
+    let (_, type_) = item
+    if ffi_type_is_string_or_string_array_union(type_) {
+      has_subset_param = true
+    }
+    let param_type = ffi_func_string_subset_param_type_name(state, type_)
+    if ffi_rendered_type_uses_js_any(param_type) {
+      return false
+    }
+  }
+  if !has_subset_param {
+    return false
+  }
+  let return_type = ffi_type_name(state, import_.return_type)
+  !ffi_rendered_type_uses_js_any(return_type)
 }
 
 ///|
@@ -3782,6 +4015,90 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           }
         }
     }
+    if ffi_import_string_subset_should_emit_wrapper(state, import_) {
+      let subset_needs_js_arg_conversion = ffi_import_needs_js_arg_conversion(
+        state, import_,
+      )
+      let subset_needs_js_return_conversion = ffi_import_needs_js_return_conversion(
+        import_,
+      )
+      if subset_needs_js_arg_conversion || subset_needs_js_return_conversion {
+        bridge_needs_option_unwrap = true
+      }
+      let subset_fn_name = ffi_func_string_subset_name(import_.name)
+      if ffi_can_use_direct_runtime_export(module_spec, runtime_export_name) &&
+        !ffi_runtime_export_requires_bridge(runtime_export_name) &&
+        !subset_needs_js_arg_conversion &&
+        !subset_needs_js_return_conversion {
+        push_unique_ffi_section(
+          seen_ffi_binding_names,
+          ffi_sections,
+          ffi_fn_decl_key(subset_fn_name),
+          ffi_import_string_subset_decl_to_moonbit_direct(
+            state, import_, runtime_export_name, module_spec,
+          ),
+        )
+      } else {
+        let subset_binding_name = ffi_func_string_subset_binding_name(
+          import_.name,
+        )
+        push_unique_ffi_section(
+          seen_ffi_binding_names,
+          ffi_sections,
+          ffi_fn_decl_key(subset_fn_name),
+          ffi_import_string_subset_decl_to_moonbit(state, import_),
+        )
+        let args = ffi_import_bridge_param_names(import_, runtime_export_name)
+        let call_args = ffi_import_call_args_with_names(state, import_, args)
+        let call_args_str = call_args.join(", ")
+        let runtime_access = ensure_bridge_runtime_access(
+          seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
+        )
+        let return_expr = ffi_type_js_return_expr(
+          import_.return_type,
+          "\{runtime_access}(\{call_args_str})",
+        )
+        push_unique_bridge_binding(
+          seen_bridge_binding_names,
+          bridge_lines,
+          subset_binding_name,
+          ffi_bridge_function_line(subset_binding_name, args, return_expr),
+        )
+      }
+    }
+    if ffi_is_node_assert_module_spec(module_spec) {
+      match ffi_node_assert_primitive_wrapper(import_.name) {
+        Some((fn_name, _, bridge_params, call_args)) => {
+          bridge_needs_option_unwrap = true
+          let binding_name = "__ts_mbt_" + fn_name
+          match ffi_node_assert_primitive_decl(import_.name) {
+            Some(decl) =>
+              push_unique_ffi_section(
+                seen_ffi_binding_names,
+                ffi_sections,
+                ffi_fn_decl_key(fn_name),
+                decl,
+              )
+            None => ()
+          }
+          let runtime_access = ensure_bridge_runtime_access(
+            seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
+          )
+          let call_args_src = call_args.join(", ")
+          push_unique_bridge_binding(
+            seen_bridge_binding_names,
+            bridge_lines,
+            binding_name,
+            ffi_bridge_function_line(
+              binding_name,
+              bridge_params,
+              "\{runtime_access}(\{call_args_src})",
+            ),
+          )
+        }
+        None => ()
+      }
+    }
     handled_export_names.push(import_.name)
   }
 
@@ -3903,7 +4220,160 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           }
         }
     }
+    if ffi_func_string_subset_should_emit_wrapper(state, func) {
+      let subset_needs_js_arg_conversion = ffi_func_needs_js_arg_conversion(
+        state, func,
+      )
+      let subset_needs_js_return_conversion = ffi_func_needs_js_return_conversion(
+        func,
+      )
+      if subset_needs_js_arg_conversion || subset_needs_js_return_conversion {
+        bridge_needs_option_unwrap = true
+      }
+      let subset_fn_name = ffi_func_string_subset_name(func.name)
+      if ffi_can_use_direct_runtime_export(module_spec, runtime_export_name) &&
+        !ffi_runtime_export_requires_bridge(runtime_export_name) &&
+        !subset_needs_js_arg_conversion &&
+        !subset_needs_js_return_conversion {
+        push_unique_ffi_section(
+          seen_ffi_binding_names,
+          ffi_sections,
+          ffi_fn_decl_key(subset_fn_name),
+          ffi_func_string_subset_decl_to_moonbit_direct(
+            state, func, runtime_export_name, module_spec,
+          ),
+        )
+      } else {
+        let subset_binding_name = ffi_func_string_subset_binding_name(func.name)
+        push_unique_ffi_section(
+          seen_ffi_binding_names,
+          ffi_sections,
+          ffi_fn_decl_key(subset_fn_name),
+          ffi_func_string_subset_decl_to_moonbit(state, func),
+        )
+        let args = ffi_func_bridge_param_names(func, runtime_export_name)
+        let call_args = ffi_func_call_args_with_names(state, func, args)
+        let call_args_str = call_args.join(", ")
+        let runtime_access = ensure_bridge_runtime_access(
+          seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
+        )
+        let return_expr = ffi_type_js_return_expr(
+          func.return_type,
+          "\{runtime_access}(\{call_args_str})",
+        )
+        push_unique_bridge_binding(
+          seen_bridge_binding_names,
+          bridge_lines,
+          subset_binding_name,
+          ffi_bridge_function_line(subset_binding_name, args, return_expr),
+        )
+      }
+    }
+    if ffi_is_node_assert_module_spec(module_spec) {
+      match ffi_node_assert_primitive_wrapper(func.name) {
+        Some((fn_name, _, bridge_params, call_args)) => {
+          bridge_needs_option_unwrap = true
+          let binding_name = "__ts_mbt_" + fn_name
+          match ffi_node_assert_primitive_decl(func.name) {
+            Some(decl) =>
+              push_unique_ffi_section(
+                seen_ffi_binding_names,
+                ffi_sections,
+                ffi_fn_decl_key(fn_name),
+                decl,
+              )
+            None => ()
+          }
+          let runtime_access = ensure_bridge_runtime_access(
+            seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
+          )
+          let call_args_src = call_args.join(", ")
+          push_unique_bridge_binding(
+            seen_bridge_binding_names,
+            bridge_lines,
+            binding_name,
+            ffi_bridge_function_line(
+              binding_name,
+              bridge_params,
+              "\{runtime_access}(\{call_args_src})",
+            ),
+          )
+        }
+        None => ()
+      }
+    }
     handled_export_names.push(func.name)
+  }
+
+  if ffi_is_react_router_module_spec(module_spec) {
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("params_from_pairs"),
+      "pub extern \"js\" fn params_from_pairs(keys : Array[String], values : Array[String]) -> Params = \"__ts_mbt_params_from_pairs\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_params_from_pairs", "export function __ts_mbt_params_from_pairs(keys, values) { const out = {}; for (let i = 0; i < keys.length; i++) out[keys[i]] = values[i]; return out; }",
+    )
+    let runtime_export_name = runtime_export_name_for(
+      func_runtime_export_names, "generatePath",
+    )
+    let runtime_access = ensure_bridge_runtime_access(
+      seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("generate_path_params"),
+      "pub extern \"js\" fn generate_path_params(originalPath : String, params : Params) -> String = \"__ts_mbt_generate_path_params\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names,
+      bridge_lines,
+      "__ts_mbt_generate_path_params",
+      "export function __ts_mbt_generate_path_params(originalPath, params) { return \{runtime_access}(originalPath, params); }",
+    )
+  }
+
+  if ffi_is_jose_module_spec(module_spec) {
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("unsecured_jwt_set_issued_at_double"),
+      "pub extern \"js\" fn unsecured_jwt_set_issued_at_double(jwt : UnsecuredJWT, input : Double) -> UnsecuredJWT = \"__ts_mbt_unsecured_jwt_set_issued_at_double\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_unsecured_jwt_set_issued_at_double",
+      "export function __ts_mbt_unsecured_jwt_set_issued_at_double(jwt, input) { return jwt.setIssuedAt(input); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("sign_jwt_set_issued_at_double"),
+      "pub extern \"js\" fn sign_jwt_set_issued_at_double(signer : SignJWT, input : Double) -> SignJWT = \"__ts_mbt_sign_jwt_set_issued_at_double\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_sign_jwt_set_issued_at_double",
+      "export function __ts_mbt_sign_jwt_set_issued_at_double(signer, input) { return signer.setIssuedAt(input); }",
+    )
+  }
+
+  if ffi_is_node_util_module_spec(module_spec) {
+    let runtime_access = ensure_bridge_runtime_access(
+      seen_bridge_import_keys, bridge_imports, namespace_import_roots, "isArray",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("is_array_string_array"),
+      "pub extern \"js\" fn is_array_string_array(value : Array[String]) -> Bool = \"__ts_mbt_is_array_string_array\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names,
+      bridge_lines,
+      "__ts_mbt_is_array_string_array",
+      "export function __ts_mbt_is_array_string_array(value) { return \{runtime_access}(value); }",
+    )
   }
 
   for value in values {

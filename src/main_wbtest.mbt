@@ -560,6 +560,10 @@ async test "emit_unified_tsmbt_scaffold writes requested TypeScript diagnostics"
     e => fail("failed to read requested unified diagnostics: \{e}")
   }
   assert_true(diagnostics.contains("No unsupported exports were detected."))
+  assert_true(diagnostics.contains("## Fallback Policy"))
+  assert_true(
+    diagnostics.contains("| `./runtime/export-equals.js` | unclassified |"),
+  )
   assert_true(diagnostics.contains("## JSValue Fallbacks"))
   assert_true(diagnostics.contains("bridge.mbti"))
 }
@@ -588,6 +592,22 @@ test "unified JSValue diagnostics ignore shared declarations" {
       #|["bridge.mbti:3: declare pub fn parse(input : String) -> JSValue", "bridge.mbt:2: pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\""]
     ),
   )
+}
+
+///|
+test "unified TS diagnostics include fallback policy classification" {
+  let diagnostics = render_unified_ts_scaffold_diagnostics_md(
+    "node:assert",
+    [],
+    ["bridge.mbti:10: declare pub fn assertOk(value : JSValue) -> JSValue"],
+  )
+  assert_true(diagnostics.contains("## Fallback Policy"))
+  assert_true(
+    diagnostics.contains(
+      "| `node:assert` | naturalize-target | Shrink remaining Node built-in overload/unknown fallbacks toward zero for the common API surface. |",
+    ),
+  )
+  assert_true(diagnostics.contains("## JSValue Fallbacks"))
 }
 
 ///|
