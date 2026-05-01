@@ -116,6 +116,28 @@ pub(all) enum TsCompoundOp {
 } derive(Eq, @debug.Debug)
 pub impl Show for TsCompoundOp
 
+pub(all) struct TsEnumDecl {
+  name : String
+  members : Array[TsEnumMember]
+  is_const : Bool
+  is_declare : Bool
+} derive(Eq, @debug.Debug)
+pub impl Show for TsEnumDecl
+
+pub(all) struct TsEnumMember {
+  name : String
+  value : TsEnumMemberValue?
+} derive(Eq, @debug.Debug)
+pub impl Show for TsEnumMember
+
+pub(all) enum TsEnumMemberValue {
+  String(String)
+  Number(String)
+  BigInt(String)
+  Bool(Bool)
+} derive(Eq, @debug.Debug)
+pub impl Show for TsEnumMemberValue
+
 pub(all) struct TsExportSpec {
   local_name : String
   export_name : String
@@ -215,6 +237,7 @@ pub(all) struct TsModule {
   values : Array[TsValueDecl]
   classes : Array[TsClassDecl]
   namespaces : Array[TsNamespaceDecl]
+  enums : Array[TsEnumDecl]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 

@@ -20,6 +20,14 @@ priv struct ExportedInterfaceDecl {
 }
 
 ///|
+priv struct ExportedEnumDecl {
+  source_path : String
+  local_name : String
+  export_name : String
+  enum_ : @ast.TsEnumDecl
+}
+
+///|
 priv struct ExportedImportDecl {
   source_path : String
   local_name_prefix : String
@@ -87,6 +95,7 @@ priv struct ExportedConstValueSet {
 ///|
 priv enum ResolvedDecl {
   Interface(ExportedInterfaceDecl)
+  Enum(ExportedEnumDecl)
   Import(ExportedImportDecl)
   Function(ExportedFuncDecl)
   Value(ExportedValueDecl)
@@ -267,6 +276,7 @@ async fn load_decl_module_info(
           values: [],
           classes: [],
           namespaces: [],
+          enums: [],
         }
       }
   }
@@ -539,6 +549,16 @@ fn find_interface_decl_recursive(
       None
     }
   }
+}
+
+///|
+fn find_enum_decl(module_ : @ast.TsModule, name : String) -> @ast.TsEnumDecl? {
+  for enum_ in module_.enums {
+    if enum_.name == name {
+      return Some(enum_)
+    }
+  }
+  None
 }
 
 ///|
@@ -1042,6 +1062,7 @@ fn append_exported_type_namespace_members_with_prefix(
   type_export_prefix : String,
   namespace_ : @ast.TsNamespaceDecl,
   interfaces : Array[ExportedInterfaceDecl],
+  enums : Array[ExportedEnumDecl],
 ) -> Unit {
   for iface in namespace_.module_.interfaces {
     interfaces.push({
@@ -1051,6 +1072,14 @@ fn append_exported_type_namespace_members_with_prefix(
       iface,
     })
   }
+  for enum_ in namespace_.module_.enums {
+    enums.push({
+      source_path,
+      local_name: namespace_local_export_name(local_name_prefix, enum_.name),
+      export_name: namespace_type_export_name(type_export_prefix, enum_.name),
+      enum_,
+    })
+  }
   for nested in namespace_.module_.namespaces {
     append_exported_type_namespace_members_with_prefix(
       source_path,
@@ -1058,6 +1087,7 @@ fn append_exported_type_namespace_members_with_prefix(
       namespace_next_type_export_prefix(type_export_prefix, nested.name),
       nested,
       interfaces,
+      enums,
     )
   }
 }
@@ -1124,6 +1154,7 @@ fn append_exported_namespace_members_with_prefix(
   value_export_prefix : String,
   namespace_ : @ast.TsNamespaceDecl,
   interfaces : Array[ExportedInterfaceDecl],
+  enums : Array[ExportedEnumDecl],
   imports : Array[ExportedImportDecl],
   funcs : Array[ExportedFuncDecl],
   values : Array[ExportedValueDecl],
@@ -1139,6 +1170,14 @@ fn append_exported_namespace_members_with_prefix(
       local_name: namespace_local_export_name(local_name_prefix, iface.name),
       export_name: namespace_type_export_name(type_export_prefix, iface.name),
       iface,
+    })
+  }
+  for enum_ in namespace_.module_.enums {
+    enums.push({
+      source_path,
+      local_name: namespace_local_export_name(local_name_prefix, enum_.name),
+      export_name: namespace_type_export_name(type_export_prefix, enum_.name),
+      enum_,
     })
   }
   for import_ in namespace_.module_.imports {
@@ -1208,6 +1247,7 @@ fn append_exported_namespace_members_with_prefix(
       namespace_next_value_export_prefix(value_export_prefix, nested.name),
       nested,
       interfaces,
+      enums,
       imports,
       funcs,
       values,
@@ -1222,14 +1262,15 @@ fn append_exported_namespace_members(
   runtime_root_export_name : String,
   namespace_ : @ast.TsNamespaceDecl,
   interfaces : Array[ExportedInterfaceDecl],
+  enums : Array[ExportedEnumDecl],
   imports : Array[ExportedImportDecl],
   funcs : Array[ExportedFuncDecl],
   values : Array[ExportedValueDecl],
   classes : Array[ExportedClassDecl],
 ) -> Unit {
   append_exported_namespace_members_with_prefix(
-    source_path, runtime_root_export_name, "", "", "", namespace_, interfaces, imports,
-    funcs, values, classes,
+    source_path, runtime_root_export_name, "", "", "", namespace_, interfaces, enums,
+    imports, funcs, values, classes,
   )
 }
 
@@ -1345,31 +1386,24 @@ fn resolve_decl_from_local_name(
         Some(iface) =>
           Interface({ source_path, local_name, export_name, iface })
         None =>
-          match find_import_decl(info.module_, local_name) {
-            Some(import_) =>
-              Import({
-                source_path,
-                local_name_prefix: "",
-                export_name,
-                source_export_name,
-                import_,
-              })
-            None => {
-              let stmt_func = find_func_decl_from_stmts(
-                info.record.module_block.block.stmts,
-                local_name,
-              )
-              match find_func_decl(info.module_, local_name) {
-                Some(func) =>
-                  Function({
+          match find_enum_decl(info.module_, local_name) {
+            Some(enum_) => Enum({ source_path, local_name, export_name, enum_ })
+            None =>
+              match find_import_decl(info.module_, local_name) {
+                Some(import_) =>
+                  Import({
                     source_path,
                     local_name_prefix: "",
                     export_name,
                     source_export_name,
-                    func,
+                    import_,
                   })
-                None =>
-                  match stmt_func {
+                None => {
+                  let stmt_func = find_func_decl_from_stmts(
+                    info.record.module_block.block.stmts,
+                    local_name,
+                  )
+                  match find_func_decl(info.module_, local_name) {
                     Some(func) =>
                       Function({
                         source_path,
@@ -1379,104 +1413,115 @@ fn resolve_decl_from_local_name(
                         func,
                       })
                     None =>
-                      match find_value_decl(info.module_, local_name) {
-                        Some(value) =>
-                          if value_decl_has_runtime_binding(value) {
-                            Value({
-                              source_path,
-                              local_name_prefix: "",
-                              export_name,
-                              source_export_name,
-                              value,
-                            })
-                          } else {
-                            Missing
-                          }
+                      match stmt_func {
+                        Some(func) =>
+                          Function({
+                            source_path,
+                            local_name_prefix: "",
+                            export_name,
+                            source_export_name,
+                            func,
+                          })
                         None =>
-                          match find_class_decl(info.module_, local_name) {
-                            Some(class_) =>
-                              Class({
-                                source_path,
-                                local_name,
-                                local_name_prefix: "",
-                                export_name,
-                                source_export_name,
-                                class_,
-                              })
-                            None => {
-                              let mut resolved : ResolvedDecl = Missing
-                              for
-                                i, import_decl in info.record.module_block.imports {
-                                let edge = info.record.imports[i]
-                                if edge.resolved_path == "" {
-                                  continue
-                                }
-                                for binding in import_decl.named_bindings {
-                                  let (imported_name, imported_local_name) = binding
-                                  if imported_local_name == local_name {
-                                    resolved = resolve_decl_from_export_name(
-                                      export_name,
-                                      edge.resolved_path,
-                                      imported_name,
-                                      graph,
-                                      modules,
-                                      surface_cache,
-                                      visiting,
-                                    )
-                                    break
+                          match find_value_decl(info.module_, local_name) {
+                            Some(value) =>
+                              if value_decl_has_runtime_binding(value) {
+                                Value({
+                                  source_path,
+                                  local_name_prefix: "",
+                                  export_name,
+                                  source_export_name,
+                                  value,
+                                })
+                              } else {
+                                Missing
+                              }
+                            None =>
+                              match find_class_decl(info.module_, local_name) {
+                                Some(class_) =>
+                                  Class({
+                                    source_path,
+                                    local_name,
+                                    local_name_prefix: "",
+                                    export_name,
+                                    source_export_name,
+                                    class_,
+                                  })
+                                None => {
+                                  let mut resolved : ResolvedDecl = Missing
+                                  for
+                                    i, import_decl in info.record.module_block.imports {
+                                    let edge = info.record.imports[i]
+                                    if edge.resolved_path == "" {
+                                      continue
+                                    }
+                                    for binding in import_decl.named_bindings {
+                                      let (imported_name, imported_local_name) = binding
+                                      if imported_local_name == local_name {
+                                        resolved = resolve_decl_from_export_name(
+                                          export_name,
+                                          edge.resolved_path,
+                                          imported_name,
+                                          graph,
+                                          modules,
+                                          surface_cache,
+                                          visiting,
+                                        )
+                                        break
+                                      }
+                                    }
+                                    match resolved {
+                                      Missing => ()
+                                      _ => break
+                                    }
+                                    match import_decl.default_binding {
+                                      Some(imported_local_name) =>
+                                        if imported_local_name == local_name {
+                                          resolved = resolve_decl_from_export_name(
+                                            export_name,
+                                            edge.resolved_path,
+                                            "default",
+                                            graph,
+                                            modules,
+                                            surface_cache,
+                                            visiting,
+                                          )
+                                        }
+                                      None => ()
+                                    }
+                                    match resolved {
+                                      Missing => ()
+                                      _ => break
+                                    }
+                                    match import_decl.namespace_binding {
+                                      Some(imported_local_name) =>
+                                        if imported_local_name == local_name {
+                                          resolved = Value({
+                                            source_path,
+                                            local_name_prefix: "",
+                                            export_name,
+                                            source_export_name,
+                                            value: {
+                                              name: local_name,
+                                              type_: @ast.TsType::Any,
+                                            },
+                                          })
+                                        }
+                                      None => ()
+                                    }
+                                    match resolved {
+                                      Missing => ()
+                                      _ => break
+                                    }
                                   }
-                                }
-                                match resolved {
-                                  Missing => ()
-                                  _ => break
-                                }
-                                match import_decl.default_binding {
-                                  Some(imported_local_name) =>
-                                    if imported_local_name == local_name {
-                                      resolved = resolve_decl_from_export_name(
-                                        export_name,
-                                        edge.resolved_path,
-                                        "default",
-                                        graph,
-                                        modules,
-                                        surface_cache,
-                                        visiting,
-                                      )
-                                    }
-                                  None => ()
-                                }
-                                match resolved {
-                                  Missing => ()
-                                  _ => break
-                                }
-                                match import_decl.namespace_binding {
-                                  Some(imported_local_name) =>
-                                    if imported_local_name == local_name {
-                                      resolved = Value({
-                                        source_path,
-                                        local_name_prefix: "",
-                                        export_name,
-                                        source_export_name,
-                                        value: {
-                                          name: local_name,
-                                          type_: @ast.TsType::Any,
-                                        },
-                                      })
-                                    }
-                                  None => ()
-                                }
-                                match resolved {
-                                  Missing => ()
-                                  _ => break
+                                  resolved
                                 }
                               }
-                              resolved
-                            }
                           }
                       }
                   }
+                }
               }
-            }
           }
       }
     None => Missing
@@ -1492,6 +1537,7 @@ fn collect_exported_decls(
   modules : Map[String, DeclModuleInfo],
 ) -> (
   Array[ExportedInterfaceDecl],
+  Array[ExportedEnumDecl],
   Array[ExportedImportDecl],
   Array[ExportedFuncDecl],
   Array[ExportedValueDecl],
@@ -1499,6 +1545,7 @@ fn collect_exported_decls(
   Array[String],
 ) {
   let interfaces : Array[ExportedInterfaceDecl] = []
+  let enums : Array[ExportedEnumDecl] = []
   let imports : Array[ExportedImportDecl] = []
   let funcs : Array[ExportedFuncDecl] = []
   let values : Array[ExportedValueDecl] = []
@@ -1516,6 +1563,7 @@ fn collect_exported_decls(
               decl_to_pascal_case(export_.export_name),
               namespace_,
               interfaces,
+              enums,
             )
             if namespace_has_non_type_members(namespace_) {
               notes.push(
@@ -1561,6 +1609,7 @@ fn collect_exported_decls(
             decl_to_camel_case(export_.export_name),
             namespace_,
             interfaces,
+            enums,
             imports,
             funcs,
             values,
@@ -1573,6 +1622,7 @@ fn collect_exported_decls(
             decl_to_pascal_case(export_.export_name),
             namespace_,
             interfaces,
+            enums,
           )
         }
         if has_runtime_root {
@@ -1593,6 +1643,7 @@ fn collect_exported_decls(
                 export_.export_name,
                 namespace_,
                 interfaces,
+                enums,
                 imports,
                 funcs,
                 values,
@@ -1616,6 +1667,7 @@ fn collect_exported_decls(
         visiting,
       ) {
       Interface(exported) => interfaces.push(exported)
+      Enum(exported) => enums.push(exported)
       Import(exported) => imports.push(exported)
       Function(exported) => funcs.push(exported)
       Value(exported) => values.push(exported)
@@ -1651,16 +1703,28 @@ fn collect_exported_decls(
       Missing => ()
     }
   }
-  (interfaces, imports, funcs, values, classes, notes)
+  (interfaces, enums, imports, funcs, values, classes, notes)
 }
 
 ///|
 fn build_canonical_type_name_map(
   interfaces : Array[ExportedInterfaceDecl],
+  enums : Array[ExportedEnumDecl],
   classes : Array[ExportedClassDecl],
 ) -> Map[String, String] {
   let canonical : Map[String, String] = {}
   for exported in interfaces {
+    let key = decl_key(exported.source_path, exported.local_name)
+    match canonical.get(key) {
+      Some(existing) =>
+        if existing != exported.local_name &&
+          exported.export_name == exported.local_name {
+          canonical[key] = exported.export_name
+        }
+      None => canonical[key] = exported.export_name
+    }
+  }
+  for exported in enums {
     let key = decl_key(exported.source_path, exported.local_name)
     match canonical.get(key) {
       Some(existing) =>
@@ -4383,6 +4447,11 @@ fn clone_exported_interface(
 }
 
 ///|
+fn clone_exported_enum(exported : ExportedEnumDecl) -> @ast.TsEnumDecl {
+  { ..exported.enum_, name: exported.export_name }
+}
+
+///|
 fn clone_exported_import(
   exported : ExportedImportDecl,
   info : DeclModuleInfo,
@@ -5294,6 +5363,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let modules = build_decl_module_map(graph)
   let (
     exported_interfaces,
+    exported_enums,
     exported_imports,
     exported_funcs,
     exported_values,
@@ -5301,7 +5371,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     notes,
   ) = collect_exported_decls(graph, export_surface, modules)
   let canonical_types = build_canonical_type_name_map(
-    exported_interfaces, exported_classes,
+    exported_interfaces, exported_enums, exported_classes,
   )
   let class_surface_cache : Map[String, Array[ResolvedExport]] = {}
   let emitted_exported_imports = append_exported_imports(
@@ -5336,6 +5406,10 @@ pub async fn emit_moonbit_decl_from_entry_path(
   }
   for iface in react_utility_interfaces {
     interfaces.push(iface)
+  }
+  let enums : Array[@ast.TsEnumDecl] = []
+  for exported in exported_enums {
+    enums.push(clone_exported_enum(exported))
   }
   for
     iface in collect_interface_dependencies(
@@ -5397,6 +5471,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
       values,
       classes,
       namespaces: [],
+      enums,
     },
     notes,
     notes.length() > 0,

@@ -93,6 +93,27 @@ test "parser: emit MoonBit declarations sanitizes future reserved parameter name
 }
 
 ///|
+test "parser: emit MoonBit declarations for ambient enum" {
+  let src =
+    #|declare enum Mode {
+    #|  Read = "read",
+    #|  Write = "write",
+    #|}
+    #|declare function setMode(mode: Mode): Mode;
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_true(actual.contains("pub(all) enum Mode {"))
+  assert_true(actual.contains("  Read"))
+  assert_true(actual.contains("  Write"))
+  assert_true(actual.contains("declare pub fn setMode(mode : Mode) -> Mode"))
+  assert_false(actual.contains("declare pub type Mode"))
+}
+
+///|
 test "parser: emit MoonBit declaration type names with leading underscores" {
   let src = "interface _ZodType { value: string; }"
   let actual = emit_moonbit_decl_from_source(src) catch {

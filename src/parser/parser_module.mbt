@@ -122,7 +122,178 @@ fn empty_ts_module() -> @ast.TsModule {
     values: [],
     classes: [],
     namespaces: [],
+    enums: [],
   }
+}
+
+///|
+fn Parser::is_enum_keyword_at(self : Parser, offset : Int) -> Bool {
+  match self.peek_at(offset).kind {
+    Ident(name) => name == "enum"
+    _ => false
+  }
+}
+
+///|
+fn Parser::is_const_enum_decl_start(self : Parser) -> Bool {
+  self.check(Const) && self.is_enum_keyword_at(1)
+}
+
+///|
+fn Parser::is_enum_member_initializer_delim(self : Parser) -> Bool {
+  self.check(Comma) ||
+  self.check(Semicolon) ||
+  self.check(RBrace) ||
+  self.check(Eof)
+}
+
+///|
+fn Parser::skip_enum_member_initializer_tail(self : Parser) -> Unit {
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut brace_depth = 0
+  while !self.check(Eof) {
+    match self.peek().kind {
+      Comma | Semicolon if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 => return
+      RBrace if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+        return
+      LParen => {
+        paren_depth += 1
+        let _ = self.advance()
+      }
+      RParen =>
+        if paren_depth > 0 {
+          paren_depth -= 1
+          let _ = self.advance()
+        } else {
+          return
+        }
+      LBracket => {
+        bracket_depth += 1
+        let _ = self.advance()
+      }
+      RBracket =>
+        if bracket_depth > 0 {
+          bracket_depth -= 1
+          let _ = self.advance()
+        } else {
+          return
+        }
+      LBrace => {
+        brace_depth += 1
+        let _ = self.advance()
+      }
+      RBrace =>
+        if brace_depth > 0 {
+          brace_depth -= 1
+          let _ = self.advance()
+        } else {
+          return
+        }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
+fn Parser::parse_enum_member_initializer(
+  self : Parser,
+) -> @ast.TsEnumMemberValue? {
+  let sign = if self.match_(Minus) {
+    "-"
+  } else if self.match_(Plus) {
+    ""
+  } else {
+    ""
+  }
+  let value = match self.peek().kind {
+    Str(value) if sign == "" => {
+      let _ = self.advance()
+      Some(@ast.TsEnumMemberValue::String(value))
+    }
+    Int(value) => {
+      let _ = self.advance()
+      Some(@ast.TsEnumMemberValue::Number(sign + value.to_string()))
+    }
+    Number(value) => {
+      let _ = self.advance()
+      Some(@ast.TsEnumMemberValue::Number(sign + value.to_string()))
+    }
+    BigInt(value) => {
+      let _ = self.advance()
+      Some(@ast.TsEnumMemberValue::BigInt(sign + value))
+    }
+    Bool(value) if sign == "" => {
+      let _ = self.advance()
+      Some(@ast.TsEnumMemberValue::Bool(value))
+    }
+    _ => {
+      self.skip_enum_member_initializer_tail()
+      None
+    }
+  }
+  if self.is_enum_member_initializer_delim() {
+    value
+  } else {
+    self.skip_enum_member_initializer_tail()
+    None
+  }
+}
+
+///|
+fn Parser::parse_enum_member_name(self : Parser) -> String raise ParseError {
+  match self.peek().kind {
+    Str(name) => {
+      let _ = self.advance()
+      name
+    }
+    _ => self.parse_binding_ident()
+  }
+}
+
+///|
+fn Parser::parse_enum_decl_after_enum_keyword(
+  self : Parser,
+  is_const : Bool,
+  is_declare : Bool,
+) -> @ast.TsEnumDecl raise ParseError {
+  if !self.match_ident("enum") {
+    raise ParseError("Expected enum declaration")
+  }
+  let name = self.parse_binding_ident()
+  let _ = self.expect(LBrace)
+  let members : Array[@ast.TsEnumMember] = []
+  while !self.check(RBrace) && !self.check(Eof) {
+    if self.match_(Comma) || self.match_(Semicolon) {
+      continue
+    }
+    let member_name = self.parse_enum_member_name()
+    let value = if self.match_(Eq) {
+      self.parse_enum_member_initializer()
+    } else {
+      None
+    }
+    members.push({ name: member_name, value })
+    if self.match_(Comma) || self.match_(Semicolon) {
+      continue
+    }
+  }
+  let _ = self.expect(RBrace)
+  self.consume_semicolon()
+  { name, members, is_const, is_declare }
+}
+
+///|
+fn Parser::parse_const_enum_decl(
+  self : Parser,
+  is_declare : Bool,
+) -> @ast.TsEnumDecl raise ParseError {
+  let _ = self.expect(Const)
+  self.parse_enum_decl_after_enum_keyword(true, is_declare)
 }
 
 ///|
@@ -193,6 +364,7 @@ fn append_module_decls(
   values : Array[@ast.TsValueDecl],
   classes : Array[@ast.TsClassDecl],
   namespaces : Array[@ast.TsNamespaceDecl],
+  enums : Array[@ast.TsEnumDecl],
 ) -> Unit {
   for func in module_.funcs {
     funcs.push(func)
@@ -214,6 +386,9 @@ fn append_module_decls(
   }
   for namespace_ in module_.namespaces {
     namespaces.push(namespace_)
+  }
+  for enum_ in module_.enums {
+    enums.push(enum_)
   }
 }
 
@@ -242,6 +417,9 @@ fn append_ambient_external_module_exports(
   }
   for namespace_ in module_.namespaces {
     exports.push({ local_name: namespace_.name, export_name: namespace_.name })
+  }
+  for enum_ in module_.enums {
+    exports.push({ local_name: enum_.name, export_name: enum_.name })
   }
 }
 
@@ -1945,6 +2123,16 @@ fn Parser::parse_export_decl_for_module(
   }
   if is_declare {
     let _ = self.advance()
+    if self.is_const_enum_decl_start() {
+      let enum_ = self.parse_const_enum_decl(true)
+      exports.push({ local_name: enum_.name, export_name: enum_.name })
+      return (stmts, exports, reexports)
+    }
+    if self.is_enum_keyword_at(0) {
+      let enum_ = self.parse_enum_decl_after_enum_keyword(false, true)
+      exports.push({ local_name: enum_.name, export_name: enum_.name })
+      return (stmts, exports, reexports)
+    }
     match self.peek().kind {
       Function => {
         let _ = self.advance()
@@ -1997,7 +2185,6 @@ fn Parser::parse_export_decl_for_module(
         } else if name == "namespace" ||
           name == "module" ||
           name == "global" ||
-          name == "enum" ||
           name == "class" {
           match self.parse_namespace_decl_value() {
             Some(value) =>
@@ -2010,10 +2197,7 @@ fn Parser::parse_export_decl_for_module(
     }
   }
   match self.peek().kind {
-    Ident(name) if name == "namespace" ||
-      name == "module" ||
-      name == "global" ||
-      name == "enum" => {
+    Ident(name) if name == "namespace" || name == "module" || name == "global" => {
       match self.parse_namespace_decl_value() {
         Some(value) =>
           exports.push({ local_name: value.name, export_name: value.name })
@@ -2179,6 +2363,7 @@ fn Parser::parse_export_stmt(
   values : Array[@ast.TsValueDecl],
   classes : Array[@ast.TsClassDecl],
   namespaces : Array[@ast.TsNamespaceDecl],
+  enums : Array[@ast.TsEnumDecl],
   const_values : Map[String, @ast.TsExpr],
 ) -> Unit raise ParseError {
   let _ = self.expect(Export)
@@ -2285,12 +2470,12 @@ fn Parser::parse_export_stmt(
     interfaces.push(self.parse_interface())
     return
   }
-  if self.check(Const) &&
-    (match self.peek_at(1).kind {
-      Ident(name) => name == "enum"
-      _ => false
-    }) {
-    self.skip_declaration_block()
+  if self.is_const_enum_decl_start() {
+    enums.push(self.parse_const_enum_decl(false))
+    return
+  }
+  if self.is_enum_keyword_at(0) {
+    enums.push(self.parse_enum_decl_after_enum_keyword(false, false))
     return
   }
   match self.peek().kind {
@@ -2307,6 +2492,14 @@ fn Parser::parse_export_stmt(
   }
   if is_declare {
     let _ = self.advance() // consume 'declare'
+    if self.is_const_enum_decl_start() {
+      enums.push(self.parse_const_enum_decl(true))
+      return
+    }
+    if self.is_enum_keyword_at(0) {
+      enums.push(self.parse_enum_decl_after_enum_keyword(false, true))
+      return
+    }
     match self.peek().kind {
       Function => {
         let _ = self.advance() // consume 'function'
@@ -2335,7 +2528,6 @@ fn Parser::parse_export_stmt(
         } else if name == "namespace" ||
           name == "module" ||
           name == "global" ||
-          name == "enum" ||
           name == "class" {
           match self.parse_namespace_decl_value() {
             Some(value) => values.push(value)
@@ -2375,11 +2567,7 @@ fn Parser::parse_export_stmt(
   }
   // export let/const/var/class/function (fallback)
   let is_namespace_like_export = match self.peek().kind {
-    Ident(name) =>
-      name == "namespace" ||
-      name == "module" ||
-      name == "global" ||
-      name == "enum"
+    Ident(name) => name == "namespace" || name == "module" || name == "global"
     _ => false
   }
   if is_namespace_like_export {
@@ -2446,6 +2634,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   let values : Array[@ast.TsValueDecl] = []
   let classes : Array[@ast.TsClassDecl] = []
   let namespaces : Array[@ast.TsNamespaceDecl] = []
+  let enums : Array[@ast.TsEnumDecl] = []
   let const_values : Map[String, @ast.TsExpr] = {}
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
@@ -2477,6 +2666,14 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       }
     } else if self.check(Declare) {
       let _ = self.advance() // consume 'declare'
+      if self.is_const_enum_decl_start() {
+        enums.push(self.parse_const_enum_decl(true))
+        continue
+      }
+      if self.is_enum_keyword_at(0) {
+        enums.push(self.parse_enum_decl_after_enum_keyword(false, true))
+        continue
+      }
       match self.peek().kind {
         Function => {
           let _ = self.advance() // consume 'function'
@@ -2511,14 +2708,13 @@ fn Parser::parse_module_with_seeded_const_values_internal(
               Some(module_) =>
                 append_module_decls(
                   module_, funcs, interfaces, type_aliases, imports, values, classes,
-                  namespaces,
+                  namespaces, enums,
                 )
               None => ()
             }
           } else if name == "namespace" ||
             name == "module" ||
             name == "global" ||
-            name == "enum" ||
             name == "class" {
             match self.parse_namespace_decl() {
               Some((value, namespace_)) => {
@@ -2542,7 +2738,8 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       self.parse_import_stmt()
     } else if self.check(Export) {
       self.parse_export_stmt(
-        funcs, interfaces, type_aliases, imports, values, classes, namespaces, const_values,
+        funcs, interfaces, type_aliases, imports, values, classes, namespaces, enums,
+        const_values,
       )
     } else if self.check(Type) {
       let type_alias = self.parse_type_alias()
@@ -2565,17 +2762,10 @@ fn Parser::parse_module_with_seeded_const_values_internal(
         }
         None => self.skip_declaration_block()
       }
-    } else if (match self.peek().kind {
-        Ident(name) => name == "enum"
-        _ => false
-      }) {
-      self.skip_declaration_block()
-    } else if self.check(Const) &&
-      (match self.peek_at(1).kind {
-        Ident(name) => name == "enum"
-        _ => false
-      }) {
-      self.skip_declaration_block()
+    } else if self.is_enum_keyword_at(0) {
+      enums.push(self.parse_enum_decl_after_enum_keyword(false, ambient_decls))
+    } else if self.is_const_enum_decl_start() {
+      enums.push(self.parse_const_enum_decl(ambient_decls))
     } else if self.check(Let) || self.check(Const) || self.check(Var) {
       if ambient_decls {
         let _ = self.advance()
@@ -2595,7 +2785,16 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       )
     }
   }
-  { funcs, interfaces, type_aliases, imports, values, classes, namespaces }
+  {
+    funcs,
+    interfaces,
+    type_aliases,
+    imports,
+    values,
+    classes,
+    namespaces,
+    enums,
+  }
 }
 
 ///|

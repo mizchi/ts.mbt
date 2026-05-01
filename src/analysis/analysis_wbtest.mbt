@@ -1465,6 +1465,7 @@ test "find_compilable_functions: filters async/generator" {
     values: [],
     classes: [],
     namespaces: [],
+    enums: [],
   }
   let compilable = find_compilable_functions(mod)
   assert_eq(compilable.length(), 1)

@@ -127,6 +127,21 @@ pub impl Show for TsClassDecl with output(self, logger) {
 }
 
 ///|
+pub impl Show for TsEnumMemberValue with output(self, logger) {
+  write_debug_show(logger, self)
+}
+
+///|
+pub impl Show for TsEnumMember with output(self, logger) {
+  write_debug_show(logger, self)
+}
+
+///|
+pub impl Show for TsEnumDecl with output(self, logger) {
+  write_debug_show(logger, self)
+}
+
+///|
 pub impl Show for TsModule with output(self, logger) {
   write_debug_show(logger, self)
 }

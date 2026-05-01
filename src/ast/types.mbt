@@ -409,6 +409,31 @@ pub(all) struct TsNamespaceDecl {
 } derive(Debug)
 
 ///|
+// / enum member initializer literal
+pub(all) enum TsEnumMemberValue {
+  String(String)
+  Number(String)
+  BigInt(String)
+  Bool(Bool)
+} derive(Eq, Debug)
+
+///|
+// / enum member declaration
+pub(all) struct TsEnumMember {
+  name : String
+  value : TsEnumMemberValue?
+} derive(Eq, Debug)
+
+///|
+// / enum declaration
+pub(all) struct TsEnumDecl {
+  name : String
+  members : Array[TsEnumMember]
+  is_const : Bool
+  is_declare : Bool
+} derive(Eq, Debug)
+
+///|
 // / ()
 pub(all) struct TsModule {
   funcs : Array[TsFunc]
@@ -418,6 +443,7 @@ pub(all) struct TsModule {
   values : Array[TsValueDecl] // ambient value declarations
   classes : Array[TsClassDecl] // ambient class declarations
   namespaces : Array[TsNamespaceDecl]
+  enums : Array[TsEnumDecl]
 } derive(Debug)
 
 ///|

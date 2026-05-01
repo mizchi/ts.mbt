@@ -473,6 +473,7 @@ test "bridge: FFI type name treats generic intersections with empty object as op
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    enums: [],
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -4066,6 +4067,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    enums: [],
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -4113,6 +4115,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    enums: [],
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -4154,6 +4157,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    enums: [],
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -4186,6 +4190,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    enums: [],
     external_type_names: [],
     function_field_method_wrapper_limit: 2,
     needs_js_any: false,
@@ -4211,6 +4216,7 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    enums: [],
     external_type_names: [],
     function_field_method_wrapper_limit: 1,
     needs_js_any: false,

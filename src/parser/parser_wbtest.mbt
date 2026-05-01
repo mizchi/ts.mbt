@@ -1890,6 +1890,95 @@ test "parser: skip const enum declaration in ts module block" {
 }
 
 ///|
+test "parser: parse declare string enum in ts module" {
+  let src =
+    #|declare enum Mode {
+    #|  Read = "read",
+    #|  Write = "write",
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.enums.length(), 1)
+  assert_eq(module_.enums[0].name, "Mode")
+  assert_false(module_.enums[0].is_const)
+  assert_true(module_.enums[0].is_declare)
+  assert_eq(module_.enums[0].members.length(), 2)
+  assert_eq(module_.enums[0].members[0].name, "Read")
+  assert_eq(
+    module_.enums[0].members[0].value,
+    Some(@ast.TsEnumMemberValue::String("read")),
+  )
+  assert_eq(module_.enums[0].members[1].name, "Write")
+  assert_eq(
+    module_.enums[0].members[1].value,
+    Some(@ast.TsEnumMemberValue::String("write")),
+  )
+}
+
+///|
+test "parser: parse export const numeric enum in ts module" {
+  let src =
+    #|export const enum SyntaxKind {
+    #|  Unknown = 0,
+    #|  Identifier = 80,
+    #|  StringLiteral,
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.enums.length(), 1)
+  assert_eq(module_.enums[0].name, "SyntaxKind")
+  assert_true(module_.enums[0].is_const)
+  assert_false(module_.enums[0].is_declare)
+  assert_eq(module_.enums[0].members.length(), 3)
+  assert_eq(module_.enums[0].members[0].name, "Unknown")
+  assert_eq(
+    module_.enums[0].members[0].value,
+    Some(@ast.TsEnumMemberValue::Number("0")),
+  )
+  assert_eq(module_.enums[0].members[1].name, "Identifier")
+  assert_eq(
+    module_.enums[0].members[1].value,
+    Some(@ast.TsEnumMemberValue::Number("80")),
+  )
+  assert_eq(module_.enums[0].members[2].name, "StringLiteral")
+  assert_eq(module_.enums[0].members[2].value, None)
+}
+
+///|
+test "parser: parse enum inside declared namespace" {
+  let src =
+    #|declare namespace ts {
+    #|  enum ScriptTarget {
+    #|    ES5 = 1,
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  assert_eq(module_.namespaces[0].name, "ts")
+  assert_eq(module_.namespaces[0].module_.enums.length(), 1)
+  let enum_ = module_.namespaces[0].module_.enums[0]
+  assert_eq(enum_.name, "ScriptTarget")
+  assert_false(enum_.is_const)
+  assert_true(enum_.is_declare)
+  assert_eq(enum_.members.length(), 1)
+  assert_eq(enum_.members[0].name, "ES5")
+  assert_eq(enum_.members[0].value, Some(@ast.TsEnumMemberValue::Number("1")))
+}
+
+///|
 test "parser: parse function overload signature in ts module" {
   let src =
     #|export function signal<T>(): {

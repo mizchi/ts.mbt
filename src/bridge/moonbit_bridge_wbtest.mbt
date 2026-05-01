@@ -123,6 +123,59 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes object type al
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes ambient enums" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/enum-entry.d.ts", "./runtime/enum.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum Mode {"))
+  assert_true(bundle.bridge_mbti.contains("  Read"))
+  assert_true(bundle.bridge_mbti.contains("  Write"))
+  assert_true(bundle.bridge_mbt.contains("pub(all) enum Mode {"))
+  assert_true(
+    bundle.bridge_mbti.contains("declare pub fn setMode(mode : Mode) -> Mode"),
+  )
+  assert_false(
+    bundle.bridge_mbt.contains(
+      "pub extern \"js\" fn set_mode(mode : Mode) -> Mode",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn set_mode(mode : String) -> String",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains("fn __ts_mbt_mode_to_js(value : Mode) -> String"),
+  )
+  assert_true(bundle.bridge_mbt.contains("Read => \"read\""))
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_mode_from_js(value : String) -> Mode",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "_ => abort(\"unexpected Mode value: \" + value)",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn setMode(mode : Mode) -> Mode {\n  __ts_mbt_mode_from_js(set_mode(__ts_mbt_mode_to_js(mode)))\n}",
+    ),
+  )
+  assert_false(bundle.bridge_mbt.contains("get_mode() -> @js.Any"))
+  assert_false(bundle.bridge_js.contains("import { Mode }"))
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes namespace exports as opaque getters" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js",

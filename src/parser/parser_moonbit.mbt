@@ -646,6 +646,34 @@ fn class_decl_to_moonbit_sections(
 }
 
 ///|
+fn enum_decl_to_moonbit(enum_ : @ast.TsEnumDecl) -> String {
+  let type_name = moonbit_type_identifier(enum_.name, "GeneratedEnum")
+  let lines : Array[String] = [
+    "///|",
+    "/// TS enum \{enum_.name}",
+    "pub(all) enum \{type_name} {",
+  ]
+  let seen_cases : Array[String] = []
+  for i, enum_member in enum_.members {
+    let base_name = moonbit_type_identifier(enum_member.name, "Member")
+    let mut case_name = base_name
+    let mut suffix = 2
+    while seen_cases.contains(case_name) {
+      case_name = base_name + suffix.to_string()
+      suffix += 1
+    }
+    seen_cases.push(case_name)
+    if case_name == "" {
+      lines.push("  Member" + i.to_string())
+    } else {
+      lines.push("  " + case_name)
+    }
+  }
+  lines.push("}")
+  lines.join("\n")
+}
+
+///|
 pub fn emit_moonbit_decl_with_sections(
   module_ : @ast.TsModule,
   extra_sections : Array[String],
@@ -658,6 +686,9 @@ pub fn emit_moonbit_decl_with_sections(
   for class_ in module_.classes {
     declared_type_names.push(class_.name)
   }
+  for enum_ in module_.enums {
+    declared_type_names.push(enum_.name)
+  }
   let state : MoonBitDeclState = {
     declared_type_names,
     referenced_type_names: [],
@@ -665,6 +696,14 @@ pub fn emit_moonbit_decl_with_sections(
   }
   let interface_sections : Array[String] = []
   let seen_type_decl_names : Array[String] = []
+  let enum_sections : Array[String] = []
+  for enum_ in module_.enums {
+    let type_name = moonbit_type_identifier(enum_.name, "GeneratedEnum")
+    if !seen_type_decl_names.contains(type_name) {
+      seen_type_decl_names.push(type_name)
+      enum_sections.push(enum_decl_to_moonbit(enum_))
+    }
+  }
   for iface in module_.interfaces {
     let type_name = moonbit_type_identifier(iface.name, "OpaqueType")
     if !seen_type_decl_names.contains(type_name) {
@@ -734,6 +773,9 @@ pub fn emit_moonbit_decl_with_sections(
     sections.push("///|\ndeclare pub type JSValue")
   }
   for section in extra_sections {
+    sections.push(section)
+  }
+  for section in enum_sections {
     sections.push(section)
   }
   for section in interface_sections {

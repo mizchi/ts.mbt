@@ -26,6 +26,18 @@ priv struct BridgeTopLevelFnDecl {
 }
 
 ///|
+priv struct BridgeParamDecl {
+  type_name : String
+}
+
+///|
+priv struct BridgeEnumConverter {
+  type_name : String
+  to_js_name : String
+  from_js_name : String
+}
+
+///|
 priv struct BridgeTypeGuardHelper {
   source_type : String
   target_type : String
@@ -310,12 +322,36 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
 }
 
 ///|
+fn parse_bridge_param_decls(params_src : String) -> Array[BridgeParamDecl] {
+  let decls : Array[BridgeParamDecl] = []
+  if params_src.trim() == "" {
+    return decls
+  }
+  for item in bridge_split_top_level_commas(params_src) {
+    let trimmed = item.trim().to_string()
+    if trimmed == "" {
+      continue
+    }
+    match trimmed.find(":") {
+      Some(index) => {
+        let type_name = trimmed[index + 1:].to_string().trim().to_string()
+        decls.push({ type_name, })
+      }
+      None => decls.push({ type_name: "" })
+    }
+  }
+  decls
+}
+
+///|
 fn parse_bridge_public_type_name_line(line : String) -> String? {
   let prefix = "declare pub type "
   let rest = if line.has_prefix(prefix) {
     line[prefix.length():].to_string().trim().to_string()
   } else {
-    let struct_prefixes = ["pub(all) struct ", "pub struct "]
+    let struct_prefixes = [
+      "pub(all) struct ", "pub struct ", "pub(all) enum ", "pub enum ",
+    ]
     let mut parsed : String? = None
     for struct_prefix in struct_prefixes {
       if line.has_prefix(struct_prefix) {
@@ -366,7 +402,8 @@ fn collect_bridge_public_type_names(bridge_mbti : String) -> Array[String] {
 ///|
 fn parse_bridge_implemented_type_name_line(line : String) -> String? {
   let prefixes = [
-    "pub(all) struct ", "pub struct ", "struct ", "pub type ", "type ",
+    "pub(all) struct ", "pub struct ", "struct ", "pub(all) enum ", "pub enum ",
+    "enum ", "pub type ", "type ",
   ]
   for prefix in prefixes {
     if !line.has_prefix(prefix) {
@@ -684,22 +721,134 @@ fn add_bridge_namespace_public_decls(
 }
 
 ///|
+fn bridge_enum_to_js_name(type_name : String) -> String {
+  "__ts_mbt_" + bridge_to_snake_case(type_name) + "_to_js"
+}
+
+///|
+fn bridge_enum_from_js_name(type_name : String) -> String {
+  "__ts_mbt_" + bridge_to_snake_case(type_name) + "_from_js"
+}
+
+///|
+fn collect_bridge_enum_converters(
+  bridge_mbti : String,
+  bridge_mbt : String,
+) -> Array[BridgeEnumConverter] {
+  let converters : Array[BridgeEnumConverter] = []
+  for type_name in collect_bridge_public_type_names(bridge_mbti) {
+    let to_js_name = bridge_enum_to_js_name(type_name)
+    let from_js_name = bridge_enum_from_js_name(type_name)
+    if bridge_mbt.contains("fn \{to_js_name}(value : \{type_name}) -> String") &&
+      bridge_mbt.contains("fn \{from_js_name}(value : String) -> \{type_name}") {
+      converters.push({ type_name, to_js_name, from_js_name })
+    }
+  }
+  converters
+}
+
+///|
+fn find_bridge_enum_converter(
+  converters : Array[BridgeEnumConverter],
+  type_name : String,
+) -> BridgeEnumConverter? {
+  let normalized = type_name.trim().to_string()
+  for converter in converters {
+    if converter.type_name == normalized {
+      return Some(converter)
+    }
+  }
+  None
+}
+
+///|
+fn bridge_fn_decl_needs_enum_conversion(
+  fn_decl : BridgeTopLevelFnDecl,
+  converters : Array[BridgeEnumConverter],
+) -> Bool {
+  for param in parse_bridge_param_decls(fn_decl.params_src) {
+    match find_bridge_enum_converter(converters, param.type_name) {
+      Some(_) => return true
+      None => ()
+    }
+  }
+  match find_bridge_enum_converter(converters, fn_decl.return_type) {
+    Some(_) => true
+    None => false
+  }
+}
+
+///|
+fn bridge_arg_expr_for_type(
+  converters : Array[BridgeEnumConverter],
+  arg_name : String,
+  type_name : String,
+) -> String {
+  match find_bridge_enum_converter(converters, type_name) {
+    Some(converter) => "\{converter.to_js_name}(\{arg_name})"
+    None => arg_name
+  }
+}
+
+///|
+fn bridge_return_expr_for_type(
+  converters : Array[BridgeEnumConverter],
+  return_type : String,
+  call_expr : String,
+) -> String {
+  match find_bridge_enum_converter(converters, return_type) {
+    Some(converter) => "\{converter.from_js_name}(\{call_expr})"
+    None => call_expr
+  }
+}
+
+///|
 fn render_bridge_public_wrapper(fn_decl : BridgeTopLevelFnDecl) -> String? {
+  render_bridge_public_wrapper_with_converters(
+    fn_decl,
+    [],
+    bridge_value_fn_name(fn_decl.public_name),
+  )
+}
+
+///|
+fn render_bridge_public_wrapper_with_converters(
+  fn_decl : BridgeTopLevelFnDecl,
+  converters : Array[BridgeEnumConverter],
+  internal_name : String,
+) -> String? {
   if bridge_value_identifier_needs_suffix(fn_decl.public_name) {
     return None
   }
-  let internal_name = bridge_value_fn_name(fn_decl.public_name)
-  if internal_name == "" || internal_name == fn_decl.public_name {
+  let needs_conversion = bridge_fn_decl_needs_enum_conversion(
+    fn_decl, converters,
+  )
+  if internal_name == "" ||
+    (!needs_conversion && internal_name == fn_decl.public_name) {
     return None
   }
-  let call_args = fn_decl.arg_names.join(", ")
-  let call_expr = if call_args == "" {
+  let param_decls = parse_bridge_param_decls(fn_decl.params_src)
+  let call_args : Array[String] = []
+  for i, arg_name in fn_decl.arg_names {
+    let type_name = if i < param_decls.length() {
+      param_decls[i].type_name
+    } else {
+      ""
+    }
+    call_args.push(bridge_arg_expr_for_type(converters, arg_name, type_name))
+  }
+  let call_expr = if call_args.length() == 0 {
     internal_name + "()"
   } else {
-    internal_name + "(" + call_args + ")"
+    internal_name + "(" + call_args.join(", ") + ")"
   }
+  let body_expr = bridge_return_expr_for_type(
+    converters,
+    fn_decl.return_type,
+    call_expr,
+  )
   Some(
-    "pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type} {\n  \{call_expr}\n}",
+    "pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type} {\n  \{body_expr}\n}",
   )
 }
 
@@ -724,15 +873,34 @@ fn add_bridge_public_wrappers(
   let mut next_bridge_mbt = inject_bridge_public_type_aliases(
     bridge_mbti, bridge_mbt,
   )
+  let enum_converters = collect_bridge_enum_converters(
+    bridge_mbti, next_bridge_mbt,
+  )
   let wrappers : Array[String] = []
   for line_view in bridge_mbti.split("\n") {
     let line = line_view.to_string().trim().to_string()
     match parse_bridge_top_level_fn_decl_line(line) {
-      Some(fn_decl) =>
-        match render_bridge_public_wrapper(fn_decl) {
+      Some(fn_decl) => {
+        let base_internal_name = bridge_value_fn_name(fn_decl.public_name)
+        let needs_conversion = bridge_fn_decl_needs_enum_conversion(
+          fn_decl, enum_converters,
+        )
+        let internal_name = if needs_conversion &&
+          base_internal_name == fn_decl.public_name {
+          base_internal_name + "_raw"
+        } else {
+          base_internal_name
+        }
+        let wrapper = if enum_converters.length() == 0 {
+          render_bridge_public_wrapper(fn_decl)
+        } else {
+          render_bridge_public_wrapper_with_converters(
+            fn_decl, enum_converters, internal_name,
+          )
+        }
+        match wrapper {
           Some(wrapper) => {
-            let internal_name = bridge_to_snake_case(fn_decl.public_name)
-            let raw_decl = "pub extern \"js\" fn \{internal_name}("
+            let raw_decl = "pub extern \"js\" fn \{base_internal_name}("
             if next_bridge_mbt.contains(raw_decl) {
               next_bridge_mbt = next_bridge_mbt.replace(
                 old=raw_decl,
@@ -743,6 +911,7 @@ fn add_bridge_public_wrappers(
           }
           None => ()
         }
+      }
       None => ()
     }
   }

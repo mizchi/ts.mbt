@@ -129,6 +129,45 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_bridge_enum_fixture() {
+  local root="_build/bridge_fixture_enum"
+  local fixture_path="$repo_root/fixtures/bridge_smoke/enum-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/enum.js"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/enum.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/enum.js"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/bridge_enum",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated bridge package converts string enums at the JS boundary" {
+  assert_eq(recordMode(Read), "read")
+  match nextMode(Read) {
+    Write => ()
+    _ => abort("expected read to become write")
+  }
+  match echo(Write) {
+    Write => ()
+    _ => abort("expected same-name enum wrapper to preserve write")
+  }
+  assert_eq(recordMode(nextMode(Write)), "read")
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_bridge_default_export_fixture() {
   local root="_build/bridge_fixture_default_export"
   local fixture_path="$repo_root/fixtures/bridge_smoke/default-export-entry.d.ts"
@@ -2081,6 +2120,7 @@ EOF
 
 verify_mbti_fixture_typescript
 verify_bridge_smoke_fixture
+verify_bridge_enum_fixture
 verify_bridge_default_export_fixture
 verify_bridge_declaration_merge_namespace_fixture
 verify_bridge_promise_return_fixture

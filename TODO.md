@@ -401,6 +401,13 @@ TypeScript runtimes expect.
   - `declare const enum Mode { Read = "read" }`
   - implicit numeric members are allowed only when all previous values can be
     evaluated statically.
+  - [x] Parser preserves `declare enum` / `declare const enum` in `TsModule`,
+    including declared namespaces, and bridge package output now exposes those
+    enums in both `bridge.mbt` and `bridge.mbti`.
+  - [x] Raw extern wrappers keep string enums primitive and expose public
+    MoonBit enum wrappers for params and returns.
+  - [ ] Optional string enum params / returns still need `Variant?` conversion
+    and JS `undefined` behavior.
 - [ ] Defer heterogeneous enum unions and non-literal computed enum values to
   the existing primitive / `JSValue` fallback with diagnostics.
 
@@ -417,6 +424,11 @@ TypeScript runtimes expect.
   - `TsEnumMember { name, value : TsLiteralValue? }`
   - Store them in `TsModule` and `TsModuleBlock`, parallel to interfaces and
     type aliases.
+  - [x] Added `TsEnumDecl`, `TsEnumMember`, and `TsEnumMemberValue` to
+    `TsModule`; module-block export collection now recognizes
+    `export declare enum` for bridge export surfaces.
+  - [ ] `TsModuleBlock` still needs a first-class enum array if script-level
+    enum declarations need to be preserved beyond export metadata.
 - [ ] Normalize type aliases that are pure literal unions into an enum-lowering
   candidate before `emit_moonbit_decl` / `emit_moonbit_js_ffi` renders types.
   - Keep the original alias name as the MoonBit enum name.
@@ -428,14 +440,16 @@ TypeScript runtimes expect.
 - [ ] Emit public enum declarations in both `bridge.mbt` and `bridge.mbti`.
   - This must mirror the recent struct rule: generated implementation and
     interface files expose the same public shape.
+  - [x] Ambient enum exports are emitted as `pub(all) enum` in both package
+    implementation and interface output.
 - [ ] Generate stable constructor names:
   - sanitize to PascalCase;
   - suffix MoonBit keywords;
   - disambiguate collisions deterministically;
   - preserve the original TS literal in generated conversion helpers.
-- [ ] Keep raw externs primitive and wrap them:
+- [x] Keep raw externs primitive and wrap them for non-optional string enums:
   - Params: public function accepts `Variant`, private/raw extern accepts
-    `String` or `Int`.
+    `String`.
   - Returns: raw extern returns primitive, public wrapper converts to
     `Variant`.
   - Optional params / returns use `Variant?` wrappers and keep JS `undefined`
@@ -473,10 +487,11 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
 
 ### JS Bridge Rules
 
-- [ ] Do not pass MoonBit enum runtime objects directly to JS APIs.
+- [x] Do not pass MoonBit enum runtime objects directly to JS APIs for
+  non-optional string enums.
   - MoonBit JS backend enums are tagged values; TypeScript libraries expect the
     primitive literal value.
-- [ ] Prefer MoonBit-side conversion wrappers over JS-side enum construction.
+- [x] Prefer MoonBit-side conversion wrappers over JS-side enum construction.
   - JS bridge code cannot reliably construct MoonBit enum values unless those
     constructors are exported by the compiled MoonBit package.
   - Return conversion should therefore happen in generated MoonBit wrapper
@@ -507,12 +522,17 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
 - [ ] Green: AST + parser support without bridge lowering.
 - [ ] Red: declaration generation tests for named literal-union aliases.
 - [ ] Green: emit MoonBit enum declarations in `.mbt` / `.mbti`.
-- [ ] Red: JS-target smoke where a MoonBit enum argument reaches a TS function
+- [x] Red: JS-target smoke where a MoonBit enum argument reaches a TS function
   expecting a string literal.
-- [ ] Green: raw extern + public wrapper conversion for params.
+  - `fixtures/bridge_smoke/enum-entry.d.ts` verifies generated code passes
+    primitive string enum values through `moon check --target js` and
+    `moon test --target js`.
+- [x] Green: raw extern + public wrapper conversion for params.
 - [ ] Red: JS-target smoke where a TS function returns a literal union and
   MoonBit pattern matches the result.
-- [ ] Green: primitive return conversion with an explicit unexpected-value
+  - Ambient string enum returns are covered; literal-union alias returns still
+    need their own lowering path.
+- [x] Green: primitive return conversion with an explicit unexpected-value
   abort path.
 - [ ] Refactor: share enum metadata between decl, FFI, and package bridge
   emitters so literal-union and `declare enum` use the same lowering path.

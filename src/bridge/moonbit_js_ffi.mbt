@@ -16,6 +16,7 @@ priv struct MoonBitBridgeImport {
 priv struct MoonBitJsFfiState {
   declared_type_names : Array[String]
   struct_type_names : Array[String]
+  enums : Array[@ast.TsEnumDecl]
   external_type_names : Array[String]
   function_field_method_wrapper_limit : Int
   mut needs_js_any : Bool
@@ -288,6 +289,20 @@ fn ffi_mark_external_type(state : MoonBitJsFfiState, name : String) -> String {
 }
 
 ///|
+fn ffi_find_enum_decl(
+  state : MoonBitJsFfiState,
+  name : String,
+) -> @ast.TsEnumDecl? {
+  let type_name = ffi_type_identifier(name, "GeneratedEnum")
+  for enum_ in state.enums {
+    if ffi_type_identifier(enum_.name, "GeneratedEnum") == type_name {
+      return Some(enum_)
+    }
+  }
+  None
+}
+
+///|
 fn ffi_normalize_literal_type(type_ : @ast.TsType) -> @ast.TsType {
   match type_ {
     Literal("true") | Literal("false") => Boolean
@@ -356,6 +371,62 @@ fn ffi_classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
+fn ffi_enum_case_names(
+  enum_ : @ast.TsEnumDecl,
+) -> Array[(String, @ast.TsEnumMember)] {
+  let cases : Array[(String, @ast.TsEnumMember)] = []
+  let seen_cases : Array[String] = []
+  for i, enum_member in enum_.members {
+    let base_name = ffi_type_identifier(enum_member.name, "Member")
+    let mut case_name = base_name
+    let mut suffix = 2
+    while seen_cases.contains(case_name) {
+      case_name = base_name + suffix.to_string()
+      suffix += 1
+    }
+    if case_name == "" {
+      case_name = "Member" + i.to_string()
+    }
+    seen_cases.push(case_name)
+    cases.push((case_name, enum_member))
+  }
+  cases
+}
+
+///|
+fn ffi_enum_string_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, String)]? {
+  let cases : Array[(String, String)] = []
+  for item in ffi_enum_case_names(enum_) {
+    let (case_name, enum_member) = item
+    match enum_member.value {
+      Some(@ast.TsEnumMemberValue::String(value)) =>
+        cases.push((case_name, value))
+      _ => return None
+    }
+  }
+  if cases.length() == 0 {
+    None
+  } else {
+    Some(cases)
+  }
+}
+
+///|
+fn ffi_named_type_is_string_enum(
+  state : MoonBitJsFfiState,
+  name : String,
+) -> Bool {
+  match ffi_find_enum_decl(state, name) {
+    Some(enum_) =>
+      match ffi_enum_string_cases(enum_) {
+        Some(_) => true
+        None => false
+      }
+    None => false
+  }
+}
+
+///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
   match ffi_classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
@@ -396,6 +467,8 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       "Array[" + ffi_type_name(state, inner) + "]"
     Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
       "@js.Promise[" + ffi_type_name(state, inner) + "]"
+    Named(name) if ffi_named_type_is_string_enum(state, name) => "String"
+    Applied(name, _) if ffi_named_type_is_string_enum(state, name) => "String"
     Named(name) => ffi_mark_external_type(state, name)
     Applied(name, _) => ffi_mark_external_type(state, name)
     _ => {
@@ -598,6 +671,18 @@ fn ffi_interface_type_decl_to_moonbit(iface : @ast.TsInterface) -> String {
 }
 
 ///|
+fn ffi_enum_decl_to_moonbit(enum_ : @ast.TsEnumDecl) -> String {
+  let type_name = ffi_type_identifier(enum_.name, "GeneratedEnum")
+  let lines : Array[String] = ["pub(all) enum \{type_name} {"]
+  for item in ffi_enum_case_names(enum_) {
+    let (case_name, _) = item
+    lines.push("  " + case_name)
+  }
+  lines.push("}")
+  lines.join("\n")
+}
+
+///|
 fn ffi_binding_name(export_name : String) -> String {
   "__ts_mbt_" + ffi_to_snake_case(export_name)
 }
@@ -625,6 +710,53 @@ fn ffi_escape_moonbit_string(s : String) -> String {
     }
   }
   result
+}
+
+///|
+fn ffi_enum_to_js_name(type_name : String) -> String {
+  "__ts_mbt_" + ffi_to_snake_case(type_name) + "_to_js"
+}
+
+///|
+fn ffi_enum_from_js_name(type_name : String) -> String {
+  "__ts_mbt_" + ffi_to_snake_case(type_name) + "_from_js"
+}
+
+///|
+fn ffi_enum_string_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
+  let type_name = ffi_type_identifier(enum_.name, "GeneratedEnum")
+  match ffi_enum_string_cases(enum_) {
+    Some(cases) => {
+      let to_js_name = ffi_enum_to_js_name(type_name)
+      let from_js_name = ffi_enum_from_js_name(type_name)
+      let lines : Array[String] = [
+        "fn \{to_js_name}(value : \{type_name}) -> String {",
+        "  match value {",
+      ]
+      for item in cases {
+        let (case_name, value) = item
+        lines.push(
+          "    \{case_name} => \"\{ffi_escape_moonbit_string(value)}\"",
+        )
+      }
+      lines.push("  }")
+      lines.push("}")
+      lines.push("")
+      lines.push("fn \{from_js_name}(value : String) -> \{type_name} {")
+      lines.push("  match value {")
+      for item in cases {
+        let (case_name, value) = item
+        lines.push(
+          "    \"\{ffi_escape_moonbit_string(value)}\" => \{case_name}",
+        )
+      }
+      lines.push("    _ => abort(\"unexpected \{type_name} value: \" + value)")
+      lines.push("  }")
+      lines.push("}")
+      Some(lines.join("\n"))
+    }
+    None => None
+  }
 }
 
 ///|
@@ -1821,6 +1953,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let modules = build_decl_module_map(graph)
   let (
     exported_interfaces,
+    exported_enums,
     exported_imports,
     exported_funcs,
     exported_values,
@@ -1828,7 +1961,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     decl_notes,
   ) = collect_exported_decls(graph, export_surface, modules)
   let canonical_types = build_canonical_type_name_map(
-    exported_interfaces, exported_classes,
+    exported_interfaces, exported_enums, exported_classes,
   )
   let class_surface_cache : Map[String, Array[ResolvedExport]] = {}
   let emitted_exported_imports = append_exported_imports(
@@ -1879,6 +2012,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let values = normalize_values_for_ffi(
     exported_values, modules, canonical_types,
   )
+  let enums : Array[@ast.TsEnumDecl] = []
+  for exported in exported_enums {
+    enums.push(clone_exported_enum(exported))
+  }
   let classes = normalize_classes_for_ffi(
     exported_classes, graph, modules, class_surface_cache, canonical_types,
   )
@@ -1973,12 +2110,16 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       struct_type_names.push(type_name)
     }
   }
+  for enum_ in enums {
+    declared_type_names.push(ffi_type_identifier(enum_.name, "GeneratedEnum"))
+  }
   for class_ in classes {
     declared_type_names.push(ffi_class_type_name(class_.name))
   }
   let state : MoonBitJsFfiState = {
     declared_type_names,
     struct_type_names,
+    enums,
     external_type_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
@@ -2048,6 +2189,19 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         ),
       ),
     )
+  }
+
+  for enum_ in enums {
+    let type_name = ffi_type_identifier(enum_.name, "GeneratedEnum")
+    if !emitted_type_names.contains(type_name) {
+      emitted_type_names.push(type_name)
+      ffi_sections.push(ffi_enum_decl_to_moonbit(enum_))
+      match ffi_enum_string_converter_decl(enum_) {
+        Some(converter_decl) => ffi_sections.push(converter_decl)
+        None => ()
+      }
+    }
+    handled_export_names.push(enum_.name)
   }
 
   for iface in interfaces {
