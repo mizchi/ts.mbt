@@ -458,7 +458,7 @@ TypeScript runtimes expect.
     interface files expose the same public shape.
   - [x] Ambient enum exports are emitted as `pub(all) enum` in both package
     implementation and interface output.
-- [ ] Generate stable constructor names:
+- [x] Generate stable constructor names:
   - sanitize to PascalCase;
   - suffix MoonBit keywords;
   - disambiguate collisions deterministically;

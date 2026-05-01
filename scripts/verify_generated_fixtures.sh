@@ -394,6 +394,55 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_bridge_stable_constructor_fixture() {
+  local root="_build/bridge_fixture_stable_constructor"
+  local fixture_path="$repo_root/fixtures/bridge_smoke/stable-constructor-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/stable-constructor.js"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/stable-constructor.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/stable-constructor.js"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/bridge_stable_constructor",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated bridge package keeps stable constructor names" {
+  match cycleName(A_b) {
+    A_b2 => ()
+    _ => abort("expected collision suffix to preserve a_b")
+  }
+  match cycleName(A_b2) {
+    String_ => ()
+    _ => abort("expected primitive-name constructor to be suffixed")
+  }
+  match cycleName(String_) {
+    UnderscorePrivate => ()
+    _ => abort("expected leading underscore to be stable")
+  }
+  match cycleName(UnderscorePrivate) {
+    Member => ()
+    _ => abort("expected empty literal to use fallback constructor")
+  }
+  match cycleName(Member) {
+    A_b => ()
+    _ => abort("expected empty literal roundtrip to preserve original value")
+  }
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_bridge_default_export_fixture() {
   local root="_build/bridge_fixture_default_export"
   local fixture_path="$repo_root/fixtures/bridge_smoke/default-export-entry.d.ts"
@@ -2352,6 +2401,7 @@ verify_bridge_numeric_enum_fixture
 verify_bridge_numeric_literal_union_fixture
 verify_bridge_boolean_literal_union_fixture
 verify_bridge_realworld_literal_options_fixture
+verify_bridge_stable_constructor_fixture
 verify_bridge_default_export_fixture
 verify_bridge_declaration_merge_namespace_fixture
 verify_bridge_promise_return_fixture

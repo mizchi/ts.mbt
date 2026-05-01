@@ -164,6 +164,32 @@ async test "bridge: emit MoonBit TS bridge package bundle preserves real-world l
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle keeps stable enum constructor names" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/bridge_smoke/stable-constructor-entry.d.ts", "./runtime/stable-constructor.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum StableName {"))
+  assert_true(bundle.bridge_mbti.contains("  A_b"))
+  assert_true(bundle.bridge_mbti.contains("  A_b2"))
+  assert_true(bundle.bridge_mbti.contains("  String_"))
+  assert_true(bundle.bridge_mbti.contains("  UnderscorePrivate"))
+  assert_true(bundle.bridge_mbti.contains("  Member"))
+  assert_true(bundle.bridge_mbt.contains("    A_b => \"a-b\""))
+  assert_true(bundle.bridge_mbt.contains("    A_b2 => \"a_b\""))
+  assert_true(bundle.bridge_mbt.contains("    String_ => \"String\""))
+  assert_true(bundle.bridge_mbt.contains("    UnderscorePrivate => \"_private\""))
+  assert_true(bundle.bridge_mbt.contains("    Member => \"\""))
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes ambient enums" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/enum-entry.d.ts", "./runtime/enum.js",
