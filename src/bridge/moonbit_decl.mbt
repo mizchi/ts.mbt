@@ -1395,19 +1395,14 @@ fn resolve_decl_from_local_name(
             None =>
               match find_type_alias_decl(info.module_, local_name) {
                 Some(type_alias) =>
-                  match type_alias_string_enum_decl(type_alias) {
+                  match enum_lowering_type_alias_enum_decl(type_alias) {
                     Some(enum_) =>
                       Enum({ source_path, local_name, export_name, enum_ })
                     None =>
-                      match type_alias_number_enum_decl(type_alias) {
-                        Some(enum_) =>
-                          Enum({ source_path, local_name, export_name, enum_ })
-                        None =>
-                          match
-                            type_alias_enum_like_unsupported_reason(type_alias) {
-                            Some(reason) => Unsupported(export_name, reason)
-                            None => Missing
-                          }
+                      match
+                        type_alias_enum_like_unsupported_reason(type_alias) {
+                        Some(reason) => Unsupported(export_name, reason)
+                        None => Missing
                       }
                   }
                 None =>
@@ -2681,162 +2676,10 @@ fn find_type_alias_decl(
 }
 
 ///|
-fn literal_union_alias_value_looks_numeric(value : String) -> Bool {
-  if value == "" {
-    return false
-  }
-  let first = value[0].unsafe_to_char()
-  if first >= '0' && first <= '9' {
-    return true
-  }
-  if first == '-' && value.length() > 1 {
-    let next = value[1].unsafe_to_char()
-    return next >= '0' && next <= '9'
-  }
-  false
-}
-
-///|
-fn literal_union_alias_is_safe_string_value(value : String) -> Bool {
-  match value {
-    "true" | "false" => false
-    _ => !literal_union_alias_value_looks_numeric(value)
-  }
-}
-
-///|
-fn type_alias_string_enum_members(
-  type_ : @ast.TsType,
-) -> Array[@ast.TsEnumMember]? {
-  let items = match type_ {
-    @ast.TsType::Union(items) => items
-    @ast.TsType::Literal(_) => [type_]
-    _ => return None
-  }
-  if items.length() == 0 {
-    return None
-  }
-  let members : Array[@ast.TsEnumMember] = []
-  let seen_values : Array[String] = []
-  for item in items {
-    match item {
-      @ast.TsType::Literal(value) => {
-        if !literal_union_alias_is_safe_string_value(value) ||
-          seen_values.contains(value) {
-          return None
-        }
-        seen_values.push(value)
-        members.push({
-          name: value,
-          value: Some(@ast.TsEnumMemberValue::String(value)),
-          is_computed: false,
-        })
-      }
-      _ => return None
-    }
-  }
-  Some(members)
-}
-
-///|
-fn type_alias_string_enum_decl(
-  type_alias : @ast.TsTypeAlias,
-) -> @ast.TsEnumDecl? {
-  if type_alias.type_params.length() > 0 {
-    return None
-  }
-  match type_alias_string_enum_members(type_alias.type_) {
-    Some(members) =>
-      Some({ name: type_alias.name, members, is_const: false, is_declare: true })
-    None => None
-  }
-}
-
-///|
-fn type_alias_number_enum_member_name(value : Int) -> String {
-  if value < 0 {
-    "Negative" + (0 - value).to_string()
-  } else {
-    "N" + value.to_string()
-  }
-}
-
-///|
-fn type_alias_number_enum_members(
-  type_ : @ast.TsType,
-) -> Array[@ast.TsEnumMember]? {
-  let items = match type_ {
-    @ast.TsType::Union(items) => items
-    @ast.TsType::NumberLiteral(_) => [type_]
-    _ => return None
-  }
-  if items.length() == 0 {
-    return None
-  }
-  let members : Array[@ast.TsEnumMember] = []
-  let seen_values : Array[Int] = []
-  for item in items {
-    match item {
-      @ast.TsType::NumberLiteral(raw) => {
-        let value = @string.parse_int(raw) catch { _ => return None }
-        if seen_values.contains(value) {
-          return None
-        }
-        seen_values.push(value)
-        members.push({
-          name: type_alias_number_enum_member_name(value),
-          value: Some(@ast.TsEnumMemberValue::Number(value.to_string())),
-          is_computed: false,
-        })
-      }
-      _ => return None
-    }
-  }
-  Some(members)
-}
-
-///|
-fn type_alias_number_enum_decl(
-  type_alias : @ast.TsTypeAlias,
-) -> @ast.TsEnumDecl? {
-  if type_alias.type_params.length() > 0 {
-    return None
-  }
-  match type_alias_number_enum_members(type_alias.type_) {
-    Some(members) =>
-      Some({ name: type_alias.name, members, is_const: false, is_declare: true })
-    None => None
-  }
-}
-
-///|
 fn type_alias_boolean_literal_primitive_type(
   type_alias : @ast.TsTypeAlias,
 ) -> @ast.TsType? {
-  if type_alias.type_params.length() > 0 {
-    return None
-  }
-  let items = match type_alias.type_ {
-    @ast.TsType::Union(items) => items
-    @ast.TsType::BooleanLiteral(_) => [type_alias.type_]
-    _ => return None
-  }
-  if items.length() == 0 {
-    return None
-  }
-  let mut has_boolean_literal = false
-  for item in items {
-    match item {
-      @ast.TsType::BooleanLiteral(_) => has_boolean_literal = true
-      @ast.TsType::Undefined | @ast.TsType::Null => ()
-      _ => return None
-    }
-  }
-  if has_boolean_literal {
-    Some(type_alias.type_)
-  } else {
-    None
-  }
+  enum_lowering_type_alias_boolean_literal_primitive_type(type_alias)
 }
 
 ///|
@@ -2848,70 +2691,7 @@ fn enum_decl_unsupported_reason(enum_ : @ast.TsEnumDecl) -> String? {
 fn type_alias_enum_like_unsupported_reason(
   type_alias : @ast.TsTypeAlias,
 ) -> String? {
-  if type_alias.type_params.length() > 0 {
-    return None
-  }
-  if type_alias_string_enum_decl(type_alias) is Some(_) ||
-    type_alias_number_enum_decl(type_alias) is Some(_) ||
-    type_alias_boolean_literal_primitive_type(type_alias) is Some(_) {
-    return None
-  }
-  let items = match type_alias.type_ {
-    @ast.TsType::Union(items) => items
-    @ast.TsType::Literal(_)
-    | @ast.TsType::NumberLiteral(_)
-    | @ast.TsType::BigIntLiteral(_)
-    | @ast.TsType::BooleanLiteral(_) => [type_alias.type_]
-    _ => return None
-  }
-  let mut has_string = false
-  let mut has_number = false
-  let mut has_bigint = false
-  let mut has_bool = false
-  let seen_string_values : Array[String] = []
-  let seen_number_values : Array[Int] = []
-  for item in items {
-    match item {
-      @ast.TsType::Literal(value) => {
-        has_string = true
-        if seen_string_values.contains(value) {
-          return Some(
-            "duplicate literal union values cannot be converted back safely.",
-          )
-        }
-        seen_string_values.push(value)
-      }
-      @ast.TsType::NumberLiteral(raw) => {
-        has_number = true
-        let value = @string.parse_int(raw) catch {
-          _ =>
-            return Some("numeric literal union contains a non-integer literal.")
-        }
-        if seen_number_values.contains(value) {
-          return Some(
-            "duplicate literal union values cannot be converted back safely.",
-          )
-        }
-        seen_number_values.push(value)
-      }
-      @ast.TsType::BigIntLiteral(_) => has_bigint = true
-      @ast.TsType::BooleanLiteral(_) => has_bool = true
-      @ast.TsType::Undefined | @ast.TsType::Null => ()
-      _ => return None
-    }
-  }
-  if has_bigint {
-    return Some("bigint literal union cannot be lowered safely.")
-  }
-  if has_string && has_number {
-    return Some("mixed string/number literal union cannot be lowered safely.")
-  }
-  if has_bool && (has_string || has_number) {
-    return Some(
-      "mixed boolean/string/number literal union cannot be lowered safely.",
-    )
-  }
-  None
+  enum_lowering_type_alias_enum_like_unsupported_reason(type_alias)
 }
 
 ///|

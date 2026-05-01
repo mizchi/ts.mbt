@@ -554,10 +554,12 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
     `fixtures/bridge_smoke/literal-union-alias-entry.d.ts`.
 - [x] Green: primitive return conversion with an explicit unexpected-value
   abort path.
-- [ ] Refactor: share enum metadata between decl, FFI, and package bridge
+- [x] Refactor: share enum metadata between decl, FFI, and package bridge
   emitters so literal-union and `declare enum` use the same lowering path.
   - [x] Share ambient enum case/value/unsupported-reason lowering between
     declaration diagnostics and FFI generation.
+  - [x] Share literal-union alias enum declaration lowering through
+    `enum_lowering_type_alias_enum_decl`.
 
 ## Normalized DTS Shape-Merge Scope
 
