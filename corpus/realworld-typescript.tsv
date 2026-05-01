@@ -15,6 +15,7 @@ package|valibot|valibot|
 package|immer|immer|
 package|execa|execa|
 package|preact|preact|
+package|vitest/runtime|vitest_runtime|
 node_builtin|node:sqlite|node_sqlite|@types/node/sqlite.d.ts
 node_builtin|node:fs|node_fs|@types/node/fs.d.ts
 node_builtin|node:path|node_path|@types/node/path.d.ts

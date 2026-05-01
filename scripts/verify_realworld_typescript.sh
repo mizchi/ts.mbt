@@ -323,6 +323,7 @@ jsvalue_function_budget() {
     immer) printf '16\n' ;;
     execa) printf '1\n' ;;
     preact) printf '10\n' ;;
+    vitest/runtime) printf '3\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '0\n' ;;
     node:querystring) printf '0\n' ;;
@@ -362,6 +363,7 @@ jsvalue_cause_budget() {
     immer) printf '20|1|7|2|2|2|6\n' ;;
     execa) printf '1|0|0|0|1|0|0\n' ;;
     preact) printf '1319|1246|1|21|34|1|16\n' ;;
+    vitest/runtime) printf '5|0|1|0|4|0|0\n' ;;
     node:sqlite) printf '3|3|0|0|0|0|0\n' ;;
     node:fs) printf '11|4|0|0|0|7|0\n' ;;
     node:path) printf '0|0|0|0|0|0|0\n' ;;
@@ -515,6 +517,18 @@ write_probe_moon_mod() {
 EOF
 }
 
+package_root_for_spec() {
+  local package_spec="$1"
+
+  if [[ "$package_spec" == @* ]]; then
+    local scope name rest
+    IFS=/ read -r scope name rest <<< "$package_spec"
+    printf '%s/%s\n' "$scope" "$name"
+  else
+    printf '%s\n' "${package_spec%%/*}"
+  fi
+}
+
 write_bridge_test() {
   local out="$1"
   local module_name="$2"
@@ -656,6 +670,39 @@ extern "js" fn realworld_preact_children() -> Array[ComponentChildren] =
 test "real-world preact bridge smoke" {
   let _ = h(Input, None, realworld_preact_children())
   let _ = createRef()
+}
+EOF
+      ;;
+    vitest_runtime)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_vitest_global() -> JSValue =
+  #| () => globalThis
+
+extern "js" fn realworld_vitest_options() -> StringRecordOfAny =
+  #| () => ({})
+
+extern "js" fn realworld_vitest_object() -> JSValue =
+  #| () => ({})
+
+test "real-world vitest environments bridge smoke" {
+  let envs = get_builtin_environments()
+  assert_eq(envs.node.name, "node")
+  assert_eq(envs.jsdom.name, "jsdom")
+  let global = realworld_vitest_global()
+  let options = realworld_vitest_options()
+  let _ = envs.node.setup(global, options)
+  match envs.node.setupVM {
+    Some(setup_vm) => {
+      let _ = setup_vm(options)
+    }
+    None => ()
+  }
+  let populated = populateGlobal(
+    realworld_vitest_object(),
+    realworld_vitest_object(),
+    None,
+  )
+  let _ = populated.keys
 }
 EOF
       ;;
@@ -1016,6 +1063,43 @@ fn main {
 }
 EOF
       ;;
+    vitest_runtime)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_vitest_global() -> @sut.JSValue =
+  #| () => globalThis
+
+extern "js" fn realworld_vitest_options() -> @sut.StringRecordOfAny =
+  #| () => ({})
+
+extern "js" fn realworld_vitest_object() -> @sut.JSValue =
+  #| () => ({})
+
+fn main {
+  let envs = @sut.get_builtin_environments()
+  if envs.node.name != "node" {
+    abort("expected node environment")
+  }
+  if envs.jsdom.name != "jsdom" {
+    abort("expected jsdom environment")
+  }
+  let global = realworld_vitest_global()
+  let options = realworld_vitest_options()
+  let _ = envs.node.setup(global, options)
+  match envs.node.setupVM {
+    Some(setup_vm) => {
+      let _ = setup_vm(options)
+    }
+    None => ()
+  }
+  let populated = @sut.populateGlobal(
+    realworld_vitest_object(),
+    realworld_vitest_object(),
+    None,
+  )
+  let _ = populated.keys
+}
+EOF
+      ;;
     node_sqlite)
       cat > "$smoke_dir/main.mbt" <<'EOF'
 extern "js" fn realworld_node_sqlite_memory_path() -> @sut.PathLike =
@@ -1254,6 +1338,31 @@ run_build_smoke() {
   else
     run_logged "$log_root/${module_name}_node_smoke.log" node "$built_js"
   fi
+  if [ "$module_name" = "vitest_runtime" ]; then
+    run_logged "$log_root/${module_name}_bridge_js_smoke.log" \
+      node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const bridge = await import(pathToFileURL(process.argv[1]).href);
+const envs = bridge.__ts_mbt_get_builtin_environments();
+if (envs.node.name !== "node" || envs.jsdom.name !== "jsdom") {
+  throw new Error("unexpected Vitest builtin environment names");
+}
+const setupResult = await envs.node.setup(globalThis, {});
+if (typeof setupResult.teardown !== "function") {
+  throw new Error("expected node setup teardown function");
+}
+await setupResult.teardown(globalThis);
+const vmResult = await envs.node.setupVM({});
+if (!vmResult.getVmContext()) {
+  throw new Error("expected node VM context");
+}
+await vmResult.teardown();
+const populated = bridge.__ts_mbt_populate_global({}, {}, undefined);
+if (!populated.keys || !populated.skipKeys) {
+  throw new Error("expected populateGlobal result");
+}
+' "$out/bridge.js"
+  fi
 }
 
 verify_package() {
@@ -1263,8 +1372,10 @@ verify_package() {
   local project="$root/project"
   local out="$project/dist/$module_name"
 
-  if [ ! -e "$node_modules_root/$package_spec" ]; then
-    echo "Missing package '$package_spec' in $node_modules_root" >&2
+  local package_root
+  package_root="$(package_root_for_spec "$package_spec")"
+  if [ ! -e "$node_modules_root/$package_root" ]; then
+    echo "Missing package '$package_root' for '$package_spec' in $node_modules_root" >&2
     exit 1
   fi
 

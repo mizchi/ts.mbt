@@ -4309,6 +4309,7 @@ fn normalize_specialized_node_interfaces(
   let exported_names : Array[String] = []
   let mut needs_cpu_info_times = false
   let mut needs_crypto_helpers = false
+  let mut needs_vitest_environment_helpers = false
   for exported in exported_interfaces {
     exported_names.push(exported.export_name)
     exported_names.push(exported.local_name)
@@ -4324,6 +4325,10 @@ fn normalize_specialized_node_interfaces(
       exported.export_name == "Argon2Parameters" ||
       exported.local_name == "Argon2Parameters" {
       needs_crypto_helpers = true
+    }
+    if exported.export_name == "Environment" ||
+      exported.local_name == "Environment" {
+      needs_vitest_environment_helpers = true
     }
   }
   if needs_cpu_info_times {
@@ -4372,6 +4377,19 @@ fn normalize_specialized_node_interfaces(
         readonly_fields: [],
       })
     }
+  }
+  if needs_vitest_environment_helpers &&
+    !exported_names.contains("BuiltinEnvironments") {
+    interfaces.push({
+      name: "BuiltinEnvironments",
+      type_params: [],
+      extends_names: [],
+      fields: [
+        ("node", @ast.TsType::Named("Environment")),
+        ("jsdom", @ast.TsType::Named("Environment")),
+      ],
+      readonly_fields: [],
+    })
   }
   interfaces
 }
@@ -5510,6 +5528,58 @@ fn decl_is_hono_context_response_method(method_name : String) -> Bool {
 }
 
 ///|
+fn decl_promise_named_type(name : String) -> @ast.TsType {
+  Applied("Promise", [Named(name)])
+}
+
+///|
+fn decl_vitest_environment_setup_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Func(params, _) if params.length() == 2 =>
+      Func([params[0], params[1]], decl_promise_named_type("EnvironmentReturn"))
+    _ => type_
+  }
+}
+
+///|
+fn decl_vitest_environment_setup_vm_type(type_ : @ast.TsType) -> @ast.TsType {
+  let params = match type_ {
+    Func(params, _) => params
+    _ => [Named("StringRecordOfAny")]
+  }
+  if params.length() == 1 {
+    Union([
+      Func([params[0]], decl_promise_named_type("VmEnvironmentReturn")),
+      Undefined,
+    ])
+  } else {
+    type_
+  }
+}
+
+///|
+fn decl_vitest_environment_return_teardown_type(
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Func(params, _) if params.length() == 1 =>
+      Func([params[0]], Applied("Promise", [Void]))
+    _ => type_
+  }
+}
+
+///|
+fn decl_vitest_vm_environment_return_teardown_type(
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Func(params, _) if params.length() == 0 =>
+      Func([], Applied("Promise", [Void]))
+    _ => type_
+  }
+}
+
+///|
 fn decl_specialize_generated_interface_field_type(
   owner_name : String,
   field_name : String,
@@ -5568,6 +5638,30 @@ fn decl_specialize_generated_interface_field_type(
     "URLSearchParams" =>
       if field_name == "forEach" {
         decl_url_search_params_for_each_type(type_)
+      } else {
+        type_
+      }
+    "Environment" =>
+      if field_name == "viteEnvironment" {
+        decl_string_optional_type()
+      } else if field_name == "setup" {
+        decl_vitest_environment_setup_type(type_)
+      } else if field_name == "setupVM" {
+        decl_vitest_environment_setup_vm_type(type_)
+      } else {
+        type_
+      }
+    "EnvironmentReturn" =>
+      if field_name == "teardown" {
+        decl_vitest_environment_return_teardown_type(type_)
+      } else {
+        type_
+      }
+    "VmEnvironmentReturn" =>
+      if field_name == "getVmContext" {
+        Func([], Named("StringRecordOfAny"))
+      } else if field_name == "teardown" {
+        decl_vitest_vm_environment_return_teardown_type(type_)
       } else {
         type_
       }
@@ -6070,6 +6164,7 @@ fn decl_specialize_generated_value_type(
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   match value_name {
+    "builtinEnvironments" => Named("BuiltinEnvironments")
     "path" if type_ == Any => Named("PathModule")
     "constants" => Named("Constants")
     "encode" if type_ == Any => decl_querystring_stringify_type()

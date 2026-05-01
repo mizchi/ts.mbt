@@ -682,6 +682,34 @@ test "bridge: FFI type name lowers function types" {
 }
 
 ///|
+test "bridge: FFI struct field type parenthesizes optional function types" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: ["Node"],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  assert_eq(
+    ffi_struct_field_type_name(
+      state,
+      @ast.TsType::Union([
+        @ast.TsType::Func(
+          [@ast.TsType::Named("Node")],
+          @ast.TsType::Named("Node"),
+        ),
+        @ast.TsType::Undefined,
+      ]),
+    ),
+    "((Node) -> Node)?",
+  )
+  assert_false(state.needs_js_any)
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle names inline object promise results" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/inline-object-promise-entry.d.ts", "./runtime/inline-object-promise.js",

@@ -432,6 +432,62 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
     @ast.TsType::Named("Response"),
   )
   assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "Environment",
+      "viteEnvironment",
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "Environment",
+      "setup",
+      @ast.TsType::Func(
+        [@ast.TsType::Any, @ast.TsType::Named("StringRecordOfAny")],
+        @ast.TsType::Named("Awaitable"),
+      ),
+    ),
+    @ast.TsType::Func(
+      [@ast.TsType::Any, @ast.TsType::Named("StringRecordOfAny")],
+      @ast.TsType::Applied("Promise", [@ast.TsType::Named("EnvironmentReturn")]),
+    ),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "Environment",
+      "setupVM",
+      @ast.TsType::Func(
+        [@ast.TsType::Named("StringRecordOfAny")],
+        @ast.TsType::Named("Awaitable"),
+      ),
+    ),
+    @ast.TsType::Union([
+      @ast.TsType::Func(
+        [@ast.TsType::Named("StringRecordOfAny")],
+        @ast.TsType::Applied("Promise", [
+          @ast.TsType::Named("VmEnvironmentReturn"),
+        ]),
+      ),
+      @ast.TsType::Undefined,
+    ]),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "VmEnvironmentReturn",
+      "getVmContext",
+      @ast.TsType::Func([], @ast.TsType::Any),
+    ),
+    @ast.TsType::Func([], @ast.TsType::Named("StringRecordOfAny")),
+  )
+  assert_eq(
+    decl_specialize_generated_value_type(
+      "builtinEnvironments",
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Named("BuiltinEnvironments"),
+  )
+  assert_eq(
     decl_specialize_generated_value_type("encode", @ast.TsType::Any),
     @ast.TsType::Func(
       [

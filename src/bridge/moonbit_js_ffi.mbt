@@ -806,7 +806,10 @@ fn ffi_struct_field_type_name(
     Some((collapsed, is_optional)) => {
       let rendered = ffi_struct_field_type_name(state, collapsed)
       if is_optional {
-        return rendered + "?"
+        return match collapsed {
+          Func(_, _) => "(\{rendered})?"
+          _ => rendered + "?"
+        }
       }
       return rendered
     }
