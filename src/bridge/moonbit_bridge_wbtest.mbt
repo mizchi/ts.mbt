@@ -185,7 +185,9 @@ async test "bridge: emit MoonBit TS bridge package bundle keeps stable enum cons
   assert_true(bundle.bridge_mbt.contains("    A_b => \"a-b\""))
   assert_true(bundle.bridge_mbt.contains("    A_b2 => \"a_b\""))
   assert_true(bundle.bridge_mbt.contains("    String_ => \"String\""))
-  assert_true(bundle.bridge_mbt.contains("    UnderscorePrivate => \"_private\""))
+  assert_true(
+    bundle.bridge_mbt.contains("    UnderscorePrivate => \"_private\""),
+  )
   assert_true(bundle.bridge_mbt.contains("    Member => \"\""))
 }
 

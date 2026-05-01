@@ -384,82 +384,17 @@ fn ffi_classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
 fn ffi_enum_case_names(
   enum_ : @ast.TsEnumDecl,
 ) -> Array[(String, @ast.TsEnumMember)] {
-  let cases : Array[(String, @ast.TsEnumMember)] = []
-  let seen_cases : Array[String] = []
-  for i, enum_member in enum_.members {
-    let base_name = ffi_type_identifier(enum_member.name, "Member")
-    let mut case_name = base_name
-    let mut suffix = 2
-    while seen_cases.contains(case_name) {
-      case_name = base_name + suffix.to_string()
-      suffix += 1
-    }
-    if case_name == "" {
-      case_name = "Member" + i.to_string()
-    }
-    seen_cases.push(case_name)
-    cases.push((case_name, enum_member))
-  }
-  cases
+  enum_lowering_case_names(enum_)
 }
 
 ///|
 fn ffi_enum_string_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, String)]? {
-  let cases : Array[(String, String)] = []
-  let seen_values : Array[String] = []
-  for item in ffi_enum_case_names(enum_) {
-    let (case_name, enum_member) = item
-    if enum_member.is_computed {
-      return None
-    }
-    match enum_member.value {
-      Some(@ast.TsEnumMemberValue::String(value)) => {
-        if seen_values.contains(value) {
-          return None
-        }
-        seen_values.push(value)
-        cases.push((case_name, value))
-      }
-      _ => return None
-    }
-  }
-  if cases.length() == 0 {
-    None
-  } else {
-    Some(cases)
-  }
+  enum_lowering_string_cases(enum_)
 }
 
 ///|
 fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
-  let cases : Array[(String, Int)] = []
-  let seen_values : Array[Int] = []
-  let mut next_value = 0
-  for item in ffi_enum_case_names(enum_) {
-    let (case_name, enum_member) = item
-    if enum_member.is_computed {
-      return None
-    }
-    let value = match enum_member.value {
-      Some(@ast.TsEnumMemberValue::Number(raw)) => {
-        let parsed = @string.parse_int(raw) catch { _ => return None }
-        parsed
-      }
-      None => next_value
-      _ => return None
-    }
-    if seen_values.contains(value) {
-      return None
-    }
-    seen_values.push(value)
-    cases.push((case_name, value))
-    next_value = value + 1
-  }
-  if cases.length() == 0 {
-    None
-  } else {
-    Some(cases)
-  }
+  enum_lowering_int_cases(enum_)
 }
 
 ///|

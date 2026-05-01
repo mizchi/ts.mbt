@@ -554,6 +554,8 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
   abort path.
 - [ ] Refactor: share enum metadata between decl, FFI, and package bridge
   emitters so literal-union and `declare enum` use the same lowering path.
+  - [x] Share ambient enum case/value/unsupported-reason lowering between
+    declaration diagnostics and FFI generation.
 
 ## Normalized DTS Shape-Merge Scope
 
