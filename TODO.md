@@ -282,8 +282,8 @@ Implemented in the current real-world TypeScript probe order:
   - mixed named/default re-exports
   - Generated fixture smokes now cover `.cjs` `export = namespace`
     runtimes through synthetic default import, `node:path` namespace imports,
-    relative/parent-relative default exports, and mixed default/named class
-    re-exports.
+    relative/parent-relative default exports, bare CJS package default
+    functions, and mixed default/named class re-exports.
 - [x] Add runtime smokes for async and Promise-returning APIs.
   - `Promise<T>` / `PromiseLike<T>` now lower to `@js.Promise[T]` in
     declaration and FFI generation, and a generated JS-target fixture awaits
@@ -500,6 +500,9 @@ Generate TypeScript-consumable bridge artifacts from MoonBit package interfaces 
 - [x] Prefer direct `#module("...")` imports when the runtime `moduleSpec` is non-relative.
   - Works for bare specifiers, `node:*`, and rooted specifiers like `/src/api/client.ts`.
   - This now covers top-level function exports, instance methods/properties, and class constructors.
+  - Bare package `default` function exports are intentionally routed through
+    `bridge.js`; this avoids MoonBit JS backend default binding mismatches for
+    CJS packages such as `express`.
 - [x] Keep `bridge.js` fallback for relative module specs like `./client.js` and `../client.js`.
   - MoonBit currently rejects relative paths in `#module("...")`.
 - [x] Keep wrappers for static members / value exports / namespace exports for now.

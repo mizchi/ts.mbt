@@ -838,16 +838,42 @@ fn ffi_struct_field_type_name(
 fn ffi_function_type_parts(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
-) -> (Array[String], String)? {
+) -> (Array[@ast.TsType], Array[String], String)? {
   match type_ {
     Func(params, return_type) => {
       let param_types : Array[String] = []
       for param in params {
         param_types.push(ffi_type_name(state, param))
       }
-      Some((param_types, ffi_type_name(state, return_type)))
+      Some((params, param_types, ffi_type_name(state, return_type)))
     }
     _ => None
+  }
+}
+
+///|
+fn ffi_inline_js_unwrap_option_expr(expr : String) -> String {
+  "(\{expr} == null ? undefined : (typeof \{expr} === \"object\" && \"$tag\" in \{expr} ? (\{expr}.$tag === 1 ? \{expr}._0 : undefined) : \{expr}))"
+}
+
+///|
+fn ffi_inline_js_arg_expr(type_ : @ast.TsType, expr : String) -> String {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      if !is_optional {
+        return ffi_inline_js_arg_expr(collapsed, expr)
+      }
+      return match collapsed {
+        Boolean =>
+          "(\{expr} === -1 ? undefined : \{ffi_inline_js_unwrap_option_expr(expr)})"
+        _ => ffi_inline_js_unwrap_option_expr(expr)
+      }
+    }
+    None => ()
+  }
+  match ffi_classify_transparent_intersection(type_) {
+    Some(inner) => ffi_inline_js_arg_expr(inner, expr)
+    None => expr
   }
 }
 
@@ -861,7 +887,7 @@ fn ffi_function_field_method_decl(
   field_type : @ast.TsType,
 ) -> String? {
   match ffi_function_type_parts(state, field_type) {
-    Some((param_types, return_type)) => {
+    Some((source_param_types, param_types, return_type)) => {
       let self_type = ffi_receiver_self_type(
         receiver_type, receiver_type_params,
       )
@@ -874,6 +900,11 @@ fn ffi_function_field_method_decl(
       }
       let params_src = params.join(", ")
       let args_src = args.join(", ")
+      let js_args : Array[String] = []
+      for i, arg in args {
+        js_args.push(ffi_inline_js_arg_expr(source_param_types[i], arg))
+      }
+      let js_args_src = js_args.join(", ")
       let fn_prefix = ffi_function_type_param_prefix(receiver_type_params)
       if field_name == "_call_" {
         let js_params : Array[String] = ["self"]
@@ -882,7 +913,7 @@ fn ffi_function_field_method_decl(
         }
         let js_params_src = js_params.join(", ")
         Some(
-          "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => self(\{args_src})",
+          "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => self(\{js_args_src})",
         )
       } else if receiver_type == "Assertion" {
         let js_params : Array[String] = ["self"]
@@ -892,14 +923,27 @@ fn ffi_function_field_method_decl(
         let js_params_src = js_params.join(", ")
         let js_call = ffi_js_access("self", js_field_name) +
           "(" +
-          args_src +
+          js_args_src +
           ")"
         Some(
           "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
         )
-      } else {
+      } else if receiver_type_params.length() > 0 {
         Some(
           "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
+        )
+      } else {
+        let js_params : Array[String] = ["self"]
+        for arg in args {
+          js_params.push(arg)
+        }
+        let js_params_src = js_params.join(", ")
+        let js_call = ffi_js_access("self", js_field_name) +
+          "(" +
+          js_args_src +
+          ")"
+        Some(
+          "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
         )
       }
     }
@@ -1473,6 +1517,16 @@ fn ffi_can_use_direct_module(module_spec : String) -> Bool {
   module_spec != "" &&
   !module_spec.has_prefix("./") &&
   !module_spec.has_prefix("../")
+}
+
+///|
+fn ffi_can_use_direct_runtime_export(
+  module_spec : String,
+  runtime_export_name : String,
+) -> Bool {
+  ffi_can_use_direct_module(module_spec) &&
+  !(runtime_export_name == "default" &&
+  ffi_module_spec_prefers_namespace_named_imports(module_spec))
 }
 
 ///|
@@ -2312,6 +2366,7 @@ fn ffi_class_method_decl_to_moonbit(
   class_method : @ast.TsClassMethodDecl,
 ) -> String {
   let params : Array[String] = []
+  let arg_names : Array[String] = []
   let js_args : Array[String] = []
   if !class_method.is_static {
     params.push("self : \{ffi_class_type_name(class_.name)}")
@@ -2320,7 +2375,8 @@ fn ffi_class_method_decl_to_moonbit(
     let (name, type_) = param
     let safe_name = ffi_sanitize_identifier(name, "arg")
     let safe_type = ffi_type_name(state, type_)
-    js_args.push(safe_name)
+    arg_names.push(safe_name)
+    js_args.push(ffi_inline_js_arg_expr(type_, safe_name))
     params.push("\{safe_name} : \{safe_type}")
   }
   let return_type = ffi_type_name(state, class_method.return_type)
@@ -2336,7 +2392,7 @@ fn ffi_class_method_decl_to_moonbit(
     "pub extern \"js\" fn \{fn_name}(\{method_params}) -> \{return_type} = \"\{binding_name}\""
   } else {
     let js_params : Array[String] = ["self"]
-    for arg in js_args {
+    for arg in arg_names {
       js_params.push(arg)
     }
     let js_param_list = js_params.join(", ")
@@ -3509,7 +3565,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         )
       }
       None =>
-        if ffi_can_use_direct_module(module_spec) &&
+        if ffi_can_use_direct_runtime_export(module_spec, runtime_export_name) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
           !needs_js_arg_conversion &&
           !needs_js_return_conversion {
@@ -3634,7 +3690,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         )
       }
       None =>
-        if ffi_can_use_direct_module(module_spec) &&
+        if ffi_can_use_direct_runtime_export(module_spec, runtime_export_name) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
           !needs_js_arg_conversion &&
           !needs_js_return_conversion {

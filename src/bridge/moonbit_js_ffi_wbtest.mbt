@@ -2876,6 +2876,31 @@ async test "bridge: emit MoonBit JS FFI bundle uses adapter reexport for relativ
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle uses adapter reexport for bare default functions" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-default-function-entry.ts", "pkg-default-fn",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn default(label : String) -> String = \"__ts_mbt_default\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export { default as __ts_mbt_default } from \"pkg-default-fn\";",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle uses adapter reexport for parent-relative default functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-default-function-entry.ts", "../runtime/runtime-default-function.js",
@@ -3546,7 +3571,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   assert_true(bundle.ffi_mbt.contains("  dispatch : (State) -> Unit"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub fn UseOptimisticResult::dispatch(self : UseOptimisticResult, arg0 : State) -> Unit",
+      "pub extern \"js\" fn UseOptimisticResult::dispatch(self : UseOptimisticResult, arg0 : State) -> Unit =\n  #| (self, arg0) => self.dispatch(arg0)",
     ),
   )
   assert_true(bundle.ffi_mbt.contains("pub(all) struct UseActionStateResult"))
@@ -3554,7 +3579,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   assert_true(bundle.ffi_mbt.contains("  dispatch : () -> Unit"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub fn UseActionStateResult::dispatch(self : UseActionStateResult) -> Unit",
+      "pub extern \"js\" fn UseActionStateResult::dispatch(self : UseActionStateResult) -> Unit =\n  #| (self) => self.dispatch()",
     ),
   )
   assert_true(bundle.ffi_mbt.contains("  isPending : Bool"))
@@ -4558,9 +4583,114 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
   assert_true(actual.contains("  createIdentifier : (String) -> Identifier"))
   assert_true(
     actual.contains(
-      "pub fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier {\n  (self.createIdentifier)(arg0)\n}",
+      "pub extern \"js\" fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier =\n  #| (self, arg0) => self.createIdentifier(arg0)",
     ),
   )
+}
+
+///|
+test "bridge: FFI struct method wrappers unwrap optional arguments" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  let iface : @ast.TsInterface = {
+    name: "SignJWT",
+    type_params: [],
+    extends_names: [],
+    fields: [
+      (
+        "setIssuedAt",
+        @ast.TsType::Func(
+          [@ast.TsType::Union([@ast.TsType::Any, @ast.TsType::Undefined])],
+          @ast.TsType::Named("This"),
+        ),
+      ),
+    ],
+    readonly_fields: [],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  assert_true(
+    actual.contains(
+      "pub extern \"js\" fn SignJWT::setIssuedAt(self : SignJWT, arg0 : @js.Any?) -> This =",
+    ),
+  )
+  assert_true(actual.contains("self.setIssuedAt("))
+  assert_true(actual.contains("arg0.$tag === 1 ? arg0._0 : undefined"))
+}
+
+///|
+test "bridge: FFI class methods unwrap optional arguments" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  let class_ : @ast.TsClassDecl = {
+    name: "SignJWT",
+    base_names: [],
+    constructor_params: None,
+    properties: [],
+    methods: [],
+    is_abstract: false,
+    is_constructible: true,
+  }
+  let class_method : @ast.TsClassMethodDecl = {
+    name: "setIssuedAt",
+    params: [
+      ("input", @ast.TsType::Union([@ast.TsType::Any, @ast.TsType::Undefined])),
+    ],
+    return_type: @ast.TsType::Named("This"),
+    is_static: false,
+  }
+  let actual = ffi_class_method_decl_to_moonbit(state, class_, class_method)
+  assert_true(
+    actual.contains(
+      "pub extern \"js\" fn SignJWT::sign_jwt_set_issued_at(self : SignJWT, input : @js.Any?) -> This =",
+    ),
+  )
+  assert_true(actual.contains("#| (self, input) =>"))
+  assert_true(actual.contains("self.setIssuedAt("))
+  assert_true(actual.contains("input.$tag === 1 ? input._0 : undefined"))
+}
+
+///|
+test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  let iface : @ast.TsInterface = {
+    name: "StatsBase",
+    type_params: ["T"],
+    extends_names: [],
+    fields: [("isFile", @ast.TsType::Func([], @ast.TsType::Boolean))],
+    readonly_fields: [],
+  }
+  let actual = ffi_struct_decl_to_moonbit(state, iface)
+  assert_true(
+    actual.contains(
+      "pub fn[T] StatsBase::isFile(self : StatsBase[T]) -> Bool {\n  (self.isFile)()\n}",
+    ),
+  )
+  assert_false(actual.contains("pub extern \"js\" fn[T]"))
 }
 
 ///|
@@ -4588,8 +4718,11 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  call2 : () -> Unit"))
-  assert_eq(count_occurrences_in_ffi_output(actual, "pub fn LargeApi::"), 2)
-  assert_false(actual.contains("pub fn LargeApi::call2("))
+  assert_eq(
+    count_occurrences_in_ffi_output(actual, "pub extern \"js\" fn LargeApi::"),
+    2,
+  )
+  assert_false(actual.contains("pub extern \"js\" fn LargeApi::call2("))
 }
 
 ///|

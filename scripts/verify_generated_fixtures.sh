@@ -749,6 +749,48 @@ EOF
   moon -C "$pkg_root" test --target js
 }
 
+verify_bridge_bare_cjs_default_function_fixture() {
+  local root="_build/bridge_fixture_bare_cjs_default_function"
+  local fixture_path="$repo_root/fixtures/bridge_smoke/default-function-entry.ts"
+
+  rm -rf "$root"
+  mkdir -p "$root/node_modules/pkg-default-fn"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "pkg-default-fn" "$root" >/dev/null
+
+  cat > "$root/node_modules/pkg-default-fn/package.json" <<'EOF'
+{
+  "name": "pkg-default-fn",
+  "version": "0.0.0",
+  "main": "index.cjs"
+}
+EOF
+
+  cat > "$root/node_modules/pkg-default-fn/index.cjs" <<'EOF'
+module.exports = function defaultFunction(label) {
+  return `pkg:${label.trim()}`;
+};
+EOF
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/bridge_bare_cjs_default_function",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated bridge package calls bare CJS default function through bridge adapter" {
+  assert_eq(default("  hi  "), "pkg:hi")
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_bridge_class_property_fixture() {
   local root="_build/bridge_fixture_class_property"
   local fixture_path="$repo_root/fixtures/bridge_smoke/class-property-entry.d.ts"
@@ -2414,6 +2456,7 @@ verify_bridge_callback_fixture
 verify_bridge_cjs_export_equals_fixture
 verify_bridge_node_path_namespace_import_fixture
 verify_bridge_parent_relative_default_function_fixture
+verify_bridge_bare_cjs_default_function_fixture
 verify_bridge_class_property_fixture
 verify_bridge_rooted_class_property_reexport_fixture
 verify_bridge_bare_class_property_reexport_fixture

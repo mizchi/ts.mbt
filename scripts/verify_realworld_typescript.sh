@@ -759,15 +759,41 @@ EOF
     playwright)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world playwright bridge smoke" {
-  let _ = get_chromium()
-  let _ = get_firefox()
-  let _ = get_webkit()
+  let chromium = get_chromium()
+  assert_eq(chromium.name(), "chromium")
+  assert_eq(get_firefox().name(), "firefox")
+  assert_eq(get_webkit().name(), "webkit")
+  get_selectors().setTestIdAttribute("data-testid")
+  let _launch_options = LaunchOptions::{
+    args: Some(["--disable-dev-shm-usage"]),
+    artifactsDir: None,
+    channel: None,
+    chromiumSandbox: Some(false),
+    downloadsPath: None,
+    env: None,
+    executablePath: None,
+    firefoxUserPrefs: None,
+    handleSIGHUP: None,
+    handleSIGINT: None,
+    handleSIGTERM: None,
+    headless: Some(true),
+    ignoreDefaultArgs: None,
+    logger: None,
+    proxy: None,
+    slowMo: Some(0.0),
+    timeout: Some(1000.0),
+    tracesDir: None,
+  }
   let _ = get_devices()
+  let _ = get_request()
 }
 EOF
       ;;
     react_router)
       cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_react_router_params() -> JSValue =
+  #| () => ({ id: "42" })
+
 test "real-world react-router bridge smoke" {
   let path = PathPartial::{
     pathname: Some("/docs"),
@@ -778,31 +804,103 @@ test "real-world react-router bridge smoke" {
   let parsed = parsePath("/docs?tab=api#top")
   assert_eq(parsed.pathname, Some("/docs"))
   assert_eq(generatePath("/docs", None), "/docs")
+  let full_path = PathPartial::{
+    pathname: Some("/docs"),
+    search: Some("?tab=api"),
+    hash: Some("#top"),
+  }
+  assert_eq(createPath(full_path), "/docs?tab=api#top")
+  assert_eq(
+    generatePath("/users/:id", Some(realworld_react_router_params())),
+    "/users/42",
+  )
+  let resolved = resolvePath(to_from_string("../api"), Some("/docs/reference"))
+  assert_eq(resolved.pathname, "/docs/api")
+  assert_eq(resolved.search, "")
+  assert_eq(resolved.hash, "")
 }
 EOF
       ;;
     jose)
       cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_jose_timestamp() -> JSValue =
+  #| () => 1710000000
+
 test "real-world jose bridge smoke" {
   let jwt = new_unsecured_jwt(None)
+  let _ = jwt.unsecured_jwt_set_issuer("https://issuer.example")
+  let _ = jwt.unsecured_jwt_set_subject("user-42")
+  let _ = jwt.unsecured_jwt_set_jti("token-1")
+  let _ = jwt.unsecured_jwt_set_issued_at(Some(realworld_jose_timestamp()))
   let encoded = jwt.unsecured_jwt_encode()
-  let _ = unsecured_jwt_decode(encoded, None)
+  let decoded = unsecured_jwt_decode(encoded, None)
+  let _ = decoded.header
   let _ = decodeJwt(encoded)
+  let signer = new_sign_jwt(None)
+  let _ = signer.sign_jwt_set_issuer("https://issuer.example")
+  let _ = signer.sign_jwt_set_subject("user-42")
+  let _ = signer.sign_jwt_set_jti("token-1")
+  let _ = signer.sign_jwt_set_issued_at(Some(realworld_jose_timestamp()))
 }
 EOF
       ;;
     express)
       cat > "$out/bridge_test.mbt" <<'EOF'
 test "real-world express bridge smoke" {
-  let _ = router(None)
+  let options = RouterOptions::{
+    caseSensitive: Some(true),
+    mergeParams: Some(true),
+    strict: Some(false),
+  }
+  let _ = router(Some(options))
   let _ = get_json()
   let _ = get_urlencoded()
   let _ = get_static()
+  let _ = get_request()
+  let _ = get_response()
+  let _ = default()
 }
 EOF
       ;;
     glob)
       cat > "$out/bridge_test.mbt" <<'EOF'
+extern "js" fn realworld_glob_pattern() -> JSValue =
+  #| () => "src/*.mbt"
+
+fn realworld_glob_options() -> GlobOptions {
+  GlobOptions::{
+    absolute: Some(false),
+    allowWindowsEscape: None,
+    cwd: None,
+    dot: Some(false),
+    dotRelative: None,
+    follow: Some(false),
+    ignore: None,
+    magicalBraces: Some(false),
+    mark: None,
+    matchBase: None,
+    maxDepth: Some(4.0),
+    nobrace: None,
+    nocase: None,
+    nodir: Some(true),
+    noext: None,
+    noglobstar: None,
+    platform: None,
+    realpath: None,
+    root: None,
+    scurry: None,
+    stat: None,
+    signal: None,
+    windowsPathsNoEscape: Some(false),
+    withFileTypes: Some(false),
+    fs: None,
+    debug: None,
+    posix: None,
+    includeChildMatches: None,
+    braceExpandMax: None,
+  }
+}
+
 test "real-world glob bridge smoke" {
   let matches = globSync_string_glob_options_with_file_types_unset_optional(
     "*.json",
@@ -810,6 +908,18 @@ test "real-world glob bridge smoke" {
   )
   if matches.length() == 0 {
     abort("expected json files in generated project")
+  }
+  let opts = MinimatchOptionsPickWindowsPathsNoEscapeMagicalBraces::{
+    windowsPathsNoEscape: Some(false),
+    magicalBraces: Some(false),
+  }
+  let escape = get_escape()
+  let unescape = get_unescape()
+  let has_magic = get_has_magic()
+  assert_eq(escape("src/*.mbt", opts), "src/\\*.mbt")
+  assert_eq(unescape("src/\\*.mbt", opts), "src/*.mbt")
+  if !has_magic(realworld_glob_pattern(), realworld_glob_options()) {
+    abort("expected glob pattern to have magic")
   }
 }
 EOF
@@ -1211,15 +1321,47 @@ EOF
     playwright)
       cat > "$smoke_dir/main.mbt" <<'EOF'
 fn main {
-  let _ = @sut.get_chromium()
-  let _ = @sut.get_firefox()
-  let _ = @sut.get_webkit()
+  let chromium = @sut.get_chromium()
+  if chromium.name() != "chromium" {
+    abort("unexpected playwright chromium name")
+  }
+  if @sut.get_firefox().name() != "firefox" {
+    abort("unexpected playwright firefox name")
+  }
+  if @sut.get_webkit().name() != "webkit" {
+    abort("unexpected playwright webkit name")
+  }
+  @sut.get_selectors().setTestIdAttribute("data-testid")
+  let _launch_options = @sut.LaunchOptions::{
+    args: Some(["--disable-dev-shm-usage"]),
+    artifactsDir: None,
+    channel: None,
+    chromiumSandbox: Some(false),
+    downloadsPath: None,
+    env: None,
+    executablePath: None,
+    firefoxUserPrefs: None,
+    handleSIGHUP: None,
+    handleSIGINT: None,
+    handleSIGTERM: None,
+    headless: Some(true),
+    ignoreDefaultArgs: None,
+    logger: None,
+    proxy: None,
+    slowMo: Some(0.0),
+    timeout: Some(1000.0),
+    tracesDir: None,
+  }
   let _ = @sut.get_devices()
+  let _ = @sut.get_request()
 }
 EOF
       ;;
     react_router)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_react_router_params() -> @sut.JSValue =
+  #| () => ({ id: "42" })
+
 fn main {
   let path = @sut.PathPartial::{
     pathname: Some("/docs"),
@@ -1236,31 +1378,113 @@ fn main {
   if @sut.generatePath("/docs", None) != "/docs" {
     abort("unexpected react-router generatePath output")
   }
+  let full_path = @sut.PathPartial::{
+    pathname: Some("/docs"),
+    search: Some("?tab=api"),
+    hash: Some("#top"),
+  }
+  if @sut.createPath(full_path) != "/docs?tab=api#top" {
+    abort("unexpected react-router full createPath output")
+  }
+  if @sut.generatePath(
+    "/users/:id",
+    Some(realworld_react_router_params()),
+  ) != "/users/42" {
+    abort("unexpected react-router param generatePath output")
+  }
+  let resolved = @sut.resolvePath(
+    @sut.to_from_string("../api"),
+    Some("/docs/reference"),
+  )
+  if resolved.pathname != "/docs/api" {
+    abort("unexpected react-router resolvePath pathname")
+  }
+  if resolved.search != "" || resolved.hash != "" {
+    abort("unexpected react-router resolvePath search/hash")
+  }
 }
 EOF
       ;;
     jose)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_jose_timestamp() -> @sut.JSValue =
+  #| () => 1710000000
+
 fn main {
   let jwt = @sut.new_unsecured_jwt(None)
+  let _ = jwt.unsecured_jwt_set_issuer("https://issuer.example")
+  let _ = jwt.unsecured_jwt_set_subject("user-42")
+  let _ = jwt.unsecured_jwt_set_jti("token-1")
+  let _ = jwt.unsecured_jwt_set_issued_at(Some(realworld_jose_timestamp()))
   let encoded = jwt.unsecured_jwt_encode()
-  let _ = @sut.unsecured_jwt_decode(encoded, None)
+  let decoded = @sut.unsecured_jwt_decode(encoded, None)
+  let _ = decoded.header
   let _ = @sut.decodeJwt(encoded)
+  let signer = @sut.new_sign_jwt(None)
+  let _ = signer.sign_jwt_set_issuer("https://issuer.example")
+  let _ = signer.sign_jwt_set_subject("user-42")
+  let _ = signer.sign_jwt_set_jti("token-1")
+  let _ = signer.sign_jwt_set_issued_at(Some(realworld_jose_timestamp()))
 }
 EOF
       ;;
     express)
       cat > "$smoke_dir/main.mbt" <<'EOF'
 fn main {
-  let _ = @sut.router(None)
+  let options = @sut.RouterOptions::{
+    caseSensitive: Some(true),
+    mergeParams: Some(true),
+    strict: Some(false),
+  }
+  let _ = @sut.router(Some(options))
   let _ = @sut.get_json()
   let _ = @sut.get_urlencoded()
   let _ = @sut.get_static()
+  let _ = @sut.get_request()
+  let _ = @sut.get_response()
+  let _ = @sut.default()
 }
 EOF
       ;;
     glob)
       cat > "$smoke_dir/main.mbt" <<'EOF'
+extern "js" fn realworld_glob_pattern() -> @sut.JSValue =
+  #| () => "src/*.mbt"
+
+fn realworld_glob_options() -> @sut.GlobOptions {
+  @sut.GlobOptions::{
+    absolute: Some(false),
+    allowWindowsEscape: None,
+    cwd: None,
+    dot: Some(false),
+    dotRelative: None,
+    follow: Some(false),
+    ignore: None,
+    magicalBraces: Some(false),
+    mark: None,
+    matchBase: None,
+    maxDepth: Some(4.0),
+    nobrace: None,
+    nocase: None,
+    nodir: Some(true),
+    noext: None,
+    noglobstar: None,
+    platform: None,
+    realpath: None,
+    root: None,
+    scurry: None,
+    stat: None,
+    signal: None,
+    windowsPathsNoEscape: Some(false),
+    withFileTypes: Some(false),
+    fs: None,
+    debug: None,
+    posix: None,
+    includeChildMatches: None,
+    braceExpandMax: None,
+  }
+}
+
 fn main {
   let matches = @sut.globSync_string_glob_options_with_file_types_unset_optional(
     "*.json",
@@ -1268,6 +1492,22 @@ fn main {
   )
   if matches.length() == 0 {
     abort("expected json files in generated project")
+  }
+  let opts = @sut.MinimatchOptionsPickWindowsPathsNoEscapeMagicalBraces::{
+    windowsPathsNoEscape: Some(false),
+    magicalBraces: Some(false),
+  }
+  let escape = @sut.get_escape()
+  let unescape = @sut.get_unescape()
+  let has_magic = @sut.get_has_magic()
+  if escape("src/*.mbt", opts) != "src/\\*.mbt" {
+    abort("unexpected glob escape output")
+  }
+  if unescape("src/\\*.mbt", opts) != "src/*.mbt" {
+    abort("unexpected glob unescape output")
+  }
+  if !has_magic(realworld_glob_pattern(), realworld_glob_options()) {
+    abort("expected glob pattern to have magic")
   }
 }
 EOF
