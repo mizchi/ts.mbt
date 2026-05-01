@@ -160,6 +160,15 @@ test "generated bridge package converts string enums at the JS boundary" {
     Write => ()
     _ => abort("expected same-name enum wrapper to preserve write")
   }
+  match maybeMode(Some(Read)) {
+    Some(Write) => ()
+    _ => abort("expected optional read to become optional write")
+  }
+  let absent : Mode? = None
+  match maybeMode(absent) {
+    None => ()
+    _ => abort("expected absent optional enum to stay absent")
+  }
   assert_eq(recordMode(nextMode(Write)), "read")
 }
 EOF

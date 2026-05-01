@@ -6,3 +6,4 @@ export declare enum Mode {
 export declare function recordMode(mode: Mode): string;
 export declare function nextMode(mode: Mode): Mode;
 export declare function echo(mode: Mode): Mode;
+export declare function maybeMode(mode?: Mode): Mode | undefined;

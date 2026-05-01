@@ -171,6 +171,31 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes ambient enums"
       "pub fn setMode(mode : Mode) -> Mode {\n  __ts_mbt_mode_from_js(set_mode(__ts_mbt_mode_to_js(mode)))\n}",
     ),
   )
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn maybeMode(mode : Mode?) -> Mode?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn maybe_mode(mode : String?) -> String?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_mode_to_js_optional(value : Mode?) -> String?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_mode_from_js_optional(value : String?) -> Mode?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn maybeMode(mode : Mode?) -> Mode? {\n  __ts_mbt_mode_from_js_optional(maybe_mode(__ts_mbt_mode_to_js_optional(mode)))\n}",
+    ),
+  )
   assert_false(bundle.bridge_mbt.contains("get_mode() -> @js.Any"))
   assert_false(bundle.bridge_js.contains("import { Mode }"))
 }

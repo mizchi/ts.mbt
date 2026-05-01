@@ -4,3 +4,4 @@ export declare enum Mode {
 }
 
 export declare function setMode(mode: Mode): Mode;
+export declare function maybeMode(mode?: Mode): Mode | undefined;

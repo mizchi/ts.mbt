@@ -406,8 +406,8 @@ TypeScript runtimes expect.
     enums in both `bridge.mbt` and `bridge.mbti`.
   - [x] Raw extern wrappers keep string enums primitive and expose public
     MoonBit enum wrappers for params and returns.
-  - [ ] Optional string enum params / returns still need `Variant?` conversion
-    and JS `undefined` behavior.
+  - [x] Optional string enum params / returns use `Variant?` conversion and
+    keep JS `undefined` behavior.
 - [ ] Defer heterogeneous enum unions and non-literal computed enum values to
   the existing primitive / `JSValue` fallback with diagnostics.
 
@@ -447,13 +447,13 @@ TypeScript runtimes expect.
   - suffix MoonBit keywords;
   - disambiguate collisions deterministically;
   - preserve the original TS literal in generated conversion helpers.
-- [x] Keep raw externs primitive and wrap them for non-optional string enums:
+- [x] Keep raw externs primitive and wrap them for string enums:
   - Params: public function accepts `Variant`, private/raw extern accepts
     `String`.
   - Returns: raw extern returns primitive, public wrapper converts to
     `Variant`.
   - Optional params / returns use `Variant?` wrappers and keep JS `undefined`
-    behavior.
+    behavior through generated optional conversion helpers.
 
 Example target shape:
 
@@ -487,8 +487,8 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
 
 ### JS Bridge Rules
 
-- [x] Do not pass MoonBit enum runtime objects directly to JS APIs for
-  non-optional string enums.
+- [x] Do not pass MoonBit enum runtime objects directly to JS APIs for string
+  enums.
   - MoonBit JS backend enums are tagged values; TypeScript libraries expect the
     primitive literal value.
 - [x] Prefer MoonBit-side conversion wrappers over JS-side enum construction.

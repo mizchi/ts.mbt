@@ -35,6 +35,8 @@ priv struct BridgeEnumConverter {
   type_name : String
   to_js_name : String
   from_js_name : String
+  to_js_optional_name : String
+  from_js_optional_name : String
 }
 
 ///|
@@ -731,6 +733,16 @@ fn bridge_enum_from_js_name(type_name : String) -> String {
 }
 
 ///|
+fn bridge_enum_to_js_optional_name(type_name : String) -> String {
+  bridge_enum_to_js_name(type_name) + "_optional"
+}
+
+///|
+fn bridge_enum_from_js_optional_name(type_name : String) -> String {
+  bridge_enum_from_js_name(type_name) + "_optional"
+}
+
+///|
 fn collect_bridge_enum_converters(
   bridge_mbti : String,
   bridge_mbt : String,
@@ -739,9 +751,23 @@ fn collect_bridge_enum_converters(
   for type_name in collect_bridge_public_type_names(bridge_mbti) {
     let to_js_name = bridge_enum_to_js_name(type_name)
     let from_js_name = bridge_enum_from_js_name(type_name)
+    let to_js_optional_name = bridge_enum_to_js_optional_name(type_name)
+    let from_js_optional_name = bridge_enum_from_js_optional_name(type_name)
     if bridge_mbt.contains("fn \{to_js_name}(value : \{type_name}) -> String") &&
-      bridge_mbt.contains("fn \{from_js_name}(value : String) -> \{type_name}") {
-      converters.push({ type_name, to_js_name, from_js_name })
+      bridge_mbt.contains("fn \{from_js_name}(value : String) -> \{type_name}") &&
+      bridge_mbt.contains(
+        "fn \{to_js_optional_name}(value : \{type_name}?) -> String?",
+      ) &&
+      bridge_mbt.contains(
+        "fn \{from_js_optional_name}(value : String?) -> \{type_name}?",
+      ) {
+      converters.push({
+        type_name,
+        to_js_name,
+        from_js_name,
+        to_js_optional_name,
+        from_js_optional_name,
+      })
     }
   }
   converters
@@ -762,17 +788,50 @@ fn find_bridge_enum_converter(
 }
 
 ///|
+fn bridge_type_optional_base_name(type_name : String) -> String? {
+  let trimmed = type_name.trim().to_string()
+  if !trimmed.has_suffix("?") {
+    return None
+  }
+  let base = trimmed[:trimmed.length() - 1].to_string().trim().to_string()
+  if base == "" {
+    None
+  } else {
+    Some(base)
+  }
+}
+
+///|
+fn find_bridge_enum_converter_for_type(
+  converters : Array[BridgeEnumConverter],
+  type_name : String,
+) -> (BridgeEnumConverter, Bool)? {
+  match bridge_type_optional_base_name(type_name) {
+    Some(base) =>
+      match find_bridge_enum_converter(converters, base) {
+        Some(converter) => Some((converter, true))
+        None => None
+      }
+    None =>
+      match find_bridge_enum_converter(converters, type_name) {
+        Some(converter) => Some((converter, false))
+        None => None
+      }
+  }
+}
+
+///|
 fn bridge_fn_decl_needs_enum_conversion(
   fn_decl : BridgeTopLevelFnDecl,
   converters : Array[BridgeEnumConverter],
 ) -> Bool {
   for param in parse_bridge_param_decls(fn_decl.params_src) {
-    match find_bridge_enum_converter(converters, param.type_name) {
+    match find_bridge_enum_converter_for_type(converters, param.type_name) {
       Some(_) => return true
       None => ()
     }
   }
-  match find_bridge_enum_converter(converters, fn_decl.return_type) {
+  match find_bridge_enum_converter_for_type(converters, fn_decl.return_type) {
     Some(_) => true
     None => false
   }
@@ -784,8 +843,13 @@ fn bridge_arg_expr_for_type(
   arg_name : String,
   type_name : String,
 ) -> String {
-  match find_bridge_enum_converter(converters, type_name) {
-    Some(converter) => "\{converter.to_js_name}(\{arg_name})"
+  match find_bridge_enum_converter_for_type(converters, type_name) {
+    Some((converter, is_optional)) =>
+      if is_optional {
+        "\{converter.to_js_optional_name}(\{arg_name})"
+      } else {
+        "\{converter.to_js_name}(\{arg_name})"
+      }
     None => arg_name
   }
 }
@@ -796,8 +860,13 @@ fn bridge_return_expr_for_type(
   return_type : String,
   call_expr : String,
 ) -> String {
-  match find_bridge_enum_converter(converters, return_type) {
-    Some(converter) => "\{converter.from_js_name}(\{call_expr})"
+  match find_bridge_enum_converter_for_type(converters, return_type) {
+    Some((converter, is_optional)) =>
+      if is_optional {
+        "\{converter.from_js_optional_name}(\{call_expr})"
+      } else {
+        "\{converter.from_js_name}(\{call_expr})"
+      }
     None => call_expr
   }
 }

@@ -729,6 +729,8 @@ fn ffi_enum_string_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
     Some(cases) => {
       let to_js_name = ffi_enum_to_js_name(type_name)
       let from_js_name = ffi_enum_from_js_name(type_name)
+      let to_js_optional_name = to_js_name + "_optional"
+      let from_js_optional_name = from_js_name + "_optional"
       let lines : Array[String] = [
         "fn \{to_js_name}(value : \{type_name}) -> String {",
         "  match value {",
@@ -751,6 +753,24 @@ fn ffi_enum_string_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
         )
       }
       lines.push("    _ => abort(\"unexpected \{type_name} value: \" + value)")
+      lines.push("  }")
+      lines.push("}")
+      lines.push("")
+      lines.push(
+        "fn \{to_js_optional_name}(value : \{type_name}?) -> String? {",
+      )
+      lines.push("  match value {")
+      lines.push("    Some(value) => Some(\{to_js_name}(value))")
+      lines.push("    None => None")
+      lines.push("  }")
+      lines.push("}")
+      lines.push("")
+      lines.push(
+        "fn \{from_js_optional_name}(value : String?) -> \{type_name}? {",
+      )
+      lines.push("  match value {")
+      lines.push("    Some(value) => Some(\{from_js_name}(value))")
+      lines.push("    None => None")
       lines.push("  }")
       lines.push("}")
       Some(lines.join("\n"))

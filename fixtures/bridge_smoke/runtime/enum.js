@@ -9,3 +9,8 @@ export function nextMode(mode) {
 export function echo(mode) {
   return mode;
 }
+
+export function maybeMode(mode) {
+  if (mode === undefined) return undefined;
+  return nextMode(mode);
+}
