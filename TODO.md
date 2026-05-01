@@ -418,12 +418,15 @@ TypeScript runtimes expect.
 
 ### Internal Model
 
-- [ ] Replace or extend the current `TsType::Literal(String)` representation.
+- [x] Replace or extend the current `TsType::Literal(String)` representation.
   - Current parser stores string `"1"` and numeric `1` both as `Literal("1")`,
     which is not precise enough for bridge conversion.
   - Add a typed literal model, e.g. `TsLiteralValue::{String, Number, BigInt,
     Bool}`, and keep helper functions so existing `keyof` / object-key logic
     can continue treating string keys uniformly.
+  - `TsType` now keeps string literal/object keys as `Literal(String)` while
+    preserving non-string literal types as `NumberLiteral`, `BigIntLiteral`,
+    and `BooleanLiteral`.
 - [ ] Add AST nodes for enum declarations:
   - `TsEnumDecl { name, members, is_const, is_declare }`
   - `TsEnumMember { name, value : TsLiteralValue? }`
@@ -523,9 +526,9 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
 
 ### TDD Order
 
-- [ ] Red: parser tests for string/numeric/const enum declarations and typed
+- [x] Red: parser tests for string/numeric/const enum declarations and typed
   literal unions.
-- [ ] Green: AST + parser support without bridge lowering.
+- [x] Green: AST + parser support without bridge lowering.
 - [x] Red: declaration generation tests for named literal-union aliases.
 - [x] Green: emit MoonBit enum declarations in `.mbt` / `.mbti`.
 - [x] Red: JS-target smoke where a MoonBit enum argument reaches a TS function

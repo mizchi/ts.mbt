@@ -340,6 +340,9 @@ pub(all) enum TsType {
   Null
   Undefined
   Literal(String)
+  NumberLiteral(String)
+  BigIntLiteral(String)
+  BooleanLiteral(Bool)
   Array(TsType)
   Tuple(Array[TsType])
   Object(Array[(TsType, TsType)])

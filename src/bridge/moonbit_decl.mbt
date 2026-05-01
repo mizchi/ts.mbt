@@ -2479,7 +2479,7 @@ fn utility_filter_union_type(
 fn utility_record_key_suffix(type_ : @ast.TsType) -> String? {
   match type_ {
     String_ | Literal(_) => Some("String")
-    Number | Int => Some("Number")
+    Number | Int | NumberLiteral(_) => Some("Number")
     Symbol => Some("Symbol")
     Named("PropertyKey") => Some("PropertyKey")
     _ => None
@@ -2501,6 +2501,9 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
         suffix
       }
     }
+    NumberLiteral(value) => "Number" + decl_to_pascal_case(value)
+    BigIntLiteral(value) => "BigInt" + decl_to_pascal_case(value)
+    BooleanLiteral(value) => if value { "True" } else { "False" }
     Number => "Double"
     Int => "Int"
     Boolean => "Bool"
@@ -4739,10 +4742,10 @@ fn decl_overload_type_suffix(type_ : @ast.TsType) -> String? {
   }
   match type_ {
     Literal(_) | String_ => Some("string")
-    Number => Some("number")
+    Number | NumberLiteral(_) => Some("number")
     Int => Some("int")
-    Boolean => Some("bool")
-    BigInt => Some("bigint")
+    Boolean | BooleanLiteral(_) => Some("bool")
+    BigInt | BigIntLiteral(_) => Some("bigint")
     Symbol => Some("symbol")
     Named(name) if name != "any" && name != "Function" =>
       Some(decl_to_snake_case(name))

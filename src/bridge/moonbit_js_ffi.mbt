@@ -305,8 +305,10 @@ fn ffi_find_enum_decl(
 ///|
 fn ffi_normalize_literal_type(type_ : @ast.TsType) -> @ast.TsType {
   match type_ {
-    Literal("true") | Literal("false") => Boolean
     Literal(_) => String_
+    NumberLiteral(_) => Number
+    BigIntLiteral(_) => BigInt
+    BooleanLiteral(_) => Boolean
     _ => type_
   }
 }
@@ -484,7 +486,8 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     None => ()
   }
   match type_ {
-    Literal(_) => ffi_type_name(state, ffi_normalize_literal_type(type_))
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
+      ffi_type_name(state, ffi_normalize_literal_type(type_))
     Number => "Double"
     Int => "Int"
     Boolean => "Bool"

@@ -609,7 +609,10 @@ pub fn needs_gc(type_ : @ast.TsType) -> Bool {
     | @ast.TsType::Never
     | @ast.TsType::BigInt
     | @ast.TsType::Symbol
-    | @ast.TsType::Literal(_) => false
+    | @ast.TsType::Literal(_)
+    | @ast.TsType::NumberLiteral(_)
+    | @ast.TsType::BigIntLiteral(_)
+    | @ast.TsType::BooleanLiteral(_) => false
     // Heap-allocated types - need GC
     @ast.TsType::Array(_)
     | @ast.TsType::Object(_)

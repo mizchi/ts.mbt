@@ -212,8 +212,10 @@ fn normalize_literal_type_for_moonbit_bridge(
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   match type_ {
-    Literal("true") | Literal("false") => Boolean
     Literal(_) => String_
+    NumberLiteral(_) => Number
+    BigIntLiteral(_) => BigInt
+    BooleanLiteral(_) => Boolean
     _ => type_
   }
 }
@@ -292,7 +294,7 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     None => ()
   }
   match type_ {
-    Literal(_) =>
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
       moonbit_type_name(state, normalize_literal_type_for_moonbit_bridge(type_))
     Number => "Double"
     Int => "Int"

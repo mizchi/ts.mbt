@@ -3,15 +3,6 @@
 // ============================================
 
 ///|
-/// Check if current token is a number literal (Int or Number)
-fn Parser::is_number_literal(self : Parser) -> Bool {
-  match self.peek().kind {
-    Int(_) | Number(_) | BigInt(_) => true
-    _ => false
-  }
-}
-
-///|
 /// Check if current token is an identifier
 fn Parser::is_ident(self : Parser) -> Bool {
   match self.peek().kind {
@@ -422,19 +413,19 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     }
     Int(value) => {
       let _ = self.advance()
-      Literal(value.to_string())
+      NumberLiteral(value.to_string())
     }
     Number(value) => {
       let _ = self.advance()
-      Literal(value.to_string())
+      NumberLiteral(value.to_string())
     }
     BigInt(value) => {
       let _ = self.advance()
-      Literal(value + "n")
+      BigIntLiteral(value)
     }
     Bool(value) => {
       let _ = self.advance()
-      Literal(value.to_string())
+      BooleanLiteral(value)
     }
     // null and undefined literal types
     Null => {
@@ -471,10 +462,21 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Minus => {
       // Negative number literal: -1
       let _ = self.advance()
-      if self.is_number_literal() {
-        let _ = self.advance()
+      match self.peek().kind {
+        Int(value) => {
+          let _ = self.advance()
+          NumberLiteral("-" + value.to_string())
+        }
+        Number(value) => {
+          let _ = self.advance()
+          NumberLiteral("-" + value.to_string())
+        }
+        BigInt(value) => {
+          let _ = self.advance()
+          BigIntLiteral("-" + value)
+        }
+        _ => Any
       }
-      Any
     }
     // Object type: { key: T; ... }
     LBrace =>

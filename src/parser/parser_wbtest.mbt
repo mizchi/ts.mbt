@@ -595,6 +595,26 @@ test "parser: preserves generic infer conditional type aliases" {
 }
 
 ///|
+test "parser: preserves non-string literal type kinds" {
+  let module_ = Parser::from_source(
+    "export type LiteralCases = 1 | \"1\" | true | 0n;",
+  ).parse_module() catch {
+    e => fail("expected literal type alias to parse: \{e}")
+  }
+  assert_eq(module_.type_aliases.length(), 1)
+  assert_eq(module_.type_aliases[0].name, "LiteralCases")
+  assert_eq(
+    module_.type_aliases[0].type_,
+    Union([
+      NumberLiteral("1"),
+      Literal("1"),
+      BooleanLiteral(true),
+      BigIntLiteral("0"),
+    ]),
+  )
+}
+
+///|
 test "parser: parse literal-key mapped object type as fields" {
   let parser = Parser::from_source("{ [K in \"id\" | \"name\"]?: string }")
   assert_eq(

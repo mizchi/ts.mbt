@@ -17,7 +17,10 @@ pub(all) enum TsType {
   Null // null
   Undefined // undefined
   // Literal types
-  Literal(String) // literal type: "hello", 42, true
+  Literal(String) // string literal type and object property key
+  NumberLiteral(String)
+  BigIntLiteral(String)
+  BooleanLiteral(Bool)
   // Compound types
   Array(TsType)
   Tuple(Array[TsType]) // [string, number]
