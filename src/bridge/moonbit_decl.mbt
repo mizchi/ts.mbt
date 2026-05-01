@@ -1389,31 +1389,29 @@ fn resolve_decl_from_local_name(
           match find_enum_decl(info.module_, local_name) {
             Some(enum_) => Enum({ source_path, local_name, export_name, enum_ })
             None =>
-              match find_import_decl(info.module_, local_name) {
-                Some(import_) =>
-                  Import({
-                    source_path,
-                    local_name_prefix: "",
-                    export_name,
-                    source_export_name,
-                    import_,
-                  })
-                None => {
-                  let stmt_func = find_func_decl_from_stmts(
-                    info.record.module_block.block.stmts,
-                    local_name,
-                  )
-                  match find_func_decl(info.module_, local_name) {
-                    Some(func) =>
-                      Function({
+              match find_type_alias_decl(info.module_, local_name) {
+                Some(type_alias) =>
+                  match type_alias_string_enum_decl(type_alias) {
+                    Some(enum_) =>
+                      Enum({ source_path, local_name, export_name, enum_ })
+                    None => Missing
+                  }
+                None =>
+                  match find_import_decl(info.module_, local_name) {
+                    Some(import_) =>
+                      Import({
                         source_path,
                         local_name_prefix: "",
                         export_name,
                         source_export_name,
-                        func,
+                        import_,
                       })
-                    None =>
-                      match stmt_func {
+                    None => {
+                      let stmt_func = find_func_decl_from_stmts(
+                        info.record.module_block.block.stmts,
+                        local_name,
+                      )
+                      match find_func_decl(info.module_, local_name) {
                         Some(func) =>
                           Function({
                             source_path,
@@ -1423,104 +1421,120 @@ fn resolve_decl_from_local_name(
                             func,
                           })
                         None =>
-                          match find_value_decl(info.module_, local_name) {
-                            Some(value) =>
-                              if value_decl_has_runtime_binding(value) {
-                                Value({
-                                  source_path,
-                                  local_name_prefix: "",
-                                  export_name,
-                                  source_export_name,
-                                  value,
-                                })
-                              } else {
-                                Missing
-                              }
+                          match stmt_func {
+                            Some(func) =>
+                              Function({
+                                source_path,
+                                local_name_prefix: "",
+                                export_name,
+                                source_export_name,
+                                func,
+                              })
                             None =>
-                              match find_class_decl(info.module_, local_name) {
-                                Some(class_) =>
-                                  Class({
-                                    source_path,
-                                    local_name,
-                                    local_name_prefix: "",
-                                    export_name,
-                                    source_export_name,
-                                    class_,
-                                  })
-                                None => {
-                                  let mut resolved : ResolvedDecl = Missing
-                                  for
-                                    i, import_decl in info.record.module_block.imports {
-                                    let edge = info.record.imports[i]
-                                    if edge.resolved_path == "" {
-                                      continue
-                                    }
-                                    for binding in import_decl.named_bindings {
-                                      let (imported_name, imported_local_name) = binding
-                                      if imported_local_name == local_name {
-                                        resolved = resolve_decl_from_export_name(
-                                          export_name,
-                                          edge.resolved_path,
-                                          imported_name,
-                                          graph,
-                                          modules,
-                                          surface_cache,
-                                          visiting,
-                                        )
-                                        break
+                              match find_value_decl(info.module_, local_name) {
+                                Some(value) =>
+                                  if value_decl_has_runtime_binding(value) {
+                                    Value({
+                                      source_path,
+                                      local_name_prefix: "",
+                                      export_name,
+                                      source_export_name,
+                                      value,
+                                    })
+                                  } else {
+                                    Missing
+                                  }
+                                None =>
+                                  match
+                                    find_class_decl(info.module_, local_name) {
+                                    Some(class_) =>
+                                      Class({
+                                        source_path,
+                                        local_name,
+                                        local_name_prefix: "",
+                                        export_name,
+                                        source_export_name,
+                                        class_,
+                                      })
+                                    None => {
+                                      let mut resolved : ResolvedDecl = Missing
+                                      for
+                                        i, import_decl in info.record.module_block.imports {
+                                        let edge = info.record.imports[i]
+                                        if edge.resolved_path == "" {
+                                          continue
+                                        }
+                                        for
+                                          binding in import_decl.named_bindings {
+                                          let (
+                                            imported_name,
+                                            imported_local_name,
+                                          ) = binding
+                                          if imported_local_name == local_name {
+                                            resolved = resolve_decl_from_export_name(
+                                              export_name,
+                                              edge.resolved_path,
+                                              imported_name,
+                                              graph,
+                                              modules,
+                                              surface_cache,
+                                              visiting,
+                                            )
+                                            break
+                                          }
+                                        }
+                                        match resolved {
+                                          Missing => ()
+                                          _ => break
+                                        }
+                                        match import_decl.default_binding {
+                                          Some(imported_local_name) =>
+                                            if imported_local_name == local_name {
+                                              resolved = resolve_decl_from_export_name(
+                                                export_name,
+                                                edge.resolved_path,
+                                                "default",
+                                                graph,
+                                                modules,
+                                                surface_cache,
+                                                visiting,
+                                              )
+                                            }
+                                          None => ()
+                                        }
+                                        match resolved {
+                                          Missing => ()
+                                          _ => break
+                                        }
+                                        match import_decl.namespace_binding {
+                                          Some(imported_local_name) =>
+                                            if imported_local_name == local_name {
+                                              resolved = Value({
+                                                source_path,
+                                                local_name_prefix: "",
+                                                export_name,
+                                                source_export_name,
+                                                value: {
+                                                  name: local_name,
+                                                  type_: @ast.TsType::Any,
+                                                },
+                                              })
+                                            }
+                                          None => ()
+                                        }
+                                        match resolved {
+                                          Missing => ()
+                                          _ => break
+                                        }
                                       }
-                                    }
-                                    match resolved {
-                                      Missing => ()
-                                      _ => break
-                                    }
-                                    match import_decl.default_binding {
-                                      Some(imported_local_name) =>
-                                        if imported_local_name == local_name {
-                                          resolved = resolve_decl_from_export_name(
-                                            export_name,
-                                            edge.resolved_path,
-                                            "default",
-                                            graph,
-                                            modules,
-                                            surface_cache,
-                                            visiting,
-                                          )
-                                        }
-                                      None => ()
-                                    }
-                                    match resolved {
-                                      Missing => ()
-                                      _ => break
-                                    }
-                                    match import_decl.namespace_binding {
-                                      Some(imported_local_name) =>
-                                        if imported_local_name == local_name {
-                                          resolved = Value({
-                                            source_path,
-                                            local_name_prefix: "",
-                                            export_name,
-                                            source_export_name,
-                                            value: {
-                                              name: local_name,
-                                              type_: @ast.TsType::Any,
-                                            },
-                                          })
-                                        }
-                                      None => ()
-                                    }
-                                    match resolved {
-                                      Missing => ()
-                                      _ => break
+                                      resolved
                                     }
                                   }
-                                  resolved
-                                }
                               }
                           }
                       }
+                    }
                   }
-                }
               }
           }
       }
@@ -2632,6 +2646,77 @@ fn find_type_alias_decl(
     }
   }
   None
+}
+
+///|
+fn literal_union_alias_value_looks_numeric(value : String) -> Bool {
+  if value == "" {
+    return false
+  }
+  let first = value[0].unsafe_to_char()
+  if first >= '0' && first <= '9' {
+    return true
+  }
+  if first == '-' && value.length() > 1 {
+    let next = value[1].unsafe_to_char()
+    return next >= '0' && next <= '9'
+  }
+  false
+}
+
+///|
+fn literal_union_alias_is_safe_string_value(value : String) -> Bool {
+  match value {
+    "true" | "false" => false
+    _ => !literal_union_alias_value_looks_numeric(value)
+  }
+}
+
+///|
+fn type_alias_string_enum_members(
+  type_ : @ast.TsType,
+) -> Array[@ast.TsEnumMember]? {
+  let items = match type_ {
+    @ast.TsType::Union(items) => items
+    @ast.TsType::Literal(_) => [type_]
+    _ => return None
+  }
+  if items.length() == 0 {
+    return None
+  }
+  let members : Array[@ast.TsEnumMember] = []
+  let seen_values : Array[String] = []
+  for item in items {
+    match item {
+      @ast.TsType::Literal(value) => {
+        if !literal_union_alias_is_safe_string_value(value) ||
+          seen_values.contains(value) {
+          return None
+        }
+        seen_values.push(value)
+        members.push({
+          name: value,
+          value: Some(@ast.TsEnumMemberValue::String(value)),
+        })
+      }
+      _ => return None
+    }
+  }
+  Some(members)
+}
+
+///|
+fn type_alias_string_enum_decl(
+  type_alias : @ast.TsTypeAlias,
+) -> @ast.TsEnumDecl? {
+  if type_alias.type_params.length() > 0 {
+    return None
+  }
+  match type_alias_string_enum_members(type_alias.type_) {
+    Some(members) =>
+      Some({ name: type_alias.name, members, is_const: false, is_declare: true })
+    None => None
+  }
 }
 
 ///|

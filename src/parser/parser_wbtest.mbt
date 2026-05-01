@@ -1544,9 +1544,11 @@ test "parser: parse semicolonless export type alias without swallowing following
       return
     }
   }
-  assert_eq(module_.exports.length(), 1)
-  assert_eq(module_.exports[0].local_name, "greet")
-  assert_eq(module_.exports[0].export_name, "greet")
+  assert_eq(module_.exports.length(), 2)
+  assert_eq(module_.exports[0].local_name, "Name")
+  assert_eq(module_.exports[0].export_name, "Name")
+  assert_eq(module_.exports[1].local_name, "greet")
+  assert_eq(module_.exports[1].export_name, "greet")
 }
 
 ///|
@@ -1633,7 +1635,7 @@ test "parser: parse module block export metadata for declare class" {
 }
 
 ///|
-test "parser: skip export type alias in module block" {
+test "parser: parse export type alias metadata in module block" {
   let src =
     #|export type Status = "ok" | "err";
     #|export interface User {
@@ -1645,9 +1647,11 @@ test "parser: skip export type alias in module block" {
       return
     }
   }
-  assert_eq(module_.exports.length(), 1)
-  assert_eq(module_.exports[0].local_name, "User")
-  assert_eq(module_.exports[0].export_name, "User")
+  assert_eq(module_.exports.length(), 2)
+  assert_eq(module_.exports[0].local_name, "Status")
+  assert_eq(module_.exports[0].export_name, "Status")
+  assert_eq(module_.exports[1].local_name, "User")
+  assert_eq(module_.exports[1].export_name, "User")
 }
 
 ///|

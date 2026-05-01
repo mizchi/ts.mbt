@@ -177,6 +177,48 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_bridge_literal_union_alias_fixture() {
+  local root="_build/bridge_fixture_literal_union_alias"
+  local fixture_path="$repo_root/fixtures/bridge_smoke/literal-union-alias-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/literal-union-alias.js"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/literal-union-alias.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/literal-union-alias.js"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/bridge_literal_union_alias",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated bridge package converts named string literal union aliases" {
+  match renderButton(Solid) {
+    Ghost => ()
+    _ => abort("expected solid to become ghost")
+  }
+  match maybeVariant(Some(Ghost)) {
+    Some(Solid) => ()
+    _ => abort("expected optional ghost to become optional solid")
+  }
+  let absent : ButtonVariant? = None
+  match maybeVariant(absent) {
+    None => ()
+    _ => abort("expected absent variant to stay absent")
+  }
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_bridge_default_export_fixture() {
   local root="_build/bridge_fixture_default_export"
   local fixture_path="$repo_root/fixtures/bridge_smoke/default-export-entry.d.ts"
@@ -2130,6 +2172,7 @@ EOF
 verify_mbti_fixture_typescript
 verify_bridge_smoke_fixture
 verify_bridge_enum_fixture
+verify_bridge_literal_union_alias_fixture
 verify_bridge_default_export_fixture
 verify_bridge_declaration_merge_namespace_fixture
 verify_bridge_promise_return_fixture

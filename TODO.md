@@ -386,11 +386,13 @@ TypeScript runtimes expect.
 
 ### Scope
 
-- [ ] Support string literal unions as closed MoonBit enums:
+- [x] Support named string literal unions as closed MoonBit enums:
   - `type Variant = "primary" | "secondary"` ->
     `pub(all) enum Variant { Primary; Secondary }`.
   - Optional unions preserve optionality:
     `"primary" | "secondary" | undefined` -> `Variant?`.
+  - Anonymous literal unions still intentionally lower to primitives until a
+    stable synthetic naming rule is needed.
 - [ ] Support boolean literal unions only when they are not just `boolean`:
   - `true | false` remains `Bool`.
   - `true | undefined` remains `Bool?`.
@@ -429,7 +431,7 @@ TypeScript runtimes expect.
     `export declare enum` for bridge export surfaces.
   - [ ] `TsModuleBlock` still needs a first-class enum array if script-level
     enum declarations need to be preserved beyond export metadata.
-- [ ] Normalize type aliases that are pure literal unions into an enum-lowering
+- [x] Normalize type aliases that are pure string literal unions into an enum-lowering
   candidate before `emit_moonbit_decl` / `emit_moonbit_js_ffi` renders types.
   - Keep the original alias name as the MoonBit enum name.
   - If the alias is anonymous inside a parameter or field, keep the current
@@ -520,18 +522,18 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
 - [ ] Red: parser tests for string/numeric/const enum declarations and typed
   literal unions.
 - [ ] Green: AST + parser support without bridge lowering.
-- [ ] Red: declaration generation tests for named literal-union aliases.
-- [ ] Green: emit MoonBit enum declarations in `.mbt` / `.mbti`.
+- [x] Red: declaration generation tests for named literal-union aliases.
+- [x] Green: emit MoonBit enum declarations in `.mbt` / `.mbti`.
 - [x] Red: JS-target smoke where a MoonBit enum argument reaches a TS function
   expecting a string literal.
   - `fixtures/bridge_smoke/enum-entry.d.ts` verifies generated code passes
     primitive string enum values through `moon check --target js` and
     `moon test --target js`.
 - [x] Green: raw extern + public wrapper conversion for params.
-- [ ] Red: JS-target smoke where a TS function returns a literal union and
+- [x] Red: JS-target smoke where a TS function returns a literal union and
   MoonBit pattern matches the result.
-  - Ambient string enum returns are covered; literal-union alias returns still
-    need their own lowering path.
+  - Named string literal union aliases are covered by
+    `fixtures/bridge_smoke/literal-union-alias-entry.d.ts`.
 - [x] Green: primitive return conversion with an explicit unexpected-value
   abort path.
 - [ ] Refactor: share enum metadata between decl, FFI, and package bridge

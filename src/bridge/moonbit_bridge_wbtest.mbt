@@ -201,6 +201,49 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes ambient enums"
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes string literal aliases as enums" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/literal-union-alias-entry.d.ts", "./runtime/literal-union-alias.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum ButtonVariant {"))
+  assert_true(bundle.bridge_mbti.contains("  Solid"))
+  assert_true(bundle.bridge_mbti.contains("  Ghost"))
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn renderButton(variant : ButtonVariant) -> ButtonVariant",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn render_button(variant : String) -> String",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn renderButton(variant : ButtonVariant) -> ButtonVariant {\n  __ts_mbt_button_variant_from_js(render_button(__ts_mbt_button_variant_to_js(variant)))\n}",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn maybeVariant(variant : ButtonVariant?) -> ButtonVariant?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn maybeVariant(variant : ButtonVariant?) -> ButtonVariant? {\n  __ts_mbt_button_variant_from_js_optional(maybe_variant(__ts_mbt_button_variant_to_js_optional(variant)))\n}",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes namespace exports as opaque getters" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js",

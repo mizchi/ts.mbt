@@ -1946,11 +1946,8 @@ fn Parser::parse_export_decl_for_module(
       self.consume_semicolon()
       return (stmts, exports, reexports)
     }
-    match self.parse_type_alias_interface_after_type_keyword() {
-      Some(iface) =>
-        exports.push({ local_name: iface.name, export_name: iface.name })
-      None => ()
-    }
+    let type_alias = self.parse_type_alias_after_type_keyword()
+    exports.push({ local_name: type_alias.name, export_name: type_alias.name })
     return (stmts, exports, reexports)
   }
   if self.match_(Default) || self.match_ident("default") {
@@ -2146,11 +2143,11 @@ fn Parser::parse_export_decl_for_module(
         return (stmts, exports, reexports)
       }
       Type => {
-        match self.parse_type_alias_interface() {
-          Some(iface) =>
-            exports.push({ local_name: iface.name, export_name: iface.name })
-          None => ()
-        }
+        let type_alias = self.parse_type_alias()
+        exports.push({
+          local_name: type_alias.name,
+          export_name: type_alias.name,
+        })
         return (stmts, exports, reexports)
       }
       Var | Let | Const => {

@@ -1035,22 +1035,6 @@ fn Parser::parse_type_alias_after_type_keyword(
 }
 
 ///|
-fn Parser::parse_type_alias_interface_after_type_keyword(
-  self : Parser,
-) -> @ast.TsInterface? raise ParseError {
-  let type_alias = self.parse_type_alias_after_type_keyword()
-  type_alias_to_interface(type_alias)
-}
-
-///|
-fn Parser::parse_type_alias_interface(
-  self : Parser,
-) -> @ast.TsInterface? raise ParseError {
-  let _ = self.expect(Type)
-  self.parse_type_alias_interface_after_type_keyword()
-}
-
-///|
 fn Parser::parse_type_alias(self : Parser) -> @ast.TsTypeAlias raise ParseError {
   let _ = self.expect(Type)
   self.parse_type_alias_after_type_keyword()
