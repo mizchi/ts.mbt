@@ -50,6 +50,41 @@ async test "bridge: emit MoonBit TS bridge package bundle adds js import when wi
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes primitive union alias constructors" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/ambient-node-sqlite-entry.d.ts", "node:sqlite",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn sqlinput_value_from_string(value : String) -> SQLInputValue",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn sqlinput_value_from_double(value : Double) -> SQLInputValue",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn sqlinput_value_from_int64(value : Int64) -> SQLInputValue",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub extern \"js\" fn sqlinput_value_from_string(value : String) -> SQLInputValue = \"__ts_mbt_sqlinput_value_from_string\"",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle wraps camelCase exports" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
@@ -342,7 +377,7 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes numeric ambien
   )
   assert_true(
     bundle.bridge_mbt.contains(
-      "_ => abort(\"unexpected SyntaxKind value: \" + value.to_string())",
+      "abort(\"unexpected SyntaxKind value: \" + value.to_string())",
     ),
   )
   assert_true(
@@ -371,6 +406,52 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes numeric ambien
     ),
   )
   assert_false(bundle.bridge_js.contains("import { SyntaxKind }"))
+}
+
+///|
+async test "bridge: emit MoonBit TS bridge package bundle widens int-min numeric enums to double raw values" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/large-numeric-enum-entry.d.ts", "./runtime/large-numeric-enum.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum EmitFlags {"))
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn setEmitFlag(flag : EmitFlags) -> EmitFlags",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn set_emit_flag(flag : Double) -> Double",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_emit_flags_to_js(value : EmitFlags) -> Double",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "ExcludeJSDocTypeAssertion => (-536870912.0 * 4.0)",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "else if value == (-536870912.0 * 4.0) {\n    ExcludeJSDocTypeAssertion\n  }",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn setEmitFlag(flag : EmitFlags) -> EmitFlags {\n  __ts_mbt_emit_flags_from_js(set_emit_flag(__ts_mbt_emit_flags_to_js(flag)))\n}",
+    ),
+  )
 }
 
 ///|

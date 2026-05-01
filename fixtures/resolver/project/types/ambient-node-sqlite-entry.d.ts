@@ -1,6 +1,13 @@
 declare module "node:sqlite" {
+  type SQLInputValue = null | number | bigint | string;
+
   interface DatabaseSyncOptions {
     open?: boolean;
+  }
+
+  interface StatementResultingChanges {
+    changes: number | bigint;
+    lastInsertRowid: number | bigint;
   }
 
   class DatabaseSync {
@@ -12,6 +19,7 @@ declare module "node:sqlite" {
   class StatementSync {
     private constructor();
     get(): Record<string, string> | undefined;
+    run(...anonymousParameters: SQLInputValue[]): StatementResultingChanges;
   }
 
   const SQLITE_OK: number;

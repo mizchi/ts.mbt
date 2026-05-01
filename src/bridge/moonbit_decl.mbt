@@ -4663,21 +4663,26 @@ fn clone_exported_import(
   canonical_types : Map[String, String],
 ) -> @ast.TsImport {
   let params : Array[(String, @ast.TsType)] = []
-  for param in exported.import_.params {
+  for param_index, param in exported.import_.params {
     let (param_name, param_type) = param
+    let lowered = lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info,
+        exported.local_name_prefix,
+        param_type,
+        canonical_types,
+      ),
+      modules,
+      canonical_types,
+    )
     params.push(
       (
         param_name,
-        lower_react_utility_type(
-          info,
-          rewrite_type_refs_in_scope(
-            info,
-            exported.local_name_prefix,
-            param_type,
-            canonical_types,
-          ),
-          modules,
-          canonical_types,
+        decl_widen_react_factory_tag_param(
+          exported.export_name,
+          param_index,
+          lowered,
         ),
       ),
     )
@@ -4701,6 +4706,47 @@ fn clone_exported_import(
       Tuple(_) => Named(tuple_result_interface_name(exported.export_name))
       _ => return_type
     },
+  }
+}
+
+///|
+fn decl_is_react_factory_name(name : String) -> Bool {
+  name == "createElement" || name == "jsx" || name == "jsxs"
+}
+
+///|
+fn decl_is_string_literal_union_type(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Literal(_) => true
+    Union(items) => {
+      if items.length() == 0 {
+        return false
+      }
+      for item in items {
+        match item {
+          Literal(_) => ()
+          _ => return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn decl_widen_react_factory_tag_param(
+  export_name : String,
+  param_index : Int,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  if param_index != 0 || !decl_is_react_factory_name(export_name) {
+    return type_
+  }
+  if decl_is_string_literal_union_type(type_) {
+    String_
+  } else {
+    type_
   }
 }
 
@@ -4943,21 +4989,26 @@ fn clone_exported_func(
   canonical_types : Map[String, String],
 ) -> @ast.TsFunc {
   let params : Array[@ast.TsParam] = []
-  for param in exported.func.params {
+  for param_index, param in exported.func.params {
+    let lowered = lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info,
+        exported.local_name_prefix,
+        param.type_,
+        canonical_types,
+      ),
+      modules,
+      canonical_types,
+    )
     params.push({
       name: param.name,
       binding: param.binding,
       is_rest: param.is_rest,
-      type_: lower_react_utility_type(
-        info,
-        rewrite_type_refs_in_scope(
-          info,
-          exported.local_name_prefix,
-          param.type_,
-          canonical_types,
-        ),
-        modules,
-        canonical_types,
+      type_: decl_widen_react_factory_tag_param(
+        exported.export_name,
+        param_index,
+        lowered,
       ),
       default: param.default,
     })

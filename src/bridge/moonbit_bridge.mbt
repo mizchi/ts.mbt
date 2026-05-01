@@ -324,6 +324,60 @@ fn parse_bridge_top_level_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
 }
 
 ///|
+fn parse_bridge_pub_extern_fn_decl_line(line : String) -> BridgeTopLevelFnDecl? {
+  let prefix = "pub extern \"js\" fn "
+  if !line.has_prefix(prefix) {
+    return None
+  }
+  let rest = line[prefix.length():].to_string()
+  let open = rest.find("(")
+  let close = rest.rev_find(")")
+  match open {
+    Some(open_index) =>
+      match close {
+        Some(close_index) => {
+          if close_index < open_index {
+            return None
+          }
+          let public_name = rest[:open_index].to_string().trim().to_string()
+          if public_name.contains("::") {
+            return None
+          }
+          let params_src = rest[open_index + 1:close_index].to_string()
+          let after = rest[close_index + 1:].to_string().trim().to_string()
+          if !after.has_prefix("->") {
+            return None
+          }
+          let return_src = after[2:].to_string().trim().to_string()
+          let return_type = match return_src.find("=") {
+            Some(index) => return_src[:index].to_string().trim().to_string()
+            None => return_src
+          }
+          if return_type == "" {
+            return None
+          }
+          let arg_names : Array[String] = []
+          if params_src.trim() != "" {
+            for item in bridge_split_top_level_commas(params_src) {
+              if item == "" {
+                continue
+              }
+              match item.find(":") {
+                Some(index) =>
+                  arg_names.push(item[:index].to_string().trim().to_string())
+                None => arg_names.push(item)
+              }
+            }
+          }
+          Some({ public_name, params_src, arg_names, return_type })
+        }
+        None => None
+      }
+    None => None
+  }
+}
+
+///|
 fn parse_bridge_param_decls(params_src : String) -> Array[BridgeParamDecl] {
   let decls : Array[BridgeParamDecl] = []
   if params_src.trim() == "" {
@@ -674,6 +728,18 @@ fn add_bridge_ergonomic_helper_decls(
   bridge_mbt : String,
 ) -> String {
   let mut next_bridge_mbti = bridge_mbti
+  for line_view in bridge_mbt.split("\n") {
+    let line = line_view.to_string().trim().to_string()
+    match parse_bridge_pub_extern_fn_decl_line(line) {
+      Some(fn_decl) => {
+        let helper_decl = "declare pub fn \{fn_decl.public_name}(\{fn_decl.params_src}) -> \{fn_decl.return_type}"
+        if !next_bridge_mbti.contains(helper_decl) {
+          next_bridge_mbti += "\n\n///|\n" + helper_decl
+        }
+      }
+      None => ()
+    }
+  }
   let unsafe_cast_decl = "declare pub fn[A, B] unsafeCast(value : A) -> B"
   if !next_bridge_mbti.contains(unsafe_cast_decl) {
     next_bridge_mbti += "\n\n///|\n" + unsafe_cast_decl
@@ -753,7 +819,7 @@ fn collect_bridge_enum_converters(
     let from_js_name = bridge_enum_from_js_name(type_name)
     let to_js_optional_name = bridge_enum_to_js_optional_name(type_name)
     let from_js_optional_name = bridge_enum_from_js_optional_name(type_name)
-    for raw_type in ["String", "Int"] {
+    for raw_type in ["String", "Int", "Double"] {
       if bridge_mbt.contains(
           "fn \{to_js_name}(value : \{type_name}) -> \{raw_type}",
         ) &&

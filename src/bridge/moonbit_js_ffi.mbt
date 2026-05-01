@@ -13,6 +13,15 @@ priv struct MoonBitBridgeImport {
 }
 
 ///|
+priv struct FfiAliasConstructor {
+  fn_name : String
+  binding_name : String
+  params_src : String
+  bridge_params : Array[String]
+  bridge_expr : String
+}
+
+///|
 priv struct MoonBitJsFfiState {
   declared_type_names : Array[String]
   struct_type_names : Array[String]
@@ -394,7 +403,28 @@ fn ffi_enum_string_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, String)]? {
 
 ///|
 fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
-  enum_lowering_int_cases(enum_)
+  match enum_lowering_int_cases(enum_) {
+    Some(cases) =>
+      if ffi_int_cases_need_double(cases) {
+        None
+      } else {
+        Some(cases)
+      }
+    None => None
+  }
+}
+
+///|
+fn ffi_enum_double_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
+  match enum_lowering_int_cases(enum_) {
+    Some(cases) =>
+      if ffi_int_cases_need_double(cases) {
+        Some(cases)
+      } else {
+        None
+      }
+    None => None
+  }
 }
 
 ///|
@@ -425,6 +455,21 @@ fn ffi_named_type_is_int_enum(state : MoonBitJsFfiState, name : String) -> Bool 
 }
 
 ///|
+fn ffi_named_type_is_double_int_enum(
+  state : MoonBitJsFfiState,
+  name : String,
+) -> Bool {
+  match ffi_find_enum_decl(state, name) {
+    Some(enum_) =>
+      match ffi_enum_double_int_cases(enum_) {
+        Some(_) => true
+        None => false
+      }
+    None => false
+  }
+}
+
+///|
 fn ffi_named_type_is_primitive_enum_in(
   enums : Array[@ast.TsEnumDecl],
   name : String,
@@ -436,7 +481,11 @@ fn ffi_named_type_is_primitive_enum_in(
         None =>
           match ffi_enum_int_cases(enum_) {
             Some(_) => true
-            None => false
+            None =>
+              match ffi_enum_double_int_cases(enum_) {
+                Some(_) => true
+                None => false
+              }
           }
       }
     None => false
@@ -484,14 +533,7 @@ fn ffi_type_has_primitive_enum(
       }
       false
     }
-    Func(params, return_type) => {
-      for param in params {
-        if ffi_type_has_primitive_enum(enums, param) {
-          return true
-        }
-      }
-      ffi_type_has_primitive_enum(enums, return_type)
-    }
+    Func(_, _) => false
     _ => false
   }
 }
@@ -542,6 +584,9 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     Applied(name, _) if ffi_named_type_is_string_enum(state, name) => "String"
     Named(name) if ffi_named_type_is_int_enum(state, name) => "Int"
     Applied(name, _) if ffi_named_type_is_int_enum(state, name) => "Int"
+    Named(name) if ffi_named_type_is_double_int_enum(state, name) => "Double"
+    Applied(name, _) if ffi_named_type_is_double_int_enum(state, name) =>
+      "Double"
     Named(name) => ffi_mark_external_type(state, name)
     Applied(name, _) => ffi_mark_external_type(state, name)
     _ => {
@@ -909,21 +954,30 @@ fn ffi_enum_int_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
       ]
       for item in cases {
         let (case_name, value) = item
-        lines.push("    \{case_name} => \{value}")
+        lines.push("    \{case_name} => \{ffi_int_literal_expr(value)}")
       }
       lines.push("  }")
       lines.push("}")
       lines.push("")
       lines.push("fn \{from_js_name}(value : Int) -> \{type_name} {")
-      lines.push("  match value {")
-      for item in cases {
+      for i, item in cases {
         let (case_name, value) = item
-        lines.push("    \{value} => \{case_name}")
+        let prefix = if i == 0 { "if" } else { "else if" }
+        lines.push("  \{prefix} value == \{ffi_int_literal_expr(value)} {")
+        lines.push("    \{case_name}")
+        lines.push("  }")
       }
-      lines.push(
-        "    _ => abort(\"unexpected \{type_name} value: \" + value.to_string())",
-      )
-      lines.push("  }")
+      if cases.length() == 0 {
+        lines.push(
+          "  abort(\"unexpected \{type_name} value: \" + value.to_string())",
+        )
+      } else {
+        lines.push("  else {")
+        lines.push(
+          "    abort(\"unexpected \{type_name} value: \" + value.to_string())",
+        )
+        lines.push("  }")
+      }
       lines.push("}")
       lines.push("")
       lines.push("fn \{to_js_optional_name}(value : \{type_name}?) -> Int? {")
@@ -943,6 +997,226 @@ fn ffi_enum_int_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
     }
     None => None
   }
+}
+
+///|
+fn ffi_enum_double_int_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
+  let type_name = ffi_type_identifier(enum_.name, "GeneratedEnum")
+  match ffi_enum_double_int_cases(enum_) {
+    Some(cases) => {
+      let to_js_name = ffi_enum_to_js_name(type_name)
+      let from_js_name = ffi_enum_from_js_name(type_name)
+      let to_js_optional_name = to_js_name + "_optional"
+      let from_js_optional_name = from_js_name + "_optional"
+      let lines : Array[String] = [
+        "fn \{to_js_name}(value : \{type_name}) -> Double {",
+        "  match value {",
+      ]
+      for item in cases {
+        let (case_name, value) = item
+        lines.push("    \{case_name} => \{ffi_double_literal_expr(value)}")
+      }
+      lines.push("  }")
+      lines.push("}")
+      lines.push("")
+      lines.push("fn \{from_js_name}(value : Double) -> \{type_name} {")
+      for i, item in cases {
+        let (case_name, value) = item
+        let prefix = if i == 0 { "if" } else { "else if" }
+        lines.push("  \{prefix} value == \{ffi_double_literal_expr(value)} {")
+        lines.push("    \{case_name}")
+        lines.push("  }")
+      }
+      if cases.length() == 0 {
+        lines.push(
+          "  abort(\"unexpected \{type_name} value: \" + value.to_string())",
+        )
+      } else {
+        lines.push("  else {")
+        lines.push(
+          "    abort(\"unexpected \{type_name} value: \" + value.to_string())",
+        )
+        lines.push("  }")
+      }
+      lines.push("}")
+      lines.push("")
+      lines.push(
+        "fn \{to_js_optional_name}(value : \{type_name}?) -> Double? {",
+      )
+      lines.push("  match value {")
+      lines.push("    Some(value) => Some(\{to_js_name}(value))")
+      lines.push("    None => None")
+      lines.push("  }")
+      lines.push("}")
+      lines.push("")
+      lines.push(
+        "fn \{from_js_optional_name}(value : Double?) -> \{type_name}? {",
+      )
+      lines.push("  match value {")
+      lines.push("    Some(value) => Some(\{from_js_name}(value))")
+      lines.push("    None => None")
+      lines.push("  }")
+      lines.push("}")
+      Some(lines.join("\n"))
+    }
+    None => None
+  }
+}
+
+///|
+fn ffi_enum_raw_type(enum_ : @ast.TsEnumDecl) -> String? {
+  match ffi_enum_string_cases(enum_) {
+    Some(_) => Some("String")
+    None =>
+      match ffi_enum_int_cases(enum_) {
+        Some(_) => Some("Int")
+        None =>
+          match ffi_enum_double_int_cases(enum_) {
+            Some(_) => Some("Double")
+            None => None
+          }
+      }
+  }
+}
+
+///|
+fn ffi_enum_js_extern_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
+  let type_name = ffi_type_identifier(enum_.name, "GeneratedEnum")
+  let raw_type = match ffi_enum_raw_type(enum_) {
+    Some(raw_type) => raw_type
+    None => return None
+  }
+  let to_js_name = ffi_enum_to_js_name(type_name)
+  let from_js_name = ffi_enum_from_js_name(type_name)
+  let to_js_optional_name = to_js_name + "_optional"
+  let from_js_optional_name = from_js_name + "_optional"
+  let lines : Array[String] = [
+    "extern \"js\" fn \{to_js_name}(value : \{type_name}) -> \{raw_type} = \"\{to_js_name}\"",
+    "extern \"js\" fn \{from_js_name}(value : \{raw_type}) -> \{type_name} = \"\{from_js_name}\"",
+    "extern \"js\" fn \{to_js_optional_name}(value : \{type_name}?) -> \{raw_type}? = \"\{to_js_optional_name}\"",
+    "extern \"js\" fn \{from_js_optional_name}(value : \{raw_type}?) -> \{type_name}? = \"\{from_js_optional_name}\"",
+  ]
+  Some(lines.join("\n"))
+}
+
+///|
+fn ffi_int_literal_expr(value : Int) -> String {
+  let raw = value.to_string()
+  if raw == "-2147483648" {
+    "(-2147483647 - 1)"
+  } else {
+    raw
+  }
+}
+
+///|
+fn ffi_double_literal_expr(value : Int) -> String {
+  let raw = value.to_string()
+  if raw == "-2147483648" {
+    "(-536870912.0 * 4.0)"
+  } else {
+    raw + ".0"
+  }
+}
+
+///|
+fn ffi_int_cases_need_double(cases : Array[(String, Int)]) -> Bool {
+  for item in cases {
+    if item.1.to_string() == "-2147483648" {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn ffi_enum_js_raw_literal(enum_ : @ast.TsEnumDecl, index : Int) -> String? {
+  match ffi_enum_string_cases(enum_) {
+    Some(cases) => {
+      let (_, value) = cases[index]
+      Some("\"\{json_escape_string(value)}\"")
+    }
+    None =>
+      match ffi_enum_int_cases(enum_) {
+        Some(cases) => Some(cases[index].1.to_string())
+        None =>
+          match ffi_enum_double_int_cases(enum_) {
+            Some(cases) => Some(cases[index].1.to_string())
+            None => None
+          }
+      }
+  }
+}
+
+///|
+fn ffi_enum_case_count(enum_ : @ast.TsEnumDecl) -> Int {
+  match ffi_enum_string_cases(enum_) {
+    Some(cases) => cases.length()
+    None =>
+      match ffi_enum_int_cases(enum_) {
+        Some(cases) => cases.length()
+        None =>
+          match ffi_enum_double_int_cases(enum_) {
+            Some(cases) => cases.length()
+            None => 0
+          }
+      }
+  }
+}
+
+///|
+fn ffi_enum_runtime_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
+  let type_name = ffi_type_identifier(enum_.name, "GeneratedEnum")
+  let case_count = ffi_enum_case_count(enum_)
+  if case_count == 0 {
+    return None
+  }
+  let to_js_name = ffi_enum_to_js_name(type_name)
+  let from_js_name = ffi_enum_from_js_name(type_name)
+  let lines : Array[String] = [
+    "export function \{to_js_name}(value) {",
+    "  switch (value) {",
+  ]
+  for i in 0..<case_count {
+    match ffi_enum_js_raw_literal(enum_, i) {
+      Some(raw) => lines.push("    case \{i}: return \{raw};")
+      None => return None
+    }
+  }
+  lines.push(
+    "    default: throw new Error(\"unexpected \{type_name} tag: \" + value);",
+  )
+  lines.push("  }")
+  lines.push("}")
+  lines.push("")
+  lines.push("export function \{from_js_name}(value) {")
+  lines.push("  switch (value) {")
+  for i in 0..<case_count {
+    match ffi_enum_js_raw_literal(enum_, i) {
+      Some(raw) => lines.push("    case \{raw}: return \{i};")
+      None => return None
+    }
+  }
+  lines.push(
+    "    default: throw new Error(\"unexpected \{type_name} value: \" + value);",
+  )
+  lines.push("  }")
+  lines.push("}")
+  lines.push("")
+  lines.push("export function \{to_js_name}_optional(value) {")
+  lines.push("  value = __ts_mbt_unwrap_option(value);")
+  lines.push("  return value === undefined ? undefined : \{to_js_name}(value);")
+  lines.push("}")
+  lines.push("")
+  lines.push("export function \{from_js_name}_optional(value) {")
+  lines.push("  return value == null ? undefined : \{from_js_name}(value);")
+  lines.push("}")
+  Some(lines.join("\n"))
+}
+
+///|
+fn ffi_should_use_js_enum_converters(enums : Array[@ast.TsEnumDecl]) -> Bool {
+  enums.length() > 32
 }
 
 ///|
@@ -972,7 +1246,16 @@ fn ffi_enum_bridge_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
             lines.push("    case \{case_index}: return \{value};")
             case_index += 1
           }
-        None => return None
+        None =>
+          match ffi_enum_double_int_cases(enum_) {
+            Some(cases) =>
+              for item in cases {
+                let (_, value) = item
+                lines.push("    case \{case_index}: return \{value};")
+                case_index += 1
+              }
+            None => return None
+          }
       }
   }
   lines.push(
@@ -1170,6 +1453,191 @@ fn ffi_struct_converter_call_expr(name : String, expr : String) -> String {
   let type_name = ffi_type_identifier(name, "OpaqueType")
   let converter_name = ffi_struct_converter_name(type_name)
   "\{converter_name}(\{expr})"
+}
+
+///|
+fn ffi_type_alias_constructor_suffix(type_ : @ast.TsType) -> String? {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, _)) => return ffi_type_alias_constructor_suffix(collapsed)
+    None => ()
+  }
+  match ffi_classify_transparent_intersection(type_) {
+    Some(inner) => return ffi_type_alias_constructor_suffix(inner)
+    None => ()
+  }
+  match type_ {
+    Literal(_) | String_ => Some("string")
+    Number | Int | NumberLiteral(_) => Some("double")
+    BigInt | BigIntLiteral(_) => Some("int64")
+    Boolean | BooleanLiteral(_) => Some("bool")
+    Struct(name, _) | Named(name) | Applied(name, _) =>
+      Some(ffi_to_snake_case(name))
+    Array(inner) =>
+      match ffi_type_alias_constructor_suffix(inner) {
+        Some(suffix) => Some(suffix + "_array")
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn ffi_type_alias_constructor_param_type(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> String? {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, _)) =>
+      return ffi_type_alias_constructor_param_type(state, collapsed)
+    None => ()
+  }
+  match ffi_classify_transparent_intersection(type_) {
+    Some(inner) => return ffi_type_alias_constructor_param_type(state, inner)
+    None => ()
+  }
+  match type_ {
+    Literal(_) | String_ => Some("String")
+    Number | Int | NumberLiteral(_) => Some("Double")
+    BigInt | BigIntLiteral(_) => Some("Int64")
+    Boolean | BooleanLiteral(_) => Some("Bool")
+    Struct(name, _) | Named(name) | Applied(name, _) =>
+      Some(ffi_mark_external_type(state, name))
+    Array(inner) =>
+      match ffi_type_alias_constructor_param_type(state, inner) {
+        Some(inner_type) => Some("Array[\{inner_type}]")
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn ffi_type_alias_constructor_for_item(
+  state : MoonBitJsFfiState,
+  alias_fn_prefix : String,
+  item : @ast.TsType,
+) -> FfiAliasConstructor? {
+  match item {
+    Null =>
+      return Some({
+        fn_name: alias_fn_prefix + "_null",
+        binding_name: "__ts_mbt_" + alias_fn_prefix + "_null",
+        params_src: "",
+        bridge_params: [],
+        bridge_expr: "null",
+      })
+    Undefined =>
+      return Some({
+        fn_name: alias_fn_prefix + "_undefined",
+        binding_name: "__ts_mbt_" + alias_fn_prefix + "_undefined",
+        params_src: "",
+        bridge_params: [],
+        bridge_expr: "undefined",
+      })
+    _ => ()
+  }
+  let suffix = match ffi_type_alias_constructor_suffix(item) {
+    Some(suffix) => suffix
+    None => return None
+  }
+  let param_type = match ffi_type_alias_constructor_param_type(state, item) {
+    Some(param_type) => param_type
+    None => return None
+  }
+  Some({
+    fn_name: alias_fn_prefix + "_from_" + suffix,
+    binding_name: "__ts_mbt_" + alias_fn_prefix + "_from_" + suffix,
+    params_src: "value : \{param_type}",
+    bridge_params: ["value"],
+    bridge_expr: "value",
+  })
+}
+
+///|
+fn ffi_type_alias_union_items(type_ : @ast.TsType) -> Array[@ast.TsType]? {
+  match type_ {
+    Union(items) => Some(items)
+    Null
+    | Undefined
+    | Literal(_)
+    | String_
+    | Number
+    | Int
+    | NumberLiteral(_)
+    | BigInt
+    | BigIntLiteral(_)
+    | Boolean
+    | BooleanLiteral(_)
+    | Struct(_, _)
+    | Named(_)
+    | Applied(_, _)
+    | Array(_) => Some([type_])
+    _ => None
+  }
+}
+
+///|
+fn ffi_type_alias_constructors(
+  state : MoonBitJsFfiState,
+  type_alias : @ast.TsTypeAlias,
+) -> Array[FfiAliasConstructor] {
+  if type_alias.type_params.length() > 0 {
+    return []
+  }
+  let items = match ffi_type_alias_union_items(type_alias.type_) {
+    Some(items) => items
+    None => return []
+  }
+  let alias_type_name = ffi_type_identifier(type_alias.name, "OpaqueType")
+  let alias_fn_prefix = ffi_to_snake_case(alias_type_name)
+  let ctors : Array[FfiAliasConstructor] = []
+  let seen_names : Array[String] = []
+  for item in items {
+    match ffi_type_alias_constructor_for_item(state, alias_fn_prefix, item) {
+      Some(ctor) =>
+        if !seen_names.contains(ctor.fn_name) {
+          seen_names.push(ctor.fn_name)
+          ctors.push(ctor)
+        }
+      None => ()
+    }
+  }
+  ctors
+}
+
+///|
+fn ffi_alias_constructor_decl(
+  alias_type_name : String,
+  ctor : FfiAliasConstructor,
+) -> String {
+  "pub extern \"js\" fn \{ctor.fn_name}(\{ctor.params_src}) -> \{alias_type_name} = \"\{ctor.binding_name}\""
+}
+
+///|
+fn ffi_alias_constructor_bridge_line(ctor : FfiAliasConstructor) -> String {
+  ffi_bridge_function_line(
+    ctor.binding_name,
+    ctor.bridge_params,
+    ctor.bridge_expr,
+  )
+}
+
+///|
+fn ffi_type_alias_map_by_type_name(
+  modules : Map[String, DeclModuleInfo],
+) -> Map[String, @ast.TsTypeAlias] {
+  let aliases : Map[String, @ast.TsTypeAlias] = {}
+  for entry in modules {
+    let info = entry.1
+    for type_alias in info.module_.type_aliases {
+      let type_name = ffi_type_identifier(type_alias.name, "OpaqueType")
+      match aliases.get(type_name) {
+        Some(_) => ()
+        None => aliases[type_name] = type_alias
+      }
+    }
+  }
+  aliases
 }
 
 ///|
@@ -2455,6 +2923,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     needs_js_any: false,
   }
+  let type_aliases_by_type_name = ffi_type_alias_map_by_type_name(modules)
   let emitted_type_names : Array[String] = []
 
   let ffi_sections : Array[String] = [
@@ -2468,6 +2937,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let bridge_imports : Array[MoonBitBridgeImport] = []
   let seen_bridge_import_keys : Array[String] = []
   let seen_bridge_binding_names : Array[String] = []
+  let use_js_enum_converters = ffi_should_use_js_enum_converters(enums)
 
   for note in decl_notes {
     let text = note.replace(old="///|\n/// ", new="")
@@ -2528,13 +2998,29 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     if !emitted_type_names.contains(type_name) {
       emitted_type_names.push(type_name)
       ffi_sections.push(ffi_enum_decl_to_moonbit(enum_))
-      match ffi_enum_string_converter_decl(enum_) {
-        Some(converter_decl) => ffi_sections.push(converter_decl)
-        None =>
-          match ffi_enum_int_converter_decl(enum_) {
-            Some(converter_decl) => ffi_sections.push(converter_decl)
-            None => ()
-          }
+      if use_js_enum_converters {
+        match ffi_enum_js_extern_converter_decl(enum_) {
+          Some(converter_decl) => ffi_sections.push(converter_decl)
+          None => ()
+        }
+        match ffi_enum_runtime_js_converter_decl(enum_) {
+          Some(converter_decl) =>
+            bridge_enum_converter_lines.push(converter_decl)
+          None => ()
+        }
+      } else {
+        match ffi_enum_string_converter_decl(enum_) {
+          Some(converter_decl) => ffi_sections.push(converter_decl)
+          None =>
+            match ffi_enum_int_converter_decl(enum_) {
+              Some(converter_decl) => ffi_sections.push(converter_decl)
+              None =>
+                match ffi_enum_double_int_converter_decl(enum_) {
+                  Some(converter_decl) => ffi_sections.push(converter_decl)
+                  None => ()
+                }
+            }
+        }
       }
       match ffi_enum_bridge_js_converter_decl(enum_) {
         Some(converter_decl) => bridge_enum_converter_lines.push(converter_decl)
@@ -3094,12 +3580,43 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     )
   }
 
+  let alias_constructor_sections : Array[String] = []
+  let alias_candidate_type_names : Array[String] = []
+  for type_name in state.external_type_names {
+    alias_candidate_type_names.push(type_name)
+  }
+  for type_name in alias_candidate_type_names {
+    if state.declared_type_names.contains(type_name) {
+      continue
+    }
+    match type_aliases_by_type_name.get(type_name) {
+      Some(type_alias) => {
+        let ctors = ffi_type_alias_constructors(state, type_alias)
+        for ctor in ctors {
+          alias_constructor_sections.push(
+            ffi_alias_constructor_decl(type_name, ctor),
+          )
+          push_unique_bridge_binding(
+            seen_bridge_binding_names,
+            bridge_lines,
+            ctor.binding_name,
+            ffi_alias_constructor_bridge_line(ctor),
+          )
+        }
+      }
+      None => ()
+    }
+  }
+
   state.external_type_names.sort()
   for type_name in state.external_type_names {
     if state.declared_type_names.contains(type_name) {
       continue
     }
     ffi_sections.push("#warnings(\"-3\")\n#external\ntype \{type_name}")
+  }
+  for section in alias_constructor_sections {
+    ffi_sections.push(section)
   }
 
   if state.needs_js_any {

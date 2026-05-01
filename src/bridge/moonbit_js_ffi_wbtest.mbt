@@ -91,6 +91,32 @@ async test "bridge: emit MoonBit JS FFI bundle from ambient external module" {
       "pub extern \"js\" fn DatabaseSync::database_sync_prepare(self : DatabaseSync, sql : String) -> StatementSync",
     ),
   )
+  assert_true(bundle.ffi_mbt.contains("#external\ntype SQLInputValue"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn sqlinput_value_null() -> SQLInputValue = \"__ts_mbt_sqlinput_value_null\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn sqlinput_value_from_string(value : String) -> SQLInputValue = \"__ts_mbt_sqlinput_value_from_string\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn sqlinput_value_from_double(value : Double) -> SQLInputValue = \"__ts_mbt_sqlinput_value_from_double\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn sqlinput_value_from_int64(value : Int64) -> SQLInputValue = \"__ts_mbt_sqlinput_value_from_int64\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_sqlinput_value_from_string(value) { return value; }",
+    ),
+  )
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn get_sqlite_ok() -> Double = \"__ts_mbt_get_sqlite_ok\"",
@@ -4034,6 +4060,29 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React package surfac
     ),
   )
   assert_false(bundle.ffi_mbt.contains("props : @js.Any?"))
+}
+
+///|
+async test "bridge: JS FFI keeps function-field enum interfaces pass-through" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/function-field-enum-entry.d.ts", "./runtime/function-field-enum.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct Context"))
+  assert_true(bundle.ffi_mbt.contains("handle : (Int) -> Unit"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn visit(context : Context) -> Unit = \"__ts_mbt_visit\"",
+    ),
+  )
+  assert_false(bundle.bridge_js.contains("__ts_mbt_to_js_context"))
 }
 
 ///|

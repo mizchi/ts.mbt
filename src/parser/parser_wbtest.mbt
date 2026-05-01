@@ -5951,6 +5951,16 @@ test "parser: parse bigint literal union types" {
 }
 
 ///|
+test "parser: parse bigint primitive type" {
+  let src = "export type UserId = bigint;"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected bigint primitive type to parse: \{e}")
+  }
+  assert_eq(module_.type_aliases.length(), 1)
+  assert_eq(module_.type_aliases[0].type_, @ast.TsType::BigInt)
+}
+
+///|
 test "parser: parse generic curried function return type" {
   let src =
     #|export declare function ap<F extends URIS2, G extends URIS>(

@@ -432,11 +432,7 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       let _ = self.advance()
       Null
     }
-    Ident("any")
-    | Ident("unknown")
-    | Ident("object")
-    | Ident("symbol")
-    | Ident("bigint") => {
+    Ident("any") | Ident("unknown") | Ident("object") | Ident("symbol") => {
       let name = match self.advance().kind {
         Ident(n) => n
         _ => "any"
@@ -446,6 +442,10 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       } else {
         Any
       }
+    }
+    Ident("bigint") => {
+      let _ = self.advance()
+      BigInt
     }
     Ident("undefined") => {
       let _ = self.advance()
