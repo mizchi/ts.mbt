@@ -313,7 +313,7 @@ jsvalue_function_budget() {
     zod) printf '239\n' ;;
     date-fns) printf '18\n' ;;
     node:sqlite) printf '0\n' ;;
-    node:fs) printf '37\n' ;;
+    node:fs) printf '32\n' ;;
     node:path) printf '1\n' ;;
     node:crypto) printf '61\n' ;;
     colorette) printf '1\n' ;;
@@ -363,7 +363,7 @@ jsvalue_cause_budget() {
     execa) printf '1|0|0|0|1|0|0\n' ;;
     preact) printf '1319|1246|1|21|34|1|16\n' ;;
     node:sqlite) printf '3|3|0|0|0|0|0\n' ;;
-    node:fs) printf '58|12|8|5|21|10|2\n' ;;
+    node:fs) printf '52|12|7|2|21|10|0\n' ;;
     node:path) printf '1|0|0|0|0|0|1\n' ;;
     node:crypto) printf '111|20|13|24|53|0|1\n' ;;
     node:os) printf '5|5|0|0|0|0|0\n' ;;

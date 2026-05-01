@@ -4324,11 +4324,15 @@ fn append_lowered_interface_field(
     return
   }
   seen_field_names.push(field_name)
-  let lowered_type = lower_react_utility_type(
-    info,
-    rewrite_type_refs(info, field_type, canonical_types),
-    modules,
-    canonical_types,
+  let lowered_type = decl_specialize_generated_interface_field_type(
+    owner_name,
+    field_name,
+    lower_react_utility_type(
+      info,
+      rewrite_type_refs(info, field_type, canonical_types),
+      modules,
+      canonical_types,
+    ),
   )
   fields.push(
     (
@@ -4918,6 +4922,47 @@ fn decl_specialize_generated_api_return_type(
 }
 
 ///|
+fn decl_specialize_generated_class_property_type(
+  class_name : String,
+  property_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match class_name {
+    "ReadStream" | "WriteStream" =>
+      if property_name == "path" && decl_is_node_string_buffer_union(type_) {
+        Named("PathLike")
+      } else {
+        type_
+      }
+    _ => type_
+  }
+}
+
+///|
+fn decl_specialize_generated_interface_field_type(
+  owner_name : String,
+  field_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match owner_name {
+    "StatSyncFn" =>
+      if field_name == "<call>" {
+        match type_ {
+          Func([Named("PathLike"), _], Named("Stats")) =>
+            Func(
+              [Named("PathLike"), Union([Named("StatSyncOptions"), Undefined])],
+              Named("Stats"),
+            )
+          _ => type_
+        }
+      } else {
+        type_
+      }
+    _ => type_
+  }
+}
+
+///|
 fn decl_type_is_named(type_ : @ast.TsType, names : Array[String]) -> Bool {
   match type_ {
     Named(name) | Applied(name, _) => names.contains(name)
@@ -5008,6 +5053,11 @@ fn decl_is_node_file_data_union(type_ : @ast.TsType) -> Bool {
 ///|
 fn decl_is_node_string_url_union(type_ : @ast.TsType) -> Bool {
   decl_union_has_string_and_named(type_, ["URL"])
+}
+
+///|
+fn decl_is_node_string_buffer_union(type_ : @ast.TsType) -> Bool {
+  decl_union_has_string_and_named(type_, ["Buffer", "NonSharedBuffer"])
 }
 
 ///|
@@ -5693,6 +5743,7 @@ fn clone_exported_value(
 ///|
 fn clone_class_property_in_scope(
   class_property : @ast.TsClassPropertyDecl,
+  class_name : String,
   info : DeclModuleInfo,
   local_name_prefix : String,
   modules : Map[String, DeclModuleInfo],
@@ -5700,16 +5751,20 @@ fn clone_class_property_in_scope(
 ) -> @ast.TsClassPropertyDecl {
   {
     name: class_property.name,
-    type_: lower_react_utility_type(
-      info,
-      rewrite_type_refs_in_scope(
+    type_: decl_specialize_generated_class_property_type(
+      class_name,
+      class_property.name,
+      lower_react_utility_type(
         info,
-        local_name_prefix,
-        class_property.type_,
+        rewrite_type_refs_in_scope(
+          info,
+          local_name_prefix,
+          class_property.type_,
+          canonical_types,
+        ),
+        modules,
         canonical_types,
       ),
-      modules,
-      canonical_types,
     ),
     is_static: class_property.is_static,
     is_readonly: class_property.is_readonly,
@@ -5952,6 +6007,7 @@ fn append_class_origin_members(
   for class_property in origin.class_.properties {
     let cloned_property = clone_class_property_in_scope(
       class_property,
+      origin.class_.name,
       origin.info,
       origin.local_name_prefix,
       modules,

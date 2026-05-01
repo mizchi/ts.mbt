@@ -124,6 +124,34 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
     ),
     @ast.TsType::Named("ReadStreamOptions"),
   )
+  assert_eq(
+    decl_specialize_generated_class_property_type(
+      "ReadStream",
+      "path",
+      @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Named("Buffer")]),
+    ),
+    @ast.TsType::Named("PathLike"),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "StatSyncFn",
+      "<call>",
+      @ast.TsType::Func(
+        [@ast.TsType::Named("PathLike"), @ast.TsType::Any],
+        @ast.TsType::Named("Stats"),
+      ),
+    ),
+    @ast.TsType::Func(
+      [
+        @ast.TsType::Named("PathLike"),
+        @ast.TsType::Union([
+          @ast.TsType::Named("StatSyncOptions"),
+          @ast.TsType::Undefined,
+        ]),
+      ],
+      @ast.TsType::Named("Stats"),
+    ),
+  )
 }
 
 ///|
