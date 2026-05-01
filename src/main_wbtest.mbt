@@ -631,6 +631,40 @@ async test "emit_unified_tsmbt_scaffold strict mode rejects unsupported exports"
 }
 
 ///|
+async test "emit_unified_tsmbt_scaffold strict mode rejects enum-like unsupported exports" {
+  let root = wbtest_tmp_project_benchmark_root(
+    "unified_ts_to_mbt_strict_enum_like_unsupported",
+  )
+  let diagnostics_path = wbtest_join_path(root, "strict.md")
+  let _ = try? @fs.rmdir(root, recursive=true)
+  assert_false(
+    emit_unified_tsmbt_scaffold(
+      "fixtures/resolver/project/types/unsupported-enum-like-entry.d.ts",
+      wbtest_join_path(root, "generated"),
+      direction=TsmbtDirection::TsToMbt,
+      module_spec=Some("./runtime/unsupported-enum-like.js"),
+      import_rewrite_path=None,
+      diagnostics_path=Some(diagnostics_path),
+      strict=true,
+      facade=true,
+    ),
+  )
+  let diagnostics = @fs.read_file(diagnostics_path).text() catch {
+    e => fail("failed to read strict enum-like diagnostics: \{e}")
+  }
+  assert_true(
+    diagnostics.contains(
+      "MixedMode (mixed string/number enum cannot be lowered safely.)",
+    ),
+  )
+  assert_true(
+    diagnostics.contains(
+      "| `MixedMode` | omitted | unsupported export surface |",
+    ),
+  )
+}
+
+///|
 async test "emit_unified_tsmbt_scaffold creates nested TypeScript to MoonBit output dirs" {
   let root = wbtest_tmp_project_benchmark_root("unified_ts_to_mbt_nested")
   let out_dir = wbtest_join_path(root, "dist/generated")

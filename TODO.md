@@ -517,13 +517,13 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
 
 ### Diagnostics and Safety
 
-- [ ] Add diagnostics for every enum-like surface that is not lowered:
+- [x] Add diagnostics for every enum-like surface that is not lowered:
   - [x] mixed string/number enum;
   - [x] computed enum member;
   - [x] duplicate literal values after sanitization;
   - [x] mixed / non-integer / bigint named literal-union aliases;
   - [x] anonymous literal union without a stable public name.
-- [ ] Keep strict mode behavior unchanged: unsupported enum lowering in a
+- [x] Keep strict mode behavior unchanged: unsupported enum lowering in a
   public surface must either fall back within budget or fail with an actionable
   diagnostic.
 - [ ] Add real-world probes after fixtures pass:

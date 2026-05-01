@@ -48,6 +48,14 @@ fn find_resolved_export(
 }
 
 ///|
+async fn resolve_type_export_surface(
+  entry_path : String,
+) -> Array[ResolvedExport] raise ModuleGraphError {
+  let graph = load_type_module_graph(entry_path)
+  resolve_export_surface(graph)
+}
+
+///|
 async test "bridge: conflicting star exports are marked ambiguous" {
   let exports = resolve_type_export_surface(semantics_conflict_entry_path)
   match find_resolved_export(exports, "shared") {
@@ -81,6 +89,28 @@ async test "bridge: collect MoonBit TS scaffold unsupported exports reports only
     ambiguous_unsupported,
     content=(
       #|["Shared (ambiguous re-export: fixtures/resolver/project/types/ambiguous-a.d.ts, fixtures/resolver/project/types/ambiguous-b.d.ts)"]
+    ),
+  )
+}
+
+///|
+async test "bridge: collect MoonBit TS scaffold unsupported exports reports enum-like diagnostics" {
+  let unsupported = collect_moonbit_ts_scaffold_unsupported_exports(
+    "fixtures/resolver/project/types/unsupported-enum-like-entry.d.ts",
+  )
+  assert_true(
+    unsupported.contains(
+      "MixedMode (mixed string/number enum cannot be lowered safely.)",
+    ),
+  )
+  assert_true(
+    unsupported.contains(
+      "ComputedKind (enum member Dynamic has a non-literal computed value.)",
+    ),
+  )
+  assert_true(
+    unsupported.contains(
+      "MixedAlias (mixed string/number literal union cannot be lowered safely.)",
     ),
   )
 }

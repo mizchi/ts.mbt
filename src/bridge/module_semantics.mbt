@@ -593,14 +593,6 @@ fn resolve_export_surface(graph : ModuleGraph) -> Array[ResolvedExport] {
 }
 
 ///|
-async fn resolve_type_export_surface(
-  entry_path : String,
-) -> Array[ResolvedExport] raise ModuleGraphError {
-  let graph = load_type_module_graph(entry_path)
-  resolve_export_surface(graph)
-}
-
-///|
 fn scaffold_unsupported_export_text(export_ : ResolvedExport) -> String {
   let base = "\{export_.export_name} (ambiguous re-export"
   if export_.ambiguous_source_paths.length() == 0 {
@@ -611,16 +603,65 @@ fn scaffold_unsupported_export_text(export_ : ResolvedExport) -> String {
 }
 
 ///|
+fn push_unique_scaffold_unsupported_export(
+  unsupported_exports : Array[String],
+  item : String,
+) -> Unit {
+  if !unsupported_exports.contains(item) {
+    unsupported_exports.push(item)
+  }
+}
+
+///|
+fn scaffold_unsupported_decl_note_text(note : String) -> String? {
+  let prefix = "///|\n/// Unsupported export "
+  if !note.has_prefix(prefix) {
+    return None
+  }
+  let body = note[prefix.length():].to_string()
+  if body.contains("ambiguous re-export") {
+    return None
+  }
+  if body.contains("namespace export is widened to JSValue") ||
+    body.contains("runtime members inside exported namespace are omitted") {
+    return None
+  }
+  match body.find(": ") {
+    Some(idx) => {
+      let export_name = body[:idx].to_string()
+      let reason = body[idx + 2:].to_string()
+      Some("\{export_name} (\{reason})")
+    }
+    None => Some(body)
+  }
+}
+
+///|
 pub async fn collect_moonbit_ts_scaffold_unsupported_exports(
   entry_path : String,
 ) -> Array[String] raise ModuleGraphError {
-  let export_surface = resolve_type_export_surface(entry_path)
+  let graph = load_type_module_graph(entry_path)
+  let export_surface = resolve_export_surface(graph)
   let unsupported_exports : Array[String] = []
   for export_ in export_surface {
     match export_.kind {
       Ambiguous =>
-        unsupported_exports.push(scaffold_unsupported_export_text(export_))
+        push_unique_scaffold_unsupported_export(
+          unsupported_exports,
+          scaffold_unsupported_export_text(export_),
+        )
       _ => ()
+    }
+  }
+  let modules = build_decl_module_map(graph)
+  let (_, _, _, _, _, _, notes) = collect_exported_decls(
+    graph, export_surface, modules,
+  )
+  for note in notes {
+    match scaffold_unsupported_decl_note_text(note) {
+      Some(item) =>
+        push_unique_scaffold_unsupported_export(unsupported_exports, item)
+      None => ()
     }
   }
   unsupported_exports
