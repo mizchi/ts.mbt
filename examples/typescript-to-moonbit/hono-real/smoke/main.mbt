@@ -1,5 +1,6 @@
-extern "js" fn test_hono_handler() -> @sut.JSValue =
-  #| () => (c) => c.text("hi")
+fn test_hono_handler(c : @sut.Context) -> @sut.Response {
+  c.text("hi", None, None)
+}
 
 extern "js" fn test_undefined() -> @sut.JSValue =
   #| () => undefined
@@ -12,7 +13,7 @@ extern "js" fn test_hono_route_response(app : @sut.Hono, res : @sut.JSValue) -> 
 
 fn main {
   let app = @sut.new_hono(None)
-  let _ = app.get(@sut.unsafeCast("/hello"), test_hono_handler())
+  let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
   let res = app.request(
     @sut.unsafeCast("/hello"),

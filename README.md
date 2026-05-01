@@ -277,15 +277,30 @@ Package-specific practical coverage:
 - Small Node built-ins (`node:path`, `node:os`, `node:url`, `node:querystring`,
   `node:buffer`) and the focused `node:crypto` surface are expected to generate
   with zero public `JSValue` fallback in the real-world probe corpus.
-- Hono supports the basic application route shape directly from MoonBit:
+- Naturalization targets are packages where remaining fallback should keep
+  shrinking because the useful API shape is finite or common: Hono,
+  React Router, JOSE, Glob, `date-fns`, `magic-string`, `source-map`,
+  `node:sqlite`, `node:fs`, `node:assert`, and `node:util`.
+- Hono is the current example of that policy: the basic application route shape
+  works directly from MoonBit as
   `app.hono_get("/", fn(c) { c.text("ok", None, None) })`, with route paths as
   `String`, handlers as `(Context) -> Response`, and common `Context` response
   helpers returning `Response`.
-- Zod, Valibot, and Preact are currently treated as buildable interop probes
-  rather than fully ergonomic API surfaces. Their high-order schema, parser, JSX,
-  and component generic APIs still rely on explicit `JSValue` budgets; this is a
-  documented fallback policy, not a claim that those APIs are naturally typed in
-  MoonBit yet.
+- Glob now exercises the same policy for function-valued constant exports.
+  Natural function signatures such as `escape(pattern, options)` / `unescape`
+  are emitted as direct MoonBit calls, and `hasMagic(pattern: string |
+  string[], options: GlobOptions)` also gets a string-subset wrapper as
+  `has_magic(pattern : String, options : GlobOptions) -> Bool`. The common
+  single-pattern path no longer needs a manual `JSValue` argument or a
+  getter-returned function call.
+- Zod, Valibot, Preact, and broad Playwright event/callback surfaces are
+  currently treated as buildable interop probes rather than fully ergonomic API
+  surfaces. Their high-order schema, parser, JSX/component, and event callback
+  APIs still rely on explicit `JSValue` budgets; this is a documented fallback
+  policy, not a claim that those APIs are naturally typed in MoonBit yet.
+- `just verify-realworld-typescript` appends a fallback policy table to
+  `_build/realworld-typescript/METRICS.md`, and new corpus entries must be
+  classified before their `JSValue` budget is accepted.
 
 Supported subset examples:
 

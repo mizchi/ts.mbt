@@ -389,6 +389,80 @@ jsvalue_cause_budget() {
   esac
 }
 
+realworld_fallback_policy() {
+  local package_spec="$1"
+
+  case "$package_spec" in
+    clsx | node:path | node:crypto | node:os | node:url | node:querystring | node:buffer)
+      printf 'zero-target|Keep public JSValue surface at zero; any fallback is a regression.\n'
+      ;;
+    hono)
+      printf 'naturalize-target|Reduce generic context/router fallbacks while keeping route handlers and response helpers natural.\n'
+      ;;
+    react-router)
+      printf 'naturalize-target|Reduce route/path utility overload and option-object fallbacks; keep typed navigation helpers usable from MoonBit.\n'
+      ;;
+    jose)
+      printf 'naturalize-target|Reduce builder option and compact JWS/JWT overload fallbacks around the smoke-tested APIs.\n'
+      ;;
+    glob)
+      printf 'naturalize-target|Reduce pattern/options namespace fallbacks for common sync glob calls.\n'
+      ;;
+    node:assert | node:util)
+      printf 'naturalize-target|Shrink remaining Node built-in overload/unknown fallbacks toward zero for the common API surface.\n'
+      ;;
+    date-fns | magic-string | source-map | node:sqlite | node:fs)
+      printf 'naturalize-target|Keep reducing fallback around finite option bags, tuple results, and class/value helper APIs.\n'
+      ;;
+    zod | valibot)
+      printf 'budgeted-fallback|Schema/parser generics are intentionally smoke-tested and budgeted, not treated as naturally typed MoonBit APIs yet.\n'
+      ;;
+    preact)
+      printf 'budgeted-fallback|JSX/component/children generics are intentionally budgeted until a dedicated JSX/component binding layer exists.\n'
+      ;;
+    playwright)
+      printf 'budgeted-fallback|Large event/callback-heavy API is smoke-tested; only selected launch/device/options surfaces are naturalization targets.\n'
+      ;;
+    chalk | dotenv | ignore | colorette | immer | execa | vitest/runtime | express)
+      printf 'low-fallback-maintain|Current fallback is small and explicitly budgeted; naturalize only when a real smoke use case needs it.\n'
+      ;;
+    *)
+      printf 'unclassified|Add an explicit fallback policy before accepting this package into the real-world corpus.\n'
+      ;;
+  esac
+}
+
+append_fallback_policy_report() {
+  {
+    printf '\n## Fallback Policy\n\n'
+    printf 'This table separates practical naturalization targets from intentionally budgeted fallback packages. New corpus entries must be classified here before their `JSValue` budget is accepted.\n\n'
+    printf '| package | policy | action |\n'
+    printf '| --- | --- | --- |\n'
+  } >> "$metrics_file"
+
+  local kind
+  local package_spec
+  local module_name
+  local types_path
+  local policy
+  local action
+
+  while IFS='|' read -r kind package_spec module_name types_path; do
+    if [ -z "${kind:-}" ] || [[ "$kind" == \#* ]]; then
+      continue
+    fi
+    IFS='|' read -r policy action < <(realworld_fallback_policy "$package_spec")
+    if [ "$policy" = "unclassified" ]; then
+      echo "Missing fallback policy classification for $package_spec" >&2
+      exit 1
+    fi
+    printf '| %s | %s | %s |\n' \
+      "$package_spec" \
+      "$policy" \
+      "$action" >> "$metrics_file"
+  done < "$corpus_file"
+}
+
 assert_jsvalue_cause_budget() {
   local package_spec="$1"
   local actual_surface="$2"
@@ -864,9 +938,6 @@ EOF
       ;;
     glob)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_glob_pattern() -> JSValue =
-  #| () => "src/*.mbt"
-
 fn realworld_glob_options() -> GlobOptions {
   GlobOptions::{
     absolute: Some(false),
@@ -913,12 +984,9 @@ test "real-world glob bridge smoke" {
     windowsPathsNoEscape: Some(false),
     magicalBraces: Some(false),
   }
-  let escape = get_escape()
-  let unescape = get_unescape()
-  let has_magic = get_has_magic()
   assert_eq(escape("src/*.mbt", opts), "src/\\*.mbt")
   assert_eq(unescape("src/\\*.mbt", opts), "src/*.mbt")
-  if !has_magic(realworld_glob_pattern(), realworld_glob_options()) {
+  if !has_magic("src/*.mbt", realworld_glob_options()) {
     abort("expected glob pattern to have magic")
   }
 }
@@ -1448,9 +1516,6 @@ EOF
       ;;
     glob)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_glob_pattern() -> @sut.JSValue =
-  #| () => "src/*.mbt"
-
 fn realworld_glob_options() -> @sut.GlobOptions {
   @sut.GlobOptions::{
     absolute: Some(false),
@@ -1497,16 +1562,13 @@ fn main {
     windowsPathsNoEscape: Some(false),
     magicalBraces: Some(false),
   }
-  let escape = @sut.get_escape()
-  let unescape = @sut.get_unescape()
-  let has_magic = @sut.get_has_magic()
-  if escape("src/*.mbt", opts) != "src/\\*.mbt" {
+  if @sut.escape("src/*.mbt", opts) != "src/\\*.mbt" {
     abort("unexpected glob escape output")
   }
-  if unescape("src/\\*.mbt", opts) != "src/*.mbt" {
+  if @sut.unescape("src/\\*.mbt", opts) != "src/*.mbt" {
     abort("unexpected glob unescape output")
   }
-  if !has_magic(realworld_glob_pattern(), realworld_glob_options()) {
+  if !@sut.has_magic("src/*.mbt", realworld_glob_options()) {
     abort("expected glob pattern to have magic")
   }
 }
@@ -2110,5 +2172,7 @@ while IFS='|' read -r kind package_spec module_name types_path; do
       ;;
   esac
 done < "$corpus_file"
+
+append_fallback_policy_report
 
 echo "metrics written to $metrics_file"

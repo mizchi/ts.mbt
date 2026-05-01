@@ -1083,6 +1083,45 @@ async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported const ar
 }
 
 ///|
+async test "bridge: emit callable wrappers for natural function-valued const exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/function-value-string-array-entry.d.ts", "glob-like",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct GlobOptions"))
+  assert_true(
+    bundle.ffi_mbt.contains("pub extern \"js\" fn get_has_magic() ->"),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn has_magic(arg0 : String, arg1 : GlobOptions) -> Bool = \"__ts_mbt_has_magic\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_has_magic(arg0, arg1) { return __ts_mbt_module.hasMagic(arg0, __ts_mbt_to_js_glob_options(arg1)); }",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn escape(arg0 : String, arg1 : GlobOptions) -> String = \"__ts_mbt_escape\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_escape(arg0, arg1) { return __ts_mbt_module.escape(arg0, __ts_mbt_to_js_glob_options(arg1)); }",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle from runtime ts exported untyped const arrow functions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/runtime-untyped-arrow-entry.ts", "/runtime/runtime-untyped-arrow.js",

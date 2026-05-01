@@ -174,6 +174,30 @@ Implemented in the current real-world TypeScript probe order:
     schema, parser, JSX, and component generic surfaces are explicitly
     documented as budgeted `JSValue` fallback areas rather than natural MoonBit
     APIs.
+- [x] Split real-world packages into explicit fallback policy classes.
+  - `just verify-realworld-typescript` now appends a fallback policy table to
+    `_build/realworld-typescript/METRICS.md` and fails if a new corpus package
+    is not classified.
+  - Active naturalization targets: Hono, React Router, JOSE, Glob, `date-fns`,
+    `magic-string`, `source-map`, `node:sqlite`, `node:fs`, `node:assert`, and
+    `node:util`.
+  - Budgeted fallback probes: Zod, Valibot, Preact, and broad Playwright
+    event/callback surfaces. These should stay buildable and smoke-tested, but
+    are not currently claimed as naturally typed MoonBit APIs.
+- [x] Add a first Glob naturalization for function-valued const exports.
+  - `declare const hasMagic: (pattern: string | string[], options:
+    GlobOptions) => boolean` now keeps the existing getter but also emits a
+    MoonBit string-subset wrapper as `has_magic(pattern : String, options :
+    GlobOptions) -> Bool`.
+  - Function-valued const exports whose signatures do not widen to `@js.Any`
+    also get direct callable wrappers, so `escape(pattern, options)` and
+    `unescape(pattern, options)` no longer require `get_escape()` /
+    `get_unescape()` first.
+  - The real-world Glob smoke now calls `escape`, `unescape`, and
+    `has_magic("src/*.mbt", options)` directly instead of manufacturing a
+    `JSValue` pattern argument or calling getter-returned functions.
+  - The Hono real-world example smoke now uses a typed MoonBit route handler
+    `(Context) -> Response` directly with `app.get("/hello", handler)`.
 
 ### Phase 1: Measurement and Diagnostics (60% -> 65%)
 

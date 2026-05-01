@@ -691,6 +691,77 @@ fn ffi_func_type_name(
 }
 
 ///|
+fn ffi_type_is_string_like(type_ : @ast.TsType) -> Bool {
+  match ffi_normalize_literal_type(type_) {
+    String_ => true
+    _ => false
+  }
+}
+
+///|
+fn ffi_type_is_string_array_like(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Array(inner)
+    | Applied("Array", [inner])
+    | Applied("ReadonlyArray", [inner]) => ffi_type_is_string_like(inner)
+    _ => false
+  }
+}
+
+///|
+fn ffi_type_is_string_or_string_array_union(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Union(items) => {
+      let mut has_string = false
+      let mut has_array = false
+      for item in items {
+        if ffi_type_is_string_like(item) {
+          has_string = true
+        } else if ffi_type_is_string_array_like(item) {
+          has_array = true
+        } else {
+          return false
+        }
+      }
+      has_string && has_array
+    }
+    _ => false
+  }
+}
+
+///|
+fn ffi_callable_value_param_type_name(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> String {
+  if ffi_type_is_string_or_string_array_union(type_) {
+    "String"
+  } else {
+    ffi_type_name(state, type_)
+  }
+}
+
+///|
+fn ffi_rendered_type_uses_js_any(type_name : String) -> Bool {
+  type_name.contains("@js.Any") || type_name.contains("JSValue")
+}
+
+///|
+fn ffi_callable_value_should_emit_wrapper(
+  state : MoonBitJsFfiState,
+  params : Array[@ast.TsType],
+  return_type : @ast.TsType,
+) -> Bool {
+  for param in params {
+    let param_type = ffi_callable_value_param_type_name(state, param)
+    if ffi_rendered_type_uses_js_any(param_type) {
+      return false
+    }
+  }
+  !ffi_rendered_type_uses_js_any(ffi_type_name(state, return_type))
+}
+
+///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
   match ffi_classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
@@ -1611,6 +1682,21 @@ fn ffi_func_param_names(func : @ast.TsFunc) -> Array[String] {
 }
 
 ///|
+fn ffi_callable_value_param_names(
+  params : Array[@ast.TsType],
+  runtime_export_name : String,
+) -> Array[String] {
+  let names : Array[String] = []
+  for i, _ in params {
+    names.push("arg" + i.to_string())
+  }
+  ffi_avoid_bridge_param_name_collisions(
+    names,
+    ffi_bridge_runtime_avoid_names(runtime_export_name),
+  )
+}
+
+///|
 fn ffi_bridge_runtime_avoid_names(
   runtime_export_name : String,
 ) -> Array[String] {
@@ -2107,6 +2193,19 @@ fn ffi_func_needs_js_arg_conversion(
 }
 
 ///|
+fn ffi_callable_value_needs_js_arg_conversion(
+  state : MoonBitJsFfiState,
+  params : Array[@ast.TsType],
+) -> Bool {
+  for param in params {
+    if ffi_type_needs_js_arg_conversion(state, param) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn ffi_type_needs_js_return_conversion(type_ : @ast.TsType) -> Bool {
   match ffi_classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => is_optional && collapsed == Boolean
@@ -2173,6 +2272,19 @@ fn ffi_func_call_args_with_names(
   let args : Array[String] = []
   for i, param in func.params {
     args.push(ffi_type_js_converter_expr(state, param.type_, names[i]))
+  }
+  args
+}
+
+///|
+fn ffi_callable_value_call_args_with_names(
+  state : MoonBitJsFfiState,
+  params : Array[@ast.TsType],
+  names : Array[String],
+) -> Array[String] {
+  let args : Array[String] = []
+  for i, param in params {
+    args.push(ffi_type_js_converter_expr(state, param, names[i]))
   }
   args
 }
@@ -2281,6 +2393,25 @@ fn ffi_value_decl_to_moonbit(
   let return_type = ffi_type_name(state, value.type_)
   let fn_name = ffi_namespace_getter_name(value.name)
   "pub extern \"js\" fn \{fn_name}() -> \{return_type} = \"__ts_mbt_get_\{ffi_to_snake_case(value.name)}\""
+}
+
+///|
+fn ffi_callable_value_decl_to_moonbit(
+  state : MoonBitJsFfiState,
+  value : @ast.TsValueDecl,
+  params : Array[@ast.TsType],
+  return_type : @ast.TsType,
+) -> String {
+  let moonbit_params : Array[String] = []
+  for i, param in params {
+    let param_name = "arg" + i.to_string()
+    let safe_type = ffi_callable_value_param_type_name(state, param)
+    moonbit_params.push("\{param_name} : \{safe_type}")
+  }
+  let return_type_src = ffi_type_name(state, return_type)
+  let fn_name = ffi_value_fn_name(value.name)
+  let params_str = moonbit_params.join(", ")
+  "pub extern \"js\" fn \{fn_name}(\{params_str}) -> \{return_type_src} = \"\{ffi_binding_name(value.name)}\""
 }
 
 ///|
@@ -3824,6 +3955,51 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         ),
       ),
     )
+    match value.type_ {
+      Func(params, return_type) =>
+        if ffi_callable_value_should_emit_wrapper(state, params, return_type) {
+          let binding_name = ffi_binding_name(value.name)
+          let needs_js_arg_conversion = ffi_callable_value_needs_js_arg_conversion(
+            state, params,
+          )
+          let needs_js_return_conversion = ffi_type_needs_js_return_conversion(
+            return_type,
+          )
+          if needs_js_arg_conversion || needs_js_return_conversion {
+            bridge_needs_option_unwrap = true
+          }
+          push_unique_ffi_section(
+            seen_ffi_binding_names,
+            ffi_sections,
+            ffi_fn_decl_key(ffi_value_fn_name(value.name)),
+            ffi_callable_value_decl_to_moonbit(
+              state, value, params, return_type,
+            ),
+          )
+          let args = ffi_callable_value_param_names(params, runtime_export_name)
+          let call_args = ffi_callable_value_call_args_with_names(
+            state, params, args,
+          )
+          let call_args_str = call_args.join(", ")
+          let runtime_access = ensure_bridge_value_runtime_access(
+            seen_bridge_import_keys, bridge_imports, namespace_import_roots, module_spec,
+            runtime_export_name,
+          )
+          let return_expr = ffi_type_js_return_expr(
+            return_type,
+            "\{runtime_access}(\{call_args_str})",
+          )
+          push_unique_bridge_binding(
+            seen_bridge_binding_names,
+            bridge_lines,
+            binding_name,
+            ffi_bridge_function_line(binding_name, args, return_expr),
+          )
+        } else {
+          ()
+        }
+      _ => ()
+    }
     handled_export_names.push(value.name)
   }
 

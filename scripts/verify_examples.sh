@@ -319,8 +319,9 @@ verify_typescript_to_moonbit_hono_real_example() {
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn test_hono_handler() -> JSValue =
-  #| () => (c) => c.text("hi")
+fn test_hono_handler(c : Context) -> Response {
+  c.text("hi", None, None)
+}
 
 extern "js" fn test_undefined() -> JSValue =
   #| () => undefined
@@ -333,7 +334,7 @@ extern "js" fn test_hono_route_response(app : Hono, res : JSValue) -> String =
 
 test "generated real Hono bridge smoke" {
   let app = new_hono(None)
-  let _ = app.get(unsafeCast("/hello"), test_hono_handler())
+  let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
   let res = app.request(
     unsafeCast("/hello"),
@@ -581,7 +582,7 @@ EOF
   grep_generated_mbt "$out" 'pub extern "js" fn get_expect() -> ExpectStatic'
   grep_generated_mbt "$out" 'pub extern "js" fn get_assert() -> Chai_Assert'
   grep_generated_mbt "$out" 'pub extern "js" fn get_vi() -> VitestUtils'
-  grep_generated_mbt "$out" 'pub fn VitestUtils::isFakeTimers(self : VitestUtils) -> Bool'
+  grep_generated_mbt "$out" 'pub extern "js" fn VitestUtils::isFakeTimers(self : VitestUtils) -> Bool'
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
@@ -879,9 +880,9 @@ EOF
   grep_generated_mbt "$out" 'pub fn[A, B] unsafeCast(value : A) -> B = "%identity"'
   grep_generated_mbt "$out" 'pub fn Node::asIdentifier(self : Node) -> Identifier?'
   grep_generated_mbt "$out" '  createIdentifier : (String) -> Identifier'
-  grep_generated_mbt "$out" 'pub fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier'
-  grep_generated_mbt "$out" 'pub fn Printer::printFile(self : Printer, arg0 : SourceFile) -> String'
-  grep_generated_mbt "$out" 'pub fn TransformationResult::dispose(self : TransformationResult) -> Unit'
+  grep_generated_mbt "$out" 'pub extern "js" fn NodeFactory::createIdentifier(self : NodeFactory, arg0 : String) -> Identifier'
+  grep_generated_mbt "$out" 'pub extern "js" fn Printer::printFile(self : Printer, arg0 : SourceFile) -> String'
+  grep_generated_mbt "$out" 'pub extern "js" fn TransformationResult::dispose(self : TransformationResult) -> Unit'
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast"
