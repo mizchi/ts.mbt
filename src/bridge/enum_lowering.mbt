@@ -322,6 +322,309 @@ fn enum_lowering_type_alias_enum_like_unsupported_reason(
 }
 
 ///|
+fn enum_lowering_literal_union_core_with_optionals(
+  type_ : @ast.TsType,
+) -> (@ast.TsType, Array[@ast.TsType])? {
+  match type_ {
+    @ast.TsType::Union(items) => {
+      let concrete_items : Array[@ast.TsType] = []
+      let optional_items : Array[@ast.TsType] = []
+      for item in items {
+        match item {
+          @ast.TsType::Undefined | @ast.TsType::Null =>
+            optional_items.push(item)
+          @ast.TsType::Literal(_)
+          | @ast.TsType::NumberLiteral(_)
+          | @ast.TsType::BigIntLiteral(_)
+          | @ast.TsType::BooleanLiteral(_) => concrete_items.push(item)
+          _ => return None
+        }
+      }
+      if concrete_items.length() == 0 {
+        return None
+      }
+      let core = if concrete_items.length() == 1 {
+        concrete_items[0]
+      } else {
+        @ast.TsType::Union(concrete_items)
+      }
+      Some((core, optional_items))
+    }
+    @ast.TsType::Literal(_)
+    | @ast.TsType::NumberLiteral(_)
+    | @ast.TsType::BigIntLiteral(_)
+    | @ast.TsType::BooleanLiteral(_) => Some((type_, []))
+    _ => None
+  }
+}
+
+///|
+fn enum_lowering_anonymous_literal_enum_decl(
+  name : String,
+  type_ : @ast.TsType,
+) -> (@ast.TsEnumDecl, @ast.TsType)? {
+  match enum_lowering_literal_union_core_with_optionals(type_) {
+    Some((core, optional_items)) => {
+      let type_alias : @ast.TsTypeAlias = { name, type_params: [], type_: core }
+      match enum_lowering_type_alias_enum_decl(type_alias) {
+        Some(enum_) => {
+          let named = @ast.TsType::Named(name)
+          let rewritten = if optional_items.length() == 0 {
+            named
+          } else {
+            let items : Array[@ast.TsType] = [named]
+            for item in optional_items {
+              items.push(item)
+            }
+            @ast.TsType::Union(items)
+          }
+          Some((enum_, rewritten))
+        }
+        None => None
+      }
+    }
+    None => None
+  }
+}
+
+///|
+fn enum_lowering_used_type_key(name : String) -> String {
+  ffi_type_identifier(name, "GeneratedEnum")
+}
+
+///|
+fn enum_lowering_synthetic_enum_name(
+  parts : Array[String],
+  used_type_names : Array[String],
+) -> String {
+  let normalized_parts : Array[String] = []
+  for part in parts {
+    normalized_parts.push(ffi_type_identifier(part, "Value"))
+  }
+  let base = if normalized_parts.length() == 0 {
+    "GeneratedEnum"
+  } else {
+    normalized_parts.join("")
+  }
+  let mut candidate = base
+  let mut suffix = 2
+  while used_type_names.contains(enum_lowering_used_type_key(candidate)) {
+    candidate = base + suffix.to_string()
+    suffix += 1
+  }
+  used_type_names.push(enum_lowering_used_type_key(candidate))
+  candidate
+}
+
+///|
+fn enum_lowering_rewrite_direct_anonymous_enum_type(
+  type_ : @ast.TsType,
+  name_parts : Array[String],
+  enums : Array[@ast.TsEnumDecl],
+  used_type_names : Array[String],
+) -> @ast.TsType {
+  let enum_name = enum_lowering_synthetic_enum_name(name_parts, used_type_names)
+  match enum_lowering_anonymous_literal_enum_decl(enum_name, type_) {
+    Some((enum_, rewritten)) => {
+      enums.push(enum_)
+      rewritten
+    }
+    None => {
+      let _ = used_type_names.pop()
+      type_
+    }
+  }
+}
+
+///|
+fn enum_lowering_seed_used_type_names(
+  enums : Array[@ast.TsEnumDecl],
+  interfaces : Array[@ast.TsInterface],
+  classes : Array[@ast.TsClassDecl],
+) -> Array[String] {
+  let used_type_names : Array[String] = []
+  for enum_ in enums {
+    used_type_names.push(enum_lowering_used_type_key(enum_.name))
+  }
+  for iface in interfaces {
+    used_type_names.push(enum_lowering_used_type_key(iface.name))
+  }
+  for class_ in classes {
+    used_type_names.push(enum_lowering_used_type_key(class_.name))
+  }
+  used_type_names
+}
+
+///|
+fn enum_lowering_rewrite_anonymous_enum_surfaces(
+  enums : Array[@ast.TsEnumDecl],
+  interfaces : Array[@ast.TsInterface],
+  imports : Array[@ast.TsImport],
+  funcs : Array[@ast.TsFunc],
+  values : Array[@ast.TsValueDecl],
+  classes : Array[@ast.TsClassDecl],
+) -> Unit {
+  let used_type_names = enum_lowering_seed_used_type_names(
+    enums, interfaces, classes,
+  )
+  for i, iface in interfaces {
+    let fields : Array[(String, @ast.TsType)] = []
+    for field in iface.fields {
+      let (field_name, field_type) = field
+      fields.push(
+        (
+          field_name,
+          enum_lowering_rewrite_direct_anonymous_enum_type(
+            field_type,
+            [iface.name, field_name],
+            enums,
+            used_type_names,
+          ),
+        ),
+      )
+    }
+    interfaces[i] = { ..iface, fields, }
+  }
+  for i, import_ in imports {
+    let params : Array[(String, @ast.TsType)] = []
+    for param_index, param in import_.params {
+      let (param_name, param_type) = param
+      let name_part = if param_name == "" {
+        "arg" + param_index.to_string()
+      } else {
+        param_name
+      }
+      params.push(
+        (
+          param_name,
+          enum_lowering_rewrite_direct_anonymous_enum_type(
+            param_type,
+            [import_.name, name_part],
+            enums,
+            used_type_names,
+          ),
+        ),
+      )
+    }
+    let return_type = enum_lowering_rewrite_direct_anonymous_enum_type(
+      import_.return_type,
+      [import_.name, "Return"],
+      enums,
+      used_type_names,
+    )
+    imports[i] = { ..import_, params, return_type }
+  }
+  for i, func in funcs {
+    let params : Array[@ast.TsParam] = []
+    for param_index, param in func.params {
+      let name_part = if param.name == "" {
+        "arg" + param_index.to_string()
+      } else {
+        param.name
+      }
+      params.push({
+        ..param,
+        type_: enum_lowering_rewrite_direct_anonymous_enum_type(
+          param.type_,
+          [func.name, name_part],
+          enums,
+          used_type_names,
+        ),
+      })
+    }
+    let return_type = enum_lowering_rewrite_direct_anonymous_enum_type(
+      func.return_type,
+      [func.name, "Return"],
+      enums,
+      used_type_names,
+    )
+    funcs[i] = { ..func, params, return_type }
+  }
+  for i, value in values {
+    values[i] = {
+      ..value,
+      type_: enum_lowering_rewrite_direct_anonymous_enum_type(
+        value.type_,
+        [value.name, "Value"],
+        enums,
+        used_type_names,
+      ),
+    }
+  }
+  for i, class_ in classes {
+    let constructor_params = match class_.constructor_params {
+      Some(params) => {
+        let next_params : Array[(String, @ast.TsType)] = []
+        for param_index, param in params {
+          let (param_name, param_type) = param
+          let name_part = if param_name == "" {
+            "arg" + param_index.to_string()
+          } else {
+            param_name
+          }
+          next_params.push(
+            (
+              param_name,
+              enum_lowering_rewrite_direct_anonymous_enum_type(
+                param_type,
+                [class_.name, "constructor", name_part],
+                enums,
+                used_type_names,
+              ),
+            ),
+          )
+        }
+        Some(next_params)
+      }
+      None => None
+    }
+    let properties : Array[@ast.TsClassPropertyDecl] = []
+    for property in class_.properties {
+      properties.push({
+        ..property,
+        type_: enum_lowering_rewrite_direct_anonymous_enum_type(
+          property.type_,
+          [class_.name, property.name],
+          enums,
+          used_type_names,
+        ),
+      })
+    }
+    let methods : Array[@ast.TsClassMethodDecl] = []
+    for class_method in class_.methods {
+      let params : Array[(String, @ast.TsType)] = []
+      for param_index, param in class_method.params {
+        let (param_name, param_type) = param
+        let name_part = if param_name == "" {
+          "arg" + param_index.to_string()
+        } else {
+          param_name
+        }
+        params.push(
+          (
+            param_name,
+            enum_lowering_rewrite_direct_anonymous_enum_type(
+              param_type,
+              [class_.name, class_method.name, name_part],
+              enums,
+              used_type_names,
+            ),
+          ),
+        )
+      }
+      let return_type = enum_lowering_rewrite_direct_anonymous_enum_type(
+        class_method.return_type,
+        [class_.name, class_method.name, "Return"],
+        enums,
+        used_type_names,
+      )
+      methods.push({ ..class_method, params, return_type })
+    }
+    classes[i] = { ..class_, constructor_params, properties, methods }
+  }
+}
+
+///|
 fn enum_lowering_unsupported_reason(enum_ : @ast.TsEnumDecl) -> String? {
   if enum_lowering_string_cases(enum_) is Some(_) ||
     enum_lowering_int_cases(enum_) is Some(_) {

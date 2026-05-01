@@ -153,7 +153,7 @@ async test "bridge: emit MoonBit declarations diagnoses unsupported enum-like ex
 }
 
 ///|
-async test "bridge: emit MoonBit declarations diagnoses anonymous literal unions" {
+async test "bridge: emit MoonBit declarations names anonymous literal unions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/anonymous-literal-union-entry.d.ts",
   ) catch {
@@ -165,20 +165,17 @@ async test "bridge: emit MoonBit declarations diagnoses anonymous literal unions
       return
     }
   }
+  assert_true(actual.contains("pub(all) enum ButtonOptionsVariant {"))
+  assert_true(actual.contains("pub(all) enum RenderButtonVariant {"))
+  assert_true(actual.contains("pub(all) enum RenderButtonReturn {"))
   assert_true(actual.contains("declare pub type ButtonOptions"))
-  assert_true(
-    actual.contains("declare pub fn renderButton(variant : String) -> String"),
-  )
+  assert_true(actual.contains("/// variant : ButtonOptionsVariant"))
   assert_true(
     actual.contains(
-      "Unsupported export ButtonOptions: anonymous literal union in public surface is widened because no stable public enum name.",
+      "declare pub fn renderButton(variant : RenderButtonVariant) -> RenderButtonReturn",
     ),
   )
-  assert_true(
-    actual.contains(
-      "Unsupported export renderButton: anonymous literal union in public surface is widened because no stable public enum name.",
-    ),
-  )
+  assert_false(actual.contains("anonymous literal union in public surface"))
 }
 
 ///|
@@ -1559,7 +1556,7 @@ async test "bridge: emit MoonBit declarations from imported object type alias me
 }
 
 ///|
-async test "bridge: emit MoonBit declarations narrows literal unions to primitives" {
+async test "bridge: emit MoonBit declarations names literal unions" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/literal-union-entry.d.ts",
   ) catch {
@@ -1572,11 +1569,14 @@ async test "bridge: emit MoonBit declarations narrows literal unions to primitiv
     }
   }
   assert_false(actual.contains("declare pub type JSValue"))
-  assert_true(actual.contains("/// variant : String?"))
+  assert_true(actual.contains("pub(all) enum ButtonOptionsVariant"))
+  assert_true(actual.contains("pub(all) enum RenderButtonVariant"))
+  assert_true(actual.contains("pub(all) enum RenderButtonReturn"))
+  assert_true(actual.contains("/// variant : ButtonOptionsVariant?"))
   assert_true(actual.contains("/// disabled : Bool?"))
   assert_true(
     actual.contains(
-      "declare pub fn renderButton(variant : String, options : ButtonOptions?) -> String",
+      "declare pub fn renderButton(variant : RenderButtonVariant, options : ButtonOptions?) -> RenderButtonReturn",
     ),
   )
 }

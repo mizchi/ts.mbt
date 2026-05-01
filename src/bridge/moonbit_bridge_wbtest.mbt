@@ -462,6 +462,85 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes numeric litera
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle names anonymous literal unions" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/anonymous-literal-union-entry.d.ts", "./runtime/anonymous-literal-union.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.bridge_mbti.contains("pub(all) enum ButtonOptionsVariant {"),
+  )
+  assert_true(
+    bundle.bridge_mbti.contains("pub(all) enum RenderButtonVariant {"),
+  )
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum RenderButtonReturn {"))
+  assert_true(bundle.bridge_mbti.contains("  variant : ButtonOptionsVariant"))
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn renderButton(variant : RenderButtonVariant) -> RenderButtonReturn",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn render_button(variant : String) -> String",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn renderButton(variant : RenderButtonVariant) -> RenderButtonReturn {\n  __ts_mbt_render_button_return_from_js(render_button(__ts_mbt_render_button_variant_to_js(variant)))\n}",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "function __ts_mbt_bridge_button_options_variant_to_js",
+    ),
+  )
+  assert_false(
+    bundle.bridge_mbti.contains("anonymous literal union in public surface"),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit TS bridge package bundle names anonymous numeric literal unions" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/anonymous-numeric-literal-union-entry.d.ts",
+    "./runtime/anonymous-numeric-literal-union.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum NextStatusCode {"))
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum NextStatusReturn {"))
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn nextStatus(code : NextStatusCode) -> NextStatusReturn",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn next_status(code : Int) -> Int",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn nextStatus(code : NextStatusCode) -> NextStatusReturn {\n  __ts_mbt_next_status_return_from_js(next_status(__ts_mbt_next_status_code_to_js(code)))\n}",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle lowers boolean literal aliases to bool" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/boolean-literal-union-entry.d.ts", "./runtime/boolean-literal-union.js",

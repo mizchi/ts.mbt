@@ -3958,7 +3958,7 @@ async test "bridge: emit MoonBit JS FFI bundle converts literal option fields be
 }
 
 ///|
-async test "bridge: emit MoonBit JS FFI bundle narrows literal unions to primitives" {
+async test "bridge: emit MoonBit JS FFI bundle names anonymous literal unions" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/literal-union-entry.d.ts", "./runtime/literal-union.js",
   ) catch {
@@ -3971,7 +3971,10 @@ async test "bridge: emit MoonBit JS FFI bundle narrows literal unions to primiti
     }
   }
   assert_false(bundle.ffi_mbt.contains("pub type JSValue = @js.Any"))
-  assert_true(bundle.ffi_mbt.contains("  variant : String?"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) enum ButtonOptionsVariant"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) enum RenderButtonVariant"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) enum RenderButtonReturn"))
+  assert_true(bundle.ffi_mbt.contains("  variant : ButtonOptionsVariant?"))
   assert_true(bundle.ffi_mbt.contains("  disabled : Bool?"))
   assert_true(
     bundle.ffi_mbt.contains(

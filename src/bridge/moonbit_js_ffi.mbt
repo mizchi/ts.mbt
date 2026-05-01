@@ -2344,6 +2344,12 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let classes = normalize_classes_for_ffi(
     exported_classes, graph, modules, class_surface_cache, canonical_types,
   )
+  enum_lowering_rewrite_anonymous_enum_surfaces(
+    enums, interfaces, imports, funcs, values, classes,
+  )
+  push_remaining_anonymous_literal_union_notes(
+    decl_notes, interfaces, imports, funcs,
+  )
   let runtime_module_resolved_path = @parser.resolve_type_module_specifier(
     entry_path, module_spec,
   ) catch {

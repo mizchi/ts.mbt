@@ -391,19 +391,20 @@ TypeScript runtimes expect.
     `pub(all) enum Variant { Primary; Secondary }`.
   - Optional unions preserve optionality:
     `"primary" | "secondary" | undefined` -> `Variant?`.
-  - Anonymous literal unions still intentionally lower to primitives until a
-    stable synthetic naming rule is needed.
+  - Direct anonymous literal unions on exported fields / params / returns now
+    receive stable synthetic names such as `ButtonOptionsVariant` and
+    `RenderButtonReturn`.
 - [x] Support boolean literal unions only when they are not just `boolean`:
   - `true | false` remains `Bool`.
   - `true | undefined` remains `Bool?`.
   - Named boolean literal aliases now resolve through primitive `Bool` /
     `Bool?` bridge signatures instead of emitting enum wrappers.
-- [ ] Support numeric literal unions only when every member is an integer-like
+- [x] Support numeric literal unions only when every member is an integer-like
   literal and the runtime bridge can convert losslessly.
   - [x] Named numeric literal union aliases lower to closed MoonBit enums and
     bridge through raw `Int` params / returns.
-  - Anonymous numeric literal unions still intentionally lower to primitive
-    `Double` until a stable synthetic naming rule is needed.
+  - [x] Direct anonymous numeric literal unions use the same synthetic naming
+    pass and bridge through raw `Int` params / returns.
 - [x] Support ambient / declaration enum surfaces:
   - `declare enum Mode { Read = "read" }`
   - `declare const enum Mode { Read = "read" }`

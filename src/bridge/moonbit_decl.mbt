@@ -1689,25 +1689,10 @@ fn collect_exported_decls(
         surface_cache,
         visiting,
       ) {
-      Interface(exported) => {
-        if interface_has_anonymous_enum_like_literal_union(exported.iface) {
-          push_anonymous_literal_union_note(notes, exported.export_name)
-        }
-        interfaces.push(exported)
-      }
+      Interface(exported) => interfaces.push(exported)
       Enum(exported) => enums.push(exported)
-      Import(exported) => {
-        if import_has_anonymous_enum_like_literal_union(exported.import_) {
-          push_anonymous_literal_union_note(notes, exported.export_name)
-        }
-        imports.push(exported)
-      }
-      Function(exported) => {
-        if func_has_anonymous_enum_like_literal_union(exported.func) {
-          push_anonymous_literal_union_note(notes, exported.export_name)
-        }
-        funcs.push(exported)
-      }
+      Import(exported) => imports.push(exported)
+      Function(exported) => funcs.push(exported)
       Value(exported) => values.push(exported)
       Class(exported) =>
         if export_.type_only {
@@ -2810,6 +2795,30 @@ fn push_anonymous_literal_union_note(
   let note = "///|\n/// Unsupported export \{export_name}: anonymous literal union in public surface is widened because no stable public enum name."
   if !notes.contains(note) {
     notes.push(note)
+  }
+}
+
+///|
+fn push_remaining_anonymous_literal_union_notes(
+  notes : Array[String],
+  interfaces : Array[@ast.TsInterface],
+  imports : Array[@ast.TsImport],
+  funcs : Array[@ast.TsFunc],
+) -> Unit {
+  for iface in interfaces {
+    if interface_has_anonymous_enum_like_literal_union(iface) {
+      push_anonymous_literal_union_note(notes, iface.name)
+    }
+  }
+  for import_ in imports {
+    if import_has_anonymous_enum_like_literal_union(import_) {
+      push_anonymous_literal_union_note(notes, import_.name)
+    }
+  }
+  for func in funcs {
+    if func_has_anonymous_enum_like_literal_union(func) {
+      push_anonymous_literal_union_note(notes, func.name)
+    }
   }
 }
 
@@ -5657,6 +5666,12 @@ pub async fn emit_moonbit_decl_from_entry_path(
       None => ()
     }
   }
+  enum_lowering_rewrite_anonymous_enum_surfaces(
+    enums, interfaces, imports, funcs, values, classes,
+  )
+  push_remaining_anonymous_literal_union_notes(
+    notes, interfaces, imports, funcs,
+  )
   let mut notes_need_jsvalue = false
   for note in notes {
     if note.contains("JSValue") {
