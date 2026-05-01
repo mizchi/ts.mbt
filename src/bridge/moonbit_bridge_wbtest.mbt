@@ -123,6 +123,47 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes object type al
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle preserves real-world literal option fields" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/bridge_smoke/realworld-literal-options-entry.d.ts", "./runtime/realworld-literal-options.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum NodeEncoding"))
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum NodeFlag"))
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum ReactButtonType"))
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum HonoMode"))
+  assert_true(bundle.bridge_mbti.contains("  encoding : NodeEncoding?"))
+  assert_true(bundle.bridge_mbti.contains("  flag : NodeFlag?"))
+  assert_true(bundle.bridge_mbti.contains("  type_ : ReactButtonType?"))
+  assert_true(bundle.bridge_mbti.contains("  mode : HonoMode?"))
+  assert_true(
+    bundle.bridge_mbt.contains("  encoding : NodeEncoding?") &&
+    bundle.bridge_mbt.contains("  flag : NodeFlag?"),
+  )
+  assert_true(
+    bundle.bridge_js.contains("function __ts_mbt_bridge_node_encoding_to_js"),
+  )
+  assert_true(
+    bundle.bridge_js.contains("function __ts_mbt_bridge_node_flag_to_js"),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "function __ts_mbt_bridge_react_button_type_to_js",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains("function __ts_mbt_bridge_hono_mode_to_js"),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes ambient enums" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/enum-entry.d.ts", "./runtime/enum.js",

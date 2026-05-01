@@ -3919,6 +3919,45 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle converts literal option fields before JS calls" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/bridge_smoke/realworld-literal-options-entry.d.ts", "./runtime/realworld-literal-options.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("  encoding : NodeEncoding?"))
+  assert_true(bundle.ffi_mbt.contains("  flag : NodeFlag?"))
+  assert_true(bundle.ffi_mbt.contains("  type_ : ReactButtonType?"))
+  assert_true(bundle.ffi_mbt.contains("  mode : HonoMode?"))
+  assert_true(
+    bundle.bridge_js.contains(
+      "field = __ts_mbt_bridge_node_encoding_to_js_optional(field);",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "field = __ts_mbt_bridge_node_flag_to_js_optional(field);",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "field = __ts_mbt_bridge_react_button_type_to_js_optional(field);",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "field = __ts_mbt_bridge_hono_mode_to_js_optional(field);",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle narrows literal unions to primitives" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/literal-union-entry.d.ts", "./runtime/literal-union.js",

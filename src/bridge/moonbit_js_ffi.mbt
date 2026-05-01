@@ -293,8 +293,16 @@ fn ffi_find_enum_decl(
   state : MoonBitJsFfiState,
   name : String,
 ) -> @ast.TsEnumDecl? {
+  ffi_find_enum_decl_in(state.enums, name)
+}
+
+///|
+fn ffi_find_enum_decl_in(
+  enums : Array[@ast.TsEnumDecl],
+  name : String,
+) -> @ast.TsEnumDecl? {
   let type_name = ffi_type_identifier(name, "GeneratedEnum")
-  for enum_ in state.enums {
+  for enum_ in enums {
     if ffi_type_identifier(enum_.name, "GeneratedEnum") == type_name {
       return Some(enum_)
     }
@@ -482,6 +490,78 @@ fn ffi_named_type_is_int_enum(state : MoonBitJsFfiState, name : String) -> Bool 
 }
 
 ///|
+fn ffi_named_type_is_primitive_enum_in(
+  enums : Array[@ast.TsEnumDecl],
+  name : String,
+) -> Bool {
+  match ffi_find_enum_decl_in(enums, name) {
+    Some(enum_) =>
+      match ffi_enum_string_cases(enum_) {
+        Some(_) => true
+        None =>
+          match ffi_enum_int_cases(enum_) {
+            Some(_) => true
+            None => false
+          }
+      }
+    None => false
+  }
+}
+
+///|
+fn ffi_type_has_primitive_enum(
+  enums : Array[@ast.TsEnumDecl],
+  type_ : @ast.TsType,
+) -> Bool {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, _)) => return ffi_type_has_primitive_enum(enums, collapsed)
+    None => ()
+  }
+  match ffi_classify_transparent_intersection(type_) {
+    Some(inner) => return ffi_type_has_primitive_enum(enums, inner)
+    None => ()
+  }
+  match type_ {
+    Named(name) | Applied(name, _) =>
+      ffi_named_type_is_primitive_enum_in(enums, name)
+    Array(inner) => ffi_type_has_primitive_enum(enums, inner)
+    Tuple(items) | Intersection(items) | Union(items) => {
+      for item in items {
+        if ffi_type_has_primitive_enum(enums, item) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for field in fields {
+        if ffi_type_has_primitive_enum(enums, field.1) {
+          return true
+        }
+      }
+      false
+    }
+    Object(fields) => {
+      for field in fields {
+        if ffi_type_has_primitive_enum(enums, field.1) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, return_type) => {
+      for param in params {
+        if ffi_type_has_primitive_enum(enums, param) {
+          return true
+        }
+      }
+      ffi_type_has_primitive_enum(enums, return_type)
+    }
+    _ => false
+  }
+}
+
+///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
   match ffi_classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
@@ -564,6 +644,38 @@ fn ffi_function_field_type_name(
       let return_src = ffi_type_name(state, return_type)
       "(\{params_src}) -> \{return_src}"
     }
+    _ => ffi_type_name(state, type_)
+  }
+}
+
+///|
+fn ffi_struct_field_type_name(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> String {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      let rendered = ffi_struct_field_type_name(state, collapsed)
+      if is_optional {
+        return rendered + "?"
+      }
+      return rendered
+    }
+    None => ()
+  }
+  match ffi_classify_transparent_intersection(type_) {
+    Some(inner) => return ffi_struct_field_type_name(state, inner)
+    None => ()
+  }
+  match type_ {
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
+      ffi_struct_field_type_name(state, ffi_normalize_literal_type(type_))
+    Array(inner) => "Array[" + ffi_struct_field_type_name(state, inner) + "]"
+    Func(_, _) => ffi_function_field_type_name(state, type_)
+    Named(name) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
+      ffi_type_identifier(name, "GeneratedEnum")
+    Applied(name, _) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
+      ffi_type_identifier(name, "GeneratedEnum")
     _ => ffi_type_name(state, type_)
   }
 }
@@ -656,13 +768,13 @@ fn ffi_struct_decl_to_moonbit(
       continue
     }
     seen_fields.push(field_name)
-    let field_type = ffi_function_field_type_name(state, type_)
     if iface.readonly_fields.contains(name) {
       lines.push(
         "  // readonly in TypeScript; not enforced by generated MoonBit struct",
       )
     }
-    lines.push("  \{field_name} : \{field_type}")
+    let struct_field_type = ffi_struct_field_type_name(state, type_)
+    lines.push("  \{field_name} : \{struct_field_type}")
     let force_method_wrapper = field_name == "_call_"
     if force_method_wrapper ||
       method_wrapper_count < state.function_field_method_wrapper_limit {
@@ -707,7 +819,7 @@ fn ffi_named_struct_decl_to_moonbit(
       continue
     }
     seen_fields.push(safe_name)
-    let safe_type = ffi_function_field_type_name(state, field_type)
+    let safe_type = ffi_struct_field_type_name(state, field_type)
     lines.push("  \{safe_name} : \{safe_type}")
   }
   lines.push("}")
@@ -778,6 +890,16 @@ fn ffi_enum_to_js_name(type_name : String) -> String {
 ///|
 fn ffi_enum_from_js_name(type_name : String) -> String {
   "__ts_mbt_" + ffi_to_snake_case(type_name) + "_from_js"
+}
+
+///|
+fn ffi_bridge_enum_to_js_name(type_name : String) -> String {
+  "__ts_mbt_bridge_" + ffi_to_snake_case(type_name) + "_to_js"
+}
+
+///|
+fn ffi_bridge_enum_to_js_optional_name(type_name : String) -> String {
+  ffi_bridge_enum_to_js_name(type_name) + "_optional"
 }
 
 ///|
@@ -886,6 +1008,49 @@ fn ffi_enum_int_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
     }
     None => None
   }
+}
+
+///|
+fn ffi_enum_bridge_js_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
+  let type_name = ffi_type_identifier(enum_.name, "GeneratedEnum")
+  let to_js_name = ffi_bridge_enum_to_js_name(type_name)
+  let to_js_optional_name = ffi_bridge_enum_to_js_optional_name(type_name)
+  let lines : Array[String] = [
+    "function \{to_js_name}(value) {",
+    "  switch (value) {",
+  ]
+  let mut case_index = 0
+  match ffi_enum_string_cases(enum_) {
+    Some(cases) =>
+      for item in cases {
+        let (_, value) = item
+        lines.push(
+          "    case \{case_index}: return \"\{json_escape_string(value)}\";",
+        )
+        case_index += 1
+      }
+    None =>
+      match ffi_enum_int_cases(enum_) {
+        Some(cases) =>
+          for item in cases {
+            let (_, value) = item
+            lines.push("    case \{case_index}: return \{value};")
+            case_index += 1
+          }
+        None => return None
+      }
+  }
+  lines.push(
+    "    default: throw new Error(\"unexpected \{type_name} tag: \" + value);",
+  )
+  lines.push("  }")
+  lines.push("}")
+  lines.push("")
+  lines.push("function \{to_js_optional_name}(value) {")
+  lines.push("  value = __ts_mbt_unwrap_option(value);")
+  lines.push("  return value === undefined ? undefined : \{to_js_name}(value);")
+  lines.push("}")
+  Some(lines.join("\n"))
 }
 
 ///|
@@ -1046,12 +1211,14 @@ fn ffi_type_is_optional(type_ : @ast.TsType) -> Bool {
 
 ///|
 fn ffi_struct_fields_need_js_converter(
+  enums : Array[@ast.TsEnumDecl],
   fields : Array[(String, @ast.TsType)],
 ) -> Bool {
   for field in fields {
     let (field_name, field_type) = field
     if ffi_sanitize_identifier(field_name, "field") != field_name ||
-      ffi_type_is_optional(field_type) {
+      ffi_type_is_optional(field_type) ||
+      ffi_type_has_primitive_enum(enums, field_type) {
       return true
     }
   }
@@ -1076,6 +1243,21 @@ fn ffi_named_type_is_generated_struct(
   name : String,
 ) -> Bool {
   state.struct_type_names.contains(ffi_type_identifier(name, "OpaqueType"))
+}
+
+///|
+fn ffi_bridge_named_enum_to_js_converter_call_expr(
+  name : String,
+  expr : String,
+  optional : Bool,
+) -> String {
+  let type_name = ffi_type_identifier(name, "GeneratedEnum")
+  let converter_name = if optional {
+    ffi_bridge_enum_to_js_optional_name(type_name)
+  } else {
+    ffi_bridge_enum_to_js_name(type_name)
+  }
+  "\{converter_name}(\{expr})"
 }
 
 ///|
@@ -1124,6 +1306,53 @@ fn ffi_type_js_converter_expr(
 }
 
 ///|
+fn ffi_type_js_struct_field_converter_expr(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+  expr : String,
+) -> String {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      if !is_optional {
+        return ffi_type_js_struct_field_converter_expr(state, collapsed, expr)
+      }
+      return match collapsed {
+        Named(name) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
+          ffi_bridge_named_enum_to_js_converter_call_expr(name, expr, true)
+        Applied(name, _) if ffi_named_type_is_primitive_enum_in(
+            state.enums,
+            name,
+          ) => ffi_bridge_named_enum_to_js_converter_call_expr(name, expr, true)
+        _ => ffi_type_js_converter_expr(state, type_, expr)
+      }
+    }
+    None => ()
+  }
+  match ffi_classify_transparent_intersection(type_) {
+    Some(inner) =>
+      return ffi_type_js_struct_field_converter_expr(state, inner, expr)
+    None => ()
+  }
+  match type_ {
+    Named(name) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
+      ffi_bridge_named_enum_to_js_converter_call_expr(name, expr, false)
+    Applied(name, _) if ffi_named_type_is_primitive_enum_in(state.enums, name) =>
+      ffi_bridge_named_enum_to_js_converter_call_expr(name, expr, false)
+    Array(inner) => {
+      let item_expr = ffi_type_js_struct_field_converter_expr(
+        state, inner, "item",
+      )
+      if item_expr == "item" {
+        expr
+      } else {
+        "Array.isArray(\{expr}) ? \{expr}.map((item) => \{item_expr}) : \{expr}"
+      }
+    }
+    _ => ffi_type_js_converter_expr(state, type_, expr)
+  }
+}
+
+///|
 fn ffi_struct_js_converter_decl(
   state : MoonBitJsFfiState,
   name : String,
@@ -1143,7 +1372,9 @@ fn ffi_struct_js_converter_decl(
     let safe_name = ffi_sanitize_identifier(field_name, "field")
     let source_key = json_escape_string(safe_name)
     let target_key = json_escape_string(field_name)
-    let converted_field = ffi_type_js_converter_expr(state, field_type, "field")
+    let converted_field = ffi_type_js_struct_field_converter_expr(
+      state, field_type, "field",
+    )
     lines.push("  field = value[\"\{source_key}\"];")
     lines.push("  field = \{converted_field};")
     if ffi_type_is_optional(field_type) {
@@ -2265,7 +2496,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     let type_name = ffi_type_identifier(iface.name, "OpaqueType")
     declared_type_names.push(type_name)
     if !ffi_is_react_callable_component_interface(iface.name) &&
-      ffi_struct_fields_need_js_converter(iface.fields) {
+      ffi_struct_fields_need_js_converter(enums, iface.fields) {
       struct_type_names.push(type_name)
     }
   }
@@ -2290,6 +2521,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   ]
   let seen_ffi_binding_names : Array[String] = []
   let bridge_lines : Array[String] = []
+  let bridge_enum_converter_lines : Array[String] = []
   let bridge_struct_converter_lines : Array[String] = []
   let mut bridge_needs_option_unwrap = false
   let bridge_imports : Array[MoonBitBridgeImport] = []
@@ -2362,6 +2594,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
             Some(converter_decl) => ffi_sections.push(converter_decl)
             None => ()
           }
+      }
+      match ffi_enum_bridge_js_converter_decl(enum_) {
+        Some(converter_decl) => bridge_enum_converter_lines.push(converter_decl)
+        None => ()
       }
     }
     handled_export_names.push(enum_.name)
@@ -2823,7 +3059,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         if !state.declared_type_names.contains(type_name) {
           state.declared_type_names.push(type_name)
         }
-        if ffi_struct_fields_need_js_converter(fields) &&
+        if ffi_struct_fields_need_js_converter(state.enums, fields) &&
           !state.struct_type_names.contains(type_name) {
           state.struct_type_names.push(type_name)
         }
@@ -2952,6 +3188,12 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       "function __ts_mbt_wrap_bool_option(value) { return value == null ? -1 : value; }",
     )
     rendered_bridge_lines.push("")
+  }
+  if !bridge_struct_converter_lines.is_empty() {
+    for line in bridge_enum_converter_lines {
+      rendered_bridge_lines.push(line)
+      rendered_bridge_lines.push("")
+    }
   }
   for line in bridge_struct_converter_lines {
     rendered_bridge_lines.push(line)

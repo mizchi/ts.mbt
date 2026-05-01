@@ -343,6 +343,57 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_bridge_realworld_literal_options_fixture() {
+  local root="_build/bridge_fixture_realworld_literal_options"
+  local fixture_path="$repo_root/fixtures/bridge_smoke/realworld-literal-options-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/realworld-literal-options.js"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/realworld-literal-options.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/realworld-literal-options.js"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/bridge_realworld_literal_options",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated bridge package converts real-world literal option fields" {
+  let read_options = NodeReadOptions::{
+    encoding: Some(Utf8),
+    flag: Some(R),
+  }
+  match describeRead("/tmp/config.json", read_options) {
+    Buffer => ()
+    _ => abort("expected Node encoding option to cross as a primitive string")
+  }
+  match nextFlag(R) {
+    W => ()
+    _ => abort("expected Node flag alias to convert as a top-level enum")
+  }
+  let button_props = ReactButtonProps::{ type_: Some(Submit) }
+  match renderReactButton(button_props) {
+    Reset => ()
+    _ => abort("expected React button type prop to cross as a primitive string")
+  }
+  let hono_options = HonoProbeOptions::{ mode: Some(Strict) }
+  match createHonoProbe(hono_options) {
+    Loose => ()
+    _ => abort("expected Hono mode option to cross as a primitive string")
+  }
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_bridge_default_export_fixture() {
   local root="_build/bridge_fixture_default_export"
   local fixture_path="$repo_root/fixtures/bridge_smoke/default-export-entry.d.ts"
@@ -2300,6 +2351,7 @@ verify_bridge_literal_union_alias_fixture
 verify_bridge_numeric_enum_fixture
 verify_bridge_numeric_literal_union_fixture
 verify_bridge_boolean_literal_union_fixture
+verify_bridge_realworld_literal_options_fixture
 verify_bridge_default_export_fixture
 verify_bridge_declaration_merge_namespace_fixture
 verify_bridge_promise_return_fixture

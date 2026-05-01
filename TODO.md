@@ -512,7 +512,7 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
     constructors are exported by the compiled MoonBit package.
   - Return conversion should therefore happen in generated MoonBit wrapper
     code from raw primitive externs.
-- [ ] Reuse the existing optional object-field converter only after enum values
+- [x] Reuse the existing optional object-field converter only after enum values
   have been converted to primitives.
 
 ### Diagnostics and Safety
@@ -526,10 +526,10 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
 - [x] Keep strict mode behavior unchanged: unsupported enum lowering in a
   public surface must either fall back within budget or fail with an actionable
   diagnostic.
-- [ ] Add real-world probes after fixtures pass:
-  - Node string modes / flags;
-  - React string literal props;
-  - Hono option modes;
+- [x] Add real-world probes after fixtures pass:
+  - [x] Node string modes / flags;
+  - [x] React string literal props;
+  - [x] Hono option modes;
   - [x] TypeScript AST `SyntaxKind`-style numeric enum as an `Int` bridge
     stress case.
 
