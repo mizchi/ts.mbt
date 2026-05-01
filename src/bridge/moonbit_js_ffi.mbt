@@ -1549,7 +1549,7 @@ fn ffi_type_alias_constructor_for_item(
     binding_name: "__ts_mbt_" + alias_fn_prefix + "_from_" + suffix,
     params_src: "value : \{param_type}",
     bridge_params: ["value"],
-    bridge_expr: "value",
+    bridge_expr: ffi_type_js_converter_expr(state, item, "value"),
   })
 }
 

@@ -624,6 +624,88 @@ fn main {
 EOF
 }
 
+verify_typescript_to_moonbit_reducer_example() {
+  local root="_build/examples/typescript-to-moonbit-reducer"
+  local out="$root/dist"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  cp examples/typescript-to-moonbit/reducer/runtime/reducer.js "$root/runtime/reducer.js"
+
+  moon run src -- \
+    --input examples/typescript-to-moonbit/reducer/src/index.d.ts \
+    --out "$out" \
+    --direction ts-to-mbt \
+    --module-spec ../runtime/reducer.js >/dev/null
+
+  cat > "$out/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_reducer",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$out/bridge_test.mbt" <<'EOF'
+fn initial_state() -> CounterState {
+  { count: 1.0, label: "ready" }
+}
+
+test "generated reducer tagged union pattern" {
+  let increment = counter_action_from_increment_action({
+    type_: Increment,
+    amount: 4.0,
+  })
+  assert_eq(actionKind(increment), "increment")
+  let after_increment = reducer(initial_state(), increment)
+  assert_eq(after_increment.count, 5.0)
+  assert_eq(after_increment.label, "ready")
+
+  let rename = counter_action_from_rename_action({
+    type_: Rename,
+    label: "done",
+  })
+  let after_rename = reducer(after_increment, rename)
+  assert_eq(after_rename.count, 5.0)
+  assert_eq(after_rename.label, "done")
+
+  let reset = counter_action_from_reset_action({ type_: Reset })
+  let after_reset = reducer(after_rename, reset)
+  assert_eq(after_reset.count, 0.0)
+  assert_eq(after_reset.label, "idle")
+}
+EOF
+
+  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/bridge.mbti" ]
+  [ -f "$out/bridge.mbt" ]
+  [ -f "$out/bridge.js" ]
+  grep -F 'pub(all) struct IncrementAction' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub(all) enum IncrementActionType' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn counter_action_from_increment_action(value : IncrementAction) -> CounterAction' "$out/bridge.mbt" >/dev/null
+  grep -F 'pub extern "js" fn reducer(state : CounterState, action : CounterAction) -> CounterState' "$out/bridge.mbt" >/dev/null
+  moon -C "$out" check --target js
+  moon -C "$out" test --target js
+  run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_reducer" <<'EOF'
+fn main {
+  let state : @sut.CounterState = { count: 2.0, label: "ready" }
+  let action = @sut.counter_action_from_increment_action({
+    type_: @sut.Increment,
+    amount: 3.0,
+  })
+  if @sut.actionKind(action) != "increment" {
+    abort("unexpected action kind")
+  }
+  let next = @sut.reducer(state, action)
+  if next.count != 5.0 || next.label != "ready" {
+    abort("unexpected reducer result")
+  }
+}
+EOF
+}
+
 verify_typescript_to_moonbit_default_class_example() {
   local root="_build/examples/typescript-to-moonbit-default-class"
   local out="$root/dist"
@@ -796,6 +878,7 @@ verify_typescript_to_moonbit_react_example
 verify_typescript_to_moonbit_react_types_example
 verify_typescript_to_moonbit_vitest_example
 verify_typescript_to_moonbit_result_example
+verify_typescript_to_moonbit_reducer_example
 verify_typescript_to_moonbit_default_class_example
 verify_typescript_to_moonbit_const_table_example
 verify_typescript_to_moonbit_typescript_ast_example
