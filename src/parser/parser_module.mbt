@@ -2247,6 +2247,38 @@ fn Parser::parse_export_decl_for_module(
 }
 
 ///|
+fn Parser::parse_export_enum_decl_for_module_block(
+  self : Parser,
+) -> @ast.TsEnumDecl? raise ParseError {
+  if !self.check(Export) {
+    return None
+  }
+  let is_declare = match self.peek_at(1).kind {
+    Declare => true
+    Ident(name) => name == "declare"
+    _ => false
+  }
+  let enum_offset = if is_declare { 2 } else { 1 }
+  let is_enum_decl = self.is_enum_keyword_at(enum_offset)
+  let is_const_enum_decl = self.peek_at(enum_offset).kind == Const &&
+    self.is_enum_keyword_at(enum_offset + 1)
+  if !is_enum_decl && !is_const_enum_decl {
+    return None
+  }
+  let _ = self.expect(Export)
+  if is_declare {
+    let _ = self.advance()
+  }
+  if self.is_const_enum_decl_start() {
+    Some(self.parse_const_enum_decl(is_declare))
+  } else if self.is_enum_keyword_at(0) {
+    Some(self.parse_enum_decl_after_enum_keyword(false, is_declare))
+  } else {
+    raise ParseError("Expected enum declaration after export")
+  }
+}
+
+///|
 fn Parser::parse_import_stmt(self : Parser) -> Unit raise ParseError {
   let _ = self.expect(Import)
   if self.match_(Type) || self.match_ident("type") {
@@ -2820,6 +2852,7 @@ fn Parser::parse_module_block_with_const_values(
   let imports : Array[@ast.TsImportDecl] = []
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
+  let enums : Array[@ast.TsEnumDecl] = []
   let const_values : Map[String, @ast.TsExpr] = {}
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
@@ -2833,6 +2866,14 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Export) {
+      match self.parse_export_enum_decl_for_module_block() {
+        Some(enum_) => {
+          enums.push(enum_)
+          exports.push({ local_name: enum_.name, export_name: enum_.name })
+          continue
+        }
+        None => ()
+      }
       let (block_stmts, export_specs, reexport_specs) = self.parse_export_decl_for_module(
         const_values,
       )
@@ -2849,6 +2890,14 @@ fn Parser::parse_module_block_with_const_values(
     }
     if self.check(Declare) {
       let _ = self.advance()
+      if self.is_const_enum_decl_start() {
+        enums.push(self.parse_const_enum_decl(true))
+        continue
+      }
+      if self.is_enum_keyword_at(0) {
+        enums.push(self.parse_enum_decl_after_enum_keyword(false, true))
+        continue
+      }
       match self.peek().kind {
         Function => {
           let _ = self.advance()
@@ -2910,19 +2959,12 @@ fn Parser::parse_module_block_with_const_values(
       self.skip_declaration_block()
       continue
     }
-    if (match self.peek().kind {
-        Ident(name) => name == "enum"
-        _ => false
-      }) {
-      self.skip_declaration_block()
+    if self.is_const_enum_decl_start() {
+      enums.push(self.parse_const_enum_decl(false))
       continue
     }
-    if self.check(Const) &&
-      (match self.peek_at(1).kind {
-        Ident(name) => name == "enum"
-        _ => false
-      }) {
-      self.skip_declaration_block()
+    if self.is_enum_keyword_at(0) {
+      enums.push(self.parse_enum_decl_after_enum_keyword(false, false))
       continue
     }
     if self.check(Const) {
@@ -2932,7 +2974,7 @@ fn Parser::parse_module_block_with_const_values(
     }
     stmts.push(self.parse_stmt())
   }
-  ({ block: { stmts, }, imports, exports, reexports }, const_values)
+  ({ block: { stmts, }, imports, exports, reexports, enums }, const_values)
 }
 
 ///|

@@ -270,6 +270,40 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes ambient enums"
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes runtime ts enums" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/runtime-enum-entry.ts", "/runtime/runtime-enum.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum RuntimeMode {"))
+  assert_true(bundle.bridge_mbti.contains("  Read"))
+  assert_true(bundle.bridge_mbti.contains("  Write"))
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn flipMode(mode : RuntimeMode) -> RuntimeMode",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn flip_mode(mode : String) -> String",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn flipMode(mode : RuntimeMode) -> RuntimeMode {\n  __ts_mbt_runtime_mode_from_js(flip_mode(__ts_mbt_runtime_mode_to_js(mode)))\n}",
+    ),
+  )
+  assert_false(bundle.bridge_js.contains("import { RuntimeMode }"))
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes numeric ambient enums" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/numeric-enum-entry.d.ts", "./runtime/numeric-enum.js",

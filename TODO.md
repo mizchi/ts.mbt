@@ -404,7 +404,7 @@ TypeScript runtimes expect.
     bridge through raw `Int` params / returns.
   - Anonymous numeric literal unions still intentionally lower to primitive
     `Double` until a stable synthetic naming rule is needed.
-- [ ] Support ambient / declaration enum surfaces:
+- [x] Support ambient / declaration enum surfaces:
   - `declare enum Mode { Read = "read" }`
   - `declare const enum Mode { Read = "read" }`
   - implicit numeric members are allowed only when all previous values can be
@@ -433,7 +433,7 @@ TypeScript runtimes expect.
   - `TsType` now keeps string literal/object keys as `Literal(String)` while
     preserving non-string literal types as `NumberLiteral`, `BigIntLiteral`,
     and `BooleanLiteral`.
-- [ ] Add AST nodes for enum declarations:
+- [x] Add AST nodes for enum declarations:
   - `TsEnumDecl { name, members, is_const, is_declare }`
   - `TsEnumMember { name, value : TsLiteralValue? }`
   - Store them in `TsModule` and `TsModuleBlock`, parallel to interfaces and
@@ -443,7 +443,7 @@ TypeScript runtimes expect.
     `export declare enum` for bridge export surfaces.
   - [x] `TsEnumMember.is_computed` now distinguishes implicit numeric enum
     members from non-literal computed initializers.
-  - [ ] `TsModuleBlock` still needs a first-class enum array if script-level
+  - [x] `TsModuleBlock` still needs a first-class enum array if script-level
     enum declarations need to be preserved beyond export metadata.
 - [x] Normalize type aliases that are pure string literal unions into an enum-lowering
   candidate before `emit_moonbit_decl` / `emit_moonbit_js_ffi` renders types.
@@ -453,11 +453,13 @@ TypeScript runtimes expect.
 
 ### MoonBit Surface
 
-- [ ] Emit public enum declarations in both `bridge.mbt` and `bridge.mbti`.
+- [x] Emit public enum declarations in both `bridge.mbt` and `bridge.mbti`.
   - This must mirror the recent struct rule: generated implementation and
     interface files expose the same public shape.
   - [x] Ambient enum exports are emitted as `pub(all) enum` in both package
     implementation and interface output.
+  - [x] Runtime TypeScript `export enum` declarations are preserved through
+    `TsModuleBlock` export discovery and emitted in package bridge output.
 - [x] Generate stable constructor names:
   - sanitize to PascalCase;
   - suffix MoonBit keywords;

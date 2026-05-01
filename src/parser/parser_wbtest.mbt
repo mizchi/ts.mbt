@@ -1894,7 +1894,7 @@ test "parser: parse generic function declaration in ts module" {
 }
 
 ///|
-test "parser: skip const enum declaration in ts module block" {
+test "parser: parse const enum declaration in ts module block" {
   let src =
     #|export const enum ReactiveFlags {
     #|  None = 0,
@@ -1909,8 +1909,22 @@ test "parser: skip const enum declaration in ts module block" {
       return
     }
   }
-  assert_eq(module_.exports.length(), 1)
-  assert_eq(module_.exports[0].export_name, "current")
+  assert_eq(module_.enums.length(), 1)
+  assert_eq(module_.enums[0].name, "ReactiveFlags")
+  assert_true(module_.enums[0].is_const)
+  assert_false(module_.enums[0].is_declare)
+  assert_eq(module_.enums[0].members.length(), 2)
+  assert_eq(
+    module_.enums[0].members[0].value,
+    Some(@ast.TsEnumMemberValue::Number("0")),
+  )
+  assert_eq(
+    module_.enums[0].members[1].value,
+    Some(@ast.TsEnumMemberValue::Number("2")),
+  )
+  assert_eq(module_.exports.length(), 2)
+  assert_eq(module_.exports[0].export_name, "ReactiveFlags")
+  assert_eq(module_.exports[1].export_name, "current")
 }
 
 ///|
@@ -4070,7 +4084,7 @@ test "parser: skip plain enum declaration in statement position" {
 }
 
 ///|
-test "parser: skip plain enum declaration in ts module block" {
+test "parser: parse plain enum declaration in ts module block" {
   let src =
     #|enum FileType {
     #|  Unknown = 0,
@@ -4083,7 +4097,59 @@ test "parser: skip plain enum declaration in ts module block" {
       return
     }
   }
+  assert_eq(module_.enums.length(), 1)
+  assert_eq(module_.enums[0].name, "FileType")
+  assert_false(module_.enums[0].is_const)
+  assert_false(module_.enums[0].is_declare)
+  assert_eq(module_.enums[0].members.length(), 2)
+  assert_eq(
+    module_.enums[0].members[1].value,
+    Some(@ast.TsEnumMemberValue::Number("1")),
+  )
   assert_eq(module_.block.stmts.length(), 0)
+}
+
+///|
+test "parser: parse declare enum declaration in ts module block" {
+  let src =
+    #|declare enum Mode {
+    #|  Read = "read",
+    #|  Write = "write",
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.enums.length(), 1)
+  assert_eq(module_.enums[0].name, "Mode")
+  assert_false(module_.enums[0].is_const)
+  assert_true(module_.enums[0].is_declare)
+  assert_eq(module_.enums[0].members.length(), 2)
+  assert_eq(
+    module_.enums[0].members[0].value,
+    Some(@ast.TsEnumMemberValue::String("read")),
+  )
+}
+
+///|
+test "parser: parse export declare enum declaration in ts module block" {
+  let src =
+    #|export declare enum Mode {
+    #|  Read = "read",
+    #|}
+  let module_ = Parser::from_source(src).parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.enums.length(), 1)
+  assert_eq(module_.enums[0].name, "Mode")
+  assert_true(module_.enums[0].is_declare)
+  assert_eq(module_.exports.length(), 1)
+  assert_eq(module_.exports[0].export_name, "Mode")
 }
 
 ///|

@@ -491,6 +491,7 @@ pub(all) struct TsModuleBlock {
   imports : Array[TsImportDecl]
   exports : Array[TsExportSpec]
   reexports : Array[TsReExportSpec]
+  enums : Array[TsEnumDecl]
 } derive(Debug)
 
 // ============================================
