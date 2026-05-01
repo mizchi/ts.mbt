@@ -69,6 +69,7 @@ pub struct Parser {
   mut class_id : Int
   mut current_class_brand : String?
   mut last_runtime_class_decl : @ast.TsClassDecl?
+  local_type_param_bounds : Array[(String, @ast.TsType)]
 } derive(@debug.Debug)
 pub fn Parser::from_source(String) -> Self
 pub fn Parser::from_source_with_jsx(String, Bool) -> Self

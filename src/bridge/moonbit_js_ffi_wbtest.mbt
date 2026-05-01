@@ -526,6 +526,7 @@ test "bridge: FFI type name treats generic intersections with empty object as op
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -549,6 +550,7 @@ test "bridge: FFI type name collapses named option intersections" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -575,6 +577,7 @@ test "bridge: FFI type name preserves optional complex unions when widened" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -594,10 +597,80 @@ test "bridge: FFI type name preserves optional complex unions when widened" {
 }
 
 ///|
+test "bridge: FFI type name renders declared generic applications" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: ["StatsBase"],
+    struct_type_names: [],
+    generic_type_params_by_name: { "StatsBase": ["T"] },
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  let actual = ffi_type_name(
+    state,
+    @ast.TsType::Applied("StatsBase", [@ast.TsType::Named("Int64")]),
+  )
+  assert_eq(actual, "StatsBase[Int64]")
+  assert_false(state.needs_js_any)
+}
+
+///|
+test "bridge: FFI type name lowers tuple payloads to arrays" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: ["Error"],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  assert_eq(ffi_type_name(state, @ast.TsType::Tuple([])), "Array[Unit]")
+  assert_eq(
+    ffi_type_name(state, @ast.TsType::Tuple([@ast.TsType::Number])),
+    "Array[Double]",
+  )
+  assert_eq(
+    ffi_type_name(state, @ast.TsType::Tuple([@ast.TsType::Named("Error")])),
+    "Array[Error_]",
+  )
+  assert_false(state.needs_js_any)
+}
+
+///|
+test "bridge: FFI type name lowers function types" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: ["Node"],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  assert_eq(
+    ffi_type_name(
+      state,
+      @ast.TsType::Func(
+        [@ast.TsType::Named("Node")],
+        @ast.TsType::Named("Node"),
+      ),
+    ),
+    "(Node) -> Node",
+  )
+  assert_false(state.needs_js_any)
+}
+
+///|
 test "bridge: FFI type name widens likely generic placeholders" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -4279,7 +4352,7 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture Hono JSX package sub
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn memo(component : MemoComponentCallback) -> @js.Any = \"memo\"",
+      "pub extern \"js\" fn memo(component : MemoComponentCallback) -> (@js.Any) -> JsxElement = \"memo\"",
     ),
   )
 }
@@ -4289,6 +4362,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -4341,6 +4415,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -4385,6 +4460,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -4420,6 +4496,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -4448,6 +4525,7 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -4486,6 +4564,7 @@ test "bridge: FFI struct JS converter emits callable wrappers for call signature
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: ["ForwardRefRenderFunction"],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -4516,10 +4595,11 @@ test "bridge: FFI struct JS converter emits callable wrappers for call signature
 }
 
 ///|
-test "bridge: FFI struct widens interface type parameters locally" {
+test "bridge: FFI struct preserves selected interface type parameters locally" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],
     struct_type_names: [],
+    generic_type_params_by_name: {},
     enums: [],
     external_type_names: [],
     local_type_param_names: [],
@@ -4527,23 +4607,21 @@ test "bridge: FFI struct widens interface type parameters locally" {
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
-    name: "Box",
+    name: "StatsBase",
     type_params: ["T"],
     extends_names: [],
     fields: [
-      ("value", @ast.TsType::Named("T")),
-      (
-        "map",
-        @ast.TsType::Func([@ast.TsType::Named("T")], @ast.TsType::Named("T")),
-      ),
+      ("dev", @ast.TsType::Named("T")),
+      ("isFile", @ast.TsType::Func([], @ast.TsType::Boolean)),
     ],
     readonly_fields: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
-  assert_true(actual.contains("value : @js.Any"))
-  assert_true(actual.contains("map : (@js.Any) -> @js.Any"))
+  assert_true(actual.contains("pub(all) struct StatsBase[T]"))
+  assert_true(actual.contains("dev : T"))
+  assert_true(actual.contains("isFile : () -> Bool"))
   assert_true(
-    actual.contains("pub fn Box::map(self : Box, arg0 : @js.Any) -> @js.Any"),
+    actual.contains("pub fn[T] StatsBase::isFile(self : StatsBase[T]) -> Bool"),
   )
   assert_false(actual.contains("type T"))
   assert_false(state.external_type_names.contains("T"))

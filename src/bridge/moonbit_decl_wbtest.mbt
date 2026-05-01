@@ -8,6 +8,67 @@ fn count_occurrences_in_decl_output(haystack : String, needle : String) -> Int {
 }
 
 ///|
+test "bridge: specialize TypeScript AST ergonomic API types" {
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "createSourceFile",
+      "languageVersionOrOptions",
+      2,
+      @ast.TsType::Union([
+        @ast.TsType::Named("ScriptTarget"),
+        @ast.TsType::Named("CreateSourceFileOptions"),
+      ]),
+    ),
+    @ast.TsType::Named("ScriptTarget"),
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "transform",
+      "source",
+      0,
+      @ast.TsType::Union([
+        @ast.TsType::Named("Node"),
+        @ast.TsType::Array(@ast.TsType::Named("Node")),
+      ]),
+    ),
+    @ast.TsType::Named("SourceFile"),
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "visitEachChild",
+      "visitor",
+      1,
+      @ast.TsType::Named("Visitor"),
+    ),
+    @ast.TsType::Func([@ast.TsType::Named("Node")], @ast.TsType::Named("Node")),
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "transform",
+      "transformers",
+      1,
+      @ast.TsType::Array(@ast.TsType::Named("TransformerFactory")),
+    ),
+    @ast.TsType::Array(
+      @ast.TsType::Func(
+        [@ast.TsType::Named("TransformationContext")],
+        @ast.TsType::Func(
+          [@ast.TsType::Named("SourceFile")],
+          @ast.TsType::Named("SourceFile"),
+        ),
+      ),
+    ),
+  )
+  assert_eq(
+    decl_specialize_generated_api_return_type(
+      "visitEachChild",
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Named("Node"),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit declarations from type export surface" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/entry.d.ts",
@@ -1732,7 +1793,7 @@ async test "bridge: emit MoonBit declarations from fixture Hono JSX package subp
   )
   assert_true(
     actual.contains(
-      "declare pub fn memo(component : MemoComponentCallback) -> JSValue",
+      "declare pub fn memo(component : MemoComponentCallback) -> (JSValue) -> JsxElement",
     ),
   )
 }

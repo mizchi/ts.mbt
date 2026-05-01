@@ -698,7 +698,33 @@ test "parser: parse interface type parameters" {
   assert_eq(iface.type_params, ["T", "U"])
   assert_eq(iface.fields.length(), 2)
   assert_eq(iface.fields[0], ("value", @ast.TsType::Named("T")))
-  assert_eq(iface.fields[1], ("label", @ast.TsType::Named("U")))
+  assert_eq(iface.fields[1], ("label", @ast.TsType::String_))
+}
+
+///|
+test "parser: substitute generic interface bounds in fields" {
+  let src =
+    #|interface TransformationResult<T extends Node> {
+    #|  transformed: T[];
+    #|}
+  let parser = Parser::from_source(src)
+  let iface = parser.parse_interface()
+  assert_eq(iface.name, "TransformationResult")
+  assert_eq(iface.type_params, ["T"])
+  assert_eq(
+    iface.fields[0],
+    ("transformed", @ast.TsType::Array(@ast.TsType::Named("Node"))),
+  )
+}
+
+///|
+test "parser: substitute declare function generic bounds in signature" {
+  let src = "visitEachChild<T extends Node>(node: T, visitor: Visitor): T;"
+  let parser = Parser::from_source(src)
+  let import_ = parser.parse_declare_function()
+  assert_eq(import_.name, "visitEachChild")
+  assert_eq(import_.params[0], ("node", @ast.TsType::Named("Node")))
+  assert_eq(import_.return_type, @ast.TsType::Named("Node"))
 }
 
 ///|
@@ -2080,6 +2106,26 @@ test "parser: parse function overload signature in ts module" {
   assert_eq(module_.funcs.length(), 2)
   assert_eq(module_.funcs[0].name, "signal")
   assert_eq(module_.funcs[1].name, "signal")
+}
+
+///|
+test "parser: substitute ambient namespace function generic bounds" {
+  let src =
+    #|declare namespace ts {
+    #|  function visitEachChild<T extends Node>(node: T, visitor: Visitor): T;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  let inner = module_.namespaces[0].module_
+  assert_eq(inner.funcs.length(), 1)
+  assert_eq(inner.funcs[0].name, "visitEachChild")
+  assert_eq(inner.funcs[0].params[0].type_, @ast.TsType::Named("Node"))
+  assert_eq(inner.funcs[0].return_type, @ast.TsType::Named("Node"))
 }
 
 ///|

@@ -4708,10 +4708,15 @@ fn clone_exported_import(
           callback_owner_name,
           param_name,
           param_index,
-          decl_widen_react_factory_tag_param(
+          decl_specialize_generated_api_param_type(
             exported.export_name,
+            param_name,
             param_index,
-            lowered,
+            decl_widen_react_factory_tag_param(
+              exported.export_name,
+              param_index,
+              lowered,
+            ),
           ),
         ),
       ),
@@ -4728,6 +4733,10 @@ fn clone_exported_import(
     modules,
     canonical_types,
   )
+  let return_type = decl_specialize_generated_api_return_type(
+    exported.export_name,
+    return_type,
+  )
   {
     name: exported.export_name,
     module_: exported.import_.module_,
@@ -4742,6 +4751,54 @@ fn clone_exported_import(
 ///|
 fn decl_is_react_factory_name(name : String) -> Bool {
   name == "createElement" || name == "jsx" || name == "jsxs"
+}
+
+///|
+fn decl_specialize_generated_api_param_type(
+  export_name : String,
+  _param_name : String,
+  param_index : Int,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match export_name {
+    "createSourceFile" | "createLanguageServiceSourceFile" =>
+      if param_index == 2 {
+        Named("ScriptTarget")
+      } else {
+        type_
+      }
+    "visitEachChild" =>
+      if param_index == 1 {
+        Func([Named("Node")], Named("Node"))
+      } else {
+        type_
+      }
+    "transform" =>
+      if param_index == 0 {
+        Named("SourceFile")
+      } else if param_index == 1 {
+        Array(
+          Func(
+            [Named("TransformationContext")],
+            Func([Named("SourceFile")], Named("SourceFile")),
+          ),
+        )
+      } else {
+        type_
+      }
+    _ => type_
+  }
+}
+
+///|
+fn decl_specialize_generated_api_return_type(
+  export_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match export_name {
+    "visitEachChild" => Named("Node")
+    _ => type_
+  }
 }
 
 ///|
@@ -5162,10 +5219,15 @@ fn clone_exported_func(
         callback_owner_name,
         param.name,
         param_index,
-        decl_widen_react_factory_tag_param(
+        decl_specialize_generated_api_param_type(
           exported.export_name,
+          param.name,
           param_index,
-          lowered,
+          decl_widen_react_factory_tag_param(
+            exported.export_name,
+            param_index,
+            lowered,
+          ),
         ),
       ),
       default: param.default,
@@ -5181,6 +5243,10 @@ fn clone_exported_func(
     ),
     modules,
     canonical_types,
+  )
+  let return_type = decl_specialize_generated_api_return_type(
+    exported.export_name,
+    return_type,
   )
   {
     name: exported.export_name,

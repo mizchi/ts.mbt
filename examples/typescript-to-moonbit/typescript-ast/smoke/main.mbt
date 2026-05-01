@@ -1,5 +1,5 @@
-fn latest_script_target() -> @sut.JSValue {
-  @sut.unsafeCast(99.0)
+fn script_target() -> @sut.ScriptTarget {
+  @sut.ScriptTarget::ES2024
 }
 
 fn rename_identifier(identifier : @sut.Identifier) -> @sut.Node {
@@ -15,16 +15,10 @@ fn visit_node(node : @sut.Node, context : @sut.TransformationContext) -> @sut.No
   match node.asIdentifier() {
     Some(identifier) => rename_identifier(identifier)
     None => {
-      let visitor : @sut.Visitor = @sut.unsafeCast(fn(child : @sut.Node) {
+      let visitor = fn(child : @sut.Node) {
         visit_node(child, context)
-      })
-      @sut.unsafeCast(
-        @sut.visitEachChild(
-          @sut.unsafeCast(node),
-          visitor,
-          Some(context),
-        ),
-      )
+      }
+      @sut.visitEachChild(node, visitor, Some(context))
     }
   }
 }
@@ -33,7 +27,10 @@ fn transformer_factory(
   context : @sut.TransformationContext
 ) -> (@sut.SourceFile) -> @sut.SourceFile {
   fn(source_file) {
-    @sut.unsafeCast(visit_node(@sut.unsafeCast(source_file), context))
+    match visit_node(@sut.unsafeCast(source_file), context).asSourceFile() {
+      Some(source_file) => source_file
+      None => abort("expected transformer result to remain a SourceFile")
+    }
   }
 }
 
@@ -41,16 +38,19 @@ fn main {
   let source = @sut.createSourceFile(
     "input.ts",
     "const value = 1; console.log(value);",
-    latest_script_target(),
+    script_target(),
     Some(true),
     None,
   )
   let transformed = @sut.transform(
-    @sut.unsafeCast(source),
-    [@sut.unsafeCast(transformer_factory)],
+    source,
+    [transformer_factory],
     None,
   )
-  let source_file : @sut.SourceFile = @sut.unsafeCast(transformed.transformed[0])
+  let source_file = match transformed.transformed[0].asSourceFile() {
+    Some(source_file) => source_file
+    None => abort("expected transformed node to be a SourceFile")
+  }
   transformed.dispose()
   let printed = @sut.createPrinter(None, None).printFile(source_file)
   if !printed.contains("const renamed = 1") {

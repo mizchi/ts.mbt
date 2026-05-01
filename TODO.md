@@ -58,9 +58,9 @@ Review status:
 - `just verify-realworld-typescript` passes with package-local `JSValue` cause
   budgets and warning-free MoonBit checks.
 - A node:fs-only real-world probe builds and runs with 0 unsupported exports.
-  Current metrics after callback/option-bag cleanup: 2192 bridge lines, 322
-  declared functions, 115 `JSValue` refs, 55 `JSValue` functions, and 114
-  `JSValue` surface lines.
+  Current metrics after callback/option-bag, generic, tuple, and function-type
+  cleanup: 2180 bridge lines, 315 declared functions, 74 `JSValue` refs, 52
+  `JSValue` functions, and 73 `JSValue` surface lines.
 
 Next implementation tasks:
 
@@ -101,11 +101,15 @@ Next implementation tasks:
     common option bag aliases such as stat/read/write options.
   - Done: inline callback parameters now receive stable synthetic callback
     opaque types instead of `JSValue`, and named option intersections such as
-    `StatOptions & { bigint?: false }` collapse back to the named option bag.
-    Current node:fs budget is 115 `JSValue` refs, 55 `JSValue` functions, and
-    114 surface lines.
-  - Remaining quality debt: `StatsBase<T>` / `StatsFsBase<T>` generic fields
-    and event-map fields still account for most `unknown/any` `JSValue` lines.
+    `StatOptions & { bigint?: false }` collapse back to the named option bag;
+    `StatsBase<T>` / `StatsFsBase<T>` now preserve `T`, and event-map tuple
+    payloads keep `Array[Unit]`, `Array[Double]`, or `Array[Error_]` where
+    representable. Function types now lower to MoonBit function arrows instead
+    of `JSValue`; current node:fs budget is 73 `JSValue` surface lines and 52
+    `JSValue` functions.
+  - Remaining quality debt: heterogeneous event payload tuples such as
+    `string | NonSharedBuffer`, stream listener APIs, and some overload-selected
+    sync/promisify wrappers still require `JSValue`.
 - [x] Split large generated MoonBit packages into reviewable files.
   - Target layout: `types.mbt`, `externs.mbt`, `converters.mbt`, and
     `guards.mbt` for large TS -> MoonBit scaffolds, while preserving generated
@@ -117,7 +121,7 @@ Next implementation tasks:
     files instead of assuming all implementation code lives in `bridge.mbt`.
 - [ ] Add regression rails for generated-code ergonomics.
   - [x] React `forwardRef` warning should fail the smoke rail.
-  - [ ] TypeScript AST transformer smoke should reduce required `unsafeCast`
+  - [x] TypeScript AST transformer smoke should reduce required `unsafeCast`
     usage around `ScriptTarget`, `transform`, visitors, and transformed arrays.
   - [x] node:fs budget regressions should fail with package-local diagnostics.
 

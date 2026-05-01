@@ -195,7 +195,10 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = self.parse_binding_ident()
-  self.skip_type_params()
+  let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let local_type_param_bound_len = self.push_local_type_param_bounds(
+    type_param_bounds,
+  )
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
@@ -206,6 +209,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   } else {
     Any // type Any
   }
+  self.restore_local_type_param_bounds(local_type_param_bound_len)
   if self.check(Semicolon) {
     let _ = self.advance()
     return {
@@ -378,6 +382,186 @@ fn Parser::skip_type_params(self : Parser) -> Unit {
 }
 
 ///|
+fn Parser::skip_type_param_tail_until_delim(self : Parser) -> Unit {
+  let mut paren_depth = 0
+  let mut bracket_depth = 0
+  let mut brace_depth = 0
+  let mut angle_depth = 0
+  while !self.check(Eof) {
+    match self.peek().kind {
+      Comma if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 &&
+        angle_depth == 0 => break
+      Gt if paren_depth == 0 &&
+        bracket_depth == 0 &&
+        brace_depth == 0 &&
+        angle_depth == 0 => break
+      LParen => {
+        paren_depth += 1
+        let _ = self.advance()
+      }
+      RParen => {
+        if paren_depth > 0 {
+          paren_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      LBracket => {
+        bracket_depth += 1
+        let _ = self.advance()
+      }
+      RBracket => {
+        if bracket_depth > 0 {
+          bracket_depth -= 1
+        }
+        let _ = self.advance()
+      }
+      LBrace => {
+        brace_depth += 1
+        let _ = self.advance()
+      }
+      RBrace =>
+        if brace_depth > 0 {
+          brace_depth -= 1
+          let _ = self.advance()
+        } else {
+          break
+        }
+      Lt => {
+        angle_depth += 1
+        let _ = self.advance()
+      }
+      Gt =>
+        if angle_depth > 0 {
+          angle_depth -= 1
+          let _ = self.advance()
+        } else {
+          break
+        }
+      GtGt =>
+        if angle_depth >= 2 {
+          angle_depth -= 2
+          let _ = self.advance()
+        } else if angle_depth == 1 {
+          let tok = self.advance()
+          self.pending_gt += 1
+          self.pending_gt_pos = tok.pos
+          angle_depth = 0
+          break
+        } else {
+          break
+        }
+      GtGtGt =>
+        if angle_depth >= 3 {
+          angle_depth -= 3
+          let _ = self.advance()
+        } else if angle_depth == 2 {
+          let tok = self.advance()
+          self.pending_gt += 1
+          self.pending_gt_pos = tok.pos
+          angle_depth = 0
+          break
+        } else if angle_depth == 1 {
+          let tok = self.advance()
+          self.pending_gt += 2
+          self.pending_gt_pos = tok.pos
+          angle_depth = 0
+          break
+        } else {
+          break
+        }
+      _ => {
+        let _ = self.advance()
+      }
+    }
+  }
+}
+
+///|
+fn Parser::parse_type_param_names_and_bounds(
+  self : Parser,
+) -> (Array[String], Array[(String, @ast.TsType)]) {
+  let names : Array[String] = []
+  let bounds : Array[(String, @ast.TsType)] = []
+  if !self.check(Lt) {
+    return (names, bounds)
+  }
+  let _ = self.advance()
+  while !self.check(Eof) {
+    if self.check(Gt) {
+      let _ = self.advance()
+      break
+    }
+    let mut name = ""
+    if self.is_qualified_type_name_part(0) {
+      name = self.parse_binding_ident() catch { _ => "_" }
+    } else {
+      self.skip_type_param_tail_until_delim()
+      if self.check(Comma) {
+        let _ = self.advance()
+        continue
+      }
+      if self.check(Gt) {
+        let _ = self.advance()
+      }
+      break
+    }
+    names.push(name)
+    if self.match_(Extends) {
+      let saved_pos = self.pos
+      let saved_pending_gt = self.pending_gt
+      let saved_pending_gt_pos = self.pending_gt_pos
+      try {
+        let bound = self.parse_type()
+        bounds.push((name, bound))
+      } catch {
+        _ => {
+          self.pos = saved_pos
+          self.pending_gt = saved_pending_gt
+          self.pending_gt_pos = saved_pending_gt_pos
+          self.skip_type_param_tail_until_delim()
+        }
+      }
+    }
+    if self.match_(Eq) {
+      self.skip_type_param_tail_until_delim()
+    }
+    if self.check(Comma) {
+      let _ = self.advance()
+      continue
+    }
+    if self.check(Gt) {
+      let _ = self.advance()
+      break
+    }
+  }
+  (names, bounds)
+}
+
+///|
+fn Parser::push_local_type_param_bounds(
+  self : Parser,
+  bounds : Array[(String, @ast.TsType)],
+) -> Int {
+  let old_len = self.local_type_param_bounds.length()
+  for bound in bounds {
+    self.local_type_param_bounds.push(bound)
+  }
+  old_len
+}
+
+///|
+fn Parser::restore_local_type_param_bounds(
+  self : Parser,
+  old_len : Int,
+) -> Unit {
+  while self.local_type_param_bounds.length() > old_len {
+    let _ = self.local_type_param_bounds.pop()
+  }
+}
+
+///|
 /// Parse simple `extends` names while still skipping complex generic clauses.
 fn Parser::parse_extends_names_until_body(self : Parser) -> Array[String] {
   let names : Array[String] = []
@@ -530,7 +714,10 @@ pub fn Parser::parse_interface(
     Ident(n) => n
     k => raise ParseError("Expected interface name, got \{k}")
   }
-  let type_params = self.parse_type_param_names()
+  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let local_type_param_bound_len = self.push_local_type_param_bounds(
+    type_param_bounds,
+  )
   let extends_names = self.parse_extends_names_until_body()
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
@@ -812,6 +999,7 @@ pub fn Parser::parse_interface(
     }
   }
   let _ = self.expect(RBrace)
+  self.restore_local_type_param_bounds(local_type_param_bound_len)
   { name, type_params, extends_names, fields, readonly_fields }
 }
 
@@ -946,47 +1134,7 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
 
 ///|
 fn Parser::parse_type_param_names(self : Parser) -> Array[String] {
-  let names : Array[String] = []
-  if !self.check(Lt) {
-    return names
-  }
-  let _ = self.advance()
-  let mut depth = 1
-  let mut at_param_start = true
-  while depth > 0 && !self.check(Eof) {
-    if depth == 1 && at_param_start && self.is_qualified_type_name_part(0) {
-      let name = self.parse_binding_ident() catch { _ => "_" }
-      names.push(name)
-      at_param_start = false
-      continue
-    }
-    match self.peek().kind {
-      Lt => {
-        depth += 1
-        let _ = self.advance()
-      }
-      Gt => {
-        depth -= 1
-        let _ = self.advance()
-      }
-      GtGt => {
-        depth = if depth >= 2 { depth - 2 } else { 0 }
-        let _ = self.advance()
-      }
-      GtGtGt => {
-        depth = if depth >= 3 { depth - 3 } else { 0 }
-        let _ = self.advance()
-      }
-      Comma if depth == 1 => {
-        at_param_start = true
-        let _ = self.advance()
-      }
-      _ => {
-        let _ = self.advance()
-      }
-    }
-  }
-  names
+  self.parse_type_param_names_and_bounds().0
 }
 
 ///|
@@ -1089,8 +1237,10 @@ pub fn Parser::parse_declare_function(
   // function
   let name = self.parse_binding_ident()
 
-  // Skip type parameters if present
-  self.skip_type_params()
+  let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let local_type_param_bound_len = self.push_local_type_param_bounds(
+    type_param_bounds,
+  )
   // parameter
   let _ = self.expect(LParen)
   let params : Array[(String, @ast.TsType)] = []
@@ -1127,6 +1277,7 @@ pub fn Parser::parse_declare_function(
   // return valuetype
   let _ = self.expect(Colon)
   let return_type = self.parse_type()
+  self.restore_local_type_param_bounds(local_type_param_bound_len)
   self.consume_semicolon()
   { name, module_: "env", params, return_type }
 }

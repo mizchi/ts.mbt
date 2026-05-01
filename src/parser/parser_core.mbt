@@ -26,6 +26,7 @@ pub struct Parser {
   mut class_id : Int // for private field brand generation
   mut current_class_brand : String? // brand ID of current class being parsed
   mut last_runtime_class_decl : @ast.TsClassDecl?
+  local_type_param_bounds : Array[(String, @ast.TsType)]
 } derive(Debug)
 
 ///|
@@ -66,6 +67,7 @@ pub fn Parser::new_with_strict_and_jsx(
     class_id: 0,
     current_class_brand: None,
     last_runtime_class_decl: None,
+    local_type_param_bounds: [],
   }
 }
 
@@ -100,6 +102,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     class_id: 0,
     current_class_brand: None,
     last_runtime_class_decl: None,
+    local_type_param_bounds: [],
   }
 }
 

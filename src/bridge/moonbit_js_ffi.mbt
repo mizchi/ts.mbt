@@ -25,6 +25,7 @@ priv struct FfiAliasConstructor {
 priv struct MoonBitJsFfiState {
   declared_type_names : Array[String]
   struct_type_names : Array[String]
+  generic_type_params_by_name : Map[String, Array[String]]
   enums : Array[@ast.TsEnumDecl]
   external_type_names : Array[String]
   local_type_param_names : Array[String]
@@ -330,6 +331,40 @@ fn ffi_is_local_type_param(state : MoonBitJsFfiState, name : String) -> Bool {
 }
 
 ///|
+fn ffi_type_param_suffix(type_params : Array[String]) -> String {
+  if type_params.length() == 0 {
+    ""
+  } else {
+    "[" + type_params.join(", ") + "]"
+  }
+}
+
+///|
+fn ffi_receiver_self_type(
+  type_name : String,
+  type_params : Array[String],
+) -> String {
+  type_name + ffi_type_param_suffix(type_params)
+}
+
+///|
+fn ffi_function_type_param_prefix(type_params : Array[String]) -> String {
+  if type_params.length() == 0 {
+    "fn"
+  } else {
+    "fn" + ffi_type_param_suffix(type_params)
+  }
+}
+
+///|
+fn ffi_should_preserve_interface_type_params(iface : @ast.TsInterface) -> Bool {
+  match iface.name {
+    "StatsBase" | "StatsFsBase" => true
+    _ => false
+  }
+}
+
+///|
 fn ffi_is_likely_discarded_type_param_name(name : String) -> Bool {
   if name == "SS" {
     return true
@@ -621,12 +656,48 @@ fn ffi_type_has_primitive_enum(
 }
 
 ///|
+fn ffi_tuple_type_name(
+  state : MoonBitJsFfiState,
+  items : Array[@ast.TsType],
+) -> String {
+  if items.length() == 0 {
+    return "Array[Unit]"
+  }
+  let first = ffi_type_name(state, items[0])
+  for i in 1..<items.length() {
+    if ffi_type_name(state, items[i]) != first {
+      state.needs_js_any = true
+      return "Array[@js.Any]"
+    }
+  }
+  "Array[\{first}]"
+}
+
+///|
+fn ffi_func_type_name(
+  state : MoonBitJsFfiState,
+  params : Array[@ast.TsType],
+  return_type : @ast.TsType,
+) -> String {
+  let param_types : Array[String] = []
+  for param in params {
+    param_types.push(ffi_type_name(state, param))
+  }
+  let params_src = param_types.join(", ")
+  let return_src = ffi_type_name(state, return_type)
+  "(\{params_src}) -> \{return_src}"
+}
+
+///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
   match ffi_classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       let rendered = ffi_type_name(state, collapsed)
       if is_optional {
-        return rendered + "?"
+        return match collapsed {
+          Func(_, _) => "(\{rendered})?"
+          _ => rendered + "?"
+        }
       }
       return rendered
     }
@@ -645,10 +716,8 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     String_ => "String"
     Void => "Unit"
     Array(inner) => "Array[" + ffi_type_name(state, inner) + "]"
-    Func(_, _) => {
-      state.needs_js_any = true
-      "@js.Any"
-    }
+    Tuple(items) => ffi_tuple_type_name(state, items)
+    Func(params, return_type) => ffi_func_type_name(state, params, return_type)
     Struct(name, _) => ffi_type_identifier(name, "OpaqueType")
     Named("any") | Named("Function") => {
       state.needs_js_any = true
@@ -662,14 +731,8 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       "Array[" + ffi_type_name(state, inner) + "]"
     Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
       "@js.Promise[" + ffi_type_name(state, inner) + "]"
-    Named(name) if ffi_is_local_type_param(state, name) => {
-      state.needs_js_any = true
-      "@js.Any"
-    }
-    Applied(name, _) if ffi_is_local_type_param(state, name) => {
-      state.needs_js_any = true
-      "@js.Any"
-    }
+    Named(name) if ffi_is_local_type_param(state, name) => name
+    Applied(name, _) if ffi_is_local_type_param(state, name) => name
     Named(name) if ffi_should_widen_unresolved_type_param(state, name) => {
       state.needs_js_any = true
       "@js.Any"
@@ -686,7 +749,22 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     Applied(name, _) if ffi_named_type_is_double_int_enum(state, name) =>
       "Double"
     Named(name) => ffi_mark_external_type(state, name)
-    Applied(name, _) => ffi_mark_external_type(state, name)
+    Applied(name, args) => {
+      let type_name = ffi_type_identifier(name, "OpaqueType")
+      match state.generic_type_params_by_name.get(type_name) {
+        Some(type_params) =>
+          if type_params.length() == args.length() {
+            let rendered_args : Array[String] = []
+            for arg in args {
+              rendered_args.push(ffi_type_name(state, arg))
+            }
+            type_name + "[" + rendered_args.join(", ") + "]"
+          } else {
+            ffi_mark_external_type(state, name)
+          }
+        None => ffi_mark_external_type(state, name)
+      }
+    }
     _ => {
       state.needs_js_any = true
       "@js.Any"
@@ -713,15 +791,7 @@ fn ffi_function_field_type_name(
     None => ()
   }
   match type_ {
-    Func(params, return_type) => {
-      let param_types : Array[String] = []
-      for param in params {
-        param_types.push(ffi_type_name(state, param))
-      }
-      let params_src = param_types.join(", ")
-      let return_src = ffi_type_name(state, return_type)
-      "(\{params_src}) -> \{return_src}"
-    }
+    Func(params, return_type) => ffi_func_type_name(state, params, return_type)
     _ => ffi_type_name(state, type_)
   }
 }
@@ -779,13 +849,17 @@ fn ffi_function_type_parts(
 fn ffi_function_field_method_decl(
   state : MoonBitJsFfiState,
   receiver_type : String,
+  receiver_type_params : Array[String],
   field_name : String,
   js_field_name : String,
   field_type : @ast.TsType,
 ) -> String? {
   match ffi_function_type_parts(state, field_type) {
     Some((param_types, return_type)) => {
-      let params : Array[String] = ["self : \{receiver_type}"]
+      let self_type = ffi_receiver_self_type(
+        receiver_type, receiver_type_params,
+      )
+      let params : Array[String] = ["self : \{self_type}"]
       let args : Array[String] = []
       for i, param_type in param_types {
         let arg_name = "arg" + i.to_string()
@@ -794,6 +868,7 @@ fn ffi_function_field_method_decl(
       }
       let params_src = params.join(", ")
       let args_src = args.join(", ")
+      let fn_prefix = ffi_function_type_param_prefix(receiver_type_params)
       if field_name == "_call_" {
         let js_params : Array[String] = ["self"]
         for arg in args {
@@ -801,7 +876,7 @@ fn ffi_function_field_method_decl(
         }
         let js_params_src = js_params.join(", ")
         Some(
-          "pub extern \"js\" fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => self(\{args_src})",
+          "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => self(\{args_src})",
         )
       } else if receiver_type == "Assertion" {
         let js_params : Array[String] = ["self"]
@@ -814,11 +889,11 @@ fn ffi_function_field_method_decl(
           args_src +
           ")"
         Some(
-          "pub extern \"js\" fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
+          "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
         )
       } else {
         Some(
-          "pub fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
+          "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
         )
       }
     }
@@ -831,14 +906,19 @@ fn ffi_struct_decl_to_moonbit(
   state : MoonBitJsFfiState,
   iface : @ast.TsInterface,
 ) -> String {
+  let active_type_params = if ffi_should_preserve_interface_type_params(iface) {
+    iface.type_params
+  } else {
+    []
+  }
   let local_type_param_len = ffi_push_local_type_params(
-    state,
-    iface.type_params,
+    state, active_type_params,
   )
   let type_name = ffi_type_identifier(iface.name, "OpaqueType")
+  let type_param_suffix = ffi_type_param_suffix(active_type_params)
   let lines : Array[String] = [
     "#warnings(\"-9\")",
-    "pub(all) struct \{type_name} {",
+    "pub(all) struct \{type_name}\{type_param_suffix} {",
   ]
   let method_lines : Array[String] = []
   let mut method_wrapper_count = 0
@@ -862,7 +942,7 @@ fn ffi_struct_decl_to_moonbit(
       method_wrapper_count < state.function_field_method_wrapper_limit {
       match
         ffi_function_field_method_decl(
-          state, type_name, field_name, name, type_,
+          state, type_name, active_type_params, field_name, name, type_,
         ) {
         Some(method_decl) => {
           method_lines.push(method_decl)
@@ -3039,9 +3119,14 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
 
   let declared_type_names : Array[String] = []
   let struct_type_names : Array[String] = []
+  let generic_type_params_by_name : Map[String, Array[String]] = {}
   for iface in interfaces {
     let type_name = ffi_type_identifier(iface.name, "OpaqueType")
     declared_type_names.push(type_name)
+    if ffi_should_preserve_interface_type_params(iface) &&
+      iface.type_params.length() > 0 {
+      generic_type_params_by_name[type_name] = iface.type_params
+    }
     if !ffi_is_react_callable_component_interface(iface.name) &&
       ffi_struct_fields_need_js_converter(enums, iface.fields) {
       struct_type_names.push(type_name)
@@ -3056,6 +3141,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let state : MoonBitJsFfiState = {
     declared_type_names,
     struct_type_names,
+    generic_type_params_by_name,
     enums,
     external_type_names: [],
     local_type_param_names: [],

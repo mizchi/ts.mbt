@@ -50,6 +50,7 @@ priv struct BridgeTypeGuardHelper {
 ///|
 priv struct BridgeStructDecl {
   name : String
+  type_param_suffix : String
   fields : Array[String]
 }
 
@@ -508,7 +509,7 @@ fn collect_bridge_implemented_type_names(bridge_mbt : String) -> Array[String] {
 }
 
 ///|
-fn parse_bridge_struct_header_line(line : String) -> String? {
+fn parse_bridge_struct_header_line(line : String) -> (String, String)? {
   let prefixes = ["pub(all) struct ", "pub struct "]
   for prefix in prefixes {
     if !line.has_prefix(prefix) {
@@ -532,8 +533,17 @@ fn parse_bridge_struct_header_line(line : String) -> String? {
       None => ()
     }
     let name = rest[:end_].to_string().trim().to_string()
+    let type_param_suffix = match rest.find("[") {
+      Some(start) if start < rest.length() =>
+        match rest.find("]") {
+          Some(end_param) if end_param > start =>
+            rest[start:end_param + 1].to_string()
+          _ => ""
+        }
+      _ => ""
+    }
     if name != "" {
-      return Some(name)
+      return Some((name, type_param_suffix))
     }
   }
   None
@@ -543,14 +553,20 @@ fn parse_bridge_struct_header_line(line : String) -> String? {
 fn collect_bridge_struct_decls(bridge_mbt : String) -> Array[BridgeStructDecl] {
   let decls : Array[BridgeStructDecl] = []
   let mut current_name : String? = None
+  let mut current_type_param_suffix = ""
   let mut fields : Array[String] = []
   for line_view in bridge_mbt.split("\n") {
     let line = line_view.to_string().trim().to_string()
     match current_name {
       Some(name) =>
         if line == "}" {
-          decls.push({ name, fields })
+          decls.push({
+            name,
+            type_param_suffix: current_type_param_suffix,
+            fields,
+          })
           current_name = None
+          current_type_param_suffix = ""
           fields = []
         } else if line.has_prefix("//") || line == "" {
           continue
@@ -559,8 +575,9 @@ fn collect_bridge_struct_decls(bridge_mbt : String) -> Array[BridgeStructDecl] {
         }
       None =>
         match parse_bridge_struct_header_line(line) {
-          Some(name) => {
+          Some((name, type_param_suffix)) => {
             current_name = Some(name)
+            current_type_param_suffix = type_param_suffix
             fields = []
           }
           None => ()
@@ -585,7 +602,9 @@ fn find_bridge_struct_decl(
 
 ///|
 fn render_bridge_struct_mbti_decl(decl : BridgeStructDecl) -> String {
-  let lines : Array[String] = ["pub(all) struct \{decl.name} {"]
+  let lines : Array[String] = [
+    "pub(all) struct \{decl.name}\{decl.type_param_suffix} {",
+  ]
   for field in decl.fields {
     lines.push("  " + field)
   }

@@ -237,6 +237,42 @@ fn is_local_type_param(state : MoonBitDeclState, name : String) -> Bool {
 }
 
 ///|
+fn moonbit_type_param_suffix(type_params : Array[String]) -> String {
+  if type_params.length() == 0 {
+    ""
+  } else {
+    "[" + type_params.join(", ") + "]"
+  }
+}
+
+///|
+fn moonbit_function_type_param_prefix(type_params : Array[String]) -> String {
+  if type_params.length() == 0 {
+    "fn"
+  } else {
+    "fn" + moonbit_type_param_suffix(type_params)
+  }
+}
+
+///|
+fn moonbit_receiver_self_type(
+  type_name : String,
+  type_params : Array[String],
+) -> String {
+  type_name + moonbit_type_param_suffix(type_params)
+}
+
+///|
+fn moonbit_should_preserve_interface_type_params(
+  iface : @ast.TsInterface,
+) -> Bool {
+  match iface.name {
+    "StatsBase" | "StatsFsBase" => true
+    _ => false
+  }
+}
+
+///|
 fn is_likely_discarded_type_param_name(name : String) -> Bool {
   if name == "SS" {
     return true
@@ -356,12 +392,48 @@ fn classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
 }
 
 ///|
+fn moonbit_tuple_type_name(
+  state : MoonBitDeclState,
+  items : Array[@ast.TsType],
+) -> String {
+  if items.length() == 0 {
+    return "Array[Unit]"
+  }
+  let first = moonbit_type_name(state, items[0])
+  for i in 1..<items.length() {
+    if moonbit_type_name(state, items[i]) != first {
+      state.needs_jsvalue = true
+      return "Array[JSValue]"
+    }
+  }
+  "Array[\{first}]"
+}
+
+///|
+fn moonbit_func_type_name(
+  state : MoonBitDeclState,
+  params : Array[@ast.TsType],
+  return_type : @ast.TsType,
+) -> String {
+  let param_types : Array[String] = []
+  for param in params {
+    param_types.push(moonbit_type_name(state, param))
+  }
+  let params_src = param_types.join(", ")
+  let return_src = moonbit_type_name(state, return_type)
+  "(\{params_src}) -> \{return_src}"
+}
+
+///|
 fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
   match classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       let rendered = moonbit_type_name(state, collapsed)
       if is_optional {
-        return rendered + "?"
+        return match collapsed {
+          Func(_, _) => "(\{rendered})?"
+          _ => rendered + "?"
+        }
       }
       return rendered
     }
@@ -380,10 +452,9 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     String_ => "String"
     Void => "Unit"
     Array(inner) => "Array[" + moonbit_type_name(state, inner) + "]"
-    Func(_, _) => {
-      state.needs_jsvalue = true
-      "JSValue"
-    }
+    Tuple(items) => moonbit_tuple_type_name(state, items)
+    Func(params, return_type) =>
+      moonbit_func_type_name(state, params, return_type)
     Struct(name, _) => {
       mark_referenced_type(state, name)
       moonbit_type_identifier(name, "OpaqueType")
@@ -400,14 +471,8 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       "Array[" + moonbit_type_name(state, inner) + "]"
     Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
       "@js.Promise[" + moonbit_type_name(state, inner) + "]"
-    Named(name) if is_local_type_param(state, name) => {
-      state.needs_jsvalue = true
-      "JSValue"
-    }
-    Applied(name, _) if is_local_type_param(state, name) => {
-      state.needs_jsvalue = true
-      "JSValue"
-    }
+    Named(name) if is_local_type_param(state, name) => name
+    Applied(name, _) if is_local_type_param(state, name) => name
     Named(name) if should_widen_unresolved_type_param(state, name) => {
       state.needs_jsvalue = true
       "JSValue"
@@ -450,15 +515,8 @@ fn moonbit_function_field_type_name(
     None => ()
   }
   match type_ {
-    Func(params, return_type) => {
-      let param_types : Array[String] = []
-      for param in params {
-        param_types.push(moonbit_type_name(state, param))
-      }
-      let params_src = param_types.join(", ")
-      let return_src = moonbit_type_name(state, return_type)
-      "(\{params_src}) -> \{return_src}"
-    }
+    Func(params, return_type) =>
+      moonbit_func_type_name(state, params, return_type)
     _ => moonbit_type_name(state, type_)
   }
 }
@@ -484,23 +542,28 @@ fn moonbit_function_type_parts(
 fn interface_function_field_method_decl(
   state : MoonBitDeclState,
   receiver_type : String,
+  receiver_type_params : Array[String],
   field_name : String,
   field_type : @ast.TsType,
 ) -> String? {
   match moonbit_function_type_parts(state, field_type) {
     Some((param_types, return_type)) => {
+      let self_type = moonbit_receiver_self_type(
+        receiver_type, receiver_type_params,
+      )
       let params : Array[String] = []
       for i, param_type in param_types {
         let arg_name = "arg" + i.to_string()
         params.push("\{arg_name} : \{param_type}")
       }
       let params_src = if params.length() == 0 {
-        "self : \{receiver_type}"
+        "self : \{self_type}"
       } else {
-        "self : \{receiver_type}, " + params.join(", ")
+        "self : \{self_type}, " + params.join(", ")
       }
+      let fn_prefix = moonbit_function_type_param_prefix(receiver_type_params)
       Some(
-        "///|\ndeclare pub fn \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type}",
+        "///|\ndeclare pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type}",
       )
     }
     None => None
@@ -512,7 +575,14 @@ fn interface_decl_to_moonbit(
   state : MoonBitDeclState,
   iface : @ast.TsInterface,
 ) -> String {
-  let local_type_param_len = push_local_type_params(state, iface.type_params)
+  let active_type_params = if moonbit_should_preserve_interface_type_params(
+      iface,
+    ) {
+    iface.type_params
+  } else {
+    []
+  }
+  let local_type_param_len = push_local_type_params(state, active_type_params)
   let lines : Array[String] = ["///|", "/// TS interface \{iface.name}"]
   let method_decls : Array[String] = []
   let seen_method_names : Array[String] = []
@@ -531,7 +601,7 @@ fn interface_decl_to_moonbit(
       !seen_method_names.contains(method_name) {
       match
         interface_function_field_method_decl(
-          state, type_name, method_name, type_,
+          state, type_name, active_type_params, method_name, type_,
         ) {
         Some(method_decl) => {
           seen_method_names.push(method_name)
@@ -542,7 +612,9 @@ fn interface_decl_to_moonbit(
       }
     }
   }
-  lines.push("declare pub type \{type_name}")
+  lines.push(
+    "declare pub type \{type_name}\{moonbit_type_param_suffix(active_type_params)}",
+  )
   restore_local_type_params(state, local_type_param_len)
   if method_decls.length() == 0 {
     lines.join("\n")

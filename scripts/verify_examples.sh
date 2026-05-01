@@ -475,7 +475,7 @@ EOF
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
   grep_generated_mbt "$out" 'pub fn createElement(type_ : String, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement'
-  grep_generated_mbt "$out" 'pub fn cloneElement(element : DetailedReactHTMLElement, props : JSValue?, children : Array[JSValue]) -> DetailedReactHTMLElement'
+  grep_generated_mbt "$out" 'pub fn cloneElement(element : DetailedReactHTMLElement, props : HTMLAttributes?, children : Array[JSValue]) -> DetailedReactHTMLElement'
   grep_generated_mbt "$out" 'pub extern "js" fn memo(component : FunctionComponent, propsAreEqual : MemoPropsAreEqualCallback?) -> NamedExoticComponent'
   grep_generated_mbt "$out" 'pub fn forwardRef(render : ForwardRefRenderFunction) -> ForwardRefExoticComponent'
   grep_generated_mbt "$out" 'pub fn useState() -> UseStateResult'
@@ -872,9 +872,9 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
-  grep_generated_mbt "$out" 'pub fn createSourceFile(fileName : String, sourceText : String, languageVersionOrOptions : JSValue, setParentNodes : Bool?, scriptKind : ScriptKind?) -> SourceFile'
-  grep_generated_mbt "$out" 'pub extern "js" fn transform(source : @js.Any, transformers : Array[TransformerFactory], compilerOptions : CompilerOptions?) -> TransformationResult'
-  grep_generated_mbt "$out" 'pub fn visitEachChild(node : JSValue, visitor : Visitor, context : TransformationContext?) -> JSValue'
+  grep_generated_mbt "$out" 'pub fn createSourceFile(fileName : String, sourceText : String, languageVersionOrOptions : ScriptTarget, setParentNodes : Bool?, scriptKind : ScriptKind?) -> SourceFile'
+  grep_generated_mbt "$out" 'pub extern "js" fn transform(source : SourceFile, transformers : Array[(TransformationContext) -> (SourceFile) -> SourceFile], compilerOptions : CompilerOptions?) -> TransformationResult'
+  grep_generated_mbt "$out" 'pub fn visitEachChild(node : Node, visitor : (Node) -> Node, context : TransformationContext?) -> Node'
   grep_generated_mbt "$out" 'pub fn isIdentifier(node : Node) -> Bool'
   grep_generated_mbt "$out" 'pub fn[A, B] unsafeCast(value : A) -> B = "%identity"'
   grep_generated_mbt "$out" 'pub fn Node::asIdentifier(self : Node) -> Identifier?'

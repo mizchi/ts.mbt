@@ -347,6 +347,19 @@ fn Parser::parse_named_type_tail(
 }
 
 ///|
+fn Parser::local_type_param_bound(self : Parser, name : String) -> @ast.TsType? {
+  let mut idx = self.local_type_param_bounds.length()
+  while idx > 0 {
+    idx -= 1
+    let (param_name, bound) = self.local_type_param_bounds[idx]
+    if param_name == name {
+      return Some(bound)
+    }
+  }
+  None
+}
+
+///|
 /// Parse a single type (not including union/intersection)
 fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
   let tok = self.peek()
@@ -640,7 +653,10 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // Ident or generic type: Foo, Array<T>
     Ident(name) => {
       let _ = self.advance()
-      self.parse_named_type_tail(name)
+      match self.local_type_param_bound(name) {
+        Some(bound) => bound
+        None => self.parse_named_type_tail(name)
+      }
     }
     _ => raise ParseError("Expected type, got \{tok.kind}")
   }

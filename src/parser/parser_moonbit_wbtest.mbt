@@ -53,6 +53,50 @@ test "parser: emit MoonBit declarations widens interface type parameters locally
 }
 
 ///|
+test "parser: emit MoonBit declarations preserves selected node fs generic interfaces" {
+  let src =
+    #|interface StatsBase<T> {
+    #|  dev: T;
+    #|  isFile(): boolean;
+    #|}
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_true(actual.contains("/// dev : T"))
+  assert_true(actual.contains("/// isFile : () -> Bool"))
+  assert_true(actual.contains("declare pub type StatsBase[T]"))
+  assert_true(
+    actual.contains(
+      "declare pub fn[T] StatsBase::isFile(self : StatsBase[T]) -> Bool",
+    ),
+  )
+  assert_false(actual.contains("declare pub type JSValue"))
+}
+
+///|
+test "parser: emit MoonBit declarations lowers tuple fields to arrays" {
+  let src =
+    #|interface EventMap {
+    #|  "close": [];
+    #|  "open": [fd: number];
+    #|  "error": [error: Error];
+    #|}
+  let actual = emit_moonbit_decl_from_source(src) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_true(actual.contains("/// close : Array[Unit]"))
+  assert_true(actual.contains("/// open : Array[Double]"))
+  assert_true(actual.contains("/// error : Array[Error_]"))
+  assert_false(actual.contains("declare pub type JSValue"))
+}
+
+///|
 test "parser: emit MoonBit declarations widens discarded function type parameters" {
   let src =
     #|declare function identity<T>(value: T): T;
@@ -77,7 +121,7 @@ test "parser: emit MoonBit declarations widens discarded function type parameter
 }
 
 ///|
-test "parser: emit MoonBit declarations widens callbacks and preserves Promise payloads" {
+test "parser: emit MoonBit declarations lowers callbacks and preserves Promise payloads" {
   let src =
     #|declare function later(
     #|  callback: (value: number) => void,
@@ -95,10 +139,7 @@ test "parser: emit MoonBit declarations widens callbacks and preserves Promise p
     #|/// Complex or unsupported TypeScript types are widened to JSValue.
     #|
     #|///|
-    #|declare pub type JSValue
-    #|
-    #|///|
-    #|declare pub fn later(callback : JSValue, promise : @js.Promise[String]) -> @js.Promise[Double]
+    #|declare pub fn later(callback : (Double) -> Unit, promise : @js.Promise[String]) -> @js.Promise[Double]
   assert_eq(actual, expected)
 }
 
