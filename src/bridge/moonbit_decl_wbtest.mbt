@@ -116,7 +116,7 @@ async test "bridge: emit MoonBit declarations diagnoses unsupported enum-like ex
       return
     }
   }
-  assert_true(actual.contains("declare pub type JSValue"))
+  assert_false(actual.contains("declare pub type JSValue"))
   assert_true(
     actual.contains(
       "Unsupported export MixedMode: mixed string/number enum cannot be lowered safely.",
@@ -150,6 +150,35 @@ async test "bridge: emit MoonBit declarations diagnoses unsupported enum-like ex
   assert_false(actual.contains("enum MixedMode"))
   assert_false(actual.contains("enum ComputedKind"))
   assert_false(actual.contains("enum DuplicateMode"))
+}
+
+///|
+async test "bridge: emit MoonBit declarations diagnoses anonymous literal unions" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/anonymous-literal-union-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type ButtonOptions"))
+  assert_true(
+    actual.contains("declare pub fn renderButton(variant : String) -> String"),
+  )
+  assert_true(
+    actual.contains(
+      "Unsupported export ButtonOptions: anonymous literal union in public surface is widened because no stable public enum name.",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "Unsupported export renderButton: anonymous literal union in public surface is widened because no stable public enum name.",
+    ),
+  )
 }
 
 ///|

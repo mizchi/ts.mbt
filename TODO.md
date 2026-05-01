@@ -522,7 +522,7 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
   - [x] computed enum member;
   - [x] duplicate literal values after sanitization;
   - [x] mixed / non-integer / bigint named literal-union aliases;
-  - anonymous literal union without a stable public name.
+  - [x] anonymous literal union without a stable public name.
 - [ ] Keep strict mode behavior unchanged: unsupported enum lowering in a
   public surface must either fall back within budget or fail with an actionable
   diagnostic.

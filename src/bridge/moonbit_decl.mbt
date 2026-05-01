@@ -1694,10 +1694,25 @@ fn collect_exported_decls(
         surface_cache,
         visiting,
       ) {
-      Interface(exported) => interfaces.push(exported)
+      Interface(exported) => {
+        if interface_has_anonymous_enum_like_literal_union(exported.iface) {
+          push_anonymous_literal_union_note(notes, exported.export_name)
+        }
+        interfaces.push(exported)
+      }
       Enum(exported) => enums.push(exported)
-      Import(exported) => imports.push(exported)
-      Function(exported) => funcs.push(exported)
+      Import(exported) => {
+        if import_has_anonymous_enum_like_literal_union(exported.import_) {
+          push_anonymous_literal_union_note(notes, exported.export_name)
+        }
+        imports.push(exported)
+      }
+      Function(exported) => {
+        if func_has_anonymous_enum_like_literal_union(exported.func) {
+          push_anonymous_literal_union_note(notes, exported.export_name)
+        }
+        funcs.push(exported)
+      }
       Value(exported) => values.push(exported)
       Class(exported) =>
         if export_.type_only {
@@ -3003,6 +3018,125 @@ fn type_alias_enum_like_unsupported_reason(
     )
   }
   None
+}
+
+///|
+fn type_has_anonymous_enum_like_literal_union(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Union(items) => {
+      let mut has_enum_like_literal = false
+      let mut only_literal_union_items = true
+      for item in items {
+        match item {
+          Literal(_) | NumberLiteral(_) | BigIntLiteral(_) =>
+            has_enum_like_literal = true
+          BooleanLiteral(_) | Undefined | Null => ()
+          _ => only_literal_union_items = false
+        }
+      }
+      if has_enum_like_literal && only_literal_union_items {
+        return true
+      }
+      for item in items {
+        if type_has_anonymous_enum_like_literal_union(item) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) => type_has_anonymous_enum_like_literal_union(inner)
+    Tuple(items) | Intersection(items) => {
+      for item in items {
+        if type_has_anonymous_enum_like_literal_union(item) {
+          return true
+        }
+      }
+      false
+    }
+    Object(fields) => {
+      for field in fields {
+        if type_has_anonymous_enum_like_literal_union(field.1) {
+          return true
+        }
+      }
+      false
+    }
+    Struct(_, fields) => {
+      for field in fields {
+        if type_has_anonymous_enum_like_literal_union(field.1) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, return_type) => {
+      for param in params {
+        if type_has_anonymous_enum_like_literal_union(param) {
+          return true
+        }
+      }
+      type_has_anonymous_enum_like_literal_union(return_type)
+    }
+    Conditional(source, target, true_type, false_type) =>
+      type_has_anonymous_enum_like_literal_union(source) ||
+      type_has_anonymous_enum_like_literal_union(target) ||
+      type_has_anonymous_enum_like_literal_union(true_type) ||
+      type_has_anonymous_enum_like_literal_union(false_type)
+    Applied(_, args) => {
+      for arg in args {
+        if type_has_anonymous_enum_like_literal_union(arg) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn interface_has_anonymous_enum_like_literal_union(
+  iface : @ast.TsInterface,
+) -> Bool {
+  for field in iface.fields {
+    if type_has_anonymous_enum_like_literal_union(field.1) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn import_has_anonymous_enum_like_literal_union(
+  import_ : @ast.TsImport,
+) -> Bool {
+  for param in import_.params {
+    if type_has_anonymous_enum_like_literal_union(param.1) {
+      return true
+    }
+  }
+  type_has_anonymous_enum_like_literal_union(import_.return_type)
+}
+
+///|
+fn func_has_anonymous_enum_like_literal_union(func : @ast.TsFunc) -> Bool {
+  for param in func.params {
+    if type_has_anonymous_enum_like_literal_union(param.type_) {
+      return true
+    }
+  }
+  type_has_anonymous_enum_like_literal_union(func.return_type)
+}
+
+///|
+fn push_anonymous_literal_union_note(
+  notes : Array[String],
+  export_name : String,
+) -> Unit {
+  let note = "///|\n/// Unsupported export \{export_name}: anonymous literal union in public surface is widened because no stable public enum name."
+  if !notes.contains(note) {
+    notes.push(note)
+  }
 }
 
 ///|
@@ -5849,6 +5983,13 @@ pub async fn emit_moonbit_decl_from_entry_path(
       None => ()
     }
   }
+  let mut notes_need_jsvalue = false
+  for note in notes {
+    if note.contains("JSValue") {
+      notes_need_jsvalue = true
+      break
+    }
+  }
   @parser.emit_moonbit_decl_with_sections(
     {
       funcs,
@@ -5861,6 +6002,6 @@ pub async fn emit_moonbit_decl_from_entry_path(
       enums,
     },
     notes,
-    notes.length() > 0,
+    notes_need_jsvalue,
   )
 }
