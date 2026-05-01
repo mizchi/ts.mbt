@@ -59,8 +59,8 @@ Review status:
   budgets and warning-free MoonBit checks.
 - A node:fs-only real-world probe builds and runs with 0 unsupported exports.
   Current metrics after callback/option-bag, generic, tuple, and function-type
-  cleanup: 2235 bridge lines, 327 declared functions, 18 `JSValue` refs, 5
-  `JSValue` functions, and 17 `JSValue` surface lines.
+  cleanup: 2239 bridge lines, 327 declared functions, 12 `JSValue` refs, 2
+  `JSValue` functions, and 11 `JSValue` surface lines.
 
 Next implementation tasks:
 
@@ -120,11 +120,16 @@ Next implementation tasks:
     `Array[JSValue]`; `WatchOptions.encoding` now lowers to `String?`.
     Overload wrapper pruning keeps narrow overloads per arity, so the broad
     `fstatSync` / `statfsSync` union-return wrappers no longer leak `JSValue`
-    while bigint variants remain callable. Current node:fs budget is 17
-    `JSValue` surface lines and 5 `JSValue` functions.
+    while bigint variants remain callable. `readFileSync` /
+    `readFile.__promisify__` buffer options now use `ReadFileBufferOptions?`,
+    `readFileSync` also exposes a `BufferEncoding -> String` wrapper, broad
+    `globSync` union-return wrappers are skipped, and `_GlobOptions.cwd`,
+    `_GlobOptions.exclude`, and `CopyOptions.filter` now keep concrete MoonBit
+    types. Current node:fs budget is 11 `JSValue` surface lines and 2
+    `JSValue` functions.
   - Remaining quality debt: event payloads with heterogeneous values still use
-    opaque payload boundaries, and overload-selected return/options surfaces
-    such as `readFile*`, statfs, and glob still require `JSValue`.
+    opaque payload boundaries, and custom `fs` implementation hooks / watcher
+    ignore predicates still require `JSValue`.
 - [x] Split large generated MoonBit packages into reviewable files.
   - Target layout: `types.mbt`, `externs.mbt`, `converters.mbt`, and
     `guards.mbt` for large TS -> MoonBit scaffolds, while preserving generated

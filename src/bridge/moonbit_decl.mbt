@@ -4853,6 +4853,9 @@ fn decl_specialize_generated_api_param_type(
   if param_name == "data" && decl_is_node_file_data_union(type_) {
     return String_
   }
+  if decl_is_node_read_file_api_name(export_name) && param_name == "options" {
+    return decl_node_read_file_options_type(type_)
+  }
   match export_name {
     "createSourceFile" | "createLanguageServiceSourceFile" =>
       if param_index == 2 {
@@ -4907,6 +4910,158 @@ fn decl_specialize_generated_api_param_type(
         type_
       }
     _ => type_
+  }
+}
+
+///|
+fn decl_is_node_read_file_api_name(name : String) -> Bool {
+  name == "readFileSync" ||
+  name == "readFile.__promisify__" ||
+  name == "readFilePromisify"
+}
+
+///|
+fn decl_struct_field_type(
+  fields : Array[(String, @ast.TsType)],
+  name : String,
+) -> @ast.TsType? {
+  for field in fields {
+    if field.0 == name {
+      return Some(field.1)
+    }
+  }
+  None
+}
+
+///|
+fn decl_object_type_field_type(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+  name : String,
+) -> @ast.TsType? {
+  for field in fields {
+    match field.0 {
+      Literal(key) if key == name => return Some(field.1)
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+fn decl_type_is_read_file_buffer_options(type_ : @ast.TsType) -> Bool {
+  match decl_classify_optional_like_union(type_) {
+    Some((inner, _)) => return decl_type_is_read_file_buffer_options(inner)
+    None => ()
+  }
+  if decl_type_contains_named(type_, ["BufferEncoding"]) {
+    return false
+  }
+  match type_ {
+    Object(fields) =>
+      match decl_object_type_field_type(fields, "encoding") {
+        Some(_) => true
+        None => false
+      }
+    Struct(_, fields) =>
+      match decl_struct_field_type(fields, "encoding") {
+        Some(_) => true
+        None => false
+      }
+    _ => false
+  }
+}
+
+///|
+fn decl_node_read_file_options_type(type_ : @ast.TsType) -> @ast.TsType {
+  if decl_type_is_read_file_buffer_options(type_) {
+    return Union([Named("ReadFileBufferOptions"), Undefined])
+  }
+  if decl_type_contains_named(type_, ["BufferEncoding"]) {
+    match decl_classify_optional_like_union(type_) {
+      Some((_, true)) => Union([Named("BufferEncoding"), Undefined])
+      _ => Named("BufferEncoding")
+    }
+  } else {
+    type_
+  }
+}
+
+///|
+fn decl_type_has_optional_member(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Undefined | Null => true
+    Union(items) => {
+      for item in items {
+        if decl_type_has_optional_member(item) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn decl_optionalize_if_needed(
+  original : @ast.TsType,
+  rewritten : @ast.TsType,
+) -> @ast.TsType {
+  if decl_type_has_optional_member(original) {
+    Union([rewritten, Undefined])
+  } else {
+    rewritten
+  }
+}
+
+///|
+fn decl_type_contains_boolean(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Boolean | BooleanLiteral(_) => true
+    Union(items) | Intersection(items) | Tuple(items) => {
+      for item in items {
+        if decl_type_contains_boolean(item) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner)
+    | Applied("Promise", [inner])
+    | Applied("PromiseLike", [inner]) => decl_type_contains_boolean(inner)
+    _ => false
+  }
+}
+
+///|
+fn decl_copy_options_filter_type(type_ : @ast.TsType) -> @ast.TsType {
+  let inner_type = match decl_classify_optional_like_union(type_) {
+    Some((inner, _)) => inner
+    None => type_
+  }
+  match inner_type {
+    Func([String_, String_], return_type) if decl_type_contains_boolean(
+        return_type,
+      ) => decl_optionalize_if_needed(type_, Func([String_, String_], Boolean))
+    _ => type_
+  }
+}
+
+///|
+fn decl_glob_options_cwd_type(type_ : @ast.TsType) -> @ast.TsType {
+  if decl_type_contains_string(type_) {
+    decl_optionalize_if_needed(type_, String_)
+  } else {
+    type_
+  }
+}
+
+///|
+fn decl_glob_options_exclude_type(type_ : @ast.TsType) -> @ast.TsType {
+  if decl_type_contains_string_array(type_) {
+    decl_optionalize_if_needed(type_, Array(String_))
+  } else {
+    type_
   }
 }
 
@@ -4997,6 +5152,20 @@ fn decl_specialize_generated_interface_field_type(
     "WatchOptions" =>
       if field_name == "encoding" {
         decl_watch_options_encoding_type(type_)
+      } else {
+        type_
+      }
+    "CopyOptions" =>
+      if field_name == "filter" {
+        decl_copy_options_filter_type(type_)
+      } else {
+        type_
+      }
+    "_GlobOptions" =>
+      if field_name == "cwd" {
+        decl_glob_options_cwd_type(type_)
+      } else if field_name == "exclude" {
+        decl_glob_options_exclude_type(type_)
       } else {
         type_
       }
@@ -5792,6 +5961,72 @@ fn decl_func_wider_than_any_same_param_preferred(
 }
 
 ///|
+fn decl_type_is_string_nonshared_buffer_union(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Union(items) => {
+      let mut has_string = false
+      let mut has_buffer = false
+      for item in items {
+        match item {
+          String_ => has_string = true
+          Named("NonSharedBuffer") | Applied("NonSharedBuffer", _) =>
+            has_buffer = true
+          _ => ()
+        }
+      }
+      has_string && has_buffer
+    }
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
+      decl_type_is_string_nonshared_buffer_union(inner)
+    _ => false
+  }
+}
+
+///|
+fn decl_type_is_dirent_or_string_array_union(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Union(items) => {
+      let mut has_dirent_array = false
+      let mut has_string_array = false
+      for item in items {
+        match item {
+          Array(Named("Dirent"))
+          | Applied("Array", [Named("Dirent")])
+          | Applied("ReadonlyArray", [Named("Dirent")]) =>
+            has_dirent_array = true
+          Array(String_)
+          | Applied("Array", [String_])
+          | Applied("ReadonlyArray", [String_]) => has_string_array = true
+          _ => ()
+        }
+      }
+      has_dirent_array && has_string_array
+    }
+    _ => false
+  }
+}
+
+///|
+fn decl_func_should_skip_broad_node_wrapper(func : @ast.TsFunc) -> Bool {
+  if decl_is_node_read_file_api_name(func.name) &&
+    decl_type_is_string_nonshared_buffer_union(func.return_type) {
+    return true
+  }
+  func.name == "globSync" &&
+  decl_type_is_dirent_or_string_array_union(func.return_type)
+}
+
+///|
+fn decl_import_should_skip_broad_node_wrapper(import_ : @ast.TsImport) -> Bool {
+  if decl_is_node_read_file_api_name(import_.name) &&
+    decl_type_is_string_nonshared_buffer_union(import_.return_type) {
+    return true
+  }
+  import_.name == "globSync" &&
+  decl_type_is_dirent_or_string_array_union(import_.return_type)
+}
+
+///|
 fn clone_exported_func(
   exported : ExportedFuncDecl,
   info : DeclModuleInfo,
@@ -5930,6 +6165,9 @@ fn exported_import_overload_wrappers(
       if decl_import_wider_than_any_same_param_preferred(clone, preferred) {
         continue
       }
+      if decl_import_should_skip_broad_node_wrapper(clone) {
+        continue
+      }
       let suffix = match
         decl_overload_suffix_from_types(decl_import_signature_types(clone)) {
         Some(suffix) => suffix
@@ -6012,6 +6250,9 @@ fn exported_func_overload_wrappers(
         continue
       }
       if decl_func_wider_than_any_same_param_preferred(clone, preferred) {
+        continue
+      }
+      if decl_func_should_skip_broad_node_wrapper(clone) {
         continue
       }
       let suffix = match

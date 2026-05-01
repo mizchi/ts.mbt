@@ -937,6 +937,78 @@ async test "bridge: emit MoonBit declarations keeps narrow overload per arity" {
 }
 
 ///|
+async test "bridge: emit MoonBit declarations specializes node fs readFile and glob overloads" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/node-fs-readfile-glob-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type ReadFileBufferOptions"))
+  assert_true(
+    actual.contains(
+      "declare pub fn readFileSync(path : PathOrFileDescriptor, options : ReadFileBufferOptions?) -> NonSharedBuffer",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn readFileSync_path_or_file_descriptor_buffer_encoding(path : PathOrFileDescriptor, options : BufferEncoding) -> String",
+    ),
+  )
+  assert_false(
+    actual.contains(
+      "declare pub fn readFileSync(path : PathOrFileDescriptor, options : JSValue?) -> NonSharedBuffer",
+    ),
+  )
+  assert_false(
+    actual.contains(
+      "declare pub fn readFileSync_path_or_file_descriptor_buffer_encoding_optional",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn readFilePromisify(path : PathOrFileDescriptor, options : ReadFileBufferOptions?) -> @js.Promise[NonSharedBuffer]",
+    ),
+  )
+  assert_false(
+    actual.contains(
+      "declare pub fn readFilePromisify(path : PathOrFileDescriptor, options : JSValue?) -> @js.Promise[NonSharedBuffer]",
+    ),
+  )
+  assert_true(actual.contains("/// filter : ((String, String) -> Bool)?"))
+  assert_false(actual.contains("/// filter : ((String, String) -> JSValue)?"))
+  assert_true(actual.contains("/// cwd : String?"))
+  assert_true(actual.contains("/// exclude : Array[String]?"))
+  assert_false(actual.contains("/// cwd : JSValue?"))
+  assert_false(actual.contains("/// exclude : JSValue?"))
+  assert_true(
+    actual.contains(
+      "declare pub fn globSync(pattern : String) -> Array[String]",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn globSync_string_glob_options_with_file_types(pattern : String, options : GlobOptionsWithFileTypes) -> Array[Dirent]",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn globSync_string_glob_options_without_file_types(pattern : String, options : GlobOptionsWithoutFileTypes) -> Array[String]",
+    ),
+  )
+  assert_false(
+    actual.contains(
+      "declare pub fn globSync_string_glob_options(pattern : String, options : GlobOptions) -> JSValue",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit declarations ignore unresolved bare-package reexports" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/unresolved-bare-reexport-entry.d.ts",
