@@ -2999,6 +2999,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     dependency_exported_interfaces, emitted_exported_imports, emitted_exported_funcs,
     exported_values, exported_classes, modules, canonical_types,
   )
+  let specialized_node_interfaces = normalize_specialized_node_interfaces(
+    dependency_exported_interfaces,
+  )
   let interfaces = normalize_interfaces_for_ffi(
     exported_interfaces, modules, canonical_types,
   )
@@ -3006,6 +3009,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     interfaces.push(spec.iface)
   }
   for iface in react_utility_interfaces {
+    interfaces.push(iface)
+  }
+  for iface in specialized_node_interfaces {
     interfaces.push(iface)
   }
   for

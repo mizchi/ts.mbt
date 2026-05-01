@@ -4302,6 +4302,81 @@ fn normalize_react_utility_interfaces(
 }
 
 ///|
+fn normalize_specialized_node_interfaces(
+  exported_interfaces : Array[ExportedInterfaceDecl],
+) -> Array[@ast.TsInterface] {
+  let interfaces : Array[@ast.TsInterface] = []
+  let exported_names : Array[String] = []
+  let mut needs_cpu_info_times = false
+  let mut needs_crypto_helpers = false
+  for exported in exported_interfaces {
+    exported_names.push(exported.export_name)
+    exported_names.push(exported.local_name)
+    if exported.export_name == "CpuInfo" || exported.local_name == "CpuInfo" {
+      needs_cpu_info_times = true
+    }
+    if exported.export_name == "CipherGCM" ||
+      exported.local_name == "CipherGCM" ||
+      exported.export_name == "SubtleCrypto" ||
+      exported.local_name == "SubtleCrypto" ||
+      exported.export_name == "WebcryptoSubtleCrypto" ||
+      exported.local_name == "WebcryptoSubtleCrypto" ||
+      exported.export_name == "Argon2Parameters" ||
+      exported.local_name == "Argon2Parameters" {
+      needs_crypto_helpers = true
+    }
+  }
+  if needs_cpu_info_times {
+    interfaces.push({
+      name: "CpuInfoTimes",
+      type_params: [],
+      extends_names: [],
+      fields: [
+        ("user", @ast.TsType::Number),
+        ("nice", @ast.TsType::Number),
+        ("sys", @ast.TsType::Number),
+        ("idle", @ast.TsType::Number),
+        ("irq", @ast.TsType::Number),
+      ],
+      readonly_fields: [],
+    })
+  }
+  if needs_crypto_helpers {
+    if !exported_names.contains("CipherAADOptions") {
+      interfaces.push({
+        name: "CipherAADOptions",
+        type_params: [],
+        extends_names: [],
+        fields: [("plaintextLength", @ast.TsType::Number)],
+        readonly_fields: [],
+      })
+    }
+    if !exported_names.contains("GenerateKeyOptions") {
+      interfaces.push({
+        name: "GenerateKeyOptions",
+        type_params: [],
+        extends_names: [],
+        fields: [("length", @ast.TsType::Number)],
+        readonly_fields: [],
+      })
+    }
+    if !exported_names.contains("DiffieHellmanOptions") {
+      interfaces.push({
+        name: "DiffieHellmanOptions",
+        type_params: [],
+        extends_names: [],
+        fields: [
+          ("privateKey", @ast.TsType::Named("KeyObject")),
+          ("publicKey", @ast.TsType::Named("KeyObject")),
+        ],
+        readonly_fields: [],
+      })
+    }
+  }
+  interfaces
+}
+
+///|
 fn should_expand_interface_base(origin : ResolvedInterfaceOrigin) -> Bool {
   origin.info.record.path.contains("@vitest/expect") ||
   origin.info.record.path.contains("callable-interface-reexport")
@@ -4850,6 +4925,55 @@ fn decl_specialize_generated_api_param_type(
   param_index : Int,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
+  match export_name {
+    "createHmac" => if param_index == 1 { return Named("CipherKey") }
+    "hash" =>
+      if param_index == 2 {
+        return decl_named_optional_type(
+          "OneShotDigestOptionsWithStringEncoding",
+        )
+      }
+    "hkdf" | "hkdfSync" => if param_index == 1 { return Named("CipherKey") }
+    "sign" | "verify" => if param_index == 2 { return Named("KeyLike") }
+    "decapsulate" =>
+      if param_index == 0 {
+        return Named("KeyLike")
+      } else if param_index == 1 {
+        return Named("BinaryLike")
+      }
+    "encapsulate" => if param_index == 0 { return Named("KeyLike") }
+    "generateKey" | "generateKeySync" =>
+      if param_index == 1 {
+        return Named("GenerateKeyOptions")
+      }
+    "generateKeyPair" =>
+      if param_index == 2 {
+        return decl_crypto_generate_key_pair_callback_type(type_)
+      }
+    "diffieHellman" =>
+      if param_index == 0 {
+        return Named("DiffieHellmanOptions")
+      }
+    "getCipherInfo" => if param_index == 0 { return String_ }
+    "publicDecrypt" | "publicEncrypt" | "privateDecrypt" | "privateEncrypt" =>
+      if param_index == 0 {
+        return Named("KeyLike")
+      } else if param_index == 1 {
+        return Named("BinaryLike")
+      }
+    "createPublicKey" | "createPrivateKey" =>
+      if param_index == 0 {
+        return Named("KeyLike")
+      }
+    _ => ()
+  }
+  if param_index == 0 &&
+    (export_name == "fileURLToPath" || export_name == "fileURLToPathBuffer") {
+    return String_
+  }
+  if param_index == 0 && (export_name == "isUtf8" || export_name == "isAscii") {
+    return Named("Uint8Array")
+  }
   if param_name == "data" && decl_is_node_file_data_union(type_) {
     return String_
   }
@@ -5122,12 +5246,385 @@ fn decl_watch_options_encoding_type(type_ : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+fn decl_string_optional_type() -> @ast.TsType {
+  Union([String_, Undefined])
+}
+
+///|
+fn decl_named_optional_type(name : String) -> @ast.TsType {
+  Union([Named(name), Undefined])
+}
+
+///|
+fn decl_url_pattern_base_url_type(type_ : @ast.TsType) -> @ast.TsType {
+  match decl_classify_optional_like_union(type_) {
+    Some(_) => decl_string_optional_type()
+    None =>
+      match type_ {
+        Any | String_ | Named("URL") => decl_string_optional_type()
+        Union(_) if decl_type_contains_string(type_) =>
+          decl_string_optional_type()
+        _ => type_
+      }
+  }
+}
+
+///|
+fn decl_url_pattern_method_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Func(params, return_type) if params.length() == 2 => {
+      let rewritten : Array[@ast.TsType] = [
+        params[0],
+        decl_string_optional_type(),
+      ]
+      Func(rewritten, return_type)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn decl_url_search_params_this_arg_type(type_ : @ast.TsType) -> @ast.TsType {
+  match decl_classify_optional_like_union(type_) {
+    Some(_) => decl_named_optional_type("URLSearchParamsForEachThisArg")
+    None =>
+      match type_ {
+        Any => decl_named_optional_type("URLSearchParamsForEachThisArg")
+        _ => type_
+      }
+  }
+}
+
+///|
+fn decl_url_search_params_for_each_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Func(params, return_type) if params.length() == 2 => {
+      let rewritten : Array[@ast.TsType] = [
+        params[0],
+        decl_url_search_params_this_arg_type(params[1]),
+      ]
+      Func(rewritten, return_type)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn decl_is_crypto_aad_owner(owner_name : String) -> Bool {
+  owner_name == "CipherCCM" ||
+  owner_name == "CipherGCM" ||
+  owner_name == "CipherOCB" ||
+  owner_name == "CipherChaCha20Poly1305" ||
+  owner_name == "DecipherCCM" ||
+  owner_name == "DecipherGCM" ||
+  owner_name == "DecipherOCB" ||
+  owner_name == "DecipherChaCha20Poly1305"
+}
+
+///|
+fn decl_crypto_aad_options_type(
+  owner_name : String,
+  original : @ast.TsType,
+) -> @ast.TsType {
+  if decl_type_has_optional_member(original) ||
+    owner_name == "CipherGCM" ||
+    owner_name == "CipherOCB" ||
+    owner_name == "DecipherGCM" ||
+    owner_name == "DecipherOCB" {
+    decl_named_optional_type("CipherAADOptions")
+  } else {
+    Named("CipherAADOptions")
+  }
+}
+
+///|
+fn decl_crypto_set_aad_method_type(
+  owner_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Func(params, return_type) if params.length() >= 2 => {
+      let rewritten : Array[@ast.TsType] = []
+      for param_index, param in params {
+        if param_index == 1 {
+          rewritten.push(decl_crypto_aad_options_type(owner_name, param))
+        } else {
+          rewritten.push(param)
+        }
+      }
+      Func(rewritten, return_type)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn decl_is_crypto_subtle_owner(owner_name : String) -> Bool {
+  owner_name == "SubtleCrypto" || owner_name == "WebcryptoSubtleCrypto"
+}
+
+///|
+fn decl_crypto_subtle_algorithm_param_type(
+  owner_name : String,
+  method_name : String,
+  param_index : Int,
+) -> @ast.TsType? {
+  if !decl_is_crypto_subtle_owner(owner_name) {
+    return None
+  }
+  match method_name {
+    "decrypt"
+    | "deriveBits"
+    | "digest"
+    | "encrypt"
+    | "generateKey"
+    | "sign"
+    | "verify" =>
+      if param_index == 0 {
+        Some(Named("AlgorithmIdentifier"))
+      } else {
+        None
+      }
+    "deriveKey" =>
+      if param_index == 0 || param_index == 2 {
+        Some(Named("AlgorithmIdentifier"))
+      } else {
+        None
+      }
+    "decapsulateKey" =>
+      if param_index == 3 {
+        Some(Named("AlgorithmIdentifier"))
+      } else {
+        None
+      }
+    "encapsulateKey" =>
+      if param_index == 2 {
+        Some(Named("AlgorithmIdentifier"))
+      } else {
+        None
+      }
+    "importKey" =>
+      if param_index == 2 {
+        Some(Named("AlgorithmIdentifier"))
+      } else {
+        None
+      }
+    "unwrapKey" =>
+      if param_index == 3 || param_index == 4 {
+        Some(Named("AlgorithmIdentifier"))
+      } else {
+        None
+      }
+    "wrapKey" =>
+      if param_index == 3 {
+        Some(Named("AlgorithmIdentifier"))
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+fn decl_crypto_subtle_method_type(
+  owner_name : String,
+  method_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Func(params, return_type) => {
+      let rewritten : Array[@ast.TsType] = []
+      for param_index, param in params {
+        match
+          decl_crypto_subtle_algorithm_param_type(
+            owner_name, method_name, param_index,
+          ) {
+          Some(rewritten_param) => rewritten.push(rewritten_param)
+          None => rewritten.push(param)
+        }
+      }
+      Func(rewritten, return_type)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn decl_crypto_get_random_values_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Func(params, _) if params.length() == 1 =>
+      Func(
+        [Named("NodeJS_NonSharedTypedArray")],
+        Named("NodeJS_NonSharedTypedArray"),
+      )
+    _ => type_
+  }
+}
+
+///|
+fn decl_crypto_generate_key_pair_callback_type(
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Func(params, return_type) if params.length() == 3 =>
+      Func([params[0], Named("KeyObject"), Named("KeyObject")], return_type)
+    _ => type_
+  }
+}
+
+///|
+fn decl_is_hono_route_method(method_name : String) -> Bool {
+  method_name == "get" ||
+  method_name == "hono_get" ||
+  method_name == "post" ||
+  method_name == "hono_post" ||
+  method_name == "put" ||
+  method_name == "hono_put" ||
+  method_name == "delete" ||
+  method_name == "hono_delete" ||
+  method_name == "options" ||
+  method_name == "hono_options" ||
+  method_name == "patch" ||
+  method_name == "hono_patch" ||
+  method_name == "all" ||
+  method_name == "hono_all"
+}
+
+///|
+fn decl_hono_handler_type() -> @ast.TsType {
+  Func([Named("Context")], Named("Response"))
+}
+
+///|
+fn decl_is_hono_context_response_method(method_name : String) -> Bool {
+  method_name == "body" ||
+  method_name == "context_body" ||
+  method_name == "text" ||
+  method_name == "context_text" ||
+  method_name == "json" ||
+  method_name == "context_json" ||
+  method_name == "html" ||
+  method_name == "context_html" ||
+  method_name == "redirect" ||
+  method_name == "context_redirect"
+}
+
+///|
 fn decl_specialize_generated_interface_field_type(
   owner_name : String,
   field_name : String,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
+  if decl_is_crypto_aad_owner(owner_name) && field_name == "setAAD" {
+    return decl_crypto_set_aad_method_type(owner_name, type_)
+  }
+  if decl_is_crypto_subtle_owner(owner_name) {
+    return decl_crypto_subtle_method_type(owner_name, field_name, type_)
+  }
+  if owner_name == "WebcryptoCrypto" && field_name == "getRandomValues" {
+    return decl_crypto_get_random_values_type(type_)
+  }
   match owner_name {
+    "CpuInfo" =>
+      if field_name == "times" {
+        Named("CpuInfoTimes")
+      } else {
+        type_
+      }
+    "UserInfo" =>
+      if field_name == "username" || field_name == "homedir" {
+        String_
+      } else if field_name == "shell" {
+        decl_string_optional_type()
+      } else {
+        type_
+      }
+    "UserInfoOptions" =>
+      if field_name == "encoding" {
+        decl_named_optional_type("BufferEncoding")
+      } else {
+        type_
+      }
+    "Url" =>
+      if field_name == "query" {
+        decl_string_optional_type()
+      } else {
+        type_
+      }
+    "UrlObject" =>
+      if field_name == "port" {
+        decl_string_optional_type()
+      } else if field_name == "query" {
+        decl_named_optional_type("ParsedUrlQueryInput")
+      } else {
+        type_
+      }
+    "URLPattern" =>
+      if field_name == "exec" || field_name == "test" {
+        decl_url_pattern_method_type(type_)
+      } else {
+        type_
+      }
+    "URLSearchParams" =>
+      if field_name == "forEach" {
+        decl_url_search_params_for_each_type(type_)
+      } else {
+        type_
+      }
+    "PublicKeyInput" =>
+      if field_name == "key" {
+        Named("BinaryLike")
+      } else {
+        type_
+      }
+    "PrivateKeyInput" =>
+      if field_name == "key" {
+        Named("BinaryLike")
+      } else if field_name == "passphrase" {
+        decl_named_optional_type("BinaryLike")
+      } else {
+        type_
+      }
+    "SigningOptions" =>
+      if field_name == "context" {
+        decl_named_optional_type("NodeJS_BufferSource")
+      } else {
+        type_
+      }
+    "Argon2Parameters" =>
+      if field_name == "message" || field_name == "nonce" {
+        Named("BinaryLike")
+      } else if field_name == "secret" || field_name == "associatedData" {
+        decl_named_optional_type("BinaryLike")
+      } else {
+        type_
+      }
+    "KeyPairExportResult" =>
+      if field_name == "publicKey" || field_name == "privateKey" {
+        Named("KeyObject")
+      } else {
+        type_
+      }
+    "KeyPairExportOptions" =>
+      if field_name == "publicKeyEncoding" {
+        decl_named_optional_type("PublicKeyExportOptions")
+      } else if field_name == "privateKeyEncoding" {
+        decl_named_optional_type("PrivateKeyExportOptions")
+      } else {
+        type_
+      }
+    "PrivateKeyExportOptions" =>
+      if field_name == "passphrase" {
+        decl_named_optional_type("BinaryLike")
+      } else {
+        type_
+      }
+    "OneShotDigestOptions" =>
+      if field_name == "outputEncoding" {
+        decl_named_optional_type("BinaryToTextEncoding")
+      } else {
+        type_
+      }
     "ReadStreamEventMap" =>
       if field_name == "data" {
         decl_stream_event_payload_array_type("ReadStream", type_)
@@ -5290,6 +5787,88 @@ fn decl_specialize_generated_class_method_param_type(
   param_index : Int,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
+  if class_name == "Hono" && decl_is_hono_route_method(method_name) {
+    if param_index == 0 {
+      return String_
+    }
+    if param_index == 1 {
+      return decl_hono_handler_type()
+    }
+  }
+  if class_name == "Context" &&
+    decl_is_hono_context_response_method(method_name) {
+    match method_name {
+      "text" | "context_text" | "html" | "context_html" =>
+        if param_index == 0 {
+          return String_
+        } else if param_index == 1 {
+          return decl_named_optional_type("StatusCode")
+        }
+      "body" | "context_body" =>
+        if param_index == 0 {
+          return Named("Data")
+        } else if param_index == 1 {
+          return decl_named_optional_type("StatusCode")
+        }
+      "json" | "context_json" =>
+        if param_index == 1 {
+          return decl_named_optional_type("StatusCode")
+        }
+      "redirect" | "context_redirect" =>
+        if param_index == 0 {
+          return String_
+        } else if param_index == 1 {
+          return decl_named_optional_type("StatusCode")
+        }
+      _ => ()
+    }
+  }
+  if decl_is_crypto_aad_owner(class_name) &&
+    method_name == "setAAD" &&
+    param_index == 1 {
+    return decl_crypto_aad_options_type(class_name, type_)
+  }
+  match
+    decl_crypto_subtle_algorithm_param_type(
+      class_name, method_name, param_index,
+    ) {
+    Some(rewritten_param) => return rewritten_param
+    None => ()
+  }
+  if class_name == "WebcryptoCrypto" &&
+    method_name == "getRandomValues" &&
+    param_index == 0 {
+    return Named("NodeJS_NonSharedTypedArray")
+  }
+  if class_name == "Sign" && method_name == "sign" && param_index == 0 {
+    return Named("KeyLike")
+  }
+  if class_name == "Verify" && method_name == "verify" && param_index == 0 {
+    return Named("KeyLike")
+  }
+  if class_name == "KeyObject" &&
+    method_name == "toCryptoKey" &&
+    param_index == 0 {
+    return Named("AlgorithmIdentifier")
+  }
+  if class_name == "DiffieHellman" &&
+    method_name == "computeSecret" &&
+    (param_index == 1 || param_index == 2) {
+    return decl_named_optional_type("BufferEncoding")
+  }
+  if class_name == "ECDH" && method_name == "getPublicKey" && param_index == 0 {
+    return decl_named_optional_type("BufferEncoding")
+  }
+  if class_name == "URLPattern" &&
+    (method_name == "exec" || method_name == "test") &&
+    param_index == 1 {
+    return decl_url_pattern_base_url_type(type_)
+  }
+  if class_name == "URLSearchParams" &&
+    method_name == "forEach" &&
+    param_index == 1 {
+    return decl_url_search_params_this_arg_type(type_)
+  }
   match decl_stream_event_payload_name(class_name) {
     Some(_) => ()
     None => return type_
@@ -5312,6 +5891,19 @@ fn decl_specialize_generated_class_method_return_type(
   method_name : String,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
+  if class_name == "Context" &&
+    decl_is_hono_context_response_method(method_name) {
+    return Named("Response")
+  }
+  if class_name == "KeyObject" && method_name == "export" {
+    return Named("NonSharedBuffer")
+  }
+  if class_name == "ECDH" && method_name == "convertKey" {
+    return Named("NonSharedBuffer")
+  }
+  if class_name == "WebcryptoCrypto" && method_name == "getRandomValues" {
+    return Named("NodeJS_NonSharedTypedArray")
+  }
   match decl_stream_event_payload_name(class_name) {
     Some(_) => ()
     None => return type_
@@ -5443,6 +6035,46 @@ fn decl_is_string_literal_union_type(type_ : @ast.TsType) -> Bool {
       true
     }
     _ => false
+  }
+}
+
+///|
+fn decl_querystring_stringify_type() -> @ast.TsType {
+  Func(
+    [
+      decl_named_optional_type("ParsedUrlQueryInput"),
+      decl_string_optional_type(),
+      decl_string_optional_type(),
+      decl_named_optional_type("StringifyOptions"),
+    ],
+    String_,
+  )
+}
+
+///|
+fn decl_querystring_parse_type() -> @ast.TsType {
+  Func(
+    [
+      String_,
+      decl_string_optional_type(),
+      decl_string_optional_type(),
+      decl_named_optional_type("ParseOptions"),
+    ],
+    Named("ParsedUrlQuery"),
+  )
+}
+
+///|
+fn decl_specialize_generated_value_type(
+  value_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match value_name {
+    "path" if type_ == Any => Named("PathModule")
+    "constants" => Named("Constants")
+    "encode" if type_ == Any => decl_querystring_stringify_type()
+    "decode" if type_ == Any => decl_querystring_parse_type()
+    _ => type_
   }
 }
 
@@ -6012,6 +6644,9 @@ fn decl_func_should_skip_broad_node_wrapper(func : @ast.TsFunc) -> Bool {
     decl_type_is_string_nonshared_buffer_union(func.return_type) {
     return true
   }
+  if decl_is_broad_generate_prime_sync_wrapper_name(func.name) {
+    return true
+  }
   func.name == "globSync" &&
   decl_type_is_dirent_or_string_array_union(func.return_type)
 }
@@ -6022,8 +6657,22 @@ fn decl_import_should_skip_broad_node_wrapper(import_ : @ast.TsImport) -> Bool {
     decl_type_is_string_nonshared_buffer_union(import_.return_type) {
     return true
   }
+  if decl_is_broad_generate_prime_sync_wrapper_name(import_.name) {
+    return true
+  }
   import_.name == "globSync" &&
   decl_type_is_dirent_or_string_array_union(import_.return_type)
+}
+
+///|
+fn decl_is_broad_generate_prime_sync_wrapper_name(name : String) -> Bool {
+  name == "generatePrimeSync" ||
+  (
+    name.has_prefix("generatePrimeSync_") &&
+    name.contains("generate_prime_options") &&
+    !name.contains("generate_prime_options_big_int") &&
+    !name.contains("generate_prime_options_array_buffer")
+  )
 }
 
 ///|
@@ -6316,16 +6965,19 @@ fn clone_exported_value(
 ) -> @ast.TsValueDecl {
   {
     name: exported.export_name,
-    type_: lower_react_utility_type(
-      info,
-      rewrite_type_refs_in_scope(
+    type_: decl_specialize_generated_value_type(
+      exported.export_name,
+      lower_react_utility_type(
         info,
-        exported.local_name_prefix,
-        exported.value.type_,
+        rewrite_type_refs_in_scope(
+          info,
+          exported.local_name_prefix,
+          exported.value.type_,
+          canonical_types,
+        ),
+        modules,
         canonical_types,
       ),
-      modules,
-      canonical_types,
     ),
   }
 }
@@ -6423,6 +7075,7 @@ fn clone_class_method_in_scope(
 
 ///|
 fn callable_method_from_func_type(
+  class_name : String,
   method_name : String,
   is_static : Bool,
   params : Array[@ast.TsType],
@@ -6434,30 +7087,37 @@ fn callable_method_from_func_type(
 ) -> @ast.TsClassMethodDecl {
   let method_params : Array[(String, @ast.TsType)] = []
   for i, param_type in params {
+    let param_name = "arg" + i.to_string()
+    let lowered_param_type = lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info, local_name_prefix, param_type, canonical_types,
+      ),
+      modules,
+      canonical_types,
+    )
     method_params.push(
       (
-        "arg" + i.to_string(),
-        lower_react_utility_type(
-          info,
-          rewrite_type_refs_in_scope(
-            info, local_name_prefix, param_type, canonical_types,
-          ),
-          modules,
-          canonical_types,
+        param_name,
+        decl_specialize_generated_class_method_param_type(
+          class_name, method_name, param_name, i, lowered_param_type,
         ),
       ),
     )
   }
+  let lowered_return_type = lower_react_utility_type(
+    info,
+    rewrite_type_refs_in_scope(
+      info, local_name_prefix, return_type, canonical_types,
+    ),
+    modules,
+    canonical_types,
+  )
   {
     name: method_name,
     params: method_params,
-    return_type: lower_react_utility_type(
-      info,
-      rewrite_type_refs_in_scope(
-        info, local_name_prefix, return_type, canonical_types,
-      ),
-      modules,
-      canonical_types,
+    return_type: decl_specialize_generated_class_method_return_type(
+      class_name, method_name, lowered_return_type,
     ),
     is_static,
   }
@@ -6486,6 +7146,7 @@ fn preferred_callable_interface_field(iface : @ast.TsInterface) -> @ast.TsType? 
 
 ///|
 fn callable_method_from_property(
+  class_name : String,
   class_property : @ast.TsClassPropertyDecl,
   info : DeclModuleInfo,
   local_name_prefix : String,
@@ -6496,6 +7157,7 @@ fn callable_method_from_property(
     Func(params, return_type) =>
       Some(
         callable_method_from_func_type(
+          class_name,
           class_property.name,
           class_property.is_static,
           params,
@@ -6514,6 +7176,7 @@ fn callable_method_from_property(
             Some(Func(params, return_type)) =>
               Some(
                 callable_method_from_func_type(
+                  class_name,
                   class_property.name,
                   class_property.is_static,
                   params,
@@ -6617,6 +7280,7 @@ fn append_class_origin_members(
     append_class_property_once(properties, seen_property_keys, cloned_property)
     match
       callable_method_from_property(
+        origin.class_.name,
         class_property,
         origin.info,
         origin.local_name_prefix,
@@ -6748,6 +7412,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
     exported_interfaces, emitted_exported_imports, emitted_exported_funcs, exported_values,
     exported_classes, modules, canonical_types,
   )
+  let specialized_node_interfaces = normalize_specialized_node_interfaces(
+    exported_interfaces,
+  )
   let interfaces : Array[@ast.TsInterface] = []
   for exported in exported_interfaces {
     match modules.get(exported.source_path) {
@@ -6762,6 +7429,9 @@ pub async fn emit_moonbit_decl_from_entry_path(
     interfaces.push(spec.iface)
   }
   for iface in react_utility_interfaces {
+    interfaces.push(iface)
+  }
+  for iface in specialized_node_interfaces {
     interfaces.push(iface)
   }
   let enums : Array[@ast.TsEnumDecl] = []

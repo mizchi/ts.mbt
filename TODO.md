@@ -139,11 +139,41 @@ Next implementation tasks:
     `externs.mbt`, `guards.mbt`, and `bridge.mbt`. Example/scaffold checks,
     real-world manifests, and bridge quality metrics now count the split source
     files instead of assuming all implementation code lives in `bridge.mbt`.
-- [ ] Add regression rails for generated-code ergonomics.
+- [x] Add regression rails for generated-code ergonomics.
   - [x] React `forwardRef` warning should fail the smoke rail.
   - [x] TypeScript AST transformer smoke should reduce required `unsafeCast`
     usage around `ScriptTarget`, `transform`, visitors, and transformed arrays.
   - [x] node:fs budget regressions should fail with package-local diagnostics.
+
+### Package-Specific Practical Coverage Pass (2026-05-01)
+
+Implemented in the current real-world TypeScript probe order:
+
+- [x] Small Node built-ins now target zero public `JSValue` fallback.
+  - `node:path`, `node:os`, `node:url`, `node:querystring`, and `node:buffer`
+    all generate with `JSValue surface = 0` in
+    `_build/realworld-typescript/METRICS.md`.
+  - The corresponding real-world budgets in
+    `scripts/verify_realworld_typescript.sh` are fixed at 0 so regressions fail.
+- [x] `node:crypto` focused pass.
+  - Common option bags, AAD options, key-like parameters, WebCrypto algorithm
+    parameters, `generateKeyPair` callbacks, and broad `generatePrimeSync`
+    overloads are now specialized or pruned.
+  - Current `node:crypto` metrics: `JSValue refs = 0`, `JSValue functions = 0`,
+    `JSValue surface = 0`.
+- [x] Hono practical route API smoke.
+  - The real-world smoke now writes a route as
+    `app.hono_get("/", realworld_hono_handler)`.
+  - Route paths lower to `String`, handlers lower to `(Context) -> Response`,
+    and common `Context` response helpers such as `text` return `Response`.
+  - Current Hono budget is tightened to 55 `JSValue` surface lines and 36
+    `JSValue` functions; remaining fallbacks are mostly generic context,
+    router, and validation data surfaces.
+- [x] Zod / Valibot / Preact fallback policy documented.
+  - These packages remain buildable and smoke-tested, but their high-order
+    schema, parser, JSX, and component generic surfaces are explicitly
+    documented as budgeted `JSValue` fallback areas rather than natural MoonBit
+    APIs.
 
 ### Phase 1: Measurement and Diagnostics (60% -> 65%)
 

@@ -309,13 +309,13 @@ jsvalue_function_budget() {
     chalk) printf '4\n' ;;
     dotenv) printf '1\n' ;;
     ignore) printf '1\n' ;;
-    hono) printf '47\n' ;;
+    hono) printf '36\n' ;;
     zod) printf '239\n' ;;
     date-fns) printf '18\n' ;;
     node:sqlite) printf '0\n' ;;
     node:fs) printf '2\n' ;;
-    node:path) printf '1\n' ;;
-    node:crypto) printf '61\n' ;;
+    node:path) printf '0\n' ;;
+    node:crypto) printf '0\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '9\n' ;;
     source-map) printf '9\n' ;;
@@ -324,11 +324,11 @@ jsvalue_function_budget() {
     execa) printf '1\n' ;;
     preact) printf '10\n' ;;
     node:os) printf '0\n' ;;
-    node:url) printf '5\n' ;;
-    node:querystring) printf '2\n' ;;
+    node:url) printf '0\n' ;;
+    node:querystring) printf '0\n' ;;
     node:assert) printf '24\n' ;;
     node:util) printf '13\n' ;;
-    node:buffer) printf '3\n' ;;
+    node:buffer) printf '0\n' ;;
     *) printf '0\n' ;;
   esac
 }
@@ -352,7 +352,7 @@ jsvalue_cause_budget() {
     chalk) printf '5|0|0|0|0|2|3\n' ;;
     dotenv) printf '2|1|1|0|0|0|0\n' ;;
     ignore) printf '2|1|0|1|0|0|0\n' ;;
-    hono) printf '66|10|6|34|3|4|9\n' ;;
+    hono) printf '55|10|6|23|3|4|9\n' ;;
     zod) printf '433|163|93|111|26|21|19\n' ;;
     date-fns) printf '22|4|7|1|0|8|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
@@ -364,14 +364,14 @@ jsvalue_cause_budget() {
     preact) printf '1319|1246|1|21|34|1|16\n' ;;
     node:sqlite) printf '3|3|0|0|0|0|0\n' ;;
     node:fs) printf '11|4|0|0|0|7|0\n' ;;
-    node:path) printf '1|0|0|0|0|0|1\n' ;;
-    node:crypto) printf '111|20|13|24|53|0|1\n' ;;
-    node:os) printf '5|5|0|0|0|0|0\n' ;;
-    node:url) printf '11|6|2|3|0|0|0\n' ;;
-    node:querystring) printf '2|0|0|0|0|0|2\n' ;;
+    node:path) printf '0|0|0|0|0|0|0\n' ;;
+    node:crypto) printf '0|0|0|0|0|0|0\n' ;;
+    node:os) printf '0|0|0|0|0|0|0\n' ;;
+    node:url) printf '0|0|0|0|0|0|0\n' ;;
+    node:querystring) printf '0|0|0|0|0|0|0\n' ;;
     node:assert) printf '27|3|16|3|2|0|3\n' ;;
     node:util) printf '22|8|9|1|1|2|1\n' ;;
-    node:buffer) printf '3|0|2|0|0|0|1\n' ;;
+    node:buffer) printf '0|0|0|0|0|0|0\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
   esac
 }
@@ -557,8 +557,13 @@ EOF
 extern "js" fn realworld_hono_options() -> HonoOptions =
   #| () => ({ strict: true })
 
+fn realworld_hono_handler(c : Context) -> Response {
+  c.text("hello from moonbit", None, None)
+}
+
 test "real-world hono bridge smoke" {
-  let _ = new_hono(Some(realworld_hono_options()))
+  let app = new_hono(Some(realworld_hono_options()))
+  let _ = app.hono_get("/", realworld_hono_handler)
 }
 EOF
       ;;
@@ -814,7 +819,7 @@ EOF
       ;;
     node_buffer)
       cat > "$out/bridge_test.mbt" <<'EOF'
-extern "js" fn realworld_buffer_value() -> JSValue =
+extern "js" fn realworld_buffer_value() -> Uint8Array =
   #| () => Buffer.from("hello")
 
 test "real-world node:buffer bridge smoke" {
@@ -891,8 +896,13 @@ EOF
 extern "js" fn realworld_hono_options() -> @sut.HonoOptions =
   #| () => ({ strict: true })
 
+fn realworld_hono_handler(c : @sut.Context) -> @sut.Response {
+  c.text("hello from moonbit", None, None)
+}
+
 fn main {
-  let _ = @sut.new_hono(Some(realworld_hono_options()))
+  let app = @sut.new_hono(Some(realworld_hono_options()))
+  let _ = app.hono_get("/", realworld_hono_handler)
 }
 EOF
       ;;
@@ -1201,7 +1211,7 @@ EOF
       ;;
     node_buffer)
       cat > "$smoke_dir/main.mbt" <<'EOF'
-extern "js" fn realworld_buffer_value() -> @sut.JSValue =
+extern "js" fn realworld_buffer_value() -> @sut.Uint8Array =
   #| () => Buffer.from("hello")
 
 fn main {

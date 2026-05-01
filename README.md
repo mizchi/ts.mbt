@@ -272,6 +272,21 @@ Fallback and unsupported surface:
 - Ambiguous re-exports are intentionally not bound unsafely. The generated package remains buildable and reports the candidate source files.
 - Unsupported exports are either absent or explicitly budgeted in verification; new unsupported surfaces should be minimized into fixtures before broadening the generator.
 
+Package-specific practical coverage:
+
+- Small Node built-ins (`node:path`, `node:os`, `node:url`, `node:querystring`,
+  `node:buffer`) and the focused `node:crypto` surface are expected to generate
+  with zero public `JSValue` fallback in the real-world probe corpus.
+- Hono supports the basic application route shape directly from MoonBit:
+  `app.hono_get("/", fn(c) { c.text("ok", None, None) })`, with route paths as
+  `String`, handlers as `(Context) -> Response`, and common `Context` response
+  helpers returning `Response`.
+- Zod, Valibot, and Preact are currently treated as buildable interop probes
+  rather than fully ergonomic API surfaces. Their high-order schema, parser, JSX,
+  and component generic APIs still rely on explicit `JSValue` budgets; this is a
+  documented fallback policy, not a claim that those APIs are naturally typed in
+  MoonBit yet.
+
 Supported subset examples:
 
 ```ts

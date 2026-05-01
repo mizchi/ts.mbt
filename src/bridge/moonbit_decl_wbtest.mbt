@@ -187,6 +187,58 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
     @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
   )
   assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "UserInfo",
+      "username",
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::String_,
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "UserInfo",
+      "shell",
+      @ast.TsType::Union([@ast.TsType::Any, @ast.TsType::Null]),
+    ),
+    @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "UserInfoOptions",
+      "encoding",
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Union([
+      @ast.TsType::Named("BufferEncoding"),
+      @ast.TsType::Undefined,
+    ]),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "UrlObject",
+      "port",
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "URLPattern",
+      "exec",
+      @ast.TsType::Func(
+        [@ast.TsType::Named("URLPatternInput"), @ast.TsType::Any],
+        @ast.TsType::Named("URLPatternResult"),
+      ),
+    ),
+    @ast.TsType::Func(
+      [
+        @ast.TsType::Named("URLPatternInput"),
+        @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
+      ],
+      @ast.TsType::Named("URLPatternResult"),
+    ),
+  )
+  assert_eq(
     decl_specialize_generated_class_method_param_type(
       "ReadStream",
       "on",
@@ -198,6 +250,213 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
       [@ast.TsType::Named("ReadStreamEventPayload")],
       @ast.TsType::Void,
     ),
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_param_type(
+      "URLPattern",
+      "exec",
+      "baseURL",
+      1,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "fileURLToPath",
+      "url",
+      0,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::String_,
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "isUtf8",
+      "input",
+      0,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Named("Uint8Array"),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "CipherGCM",
+      "setAAD",
+      @ast.TsType::Func(
+        [@ast.TsType::Named("NodeJS_ArrayBufferView"), @ast.TsType::Any],
+        @ast.TsType::Named("This"),
+      ),
+    ),
+    @ast.TsType::Func(
+      [
+        @ast.TsType::Named("NodeJS_ArrayBufferView"),
+        @ast.TsType::Union([
+          @ast.TsType::Named("CipherAADOptions"),
+          @ast.TsType::Undefined,
+        ]),
+      ],
+      @ast.TsType::Named("This"),
+    ),
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "createHmac",
+      "key",
+      1,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Named("CipherKey"),
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "hash",
+      "options",
+      2,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Union([
+      @ast.TsType::Named("OneShotDigestOptionsWithStringEncoding"),
+      @ast.TsType::Undefined,
+    ]),
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_param_type(
+      "SubtleCrypto",
+      "digest",
+      "algorithm",
+      0,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Named("AlgorithmIdentifier"),
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_param_type(
+      "Sign",
+      "sign",
+      "privateKey",
+      0,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Named("KeyLike"),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "PrivateKeyExportOptions",
+      "passphrase",
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Union([
+      @ast.TsType::Named("BinaryLike"),
+      @ast.TsType::Undefined,
+    ]),
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "generateKeyPair",
+      "callback",
+      2,
+      @ast.TsType::Func(
+        [
+          @ast.TsType::Union([
+            @ast.TsType::Named("Error_"),
+            @ast.TsType::Undefined,
+          ]),
+          @ast.TsType::Any,
+          @ast.TsType::Any,
+        ],
+        @ast.TsType::Void,
+      ),
+    ),
+    @ast.TsType::Func(
+      [
+        @ast.TsType::Union([
+          @ast.TsType::Named("Error_"),
+          @ast.TsType::Undefined,
+        ]),
+        @ast.TsType::Named("KeyObject"),
+        @ast.TsType::Named("KeyObject"),
+      ],
+      @ast.TsType::Void,
+    ),
+  )
+  assert_true(
+    decl_func_should_skip_broad_node_wrapper({
+      name: "generatePrimeSync_number_generate_prime_options",
+      params: [],
+      return_type: @ast.TsType::Any,
+      body: { stmts: [] },
+      is_generator: false,
+      is_async: false,
+    }),
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_param_type(
+      "Hono",
+      "get",
+      "arg0",
+      0,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::String_,
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_param_type(
+      "Hono",
+      "get",
+      "arg1",
+      1,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Func(
+      [@ast.TsType::Named("Context")],
+      @ast.TsType::Named("Response"),
+    ),
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_param_type(
+      "Context",
+      "text",
+      "arg0",
+      0,
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::String_,
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_return_type(
+      "Context",
+      "text",
+      @ast.TsType::Any,
+    ),
+    @ast.TsType::Named("Response"),
+  )
+  assert_eq(
+    decl_specialize_generated_value_type("encode", @ast.TsType::Any),
+    @ast.TsType::Func(
+      [
+        @ast.TsType::Union([
+          @ast.TsType::Named("ParsedUrlQueryInput"),
+          @ast.TsType::Undefined,
+        ]),
+        @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
+        @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
+        @ast.TsType::Union([
+          @ast.TsType::Named("StringifyOptions"),
+          @ast.TsType::Undefined,
+        ]),
+      ],
+      @ast.TsType::String_,
+    ),
+  )
+  assert_eq(
+    decl_specialize_generated_value_type(
+      "constants",
+      @ast.TsType::Object([
+        (@ast.TsType::Literal("MAX_LENGTH"), @ast.TsType::Number),
+      ]),
+    ),
+    @ast.TsType::Named("Constants"),
   )
   assert_eq(
     decl_specialize_generated_class_method_return_type(
