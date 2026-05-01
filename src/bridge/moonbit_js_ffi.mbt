@@ -412,6 +412,35 @@ fn ffi_enum_string_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, String)]? {
 }
 
 ///|
+fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
+  let cases : Array[(String, Int)] = []
+  let seen_values : Array[Int] = []
+  let mut next_value = 0
+  for item in ffi_enum_case_names(enum_) {
+    let (case_name, enum_member) = item
+    let value = match enum_member.value {
+      Some(@ast.TsEnumMemberValue::Number(raw)) => {
+        let parsed = @string.parse_int(raw) catch { _ => return None }
+        parsed
+      }
+      None => next_value
+      _ => return None
+    }
+    if seen_values.contains(value) {
+      return None
+    }
+    seen_values.push(value)
+    cases.push((case_name, value))
+    next_value = value + 1
+  }
+  if cases.length() == 0 {
+    None
+  } else {
+    Some(cases)
+  }
+}
+
+///|
 fn ffi_named_type_is_string_enum(
   state : MoonBitJsFfiState,
   name : String,
@@ -419,6 +448,18 @@ fn ffi_named_type_is_string_enum(
   match ffi_find_enum_decl(state, name) {
     Some(enum_) =>
       match ffi_enum_string_cases(enum_) {
+        Some(_) => true
+        None => false
+      }
+    None => false
+  }
+}
+
+///|
+fn ffi_named_type_is_int_enum(state : MoonBitJsFfiState, name : String) -> Bool {
+  match ffi_find_enum_decl(state, name) {
+    Some(enum_) =>
+      match ffi_enum_int_cases(enum_) {
         Some(_) => true
         None => false
       }
@@ -469,6 +510,8 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       "@js.Promise[" + ffi_type_name(state, inner) + "]"
     Named(name) if ffi_named_type_is_string_enum(state, name) => "String"
     Applied(name, _) if ffi_named_type_is_string_enum(state, name) => "String"
+    Named(name) if ffi_named_type_is_int_enum(state, name) => "Int"
+    Applied(name, _) if ffi_named_type_is_int_enum(state, name) => "Int"
     Named(name) => ffi_mark_external_type(state, name)
     Applied(name, _) => ffi_mark_external_type(state, name)
     _ => {
@@ -768,6 +811,57 @@ fn ffi_enum_string_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
       lines.push(
         "fn \{from_js_optional_name}(value : String?) -> \{type_name}? {",
       )
+      lines.push("  match value {")
+      lines.push("    Some(value) => Some(\{from_js_name}(value))")
+      lines.push("    None => None")
+      lines.push("  }")
+      lines.push("}")
+      Some(lines.join("\n"))
+    }
+    None => None
+  }
+}
+
+///|
+fn ffi_enum_int_converter_decl(enum_ : @ast.TsEnumDecl) -> String? {
+  let type_name = ffi_type_identifier(enum_.name, "GeneratedEnum")
+  match ffi_enum_int_cases(enum_) {
+    Some(cases) => {
+      let to_js_name = ffi_enum_to_js_name(type_name)
+      let from_js_name = ffi_enum_from_js_name(type_name)
+      let to_js_optional_name = to_js_name + "_optional"
+      let from_js_optional_name = from_js_name + "_optional"
+      let lines : Array[String] = [
+        "fn \{to_js_name}(value : \{type_name}) -> Int {",
+        "  match value {",
+      ]
+      for item in cases {
+        let (case_name, value) = item
+        lines.push("    \{case_name} => \{value}")
+      }
+      lines.push("  }")
+      lines.push("}")
+      lines.push("")
+      lines.push("fn \{from_js_name}(value : Int) -> \{type_name} {")
+      lines.push("  match value {")
+      for item in cases {
+        let (case_name, value) = item
+        lines.push("    \{value} => \{case_name}")
+      }
+      lines.push(
+        "    _ => abort(\"unexpected \{type_name} value: \" + value.to_string())",
+      )
+      lines.push("  }")
+      lines.push("}")
+      lines.push("")
+      lines.push("fn \{to_js_optional_name}(value : \{type_name}?) -> Int? {")
+      lines.push("  match value {")
+      lines.push("    Some(value) => Some(\{to_js_name}(value))")
+      lines.push("    None => None")
+      lines.push("  }")
+      lines.push("}")
+      lines.push("")
+      lines.push("fn \{from_js_optional_name}(value : Int?) -> \{type_name}? {")
       lines.push("  match value {")
       lines.push("    Some(value) => Some(\{from_js_name}(value))")
       lines.push("    None => None")
@@ -2218,7 +2312,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       ffi_sections.push(ffi_enum_decl_to_moonbit(enum_))
       match ffi_enum_string_converter_decl(enum_) {
         Some(converter_decl) => ffi_sections.push(converter_decl)
-        None => ()
+        None =>
+          match ffi_enum_int_converter_decl(enum_) {
+            Some(converter_decl) => ffi_sections.push(converter_decl)
+            None => ()
+          }
       }
     }
     handled_export_names.push(enum_.name)

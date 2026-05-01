@@ -753,21 +753,28 @@ fn collect_bridge_enum_converters(
     let from_js_name = bridge_enum_from_js_name(type_name)
     let to_js_optional_name = bridge_enum_to_js_optional_name(type_name)
     let from_js_optional_name = bridge_enum_from_js_optional_name(type_name)
-    if bridge_mbt.contains("fn \{to_js_name}(value : \{type_name}) -> String") &&
-      bridge_mbt.contains("fn \{from_js_name}(value : String) -> \{type_name}") &&
-      bridge_mbt.contains(
-        "fn \{to_js_optional_name}(value : \{type_name}?) -> String?",
-      ) &&
-      bridge_mbt.contains(
-        "fn \{from_js_optional_name}(value : String?) -> \{type_name}?",
-      ) {
-      converters.push({
-        type_name,
-        to_js_name,
-        from_js_name,
-        to_js_optional_name,
-        from_js_optional_name,
-      })
+    for raw_type in ["String", "Int"] {
+      if bridge_mbt.contains(
+          "fn \{to_js_name}(value : \{type_name}) -> \{raw_type}",
+        ) &&
+        bridge_mbt.contains(
+          "fn \{from_js_name}(value : \{raw_type}) -> \{type_name}",
+        ) &&
+        bridge_mbt.contains(
+          "fn \{to_js_optional_name}(value : \{type_name}?) -> \{raw_type}?",
+        ) &&
+        bridge_mbt.contains(
+          "fn \{from_js_optional_name}(value : \{raw_type}?) -> \{type_name}?",
+        ) {
+        converters.push({
+          type_name,
+          to_js_name,
+          from_js_name,
+          to_js_optional_name,
+          from_js_optional_name,
+        })
+        break
+      }
     }
   }
   converters

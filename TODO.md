@@ -410,6 +410,9 @@ TypeScript runtimes expect.
     MoonBit enum wrappers for params and returns.
   - [x] Optional string enum params / returns use `Variant?` conversion and
     keep JS `undefined` behavior.
+  - [x] Raw extern wrappers keep statically evaluable numeric enums as `Int`
+    and expose public MoonBit enum wrappers for params and returns, including
+    optional `Variant?` conversion.
 - [ ] Defer heterogeneous enum unions and non-literal computed enum values to
   the existing primitive / `JSValue` fallback with diagnostics.
 
@@ -515,7 +518,8 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
   - Node string modes / flags;
   - React string literal props;
   - Hono option modes;
-  - TypeScript AST `SyntaxKind` as a numeric enum stress case.
+  - [x] TypeScript AST `SyntaxKind`-style numeric enum as an `Int` bridge
+    stress case.
 
 ### TDD Order
 

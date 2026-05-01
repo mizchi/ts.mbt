@@ -201,6 +201,76 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes ambient enums"
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes numeric ambient enums" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/numeric-enum-entry.d.ts", "./runtime/numeric-enum.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum SyntaxKind {"))
+  assert_true(bundle.bridge_mbti.contains("  Unknown"))
+  assert_true(bundle.bridge_mbti.contains("  Identifier"))
+  assert_true(bundle.bridge_mbti.contains("  PrivateIdentifier"))
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn nextKind(kind : SyntaxKind) -> SyntaxKind",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains("extern \"js\" fn next_kind(kind : Int) -> Int"),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_syntax_kind_to_js(value : SyntaxKind) -> Int",
+    ),
+  )
+  assert_true(bundle.bridge_mbt.contains("Identifier => 80"))
+  assert_true(bundle.bridge_mbt.contains("PrivateIdentifier => 81"))
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_syntax_kind_from_js(value : Int) -> SyntaxKind",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "_ => abort(\"unexpected SyntaxKind value: \" + value.to_string())",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn nextKind(kind : SyntaxKind) -> SyntaxKind {\n  __ts_mbt_syntax_kind_from_js(next_kind(__ts_mbt_syntax_kind_to_js(kind)))\n}",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn maybe_kind(kind : Int?) -> Int?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_syntax_kind_to_js_optional(value : SyntaxKind?) -> Int?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_syntax_kind_from_js_optional(value : Int?) -> SyntaxKind?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn maybeKind(kind : SyntaxKind?) -> SyntaxKind? {\n  __ts_mbt_syntax_kind_from_js_optional(maybe_kind(__ts_mbt_syntax_kind_to_js_optional(kind)))\n}",
+    ),
+  )
+  assert_false(bundle.bridge_js.contains("import { SyntaxKind }"))
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes string literal aliases as enums" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/literal-union-alias-entry.d.ts", "./runtime/literal-union-alias.js",
