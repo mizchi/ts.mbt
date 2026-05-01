@@ -398,6 +398,10 @@ TypeScript runtimes expect.
   - `true | undefined` remains `Bool?`.
 - [ ] Support numeric literal unions only when every member is an integer-like
   literal and the runtime bridge can convert losslessly.
+  - [x] Named numeric literal union aliases lower to closed MoonBit enums and
+    bridge through raw `Int` params / returns.
+  - Anonymous numeric literal unions still intentionally lower to primitive
+    `Double` until a stable synthetic naming rule is needed.
 - [ ] Support ambient / declaration enum surfaces:
   - `declare enum Mode { Read = "read" }`
   - `declare const enum Mode { Read = "read" }`

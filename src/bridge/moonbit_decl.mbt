@@ -1394,7 +1394,12 @@ fn resolve_decl_from_local_name(
                   match type_alias_string_enum_decl(type_alias) {
                     Some(enum_) =>
                       Enum({ source_path, local_name, export_name, enum_ })
-                    None => Missing
+                    None =>
+                      match type_alias_number_enum_decl(type_alias) {
+                        Some(enum_) =>
+                          Enum({ source_path, local_name, export_name, enum_ })
+                        None => Missing
+                      }
                   }
                 None =>
                   match find_import_decl(info.module_, local_name) {
@@ -2716,6 +2721,62 @@ fn type_alias_string_enum_decl(
     return None
   }
   match type_alias_string_enum_members(type_alias.type_) {
+    Some(members) =>
+      Some({ name: type_alias.name, members, is_const: false, is_declare: true })
+    None => None
+  }
+}
+
+///|
+fn type_alias_number_enum_member_name(value : Int) -> String {
+  if value < 0 {
+    "Negative" + (0 - value).to_string()
+  } else {
+    "N" + value.to_string()
+  }
+}
+
+///|
+fn type_alias_number_enum_members(
+  type_ : @ast.TsType,
+) -> Array[@ast.TsEnumMember]? {
+  let items = match type_ {
+    @ast.TsType::Union(items) => items
+    @ast.TsType::NumberLiteral(_) => [type_]
+    _ => return None
+  }
+  if items.length() == 0 {
+    return None
+  }
+  let members : Array[@ast.TsEnumMember] = []
+  let seen_values : Array[Int] = []
+  for item in items {
+    match item {
+      @ast.TsType::NumberLiteral(raw) => {
+        let value = @string.parse_int(raw) catch { _ => return None }
+        if seen_values.contains(value) {
+          return None
+        }
+        seen_values.push(value)
+        members.push({
+          name: type_alias_number_enum_member_name(value),
+          value: Some(@ast.TsEnumMemberValue::Number(value.to_string())),
+        })
+      }
+      _ => return None
+    }
+  }
+  Some(members)
+}
+
+///|
+fn type_alias_number_enum_decl(
+  type_alias : @ast.TsTypeAlias,
+) -> @ast.TsEnumDecl? {
+  if type_alias.type_params.length() > 0 {
+    return None
+  }
+  match type_alias_number_enum_members(type_alias.type_) {
     Some(members) =>
       Some({ name: type_alias.name, members, is_const: false, is_declare: true })
     None => None

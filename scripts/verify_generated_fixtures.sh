@@ -261,6 +261,48 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_bridge_numeric_literal_union_fixture() {
+  local root="_build/bridge_fixture_numeric_literal_union"
+  local fixture_path="$repo_root/fixtures/bridge_smoke/numeric-literal-union-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/numeric-literal-union.js"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/numeric-literal-union.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/numeric-literal-union.js"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/bridge_numeric_literal_union",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated bridge package converts named numeric literal union aliases" {
+  match nextStatus(N200) {
+    N404 => ()
+    _ => abort("expected 200 to become 404")
+  }
+  match maybeStatus(Some(N404)) {
+    Some(N200) => ()
+    _ => abort("expected optional 404 to become optional 200")
+  }
+  let absent : StatusCode? = None
+  match maybeStatus(absent) {
+    None => ()
+    _ => abort("expected absent status code to stay absent")
+  }
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_bridge_default_export_fixture() {
   local root="_build/bridge_fixture_default_export"
   local fixture_path="$repo_root/fixtures/bridge_smoke/default-export-entry.d.ts"
@@ -2216,6 +2258,7 @@ verify_bridge_smoke_fixture
 verify_bridge_enum_fixture
 verify_bridge_literal_union_alias_fixture
 verify_bridge_numeric_enum_fixture
+verify_bridge_numeric_literal_union_fixture
 verify_bridge_default_export_fixture
 verify_bridge_declaration_merge_namespace_fixture
 verify_bridge_promise_return_fixture

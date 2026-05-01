@@ -314,6 +314,51 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes string literal
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes numeric literal aliases as enums" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/numeric-literal-union-entry.d.ts", "./runtime/numeric-literal-union.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum StatusCode {"))
+  assert_true(bundle.bridge_mbti.contains("  N200"))
+  assert_true(bundle.bridge_mbti.contains("  N404"))
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn nextStatus(code : StatusCode) -> StatusCode",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn next_status(code : Int) -> Int",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "fn __ts_mbt_status_code_to_js(value : StatusCode) -> Int",
+    ),
+  )
+  assert_true(bundle.bridge_mbt.contains("N200 => 200"))
+  assert_true(bundle.bridge_mbt.contains("N404 => 404"))
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn nextStatus(code : StatusCode) -> StatusCode {\n  __ts_mbt_status_code_from_js(next_status(__ts_mbt_status_code_to_js(code)))\n}",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "pub fn maybeStatus(code : StatusCode?) -> StatusCode? {\n  __ts_mbt_status_code_from_js_optional(maybe_status(__ts_mbt_status_code_to_js_optional(code)))\n}",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes namespace exports as opaque getters" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js",
