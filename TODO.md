@@ -419,7 +419,7 @@ TypeScript runtimes expect.
   - [x] Raw extern wrappers keep statically evaluable numeric enums as `Int`
     and expose public MoonBit enum wrappers for params and returns, including
     optional `Variant?` conversion.
-- [ ] Defer heterogeneous enum unions and non-literal computed enum values to
+- [x] Defer heterogeneous enum unions and non-literal computed enum values to
   the existing primitive / `JSValue` fallback with diagnostics.
 
 ### Internal Model
@@ -441,6 +441,8 @@ TypeScript runtimes expect.
   - [x] Added `TsEnumDecl`, `TsEnumMember`, and `TsEnumMemberValue` to
     `TsModule`; module-block export collection now recognizes
     `export declare enum` for bridge export surfaces.
+  - [x] `TsEnumMember.is_computed` now distinguishes implicit numeric enum
+    members from non-literal computed initializers.
   - [ ] `TsModuleBlock` still needs a first-class enum array if script-level
     enum declarations need to be preserved beyond export metadata.
 - [x] Normalize type aliases that are pure string literal unions into an enum-lowering
@@ -516,9 +518,10 @@ pub fn renderButton(variant : ButtonVariant) -> Unit {
 ### Diagnostics and Safety
 
 - [ ] Add diagnostics for every enum-like surface that is not lowered:
-  - mixed string/number enum;
-  - computed enum member;
-  - duplicate literal values after sanitization;
+  - [x] mixed string/number enum;
+  - [x] computed enum member;
+  - [x] duplicate literal values after sanitization;
+  - [x] mixed / non-integer / bigint named literal-union aliases;
   - anonymous literal union without a stable public name.
 - [ ] Keep strict mode behavior unchanged: unsupported enum lowering in a
   public surface must either fall back within budget or fail with an actionable

@@ -1387,7 +1387,11 @@ fn resolve_decl_from_local_name(
           Interface({ source_path, local_name, export_name, iface })
         None =>
           match find_enum_decl(info.module_, local_name) {
-            Some(enum_) => Enum({ source_path, local_name, export_name, enum_ })
+            Some(enum_) =>
+              match enum_decl_unsupported_reason(enum_) {
+                Some(reason) => Unsupported(export_name, reason)
+                None => Enum({ source_path, local_name, export_name, enum_ })
+              }
             None =>
               match find_type_alias_decl(info.module_, local_name) {
                 Some(type_alias) =>
@@ -1398,7 +1402,12 @@ fn resolve_decl_from_local_name(
                       match type_alias_number_enum_decl(type_alias) {
                         Some(enum_) =>
                           Enum({ source_path, local_name, export_name, enum_ })
-                        None => Missing
+                        None =>
+                          match
+                            type_alias_enum_like_unsupported_reason(type_alias) {
+                            Some(reason) => Unsupported(export_name, reason)
+                            None => Missing
+                          }
                       }
                   }
                 None =>
@@ -2705,6 +2714,7 @@ fn type_alias_string_enum_members(
         members.push({
           name: value,
           value: Some(@ast.TsEnumMemberValue::String(value)),
+          is_computed: false,
         })
       }
       _ => return None
@@ -2761,6 +2771,7 @@ fn type_alias_number_enum_members(
         members.push({
           name: type_alias_number_enum_member_name(value),
           value: Some(@ast.TsEnumMemberValue::Number(value.to_string())),
+          is_computed: false,
         })
       }
       _ => return None
@@ -2811,6 +2822,187 @@ fn type_alias_boolean_literal_primitive_type(
   } else {
     None
   }
+}
+
+///|
+fn enum_decl_string_lowering_supported(enum_ : @ast.TsEnumDecl) -> Bool {
+  if enum_.members.length() == 0 {
+    return false
+  }
+  let seen_values : Array[String] = []
+  for enum_member in enum_.members {
+    if enum_member.is_computed {
+      return false
+    }
+    match enum_member.value {
+      Some(@ast.TsEnumMemberValue::String(value)) => {
+        if seen_values.contains(value) {
+          return false
+        }
+        seen_values.push(value)
+      }
+      _ => return false
+    }
+  }
+  true
+}
+
+///|
+fn enum_decl_int_lowering_supported(enum_ : @ast.TsEnumDecl) -> Bool {
+  if enum_.members.length() == 0 {
+    return false
+  }
+  let seen_values : Array[Int] = []
+  let mut next_value = 0
+  for enum_member in enum_.members {
+    if enum_member.is_computed {
+      return false
+    }
+    let value = match enum_member.value {
+      Some(@ast.TsEnumMemberValue::Number(raw)) =>
+        @string.parse_int(raw) catch {
+          _ => return false
+        }
+      None => next_value
+      _ => return false
+    }
+    if seen_values.contains(value) {
+      return false
+    }
+    seen_values.push(value)
+    next_value = value + 1
+  }
+  true
+}
+
+///|
+fn enum_decl_unsupported_reason(enum_ : @ast.TsEnumDecl) -> String? {
+  if enum_decl_string_lowering_supported(enum_) ||
+    enum_decl_int_lowering_supported(enum_) {
+    return None
+  }
+  let seen_string_values : Array[String] = []
+  let seen_number_values : Array[Int] = []
+  let mut has_string = false
+  let mut has_number = false
+  let mut has_bigint = false
+  let mut has_bool = false
+  let mut has_implicit = false
+  for enum_member in enum_.members {
+    if enum_member.is_computed {
+      return Some(
+        "enum member \{enum_member.name} has a non-literal computed value.",
+      )
+    }
+    match enum_member.value {
+      Some(@ast.TsEnumMemberValue::String(value)) => {
+        has_string = true
+        if seen_string_values.contains(value) {
+          return Some(
+            "duplicate enum literal values cannot be converted back safely.",
+          )
+        }
+        seen_string_values.push(value)
+      }
+      Some(@ast.TsEnumMemberValue::Number(raw)) => {
+        has_number = true
+        let value = @string.parse_int(raw) catch {
+          _ => return Some("numeric enum contains a non-integer literal.")
+        }
+        if seen_number_values.contains(value) {
+          return Some(
+            "duplicate enum literal values cannot be converted back safely.",
+          )
+        }
+        seen_number_values.push(value)
+      }
+      Some(@ast.TsEnumMemberValue::BigInt(_)) => has_bigint = true
+      Some(@ast.TsEnumMemberValue::Bool(_)) => has_bool = true
+      None => has_implicit = true
+    }
+  }
+  if has_string && has_number {
+    return Some("mixed string/number enum cannot be lowered safely.")
+  }
+  if has_string && has_implicit {
+    return Some(
+      "string enum contains an implicit member without a literal value.",
+    )
+  }
+  if has_bigint || has_bool {
+    return Some("enum initializer kind is not supported for bridge lowering.")
+  }
+  Some("enum cannot be lowered safely.")
+}
+
+///|
+fn type_alias_enum_like_unsupported_reason(
+  type_alias : @ast.TsTypeAlias,
+) -> String? {
+  if type_alias.type_params.length() > 0 {
+    return None
+  }
+  if type_alias_string_enum_decl(type_alias) is Some(_) ||
+    type_alias_number_enum_decl(type_alias) is Some(_) ||
+    type_alias_boolean_literal_primitive_type(type_alias) is Some(_) {
+    return None
+  }
+  let items = match type_alias.type_ {
+    @ast.TsType::Union(items) => items
+    @ast.TsType::Literal(_)
+    | @ast.TsType::NumberLiteral(_)
+    | @ast.TsType::BigIntLiteral(_)
+    | @ast.TsType::BooleanLiteral(_) => [type_alias.type_]
+    _ => return None
+  }
+  let mut has_string = false
+  let mut has_number = false
+  let mut has_bigint = false
+  let mut has_bool = false
+  let seen_string_values : Array[String] = []
+  let seen_number_values : Array[Int] = []
+  for item in items {
+    match item {
+      @ast.TsType::Literal(value) => {
+        has_string = true
+        if seen_string_values.contains(value) {
+          return Some(
+            "duplicate literal union values cannot be converted back safely.",
+          )
+        }
+        seen_string_values.push(value)
+      }
+      @ast.TsType::NumberLiteral(raw) => {
+        has_number = true
+        let value = @string.parse_int(raw) catch {
+          _ =>
+            return Some("numeric literal union contains a non-integer literal.")
+        }
+        if seen_number_values.contains(value) {
+          return Some(
+            "duplicate literal union values cannot be converted back safely.",
+          )
+        }
+        seen_number_values.push(value)
+      }
+      @ast.TsType::BigIntLiteral(_) => has_bigint = true
+      @ast.TsType::BooleanLiteral(_) => has_bool = true
+      @ast.TsType::Undefined | @ast.TsType::Null => ()
+      _ => return None
+    }
+  }
+  if has_bigint {
+    return Some("bigint literal union cannot be lowered safely.")
+  }
+  if has_string && has_number {
+    return Some("mixed string/number literal union cannot be lowered safely.")
+  }
+  if has_bool && (has_string || has_number) {
+    return Some(
+      "mixed boolean/string/number literal union cannot be lowered safely.",
+    )
+  }
+  None
 }
 
 ///|

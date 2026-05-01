@@ -1974,6 +1974,32 @@ test "parser: parse export const numeric enum in ts module" {
   )
   assert_eq(module_.enums[0].members[2].name, "StringLiteral")
   assert_eq(module_.enums[0].members[2].value, None)
+  assert_false(module_.enums[0].members[2].is_computed)
+}
+
+///|
+test "parser: marks non-literal enum initializers as computed" {
+  let src =
+    #|export declare enum ComputedKind {
+    #|  Dynamic = getKind(),
+    #|  Static = 1,
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.enums.length(), 1)
+  assert_eq(module_.enums[0].members.length(), 2)
+  assert_eq(module_.enums[0].members[0].name, "Dynamic")
+  assert_eq(module_.enums[0].members[0].value, None)
+  assert_true(module_.enums[0].members[0].is_computed)
+  assert_eq(
+    module_.enums[0].members[1].value,
+    Some(@ast.TsEnumMemberValue::Number("1")),
+  )
+  assert_false(module_.enums[0].members[1].is_computed)
 }
 
 ///|

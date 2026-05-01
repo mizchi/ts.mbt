@@ -202,7 +202,7 @@ fn Parser::skip_enum_member_initializer_tail(self : Parser) -> Unit {
 ///|
 fn Parser::parse_enum_member_initializer(
   self : Parser,
-) -> @ast.TsEnumMemberValue? {
+) -> (@ast.TsEnumMemberValue?, Bool) {
   let sign = if self.match_(Minus) {
     "-"
   } else if self.match_(Plus) {
@@ -233,14 +233,14 @@ fn Parser::parse_enum_member_initializer(
     }
     _ => {
       self.skip_enum_member_initializer_tail()
-      None
+      return (None, true)
     }
   }
   if self.is_enum_member_initializer_delim() {
-    value
+    (value, false)
   } else {
     self.skip_enum_member_initializer_tail()
-    None
+    (None, true)
   }
 }
 
@@ -272,12 +272,12 @@ fn Parser::parse_enum_decl_after_enum_keyword(
       continue
     }
     let member_name = self.parse_enum_member_name()
-    let value = if self.match_(Eq) {
+    let (value, is_computed) = if self.match_(Eq) {
       self.parse_enum_member_initializer()
     } else {
-      None
+      (None, false)
     }
-    members.push({ name: member_name, value })
+    members.push({ name: member_name, value, is_computed })
     if self.match_(Comma) || self.match_(Semicolon) {
       continue
     }

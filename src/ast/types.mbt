@@ -425,6 +425,7 @@ pub(all) enum TsEnumMemberValue {
 pub(all) struct TsEnumMember {
   name : String
   value : TsEnumMemberValue?
+  is_computed : Bool
 } derive(Eq, Debug)
 
 ///|

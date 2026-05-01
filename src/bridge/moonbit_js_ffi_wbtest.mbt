@@ -161,6 +161,33 @@ async test "bridge: emit MoonBit JS FFI bundle keeps ambiguous exports as commen
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle comments unsupported enum-like exports" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/unsupported-enum-like-entry.d.ts", "./runtime/unsupported-enum-like.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "Unsupported export MixedMode: mixed string/number enum cannot be lowered safely.",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "Unsupported export ComputedKind: enum member Dynamic has a non-literal computed value.",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("pub(all) enum MixedMode"))
+  assert_false(bundle.ffi_mbt.contains("pub(all) enum ComputedKind"))
+}
+
+///|
 async test "bridge: emit MoonBit JS FFI bundle for typed value exports" {
   let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
     "fixtures/resolver/project/types/value-entry.d.ts", "./runtime/value.js",

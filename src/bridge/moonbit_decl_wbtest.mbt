@@ -104,6 +104,55 @@ async test "bridge: emit MoonBit declarations keeps ambiguous exports as JSValue
 }
 
 ///|
+async test "bridge: emit MoonBit declarations diagnoses unsupported enum-like exports" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/unsupported-enum-like-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type JSValue"))
+  assert_true(
+    actual.contains(
+      "Unsupported export MixedMode: mixed string/number enum cannot be lowered safely.",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "Unsupported export ComputedKind: enum member Dynamic has a non-literal computed value.",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "Unsupported export DuplicateMode: duplicate enum literal values cannot be converted back safely.",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "Unsupported export MixedAlias: mixed string/number literal union cannot be lowered safely.",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "Unsupported export FloatAlias: numeric literal union contains a non-integer literal.",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "Unsupported export BigAlias: bigint literal union cannot be lowered safely.",
+    ),
+  )
+  assert_false(actual.contains("enum MixedMode"))
+  assert_false(actual.contains("enum ComputedKind"))
+  assert_false(actual.contains("enum DuplicateMode"))
+}
+
+///|
 async test "bridge: emit MoonBit declarations for exported classes" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/class-entry.d.ts",

@@ -398,11 +398,20 @@ fn ffi_enum_case_names(
 ///|
 fn ffi_enum_string_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, String)]? {
   let cases : Array[(String, String)] = []
+  let seen_values : Array[String] = []
   for item in ffi_enum_case_names(enum_) {
     let (case_name, enum_member) = item
+    if enum_member.is_computed {
+      return None
+    }
     match enum_member.value {
-      Some(@ast.TsEnumMemberValue::String(value)) =>
+      Some(@ast.TsEnumMemberValue::String(value)) => {
+        if seen_values.contains(value) {
+          return None
+        }
+        seen_values.push(value)
         cases.push((case_name, value))
+      }
       _ => return None
     }
   }
@@ -420,6 +429,9 @@ fn ffi_enum_int_cases(enum_ : @ast.TsEnumDecl) -> Array[(String, Int)]? {
   let mut next_value = 0
   for item in ffi_enum_case_names(enum_) {
     let (case_name, enum_member) = item
+    if enum_member.is_computed {
+      return None
+    }
     let value = match enum_member.value {
       Some(@ast.TsEnumMemberValue::Number(raw)) => {
         let parsed = @string.parse_int(raw) catch { _ => return None }

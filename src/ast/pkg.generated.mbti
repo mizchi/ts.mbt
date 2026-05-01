@@ -127,6 +127,7 @@ pub impl Show for TsEnumDecl
 pub(all) struct TsEnumMember {
   name : String
   value : TsEnumMemberValue?
+  is_computed : Bool
 } derive(Eq, @debug.Debug)
 pub impl Show for TsEnumMember
 
