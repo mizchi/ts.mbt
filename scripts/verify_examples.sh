@@ -478,7 +478,7 @@ EOF
   grep_generated_mbt "$out" 'pub fn cloneElement(element : DetailedReactHTMLElement, props : HTMLAttributes?, children : Array[JSValue]) -> DetailedReactHTMLElement'
   grep_generated_mbt "$out" 'pub extern "js" fn memo(component : FunctionComponent, propsAreEqual : MemoPropsAreEqualCallback?) -> NamedExoticComponent'
   grep_generated_mbt "$out" 'pub fn forwardRef(render : ForwardRefRenderFunction) -> ForwardRefExoticComponent'
-  grep_generated_mbt "$out" 'pub fn useState() -> UseStateResult'
+  grep_generated_mbt "$out" 'pub fn useState(initialState : JSValue) -> UseStateResult'
   grep_generated_mbt "$out" 'pub fn useTransition() -> UseTransitionResult'
   grep_generated_mbt "$out" 'pub fn startTransition(scope : TransitionFunction) -> Unit'
   grep_generated_mbt "$out" 'pub extern "js" fn get_default() -> @js.Any'

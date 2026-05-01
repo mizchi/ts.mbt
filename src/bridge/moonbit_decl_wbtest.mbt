@@ -152,6 +152,95 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
       @ast.TsType::Named("Stats"),
     ),
   )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "ReadStreamEventMap",
+      "data",
+      @ast.TsType::Tuple([@ast.TsType::Any]),
+    ),
+    @ast.TsType::Array(@ast.TsType::Named("ReadStreamEventPayload")),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "FSWatcherEventMap",
+      "change",
+      @ast.TsType::Tuple([
+        @ast.TsType::String_,
+        @ast.TsType::Union([
+          @ast.TsType::String_,
+          @ast.TsType::Named("NonSharedBuffer"),
+        ]),
+      ]),
+    ),
+    @ast.TsType::Array(@ast.TsType::Named("FSWatcherChangeEventPayload")),
+  )
+  assert_eq(
+    decl_specialize_generated_interface_field_type(
+      "WatchOptions",
+      "encoding",
+      @ast.TsType::Union([
+        @ast.TsType::Named("BufferEncoding"),
+        @ast.TsType::Literal("buffer"),
+        @ast.TsType::Undefined,
+      ]),
+    ),
+    @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Undefined]),
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_param_type(
+      "ReadStream",
+      "on",
+      "listener",
+      1,
+      @ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Void),
+    ),
+    @ast.TsType::Func(
+      [@ast.TsType::Named("ReadStreamEventPayload")],
+      @ast.TsType::Void,
+    ),
+  )
+  assert_eq(
+    decl_specialize_generated_class_method_return_type(
+      "WriteStream",
+      "rawListeners",
+      @ast.TsType::Array(
+        @ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Void),
+      ),
+    ),
+    @ast.TsType::Array(
+      @ast.TsType::Func(
+        [@ast.TsType::Named("WriteStreamEventPayload")],
+        @ast.TsType::Void,
+      ),
+    ),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit declarations specializes node fs residual payloads" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/node-fs-specialization-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("/// atimeNs : Int64"))
+  assert_true(actual.contains("/// mtimeNs : Int64"))
+  assert_true(actual.contains("/// ctimeNs : Int64"))
+  assert_true(actual.contains("/// birthtimeNs : Int64"))
+  assert_false(actual.contains("atimeNs : JSValue"))
+  assert_true(actual.contains("declare pub type FSWatcherChangeEventPayload"))
+  assert_true(
+    actual.contains("/// change : Array[FSWatcherChangeEventPayload]"),
+  )
+  assert_false(actual.contains("/// change : Array[JSValue]"))
+  assert_true(actual.contains("/// encoding : String?"))
+  assert_false(actual.contains("/// encoding : JSValue?"))
 }
 
 ///|
@@ -783,6 +872,67 @@ async test "bridge: emit MoonBit declarations collapse overloads by generated bi
   )
   assert_false(
     actual.contains("declare pub fn chooseConcrete(value : JSValue) -> JSValue"),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit declarations skip wider same-param overload wrappers" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/encoding-overload-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    actual.contains(
+      "declare pub fn readlinkSync(path : String, options : EncodingOption?) -> String",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn readlinkSync_string_buffer_encoding_option(path : String, options : BufferEncodingOption) -> NonSharedBuffer",
+    ),
+  )
+  assert_false(
+    actual.contains(
+      "declare pub fn readlinkSync_string_encoding_option_optional(path : String, options : EncodingOption?) -> JSValue",
+    ),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit declarations keeps narrow overload per arity" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/overload-arity-prune-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub fn fstatSync(fd : Double) -> Stats"))
+  assert_true(
+    actual.contains(
+      "declare pub fn fstatSync_number_stat_options_optional(fd : Double, options : StatOptions?) -> Stats",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "declare pub fn fstatSync_number_stat_options(fd : Double, options : StatOptions) -> BigIntStats",
+    ),
+  )
+  assert_false(
+    actual.contains(
+      "declare pub fn fstatSync_number_stat_options_optional(fd : Double, options : StatOptions?) -> JSValue",
+    ),
   )
 }
 

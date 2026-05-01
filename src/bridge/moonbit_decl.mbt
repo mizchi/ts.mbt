@@ -4939,12 +4939,67 @@ fn decl_specialize_generated_class_property_type(
 }
 
 ///|
+fn decl_watch_options_encoding_type(type_ : @ast.TsType) -> @ast.TsType {
+  match type_ {
+    Named("BufferEncoding") | String_ | Literal(_) => String_
+    Union(items) => {
+      let mut is_optional = false
+      let mut is_encoding_only = true
+      for item in items {
+        match item {
+          Named("BufferEncoding") | String_ | Literal(_) => ()
+          Undefined | Null => is_optional = true
+          _ => is_encoding_only = false
+        }
+      }
+      if is_encoding_only {
+        if is_optional {
+          Union([String_, Undefined])
+        } else {
+          String_
+        }
+      } else {
+        type_
+      }
+    }
+    _ => type_
+  }
+}
+
+///|
 fn decl_specialize_generated_interface_field_type(
   owner_name : String,
   field_name : String,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
   match owner_name {
+    "ReadStreamEventMap" =>
+      if field_name == "data" {
+        decl_stream_event_payload_array_type("ReadStream", type_)
+      } else {
+        type_
+      }
+    "Utf8StreamEventMap" =>
+      if field_name == "drop" {
+        decl_stream_event_payload_array_type("Utf8Stream", type_)
+      } else {
+        type_
+      }
+    "FSWatcherEventMap" =>
+      if field_name == "change" {
+        match type_ {
+          Array(_) | Tuple(_) => Array(Named("FSWatcherChangeEventPayload"))
+          _ => type_
+        }
+      } else {
+        type_
+      }
+    "WatchOptions" =>
+      if field_name == "encoding" {
+        decl_watch_options_encoding_type(type_)
+      } else {
+        type_
+      }
     "StatSyncFn" =>
       if field_name == "<call>" {
         match type_ {
@@ -4959,6 +5014,143 @@ fn decl_specialize_generated_interface_field_type(
         type_
       }
     _ => type_
+  }
+}
+
+///|
+fn decl_stream_event_payload_name(class_name : String) -> String? {
+  match class_name {
+    "ReadStream" => Some("ReadStreamEventPayload")
+    "WriteStream" => Some("WriteStreamEventPayload")
+    "Utf8Stream" => Some("Utf8StreamEventPayload")
+    _ => None
+  }
+}
+
+///|
+fn decl_stream_event_payload_type(class_name : String) -> @ast.TsType? {
+  match decl_stream_event_payload_name(class_name) {
+    Some(name) => Some(Named(name))
+    None => None
+  }
+}
+
+///|
+fn decl_stream_event_payload_array_type(
+  class_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match decl_stream_event_payload_type(class_name) {
+    Some(payload_type) =>
+      match type_ {
+        Array(_) | Tuple(_) => Array(payload_type)
+        _ => type_
+      }
+    None => type_
+  }
+}
+
+///|
+fn decl_stream_listener_func_type(
+  class_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match decl_classify_optional_like_union(type_) {
+    Some((inner, is_optional)) => {
+      let rewritten = decl_stream_listener_func_type(class_name, inner)
+      if rewritten == inner {
+        type_
+      } else if is_optional {
+        Union([rewritten, Undefined])
+      } else {
+        rewritten
+      }
+    }
+    None =>
+      match decl_stream_event_payload_type(class_name) {
+        Some(payload_type) =>
+          match type_ {
+            Func([_], Void) => Func([payload_type], Void)
+            _ => type_
+          }
+        None => type_
+      }
+  }
+}
+
+///|
+fn decl_stream_listener_array_type(
+  class_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    Array(inner) => {
+      let rewritten = decl_stream_listener_func_type(class_name, inner)
+      if rewritten == inner {
+        type_
+      } else {
+        Array(rewritten)
+      }
+    }
+    _ => type_
+  }
+}
+
+///|
+fn decl_is_stream_listener_method(method_name : String) -> Bool {
+  method_name == "addListener" ||
+  method_name == "off" ||
+  method_name == "on" ||
+  method_name == "once" ||
+  method_name == "prependListener" ||
+  method_name == "prependOnceListener" ||
+  method_name == "removeListener" ||
+  method_name == "listenerCount"
+}
+
+///|
+fn decl_is_stream_listener_array_method(method_name : String) -> Bool {
+  method_name == "listeners" || method_name == "rawListeners"
+}
+
+///|
+fn decl_specialize_generated_class_method_param_type(
+  class_name : String,
+  method_name : String,
+  _param_name : String,
+  param_index : Int,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match decl_stream_event_payload_name(class_name) {
+    Some(_) => ()
+    None => return type_
+  }
+  if decl_is_stream_listener_method(method_name) && param_index == 1 {
+    decl_stream_listener_func_type(class_name, type_)
+  } else if method_name == "emit" && param_index == 1 {
+    match decl_stream_event_payload_type(class_name) {
+      Some(payload_type) => payload_type
+      None => type_
+    }
+  } else {
+    type_
+  }
+}
+
+///|
+fn decl_specialize_generated_class_method_return_type(
+  class_name : String,
+  method_name : String,
+  type_ : @ast.TsType,
+) -> @ast.TsType {
+  match decl_stream_event_payload_name(class_name) {
+    Some(_) => ()
+    None => return type_
+  }
+  if decl_is_stream_listener_array_method(method_name) {
+    decl_stream_listener_array_type(class_name, type_)
+  } else {
+    type_
   }
 }
 
@@ -5332,7 +5524,8 @@ fn push_preferred_import_decl(
   import_ : @ast.TsImport,
 ) -> Unit {
   for i, existing in imports {
-    if existing.name == import_.name {
+    if existing.name == import_.name &&
+      existing.params.length() == import_.params.length() {
       if decl_import_widening_score(import_) <
         decl_import_widening_score(existing) {
         imports[i] = import_
@@ -5349,7 +5542,8 @@ fn push_preferred_func_decl(
   func : @ast.TsFunc,
 ) -> Unit {
   for i, existing in funcs {
-    if existing.name == func.name {
+    if existing.name == func.name &&
+      existing.params.length() == func.params.length() {
       if decl_func_widening_score(func) < decl_func_widening_score(existing) {
         funcs[i] = func
       }
@@ -5360,8 +5554,81 @@ fn push_preferred_func_decl(
 }
 
 ///|
-fn decl_overload_type_suffix(type_ : @ast.TsType) -> String? {
+fn decl_is_empty_object_type(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Object(fields) => fields.length() == 0
+    _ => false
+  }
+}
+
+///|
+fn decl_transparent_intersection_type(type_ : @ast.TsType) -> @ast.TsType? {
+  match type_ {
+    Intersection(items) => {
+      let concrete : Array[@ast.TsType] = []
+      let named_constraints : Array[@ast.TsType] = []
+      for item in items {
+        if !decl_is_empty_object_type(item) {
+          concrete.push(item)
+          match item {
+            Named(_) | Applied(_, _) => named_constraints.push(item)
+            _ => ()
+          }
+        }
+      }
+      if concrete.length() == 1 {
+        Some(concrete[0])
+      } else if named_constraints.length() == 1 {
+        Some(named_constraints[0])
+      } else {
+        None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+fn decl_normalize_overload_signature_type(type_ : @ast.TsType) -> @ast.TsType {
   match decl_classify_optional_like_union(type_) {
+    Some((inner, is_optional)) => {
+      let normalized = decl_normalize_overload_signature_type(inner)
+      if is_optional {
+        return @ast.TsType::Union([normalized, @ast.TsType::Undefined])
+      } else {
+        return normalized
+      }
+    }
+    None => ()
+  }
+  match decl_transparent_intersection_type(type_) {
+    Some(inner) => return decl_normalize_overload_signature_type(inner)
+    None => ()
+  }
+  match type_ {
+    Union(items) => {
+      let normalized : Array[@ast.TsType] = []
+      for item in items {
+        normalized.push(decl_normalize_overload_signature_type(item))
+      }
+      Union(normalized)
+    }
+    Array(inner) => Array(decl_normalize_overload_signature_type(inner))
+    Tuple(items) => {
+      let normalized : Array[@ast.TsType] = []
+      for item in items {
+        normalized.push(decl_normalize_overload_signature_type(item))
+      }
+      Tuple(normalized)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn decl_overload_type_suffix(type_ : @ast.TsType) -> String? {
+  let normalized_type = decl_normalize_overload_signature_type(type_)
+  match decl_classify_optional_like_union(normalized_type) {
     Some((inner, _)) =>
       match decl_overload_type_suffix(inner) {
         Some(suffix) => return Some(suffix + "_optional")
@@ -5369,7 +5636,7 @@ fn decl_overload_type_suffix(type_ : @ast.TsType) -> String? {
       }
     None => ()
   }
-  match type_ {
+  match normalized_type {
     Literal(_) | String_ => Some("string")
     Number | NumberLiteral(_) => Some("number")
     Int => Some("int")
@@ -5406,7 +5673,7 @@ fn decl_overload_suffix_from_types(types : Array[@ast.TsType]) -> String? {
 fn decl_import_signature_types(import_ : @ast.TsImport) -> Array[@ast.TsType] {
   let types : Array[@ast.TsType] = []
   for param in import_.params {
-    types.push(param.1)
+    types.push(decl_normalize_overload_signature_type(param.1))
   }
   types
 }
@@ -5415,7 +5682,7 @@ fn decl_import_signature_types(import_ : @ast.TsImport) -> Array[@ast.TsType] {
 fn decl_func_signature_types(func : @ast.TsFunc) -> Array[@ast.TsType] {
   let types : Array[@ast.TsType] = []
   for param in func.params {
-    types.push(param.type_)
+    types.push(decl_normalize_overload_signature_type(param.type_))
   }
   types
 }
@@ -5427,7 +5694,22 @@ fn decl_import_same_signature(lhs : @ast.TsImport, rhs : @ast.TsImport) -> Bool 
     return false
   }
   for i in 0..<lhs.params.length() {
-    if lhs.params[i].1 != rhs.params[i].1 {
+    if decl_normalize_overload_signature_type(lhs.params[i].1) !=
+      decl_normalize_overload_signature_type(rhs.params[i].1) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn decl_import_same_params(lhs : @ast.TsImport, rhs : @ast.TsImport) -> Bool {
+  if lhs.params.length() != rhs.params.length() {
+    return false
+  }
+  for i in 0..<lhs.params.length() {
+    if decl_normalize_overload_signature_type(lhs.params[i].1) !=
+      decl_normalize_overload_signature_type(rhs.params[i].1) {
       return false
     }
   }
@@ -5441,11 +5723,72 @@ fn decl_func_same_signature(lhs : @ast.TsFunc, rhs : @ast.TsFunc) -> Bool {
     return false
   }
   for i in 0..<lhs.params.length() {
-    if lhs.params[i].type_ != rhs.params[i].type_ {
+    if decl_normalize_overload_signature_type(lhs.params[i].type_) !=
+      decl_normalize_overload_signature_type(rhs.params[i].type_) {
       return false
     }
   }
   true
+}
+
+///|
+fn decl_func_same_params(lhs : @ast.TsFunc, rhs : @ast.TsFunc) -> Bool {
+  if lhs.params.length() != rhs.params.length() {
+    return false
+  }
+  for i in 0..<lhs.params.length() {
+    if decl_normalize_overload_signature_type(lhs.params[i].type_) !=
+      decl_normalize_overload_signature_type(rhs.params[i].type_) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn decl_import_wider_same_param_overload(
+  candidate : @ast.TsImport,
+  preferred : @ast.TsImport,
+) -> Bool {
+  decl_import_same_params(candidate, preferred) &&
+  decl_type_widening_score(candidate.return_type) >
+  decl_type_widening_score(preferred.return_type)
+}
+
+///|
+fn decl_func_wider_same_param_overload(
+  candidate : @ast.TsFunc,
+  preferred : @ast.TsFunc,
+) -> Bool {
+  decl_func_same_params(candidate, preferred) &&
+  decl_type_widening_score(candidate.return_type) >
+  decl_type_widening_score(preferred.return_type)
+}
+
+///|
+fn decl_import_wider_than_any_same_param_preferred(
+  candidate : @ast.TsImport,
+  preferred : Array[@ast.TsImport],
+) -> Bool {
+  for item in preferred {
+    if decl_import_wider_same_param_overload(candidate, item) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn decl_func_wider_than_any_same_param_preferred(
+  candidate : @ast.TsFunc,
+  preferred : Array[@ast.TsFunc],
+) -> Bool {
+  for item in preferred {
+    if decl_func_wider_same_param_overload(candidate, item) {
+      return true
+    }
+  }
+  false
 }
 
 ///|
@@ -5584,6 +5927,9 @@ fn exported_import_overload_wrappers(
       if decl_import_same_signature(clone, preferred[0]) {
         continue
       }
+      if decl_import_wider_than_any_same_param_preferred(clone, preferred) {
+        continue
+      }
       let suffix = match
         decl_overload_suffix_from_types(decl_import_signature_types(clone)) {
         Some(suffix) => suffix
@@ -5663,6 +6009,9 @@ fn exported_func_overload_wrappers(
         canonical_types,
       )
       if decl_func_same_signature(clone, preferred[0]) {
+        continue
+      }
+      if decl_func_wider_than_any_same_param_preferred(clone, preferred) {
         continue
       }
       let suffix = match
@@ -5783,6 +6132,14 @@ fn clone_class_method_in_scope(
   let params : Array[(String, @ast.TsType)] = []
   for param_index, param in class_method.params {
     let (param_name, param_type) = param
+    let lowered_param_type = lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info, local_name_prefix, param_type, canonical_types,
+      ),
+      modules,
+      canonical_types,
+    )
     params.push(
       (
         param_name,
@@ -5790,13 +6147,12 @@ fn clone_class_method_in_scope(
           class_name + "_" + class_method.name,
           param_name,
           param_index,
-          lower_react_utility_type(
-            info,
-            rewrite_type_refs_in_scope(
-              info, local_name_prefix, param_type, canonical_types,
-            ),
-            modules,
-            canonical_types,
+          decl_specialize_generated_class_method_param_type(
+            class_name,
+            class_method.name,
+            param_name,
+            param_index,
+            lowered_param_type,
           ),
         ),
       ),
@@ -5805,16 +6161,20 @@ fn clone_class_method_in_scope(
   {
     name: class_method.name,
     params,
-    return_type: lower_react_utility_type(
-      info,
-      rewrite_type_refs_in_scope(
+    return_type: decl_specialize_generated_class_method_return_type(
+      class_name,
+      class_method.name,
+      lower_react_utility_type(
         info,
-        local_name_prefix,
-        class_method.return_type,
+        rewrite_type_refs_in_scope(
+          info,
+          local_name_prefix,
+          class_method.return_type,
+          canonical_types,
+        ),
+        modules,
         canonical_types,
       ),
-      modules,
-      canonical_types,
     ),
     is_static: class_method.is_static,
   }

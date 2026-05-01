@@ -448,6 +448,7 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       moonbit_type_name(state, normalize_literal_type_for_moonbit_bridge(type_))
     Number => "Double"
     Int => "Int"
+    BigInt => "Int64"
     Boolean => "Bool"
     String_ => "String"
     Void => "Unit"

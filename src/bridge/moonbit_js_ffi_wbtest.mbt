@@ -617,6 +617,22 @@ test "bridge: FFI type name renders declared generic applications" {
 }
 
 ///|
+test "bridge: FFI type name lowers bigint primitive" {
+  let state : MoonBitJsFfiState = {
+    declared_type_names: [],
+    struct_type_names: [],
+    generic_type_params_by_name: {},
+    enums: [],
+    external_type_names: [],
+    local_type_param_names: [],
+    function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    needs_js_any: false,
+  }
+  assert_eq(ffi_type_name(state, @ast.TsType::BigInt), "Int64")
+  assert_false(state.needs_js_any)
+}
+
+///|
 test "bridge: FFI type name lowers tuple payloads to arrays" {
   let state : MoonBitJsFfiState = {
     declared_type_names: ["Error"],

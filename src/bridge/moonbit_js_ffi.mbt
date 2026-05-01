@@ -712,6 +712,7 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       ffi_type_name(state, ffi_normalize_literal_type(type_))
     Number => "Double"
     Int => "Int"
+    BigInt => "Int64"
     Boolean => "Bool"
     String_ => "String"
     Void => "Unit"

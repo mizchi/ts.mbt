@@ -59,8 +59,8 @@ Review status:
   budgets and warning-free MoonBit checks.
 - A node:fs-only real-world probe builds and runs with 0 unsupported exports.
   Current metrics after callback/option-bag, generic, tuple, and function-type
-  cleanup: 2239 bridge lines, 322 declared functions, 53 `JSValue` refs, 32
-  `JSValue` functions, and 52 `JSValue` surface lines.
+  cleanup: 2235 bridge lines, 327 declared functions, 18 `JSValue` refs, 5
+  `JSValue` functions, and 17 `JSValue` surface lines.
 
 Next implementation tasks:
 
@@ -112,12 +112,19 @@ Next implementation tasks:
     paths now stay typed; `glob*` string patterns and `create*Stream` option
     bags are preserved; promisify file-data wrappers no longer widen string
     data to `JSValue`; stream `path` properties now use `PathLike`, and
-    `StatSyncFn` callable options use `StatSyncOptions?`. Current node:fs
-    budget is 52 `JSValue` surface lines and 32 `JSValue` functions.
-  - Remaining quality debt: heterogeneous event payload tuples such as
-    `string | NonSharedBuffer`, stream listener payload APIs, and
-    overload-selected return/options surfaces such as encoding-dependent sync
-    wrappers still require `JSValue`.
+    `StatSyncFn` callable options use `StatSyncOptions?`. Stream listener
+    payloads now use generated payload opaque types, and redundant
+    encoding-dependent overload wrappers with wider returns are skipped.
+    `BigIntStats` nanosecond fields now lower to `Int64`, and
+    `FSWatcherEventMap.change` uses an opaque payload type instead of
+    `Array[JSValue]`; `WatchOptions.encoding` now lowers to `String?`.
+    Overload wrapper pruning keeps narrow overloads per arity, so the broad
+    `fstatSync` / `statfsSync` union-return wrappers no longer leak `JSValue`
+    while bigint variants remain callable. Current node:fs budget is 17
+    `JSValue` surface lines and 5 `JSValue` functions.
+  - Remaining quality debt: event payloads with heterogeneous values still use
+    opaque payload boundaries, and overload-selected return/options surfaces
+    such as `readFile*`, statfs, and glob still require `JSValue`.
 - [x] Split large generated MoonBit packages into reviewable files.
   - Target layout: `types.mbt`, `externs.mbt`, `converters.mbt`, and
     `guards.mbt` for large TS -> MoonBit scaffolds, while preserving generated
