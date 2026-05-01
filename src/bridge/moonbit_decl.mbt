@@ -2784,6 +2784,36 @@ fn type_alias_number_enum_decl(
 }
 
 ///|
+fn type_alias_boolean_literal_primitive_type(
+  type_alias : @ast.TsTypeAlias,
+) -> @ast.TsType? {
+  if type_alias.type_params.length() > 0 {
+    return None
+  }
+  let items = match type_alias.type_ {
+    @ast.TsType::Union(items) => items
+    @ast.TsType::BooleanLiteral(_) => [type_alias.type_]
+    _ => return None
+  }
+  if items.length() == 0 {
+    return None
+  }
+  let mut has_boolean_literal = false
+  for item in items {
+    match item {
+      @ast.TsType::BooleanLiteral(_) => has_boolean_literal = true
+      @ast.TsType::Undefined | @ast.TsType::Null => ()
+      _ => return None
+    }
+  }
+  if has_boolean_literal {
+    Some(type_alias.type_)
+  } else {
+    None
+  }
+}
+
+///|
 fn type_name_references_alias(
   module_ : @ast.TsModule,
   name : String,
@@ -3748,7 +3778,18 @@ fn rewrite_type_refs_in_scope(
           info, local_name_prefix, name, canonical_types,
         ) {
         Some(export_name) => Named(export_name)
-        None => type_
+        None =>
+          match find_type_alias_decl(info.module_, name) {
+            Some(type_alias) =>
+              match type_alias_boolean_literal_primitive_type(type_alias) {
+                Some(alias_type) =>
+                  rewrite_type_refs_in_scope(
+                    info, local_name_prefix, alias_type, canonical_types,
+                  )
+                None => type_
+              }
+            None => type_
+          }
       }
     Applied(name, args) => {
       let next_args : Array[@ast.TsType] = []
@@ -3842,11 +3883,16 @@ fn rewrite_type_refs_in_scope(
     Union(types) => {
       let next_types : Array[@ast.TsType] = []
       for item in types {
-        next_types.push(
-          rewrite_type_refs_in_scope(
-            info, local_name_prefix, item, canonical_types,
-          ),
+        let next_item = rewrite_type_refs_in_scope(
+          info, local_name_prefix, item, canonical_types,
         )
+        match next_item {
+          Union(nested_types) =>
+            for nested_item in nested_types {
+              next_types.push(nested_item)
+            }
+          _ => next_types.push(next_item)
+        }
       }
       Union(next_types)
     }

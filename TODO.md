@@ -393,9 +393,11 @@ TypeScript runtimes expect.
     `"primary" | "secondary" | undefined` -> `Variant?`.
   - Anonymous literal unions still intentionally lower to primitives until a
     stable synthetic naming rule is needed.
-- [ ] Support boolean literal unions only when they are not just `boolean`:
+- [x] Support boolean literal unions only when they are not just `boolean`:
   - `true | false` remains `Bool`.
   - `true | undefined` remains `Bool?`.
+  - Named boolean literal aliases now resolve through primitive `Bool` /
+    `Bool?` bridge signatures instead of emitting enum wrappers.
 - [ ] Support numeric literal unions only when every member is an integer-like
   literal and the runtime bridge can convert losslessly.
   - [x] Named numeric literal union aliases lower to closed MoonBit enums and

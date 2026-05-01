@@ -1183,6 +1183,36 @@ fn ffi_func_needs_js_arg_conversion(
 }
 
 ///|
+fn ffi_type_needs_js_return_conversion(type_ : @ast.TsType) -> Bool {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => is_optional && collapsed == Boolean
+    None => false
+  }
+}
+
+///|
+fn ffi_import_needs_js_return_conversion(import_ : @ast.TsImport) -> Bool {
+  ffi_type_needs_js_return_conversion(import_.return_type)
+}
+
+///|
+fn ffi_func_needs_js_return_conversion(func : @ast.TsFunc) -> Bool {
+  ffi_type_needs_js_return_conversion(func.return_type)
+}
+
+///|
+fn ffi_type_js_return_expr(type_ : @ast.TsType, expr : String) -> String {
+  match ffi_classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) =>
+      if is_optional && collapsed == Boolean {
+        return "__ts_mbt_wrap_bool_option(\{expr})"
+      }
+    None => ()
+  }
+  expr
+}
+
+///|
 fn ffi_params_call_args_with_names(
   state : MoonBitJsFfiState,
   params : Array[(String, @ast.TsType)],
@@ -2532,7 +2562,10 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     let needs_js_arg_conversion = ffi_import_needs_js_arg_conversion(
       state, import_,
     )
-    if needs_js_arg_conversion {
+    let needs_js_return_conversion = ffi_import_needs_js_return_conversion(
+      import_,
+    )
+    if needs_js_arg_conversion || needs_js_return_conversion {
       bridge_needs_option_unwrap = true
     }
     match tuple_result_field_names.get(import_.name) {
@@ -2563,7 +2596,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       None =>
         if ffi_can_use_direct_module(module_spec) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
-          !needs_js_arg_conversion {
+          !needs_js_arg_conversion &&
+          !needs_js_return_conversion {
           push_unique_ffi_section(
             seen_ffi_binding_names,
             ffi_sections,
@@ -2585,7 +2619,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
               module_spec, runtime_export_name, binding_name,
             ) {
             Some(reexport_line) =>
-              if !needs_js_arg_conversion {
+              if !needs_js_arg_conversion && !needs_js_return_conversion {
                 push_unique_bridge_binding(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
@@ -2601,19 +2635,19 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
                   runtime_export_name,
                 )
+                let return_expr = ffi_type_js_return_expr(
+                  import_.return_type,
+                  "\{runtime_access}(\{call_args_str})",
+                )
                 push_unique_bridge_binding(
                   seen_bridge_binding_names,
                   bridge_lines,
                   binding_name,
-                  ffi_bridge_function_line(
-                    binding_name,
-                    args,
-                    "\{runtime_access}(\{call_args_str})",
-                  ),
+                  ffi_bridge_function_line(binding_name, args, return_expr),
                 )
               }
             None =>
-              if needs_js_arg_conversion {
+              if needs_js_arg_conversion || needs_js_return_conversion {
                 let args = ffi_import_bridge_param_names(
                   import_, runtime_export_name,
                 )
@@ -2625,15 +2659,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
                   runtime_export_name,
                 )
+                let return_expr = ffi_type_js_return_expr(
+                  import_.return_type,
+                  "\{runtime_access}(\{call_args_str})",
+                )
                 push_unique_bridge_binding(
                   seen_bridge_binding_names,
                   bridge_lines,
                   binding_name,
-                  ffi_bridge_function_line(
-                    binding_name,
-                    args,
-                    "\{runtime_access}(\{call_args_str})",
-                  ),
+                  ffi_bridge_function_line(binding_name, args, return_expr),
                 )
               } else {
                 push_unique_bridge_binding(
@@ -2655,7 +2689,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       func.name,
     )
     let needs_js_arg_conversion = ffi_func_needs_js_arg_conversion(state, func)
-    if needs_js_arg_conversion {
+    let needs_js_return_conversion = ffi_func_needs_js_return_conversion(func)
+    if needs_js_arg_conversion || needs_js_return_conversion {
       bridge_needs_option_unwrap = true
     }
     match tuple_result_field_names.get(func.name) {
@@ -2686,7 +2721,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       None =>
         if ffi_can_use_direct_module(module_spec) &&
           !ffi_runtime_export_requires_bridge(runtime_export_name) &&
-          !needs_js_arg_conversion {
+          !needs_js_arg_conversion &&
+          !needs_js_return_conversion {
           push_unique_ffi_section(
             seen_ffi_binding_names,
             ffi_sections,
@@ -2708,7 +2744,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
               module_spec, runtime_export_name, binding_name,
             ) {
             Some(reexport_line) =>
-              if !needs_js_arg_conversion {
+              if !needs_js_arg_conversion && !needs_js_return_conversion {
                 push_unique_bridge_binding(
                   seen_bridge_binding_names, bridge_lines, binding_name, reexport_line,
                 )
@@ -2722,19 +2758,19 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
                   runtime_export_name,
                 )
+                let return_expr = ffi_type_js_return_expr(
+                  func.return_type,
+                  "\{runtime_access}(\{call_args_str})",
+                )
                 push_unique_bridge_binding(
                   seen_bridge_binding_names,
                   bridge_lines,
                   binding_name,
-                  ffi_bridge_function_line(
-                    binding_name,
-                    args,
-                    "\{runtime_access}(\{call_args_str})",
-                  ),
+                  ffi_bridge_function_line(binding_name, args, return_expr),
                 )
               }
             None =>
-              if needs_js_arg_conversion {
+              if needs_js_arg_conversion || needs_js_return_conversion {
                 let args = ffi_func_bridge_param_names(
                   func, runtime_export_name,
                 )
@@ -2744,15 +2780,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   seen_bridge_import_keys, bridge_imports, namespace_import_roots,
                   runtime_export_name,
                 )
+                let return_expr = ffi_type_js_return_expr(
+                  func.return_type,
+                  "\{runtime_access}(\{call_args_str})",
+                )
                 push_unique_bridge_binding(
                   seen_bridge_binding_names,
                   bridge_lines,
                   binding_name,
-                  ffi_bridge_function_line(
-                    binding_name,
-                    args,
-                    "\{runtime_access}(\{call_args_str})",
-                  ),
+                  ffi_bridge_function_line(binding_name, args, return_expr),
                 )
               } else {
                 push_unique_bridge_binding(
@@ -2899,6 +2935,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     )
     rendered_bridge_lines.push(
       "function __ts_mbt_unwrap_bool_option(value) { return value === -1 ? undefined : __ts_mbt_unwrap_option(value); }",
+    )
+    rendered_bridge_lines.push(
+      "function __ts_mbt_wrap_bool_option(value) { return value == null ? -1 : value; }",
     )
     rendered_bridge_lines.push("")
   }

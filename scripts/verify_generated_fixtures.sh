@@ -303,6 +303,46 @@ EOF
   moon -C "$root" test --target js
 }
 
+verify_bridge_boolean_literal_union_fixture() {
+  local root="_build/bridge_fixture_boolean_literal_union"
+  local fixture_path="$repo_root/fixtures/bridge_smoke/boolean-literal-union-entry.d.ts"
+  local runtime_path="$repo_root/fixtures/bridge_smoke/runtime/boolean-literal-union.js"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src -- emit-moonbit-bridge-package "$fixture_path" "./runtime/boolean-literal-union.js" "$root" >/dev/null
+  cp "$runtime_path" "$root/runtime/boolean-literal-union.js"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/bridge_boolean_literal_union",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated bridge package keeps boolean literal aliases primitive" {
+  assert_false(flipFlag(true))
+  assert_true(flipFlag(false))
+  match maybeAlways(Some(false)) {
+    Some(true) => ()
+    _ => abort("expected optional false to become optional true")
+  }
+  let absent : Bool? = None
+  match maybeAlways(absent) {
+    None => ()
+    _ => abort("expected absent boolean literal alias to stay absent")
+  }
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_bridge_default_export_fixture() {
   local root="_build/bridge_fixture_default_export"
   local fixture_path="$repo_root/fixtures/bridge_smoke/default-export-entry.d.ts"
@@ -2259,6 +2299,7 @@ verify_bridge_enum_fixture
 verify_bridge_literal_union_alias_fixture
 verify_bridge_numeric_enum_fixture
 verify_bridge_numeric_literal_union_fixture
+verify_bridge_boolean_literal_union_fixture
 verify_bridge_default_export_fixture
 verify_bridge_declaration_merge_namespace_fixture
 verify_bridge_promise_return_fixture

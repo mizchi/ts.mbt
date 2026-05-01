@@ -359,6 +359,41 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes numeric litera
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle lowers boolean literal aliases to bool" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/boolean-literal-union-entry.d.ts", "./runtime/boolean-literal-union.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_false(bundle.bridge_mbti.contains("enum FeatureFlag"))
+  assert_false(bundle.bridge_mbti.contains("enum AlwaysOn"))
+  assert_true(
+    bundle.bridge_mbti.contains("declare pub fn flipFlag(flag : Bool) -> Bool"),
+  )
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn maybeAlways(flag : Bool?) -> Bool?",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn flip_flag(flag : Bool) -> Bool",
+    ),
+  )
+  assert_true(
+    bundle.bridge_mbt.contains(
+      "extern \"js\" fn maybe_always(flag : Bool?) -> Bool?",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes namespace exports as opaque getters" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/ns-entry.d.ts", "./runtime/ns.js",
