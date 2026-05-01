@@ -666,6 +666,30 @@ test "bridge: FFI type name lowers function types" {
 }
 
 ///|
+async test "bridge: emit MoonBit JS FFI bundle names inline object promise results" {
+  let bundle = emit_moonbit_js_ffi_bundle_from_entry_path(
+    "fixtures/resolver/project/types/inline-object-promise-entry.d.ts", "./runtime/inline-object-promise.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct ReadPromisifyResult"))
+  assert_true(bundle.ffi_mbt.contains("bytesRead : Double"))
+  assert_true(bundle.ffi_mbt.contains("buffer : NodeJS_ArrayBufferView"))
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "extern \"js\" fn read_promisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> @js.Promise[ReadPromisifyResult] =",
+    ),
+  )
+  assert_false(bundle.ffi_mbt.contains("@js.Promise[@js.Any]"))
+}
+
+///|
 test "bridge: FFI type name widens likely generic placeholders" {
   let state : MoonBitJsFfiState = {
     declared_type_names: [],

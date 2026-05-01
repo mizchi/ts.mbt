@@ -2985,7 +2985,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     exported_funcs,
     exported_func_overload_wrappers(exported_funcs, modules, canonical_types),
   )
-  let tuple_result_interfaces = normalize_tuple_result_interfaces(
+  let tuple_result_interfaces = normalize_result_interfaces(
     emitted_exported_imports, emitted_exported_funcs, modules, canonical_types,
   )
   let dependency_exported_interfaces : Array[ExportedInterfaceDecl] = if exported_interfaces.length() >
@@ -3110,6 +3110,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   )
   let tuple_result_field_names : Map[String, Array[String]] = {}
   for spec in tuple_result_interfaces {
+    if !spec.needs_runtime_tuple_wrapper {
+      continue
+    }
     let field_names : Array[String] = []
     for field in spec.iface.fields {
       field_names.push(field.0)

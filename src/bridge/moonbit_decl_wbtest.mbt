@@ -66,6 +66,92 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
     ),
     @ast.TsType::Named("Node"),
   )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "writeFileSync",
+      "data",
+      1,
+      @ast.TsType::Union([
+        @ast.TsType::String_,
+        @ast.TsType::Named("NodeJS_ArrayBufferView"),
+      ]),
+    ),
+    @ast.TsType::String_,
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "writeFile.__promisify__",
+      "data",
+      1,
+      @ast.TsType::Union([
+        @ast.TsType::String_,
+        @ast.TsType::Named("NonSharedBuffer"),
+      ]),
+    ),
+    @ast.TsType::String_,
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "cp",
+      "source",
+      0,
+      @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Named("URL")]),
+    ),
+    @ast.TsType::String_,
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "globSync",
+      "pattern",
+      0,
+      @ast.TsType::Union([
+        @ast.TsType::String_,
+        @ast.TsType::Array(@ast.TsType::String_),
+      ]),
+    ),
+    @ast.TsType::String_,
+  )
+  assert_eq(
+    decl_specialize_generated_api_param_type(
+      "createReadStream",
+      "options",
+      1,
+      @ast.TsType::Union([
+        @ast.TsType::Named("BufferEncoding"),
+        @ast.TsType::Named("ReadStreamOptions"),
+        @ast.TsType::Undefined,
+      ]),
+    ),
+    @ast.TsType::Named("ReadStreamOptions"),
+  )
+}
+
+///|
+async test "bridge: emit MoonBit declarations names inline object promise results" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/inline-object-promise-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type ReadPromisifyResult"))
+  assert_true(actual.contains("bytesRead : Double"))
+  assert_true(actual.contains("buffer : NodeJS_ArrayBufferView"))
+  assert_true(
+    actual.contains(
+      "declare pub fn readPromisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> @js.Promise[ReadPromisifyResult]",
+    ),
+  )
+  assert_false(
+    actual.contains(
+      "readPromisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> @js.Promise[JSValue]",
+    ),
+  )
 }
 
 ///|

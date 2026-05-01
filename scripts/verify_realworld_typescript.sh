@@ -308,26 +308,26 @@ jsvalue_function_budget() {
     clsx) printf '0\n' ;;
     chalk) printf '4\n' ;;
     dotenv) printf '1\n' ;;
-    ignore) printf '2\n' ;;
-    hono) printf '60\n' ;;
-    zod) printf '265\n' ;;
-    date-fns) printf '19\n' ;;
-    node:sqlite) printf '3\n' ;;
-    node:fs) printf '52\n' ;;
+    ignore) printf '1\n' ;;
+    hono) printf '47\n' ;;
+    zod) printf '239\n' ;;
+    date-fns) printf '18\n' ;;
+    node:sqlite) printf '0\n' ;;
+    node:fs) printf '37\n' ;;
     node:path) printf '1\n' ;;
-    node:crypto) printf '74\n' ;;
+    node:crypto) printf '61\n' ;;
     colorette) printf '1\n' ;;
     magic-string) printf '9\n' ;;
-    source-map) printf '11\n' ;;
-    valibot) printf '98\n' ;;
-    immer) printf '21\n' ;;
+    source-map) printf '9\n' ;;
+    valibot) printf '92\n' ;;
+    immer) printf '16\n' ;;
     execa) printf '1\n' ;;
-    preact) printf '11\n' ;;
+    preact) printf '10\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '5\n' ;;
     node:querystring) printf '2\n' ;;
     node:assert) printf '24\n' ;;
-    node:util) printf '16\n' ;;
+    node:util) printf '13\n' ;;
     node:buffer) printf '3\n' ;;
     *) printf '0\n' ;;
   esac
@@ -351,26 +351,26 @@ jsvalue_cause_budget() {
     clsx) printf '0|0|0|0|0|0|0\n' ;;
     chalk) printf '5|0|0|0|0|2|3\n' ;;
     dotenv) printf '2|1|1|0|0|0|0\n' ;;
-    ignore) printf '4|2|0|2|0|0|0\n' ;;
-    hono) printf '79|10|6|42|2|4|15\n' ;;
-    zod) printf '490|196|100|120|29|18|27\n' ;;
-    date-fns) printf '27|6|7|2|1|8|3\n' ;;
+    ignore) printf '2|1|0|1|0|0|0\n' ;;
+    hono) printf '66|10|6|34|3|4|9\n' ;;
+    zod) printf '433|163|93|111|26|21|19\n' ;;
+    date-fns) printf '22|4|7|1|0|8|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '12|3|0|2|0|0|7\n' ;;
-    source-map) printf '16|2|0|7|4|2|1\n' ;;
-    valibot) printf '823|691|27|27|23|37|18\n' ;;
-    immer) printf '25|1|7|4|3|1|9\n' ;;
+    source-map) printf '14|2|0|5|4|2|1\n' ;;
+    valibot) printf '659|539|28|27|19|31|15\n' ;;
+    immer) printf '20|1|7|2|2|2|6\n' ;;
     execa) printf '1|0|0|0|1|0|0\n' ;;
-    preact) printf '1322|1247|1|22|35|1|16\n' ;;
-    node:sqlite) printf '9|6|0|1|2|0|0\n' ;;
-    node:fs) printf '73|12|12|6|29|12|2\n' ;;
+    preact) printf '1319|1246|1|21|34|1|16\n' ;;
+    node:sqlite) printf '3|3|0|0|0|0|0\n' ;;
+    node:fs) printf '58|12|8|5|21|10|2\n' ;;
     node:path) printf '1|0|0|0|0|0|1\n' ;;
-    node:crypto) printf '126|22|15|30|58|0|1\n' ;;
+    node:crypto) printf '111|20|13|24|53|0|1\n' ;;
     node:os) printf '5|5|0|0|0|0|0\n' ;;
     node:url) printf '11|6|2|3|0|0|0\n' ;;
     node:querystring) printf '2|0|0|0|0|0|2\n' ;;
     node:assert) printf '27|3|16|3|2|0|3\n' ;;
-    node:util) printf '24|7|10|1|3|2|1\n' ;;
+    node:util) printf '22|8|9|1|1|2|1\n' ;;
     node:buffer) printf '3|0|2|0|0|0|1\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
   esac
@@ -706,7 +706,7 @@ extern "js" fn realworld_node_fs_path_like() -> PathLike =
 extern "js" fn realworld_node_fs_path_or_fd() -> PathOrFileDescriptor =
   #| () => process.cwd() + "/node-fs-test.txt"
 
-extern "js" fn realworld_node_fs_data() -> JSValue =
+extern "js" fn realworld_node_fs_data() -> String =
   #| () => "hello from moonbit"
 
 extern "js" fn realworld_node_fs_to_string(data : NonSharedBuffer) -> String =
@@ -1064,7 +1064,7 @@ extern "js" fn realworld_node_fs_path_like() -> @sut.PathLike =
 extern "js" fn realworld_node_fs_path_or_fd() -> @sut.PathOrFileDescriptor =
   #| () => process.cwd() + "/node-fs-build-smoke.txt"
 
-extern "js" fn realworld_node_fs_data() -> @sut.JSValue =
+extern "js" fn realworld_node_fs_data() -> String =
   #| () => "hello from moonbit"
 
 extern "js" fn realworld_node_fs_to_string(data : @sut.NonSharedBuffer) -> String =

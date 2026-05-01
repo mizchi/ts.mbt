@@ -526,8 +526,12 @@ fn Parser::parse_class_body(
     let method_name = class_key_name(key)
     let is_optional = self.match_(Question)
     let _ = self.match_(Bang)
+    let mut local_type_param_bound_len = self.local_type_param_bounds.length()
     if self.check(Lt) {
-      self.skip_type_params()
+      let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+      local_type_param_bound_len = self.push_local_type_param_bounds(
+        type_param_bounds,
+      )
     }
     let is_getter_without_parens = match accessor_kind {
       Some(kind) => kind == "get" && !self.check(LParen)
@@ -563,6 +567,7 @@ fn Parser::parse_class_body(
         self.in_function = prev_function
         body
       }
+      self.restore_local_type_param_bounds(local_type_param_bound_len)
       let func : @ast.TsFunc = {
         name: method_name,
         params,
@@ -577,6 +582,7 @@ fn Parser::parse_class_body(
         elements.push(Method(is_static, key, accessor_kind, func))
       }
     } else {
+      self.restore_local_type_param_bounds(local_type_param_bound_len)
       let field_type = if self.match_(Colon) {
         self.parse_type()
       } else {

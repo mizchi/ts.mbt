@@ -59,8 +59,8 @@ Review status:
   budgets and warning-free MoonBit checks.
 - A node:fs-only real-world probe builds and runs with 0 unsupported exports.
   Current metrics after callback/option-bag, generic, tuple, and function-type
-  cleanup: 2180 bridge lines, 315 declared functions, 74 `JSValue` refs, 52
-  `JSValue` functions, and 73 `JSValue` surface lines.
+  cleanup: 2239 bridge lines, 322 declared functions, 59 `JSValue` refs, 37
+  `JSValue` functions, and 58 `JSValue` surface lines.
 
 Next implementation tasks:
 
@@ -105,11 +105,18 @@ Next implementation tasks:
     `StatsBase<T>` / `StatsFsBase<T>` now preserve `T`, and event-map tuple
     payloads keep `Array[Unit]`, `Array[Double]`, or `Array[Error_]` where
     representable. Function types now lower to MoonBit function arrows instead
-    of `JSValue`; current node:fs budget is 73 `JSValue` surface lines and 52
-    `JSValue` functions.
+    of `JSValue`; inline `Promise<{ ... }>` results such as
+    `read.__promisify__` / `write.__promisify__` now get named result structs,
+    and class method generic bounds keep stream listener event names as
+    `String`. Common `writeFile*` / `appendFile*` string data and `cp*` string
+    paths now stay typed; `glob*` string patterns and `create*Stream` option
+    bags are preserved; promisify file-data wrappers no longer widen string
+    data to `JSValue`. Current node:fs budget is 58 `JSValue` surface lines and
+    37 `JSValue` functions.
   - Remaining quality debt: heterogeneous event payload tuples such as
-    `string | NonSharedBuffer`, stream listener APIs, and some overload-selected
-    sync/promisify wrappers still require `JSValue`.
+    `string | NonSharedBuffer`, stream listener payload APIs, and
+    overload-selected return/options surfaces such as encoding-dependent sync
+    wrappers still require `JSValue`.
 - [x] Split large generated MoonBit packages into reviewable files.
   - Target layout: `types.mbt`, `externs.mbt`, `converters.mbt`, and
     `guards.mbt` for large TS -> MoonBit scaffolds, while preserving generated

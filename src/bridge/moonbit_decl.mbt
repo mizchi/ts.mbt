@@ -65,9 +65,10 @@ priv struct ExportedClassDecl {
 }
 
 ///|
-priv struct TupleResultInterfaceSpec {
+priv struct ResultInterfaceSpec {
   export_name : String
   iface : @ast.TsInterface
+  needs_runtime_tuple_wrapper : Bool
 }
 
 ///|
@@ -3929,7 +3930,7 @@ fn rewrite_type_refs_in_scope(
 fn tuple_result_interface_spec(
   export_name : String,
   return_type : @ast.TsType,
-) -> TupleResultInterfaceSpec? {
+) -> ResultInterfaceSpec? {
   match return_type {
     Tuple(items) => {
       let fields : Array[(String, @ast.TsType)] = []
@@ -3939,6 +3940,7 @@ fn tuple_result_interface_spec(
       }
       Some({
         export_name,
+        needs_runtime_tuple_wrapper: true,
         iface: {
           name: tuple_result_interface_name(export_name),
           type_params: [],
@@ -3953,19 +3955,103 @@ fn tuple_result_interface_spec(
 }
 
 ///|
-fn normalize_tuple_result_interfaces(
+fn object_result_fields(
+  fields : Array[(@ast.TsType, @ast.TsType)],
+) -> Array[(String, @ast.TsType)]? {
+  let iface_fields : Array[(String, @ast.TsType)] = []
+  for field in fields {
+    let (key_type, value_type) = field
+    match key_type {
+      Literal(field_name) => iface_fields.push((field_name, value_type))
+      _ => return None
+    }
+  }
+  Some(iface_fields)
+}
+
+///|
+fn inline_object_result_interface_spec(
+  export_name : String,
+  return_type : @ast.TsType,
+) -> ResultInterfaceSpec? {
+  let fields = match return_type {
+    Object(fields) => fields
+    Applied("Promise", [Object(fields)]) => fields
+    Applied("PromiseLike", [Object(fields)]) => fields
+    _ => return None
+  }
+  match object_result_fields(fields) {
+    Some(iface_fields) =>
+      Some({
+        export_name,
+        needs_runtime_tuple_wrapper: false,
+        iface: {
+          name: tuple_result_interface_name(export_name),
+          type_params: [],
+          extends_names: [],
+          fields: iface_fields,
+          readonly_fields: [],
+        },
+      })
+    None => None
+  }
+}
+
+///|
+fn result_interface_spec(
+  export_name : String,
+  return_type : @ast.TsType,
+) -> ResultInterfaceSpec? {
+  match tuple_result_interface_spec(export_name, return_type) {
+    Some(spec) => Some(spec)
+    None => inline_object_result_interface_spec(export_name, return_type)
+  }
+}
+
+///|
+fn rewrite_inline_result_return_type(
+  export_name : String,
+  return_type : @ast.TsType,
+) -> @ast.TsType {
+  match return_type {
+    Tuple(_) => Named(tuple_result_interface_name(export_name))
+    Object(fields) =>
+      match object_result_fields(fields) {
+        Some(_) => Named(tuple_result_interface_name(export_name))
+        None => return_type
+      }
+    Applied("Promise", [Object(fields)]) =>
+      match object_result_fields(fields) {
+        Some(_) =>
+          Applied("Promise", [Named(tuple_result_interface_name(export_name))])
+        None => return_type
+      }
+    Applied("PromiseLike", [Object(fields)]) =>
+      match object_result_fields(fields) {
+        Some(_) =>
+          Applied("PromiseLike", [
+            Named(tuple_result_interface_name(export_name)),
+          ])
+        None => return_type
+      }
+    _ => return_type
+  }
+}
+
+///|
+fn normalize_result_interfaces(
   exported_imports : Array[ExportedImportDecl],
   exported_funcs : Array[ExportedFuncDecl],
   modules : Map[String, DeclModuleInfo],
   canonical_types : Map[String, String],
-) -> Array[TupleResultInterfaceSpec] {
-  let specs : Array[TupleResultInterfaceSpec] = []
+) -> Array[ResultInterfaceSpec] {
+  let specs : Array[ResultInterfaceSpec] = []
   let seen_export_names : Array[String] = []
   for exported in exported_imports {
     match modules.get(exported.source_path) {
       Some(info) =>
         match
-          tuple_result_interface_spec(
+          result_interface_spec(
             exported.export_name,
             lower_react_utility_type(
               info,
@@ -3993,7 +4079,7 @@ fn normalize_tuple_result_interfaces(
     match modules.get(exported.source_path) {
       Some(info) =>
         match
-          tuple_result_interface_spec(
+          result_interface_spec(
             exported.export_name,
             lower_react_utility_type(
               info,
@@ -4709,7 +4795,7 @@ fn clone_exported_import(
           param_name,
           param_index,
           decl_specialize_generated_api_param_type(
-            exported.export_name,
+            callback_owner_name,
             param_name,
             param_index,
             decl_widen_react_factory_tag_param(
@@ -4741,10 +4827,10 @@ fn clone_exported_import(
     name: exported.export_name,
     module_: exported.import_.module_,
     params,
-    return_type: match return_type {
-      Tuple(_) => Named(tuple_result_interface_name(exported.export_name))
-      _ => return_type
-    },
+    return_type: rewrite_inline_result_return_type(
+      exported.export_name,
+      return_type,
+    ),
   }
 }
 
@@ -4756,10 +4842,13 @@ fn decl_is_react_factory_name(name : String) -> Bool {
 ///|
 fn decl_specialize_generated_api_param_type(
   export_name : String,
-  _param_name : String,
+  param_name : String,
   param_index : Int,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
+  if param_name == "data" && decl_is_node_file_data_union(type_) {
+    return String_
+  }
   match export_name {
     "createSourceFile" | "createLanguageServiceSourceFile" =>
       if param_index == 2 {
@@ -4786,6 +4875,33 @@ fn decl_specialize_generated_api_param_type(
       } else {
         type_
       }
+    "cp" | "cpSync" =>
+      if (param_name == "source" || param_name == "destination") &&
+        decl_is_node_string_url_union(type_) {
+        String_
+      } else {
+        type_
+      }
+    "glob" | "globSync" =>
+      if param_name == "pattern" && decl_is_string_or_string_array_union(type_) {
+        String_
+      } else {
+        type_
+      }
+    "createReadStream" =>
+      if param_name == "options" &&
+        decl_type_contains_named(type_, ["ReadStreamOptions"]) {
+        Named("ReadStreamOptions")
+      } else {
+        type_
+      }
+    "createWriteStream" =>
+      if param_name == "options" &&
+        decl_type_contains_named(type_, ["WriteStreamOptions"]) {
+        Named("WriteStreamOptions")
+      } else {
+        type_
+      }
     _ => type_
   }
 }
@@ -4799,6 +4915,104 @@ fn decl_specialize_generated_api_return_type(
     "visitEachChild" => Named("Node")
     _ => type_
   }
+}
+
+///|
+fn decl_type_is_named(type_ : @ast.TsType, names : Array[String]) -> Bool {
+  match type_ {
+    Named(name) | Applied(name, _) => names.contains(name)
+    _ => false
+  }
+}
+
+///|
+fn decl_type_contains_named(type_ : @ast.TsType, names : Array[String]) -> Bool {
+  if decl_type_is_named(type_, names) {
+    return true
+  }
+  match type_ {
+    Union(items) =>
+      for item in items {
+        if decl_type_contains_named(item, names) {
+          return true
+        }
+      }
+    _ => ()
+  }
+  false
+}
+
+///|
+fn decl_type_contains_string(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    String_ | Literal(_) => true
+    Union(items) => {
+      for item in items {
+        if decl_type_contains_string(item) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn decl_type_contains_string_array(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Array(inner) => decl_type_contains_string(inner)
+    Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
+      decl_type_contains_string(inner)
+    Union(items) => {
+      for item in items {
+        if decl_type_contains_string_array(item) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn decl_union_has_string_and_named(
+  type_ : @ast.TsType,
+  names : Array[String],
+) -> Bool {
+  match type_ {
+    Union(items) => {
+      let mut has_string = false
+      let mut has_named = false
+      for item in items {
+        match item {
+          String_ | Literal(_) => has_string = true
+          _ => if decl_type_is_named(item, names) { has_named = true }
+        }
+      }
+      has_string && has_named
+    }
+    _ => false
+  }
+}
+
+///|
+fn decl_is_node_file_data_union(type_ : @ast.TsType) -> Bool {
+  decl_union_has_string_and_named(type_, [
+    "NodeJS.ArrayBufferView", "NodeJS_ArrayBufferView", "Uint8Array", "NonSharedBuffer",
+    "Buffer",
+  ])
+}
+
+///|
+fn decl_is_node_string_url_union(type_ : @ast.TsType) -> Bool {
+  decl_union_has_string_and_named(type_, ["URL"])
+}
+
+///|
+fn decl_is_string_or_string_array_union(type_ : @ast.TsType) -> Bool {
+  decl_type_contains_string(type_) && decl_type_contains_string_array(type_)
 }
 
 ///|
@@ -5220,7 +5434,7 @@ fn clone_exported_func(
         param.name,
         param_index,
         decl_specialize_generated_api_param_type(
-          exported.export_name,
+          callback_owner_name,
           param.name,
           param_index,
           decl_widen_react_factory_tag_param(
@@ -5251,10 +5465,10 @@ fn clone_exported_func(
   {
     name: exported.export_name,
     params,
-    return_type: match return_type {
-      Tuple(_) => Named(tuple_result_interface_name(exported.export_name))
-      _ => return_type
-    },
+    return_type: rewrite_inline_result_return_type(
+      exported.export_name,
+      return_type,
+    ),
     body: exported.func.body,
     is_generator: exported.func.is_generator,
     is_async: exported.func.is_async,
@@ -5870,7 +6084,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     exported_funcs,
     exported_func_overload_wrappers(exported_funcs, modules, canonical_types),
   )
-  let tuple_result_interfaces = normalize_tuple_result_interfaces(
+  let tuple_result_interfaces = normalize_result_interfaces(
     emitted_exported_imports, emitted_exported_funcs, modules, canonical_types,
   )
   let react_utility_interfaces = normalize_react_utility_interfaces(

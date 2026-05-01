@@ -1691,8 +1691,12 @@ fn Parser::parse_declare_class(
     }
     let member_name = self.parse_declare_class_member_name()
     let _ = self.match_(Question)
+    let mut local_type_param_bound_len = self.local_type_param_bounds.length()
     if self.check(Lt) {
-      self.skip_type_params()
+      let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+      local_type_param_bound_len = self.push_local_type_param_bounds(
+        type_param_bounds,
+      )
     }
     if self.check(LParen) {
       let params = self.parse_declare_signature_params()
@@ -1702,6 +1706,7 @@ fn Parser::parse_declare_class(
       } else {
         @ast.TsType::Any
       }
+      self.restore_local_type_param_bounds(local_type_param_bound_len)
       self.consume_semicolon()
       match member_name {
         Some(member_name) =>
@@ -1750,6 +1755,7 @@ fn Parser::parse_declare_class(
       }
       continue
     }
+    self.restore_local_type_param_bounds(local_type_param_bound_len)
     let mut property_type = @ast.TsType::Any
     if self.match_(Colon) {
       property_type = self.parse_type()

@@ -1663,6 +1663,27 @@ test "parser: parse declare class in module" {
 }
 
 ///|
+test "parser: substitute declare class method generic bounds" {
+  let src =
+    #|interface Events {
+    #|  close: [];
+    #|}
+    #|declare class Stream {
+    #|  on<E extends keyof Events>(eventName: E): void;
+    #|}
+  let parser = Parser::from_source(src)
+  let module_ = parser.parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let method_ = module_.classes[0].methods[0]
+  assert_eq(method_.params[0].1, String_)
+}
+
+///|
 test "parser: parse declare namespace in module as value declaration" {
   let parser = Parser::from_source(
     "declare namespace semver { const version: string; } export = semver;",
