@@ -11,6 +11,7 @@ if [ ! -d "$node_modules_root" ]; then
   echo "Set TSMBT_REALWORLD_TYPESCRIPT_NODE_MODULES to a node_modules directory to enable it." >&2
   exit 0
 fi
+repo_node_modules_root="$repo_root/node_modules"
 
 corpus_file="${TSMBT_REALWORLD_TYPESCRIPT_CORPUS:-corpus/realworld-typescript.tsv}"
 if [ ! -f "$corpus_file" ]; then
@@ -324,6 +325,11 @@ jsvalue_function_budget() {
     execa) printf '1\n' ;;
     preact) printf '10\n' ;;
     vitest/runtime) printf '3\n' ;;
+    playwright) printf '209\n' ;;
+    react-router) printf '86\n' ;;
+    jose) printf '63\n' ;;
+    express) printf '4\n' ;;
+    glob) printf '19\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '0\n' ;;
     node:querystring) printf '0\n' ;;
@@ -364,6 +370,11 @@ jsvalue_cause_budget() {
     execa) printf '1|0|0|0|1|0|0\n' ;;
     preact) printf '1319|1246|1|21|34|1|16\n' ;;
     vitest/runtime) printf '5|0|1|0|4|0|0\n' ;;
+    playwright) printf '618|98|0|50|413|56|1\n' ;;
+    react-router) printf '233|95|33|47|29|12|17\n' ;;
+    jose) printf '84|21|2|28|11|10|12\n' ;;
+    express) printf '4|0|0|0|0|0|4\n' ;;
+    glob) printf '27|8|6|2|0|2|9\n' ;;
     node:sqlite) printf '3|3|0|0|0|0|0\n' ;;
     node:fs) printf '11|4|0|0|0|7|0\n' ;;
     node:path) printf '0|0|0|0|0|0|0\n' ;;
@@ -526,6 +537,45 @@ package_root_for_spec() {
     printf '%s/%s\n' "$scope" "$name"
   else
     printf '%s\n' "${package_spec%%/*}"
+  fi
+}
+
+node_modules_root_for_spec() {
+  local package_spec="$1"
+  local package_root
+  package_root="$(package_root_for_spec "$package_spec")"
+
+  if [ -e "$node_modules_root/$package_root" ]; then
+    printf '%s\n' "$node_modules_root"
+    return
+  fi
+  if [ -d "$repo_node_modules_root" ] &&
+    [ -e "$repo_node_modules_root/$package_root" ]; then
+    printf '%s\n' "$repo_node_modules_root"
+    return
+  fi
+
+  echo "Missing package '$package_root' for '$package_spec' in $node_modules_root or $repo_node_modules_root" >&2
+  exit 1
+}
+
+ensure_project_node_modules() {
+  local project="$1"
+  local selected_node_modules_root="$2"
+
+  if [ -L "$project/node_modules" ]; then
+    local current_target
+    current_target="$(readlink "$project/node_modules")"
+    if [ "$current_target" != "$selected_node_modules_root" ]; then
+      rm "$project/node_modules"
+    fi
+  elif [ -e "$project/node_modules" ]; then
+    echo "Expected $project/node_modules to be a symlink" >&2
+    exit 1
+  fi
+
+  if [ ! -e "$project/node_modules" ]; then
+    ln -s "$selected_node_modules_root" "$project/node_modules"
   fi
 }
 
@@ -703,6 +753,64 @@ test "real-world vitest environments bridge smoke" {
     None,
   )
   let _ = populated.keys
+}
+EOF
+      ;;
+    playwright)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world playwright bridge smoke" {
+  let _ = get_chromium()
+  let _ = get_firefox()
+  let _ = get_webkit()
+  let _ = get_devices()
+}
+EOF
+      ;;
+    react_router)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world react-router bridge smoke" {
+  let path = PathPartial::{
+    pathname: Some("/docs"),
+    search: None,
+    hash: None,
+  }
+  assert_eq(createPath(path), "/docs")
+  let parsed = parsePath("/docs?tab=api#top")
+  assert_eq(parsed.pathname, Some("/docs"))
+  assert_eq(generatePath("/docs", None), "/docs")
+}
+EOF
+      ;;
+    jose)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world jose bridge smoke" {
+  let jwt = new_unsecured_jwt(None)
+  let encoded = jwt.unsecured_jwt_encode()
+  let _ = unsecured_jwt_decode(encoded, None)
+  let _ = decodeJwt(encoded)
+}
+EOF
+      ;;
+    express)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world express bridge smoke" {
+  let _ = router(None)
+  let _ = get_json()
+  let _ = get_urlencoded()
+  let _ = get_static()
+}
+EOF
+      ;;
+    glob)
+      cat > "$out/bridge_test.mbt" <<'EOF'
+test "real-world glob bridge smoke" {
+  let matches = globSync_string_glob_options_with_file_types_unset_optional(
+    "*.json",
+    None,
+  )
+  if matches.length() == 0 {
+    abort("expected json files in generated project")
+  }
 }
 EOF
       ;;
@@ -1100,6 +1208,70 @@ fn main {
 }
 EOF
       ;;
+    playwright)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let _ = @sut.get_chromium()
+  let _ = @sut.get_firefox()
+  let _ = @sut.get_webkit()
+  let _ = @sut.get_devices()
+}
+EOF
+      ;;
+    react_router)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let path = @sut.PathPartial::{
+    pathname: Some("/docs"),
+    search: None,
+    hash: None,
+  }
+  if @sut.createPath(path) != "/docs" {
+    abort("unexpected react-router createPath output")
+  }
+  let parsed = @sut.parsePath("/docs?tab=api#top")
+  if parsed.pathname != Some("/docs") {
+    abort("unexpected react-router parsePath pathname")
+  }
+  if @sut.generatePath("/docs", None) != "/docs" {
+    abort("unexpected react-router generatePath output")
+  }
+}
+EOF
+      ;;
+    jose)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let jwt = @sut.new_unsecured_jwt(None)
+  let encoded = jwt.unsecured_jwt_encode()
+  let _ = @sut.unsecured_jwt_decode(encoded, None)
+  let _ = @sut.decodeJwt(encoded)
+}
+EOF
+      ;;
+    express)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let _ = @sut.router(None)
+  let _ = @sut.get_json()
+  let _ = @sut.get_urlencoded()
+  let _ = @sut.get_static()
+}
+EOF
+      ;;
+    glob)
+      cat > "$smoke_dir/main.mbt" <<'EOF'
+fn main {
+  let matches = @sut.globSync_string_glob_options_with_file_types_unset_optional(
+    "*.json",
+    None,
+  )
+  if matches.length() == 0 {
+    abort("expected json files in generated project")
+  }
+}
+EOF
+      ;;
     node_sqlite)
       cat > "$smoke_dir/main.mbt" <<'EOF'
 extern "js" fn realworld_node_sqlite_memory_path() -> @sut.PathLike =
@@ -1372,20 +1544,14 @@ verify_package() {
   local project="$root/project"
   local out="$project/dist/$module_name"
 
-  local package_root
-  package_root="$(package_root_for_spec "$package_spec")"
-  if [ ! -e "$node_modules_root/$package_root" ]; then
-    echo "Missing package '$package_root' for '$package_spec' in $node_modules_root" >&2
-    exit 1
-  fi
+  local selected_node_modules_root
+  selected_node_modules_root="$(node_modules_root_for_spec "$package_spec")"
 
   echo "== $package_spec"
 
   rm -rf "$out"
   mkdir -p "$project"
-  if [ ! -e "$project/node_modules" ]; then
-    ln -s "$node_modules_root" "$project/node_modules"
-  fi
+  ensure_project_node_modules "$project" "$selected_node_modules_root"
 
   (
     cd "$project"

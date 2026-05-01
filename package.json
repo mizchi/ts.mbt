@@ -6,7 +6,10 @@
     "extract": "node scripts/extract-interfaces.mjs"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/react": "^19.2.14",
+    "express": "^5.2.1",
+    "glob": "^13.0.6",
     "hono": "^4.12.16",
     "react": "^19.2.5",
     "typescript": "^5.7.0",

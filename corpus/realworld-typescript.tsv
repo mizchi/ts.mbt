@@ -16,6 +16,11 @@ package|immer|immer|
 package|execa|execa|
 package|preact|preact|
 package|vitest/runtime|vitest_runtime|
+package|playwright|playwright|
+package|react-router|react_router|
+package|jose|jose|
+package|express|express|
+package|glob|glob|
 node_builtin|node:sqlite|node_sqlite|@types/node/sqlite.d.ts
 node_builtin|node:fs|node_fs|@types/node/fs.d.ts
 node_builtin|node:path|node_path|@types/node/path.d.ts

@@ -12,24 +12,6 @@ fn Parser::is_ident(self : Parser) -> Bool {
 }
 
 ///|
-fn Parser::is_function_type_param_name_start(self : Parser) -> Bool {
-  match self.peek().kind {
-    Ident(_)
-    | NumberType
-    | BooleanType
-    | StringType
-    | VoidType
-    | IntType
-    | Type
-    | Of
-    | In
-    | From
-    | Delete => true
-    _ => false
-  }
-}
-
-///|
 fn Parser::parse_paren_or_function_type(
   self : Parser,
 ) -> @ast.TsType raise ParseError {
@@ -46,11 +28,12 @@ fn Parser::parse_paren_or_function_type(
   let mut can_be_function_type = true
   while true {
     let _ = self.match_ellipsis()
-    if !self.is_function_type_param_name_start() {
-      can_be_function_type = false
-      break
+    let _ = self.parse_declare_param_name() catch {
+      _ => {
+        can_be_function_type = false
+        break
+      }
     }
-    let _ = self.advance()
     let _ = self.match_(Question)
     if !self.match_(Colon) {
       can_be_function_type = false
@@ -671,7 +654,7 @@ fn Parser::parse_postfix_type(
   base_type : @ast.TsType,
 ) -> @ast.TsType raise ParseError {
   // Array type: T[] or indexed access T[K]
-  if self.check(LBracket) {
+  if self.check(LBracket) && !self.has_line_terminator_before() {
     let _ = self.advance() // [
     if self.check(RBracket) {
       let _ = self.advance() // ]

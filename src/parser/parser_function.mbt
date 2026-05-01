@@ -929,7 +929,8 @@ pub fn Parser::parse_interface(
         let _ = self.advance()
         "declare"
       }
-      k => raise ParseError("Expected field name, got \{k}")
+      k =>
+        raise ParseError("Expected field name at \{self.peek().pos}, got \{k}")
     }
     // Skip method type parameters <T>
     self.skip_type_params()

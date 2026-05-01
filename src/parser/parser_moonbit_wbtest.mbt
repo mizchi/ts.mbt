@@ -210,6 +210,8 @@ test "parser: emit MoonBit declarations sanitizes future reserved parameter name
     #|interface RuntimeOptions {
     #|  override: boolean;
     #|  method: string;
+    #|  priv: () => string;
+    #|  resume: () => void;
     #|}
     #|declare function move(constructor: unknown): void;
     #|declare function final(): void;
@@ -221,6 +223,10 @@ test "parser: emit MoonBit declarations sanitizes future reserved parameter name
   }
   assert_true(actual.contains("/// override : Bool"))
   assert_true(actual.contains("/// method : String"))
+  assert_true(actual.contains("/// priv : () -> String"))
+  assert_true(actual.contains("declare pub fn RuntimeOptions::priv_"))
+  assert_true(actual.contains("/// resume : () -> Unit"))
+  assert_true(actual.contains("declare pub fn RuntimeOptions::resume_"))
   assert_true(
     actual.contains("declare pub fn move_(constructor_ : JSValue) -> Unit"),
   )

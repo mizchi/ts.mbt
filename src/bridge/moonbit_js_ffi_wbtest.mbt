@@ -4466,6 +4466,8 @@ test "bridge: FFI value identifier sanitizes MoonBit keywords and discard names"
   assert_eq(ffi_sanitize_identifier("final", "field"), "final_")
   assert_eq(ffi_sanitize_identifier("constructor", "field"), "constructor_")
   assert_eq(ffi_sanitize_identifier("local", "field"), "local_")
+  assert_eq(ffi_sanitize_identifier("priv", "field"), "priv_")
+  assert_eq(ffi_sanitize_identifier("resume", "field"), "resume_")
   assert_eq(ffi_sanitize_identifier("_", "field"), "field")
   assert_eq(ffi_value_fn_name("enum"), "enum_")
 }
@@ -4502,6 +4504,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
       ("include", @ast.TsType::Array(@ast.TsType::String_)),
       ("override", @ast.TsType::Boolean),
       ("method", @ast.TsType::String_),
+      ("priv", @ast.TsType::String_),
       ("_", @ast.TsType::Named("_")),
       (
         "references",
@@ -4518,6 +4521,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
   assert_true(actual.contains("  include_ : Array[String]"))
   assert_true(actual.contains("  override_ : Bool"))
   assert_true(actual.contains("  method_ : String"))
+  assert_true(actual.contains("  priv_ : String"))
   assert_true(actual.contains("  field : OpaqueType"))
   assert_true(actual.contains("  references : Array[BaseNode]"))
   assert_false(actual.contains("  _ : Scope"))

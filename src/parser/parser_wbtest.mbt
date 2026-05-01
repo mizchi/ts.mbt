@@ -5288,6 +5288,53 @@ test "parser: parse declare class method with destructured parameter" {
 }
 
 ///|
+test "parser: parse function type with destructured parameter" {
+  let src =
+    #|export declare const escape: (s: string, { windowsPathsNoEscape, magicalBraces, }?: Pick<MinimatchOptions, "windowsPathsNoEscape" | "magicalBraces">) => string;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e =>
+      fail("expected function type with destructured parameter to parse: \{e}")
+  }
+  assert_eq(module_.values.length(), 1)
+  assert_eq(module_.values[0].name, "escape")
+  match module_.values[0].type_ {
+    @ast.TsType::Func(params, @ast.TsType::String_) =>
+      assert_eq(params.length(), 2)
+    other => fail("expected function type, got \{other}")
+  }
+}
+
+///|
+test "parser: parse interface call signature with typed parameters" {
+  let src =
+    #|export interface GenericGetKeyFunction<IProtectedHeader, IToken, ReturnKeyTypes> {
+    #|  (protectedHeader: IProtectedHeader, token: IToken): Promise<ReturnKeyTypes> | ReturnKeyTypes
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected interface call signature to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].fields.length(), 1)
+  assert_eq(module_.interfaces[0].fields[0].0, "<call>")
+}
+
+///|
+test "parser: parse array field followed by index signature on next line" {
+  let src =
+    #|export interface HeaderParameters {
+    #|  crit?: string[]
+    #|  [propName: string]: unknown
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => fail("expected array field followed by index signature to parse: \{e}")
+  }
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].fields.length(), 2)
+  assert_eq(module_.interfaces[0].fields[0].0, "crit")
+  assert_eq(module_.interfaces[0].fields[1].0, "<computed>")
+}
+
+///|
 test "parser: parse constructor parameter decorator" {
   let src = "class App { constructor(@IInstantiationService private readonly service: IInstantiationService) {} }"
   let stmt = Parser::from_source(src).parse_stmt() catch {
