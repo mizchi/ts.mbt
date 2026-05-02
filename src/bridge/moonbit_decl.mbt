@@ -6449,104 +6449,10 @@ fn push_preferred_func_decl(
   funcs.push(func)
 }
 
-///|
-fn decl_is_empty_object_type(type_ : @ast.TsType) -> Bool {
-  match type_ {
-    Object(fields) => fields.length() == 0
-    _ => false
-  }
-}
-
-///|
-fn decl_is_simple_primitive_type(t : @ast.TsType) -> Bool {
-  match t {
-    Number
-    | Int
-    | Boolean
-    | String_
-    | Void
-    | BigInt
-    | Symbol
-    | Null
-    | Undefined => true
-    _ => false
-  }
-}
-
-///|
-fn decl_reduce_uniform_union(t : @ast.TsType) -> @ast.TsType {
-  match t {
-    Union(items) => {
-      if items.length() == 0 {
-        return t
-      }
-      let reduced : Array[@ast.TsType] = []
-      for it in items {
-        reduced.push(decl_reduce_uniform_union(it))
-      }
-      let first = reduced[0]
-      if !decl_is_simple_primitive_type(first) {
-        return Union(reduced)
-      }
-      let mut all_same = true
-      for r in reduced {
-        if r != first {
-          all_same = false
-          break
-        }
-      }
-      if all_same {
-        first
-      } else {
-        Union(reduced)
-      }
-    }
-    _ => t
-  }
-}
-
-///|
-fn decl_transparent_intersection_type(type_ : @ast.TsType) -> @ast.TsType? {
-  match type_ {
-    Intersection(items) => {
-      let concrete : Array[@ast.TsType] = []
-      let named_constraints : Array[@ast.TsType] = []
-      for item in items {
-        if !decl_is_empty_object_type(item) {
-          let reduced = decl_reduce_uniform_union(item)
-          concrete.push(reduced)
-          match reduced {
-            Named(_) | Applied(_, _) => named_constraints.push(reduced)
-            _ => ()
-          }
-        }
-      }
-      if concrete.length() == 1 {
-        Some(concrete[0])
-      } else if named_constraints.length() == 1 {
-        Some(named_constraints[0])
-      } else if concrete.length() > 0 &&
-        decl_is_simple_primitive_type(concrete[0]) {
-        let first = concrete[0]
-        let mut all_same = true
-        for c in concrete {
-          if c != first {
-            all_same = false
-            break
-          }
-        }
-        if all_same {
-          Some(first)
-        } else {
-          None
-        }
-      } else {
-        None
-      }
-    }
-    _ => None
-  }
-}
+// `decl_is_empty_object_type`, `decl_is_simple_primitive_type`,
+// `decl_reduce_uniform_union`, and `decl_transparent_intersection_type` were
+// straight duplicates of `mizchi/ts/checker` helpers; callers go through
+// `@checker.is_empty_object_type` etc. directly.
 
 ///|
 fn decl_normalize_overload_signature_type(type_ : @ast.TsType) -> @ast.TsType {
@@ -6561,7 +6467,7 @@ fn decl_normalize_overload_signature_type(type_ : @ast.TsType) -> @ast.TsType {
     }
     None => ()
   }
-  match decl_transparent_intersection_type(type_) {
+  match @checker.classify_transparent_intersection(type_) {
     Some(inner) => return decl_normalize_overload_signature_type(inner)
     None => ()
   }

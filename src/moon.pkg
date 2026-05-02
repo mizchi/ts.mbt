@@ -9,12 +9,15 @@ import {
   "mizchi/ts/ast" @ast,
   "mizchi/ts/runtime" @runtime,
   "mizchi/ts/parser" @parser,
-  "mizchi/ts/checker" @checker,
   "mizchi/ts/codegen" @codegen,
   "mizchi/wasmx/encode" @encode,
   "mizchi/ts/analysis" @analysis,
   "mizchi/ts/bridge" @bridge,
 }
+
+import {
+  "mizchi/ts/checker" @checker,
+} for "wbtest"
 
 options(
   is_main: true,
