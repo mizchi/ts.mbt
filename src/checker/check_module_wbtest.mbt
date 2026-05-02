@@ -101,6 +101,37 @@ test "check_module: alias chain that terminates is fine" {
 }
 
 ///|
+test "check_module: detects duplicate interface fields" {
+  let m = empty_module_for_check()
+  m.interfaces.push(
+    iface_for_check("User", [
+      ("id", String_),
+      ("name", String_),
+      ("id", Number),
+    ]),
+  )
+  let report = check_module(m)
+  let dup_fields = report.issues.filter(fn(i) {
+    i.kind == InterfaceFieldDuplicate
+  })
+  assert_eq(dup_fields.length(), 1)
+  assert_eq(dup_fields[0].name, "User.id")
+}
+
+///|
+test "check_module: distinct interface fields produce no duplicate report" {
+  let m = empty_module_for_check()
+  m.interfaces.push(
+    iface_for_check("User", [("id", String_), ("name", String_)]),
+  )
+  let report = check_module(m)
+  let dup_fields = report.issues.filter(fn(i) {
+    i.kind == InterfaceFieldDuplicate
+  })
+  assert_eq(dup_fields.length(), 0)
+}
+
+///|
 test "check_module: detects type alias arity mismatch" {
   let m = empty_module_for_check()
   // type Box<T> = { value: T };

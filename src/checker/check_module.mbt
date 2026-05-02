@@ -10,6 +10,7 @@ pub(all) enum TypeIssueKind {
   DuplicateDeclaration
   CircularTypeAlias
   TypeAliasArityMismatch
+  InterfaceFieldDuplicate
 } derive(Eq, Debug)
 
 ///|
@@ -76,7 +77,30 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
     }
   }
 
-  // 4. Type-alias arity mismatches: every `Applied(Name, args)` that resolves
+  // 4. Duplicate field names within the same interface — TS rejects these,
+  //    and synthesized interfaces should not produce them either.
+  for iface in module_.interfaces {
+    let seen_fields : Array[String] = []
+    let dup_fields : Array[String] = []
+    for f in iface.fields {
+      if seen_fields.contains(f.0) {
+        if !dup_fields.contains(f.0) {
+          dup_fields.push(f.0)
+        }
+      } else {
+        seen_fields.push(f.0)
+      }
+    }
+    for d in dup_fields {
+      issues.push({
+        kind: InterfaceFieldDuplicate,
+        name: "\{iface.name}.\{d}",
+        detail: "interface declares the same field name more than once",
+      })
+    }
+  }
+
+  // 5. Type-alias arity mismatches: every `Applied(Name, args)` that resolves
   //    to a top-level type alias must use the alias's declared arity.
   let arities : Map[String, Int] = {}
   for ta in module_.type_aliases {

@@ -121,6 +121,7 @@ pub(all) enum TypeIssueKind {
   DuplicateDeclaration
   CircularTypeAlias
   TypeAliasArityMismatch
+  InterfaceFieldDuplicate
 } derive(Eq, @debug.Debug)
 
 // Type aliases
