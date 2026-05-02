@@ -307,6 +307,10 @@ fn moonbit_should_preserve_interface_type_params(
     | "RefCallback"
     | "Router"
     | "TypedResponse" => true
+    // NOTE: Session<Data, FlashData> body uses FlashSessionData<Data, FlashData>
+    // which lowers to `Partial`, erasing the generic references — adding
+    // Session to this list would emit `struct Session[Data]` with Data unused.
+    // Revisit once we have post-lowering type-param filtering.
     _ => false
   }
 }
