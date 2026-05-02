@@ -44,6 +44,8 @@ pub fn reduce_uniform_union(@ast.TsType) -> @ast.TsType
 
 pub fn simplify_union(Array[@ast.TsType]) -> Array[@ast.TsType]
 
+pub fn unresolved_type_references(@ast.TsModule) -> Array[String]
+
 // Errors
 
 // Types and methods
