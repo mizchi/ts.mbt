@@ -8,6 +8,9 @@ target
 *.swo
 *~
 
+# Claude Code session lock
+.claude/scheduled_tasks.lock
+
 # OS
 .DS_Store
 Thumbs.db
