@@ -7330,18 +7330,33 @@ pub async fn emit_moonbit_decl_from_entry_path(
       break
     }
   }
+  let emitted_module : @ast.TsModule = {
+    funcs,
+    interfaces,
+    type_aliases: [],
+    imports,
+    values,
+    classes,
+    namespaces: [],
+    enums,
+  }
+  // Run the checker over the final module shape and surface anything it
+  // catches as a generator-level note. The emit pipeline is internally
+  // expected to produce well-formed output; any warnings here flag a real
+  // issue in bridge synthesis.
+  let report = @checker.check_module(emitted_module)
+  for issue in report.issues {
+    let prefix = match issue.kind {
+      UnresolvedReference => "Unresolved type reference"
+      DuplicateDeclaration => "Duplicate top-level name"
+      CircularTypeAlias => "Circular type alias"
+    }
+    let note = "///|\n/// \{prefix} \{issue.name}: \{issue.detail}"
+    if !notes.contains(note) {
+      notes.push(note)
+    }
+  }
   @parser.emit_moonbit_decl_with_sections(
-    {
-      funcs,
-      interfaces,
-      type_aliases: [],
-      imports,
-      values,
-      classes,
-      namespaces: [],
-      enums,
-    },
-    notes,
-    notes_need_jsvalue,
+    emitted_module, notes, notes_need_jsvalue,
   )
 }
