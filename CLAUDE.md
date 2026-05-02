@@ -19,9 +19,9 @@ These are the primary goals right now.
 ## Purpose Notes
 
 - `src/parser` is the foundation for parsing TypeScript/JavaScript and resolving module structure.
-- `src/analysis` contains pure analysis/type-checking and AOT eligibility passes over parsed TypeScript.
-- `src/bridge` contains TypeScript-to-MoonBit bridge generation, MBTI-to-TypeScript declaration generation, and declaration normalization helpers.
-  - Its TypeScript module graph helpers are scoped to declaration/export-surface generation; runtime package resolution stays in `src/parser`.
+- `src/checker` is the TypeScript type-system layer: structural classification (`classify_optional_like_union`, `classify_transparent_intersection`), assignability (`is_assignable_to` and resolver/generic/bivariant/diagnostic variants), three-valued `extends_decision`, infer pattern matching, distributive conditional reduction, generic substitution, alias-name predicates, `simplify_type` / `simplify_union`, the standard TS utility-type table (`Exclude` / `Extract` / `NonNullable` / `Awaited` / `ReturnType` / `Parameters`), module-level validation (`unresolved_type_references`, `check_module`).
+- `src/bridge` consumes `src/checker` for every type-shape decision (alias narrowing, indexed-access resolution, conditional-type lowering, optional/intersection collapsing, post-substitution union simplification) and runs `@checker.check_module` on the synthesized output as a sanity gate. Bridge keeps its own domain-specific specialization for Node FS / React / Hono / crypto / class-shape generation.
+- `src/analysis` contains pure analysis/type-checking and AOT eligibility passes over parsed TypeScript bodies (a different scope from `src/checker`, which is declaration-level).
 
 ## Project Structure
 
