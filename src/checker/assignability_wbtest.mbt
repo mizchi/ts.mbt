@@ -214,6 +214,34 @@ test "is_assignable_to: conditional picks false branch on non-extends" {
 }
 
 ///|
+test "is_assignable_to: conditional with infer extracts inner type" {
+  // (Promise<string>) extends Promise<infer U> ? U : never
+  // Should reduce to string.
+  let cond : @ast.TsType = Conditional(
+    Applied("Promise", [String_]),
+    Applied("Promise", [Applied("__tsmbt_infer", [Named("U")])]),
+    Named("U"),
+    Never,
+  )
+  assert_true(is_assignable_to(cond, String_))
+  assert_false(is_assignable_to(cond, Number))
+}
+
+///|
+test "is_assignable_to: conditional with infer falls through on mismatch" {
+  // (Array<string>) extends Promise<infer U> ? U : number
+  // Pattern doesn't match; should reduce to number.
+  let cond : @ast.TsType = Conditional(
+    Array(String_),
+    Applied("Promise", [Applied("__tsmbt_infer", [Named("U")])]),
+    Named("U"),
+    Number,
+  )
+  assert_true(is_assignable_to(cond, Number))
+  assert_false(is_assignable_to(cond, String_))
+}
+
+///|
 test "is_assignable_to: applied generics match by name and argument assignability" {
   // Box<"a"> is assignable to Box<string> (covariant — best-effort).
   let s : @ast.TsType = Applied("Box", [Literal("a")])

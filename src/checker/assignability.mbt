@@ -257,17 +257,87 @@ fn resolve_indexed_access_local(t : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
-// Reduce `A extends B ? X : Y` to `X` or `Y` when assignability of `A` to `B`
-// is decidable. Otherwise return the conditional unchanged so the surrounding
-// match falls through to `_ => false`.
+// Reduce `A extends B ? X : Y` to a concrete branch:
+//   - If `B` contains `infer` markers, try `match_infer_pattern(A, B)` and
+//     substitute the captured names into `X` on success. On failure (no
+//     match), pick `Y`.
+//   - Otherwise fall back to `is_assignable_to(A, B)`.
+// If neither attempt yields a definite answer, return the conditional
+// unchanged so the surrounding match falls through to `_ => false`.
 fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
   match t {
     Conditional(check, extends, true_branch, false_branch) =>
-      if is_assignable_to(check, extends) {
+      if contains_infer_marker(extends) {
+        let bindings : Map[String, @ast.TsType] = {}
+        if match_infer_pattern(check, extends, bindings) {
+          substitute_inferred_type(true_branch, bindings)
+        } else {
+          false_branch
+        }
+      } else if is_assignable_to(check, extends) {
         true_branch
       } else {
         false_branch
       }
     _ => t
+  }
+}
+
+///|
+fn contains_infer_marker(t : @ast.TsType) -> Bool {
+  match infer_marker_name(t) {
+    Some(_) => return true
+    None => ()
+  }
+  match t {
+    Array(inner) => contains_infer_marker(inner)
+    Tuple(items) => {
+      for it in items {
+        if contains_infer_marker(it) {
+          return true
+        }
+      }
+      false
+    }
+    Object(fields) => {
+      for f in fields {
+        if contains_infer_marker(f.0) || contains_infer_marker(f.1) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if contains_infer_marker(p) {
+          return true
+        }
+      }
+      contains_infer_marker(ret)
+    }
+    Union(items) | Intersection(items) => {
+      for it in items {
+        if contains_infer_marker(it) {
+          return true
+        }
+      }
+      false
+    }
+    Conditional(check, extends, t_branch, f_branch) =>
+      contains_infer_marker(check) ||
+      contains_infer_marker(extends) ||
+      contains_infer_marker(t_branch) ||
+      contains_infer_marker(f_branch)
+    Applied(_, args) => {
+      for a in args {
+        if contains_infer_marker(a) {
+          return true
+        }
+      }
+      false
+    }
+    IndexedAccess(base, key) =>
+      contains_infer_marker(base) || contains_infer_marker(key)
+    _ => false
   }
 }
