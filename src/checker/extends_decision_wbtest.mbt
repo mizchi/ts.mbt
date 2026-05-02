@@ -77,3 +77,40 @@ test "extends_decision: source union — propagates unknown" {
     None,
   )
 }
+
+///|
+test "extends_decision_with: resolves names then decides" {
+  // type ID = string;  ID extends string ⇒ true.
+  let table : Map[String, @ast.TsType] = { "ID": String_ }
+  let resolve = fn(name) { table.get(name) }
+  assert_eq(extends_decision_with(Named("ID"), String_, resolve), Some(true))
+  assert_eq(extends_decision_with(Named("ID"), Number, resolve), Some(false))
+}
+
+///|
+test "extends_decision_with_generics: resolves Applied bindings" {
+  // type Maybe<T> = T | undefined; Maybe<string> extends string | undefined?
+  let table : Map[String, AliasBinding] = {
+    "Maybe": { type_params: ["T"], body: Union([Named("T"), Undefined]) },
+  }
+  let resolve = fn(name) { table.get(name) }
+  assert_eq(
+    extends_decision_with_generics(
+      Applied("Maybe", [String_]),
+      Union([String_, Undefined]),
+      resolve,
+    ),
+    Some(true),
+  )
+}
+
+///|
+test "extends_decision_with_generics: 3-valued unknown survives expansion" {
+  let table : Map[String, AliasBinding] = {}
+  let resolve = fn(name) { table.get(name) }
+  // Two unrelated nominal types stay unknown.
+  assert_eq(
+    extends_decision_with_generics(Named("Foo"), Named("Bar"), resolve),
+    None,
+  )
+}

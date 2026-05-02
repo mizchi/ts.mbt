@@ -9,6 +9,10 @@
 // different names, no resolver) report `None` instead of `false`, since at the
 // declaration level the names might still ultimately resolve to compatible
 // types.
+//
+// Resolver- and generics-aware variants pre-expand aliases via the matching
+// resolvers from resolver.mbt / generics.mbt before delegating to the
+// structural decision.
 
 ///|
 pub fn extends_decision(
@@ -80,4 +84,26 @@ pub fn extends_decision(
     ) => Some(false)
     _ => None
   }
+}
+
+///|
+pub fn extends_decision_with(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolve : (String) -> @ast.TsType?,
+) -> Bool? {
+  let s = expand_aliases(source, resolve, [])
+  let t = expand_aliases(target, resolve, [])
+  extends_decision(s, t)
+}
+
+///|
+pub fn extends_decision_with_generics(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolve : (String) -> AliasBinding?,
+) -> Bool? {
+  let s = expand_generic(source, resolve, [])
+  let t = expand_generic(target, resolve, [])
+  extends_decision(s, t)
 }
