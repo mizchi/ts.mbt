@@ -10,6 +10,10 @@ pub fn classify_optional_like_union(@ast.TsType) -> (@ast.TsType, Bool)?
 
 pub fn classify_transparent_intersection(@ast.TsType) -> @ast.TsType?
 
+pub fn collect_referenced_names(@ast.TsType) -> Array[String]
+
+pub fn equivalent(@ast.TsType, @ast.TsType) -> Bool
+
 pub fn is_assignable_to(@ast.TsType, @ast.TsType) -> Bool
 
 pub fn is_component_ref_like_name(String) -> Bool
@@ -37,6 +41,8 @@ pub fn is_simple_primitive_type(@ast.TsType) -> Bool
 pub fn normalize_literal_type(@ast.TsType) -> @ast.TsType
 
 pub fn reduce_uniform_union(@ast.TsType) -> @ast.TsType
+
+pub fn simplify_union(Array[@ast.TsType]) -> Array[@ast.TsType]
 
 // Errors
 

@@ -15,6 +15,16 @@ pub fn is_assignable_to(
   if source == target {
     return true
   }
+  // Resolve T[K] before matching — IndexedAccess that cannot be resolved is
+  // treated as `Any`, which flows freely. Both sides are eagerly resolved.
+  let source = resolve_indexed_access_local(source)
+  let target = resolve_indexed_access_local(target)
+  // Conditional types pick a branch when `extends` is decidable.
+  let source = reduce_conditional(source)
+  let target = reduce_conditional(target)
+  if source == target {
+    return true
+  }
   // `any` is the universal escape hatch — it flows in either direction.
   match target {
     Any => return true
@@ -151,8 +161,84 @@ fn is_object_assignable(
       }
     }
     if !matched {
-      return false
+      // A target field whose type accepts `undefined` (the desugaring of
+      // `x?: T`) tolerates the source missing that field entirely.
+      if !type_accepts_undefined(t_type) {
+        return false
+      }
     }
   }
   true
+}
+
+///|
+fn type_accepts_undefined(t : @ast.TsType) -> Bool {
+  match t {
+    Undefined | Any => true
+    Union(members) => {
+      for m in members {
+        if type_accepts_undefined(m) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+// Resolve `T[K]` once: when `T` is a structural Object/Struct and `K` is a
+// string literal that names one of the fields, return the field type. Any
+// other case (generic T, computed K, missing field) returns `Any` to keep the
+// caller permissive — TypeScript's fallback for unknown indexed access is
+// effectively the same.
+fn resolve_indexed_access_local(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    IndexedAccess(base, key) => {
+      let key_name = match key {
+        Literal(name) => name
+        _ => return Any
+      }
+      match base {
+        Object(fields) => {
+          for field in fields {
+            let (k, v) = field
+            match k {
+              Literal(field_name) => if field_name == key_name { return v }
+              _ => ()
+            }
+          }
+          Any
+        }
+        Struct(_, fields) => {
+          for field in fields {
+            let (field_name, v) = field
+            if field_name == key_name {
+              return v
+            }
+          }
+          Any
+        }
+        _ => Any
+      }
+    }
+    _ => t
+  }
+}
+
+///|
+// Reduce `A extends B ? X : Y` to `X` or `Y` when assignability of `A` to `B`
+// is decidable. Otherwise return the conditional unchanged so the surrounding
+// match falls through to `_ => false`.
+fn reduce_conditional(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Conditional(check, extends, true_branch, false_branch) =>
+      if is_assignable_to(check, extends) {
+        true_branch
+      } else {
+        false_branch
+      }
+    _ => t
+  }
 }

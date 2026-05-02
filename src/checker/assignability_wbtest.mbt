@@ -139,3 +139,86 @@ test "is_assignable_to: named references match by name" {
   assert_true(is_assignable_to(Named("Foo"), Named("Foo")))
   assert_false(is_assignable_to(Named("Foo"), Named("Bar")))
 }
+
+///|
+test "is_assignable_to: optional target fields accept missing source fields" {
+  // {x: number} is assignable to {x: number; y?: number}
+  // because y is optional (number | undefined accepts the missing field).
+  let source : @ast.TsType = Object([(Literal("x"), Number)])
+  let target : @ast.TsType = Object([
+    (Literal("x"), Number),
+    (Literal("y"), Union([Number, Undefined])),
+  ])
+  assert_true(is_assignable_to(source, target))
+}
+
+///|
+test "is_assignable_to: required target fields still require presence" {
+  let source : @ast.TsType = Object([(Literal("x"), Number)])
+  let target : @ast.TsType = Object([
+    (Literal("x"), Number),
+    (Literal("y"), Number),
+  ])
+  assert_false(is_assignable_to(source, target))
+}
+
+///|
+test "is_assignable_to: optional encoded with null is also assignable" {
+  // {x: number; y?: number | null}
+  let source : @ast.TsType = Object([(Literal("x"), Number)])
+  let target : @ast.TsType = Object([
+    (Literal("x"), Number),
+    (Literal("y"), Union([Number, Null, Undefined])),
+  ])
+  assert_true(is_assignable_to(source, target))
+}
+
+///|
+test "is_assignable_to: indexed access resolves against object source" {
+  // {x: number, y: string}["x"] ⇔ number
+  let object_type : @ast.TsType = Object([
+    (Literal("x"), Number),
+    (Literal("y"), String_),
+  ])
+  let access : @ast.TsType = IndexedAccess(object_type, Literal("x"))
+  assert_true(is_assignable_to(access, Number))
+  assert_false(is_assignable_to(access, String_))
+}
+
+///|
+test "is_assignable_to: indexed access on missing key is unresolvable" {
+  // We cannot prove anything about T["unknown"], so it is treated as Any.
+  let object_type : @ast.TsType = Object([(Literal("x"), Number)])
+  let access : @ast.TsType = IndexedAccess(object_type, Literal("missing"))
+  // Conservative: unresolvable indexed accesses fall back to Any.
+  assert_true(is_assignable_to(access, Number))
+  assert_true(is_assignable_to(access, String_))
+}
+
+///|
+test "is_assignable_to: conditional picks branch when extends decidable" {
+  // string extends string ? number : boolean
+  // ⇒ number is the resolved type.
+  let cond : @ast.TsType = Conditional(String_, String_, Number, Boolean)
+  assert_true(is_assignable_to(cond, Number))
+  assert_false(is_assignable_to(cond, Boolean))
+}
+
+///|
+test "is_assignable_to: conditional picks false branch on non-extends" {
+  // string extends number ? boolean : Number
+  // ⇒ Number is the resolved type.
+  let cond : @ast.TsType = Conditional(String_, Number, Boolean, Number)
+  assert_true(is_assignable_to(cond, Number))
+  assert_false(is_assignable_to(cond, Boolean))
+}
+
+///|
+test "is_assignable_to: applied generics match by name and argument assignability" {
+  // Box<"a"> is assignable to Box<string> (covariant — best-effort).
+  let s : @ast.TsType = Applied("Box", [Literal("a")])
+  let t : @ast.TsType = Applied("Box", [String_])
+  assert_true(is_assignable_to(s, t))
+  // Box<string> is not assignable to Box<number>.
+  assert_false(is_assignable_to(s, Applied("Box", [Number])))
+}
