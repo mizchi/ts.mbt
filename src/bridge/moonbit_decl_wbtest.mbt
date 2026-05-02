@@ -2490,6 +2490,27 @@ async test "bridge: recursive type alias overload wrappers do not overflow" {
 }
 
 ///|
+async test "bridge: Params<K> alias renders as opaque Params in mbti" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/params-alias-narrow-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Params<Key> is a string-keyed mapped record; treat the alias as an
+  // opaque type instead of widening the field to @js.Any when the generic
+  // key parameter prevents expansion.
+  assert_false(actual.contains("params : @js.Any"))
+  assert_false(actual.contains("params : JSValue"))
+  assert_true(actual.contains("params : Params"))
+}
+
+///|
 async test "bridge: Signalish<T> alias renders as opaque Signalish in mbti" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/signalish-narrow-entry.d.ts",

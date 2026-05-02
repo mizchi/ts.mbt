@@ -2015,6 +2015,14 @@ fn is_signalish_alias_name(name : String) -> Bool {
 }
 
 ///|
+// `Params<Key>` is the react-router `Record<Key, string | undefined>` mapped
+// alias. Generic key parameters block field expansion, so the generator
+// widens it to `Any`; treat the alias as an opaque MoonBit type instead.
+fn is_params_alias_name(name : String) -> Bool {
+  name == "Params" || name.has_suffix(".Params")
+}
+
+///|
 fn props_with_children_object_interface_name(
   fields : Array[(@ast.TsType, @ast.TsType)],
 ) -> String {
@@ -3364,6 +3372,8 @@ fn lower_react_utility_type(
       )
     Applied(name, _) if is_signalish_alias_name(name) => Named("Signalish")
     Named(name) if is_signalish_alias_name(name) => Named("Signalish")
+    Applied(name, _) if is_params_alias_name(name) => Named("Params")
+    Named(name) if is_params_alias_name(name) => Named("Params")
     Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
     Applied(name, [source_type]) if is_mapped_interface_utility_name(name) =>
