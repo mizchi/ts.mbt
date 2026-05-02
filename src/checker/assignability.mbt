@@ -5,11 +5,32 @@
 // The implementation is intentionally local — it does not resolve `Named`
 // references against any module graph. Callers that need cross-reference
 // resolution should pre-substitute aliases first.
+//
+// Function parameter variance defaults to *contravariant* (TS strict-mode
+// behavior). Use `is_assignable_to_bivariant` to mirror non-strict TS where
+// method-shorthand parameters are bivariant.
 
 ///|
 pub fn is_assignable_to(
   source : @ast.TsType,
   target : @ast.TsType,
+) -> Bool {
+  is_assignable_to_inner(source, target, false)
+}
+
+///|
+pub fn is_assignable_to_bivariant(
+  source : @ast.TsType,
+  target : @ast.TsType,
+) -> Bool {
+  is_assignable_to_inner(source, target, true)
+}
+
+///|
+fn is_assignable_to_inner(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  bivariant_params : Bool,
 ) -> Bool {
   // Reflexive shortcut.
   if source == target {
@@ -43,7 +64,7 @@ pub fn is_assignable_to(
   match target {
     Union(members) => {
       for m in members {
-        if is_assignable_to(source, m) {
+        if is_assignable_to_inner(source, m, bivariant_params) {
           return true
         }
       }
@@ -59,7 +80,7 @@ pub fn is_assignable_to(
   match source {
     Union(members) => {
       for m in members {
-        if !is_assignable_to(m, target) {
+        if !is_assignable_to_inner(m, target, bivariant_params) {
           return false
         }
       }
@@ -71,7 +92,7 @@ pub fn is_assignable_to(
   match target {
     Intersection(members) => {
       for m in members {
-        if !is_assignable_to(source, m) {
+        if !is_assignable_to_inner(source, m, bivariant_params) {
           return false
         }
       }
@@ -83,7 +104,7 @@ pub fn is_assignable_to(
   match source {
     Intersection(members) => {
       for m in members {
-        if is_assignable_to(m, target) {
+        if is_assignable_to_inner(m, target, bivariant_params) {
           return true
         }
       }
@@ -98,13 +119,13 @@ pub fn is_assignable_to(
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
     // Compound covariance/contravariance.
-    (Array(s_inner), Array(t_inner)) => is_assignable_to(s_inner, t_inner)
+    (Array(s_inner), Array(t_inner)) => is_assignable_to_inner(s_inner, t_inner, bivariant_params)
     (Tuple(s_items), Tuple(t_items)) => {
       if s_items.length() != t_items.length() {
         return false
       }
       for i in 0..<s_items.length() {
-        if !is_assignable_to(s_items[i], t_items[i]) {
+        if !is_assignable_to_inner(s_items[i], t_items[i], bivariant_params) {
           return false
         }
       }
@@ -114,17 +135,24 @@ pub fn is_assignable_to(
       if s_params.length() != t_params.length() {
         return false
       }
-      // Contravariant params: target's param must flow into source's param.
+      // Contravariant params (strict): target's param must flow into source's
+      // param. Bivariant: either direction is acceptable.
       for i in 0..<s_params.length() {
-        if !is_assignable_to(t_params[i], s_params[i]) {
+        let ok = if bivariant_params {
+          is_assignable_to_inner(s_params[i], t_params[i], bivariant_params) ||
+          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
+        } else {
+          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
+        }
+        if !ok {
           return false
         }
       }
       // Covariant return.
-      is_assignable_to(s_ret, t_ret)
+      is_assignable_to_inner(s_ret, t_ret, bivariant_params)
     }
     (Object(s_fields), Object(t_fields)) =>
-      is_object_assignable(s_fields, t_fields)
+      is_object_assignable_inner(s_fields, t_fields, bivariant_params)
     // Named/applied references are nominal: only equal names match.
     (Named(a), Named(b)) => a == b
     (Applied(a, args_a), Applied(b, args_b)) => {
@@ -132,7 +160,7 @@ pub fn is_assignable_to(
         return false
       }
       for i in 0..<args_a.length() {
-        if !is_assignable_to(args_a[i], args_b[i]) {
+        if !is_assignable_to_inner(args_a[i], args_b[i], bivariant_params) {
           return false
         }
       }
@@ -143,9 +171,10 @@ pub fn is_assignable_to(
 }
 
 ///|
-fn is_object_assignable(
+fn is_object_assignable_inner(
   s_fields : Array[(@ast.TsType, @ast.TsType)],
   t_fields : Array[(@ast.TsType, @ast.TsType)],
+  bivariant_params : Bool,
 ) -> Bool {
   for t_field in t_fields {
     let (t_key, t_type) = t_field
@@ -153,7 +182,7 @@ fn is_object_assignable(
     for s_field in s_fields {
       let (s_key, s_type) = s_field
       if s_key == t_key {
-        if !is_assignable_to(s_type, t_type) {
+        if !is_assignable_to_inner(s_type, t_type, bivariant_params) {
           return false
         }
         matched = true

@@ -20,6 +20,8 @@ pub fn extends_decision(@ast.TsType, @ast.TsType) -> Bool?
 
 pub fn is_assignable_to(@ast.TsType, @ast.TsType) -> Bool
 
+pub fn is_assignable_to_bivariant(@ast.TsType, @ast.TsType) -> Bool
+
 pub fn is_assignable_to_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?) -> Bool
 
 pub fn is_assignable_to_with_generics(@ast.TsType, @ast.TsType, (String) -> AliasBinding?) -> Bool
