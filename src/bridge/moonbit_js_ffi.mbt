@@ -3347,6 +3347,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let (
     exported_interfaces,
     exported_enums,
+    _exported_tagged_unions,
     exported_imports,
     exported_funcs,
     exported_values,

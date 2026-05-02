@@ -28,6 +28,14 @@ priv struct ExportedEnumDecl {
 }
 
 ///|
+priv struct ExportedTaggedUnionDecl {
+  source_path : String
+  local_name : String
+  export_name : String
+  decl : BridgeTaggedUnionDecl
+}
+
+///|
 priv struct ExportedImportDecl {
   source_path : String
   local_name_prefix : String
@@ -97,6 +105,7 @@ priv struct ExportedConstValueSet {
 priv enum ResolvedDecl {
   Interface(ExportedInterfaceDecl)
   Enum(ExportedEnumDecl)
+  TaggedUnion(ExportedTaggedUnionDecl)
   Import(ExportedImportDecl)
   Function(ExportedFuncDecl)
   Value(ExportedValueDecl)
@@ -1400,10 +1409,20 @@ fn resolve_decl_from_local_name(
                     Some(enum_) =>
                       Enum({ source_path, local_name, export_name, enum_ })
                     None =>
-                      match
-                        type_alias_enum_like_unsupported_reason(type_alias) {
-                        Some(reason) => Unsupported(export_name, reason)
-                        None => Missing
+                      match tagged_union_type_alias_decl(type_alias) {
+                        Some(decl) =>
+                          TaggedUnion({
+                            source_path,
+                            local_name,
+                            export_name,
+                            decl,
+                          })
+                        None =>
+                          match
+                            type_alias_enum_like_unsupported_reason(type_alias) {
+                            Some(reason) => Unsupported(export_name, reason)
+                            None => Missing
+                          }
                       }
                   }
                 None =>
@@ -1562,6 +1581,7 @@ fn collect_exported_decls(
 ) -> (
   Array[ExportedInterfaceDecl],
   Array[ExportedEnumDecl],
+  Array[ExportedTaggedUnionDecl],
   Array[ExportedImportDecl],
   Array[ExportedFuncDecl],
   Array[ExportedValueDecl],
@@ -1570,6 +1590,7 @@ fn collect_exported_decls(
 ) {
   let interfaces : Array[ExportedInterfaceDecl] = []
   let enums : Array[ExportedEnumDecl] = []
+  let tagged_unions : Array[ExportedTaggedUnionDecl] = []
   let imports : Array[ExportedImportDecl] = []
   let funcs : Array[ExportedFuncDecl] = []
   let values : Array[ExportedValueDecl] = []
@@ -1692,6 +1713,7 @@ fn collect_exported_decls(
       ) {
       Interface(exported) => interfaces.push(exported)
       Enum(exported) => enums.push(exported)
+      TaggedUnion(exported) => tagged_unions.push(exported)
       Import(exported) => imports.push(exported)
       Function(exported) => funcs.push(exported)
       Value(exported) => values.push(exported)
@@ -1727,7 +1749,7 @@ fn collect_exported_decls(
       Missing => ()
     }
   }
-  (interfaces, enums, imports, funcs, values, classes, notes)
+  (interfaces, enums, tagged_unions, imports, funcs, values, classes, notes)
 }
 
 ///|
@@ -7207,12 +7229,18 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let (
     exported_interfaces,
     exported_enums,
+    exported_tagged_unions,
     exported_imports,
     exported_funcs,
     exported_values,
     exported_classes,
     notes,
   ) = collect_exported_decls(graph, export_surface, modules)
+  for tagged in exported_tagged_unions {
+    notes.push(
+      "///|\n/// Heterogeneous union \{tagged.export_name} (\{tagged.source_path}::\{tagged.local_name}) detected with \{tagged.decl.cases.length()} cases (auto-enum lowering pending).",
+    )
+  }
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_enums, exported_classes,
   )
