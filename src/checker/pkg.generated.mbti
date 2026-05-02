@@ -64,6 +64,8 @@ pub fn reduce_uniform_union(@ast.TsType) -> @ast.TsType
 
 pub fn simplify_union(Array[@ast.TsType]) -> Array[@ast.TsType]
 
+pub fn standard_utility_types() -> Map[String, AliasBinding]
+
 pub fn substitute_inferred_type(@ast.TsType, Map[String, @ast.TsType]) -> @ast.TsType
 
 pub fn unresolved_type_references(@ast.TsModule) -> Array[String]
