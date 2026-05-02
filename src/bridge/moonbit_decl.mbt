@@ -7268,6 +7268,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
       InterfaceFieldDuplicate => "Duplicate interface field"
       EnumMemberDuplicate => "Duplicate enum member"
       InterfaceExtendsCycle => "Interface extends cycle"
+      ClassPropertyDuplicate => "Duplicate class property"
     }
     let note = "///|\n/// \{prefix} \{issue.name}: \{issue.detail}"
     if !notes.contains(note) {

@@ -101,6 +101,51 @@ test "check_module: alias chain that terminates is fine" {
 }
 
 ///|
+test "check_module: detects duplicate class instance properties" {
+  let m = empty_module_for_check()
+  m.classes.push({
+    name: "Counter",
+    base_names: [],
+    constructor_params: None,
+    properties: [
+      { name: "value", type_: Number, is_static: false, is_readonly: false },
+      { name: "value", type_: String_, is_static: false, is_readonly: false },
+    ],
+    methods: [],
+    is_abstract: false,
+    is_constructible: true,
+  })
+  let report = check_module(m)
+  let dups = report.issues.filter(fn(i) {
+    i.kind == ClassPropertyDuplicate
+  })
+  assert_eq(dups.length(), 1)
+  assert_eq(dups[0].name, "Counter.value")
+}
+
+///|
+test "check_module: instance and static with same name is OK" {
+  let m = empty_module_for_check()
+  m.classes.push({
+    name: "Counter",
+    base_names: [],
+    constructor_params: None,
+    properties: [
+      { name: "value", type_: Number, is_static: false, is_readonly: false },
+      { name: "value", type_: Number, is_static: true, is_readonly: false },
+    ],
+    methods: [],
+    is_abstract: false,
+    is_constructible: true,
+  })
+  let report = check_module(m)
+  let dups = report.issues.filter(fn(i) {
+    i.kind == ClassPropertyDuplicate
+  })
+  assert_eq(dups.length(), 0)
+}
+
+///|
 test "check_module: detects duplicate enum members" {
   let m = empty_module_for_check()
   m.enums.push({

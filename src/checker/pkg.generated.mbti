@@ -124,6 +124,7 @@ pub(all) enum TypeIssueKind {
   InterfaceFieldDuplicate
   EnumMemberDuplicate
   InterfaceExtendsCycle
+  ClassPropertyDuplicate
 } derive(Eq, @debug.Debug)
 
 // Type aliases

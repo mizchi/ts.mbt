@@ -13,6 +13,7 @@ pub(all) enum TypeIssueKind {
   InterfaceFieldDuplicate
   EnumMemberDuplicate
   InterfaceExtendsCycle
+  ClassPropertyDuplicate
 } derive(Eq, Debug)
 
 ///|
@@ -110,6 +111,42 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
         kind: EnumMemberDuplicate,
         name: "\{e.name}.\{d}",
         detail: "enum declares the same member name more than once",
+      })
+    }
+  }
+
+  // 3d. Class property duplicates: same property name listed twice on a
+  //     class (instance + static treated separately, since TS allows
+  //     `static x` alongside `x`). Methods are skipped because TS allows
+  //     same-name method overloads.
+  for c in module_.classes {
+    let seen_inst : Array[String] = []
+    let dup_inst : Array[String] = []
+    let seen_static : Array[String] = []
+    let dup_static : Array[String] = []
+    for p in c.properties {
+      let bucket = if p.is_static { seen_static } else { seen_inst }
+      let dup = if p.is_static { dup_static } else { dup_inst }
+      if bucket.contains(p.name) {
+        if !dup.contains(p.name) {
+          dup.push(p.name)
+        }
+      } else {
+        bucket.push(p.name)
+      }
+    }
+    for d in dup_inst {
+      issues.push({
+        kind: ClassPropertyDuplicate,
+        name: "\{c.name}.\{d}",
+        detail: "class declares the same instance property name more than once",
+      })
+    }
+    for d in dup_static {
+      issues.push({
+        kind: ClassPropertyDuplicate,
+        name: "\{c.name}.\{d}",
+        detail: "class declares the same static property name more than once",
       })
     }
   }
