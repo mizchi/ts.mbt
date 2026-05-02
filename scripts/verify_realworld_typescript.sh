@@ -369,7 +369,7 @@ jsvalue_cause_budget() {
     chalk) printf '5|0|0|0|0|2|3\n' ;;
     dotenv) printf '2|1|1|0|0|0|0\n' ;;
     ignore) printf '2|1|0|1|0|0|0\n' ;;
-    hono) printf '52|6|6|21|3|7|9\n' ;;
+    hono) printf '51|5|6|21|3|7|9\n' ;;
     zod) printf '431|161|93|111|26|21|19\n' ;;
     date-fns) printf '22|4|7|1|0|8|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;

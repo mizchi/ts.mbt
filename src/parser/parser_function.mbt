@@ -1164,11 +1164,102 @@ fn type_alias_object_fields_to_interface(
 
 ///|
 fn type_alias_to_interface(type_alias : @ast.TsTypeAlias) -> @ast.TsInterface? {
+  // Apply `Record<P, V>` key substitution where P has a known bound. Only at
+  // the Record-key position so the rest of the body keeps its generic shape.
+  let body = if type_alias.type_param_bounds.length() > 0 {
+    substitute_record_key_bounds(type_alias.type_, type_alias.type_param_bounds)
+  } else {
+    type_alias.type_
+  }
   type_alias_object_fields_to_interface(
     type_alias.name,
     type_alias.type_params,
-    type_alias.type_,
+    body,
   )
+}
+
+///|
+// Walk `type_` and, wherever a `Record<Named(P), V>` references a `Named(P)`
+// at the key position with `P` listed in `bounds`, substitute the key with
+// `P`'s bound. Other positions are left untouched so the generic shape of the
+// alias body is preserved.
+fn substitute_record_key_bounds(
+  type_ : @ast.TsType,
+  bounds : Array[(String, @ast.TsType)],
+) -> @ast.TsType {
+  fn lookup_bound(name : String) -> @ast.TsType? {
+    for entry in bounds {
+      if entry.0 == name {
+        return Some(entry.1)
+      }
+    }
+    None
+  }
+
+  fn walk(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      Applied("Record", [key, value]) => {
+        let resolved_key = match key {
+          Named(name) =>
+            match lookup_bound(name) {
+              Some(b) => b
+              None => key
+            }
+          _ => walk(key)
+        }
+        Applied("Record", [resolved_key, walk(value)])
+      }
+      Applied(name, args) => {
+        let new_args : Array[@ast.TsType] = []
+        for a in args {
+          new_args.push(walk(a))
+        }
+        Applied(name, new_args)
+      }
+      Array(inner) => Array(walk(inner))
+      Tuple(items) => {
+        let out : Array[@ast.TsType] = []
+        for it in items {
+          out.push(walk(it))
+        }
+        Tuple(out)
+      }
+      Object(fields) => {
+        let out : Array[(@ast.TsType, @ast.TsType)] = []
+        for f in fields {
+          out.push((walk(f.0), walk(f.1)))
+        }
+        Object(out)
+      }
+      Func(params, ret) => {
+        let new_params : Array[@ast.TsType] = []
+        for p in params {
+          new_params.push(walk(p))
+        }
+        Func(new_params, walk(ret))
+      }
+      Union(items) => {
+        let out : Array[@ast.TsType] = []
+        for it in items {
+          out.push(walk(it))
+        }
+        Union(out)
+      }
+      Intersection(items) => {
+        let out : Array[@ast.TsType] = []
+        for it in items {
+          out.push(walk(it))
+        }
+        Intersection(out)
+      }
+      Conditional(c, e, tb, fb) =>
+        Conditional(walk(c), walk(e), walk(tb), walk(fb))
+      IndexedAccess(base, k) => IndexedAccess(walk(base), walk(k))
+      _ => t
+    }
+  }
+
+  walk(type_)
 }
 
 ///|
