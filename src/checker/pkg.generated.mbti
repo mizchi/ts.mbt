@@ -120,6 +120,7 @@ pub(all) enum TypeIssueKind {
   UnresolvedReference
   DuplicateDeclaration
   CircularTypeAlias
+  TypeAliasArityMismatch
 } derive(Eq, @debug.Debug)
 
 // Type aliases

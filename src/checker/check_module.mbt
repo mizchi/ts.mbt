@@ -9,6 +9,7 @@ pub(all) enum TypeIssueKind {
   UnresolvedReference
   DuplicateDeclaration
   CircularTypeAlias
+  TypeAliasArityMismatch
 } derive(Eq, Debug)
 
 ///|
@@ -74,7 +75,112 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
       })
     }
   }
+
+  // 4. Type-alias arity mismatches: every `Applied(Name, args)` that resolves
+  //    to a top-level type alias must use the alias's declared arity.
+  let arities : Map[String, Int] = {}
+  for ta in module_.type_aliases {
+    arities[ta.name] = ta.type_params.length()
+  }
+  for iface in module_.interfaces {
+    let scope = scope_with_iface_params(iface)
+    for field in iface.fields {
+      check_arity(field.1, scope, arities, issues)
+    }
+  }
+  for ta in module_.type_aliases {
+    let scope = ta.type_params
+    check_arity(ta.type_, scope, arities, issues)
+  }
+  for f in module_.funcs {
+    let scope : Array[String] = []
+    for p in f.params {
+      check_arity(p.type_, scope, arities, issues)
+    }
+    check_arity(f.return_type, scope, arities, issues)
+  }
+  for i in module_.imports {
+    let scope : Array[String] = []
+    for p in i.params {
+      check_arity(p.1, scope, arities, issues)
+    }
+    check_arity(i.return_type, scope, arities, issues)
+  }
+  for v in module_.values {
+    let scope : Array[String] = []
+    check_arity(v.type_, scope, arities, issues)
+  }
   { issues, }
+}
+
+///|
+fn scope_with_iface_params(iface : @ast.TsInterface) -> Array[String] {
+  iface.type_params
+}
+
+///|
+fn check_arity(
+  type_ : @ast.TsType,
+  scope : Array[String],
+  arities : Map[String, Int],
+  issues : Array[TypeIssue],
+) -> Unit {
+  match type_ {
+    Applied(name, args) => {
+      if !scope.contains(name) {
+        match arities.get(name) {
+          Some(expected) =>
+            if expected != args.length() {
+              let already = issues.iter().any(fn(i) {
+                i.kind == TypeAliasArityMismatch && i.name == name
+              })
+              if !already {
+                issues.push({
+                  kind: TypeAliasArityMismatch,
+                  name,
+                  detail: "type alias declared with \{expected} parameter(s) used with \{args.length()}",
+                })
+              }
+            }
+          None => ()
+        }
+      }
+      for a in args {
+        check_arity(a, scope, arities, issues)
+      }
+    }
+    Array(inner) => check_arity(inner, scope, arities, issues)
+    Tuple(items) =>
+      for it in items {
+        check_arity(it, scope, arities, issues)
+      }
+    Object(fields) =>
+      for f in fields {
+        check_arity(f.0, scope, arities, issues)
+        check_arity(f.1, scope, arities, issues)
+      }
+    Func(params, ret) => {
+      for p in params {
+        check_arity(p, scope, arities, issues)
+      }
+      check_arity(ret, scope, arities, issues)
+    }
+    Union(items) | Intersection(items) =>
+      for m in items {
+        check_arity(m, scope, arities, issues)
+      }
+    Conditional(c, e, t, f) => {
+      check_arity(c, scope, arities, issues)
+      check_arity(e, scope, arities, issues)
+      check_arity(t, scope, arities, issues)
+      check_arity(f, scope, arities, issues)
+    }
+    IndexedAccess(b, k) => {
+      check_arity(b, scope, arities, issues)
+      check_arity(k, scope, arities, issues)
+    }
+    _ => ()
+  }
 }
 
 ///|

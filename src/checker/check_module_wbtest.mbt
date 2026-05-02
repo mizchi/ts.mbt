@@ -101,6 +101,71 @@ test "check_module: alias chain that terminates is fine" {
 }
 
 ///|
+test "check_module: detects type alias arity mismatch" {
+  let m = empty_module_for_check()
+  // type Box<T> = { value: T };
+  m.type_aliases.push(
+    alias_for_check(
+      "Box",
+      ["T"],
+      Object([(Literal("value"), Named("T"))]),
+    ),
+  )
+  // interface User { box: Box<string, number>; }  // wrong arity
+  m.interfaces.push(
+    iface_for_check("User", [
+      ("box", Applied("Box", [String_, Number])),
+    ]),
+  )
+  let report = check_module(m)
+  let arity_issues = report.issues.filter(fn(i) {
+    i.kind == TypeAliasArityMismatch
+  })
+  assert_eq(arity_issues.length(), 1)
+  assert_eq(arity_issues[0].name, "Box")
+}
+
+///|
+test "check_module: matching arity does not surface arity issue" {
+  let m = empty_module_for_check()
+  m.type_aliases.push(
+    alias_for_check(
+      "Box",
+      ["T"],
+      Object([(Literal("value"), Named("T"))]),
+    ),
+  )
+  m.interfaces.push(
+    iface_for_check("User", [("box", Applied("Box", [String_]))]),
+  )
+  let report = check_module(m)
+  let arity_issues = report.issues.filter(fn(i) {
+    i.kind == TypeAliasArityMismatch
+  })
+  assert_eq(arity_issues.length(), 0)
+}
+
+///|
+test "check_module: arity check ignores generic params in scope" {
+  let m = empty_module_for_check()
+  // type Wrap<T> = T  // 1-arity
+  m.type_aliases.push(alias_for_check("Wrap", ["T"], Named("T")))
+  // interface Box<U> { value: Wrap<U>; }  // U is in scope; Wrap<U> is fine.
+  m.interfaces.push({
+    name: "Box",
+    type_params: ["U"],
+    extends_names: [],
+    fields: [("value", Applied("Wrap", [Named("U")]))],
+    readonly_fields: [],
+  })
+  let report = check_module(m)
+  let arity_issues = report.issues.filter(fn(i) {
+    i.kind == TypeAliasArityMismatch
+  })
+  assert_eq(arity_issues.length(), 0)
+}
+
+///|
 test "check_module: alias body containing union of named is not a cycle if all terminate" {
   let m = empty_module_for_check()
   // type Maybe<T> = T | undefined;  — generic body referencing param
