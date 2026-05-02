@@ -25,6 +25,215 @@ pub fn check_assignable(
 }
 
 ///|
+// Resolver-aware diagnostic check. Pre-expands `Named(n)` references on both
+// sides via the resolver (with cycle protection) before walking the structure
+// for issue reporting. The reported paths refer to the *expanded* types — the
+// caller can reason about names via the resolver itself.
+pub fn check_assignable_with(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolve : (String) -> @ast.TsType?,
+) -> Array[AssignabilityIssue] {
+  // Reuse the same expansion the assignability fast-path uses so the
+  // diagnostic walk operates on the same shape. We delegate to
+  // `is_assignable_to_with` first as a success oracle, then walk the expanded
+  // types if the relation is rejected.
+  if is_assignable_to_with(source, target, resolve) {
+    return []
+  }
+  let s = expand_for_diagnostic(source, resolve, [])
+  let t = expand_for_diagnostic(target, resolve, [])
+  let acc : Array[AssignabilityIssue] = []
+  check_at(s, t, "", acc)
+  acc
+}
+
+///|
+// Generic-aware diagnostic check: same as `check_assignable_with` but accepts
+// an `AliasBinding` resolver so `Applied(Name, [args])` can be substituted
+// before the walk.
+pub fn check_assignable_with_generics(
+  source : @ast.TsType,
+  target : @ast.TsType,
+  resolve : (String) -> AliasBinding?,
+) -> Array[AssignabilityIssue] {
+  if is_assignable_to_with_generics(source, target, resolve) {
+    return []
+  }
+  let s = expand_for_diagnostic_generic(source, resolve, [])
+  let t = expand_for_diagnostic_generic(target, resolve, [])
+  let acc : Array[AssignabilityIssue] = []
+  check_at(s, t, "", acc)
+  acc
+}
+
+///|
+fn expand_for_diagnostic(
+  type_ : @ast.TsType,
+  resolve : (String) -> @ast.TsType?,
+  visited : Array[String],
+) -> @ast.TsType {
+  // Internal mirror of `expand_aliases` in resolver.mbt — duplicated here so
+  // diagnostic.mbt does not need to peek at private helpers in other files.
+  match type_ {
+    Named(name) =>
+      if visited.contains(name) {
+        Any
+      } else {
+        match resolve(name) {
+          Some(body) => {
+            visited.push(name)
+            let expanded = expand_for_diagnostic(body, resolve, visited)
+            let _ = visited.pop()
+            expanded
+          }
+          None => type_
+        }
+      }
+    Array(inner) => Array(expand_for_diagnostic(inner, resolve, visited))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(expand_for_diagnostic(it, resolve, visited))
+      }
+      Tuple(out)
+    }
+    Object(fields) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for f in fields {
+        out.push((
+          expand_for_diagnostic(f.0, resolve, visited),
+          expand_for_diagnostic(f.1, resolve, visited),
+        ))
+      }
+      Object(out)
+    }
+    Func(params, ret) => {
+      let out : Array[@ast.TsType] = []
+      for p in params {
+        out.push(expand_for_diagnostic(p, resolve, visited))
+      }
+      Func(out, expand_for_diagnostic(ret, resolve, visited))
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(expand_for_diagnostic(it, resolve, visited))
+      }
+      Union(out)
+    }
+    Intersection(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(expand_for_diagnostic(it, resolve, visited))
+      }
+      Intersection(out)
+    }
+    _ => type_
+  }
+}
+
+///|
+fn expand_for_diagnostic_generic(
+  type_ : @ast.TsType,
+  resolve : (String) -> AliasBinding?,
+  visited : Array[String],
+) -> @ast.TsType {
+  // Mirror of `expand_generic` for the diagnostic walk.
+  match type_ {
+    Named(name) =>
+      if visited.contains(name) {
+        Any
+      } else {
+        match resolve(name) {
+          Some(b) =>
+            if b.type_params.length() == 0 {
+              visited.push(name)
+              let expanded = expand_for_diagnostic_generic(
+                b.body, resolve, visited,
+              )
+              let _ = visited.pop()
+              expanded
+            } else {
+              type_
+            }
+          None => type_
+        }
+      }
+    Applied(name, args) => {
+      let resolved_args : Array[@ast.TsType] = []
+      for a in args {
+        resolved_args.push(expand_for_diagnostic_generic(a, resolve, visited))
+      }
+      if visited.contains(name) {
+        return Any
+      }
+      match resolve(name) {
+        Some(b) =>
+          if b.type_params.length() == resolved_args.length() &&
+            b.type_params.length() > 0 {
+            let bindings : Map[String, @ast.TsType] = {}
+            for i in 0..<b.type_params.length() {
+              bindings[b.type_params[i]] = resolved_args[i]
+            }
+            let substituted = substitute_inferred_type(b.body, bindings)
+            visited.push(name)
+            let expanded = expand_for_diagnostic_generic(
+              substituted, resolve, visited,
+            )
+            let _ = visited.pop()
+            expanded
+          } else {
+            Applied(name, resolved_args)
+          }
+        None => Applied(name, resolved_args)
+      }
+    }
+    Array(inner) =>
+      Array(expand_for_diagnostic_generic(inner, resolve, visited))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(expand_for_diagnostic_generic(it, resolve, visited))
+      }
+      Tuple(out)
+    }
+    Object(fields) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for f in fields {
+        out.push((
+          expand_for_diagnostic_generic(f.0, resolve, visited),
+          expand_for_diagnostic_generic(f.1, resolve, visited),
+        ))
+      }
+      Object(out)
+    }
+    Func(params, ret) => {
+      let out : Array[@ast.TsType] = []
+      for p in params {
+        out.push(expand_for_diagnostic_generic(p, resolve, visited))
+      }
+      Func(out, expand_for_diagnostic_generic(ret, resolve, visited))
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(expand_for_diagnostic_generic(it, resolve, visited))
+      }
+      Union(out)
+    }
+    Intersection(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(expand_for_diagnostic_generic(it, resolve, visited))
+      }
+      Intersection(out)
+    }
+    _ => type_
+  }
+}
+
+///|
 fn check_at(
   source : @ast.TsType,
   target : @ast.TsType,

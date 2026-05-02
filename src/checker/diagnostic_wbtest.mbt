@@ -82,6 +82,51 @@ test "check_assignable: function return mismatch uses return path" {
 }
 
 ///|
+test "check_assignable_with: succeeds across alias chain" {
+  // type ID = string;
+  let table : Map[String, @ast.TsType] = { "ID": String_ }
+  let resolve = fn(name) { table.get(name) }
+  let issues = check_assignable_with(Named("ID"), String_, resolve)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "check_assignable_with: surfaces field path after alias expansion" {
+  // type Inner = { x: number };
+  // type Outer = { inner: Inner };
+  // Source: { inner: { x: string } }  Target: Outer
+  let table : Map[String, @ast.TsType] = {
+    "Inner": Object([(Literal("x"), Number)]),
+    "Outer": Object([(Literal("inner"), Named("Inner"))]),
+  }
+  let resolve = fn(name) { table.get(name) }
+  let source : @ast.TsType = Object([
+    (Literal("inner"), Object([(Literal("x"), String_)])),
+  ])
+  let issues = check_assignable_with(source, Named("Outer"), resolve)
+  assert_eq(issues.length(), 1)
+  assert_eq(issues[0].path, ".inner.x")
+}
+
+///|
+test "check_assignable_with_generics: reports through generic substitution" {
+  // type Box<T> = { value: T };
+  // Source: { value: string }  Target: Box<number>
+  let table : Map[String, AliasBinding] = {
+    "Box": {
+      type_params: ["T"],
+      body: Object([(Literal("value"), Named("T"))]),
+    },
+  }
+  let resolve = fn(name) { table.get(name) }
+  let source : @ast.TsType = Object([(Literal("value"), String_)])
+  let target : @ast.TsType = Applied("Box", [Number])
+  let issues = check_assignable_with_generics(source, target, resolve)
+  assert_eq(issues.length(), 1)
+  assert_eq(issues[0].path, ".value")
+}
+
+///|
 test "check_assignable: nested object reports composite path" {
   let s : @ast.TsType = Object([
     (Literal("a"), Object([(Literal("b"), Number)])),
