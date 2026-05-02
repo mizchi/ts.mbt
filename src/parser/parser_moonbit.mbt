@@ -3,6 +3,9 @@ priv struct MoonBitDeclState {
   declared_type_names : Array[String]
   referenced_type_names : Array[String]
   local_type_param_names : Array[String]
+  // Names of declared types whose generic parameters should appear on
+  // `Applied(name, args)` references (e.g. `Box<string>` ⇒ `Box[String]`).
+  generic_preserved_type_names : Array[String]
   mut needs_jsvalue : Bool
 }
 
@@ -566,9 +569,19 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       mark_referenced_type(state, name)
       moonbit_type_identifier(name, "OpaqueType")
     }
-    Applied(name, _) => {
+    Applied(name, args) => {
       mark_referenced_type(state, name)
-      moonbit_type_identifier(name, "OpaqueType")
+      let rendered = moonbit_type_identifier(name, "OpaqueType")
+      if state.generic_preserved_type_names.contains(name) && args.length() > 0 {
+        let parts : Array[String] = []
+        for arg in args {
+          parts.push(moonbit_type_name(state, arg))
+        }
+        let joined = parts.join(", ")
+        "\{rendered}[\{joined}]"
+      } else {
+        rendered
+      }
     }
     _ => {
       state.needs_jsvalue = true
@@ -931,8 +944,12 @@ pub fn emit_moonbit_decl_with_sections(
   force_jsvalue : Bool,
 ) -> String {
   let declared_type_names : Array[String] = []
+  let generic_preserved_type_names : Array[String] = []
   for iface in module_.interfaces {
     declared_type_names.push(iface.name)
+    if moonbit_should_preserve_interface_type_params(iface) {
+      generic_preserved_type_names.push(iface.name)
+    }
   }
   for class_ in module_.classes {
     declared_type_names.push(class_.name)
@@ -944,6 +961,7 @@ pub fn emit_moonbit_decl_with_sections(
     declared_type_names,
     referenced_type_names: [],
     local_type_param_names: [],
+    generic_preserved_type_names,
     needs_jsvalue: false,
   }
   let interface_sections : Array[String] = []

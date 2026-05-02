@@ -2532,7 +2532,7 @@ async test "bridge: indexed access T[\"k\"] resolves to the field type in mbti" 
   let ui_match_block = actual
     .split("interface UIMatch")
     .nth(1)
-    .or_default()
+    .unwrap_or_default()
     .to_string()
   assert_false(ui_match_block.contains("params : @js.Any"))
   assert_false(ui_match_block.contains("params : JSValue"))
@@ -2580,9 +2580,9 @@ async test "bridge: Signalish<T> alias renders as opaque Signalish in mbti" {
   assert_false(actual.contains("accentHeight : JSValue?"))
   assert_true(actual.contains("accentHeight : Signalish?"))
   assert_true(actual.contains("fill : Signalish?"))
-  // SignalLike<T> itself is a generic interface; keep its existing behaviour
-  // (rendered as the declared interface name).
-  assert_true(actual.contains("customSignal : SignalLike?"))
+  // SignalLike<T> is on the generic-preserve allowlist, so the concrete
+  // instantiation `SignalLike<number>` renders with its argument.
+  assert_true(actual.contains("customSignal : SignalLike[Double]?"))
 }
 
 ///|
