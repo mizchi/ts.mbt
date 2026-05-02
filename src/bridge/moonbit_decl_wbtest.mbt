@@ -2490,6 +2490,31 @@ async test "bridge: recursive type alias overload wrappers do not overflow" {
 }
 
 ///|
+async test "bridge: Signalish<T> alias renders as opaque Signalish in mbti" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/signalish-narrow-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Signalish<T> wraps a value-or-signal union; rendering it as @js.Any
+  // hides the field shape entirely. Treat the alias as an opaque type so
+  // the JSValue surface drops.
+  assert_false(actual.contains("accentHeight : @js.Any?"))
+  assert_false(actual.contains("accentHeight : JSValue?"))
+  assert_true(actual.contains("accentHeight : Signalish?"))
+  assert_true(actual.contains("fill : Signalish?"))
+  // SignalLike<T> itself is a generic interface; keep its existing behaviour
+  // (rendered as the declared interface name).
+  assert_true(actual.contains("customSignal : SignalLike?"))
+}
+
+///|
 async test "bridge: EventHandler alias narrows to function type in mbti" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/event-handler-narrow-entry.d.ts",

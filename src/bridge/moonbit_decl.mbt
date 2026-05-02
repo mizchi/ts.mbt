@@ -2006,6 +2006,15 @@ fn is_event_handler_alias_name(name : String) -> Bool {
 }
 
 ///|
+// `Signalish<T>` is preact's `T | SignalLike<T>` alias used pervasively on
+// SVG/HTML attribute interfaces. The body is a Union the generator widens to
+// Any; collapse the alias into an opaque MoonBit type so the JSValue surface
+// drops to a single `Signalish` declaration.
+fn is_signalish_alias_name(name : String) -> Bool {
+  name == "Signalish" || name.has_suffix(".Signalish")
+}
+
+///|
 fn props_with_children_object_interface_name(
   fields : Array[(@ast.TsType, @ast.TsType)],
 ) -> String {
@@ -3353,6 +3362,8 @@ fn lower_react_utility_type(
         ],
         Void,
       )
+    Applied(name, _) if is_signalish_alias_name(name) => Named("Signalish")
+    Named(name) if is_signalish_alias_name(name) => Named("Signalish")
     Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
     Applied(name, [source_type]) if is_mapped_interface_utility_name(name) =>
