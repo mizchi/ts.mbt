@@ -20,6 +20,8 @@ pub fn is_assignable_to(@ast.TsType, @ast.TsType) -> Bool
 
 pub fn is_assignable_to_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?) -> Bool
 
+pub fn is_assignable_to_with_generics(@ast.TsType, @ast.TsType, (String) -> AliasBinding?) -> Bool
+
 pub fn is_component_ref_like_name(String) -> Bool
 
 pub fn is_empty_object_type(@ast.TsType) -> Bool
@@ -53,6 +55,10 @@ pub fn unresolved_type_references(@ast.TsModule) -> Array[String]
 // Errors
 
 // Types and methods
+pub(all) struct AliasBinding {
+  type_params : Array[String]
+  body : @ast.TsType
+}
 
 // Type aliases
 
