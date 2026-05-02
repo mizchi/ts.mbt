@@ -90,6 +90,103 @@ test "is_assignable_to_with_generics: arity mismatch leaves Applied opaque" {
 }
 
 ///|
+test "is_assignable_to_with_generics: distributes conditional over union arg" {
+  // type ToArray<T> = T extends any ? T[] : never;
+  // ToArray<string | number> should produce string[] | number[].
+  let table : Map[String, AliasBinding] = {
+    "ToArray": {
+      type_params: ["T"],
+      body: Conditional(Named("T"), Any, Array(Named("T")), Never),
+    },
+  }
+  let resolve = make_generic_resolver(table)
+  // Array(string) is one branch; should be assignable to the distributed result.
+  assert_true(
+    is_assignable_to_with_generics(
+      Array(String_),
+      Applied("ToArray", [Union([String_, Number])]),
+      resolve,
+    ),
+  )
+  assert_true(
+    is_assignable_to_with_generics(
+      Array(Number),
+      Applied("ToArray", [Union([String_, Number])]),
+      resolve,
+    ),
+  )
+  // Array(boolean) is NOT in the distributed union.
+  assert_false(
+    is_assignable_to_with_generics(
+      Array(Boolean),
+      Applied("ToArray", [Union([String_, Number])]),
+      resolve,
+    ),
+  )
+}
+
+///|
+test "is_assignable_to_with_generics: distribution diverges per branch" {
+  // type Wrap<T> = T extends string ? Array<T> : Set<T>;
+  // Wrap<string | number> with distribution ⇒ Array<string> | Set<number>
+  // Without distribution: extends fails (number isn't string), pick Set<...>.
+  let table : Map[String, AliasBinding] = {
+    "Wrap": {
+      type_params: ["T"],
+      body: Conditional(
+        Named("T"),
+        String_,
+        Applied("Array", [Named("T")]),
+        Applied("Set", [Named("T")]),
+      ),
+    },
+  }
+  let resolve = make_generic_resolver(table)
+  // With distribution, Array<string> is one of the branches.
+  assert_true(
+    is_assignable_to_with_generics(
+      Applied("Array", [String_]),
+      Applied("Wrap", [Union([String_, Number])]),
+      resolve,
+    ),
+  )
+  // And Set<number> is the other.
+  assert_true(
+    is_assignable_to_with_generics(
+      Applied("Set", [Number]),
+      Applied("Wrap", [Union([String_, Number])]),
+      resolve,
+    ),
+  )
+}
+
+///|
+test "is_assignable_to_with_generics: distribution preserves single-arg behavior" {
+  // ToArray<string> should still produce string[] (not distribute over a non-union).
+  let table : Map[String, AliasBinding] = {
+    "ToArray": {
+      type_params: ["T"],
+      body: Conditional(Named("T"), Any, Array(Named("T")), Never),
+    },
+  }
+  let resolve = make_generic_resolver(table)
+  assert_true(
+    is_assignable_to_with_generics(
+      Array(String_),
+      Applied("ToArray", [String_]),
+      resolve,
+    ),
+  )
+  assert_false(
+    is_assignable_to_with_generics(
+      Array(Number),
+      Applied("ToArray", [String_]),
+      resolve,
+    ),
+  )
+}
+
+///|
 test "is_assignable_to_with_generics: cycle through generics is safe" {
   // type Loop<X> = Loop<X>;
   let table : Map[String, AliasBinding] = {

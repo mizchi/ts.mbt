@@ -203,12 +203,49 @@ fn substitute_params(
       Intersection(out)
     }
     Conditional(check, extends, t_branch, f_branch) =>
-      Conditional(
-        substitute_params(check, bindings),
-        substitute_params(extends, bindings),
-        substitute_params(t_branch, bindings),
-        substitute_params(f_branch, bindings),
-      )
+      // Distributive conditional: when the check side is a naked type
+      // parameter `T` bound to a Union, distribute the conditional over each
+      // member. Mirrors TS:
+      //   type ToArray<T> = T extends X ? f(T) : g(T)
+      //   ToArray<A | B> ≡ ToArray<A> | ToArray<B>
+      match check {
+        Named(name) =>
+          match bindings.get(name) {
+            Some(Union(members)) => {
+              let branches : Array[@ast.TsType] = []
+              for m in members {
+                let scoped : Map[String, @ast.TsType] = {}
+                for entry in bindings {
+                  scoped[entry.0] = entry.1
+                }
+                scoped[name] = m
+                branches.push(
+                  Conditional(
+                    m,
+                    substitute_params(extends, scoped),
+                    substitute_params(t_branch, scoped),
+                    substitute_params(f_branch, scoped),
+                  ),
+                )
+              }
+              Union(branches)
+            }
+            _ =>
+              Conditional(
+                substitute_params(check, bindings),
+                substitute_params(extends, bindings),
+                substitute_params(t_branch, bindings),
+                substitute_params(f_branch, bindings),
+              )
+          }
+        _ =>
+          Conditional(
+            substitute_params(check, bindings),
+            substitute_params(extends, bindings),
+            substitute_params(t_branch, bindings),
+            substitute_params(f_branch, bindings),
+          )
+      }
     IndexedAccess(base, key) =>
       IndexedAccess(
         substitute_params(base, bindings),
