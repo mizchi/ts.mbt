@@ -808,18 +808,6 @@ pub fn emit_moonbit_decl_with_sections(
   extra_sections : Array[String],
   force_jsvalue : Bool,
 ) -> String {
-  emit_moonbit_decl_with_sections_and_types(
-    module_, extra_sections, [], force_jsvalue,
-  )
-}
-
-///|
-pub fn emit_moonbit_decl_with_sections_and_types(
-  module_ : @ast.TsModule,
-  extra_sections : Array[String],
-  extra_declared_type_names : Array[String],
-  force_jsvalue : Bool,
-) -> String {
   let declared_type_names : Array[String] = []
   let generic_preserved_type_names : Array[String] = []
   for iface in module_.interfaces {
@@ -833,11 +821,6 @@ pub fn emit_moonbit_decl_with_sections_and_types(
   }
   for enum_ in module_.enums {
     declared_type_names.push(enum_.name)
-  }
-  for name in extra_declared_type_names {
-    if !declared_type_names.contains(name) {
-      declared_type_names.push(name)
-    }
   }
   let state : MoonBitDeclState = {
     declared_type_names,

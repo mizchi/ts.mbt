@@ -130,49 +130,6 @@ pub(all) struct BridgeTaggedUnionDecl {
 /// Returns `None` so callers fall back to existing widening behavior; this
 /// preserves the no-op contract of the current commit until later steps wire
 /// the decl through bridge emission.
-///|
-/// Render a `TsType` as MoonBit-side type text for a tagged-union case
-/// payload. The detector restricts cases to primitive / `Named` / array of
-/// either, so this helper covers the same shape and returns `None` if the
-/// caller passes anything else.
-pub fn tagged_union_inner_moonbit_text(t : @ast.TsType) -> String? {
-  match t {
-    @ast.TsType::Number => Some("Double")
-    @ast.TsType::Int => Some("Int")
-    @ast.TsType::String_ => Some("String")
-    @ast.TsType::Boolean => Some("Bool")
-    @ast.TsType::BigInt => Some("Int64")
-    @ast.TsType::Named(name) => Some(name)
-    @ast.TsType::Array(inner) =>
-      match tagged_union_inner_moonbit_text(inner) {
-        Some(text) => Some("Array[" + text + "]")
-        None => None
-      }
-    _ => None
-  }
-}
-
-///|
-/// Render a `BridgeTaggedUnionDecl` as a MoonBit `pub(all) enum` section.
-/// Returns `None` if any case payload cannot be lowered, which means the
-/// caller must fall back to the existing JSValue widening for this alias.
-pub fn tagged_union_decl_to_moonbit_section(
-  decl : BridgeTaggedUnionDecl,
-) -> String? {
-  let mut body = "///|\npub(all) enum " + decl.name + " {\n"
-  for entry in decl.cases {
-    let (case_name, inner) = entry
-    let inner_text = match tagged_union_inner_moonbit_text(inner) {
-      Some(text) => text
-      None => return None
-    }
-    body = body + "  " + case_name + "(" + inner_text + ")\n"
-  }
-  body = body + "} derive(Eq, Debug)"
-  Some(body)
-}
-
-///|
 pub fn tagged_union_type_alias_decl(
   type_alias : @ast.TsTypeAlias,
 ) -> BridgeTaggedUnionDecl? {
