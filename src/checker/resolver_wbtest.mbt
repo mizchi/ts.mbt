@@ -74,6 +74,43 @@ test "is_assignable_to_with: applied alias is treated as opaque (best effort)" {
 }
 
 ///|
+test "is_assignable_to_with: resolves IndexedAccess against alias body" {
+  // type User = { id: string; age: number };
+  // User["id"] should resolve to string after alias expansion.
+  let table : Map[String, @ast.TsType] = {
+    "User": Object([
+      (Literal("id"), String_),
+      (Literal("age"), Number),
+    ]),
+  }
+  let resolve = make_resolver(table)
+  let access : @ast.TsType = IndexedAccess(Named("User"), Literal("id"))
+  assert_true(is_assignable_to_with(access, String_, resolve))
+  assert_false(is_assignable_to_with(access, Number, resolve))
+  let access_age : @ast.TsType = IndexedAccess(Named("User"), Literal("age"))
+  assert_true(is_assignable_to_with(access_age, Number, resolve))
+}
+
+///|
+test "is_assignable_to_with_generics: IndexedAccess resolves through generic alias" {
+  // type Box<T> = { value: T };
+  // Box<string>["value"] ⇨ string after substitution.
+  let table : Map[String, AliasBinding] = {
+    "Box": {
+      type_params: ["T"],
+      body: Object([(Literal("value"), Named("T"))]),
+    },
+  }
+  let resolve = make_generic_resolver(table)
+  let access : @ast.TsType = IndexedAccess(
+    Applied("Box", [String_]),
+    Literal("value"),
+  )
+  assert_true(is_assignable_to_with_generics(access, String_, resolve))
+  assert_false(is_assignable_to_with_generics(access, Number, resolve))
+}
+
+///|
 test "is_assignable_to_with: resolves through union aliases" {
   // type Maybe<X> would need substitution; keep it simple with a non-generic
   // alias `MaybeString = string | undefined`.
