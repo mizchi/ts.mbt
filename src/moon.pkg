@@ -9,6 +9,7 @@ import {
   "mizchi/ts/ast" @ast,
   "mizchi/ts/runtime" @runtime,
   "mizchi/ts/parser" @parser,
+  "mizchi/ts/checker" @checker,
   "mizchi/ts/codegen" @codegen,
   "mizchi/wasmx/encode" @encode,
   "mizchi/ts/analysis" @analysis,
