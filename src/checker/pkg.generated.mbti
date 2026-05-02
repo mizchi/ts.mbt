@@ -113,6 +113,9 @@ pub(all) struct AssignabilityIssue {
 pub(all) struct TypeCheckReport {
   issues : Array[TypeIssue]
 }
+pub fn TypeCheckReport::count_of_kind(Self, TypeIssueKind) -> Int
+pub fn TypeCheckReport::is_clean(Self) -> Bool
+pub fn TypeCheckReport::of_kind(Self, TypeIssueKind) -> Array[TypeIssue]
 
 pub(all) struct TypeIssue {
   kind : TypeIssueKind

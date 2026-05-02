@@ -29,6 +29,43 @@ pub(all) struct TypeCheckReport {
 }
 
 ///|
+// True iff the report has no issues. Convenience for `report.issues.length() == 0`.
+pub fn TypeCheckReport::is_clean(self : TypeCheckReport) -> Bool {
+  self.issues.length() == 0
+}
+
+///|
+// Filter issues to only the given kind. Useful when callers want to handle
+// `UnresolvedReference` separately from `DuplicateDeclaration`, etc.
+pub fn TypeCheckReport::of_kind(
+  self : TypeCheckReport,
+  kind : TypeIssueKind,
+) -> Array[TypeIssue] {
+  let out : Array[TypeIssue] = []
+  for i in self.issues {
+    if i.kind == kind {
+      out.push(i)
+    }
+  }
+  out
+}
+
+///|
+// Count issues of the given kind without materializing the array.
+pub fn TypeCheckReport::count_of_kind(
+  self : TypeCheckReport,
+  kind : TypeIssueKind,
+) -> Int {
+  let mut n = 0
+  for i in self.issues {
+    if i.kind == kind {
+      n += 1
+    }
+  }
+  n
+}
+
+///|
 pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   let issues : Array[TypeIssue] = []
 

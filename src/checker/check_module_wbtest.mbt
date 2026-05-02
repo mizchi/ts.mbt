@@ -36,6 +36,27 @@ fn alias_for_check(
 }
 
 ///|
+test "TypeCheckReport: is_clean / of_kind / count_of_kind" {
+  let m = empty_module_for_check()
+  m.interfaces.push(iface_for_check("Foo", [("x", Named("Bar"))]))
+  m.type_aliases.push(alias_for_check("Loop", [], Named("Loop")))
+  let report = check_module(m)
+  assert_false(report.is_clean())
+  assert_eq(report.count_of_kind(UnresolvedReference), 1)
+  assert_eq(report.count_of_kind(CircularTypeAlias), 1)
+  assert_eq(report.count_of_kind(DuplicateDeclaration), 0)
+  assert_eq(report.of_kind(UnresolvedReference)[0].name, "Bar")
+  assert_eq(report.of_kind(CircularTypeAlias)[0].name, "Loop")
+}
+
+///|
+test "TypeCheckReport: is_clean on empty report" {
+  let m = empty_module_for_check()
+  let report = check_module(m)
+  assert_true(report.is_clean())
+}
+
+///|
 test "check_module: clean module produces empty report" {
   let m = empty_module_for_check()
   m.interfaces.push(iface_for_check("Foo", [("x", String_)]))
