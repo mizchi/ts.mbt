@@ -96,13 +96,13 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
   for e in module_.enums {
     let seen : Array[String] = []
     let dup : Array[String] = []
-    for member in e.members {
-      if seen.contains(member.name) {
-        if !dup.contains(member.name) {
-          dup.push(member.name)
+    for em in e.members {
+      if seen.contains(em.name) {
+        if !dup.contains(em.name) {
+          dup.push(em.name)
         }
       } else {
-        seen.push(member.name)
+        seen.push(em.name)
       }
     }
     for d in dup {
