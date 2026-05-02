@@ -5089,7 +5089,7 @@ async test "bridge: emit MoonBit JS FFI bundle avoids duplicate class/interface 
 ///|
 test "ffi_classify_transparent_intersection: collapses uniform String primitive" {
   let t : @ast.TsType = Intersection([String_, String_])
-  match ffi_classify_transparent_intersection(t) {
+  match @checker.classify_transparent_intersection(t) {
     Some(String_) => ()
     Some(other) => fail("expected String_, got \{other}")
     None => fail("expected Some(String_), got None")
@@ -5100,7 +5100,7 @@ test "ffi_classify_transparent_intersection: collapses uniform String primitive"
 test "ffi_classify_transparent_intersection: collapses uniform union with primitive" {
   // (keyof Data | keyof FlashData) & string ≈ Intersection([Union([String_, String_]), String_])
   let t : @ast.TsType = Intersection([Union([String_, String_]), String_])
-  match ffi_classify_transparent_intersection(t) {
+  match @checker.classify_transparent_intersection(t) {
     Some(String_) => ()
     Some(other) => fail("expected String_, got \{other}")
     None => fail("expected Some(String_), got None")
@@ -5110,7 +5110,7 @@ test "ffi_classify_transparent_intersection: collapses uniform union with primit
 ///|
 test "ffi_classify_transparent_intersection: collapses uniform Number primitive" {
   let t : @ast.TsType = Intersection([Number, Number, Number])
-  match ffi_classify_transparent_intersection(t) {
+  match @checker.classify_transparent_intersection(t) {
     Some(Number) => ()
     Some(other) => fail("expected Number, got \{other}")
     None => fail("expected Some(Number), got None")

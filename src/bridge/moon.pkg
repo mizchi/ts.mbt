@@ -4,6 +4,7 @@ import {
   "moonbitlang/core/json" @json,
   "moonbitlang/core/string",
   "mizchi/ts/ast" @ast,
+  "mizchi/ts/checker" @checker,
   "mizchi/ts/parser" @parser,
 }
 

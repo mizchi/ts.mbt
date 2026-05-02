@@ -1965,70 +1965,8 @@ fn component_props_with_ref_interface_name(base_name : String) -> String {
   base_name + "WithRef"
 }
 
-///|
-fn is_props_passthrough_name(name : String) -> Bool {
-  name == "PropsWithoutRef" || name == "PropsWithRef"
-}
-
-///|
-fn is_mapped_interface_utility_name(name : String) -> Bool {
-  name == "Partial" || name == "Required" || name == "Readonly"
-}
-
-///|
-fn is_component_ref_like_name(name : String) -> Bool {
-  name == "ComponentRef" || name == "ElementRef"
-}
-
-///|
-fn is_react_node_like_name(name : String) -> Bool {
-  name == "ReactNode" || name.has_suffix(".ReactNode")
-}
-
-///|
-// Qualified `*.ReactNode` (e.g. `React.ReactNode`, `React__default.ReactNode`)
-// always refers to the React type alias from upstream React typings, so we
-// surface it as an opaque MoonBit type instead of widening it to `Any`. The
-// unqualified `ReactNode` form is still treated as a fixture-local alias
-// (e.g. `type ReactNode = string | number`) and widened.
-fn is_qualified_react_node_name(name : String) -> Bool {
-  name.has_suffix(".ReactNode") && name.length() > ".ReactNode".length()
-}
-
-///|
-// `EventHandler<E>` and its derived aliases (MouseEventHandler, GenericEventHandler,
-// AnimationEventHandler, ...) all have the conceptual shape
-// `(event: E) => void` once expanded. The actual TS body uses an indexed access
-// type that the parser cannot resolve, so we recognise the alias by name and
-// lower a single-arg application to a real function type.
-fn is_event_handler_alias_name(name : String) -> Bool {
-  name == "EventHandler" || name.has_suffix("EventHandler")
-}
-
-///|
-// `Signalish<T>` is preact's `T | SignalLike<T>` alias used pervasively on
-// SVG/HTML attribute interfaces. The body is a Union the generator widens to
-// Any; collapse the alias into an opaque MoonBit type so the JSValue surface
-// drops to a single `Signalish` declaration.
-fn is_signalish_alias_name(name : String) -> Bool {
-  name == "Signalish" || name.has_suffix(".Signalish")
-}
-
-///|
-// `Params<Key>` is the react-router `Record<Key, string | undefined>` mapped
-// alias. Generic key parameters block field expansion, so the generator
-// widens it to `Any`; treat the alias as an opaque MoonBit type instead.
-fn is_params_alias_name(name : String) -> Bool {
-  name == "Params" || name.has_suffix(".Params")
-}
-
-///|
-// Preact / React's `Ref<T> = RefObject<T> | RefCallback<T> | null` union
-// alias. The Union body collapses to JSValue, but real consumers only need
-// to pass the value through, so render the alias as an opaque MoonBit type.
-fn is_ref_alias_name(name : String) -> Bool {
-  name == "Ref" || name.has_suffix(".Ref")
-}
+// Alias-name predicates moved to `mizchi/ts/checker`. Bridge code calls
+// `@checker.is_*` directly.
 
 ///|
 // Resolve a single `T[K]` indexed-access type to the matching field type when
@@ -2383,7 +2321,7 @@ fn all_field_names(fields : Array[(String, @ast.TsType)]) -> Array[String] {
 
 ///|
 fn utility_optional_type(type_ : @ast.TsType) -> @ast.TsType {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some(_) => type_
     None => Union([type_, Undefined])
   }
@@ -2391,7 +2329,7 @@ fn utility_optional_type(type_ : @ast.TsType) -> @ast.TsType {
 
 ///|
 fn utility_required_type(type_ : @ast.TsType) -> @ast.TsType {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some((inner, _)) => inner
     None => type_
   }
@@ -2583,7 +2521,7 @@ fn utility_record_key_suffix(type_ : @ast.TsType) -> String? {
 
 ///|
 fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some((inner, _)) => return utility_record_type_suffix(inner) + "Optional"
     None => ()
   }
@@ -3404,32 +3342,32 @@ fn lower_react_utility_type(
     None => ()
   }
   match type_ {
-    Named(name) if is_qualified_react_node_name(name) => Named("ReactNode")
-    Named(name) if is_react_node_like_name(name) => Any
-    Applied(name, [event_type]) if is_event_handler_alias_name(name) =>
+    Named(name) if @checker.is_qualified_react_node_name(name) =>
+      Named("ReactNode")
+    Named(name) if @checker.is_react_node_like_name(name) => Any
+    Applied(name, [event_type]) if @checker.is_event_handler_alias_name(name) =>
       Func(
-        [
-          lower_react_utility_type(
-            info, event_type, modules, canonical_types,
-          ),
-        ],
+        [lower_react_utility_type(info, event_type, modules, canonical_types)],
         Void,
       )
-    Applied(name, _) if is_signalish_alias_name(name) => Named("Signalish")
-    Named(name) if is_signalish_alias_name(name) => Named("Signalish")
-    Applied(name, _) if is_params_alias_name(name) => Named("Params")
-    Named(name) if is_params_alias_name(name) => Named("Params")
-    Applied(name, _) if is_ref_alias_name(name) => Named("Ref")
-    Named(name) if is_ref_alias_name(name) => Named("Ref")
+    Applied(name, _) if @checker.is_signalish_alias_name(name) =>
+      Named("Signalish")
+    Named(name) if @checker.is_signalish_alias_name(name) => Named("Signalish")
+    Applied(name, _) if @checker.is_params_alias_name(name) => Named("Params")
+    Named(name) if @checker.is_params_alias_name(name) => Named("Params")
+    Applied(name, _) if @checker.is_ref_alias_name(name) => Named("Ref")
+    Named(name) if @checker.is_ref_alias_name(name) => Named("Ref")
     IndexedAccess(base, key) =>
       match resolve_indexed_access(info, base, key, modules, canonical_types) {
         Some(field_type) =>
           lower_react_utility_type(info, field_type, modules, canonical_types)
         None => Any
       }
-    Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
+    Applied(name, [inner_type]) if @checker.is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
-    Applied(name, [source_type]) if is_mapped_interface_utility_name(name) =>
+    Applied(name, [source_type]) if @checker.is_mapped_interface_utility_name(
+        name,
+      ) =>
       match
         utility_mapped_interface_spec(
           info, name, source_type, modules, canonical_types,
@@ -3464,7 +3402,7 @@ fn lower_react_utility_type(
             lower_react_utility_type(info, inner_type, modules, canonical_types),
           ])
       }
-    Applied(name, [_]) if is_component_ref_like_name(name) =>
+    Applied(name, [_]) if @checker.is_component_ref_like_name(name) =>
       Named(resolve_react_ref_type_name(info, canonical_types))
     Applied("LibraryManagedAttributes", [_, props_type]) =>
       lower_react_utility_type(info, props_type, modules, canonical_types)
@@ -3497,7 +3435,7 @@ fn lower_react_utility_type(
       let lowered = lower_react_utility_type(
         info, inner_type, modules, canonical_types,
       )
-      match decl_classify_optional_like_union(lowered) {
+      match @checker.classify_optional_like_union(lowered) {
         Some((collapsed, _)) => collapsed
         None => lowered
       }
@@ -3674,11 +3612,13 @@ fn collect_react_utility_interfaces_from_type(
   interfaces : Array[@ast.TsInterface],
 ) -> Unit {
   match type_ {
-    Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
+    Applied(name, [inner_type]) if @checker.is_props_passthrough_name(name) =>
       collect_react_utility_interfaces_from_type(
         info, inner_type, modules, canonical_types, seen_names, interfaces,
       )
-    Applied(name, [source_type]) if is_mapped_interface_utility_name(name) => {
+    Applied(name, [source_type]) if @checker.is_mapped_interface_utility_name(
+        name,
+      ) => {
       match
         utility_mapped_interface_spec(
           info, name, source_type, modules, canonical_types,
@@ -3740,7 +3680,7 @@ fn collect_react_utility_interfaces_from_type(
         info, inner_type, modules, canonical_types, seen_names, interfaces,
       )
     }
-    Applied(name, [inner_type]) if is_component_ref_like_name(name) =>
+    Applied(name, [inner_type]) if @checker.is_component_ref_like_name(name) =>
       collect_react_utility_interfaces_from_type(
         info, inner_type, modules, canonical_types, seen_names, interfaces,
       )
@@ -5195,7 +5135,7 @@ fn decl_object_type_field_type(
 
 ///|
 fn decl_type_is_read_file_buffer_options(type_ : @ast.TsType) -> Bool {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some((inner, _)) => return decl_type_is_read_file_buffer_options(inner)
     None => ()
   }
@@ -5223,7 +5163,7 @@ fn decl_node_read_file_options_type(type_ : @ast.TsType) -> @ast.TsType {
     return Union([Named("ReadFileBufferOptions"), Undefined])
   }
   if decl_type_contains_named(type_, ["BufferEncoding"]) {
-    match decl_classify_optional_like_union(type_) {
+    match @checker.classify_optional_like_union(type_) {
       Some((_, true)) => Union([Named("BufferEncoding"), Undefined])
       _ => Named("BufferEncoding")
     }
@@ -5281,7 +5221,7 @@ fn decl_type_contains_boolean(type_ : @ast.TsType) -> Bool {
 
 ///|
 fn decl_copy_options_filter_type(type_ : @ast.TsType) -> @ast.TsType {
-  let inner_type = match decl_classify_optional_like_union(type_) {
+  let inner_type = match @checker.classify_optional_like_union(type_) {
     Some((inner, _)) => inner
     None => type_
   }
@@ -5379,7 +5319,7 @@ fn decl_named_optional_type(name : String) -> @ast.TsType {
 
 ///|
 fn decl_url_pattern_base_url_type(type_ : @ast.TsType) -> @ast.TsType {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some(_) => decl_string_optional_type()
     None =>
       match type_ {
@@ -5407,7 +5347,7 @@ fn decl_url_pattern_method_type(type_ : @ast.TsType) -> @ast.TsType {
 
 ///|
 fn decl_url_search_params_this_arg_type(type_ : @ast.TsType) -> @ast.TsType {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some(_) => decl_named_optional_type("URLSearchParamsForEachThisArg")
     None =>
       match type_ {
@@ -5919,7 +5859,7 @@ fn decl_stream_listener_func_type(
   class_name : String,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some((inner, is_optional)) => {
       let rewritten = decl_stream_listener_func_type(class_name, inner)
       if rewritten == inner {
@@ -6335,7 +6275,7 @@ fn decl_rewrite_inline_callback_param_type(
   param_index : Int,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some((Func(_, _), is_optional)) =>
       match
         decl_synthetic_callback_type_for_param(
@@ -6388,68 +6328,15 @@ fn decl_rewrite_inline_callback_params_in_func_type(
   }
 }
 
-///|
-fn decl_classify_optional_like_union(
-  type_ : @ast.TsType,
-) -> (@ast.TsType, Bool)? {
-  match type_ {
-    Union(items) => {
-      let mut concrete : @ast.TsType? = None
-      let mut has_any = false
-      let mut is_optional = false
-      let mut has_conflicting_concrete = false
-      let mut has_error_member = false
-      for item in items {
-        match item {
-          Any => has_any = true
-          Undefined | Null => is_optional = true
-          // Skip the builtin `Error` for now; restore it later if no other
-          // concrete companion was found, so message-style unions like
-          // `string | Error` collapse to the primitive companion while
-          // `Error | null` callback args still keep `Error?`.
-          Named("Error") => has_error_member = true
-          _ =>
-            match concrete {
-              Some(existing) =>
-                if existing != item {
-                  has_conflicting_concrete = true
-                }
-              None => concrete = Some(item)
-            }
-        }
-      }
-      if has_error_member && concrete is None {
-        concrete = Some(Named("Error"))
-      }
-      if has_conflicting_concrete {
-        if is_optional {
-          Some((Any, true))
-        } else {
-          None
-        }
-      } else {
-        match concrete {
-          Some(inner) =>
-            if has_any {
-              if is_optional {
-                Some((Any, true))
-              } else {
-                None
-              }
-            } else {
-              Some((inner, is_optional))
-            }
-          None => if has_any { Some((Any, is_optional)) } else { None }
-        }
-      }
-    }
-    _ => None
-  }
-}
+// `decl_classify_optional_like_union` moved to `mizchi/ts/checker`. Bridge
+// callers go through `@checker.classify_optional_like_union` directly. The
+// shared implementation also normalizes literal members (Literal/NumberLiteral/
+// BooleanLiteral/BigIntLiteral) before comparing, which is strictly more
+// aggressive than the old decl-local version and matches the parser/ffi side.
 
 ///|
 fn decl_type_widening_score(type_ : @ast.TsType) -> Int {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some((inner, _)) => return decl_type_widening_score(inner)
     None => ()
   }
@@ -6663,7 +6550,7 @@ fn decl_transparent_intersection_type(type_ : @ast.TsType) -> @ast.TsType? {
 
 ///|
 fn decl_normalize_overload_signature_type(type_ : @ast.TsType) -> @ast.TsType {
-  match decl_classify_optional_like_union(type_) {
+  match @checker.classify_optional_like_union(type_) {
     Some((inner, is_optional)) => {
       let normalized = decl_normalize_overload_signature_type(inner)
       if is_optional {
@@ -6701,7 +6588,7 @@ fn decl_normalize_overload_signature_type(type_ : @ast.TsType) -> @ast.TsType {
 ///|
 fn decl_overload_type_suffix(type_ : @ast.TsType) -> String? {
   let normalized_type = decl_normalize_overload_signature_type(type_)
-  match decl_classify_optional_like_union(normalized_type) {
+  match @checker.classify_optional_like_union(normalized_type) {
     Some((inner, _)) =>
       match decl_overload_type_suffix(inner) {
         Some(suffix) => return Some(suffix + "_optional")
