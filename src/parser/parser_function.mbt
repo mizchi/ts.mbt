@@ -1164,10 +1164,19 @@ fn type_alias_object_fields_to_interface(
 
 ///|
 fn type_alias_to_interface(type_alias : @ast.TsTypeAlias) -> @ast.TsInterface? {
-  // Apply `Record<P, V>` key substitution where P has a known bound. Only at
-  // the Record-key position so the rest of the body keeps its generic shape.
+  // The conversion from `type X<T extends Bound> = { ... }` to interface is
+  // already lossy on T (the resulting interface is treated structurally,
+  // without the generic flowing through bridge synthesis). When the alias has
+  // bounds, substitute every reference to a bounded type-param with the bound
+  // BEFORE conversion. This recovers concrete shapes at value positions like
+  // `form: Record<string, T | T[]>` → `Record<string, FormValue | FormValue[]>`
+  // while leaving non-Object aliases (e.g. `DateArg<DateType> = DateType | ...`)
+  // untouched, since `type_alias_object_fields_to_interface` only fires on
+  // Object bodies.
   let body = if type_alias.type_param_bounds.length() > 0 {
-    substitute_record_key_bounds(type_alias.type_, type_alias.type_param_bounds)
+    substitute_alias_param_bounds(
+      type_alias.type_, type_alias.type_param_bounds,
+    )
   } else {
     type_alias.type_
   }
@@ -1179,11 +1188,11 @@ fn type_alias_to_interface(type_alias : @ast.TsTypeAlias) -> @ast.TsInterface? {
 }
 
 ///|
-// Walk `type_` and, wherever a `Record<Named(P), V>` references a `Named(P)`
-// at the key position with `P` listed in `bounds`, substitute the key with
-// `P`'s bound. Other positions are left untouched so the generic shape of the
-// alias body is preserved.
-fn substitute_record_key_bounds(
+// Walk `type_` and substitute every `Named(name)` reference whose `name`
+// appears in `bounds` with that name's bound. Operates structurally over
+// every TsType variant. Used by `type_alias_to_interface` to project a
+// generic Object-alias body into a concrete interface body.
+fn substitute_alias_param_bounds(
   type_ : @ast.TsType,
   bounds : Array[(String, @ast.TsType)],
 ) -> @ast.TsType {
@@ -1198,17 +1207,11 @@ fn substitute_record_key_bounds(
 
   fn walk(t : @ast.TsType) -> @ast.TsType {
     match t {
-      Applied("Record", [key, value]) => {
-        let resolved_key = match key {
-          Named(name) =>
-            match lookup_bound(name) {
-              Some(b) => b
-              None => key
-            }
-          _ => walk(key)
+      Named(name) =>
+        match lookup_bound(name) {
+          Some(b) => b
+          None => t
         }
-        Applied("Record", [resolved_key, walk(value)])
-      }
       Applied(name, args) => {
         let new_args : Array[@ast.TsType] = []
         for a in args {
