@@ -9,6 +9,29 @@ pub fn equivalent(a : @ast.TsType, b : @ast.TsType) -> Bool {
 }
 
 ///|
+// Resolver-aware equivalence. Pre-expands `Named(n)` references via the
+// resolver before testing.
+pub fn equivalent_with(
+  a : @ast.TsType,
+  b : @ast.TsType,
+  resolve : (String) -> @ast.TsType?,
+) -> Bool {
+  is_assignable_to_with(a, b, resolve) && is_assignable_to_with(b, a, resolve)
+}
+
+///|
+// Generics-aware equivalence. Pre-expands both `Named(n)` and `Applied(n, args)`
+// alias references before testing.
+pub fn equivalent_with_generics(
+  a : @ast.TsType,
+  b : @ast.TsType,
+  resolve : (String) -> AliasBinding?,
+) -> Bool {
+  is_assignable_to_with_generics(a, b, resolve) &&
+  is_assignable_to_with_generics(b, a, resolve)
+}
+
+///|
 // Reduce a list of union members by removing duplicates and members that are
 // subsumed by another member already kept. The result preserves the order of
 // the surviving members. If `Any` appears, the result is just `[Any]`.

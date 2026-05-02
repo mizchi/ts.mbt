@@ -25,6 +25,10 @@ pub fn collect_referenced_names(@ast.TsType) -> Array[String]
 
 pub fn equivalent(@ast.TsType, @ast.TsType) -> Bool
 
+pub fn equivalent_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?) -> Bool
+
+pub fn equivalent_with_generics(@ast.TsType, @ast.TsType, (String) -> AliasBinding?) -> Bool
+
 pub fn extends_decision(@ast.TsType, @ast.TsType) -> Bool?
 
 pub fn extends_decision_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?) -> Bool?

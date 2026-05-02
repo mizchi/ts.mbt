@@ -22,6 +22,37 @@ test "equivalent: distinguishes literals from primitives" {
 }
 
 ///|
+test "equivalent_with: resolves aliases on both sides" {
+  // type ID = string;
+  let table : Map[String, @ast.TsType] = { "ID": String_ }
+  let resolve = fn(name) { table.get(name) }
+  assert_true(equivalent_with(Named("ID"), String_, resolve))
+  assert_true(equivalent_with(String_, Named("ID"), resolve))
+  assert_false(equivalent_with(Named("ID"), Number, resolve))
+}
+
+///|
+test "equivalent_with_generics: alias-aware bidirectional check" {
+  // type Maybe<T> = T | undefined;
+  let table : Map[String, AliasBinding] = {
+    "Maybe": { type_params: ["T"], body: Union([Named("T"), Undefined]) },
+  }
+  let resolve = fn(name) { table.get(name) }
+  // Maybe<string> ≡ string | undefined
+  assert_true(
+    equivalent_with_generics(
+      Applied("Maybe", [String_]),
+      Union([String_, Undefined]),
+      resolve,
+    ),
+  )
+  // Maybe<string> ≢ string (one direction fails)
+  assert_false(
+    equivalent_with_generics(Applied("Maybe", [String_]), String_, resolve),
+  )
+}
+
+///|
 test "simplify_union: removes duplicate members" {
   let raw : Array[@ast.TsType] = [String_, String_, Number]
   let simplified = simplify_union(raw)
