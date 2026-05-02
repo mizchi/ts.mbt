@@ -5,8 +5,7 @@
 // Excluded for now (require AST features we do not model):
 //   Partial / Required / Readonly  — mapped types
 //   Pick / Omit                    — keyof + mapped
-//   ReturnType / Parameters        — rest-parameter signature pattern matching
-//   ConstructorParameters / InstanceType — same rest-param issue
+//   ConstructorParameters / InstanceType — class signature distinction
 //
 // Use:
 //   let resolve = fn(name) { standard_utility_types().get(name) }
@@ -36,6 +35,31 @@ pub fn standard_utility_types() -> Map[String, AliasBinding] {
       Union([Null, Undefined]),
       Never,
       Named("T"),
+    ),
+  }
+
+  // type ReturnType<F> = F extends (...args: any[]) => infer R ? R : any
+  table["ReturnType"] = {
+    type_params: ["F"],
+    body: Conditional(
+      Named("F"),
+      Func([Array(Any)], Applied("__tsmbt_infer", [Named("R")])),
+      Named("R"),
+      Any,
+    ),
+  }
+
+  // type Parameters<F> = F extends (...args: infer P) => any ? P : never
+  table["Parameters"] = {
+    type_params: ["F"],
+    body: Conditional(
+      Named("F"),
+      Func(
+        [Array(Applied("__tsmbt_infer", [Named("P")]))],
+        Any,
+      ),
+      Named("P"),
+      Never,
     ),
   }
 

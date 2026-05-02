@@ -85,6 +85,34 @@ test "substitute_inferred_type: replaces Named with binding" {
 }
 
 ///|
+test "match_infer_pattern: rest pattern (...args: any[]) accepts any arity" {
+  let bindings : Map[String, @ast.TsType] = {}
+  let pattern : @ast.TsType = Func([Array(Any)], infer_marker("R"))
+  let source : @ast.TsType = Func([String_, Number, Boolean], Named("Date"))
+  assert_true(match_infer_pattern(source, pattern, bindings))
+  assert_eq(bindings.get("R"), Some(Named("Date")))
+}
+
+///|
+test "match_infer_pattern: rest pattern captures params as Tuple" {
+  let bindings : Map[String, @ast.TsType] = {}
+  // (...args: infer P) => any  vs  (x: string, y: number) => void
+  let pattern : @ast.TsType = Func([Array(infer_marker("P"))], Any)
+  let source : @ast.TsType = Func([String_, Number], Void)
+  assert_true(match_infer_pattern(source, pattern, bindings))
+  assert_eq(bindings.get("P"), Some(Tuple([String_, Number])))
+}
+
+///|
+test "match_infer_pattern: rest pattern with no source params still matches" {
+  let bindings : Map[String, @ast.TsType] = {}
+  let pattern : @ast.TsType = Func([Array(Any)], infer_marker("R"))
+  let source : @ast.TsType = Func([], String_)
+  assert_true(match_infer_pattern(source, pattern, bindings))
+  assert_eq(bindings.get("R"), Some(String_))
+}
+
+///|
 test "match_infer_pattern: object pattern { value: infer V }" {
   let bindings : Map[String, @ast.TsType] = {}
   let pattern : @ast.TsType = Object([(Literal("value"), infer_marker("V"))])

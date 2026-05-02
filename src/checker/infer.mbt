@@ -76,7 +76,35 @@ pub fn match_infer_pattern(
         }
         true
       }
-    (Func(s_params, s_ret), Func(p_params, p_ret)) =>
+    (Func(s_params, s_ret), Func(p_params, p_ret)) => {
+      // Rest-parameter pattern: the pattern has a single parameter of the form
+      // `Array(X)` representing `...args: X[]`. It matches any source arity.
+      //   - If X is `infer P`, bind P to `Tuple(source_params)`.
+      //   - Otherwise every source param must match X structurally
+      //     (typical case: X = Any → unconstrained).
+      if p_params.length() == 1 {
+        match p_params[0] {
+          Array(rest_inner) =>
+            match infer_marker_name(rest_inner) {
+              Some(rest_name) =>
+                return bind_inferred_type(
+                  bindings,
+                  rest_name,
+                  Tuple(s_params),
+                ) &&
+                  match_infer_pattern(s_ret, p_ret, bindings)
+              None => {
+                for sp in s_params {
+                  if !match_infer_pattern(sp, rest_inner, bindings) {
+                    return false
+                  }
+                }
+                return match_infer_pattern(s_ret, p_ret, bindings)
+              }
+            }
+          _ => ()
+        }
+      }
       if s_params.length() != p_params.length() {
         false
       } else {
@@ -87,6 +115,7 @@ pub fn match_infer_pattern(
         }
         match_infer_pattern(s_ret, p_ret, bindings)
       }
+    }
     (_, Union(p_items)) => {
       // Try each pattern branch in isolation; commit only if a branch matches
       // without conflicting with already-committed bindings.

@@ -45,6 +45,41 @@ test "standard_utility_types: NonNullable strips null and undefined" {
 }
 
 ///|
+test "standard_utility_types: ReturnType extracts function return" {
+  let resolve = standard_resolver()
+  // ReturnType<(x: string) => number> ⇨ number
+  let target : @ast.TsType = Applied("ReturnType", [
+    Func([String_], Number),
+  ])
+  assert_true(is_assignable_to_with_generics(Number, target, resolve))
+  assert_false(is_assignable_to_with_generics(String_, target, resolve))
+}
+
+///|
+test "standard_utility_types: ReturnType handles zero-param functions" {
+  let resolve = standard_resolver()
+  let target : @ast.TsType = Applied("ReturnType", [
+    Func([], String_),
+  ])
+  assert_true(is_assignable_to_with_generics(String_, target, resolve))
+}
+
+///|
+test "standard_utility_types: Parameters captures the param tuple" {
+  let resolve = standard_resolver()
+  // Parameters<(x: string, y: number) => void> ⇨ [string, number]
+  let target : @ast.TsType = Applied("Parameters", [
+    Func([String_, Number], Void),
+  ])
+  assert_true(
+    is_assignable_to_with_generics(Tuple([String_, Number]), target, resolve),
+  )
+  assert_false(
+    is_assignable_to_with_generics(Tuple([Number, String_]), target, resolve),
+  )
+}
+
+///|
 test "standard_utility_types: Awaited unwraps Promise once" {
   let resolve = standard_resolver()
   // Awaited<Promise<string>> ⇨ string
