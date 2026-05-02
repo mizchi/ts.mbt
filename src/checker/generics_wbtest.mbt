@@ -90,6 +90,94 @@ test "is_assignable_to_with_generics: arity mismatch leaves Applied opaque" {
 }
 
 ///|
+test "module_alias_resolver: combines parsed aliases with stdlib utilities" {
+  let m : @ast.TsModule = {
+    funcs: [],
+    interfaces: [],
+    type_aliases: [
+      {
+        name: "Maybe",
+        type_params: ["X"],
+        type_: Union([Named("X"), Undefined]),
+      },
+    ],
+    imports: [],
+    values: [],
+    classes: [],
+    namespaces: [],
+    enums: [],
+  }
+  let resolve = module_alias_resolver(m)
+  // Module-defined alias resolves.
+  assert_true(
+    is_assignable_to_with_generics(
+      String_,
+      Applied("Maybe", [String_]),
+      resolve,
+    ),
+  )
+  // Standard library alias also resolves (NonNullable strips null/undefined).
+  assert_true(
+    is_assignable_to_with_generics(
+      String_,
+      Applied("NonNullable", [Union([String_, Null])]),
+      resolve,
+    ),
+  )
+}
+
+///|
+test "module_alias_resolver: include_standard=false omits stdlib" {
+  let m : @ast.TsModule = {
+    funcs: [],
+    interfaces: [],
+    type_aliases: [],
+    imports: [],
+    values: [],
+    classes: [],
+    namespaces: [],
+    enums: [],
+  }
+  let resolve = module_alias_resolver(m, include_standard=false)
+  // NonNullable not in scope → stays nominal Applied. Number is not assignable
+  // to the opaque Applied form.
+  assert_false(
+    is_assignable_to_with_generics(
+      Number,
+      Applied("NonNullable", [Number]),
+      resolve,
+    ),
+  )
+}
+
+///|
+test "module_alias_resolver: module aliases shadow stdlib on name clash" {
+  let m : @ast.TsModule = {
+    funcs: [],
+    interfaces: [],
+    // Override `NonNullable` to mean `string` for this module — a contrived
+    // example, but pins the shadowing rule.
+    type_aliases: [
+      { name: "NonNullable", type_params: ["T"], type_: String_ },
+    ],
+    imports: [],
+    values: [],
+    classes: [],
+    namespaces: [],
+    enums: [],
+  }
+  let resolve = module_alias_resolver(m)
+  // Per the override, NonNullable<anything> ≡ string.
+  assert_true(
+    is_assignable_to_with_generics(
+      String_,
+      Applied("NonNullable", [Number]),
+      resolve,
+    ),
+  )
+}
+
+///|
 test "is_assignable_to_with_generics: distributes conditional over union arg" {
   // type ToArray<T> = T extends any ? T[] : never;
   // ToArray<string | number> should produce string[] | number[].

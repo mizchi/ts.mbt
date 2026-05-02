@@ -3,6 +3,27 @@
 // substitutes type parameters when expanding `Applied(n, args)`.
 
 ///|
+// Build a `(String) -> AliasBinding?` resolver that combines:
+//  - every `type X<...> = ...` declared in `module_`,
+//  - the `standard_utility_types()` table when `include_standard` is true.
+// Module aliases shadow the standard table on name conflicts so callers can
+// override stdlib utility shapes per-module.
+pub fn module_alias_resolver(
+  module_ : @ast.TsModule,
+  include_standard~ : Bool = true,
+) -> (String) -> AliasBinding? {
+  let table : Map[String, AliasBinding] = if include_standard {
+    standard_utility_types()
+  } else {
+    {}
+  }
+  for ta in module_.type_aliases {
+    table[ta.name] = { type_params: ta.type_params, body: ta.type_ }
+  }
+  fn(name) { table.get(name) }
+}
+
+///|
 pub(all) struct AliasBinding {
   type_params : Array[String]
   body : @ast.TsType
