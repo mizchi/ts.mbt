@@ -205,6 +205,16 @@ jsvalue_cause_counts() {
   local file
   local line
 
+  # bash 3.2 misbehaves with inline regex literals when this function is
+  # invoked through process substitution; assign the patterns to variables to
+  # bypass that.
+  local pat_tuple_array="(Array\[JSValue\]|JSValue\])"
+  local pat_namespace_value="(Unsupported export|namespace|Namespace|default|Default|get_|constants|Constants|meta|Meta|rest|Rest|runtime|Runtime|build|Build)"
+  local pat_call="<call>"
+  local pat_callback_function="(callback|Callback|listener|Listener|handler|Handler|dispatch|Dispatch|reducer|Reducer|action|Action|func|Func|function|Function|component|Component|render|Render|propsAreEqual|Promise|NoParamCallback)"
+  local pat_conditional_mapped="(props|Props|children|Children|Ref|Element|ReactNode|LibraryManaged|Intrinsic|JSX|Partial|Readonly|Record|Exclude|Extract|NonNullable|ReturnType|Parameters|DOMAttributes|Key|source|self)"
+  local pat_declare_pub_fn="^declare pub fn"
+
   while IFS= read -r file; do
     while IFS= read -r line || [ -n "$line" ]; do
       if [[ "$line" != *JSValue* ]]; then
@@ -218,17 +228,17 @@ jsvalue_cause_counts() {
       fi
 
       surface_total=$((surface_total + 1))
-      if [[ "$line" =~ Array\[JSValue\] || "$line" =~ JSValue\] ]]; then
+      if [[ "$line" =~ $pat_tuple_array ]]; then
         tuple_array_fallback=$((tuple_array_fallback + 1))
-      elif [[ "$line" =~ (Unsupported\ export|namespace|Namespace|default|Default|get_|constants|Constants|meta|Meta|rest|Rest|runtime|Runtime|build|Build) ]]; then
+      elif [[ "$line" =~ $pat_namespace_value ]]; then
         namespace_value_fallback=$((namespace_value_fallback + 1))
-      elif [[ "$line" =~ \<call\> ]]; then
+      elif [[ "$line" =~ $pat_call ]]; then
         overload_fallback=$((overload_fallback + 1))
-      elif [[ "$line" =~ (callback|Callback|listener|Listener|handler|Handler|dispatch|Dispatch|reducer|Reducer|action|Action|func|Func|function|Function|component|Component|render|Render|propsAreEqual|Promise|NoParamCallback) ]]; then
+      elif [[ "$line" =~ $pat_callback_function ]]; then
         callback_function_fallback=$((callback_function_fallback + 1))
-      elif [[ "$line" =~ (props|Props|children|Children|Ref|Element|ReactNode|LibraryManaged|Intrinsic|JSX|Partial|Readonly|Record|Exclude|Extract|NonNullable|ReturnType|Parameters|DOMAttributes|Key|source|self) ]]; then
+      elif [[ "$line" =~ $pat_conditional_mapped ]]; then
         conditional_mapped_fallback=$((conditional_mapped_fallback + 1))
-      elif [[ "$line" =~ ^declare\ pub\ fn ]]; then
+      elif [[ "$line" =~ $pat_declare_pub_fn ]]; then
         overload_fallback=$((overload_fallback + 1))
       else
         unknown_any=$((unknown_any + 1))

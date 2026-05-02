@@ -14,3 +14,15 @@ export declare function strictEqual<T>(
   expected: T,
   message?: string | Error,
 ): asserts actual is T;
+
+export declare function notEqual(
+  actual: unknown,
+  expected: unknown,
+  message?: string | Error,
+): void;
+
+export declare function notStrictEqual(
+  actual: unknown,
+  expected: unknown,
+  message?: string | Error,
+): void;

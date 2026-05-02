@@ -431,10 +431,16 @@ fn ffi_classify_optional_like_union(
       let mut has_any = false
       let mut is_optional = false
       let mut has_conflicting_concrete = false
+      let mut has_error_member = false
       for item in items {
         match item {
           Any => has_any = true
           Undefined | Null => is_optional = true
+          // Skip the builtin `Error` for now; restore it later if no other
+          // concrete companion was found, so message-style unions like
+          // `string | Error` collapse to the primitive companion while
+          // `Error | null` callback args still keep `Error?`.
+          Named("Error") => has_error_member = true
           _ => {
             let normalized = ffi_normalize_literal_type(item)
             match concrete {
@@ -446,6 +452,9 @@ fn ffi_classify_optional_like_union(
             }
           }
         }
+      }
+      if has_error_member && concrete is None {
+        concrete = Some(Named("Error"))
       }
       if has_conflicting_concrete {
         if is_optional {
@@ -482,6 +491,54 @@ fn ffi_is_empty_object_type(type_ : @ast.TsType) -> Bool {
 }
 
 ///|
+fn ffi_is_simple_primitive_type(t : @ast.TsType) -> Bool {
+  match t {
+    Number
+    | Int
+    | Boolean
+    | String_
+    | Void
+    | BigInt
+    | Symbol
+    | Null
+    | Undefined => true
+    _ => false
+  }
+}
+
+///|
+fn ffi_reduce_uniform_union(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Union(items) => {
+      if items.length() == 0 {
+        return t
+      }
+      let reduced : Array[@ast.TsType] = []
+      for it in items {
+        reduced.push(ffi_reduce_uniform_union(it))
+      }
+      let first = reduced[0]
+      if !ffi_is_simple_primitive_type(first) {
+        return Union(reduced)
+      }
+      let mut all_same = true
+      for r in reduced {
+        if r != first {
+          all_same = false
+          break
+        }
+      }
+      if all_same {
+        first
+      } else {
+        Union(reduced)
+      }
+    }
+    _ => t
+  }
+}
+
+///|
 fn ffi_classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
   match type_ {
     Intersection(items) => {
@@ -489,9 +546,12 @@ fn ffi_classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
       let named_constraints : Array[@ast.TsType] = []
       for item in items {
         if !ffi_is_empty_object_type(item) {
-          concrete.push(item)
-          match item {
-            Named(_) | Applied(_, _) => named_constraints.push(item)
+          // Reduce uniform unions of identical primitives down to that primitive
+          // (e.g. (keyof T1 | keyof T2) ≡ String_ | String_ ⇒ String_).
+          let reduced = ffi_reduce_uniform_union(item)
+          concrete.push(reduced)
+          match reduced {
+            Named(_) | Applied(_, _) => named_constraints.push(reduced)
             _ => ()
           }
         }
@@ -500,6 +560,22 @@ fn ffi_classify_transparent_intersection(type_ : @ast.TsType) -> @ast.TsType? {
         Some(concrete[0])
       } else if named_constraints.length() == 1 {
         Some(named_constraints[0])
+      } else if concrete.length() > 0 &&
+        ffi_is_simple_primitive_type(concrete[0]) {
+        // Multiple concrete items, all identical simple primitives ⇒ collapse.
+        let first = concrete[0]
+        let mut all_same = true
+        for c in concrete {
+          if c != first {
+            all_same = false
+            break
+          }
+        }
+        if all_same {
+          Some(first)
+        } else {
+          None
+        }
       } else {
         None
       }
@@ -2501,6 +2577,24 @@ fn ffi_node_assert_primitive_wrapper(
           ["actual", "expected", "__ts_mbt_unwrap_option(message)"],
         ),
       )
+    "notEqual" | "assertNotEqual" =>
+      Some(
+        (
+          base_name + "_double",
+          ["actual : Double", "expected : Double", "message : String?"],
+          ["actual", "expected", "message"],
+          ["actual", "expected", "__ts_mbt_unwrap_option(message)"],
+        ),
+      )
+    "notStrictEqual" | "assertNotStrictEqual" =>
+      Some(
+        (
+          base_name + "_string",
+          ["actual : String", "expected : String", "message : String?"],
+          ["actual", "expected", "message"],
+          ["actual", "expected", "__ts_mbt_unwrap_option(message)"],
+        ),
+      )
     _ => None
   }
 }
@@ -4355,6 +4449,46 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     push_unique_bridge_binding(
       seen_bridge_binding_names, bridge_lines, "__ts_mbt_sign_jwt_set_issued_at_double",
       "export function __ts_mbt_sign_jwt_set_issued_at_double(signer, input) { return signer.setIssuedAt(input); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("unsecured_jwt_set_not_before_double"),
+      "pub extern \"js\" fn unsecured_jwt_set_not_before_double(jwt : UnsecuredJWT, input : Double) -> UnsecuredJWT = \"__ts_mbt_unsecured_jwt_set_not_before_double\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_unsecured_jwt_set_not_before_double",
+      "export function __ts_mbt_unsecured_jwt_set_not_before_double(jwt, input) { return jwt.setNotBefore(input); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("sign_jwt_set_not_before_double"),
+      "pub extern \"js\" fn sign_jwt_set_not_before_double(signer : SignJWT, input : Double) -> SignJWT = \"__ts_mbt_sign_jwt_set_not_before_double\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_sign_jwt_set_not_before_double",
+      "export function __ts_mbt_sign_jwt_set_not_before_double(signer, input) { return signer.setNotBefore(input); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("unsecured_jwt_set_expiration_time_double"),
+      "pub extern \"js\" fn unsecured_jwt_set_expiration_time_double(jwt : UnsecuredJWT, input : Double) -> UnsecuredJWT = \"__ts_mbt_unsecured_jwt_set_expiration_time_double\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_unsecured_jwt_set_expiration_time_double",
+      "export function __ts_mbt_unsecured_jwt_set_expiration_time_double(jwt, input) { return jwt.setExpirationTime(input); }",
+    )
+    push_unique_ffi_section(
+      seen_ffi_binding_names,
+      ffi_sections,
+      ffi_fn_decl_key("sign_jwt_set_expiration_time_double"),
+      "pub extern \"js\" fn sign_jwt_set_expiration_time_double(signer : SignJWT, input : Double) -> SignJWT = \"__ts_mbt_sign_jwt_set_expiration_time_double\"",
+    )
+    push_unique_bridge_binding(
+      seen_bridge_binding_names, bridge_lines, "__ts_mbt_sign_jwt_set_expiration_time_double",
+      "export function __ts_mbt_sign_jwt_set_expiration_time_double(signer, input) { return signer.setExpirationTime(input); }",
     )
   }
 

@@ -2488,3 +2488,22 @@ async test "bridge: recursive type alias overload wrappers do not overflow" {
     ),
   )
 }
+
+///|
+async test "bridge: qualified React.ReactNode renders as opaque ReactNode in mbti" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/qualified-react-node-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("element : ReactNode?"))
+  assert_true(actual.contains("errorElement : ReactNode?"))
+  assert_false(actual.contains("element : JSValue?"))
+  assert_false(actual.contains("element : @js.Any?"))
+}

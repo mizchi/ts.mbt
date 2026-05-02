@@ -1191,6 +1191,41 @@ async test "bridge: emit primitive node assert wrappers without widening values 
       "pub extern \"js\" fn strict_equal_string(actual : String, expected : String, message : String?) -> Unit = \"__ts_mbt_strict_equal_string\"",
     ),
   )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn not_equal_double(actual : Double, expected : Double, message : String?) -> Unit = \"__ts_mbt_not_equal_double\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_not_equal_double(actual, expected, message) { return notEqual(actual, expected, __ts_mbt_unwrap_option(message)); }",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn not_strict_equal_string(actual : String, expected : String, message : String?) -> Unit = \"__ts_mbt_not_strict_equal_string\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_not_strict_equal_string(actual, expected, message) { return notStrictEqual(actual, expected, __ts_mbt_unwrap_option(message)); }",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn ok(value : @js.Any, message : String?) -> @js.Any = \"__ts_mbt_ok\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn equal(actual : @js.Any, expected : @js.Any, message : String?) -> Unit = \"__ts_mbt_equal\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn not_equal(actual : @js.Any, expected : @js.Any, message : String?) -> Unit = \"__ts_mbt_not_equal\"",
+    ),
+  )
 }
 
 ///|
@@ -1255,6 +1290,31 @@ async test "bridge: emit JOSE issued-at number helpers" {
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn sign_jwt_set_issued_at_double(signer : SignJWT, input : Double) -> SignJWT = \"__ts_mbt_sign_jwt_set_issued_at_double\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn unsecured_jwt_set_not_before_double(jwt : UnsecuredJWT, input : Double) -> UnsecuredJWT = \"__ts_mbt_unsecured_jwt_set_not_before_double\"",
+    ),
+  )
+  assert_true(
+    bundle.bridge_js.contains(
+      "export function __ts_mbt_unsecured_jwt_set_not_before_double(jwt, input) { return jwt.setNotBefore(input); }",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn sign_jwt_set_not_before_double(signer : SignJWT, input : Double) -> SignJWT = \"__ts_mbt_sign_jwt_set_not_before_double\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn unsecured_jwt_set_expiration_time_double(jwt : UnsecuredJWT, input : Double) -> UnsecuredJWT = \"__ts_mbt_unsecured_jwt_set_expiration_time_double\"",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "pub extern \"js\" fn sign_jwt_set_expiration_time_double(signer : SignJWT, input : Double) -> SignJWT = \"__ts_mbt_sign_jwt_set_expiration_time_double\"",
     ),
   )
 }
@@ -5024,4 +5084,35 @@ async test "bridge: emit MoonBit JS FFI bundle avoids duplicate class/interface 
   }
   assert_true(bundle.ffi_mbt.contains("pub(all) struct Location"))
   assert_eq(count_occurrences_in_ffi_output(bundle.ffi_mbt, "type Location"), 0)
+}
+
+///|
+test "ffi_classify_transparent_intersection: collapses uniform String primitive" {
+  let t : @ast.TsType = Intersection([String_, String_])
+  match ffi_classify_transparent_intersection(t) {
+    Some(String_) => ()
+    Some(other) => fail("expected String_, got \{other}")
+    None => fail("expected Some(String_), got None")
+  }
+}
+
+///|
+test "ffi_classify_transparent_intersection: collapses uniform union with primitive" {
+  // (keyof Data | keyof FlashData) & string ≈ Intersection([Union([String_, String_]), String_])
+  let t : @ast.TsType = Intersection([Union([String_, String_]), String_])
+  match ffi_classify_transparent_intersection(t) {
+    Some(String_) => ()
+    Some(other) => fail("expected String_, got \{other}")
+    None => fail("expected Some(String_), got None")
+  }
+}
+
+///|
+test "ffi_classify_transparent_intersection: collapses uniform Number primitive" {
+  let t : @ast.TsType = Intersection([Number, Number, Number])
+  match ffi_classify_transparent_intersection(t) {
+    Some(Number) => ()
+    Some(other) => fail("expected Number, got \{other}")
+    None => fail("expected Some(Number), got None")
+  }
 }

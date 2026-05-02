@@ -1986,6 +1986,16 @@ fn is_react_node_like_name(name : String) -> Bool {
 }
 
 ///|
+// Qualified `*.ReactNode` (e.g. `React.ReactNode`, `React__default.ReactNode`)
+// always refers to the React type alias from upstream React typings, so we
+// surface it as an opaque MoonBit type instead of widening it to `Any`. The
+// unqualified `ReactNode` form is still treated as a fixture-local alias
+// (e.g. `type ReactNode = string | number`) and widened.
+fn is_qualified_react_node_name(name : String) -> Bool {
+  name.has_suffix(".ReactNode") && name.length() > ".ReactNode".length()
+}
+
+///|
 fn props_with_children_object_interface_name(
   fields : Array[(@ast.TsType, @ast.TsType)],
 ) -> String {
@@ -3322,6 +3332,7 @@ fn lower_react_utility_type(
     None => ()
   }
   match type_ {
+    Named(name) if is_qualified_react_node_name(name) => Named("ReactNode")
     Named(name) if is_react_node_like_name(name) => Any
     Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
@@ -6294,10 +6305,16 @@ fn decl_classify_optional_like_union(
       let mut has_any = false
       let mut is_optional = false
       let mut has_conflicting_concrete = false
+      let mut has_error_member = false
       for item in items {
         match item {
           Any => has_any = true
           Undefined | Null => is_optional = true
+          // Skip the builtin `Error` for now; restore it later if no other
+          // concrete companion was found, so message-style unions like
+          // `string | Error` collapse to the primitive companion while
+          // `Error | null` callback args still keep `Error?`.
+          Named("Error") => has_error_member = true
           _ =>
             match concrete {
               Some(existing) =>
@@ -6307,6 +6324,9 @@ fn decl_classify_optional_like_union(
               None => concrete = Some(item)
             }
         }
+      }
+      if has_error_member && concrete is None {
+        concrete = Some(Named("Error"))
       }
       if has_conflicting_concrete {
         if is_optional {
@@ -6458,6 +6478,54 @@ fn decl_is_empty_object_type(type_ : @ast.TsType) -> Bool {
 }
 
 ///|
+fn decl_is_simple_primitive_type(t : @ast.TsType) -> Bool {
+  match t {
+    Number
+    | Int
+    | Boolean
+    | String_
+    | Void
+    | BigInt
+    | Symbol
+    | Null
+    | Undefined => true
+    _ => false
+  }
+}
+
+///|
+fn decl_reduce_uniform_union(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Union(items) => {
+      if items.length() == 0 {
+        return t
+      }
+      let reduced : Array[@ast.TsType] = []
+      for it in items {
+        reduced.push(decl_reduce_uniform_union(it))
+      }
+      let first = reduced[0]
+      if !decl_is_simple_primitive_type(first) {
+        return Union(reduced)
+      }
+      let mut all_same = true
+      for r in reduced {
+        if r != first {
+          all_same = false
+          break
+        }
+      }
+      if all_same {
+        first
+      } else {
+        Union(reduced)
+      }
+    }
+    _ => t
+  }
+}
+
+///|
 fn decl_transparent_intersection_type(type_ : @ast.TsType) -> @ast.TsType? {
   match type_ {
     Intersection(items) => {
@@ -6465,9 +6533,10 @@ fn decl_transparent_intersection_type(type_ : @ast.TsType) -> @ast.TsType? {
       let named_constraints : Array[@ast.TsType] = []
       for item in items {
         if !decl_is_empty_object_type(item) {
-          concrete.push(item)
-          match item {
-            Named(_) | Applied(_, _) => named_constraints.push(item)
+          let reduced = decl_reduce_uniform_union(item)
+          concrete.push(reduced)
+          match reduced {
+            Named(_) | Applied(_, _) => named_constraints.push(reduced)
             _ => ()
           }
         }
@@ -6476,6 +6545,21 @@ fn decl_transparent_intersection_type(type_ : @ast.TsType) -> @ast.TsType? {
         Some(concrete[0])
       } else if named_constraints.length() == 1 {
         Some(named_constraints[0])
+      } else if concrete.length() > 0 &&
+        decl_is_simple_primitive_type(concrete[0]) {
+        let first = concrete[0]
+        let mut all_same = true
+        for c in concrete {
+          if c != first {
+            all_same = false
+            break
+          }
+        }
+        if all_same {
+          Some(first)
+        } else {
+          None
+        }
       } else {
         None
       }

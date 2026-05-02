@@ -180,6 +180,16 @@ jsvalue_cause_counts() {
     return
   fi
 
+  # bash 3.2 misbehaves with inline regex literals when this function is
+  # invoked through process substitution; assign the patterns to variables to
+  # bypass that.
+  local pat_tuple_array="(Array\[JSValue\]|JSValue\])"
+  local pat_namespace_value="(Unsupported export|namespace|Namespace|default|Default|get_|constants|Constants|meta|Meta|rest|Rest|runtime|Runtime|build|Build)"
+  local pat_call="<call>"
+  local pat_callback_function="(callback|Callback|listener|Listener|handler|Handler|dispatch|Dispatch|reducer|Reducer|action|Action|func|Func|function|Function|component|Component|render|Render|propsAreEqual|Promise|NoParamCallback)"
+  local pat_conditional_mapped="(props|Props|children|Children|Ref|Element|ReactNode|LibraryManaged|Intrinsic|JSX|Partial|Readonly|Record|Exclude|Extract|NonNullable|ReturnType|Parameters|DOMAttributes|Key|source|self)"
+  local pat_declare_pub_fn="^declare pub fn"
+
   while IFS= read -r line || [ -n "$line" ]; do
     if [[ "$line" != *JSValue* ]]; then
       continue
@@ -192,17 +202,17 @@ jsvalue_cause_counts() {
     fi
 
     surface_total=$((surface_total + 1))
-    if [[ "$line" =~ Array\[JSValue\] || "$line" =~ JSValue\] ]]; then
+    if [[ "$line" =~ $pat_tuple_array ]]; then
       tuple_array_fallback=$((tuple_array_fallback + 1))
-    elif [[ "$line" =~ (Unsupported\ export|namespace|Namespace|default|Default|get_|constants|Constants|meta|Meta|rest|Rest|runtime|Runtime|build|Build) ]]; then
+    elif [[ "$line" =~ $pat_namespace_value ]]; then
       namespace_value_fallback=$((namespace_value_fallback + 1))
-    elif [[ "$line" =~ \<call\> ]]; then
+    elif [[ "$line" =~ $pat_call ]]; then
       overload_fallback=$((overload_fallback + 1))
-    elif [[ "$line" =~ (callback|Callback|listener|Listener|handler|Handler|dispatch|Dispatch|reducer|Reducer|action|Action|func|Func|function|Function|component|Component|render|Render|propsAreEqual|Promise|NoParamCallback) ]]; then
+    elif [[ "$line" =~ $pat_callback_function ]]; then
       callback_function_fallback=$((callback_function_fallback + 1))
-    elif [[ "$line" =~ (props|Props|children|Children|Ref|Element|ReactNode|LibraryManaged|Intrinsic|JSX|Partial|Readonly|Record|Exclude|Extract|NonNullable|ReturnType|Parameters|DOMAttributes|Key|source|self) ]]; then
+    elif [[ "$line" =~ $pat_conditional_mapped ]]; then
       conditional_mapped_fallback=$((conditional_mapped_fallback + 1))
-    elif [[ "$line" =~ ^declare\ pub\ fn ]]; then
+    elif [[ "$line" =~ $pat_declare_pub_fn ]]; then
       overload_fallback=$((overload_fallback + 1))
     else
       unknown_any=$((unknown_any + 1))
@@ -310,7 +320,7 @@ jsvalue_function_budget() {
     chalk) printf '4\n' ;;
     dotenv) printf '1\n' ;;
     ignore) printf '1\n' ;;
-    hono) printf '36\n' ;;
+    hono) printf '35\n' ;;
     zod) printf '239\n' ;;
     date-fns) printf '18\n' ;;
     node:sqlite) printf '0\n' ;;
@@ -326,14 +336,14 @@ jsvalue_function_budget() {
     preact) printf '10\n' ;;
     vitest/runtime) printf '3\n' ;;
     playwright) printf '209\n' ;;
-    react-router) printf '86\n' ;;
+    react-router) printf '82\n' ;;
     jose) printf '63\n' ;;
     express) printf '4\n' ;;
     glob) printf '19\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '0\n' ;;
     node:querystring) printf '0\n' ;;
-    node:assert) printf '24\n' ;;
+    node:assert) printf '22\n' ;;
     node:util) printf '13\n' ;;
     node:buffer) printf '0\n' ;;
     *) printf '0\n' ;;
@@ -359,8 +369,8 @@ jsvalue_cause_budget() {
     chalk) printf '5|0|0|0|0|2|3\n' ;;
     dotenv) printf '2|1|1|0|0|0|0\n' ;;
     ignore) printf '2|1|0|1|0|0|0\n' ;;
-    hono) printf '55|10|6|23|3|4|9\n' ;;
-    zod) printf '433|163|93|111|26|21|19\n' ;;
+    hono) printf '54|10|6|22|3|4|9\n' ;;
+    zod) printf '431|161|93|111|26|21|19\n' ;;
     date-fns) printf '22|4|7|1|0|8|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '12|3|0|2|0|0|7\n' ;;
@@ -371,7 +381,7 @@ jsvalue_cause_budget() {
     preact) printf '1319|1246|1|21|34|1|16\n' ;;
     vitest/runtime) printf '5|0|1|0|4|0|0\n' ;;
     playwright) printf '618|98|0|50|413|56|1\n' ;;
-    react-router) printf '233|95|33|47|29|12|17\n' ;;
+    react-router) printf '208|90|32|29|28|12|17\n' ;;
     jose) printf '84|21|2|28|11|10|12\n' ;;
     express) printf '4|0|0|0|0|0|4\n' ;;
     glob) printf '27|8|6|2|0|2|9\n' ;;
@@ -382,7 +392,7 @@ jsvalue_cause_budget() {
     node:os) printf '0|0|0|0|0|0|0\n' ;;
     node:url) printf '0|0|0|0|0|0|0\n' ;;
     node:querystring) printf '0|0|0|0|0|0|0\n' ;;
-    node:assert) printf '27|3|16|3|2|0|3\n' ;;
+    node:assert) printf '25|3|14|3|2|0|3\n' ;;
     node:util) printf '22|8|9|1|1|2|1\n' ;;
     node:buffer) printf '0|0|0|0|0|0|0\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
@@ -1115,6 +1125,8 @@ test "real-world node:assert bridge smoke" {
   assert_ok_bool(true, None)
   assert_equal_double(1.0, 1.0, None)
   assert_strict_equal_string("ok", "ok", None)
+  assert_not_equal_double(1.0, 2.0, None)
+  assert_not_strict_equal_string("ok", "ng", None)
 }
 EOF
       ;;
@@ -1458,6 +1470,8 @@ fn main {
   let _ = jwt.unsecured_jwt_set_subject("user-42")
   let _ = jwt.unsecured_jwt_set_jti("token-1")
   let _ = @sut.unsecured_jwt_set_issued_at_double(jwt, 1710000000.0)
+  let _ = @sut.unsecured_jwt_set_not_before_double(jwt, 1710000000.0)
+  let _ = @sut.unsecured_jwt_set_expiration_time_double(jwt, 4070908800.0)
   let encoded = jwt.unsecured_jwt_encode()
   let decoded = @sut.unsecured_jwt_decode(encoded, None)
   let _ = decoded.header
@@ -1467,6 +1481,8 @@ fn main {
   let _ = signer.sign_jwt_set_subject("user-42")
   let _ = signer.sign_jwt_set_jti("token-1")
   let _ = @sut.sign_jwt_set_issued_at_double(signer, 1710000000.0)
+  let _ = @sut.sign_jwt_set_not_before_double(signer, 1710000000.0)
+  let _ = @sut.sign_jwt_set_expiration_time_double(signer, 4070908800.0)
 }
 EOF
       ;;
