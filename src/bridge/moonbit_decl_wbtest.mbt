@@ -2490,6 +2490,27 @@ async test "bridge: recursive type alias overload wrappers do not overflow" {
 }
 
 ///|
+async test "bridge: Ref<T> alias renders as opaque Ref in mbti" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/ref-alias-narrow-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // The Ref<T> alias is a Union of RefObject<T> | RefCallback<T> | null
+  // that the generator widens to JSValue. Lower it to the opaque MoonBit
+  // type `Ref` so consumers can at least pass the value through.
+  assert_false(actual.contains("ref : JSValue"))
+  assert_false(actual.contains("ref : @js.Any"))
+  assert_true(actual.contains("ref : Ref?"))
+}
+
+///|
 async test "bridge: indexed access T[\"k\"] resolves to the field type in mbti" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/indexed-access-narrow-entry.d.ts",

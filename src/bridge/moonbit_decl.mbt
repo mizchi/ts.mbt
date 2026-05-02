@@ -2023,6 +2023,14 @@ fn is_params_alias_name(name : String) -> Bool {
 }
 
 ///|
+// Preact / React's `Ref<T> = RefObject<T> | RefCallback<T> | null` union
+// alias. The Union body collapses to JSValue, but real consumers only need
+// to pass the value through, so render the alias as an opaque MoonBit type.
+fn is_ref_alias_name(name : String) -> Bool {
+  name == "Ref" || name.has_suffix(".Ref")
+}
+
+///|
 // Resolve a single `T[K]` indexed-access type to the matching field type when
 // T is a concrete interface and K is a literal property name. Returns None
 // for any case the resolver cannot decide on (generic T, computed K, etc.),
@@ -3411,6 +3419,8 @@ fn lower_react_utility_type(
     Named(name) if is_signalish_alias_name(name) => Named("Signalish")
     Applied(name, _) if is_params_alias_name(name) => Named("Params")
     Named(name) if is_params_alias_name(name) => Named("Params")
+    Applied(name, _) if is_ref_alias_name(name) => Named("Ref")
+    Named(name) if is_ref_alias_name(name) => Named("Ref")
     IndexedAccess(base, key) =>
       match resolve_indexed_access(info, base, key, modules, canonical_types) {
         Some(field_type) =>
