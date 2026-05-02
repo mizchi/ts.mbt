@@ -7266,6 +7266,8 @@ pub async fn emit_moonbit_decl_from_entry_path(
       CircularTypeAlias => "Circular type alias"
       TypeAliasArityMismatch => "Type alias arity mismatch"
       InterfaceFieldDuplicate => "Duplicate interface field"
+      EnumMemberDuplicate => "Duplicate enum member"
+      InterfaceExtendsCycle => "Interface extends cycle"
     }
     let note = "///|\n/// \{prefix} \{issue.name}: \{issue.detail}"
     if !notes.contains(note) {

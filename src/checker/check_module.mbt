@@ -11,6 +11,8 @@ pub(all) enum TypeIssueKind {
   CircularTypeAlias
   TypeAliasArityMismatch
   InterfaceFieldDuplicate
+  EnumMemberDuplicate
+  InterfaceExtendsCycle
 } derive(Eq, Debug)
 
 ///|
@@ -73,6 +75,41 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
         kind: CircularTypeAlias,
         name: ta.name,
         detail: "type alias resolves to itself without an intervening structural form",
+      })
+    }
+  }
+
+  // 3b. Interface extends-chain cycles: `interface A extends B {}` followed
+  //     by `interface B extends A {}` — TypeScript rejects, synthesized
+  //     output must not produce.
+  for iface in module_.interfaces {
+    if iface_extends_reaches(module_, iface.name, iface.extends_names, []) {
+      issues.push({
+        kind: InterfaceExtendsCycle,
+        name: iface.name,
+        detail: "interface extends chain reaches back to itself",
+      })
+    }
+  }
+
+  // 3c. Enum member duplicates: same member name listed twice in an enum.
+  for e in module_.enums {
+    let seen : Array[String] = []
+    let dup : Array[String] = []
+    for member in e.members {
+      if seen.contains(member.name) {
+        if !dup.contains(member.name) {
+          dup.push(member.name)
+        }
+      } else {
+        seen.push(member.name)
+      }
+    }
+    for d in dup {
+      issues.push({
+        kind: EnumMemberDuplicate,
+        name: "\{e.name}.\{d}",
+        detail: "enum declares the same member name more than once",
       })
     }
   }
@@ -140,6 +177,36 @@ pub fn check_module(module_ : @ast.TsModule) -> TypeCheckReport {
 ///|
 fn scope_with_iface_params(iface : @ast.TsInterface) -> Array[String] {
   iface.type_params
+}
+
+///|
+fn iface_extends_reaches(
+  module_ : @ast.TsModule,
+  target : String,
+  extends_names : Array[String],
+  visited : Array[String],
+) -> Bool {
+  for name in extends_names {
+    if name == target {
+      return true
+    }
+    if visited.contains(name) {
+      continue
+    }
+    for iface in module_.interfaces {
+      if iface.name == name {
+        visited.push(name)
+        let reached = iface_extends_reaches(
+          module_, target, iface.extends_names, visited,
+        )
+        let _ = visited.pop()
+        if reached {
+          return true
+        }
+      }
+    }
+  }
+  false
 }
 
 ///|

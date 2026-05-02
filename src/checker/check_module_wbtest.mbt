@@ -101,6 +101,73 @@ test "check_module: alias chain that terminates is fine" {
 }
 
 ///|
+test "check_module: detects duplicate enum members" {
+  let m = empty_module_for_check()
+  m.enums.push({
+    name: "Mode",
+    is_const: false,
+    is_declare: false,
+    members: [
+      { name: "Read", value: None, is_computed: false },
+      { name: "Write", value: None, is_computed: false },
+      { name: "Read", value: None, is_computed: false },
+    ],
+  })
+  let report = check_module(m)
+  let dups = report.issues.filter(fn(i) { i.kind == EnumMemberDuplicate })
+  assert_eq(dups.length(), 1)
+  assert_eq(dups[0].name, "Mode.Read")
+}
+
+///|
+test "check_module: detects interface extends cycle" {
+  let m = empty_module_for_check()
+  m.interfaces.push({
+    name: "A",
+    type_params: [],
+    extends_names: ["B"],
+    fields: [],
+    readonly_fields: [],
+  })
+  m.interfaces.push({
+    name: "B",
+    type_params: [],
+    extends_names: ["A"],
+    fields: [],
+    readonly_fields: [],
+  })
+  let report = check_module(m)
+  let cycles = report.issues.filter(fn(i) {
+    i.kind == InterfaceExtendsCycle
+  })
+  assert_eq(cycles.length(), 2)
+}
+
+///|
+test "check_module: terminating extends chain is fine" {
+  let m = empty_module_for_check()
+  m.interfaces.push({
+    name: "Animal",
+    type_params: [],
+    extends_names: [],
+    fields: [],
+    readonly_fields: [],
+  })
+  m.interfaces.push({
+    name: "Dog",
+    type_params: [],
+    extends_names: ["Animal"],
+    fields: [],
+    readonly_fields: [],
+  })
+  let report = check_module(m)
+  let cycles = report.issues.filter(fn(i) {
+    i.kind == InterfaceExtendsCycle
+  })
+  assert_eq(cycles.length(), 0)
+}
+
+///|
 test "check_module: detects duplicate interface fields" {
   let m = empty_module_for_check()
   m.interfaces.push(
