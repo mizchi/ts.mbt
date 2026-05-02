@@ -1996,6 +1996,16 @@ fn is_qualified_react_node_name(name : String) -> Bool {
 }
 
 ///|
+// `EventHandler<E>` and its derived aliases (MouseEventHandler, GenericEventHandler,
+// AnimationEventHandler, ...) all have the conceptual shape
+// `(event: E) => void` once expanded. The actual TS body uses an indexed access
+// type that the parser cannot resolve, so we recognise the alias by name and
+// lower a single-arg application to a real function type.
+fn is_event_handler_alias_name(name : String) -> Bool {
+  name == "EventHandler" || name.has_suffix("EventHandler")
+}
+
+///|
 fn props_with_children_object_interface_name(
   fields : Array[(@ast.TsType, @ast.TsType)],
 ) -> String {
@@ -3334,6 +3344,15 @@ fn lower_react_utility_type(
   match type_ {
     Named(name) if is_qualified_react_node_name(name) => Named("ReactNode")
     Named(name) if is_react_node_like_name(name) => Any
+    Applied(name, [event_type]) if is_event_handler_alias_name(name) =>
+      Func(
+        [
+          lower_react_utility_type(
+            info, event_type, modules, canonical_types,
+          ),
+        ],
+        Void,
+      )
     Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
     Applied(name, [source_type]) if is_mapped_interface_utility_name(name) =>

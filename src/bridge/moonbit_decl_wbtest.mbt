@@ -2490,6 +2490,34 @@ async test "bridge: recursive type alias overload wrappers do not overflow" {
 }
 
 ///|
+async test "bridge: EventHandler alias narrows to function type in mbti" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/event-handler-narrow-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Direct EventHandler<TargetedEvent<Target>> usage should expose the event
+  // type as a function param rather than collapsing to @js.Any.
+  assert_false(actual.contains("onClick : @js.Any?"))
+  assert_false(actual.contains("onClick : JSValue?"))
+  // GenericEventHandler<Target> aliases EventHandler internally; the alias
+  // name still ends with EventHandler so it should narrow as well.
+  assert_false(actual.contains("onLoad : @js.Any?"))
+  assert_false(actual.contains("onLoad : JSValue?"))
+  // Generic arguments on the event type aren't preserved by the current type
+  // identifier renderer; checking the function shape is enough to confirm the
+  // alias was lowered into a real function.
+  assert_true(actual.contains("onClick : ((TargetedEvent) -> Unit)?"))
+  assert_true(actual.contains("onLoad : ((Target) -> Unit)?"))
+}
+
+///|
 async test "bridge: qualified React.ReactNode renders as opaque ReactNode in mbti" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/qualified-react-node-entry.d.ts",
