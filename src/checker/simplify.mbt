@@ -1,9 +1,10 @@
 // Aggregator that recursively normalizes a type using every locally-decidable
 // simplification: IndexedAccess resolution against structural sources, union
 // flatten + dedup + subsumption, transparent intersection collapse, and
-// child-recursion. Idempotent. Does not consult any resolver — call
-// `expand_aliases` / `expand_generic` first if you need cross-reference
-// resolution.
+// child-recursion. Idempotent. The base `simplify_type` does not consult any
+// resolver; the `_with(_generics)?` variants pre-expand aliases first so
+// IndexedAccess and Conditional reductions can see through Named/Applied
+// references.
 
 ///|
 pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
@@ -87,6 +88,22 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
     IndexedAccess(_, _) => simplify_indexed_access(recursed)
     _ => recursed
   }
+}
+
+///|
+pub fn simplify_type_with(
+  type_ : @ast.TsType,
+  resolve : (String) -> @ast.TsType?,
+) -> @ast.TsType {
+  simplify_type(expand_aliases(type_, resolve, []))
+}
+
+///|
+pub fn simplify_type_with_generics(
+  type_ : @ast.TsType,
+  resolve : (String) -> AliasBinding?,
+) -> @ast.TsType {
+  simplify_type(expand_generic(type_, resolve, []))
 }
 
 ///|

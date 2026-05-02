@@ -57,6 +57,39 @@ test "simplify_type: preserves multi-member union" {
 }
 
 ///|
+test "simplify_type_with: resolves alias before simplifying" {
+  // type Box = { value: number; extra: number };
+  // Then IndexedAccess(Named("Box"), Literal("value")) should reduce to number.
+  let table : Map[String, @ast.TsType] = {
+    "Box": Object([
+      (Literal("value"), Number),
+      (Literal("extra"), Number),
+    ]),
+  }
+  let resolve = fn(name) { table.get(name) }
+  let t : @ast.TsType = IndexedAccess(Named("Box"), Literal("value"))
+  assert_eq(simplify_type_with(t, resolve), Number)
+}
+
+///|
+test "simplify_type_with_generics: resolves Applied before simplifying" {
+  // type Box<T> = { value: T };
+  // IndexedAccess(Box<string>, "value") ⇒ string after substitution + simplify.
+  let table : Map[String, AliasBinding] = {
+    "Box": {
+      type_params: ["T"],
+      body: Object([(Literal("value"), Named("T"))]),
+    },
+  }
+  let resolve = fn(name) { table.get(name) }
+  let t : @ast.TsType = IndexedAccess(
+    Applied("Box", [String_]),
+    Literal("value"),
+  )
+  assert_eq(simplify_type_with_generics(t, resolve), String_)
+}
+
+///|
 test "simplify_type: idempotent" {
   let t : @ast.TsType = Union([String_, String_, Number, Literal("foo")])
   let once = simplify_type(t)
