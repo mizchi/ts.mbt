@@ -85,6 +85,60 @@ test "substitute_inferred_type: replaces Named with binding" {
 }
 
 ///|
+test "match_infer_pattern: object pattern { value: infer V }" {
+  let bindings : Map[String, @ast.TsType] = {}
+  let pattern : @ast.TsType = Object([(Literal("value"), infer_marker("V"))])
+  let source : @ast.TsType = Object([
+    (Literal("value"), Number),
+    (Literal("extra"), String_),
+  ])
+  assert_true(match_infer_pattern(source, pattern, bindings))
+  assert_eq(bindings.get("V"), Some(Number))
+}
+
+///|
+test "match_infer_pattern: object pattern requires every field to match" {
+  let bindings : Map[String, @ast.TsType] = {}
+  let pattern : @ast.TsType = Object([
+    (Literal("value"), infer_marker("V")),
+    (Literal("kind"), Literal("ok")),
+  ])
+  let source : @ast.TsType = Object([
+    (Literal("value"), Number),
+    (Literal("kind"), Literal("ok")),
+  ])
+  assert_true(match_infer_pattern(source, pattern, bindings))
+  assert_eq(bindings.get("V"), Some(Number))
+}
+
+///|
+test "match_infer_pattern: object pattern fails on missing field" {
+  let bindings : Map[String, @ast.TsType] = {}
+  let pattern : @ast.TsType = Object([
+    (Literal("value"), infer_marker("V")),
+    (Literal("missing"), String_),
+  ])
+  let source : @ast.TsType = Object([(Literal("value"), Number)])
+  assert_false(match_infer_pattern(source, pattern, bindings))
+}
+
+///|
+test "match_infer_pattern: intersection pattern matches against intersection" {
+  let bindings : Map[String, @ast.TsType] = {}
+  // Pattern: A & B<infer X>;  Source: A & B<string>
+  let pattern : @ast.TsType = Intersection([
+    Named("A"),
+    Applied("B", [infer_marker("X")]),
+  ])
+  let source : @ast.TsType = Intersection([
+    Named("A"),
+    Applied("B", [String_]),
+  ])
+  assert_true(match_infer_pattern(source, pattern, bindings))
+  assert_eq(bindings.get("X"), Some(String_))
+}
+
+///|
 test "substitute_inferred_type: leaves non-bound names alone" {
   let bindings : Map[String, @ast.TsType] = { "U": Number }
   let body : @ast.TsType = Named("V")

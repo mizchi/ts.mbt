@@ -104,6 +104,47 @@ pub fn match_infer_pattern(
       }
       false
     }
+    (Object(s_fields), Object(p_fields)) => {
+      // Each pattern field must appear in the source with a matching type.
+      // Source may carry extra fields; that is the structural-subtype rule.
+      for p_field in p_fields {
+        let (p_key, p_type) = p_field
+        let mut matched = false
+        for s_field in s_fields {
+          let (s_key, s_type) = s_field
+          if s_key == p_key {
+            if !match_infer_pattern(s_type, p_type, bindings) {
+              return false
+            }
+            matched = true
+            break
+          }
+        }
+        if !matched {
+          return false
+        }
+      }
+      true
+    }
+    (Intersection(s_items), Intersection(p_items)) =>
+      if s_items.length() != p_items.length() {
+        false
+      } else {
+        for i in 0..<s_items.length() {
+          if !match_infer_pattern(s_items[i], p_items[i], bindings) {
+            return false
+          }
+        }
+        true
+      }
+    (
+      Conditional(s_check, s_extends, s_t, s_f),
+      Conditional(p_check, p_extends, p_t, p_f),
+    ) =>
+      match_infer_pattern(s_check, p_check, bindings) &&
+      match_infer_pattern(s_extends, p_extends, bindings) &&
+      match_infer_pattern(s_t, p_t, bindings) &&
+      match_infer_pattern(s_f, p_f, bindings)
     _ => false
   }
 }
