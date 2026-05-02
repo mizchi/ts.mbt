@@ -3,6 +3,7 @@ package "mizchi/ts/checker"
 
 import {
   "mizchi/ts/ast",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -13,6 +14,8 @@ pub fn check_assignable(@ast.TsType, @ast.TsType) -> Array[AssignabilityIssue]
 pub fn check_assignable_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?) -> Array[AssignabilityIssue]
 
 pub fn check_assignable_with_generics(@ast.TsType, @ast.TsType, (String) -> AliasBinding?) -> Array[AssignabilityIssue]
+
+pub fn check_module(@ast.TsModule) -> TypeCheckReport
 
 pub fn classify_optional_like_union(@ast.TsType) -> (@ast.TsType, Bool)?
 
@@ -88,6 +91,22 @@ pub(all) struct AssignabilityIssue {
   path : String
   message : String
 }
+
+pub(all) struct TypeCheckReport {
+  issues : Array[TypeIssue]
+}
+
+pub(all) struct TypeIssue {
+  kind : TypeIssueKind
+  name : String
+  detail : String
+} derive(Eq, @debug.Debug)
+
+pub(all) enum TypeIssueKind {
+  UnresolvedReference
+  DuplicateDeclaration
+  CircularTypeAlias
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 
