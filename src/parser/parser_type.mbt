@@ -660,24 +660,55 @@ fn Parser::parse_postfix_type(
       let _ = self.advance() // ]
       return self.parse_postfix_type(Array(base_type))
     }
-    // Indexed access type: T[K] - skip it
-    let mut bracket_depth = 1
-    while bracket_depth > 0 && !self.check(Eof) {
-      match self.peek().kind {
-        LBracket => {
-          bracket_depth += 1
-          let _ = self.advance()
+    // Indexed access type: T[K]. Try to parse the index as a type so later
+    // passes can resolve `T["field"]` etc. against concrete interfaces; if
+    // parsing fails for any reason, fall back to the original skip-and-Any
+    // behaviour so we don't regress more exotic forms.
+    let saved_pos = self.pos
+    let key_type = self.parse_type() catch {
+      _ => {
+        self.pos = saved_pos
+        let mut bracket_depth = 1
+        while bracket_depth > 0 && !self.check(Eof) {
+          match self.peek().kind {
+            LBracket => {
+              bracket_depth += 1
+              let _ = self.advance()
+            }
+            RBracket => {
+              bracket_depth -= 1
+              let _ = self.advance()
+            }
+            _ => {
+              let _ = self.advance()
+            }
+          }
         }
-        RBracket => {
-          bracket_depth -= 1
-          let _ = self.advance()
-        }
-        _ => {
-          let _ = self.advance()
-        }
+        return self.parse_postfix_type(Any)
       }
     }
-    return self.parse_postfix_type(Any)
+    if !self.check(RBracket) {
+      // Unexpected token after the index type; bail out to the legacy path.
+      let mut bracket_depth = 1
+      while bracket_depth > 0 && !self.check(Eof) {
+        match self.peek().kind {
+          LBracket => {
+            bracket_depth += 1
+            let _ = self.advance()
+          }
+          RBracket => {
+            bracket_depth -= 1
+            let _ = self.advance()
+          }
+          _ => {
+            let _ = self.advance()
+          }
+        }
+      }
+      return self.parse_postfix_type(Any)
+    }
+    let _ = self.advance() // ]
+    return self.parse_postfix_type(IndexedAccess(base_type, key_type))
   }
   base_type
 }

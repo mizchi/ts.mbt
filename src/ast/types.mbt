@@ -34,6 +34,10 @@ pub(all) enum TsType {
   // Type reference
   Named(String)
   Applied(String, Array[TsType])
+  // Indexed access: T[K]. The parser previously dropped this to Any; the
+  // variant lets later passes resolve it when T is a concrete interface or
+  // object literal and K is a string literal.
+  IndexedAccess(TsType, TsType)
 } derive(Eq, Debug)
 
 ///|

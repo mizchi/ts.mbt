@@ -2023,6 +2023,41 @@ fn is_params_alias_name(name : String) -> Bool {
 }
 
 ///|
+// Resolve a single `T[K]` indexed-access type to the matching field type when
+// T is a concrete interface and K is a literal property name. Returns None
+// for any case the resolver cannot decide on (generic T, computed K, etc.),
+// letting the caller fall back to widening.
+fn resolve_indexed_access(
+  info : DeclModuleInfo,
+  base : @ast.TsType,
+  key : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType? {
+  let key_name = match key {
+    Literal(name) => name
+    _ => return None
+  }
+  let type_name = match base {
+    Named(name) => name
+    Applied(name, _) => name
+    _ => return None
+  }
+  match resolve_interface_origin(info, type_name, modules, canonical_types) {
+    Some(origin) => {
+      for field in origin.iface.fields {
+        let (field_name, field_type) = field
+        if field_name == key_name {
+          return Some(field_type)
+        }
+      }
+      None
+    }
+    None => None
+  }
+}
+
+///|
 fn props_with_children_object_interface_name(
   fields : Array[(@ast.TsType, @ast.TsType)],
 ) -> String {
@@ -2632,6 +2667,8 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
         prefix + "Of" + parts.join("And")
       }
     }
+    IndexedAccess(base, key) =>
+      utility_record_type_suffix(base) + "At" + utility_record_type_suffix(key)
   }
 }
 
@@ -3374,6 +3411,12 @@ fn lower_react_utility_type(
     Named(name) if is_signalish_alias_name(name) => Named("Signalish")
     Applied(name, _) if is_params_alias_name(name) => Named("Params")
     Named(name) if is_params_alias_name(name) => Named("Params")
+    IndexedAccess(base, key) =>
+      match resolve_indexed_access(info, base, key, modules, canonical_types) {
+        Some(field_type) =>
+          lower_react_utility_type(info, field_type, modules, canonical_types)
+        None => Any
+      }
     Applied(name, [inner_type]) if is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
     Applied(name, [source_type]) if is_mapped_interface_utility_name(name) =>

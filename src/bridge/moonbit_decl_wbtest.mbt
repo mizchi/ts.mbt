@@ -2490,6 +2490,35 @@ async test "bridge: recursive type alias overload wrappers do not overflow" {
 }
 
 ///|
+async test "bridge: indexed access T[\"k\"] resolves to the field type in mbti" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/indexed-access-narrow-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Both `RouteMatch.params` and `UIMatch.params: RouteMatch["params"]` should
+  // resolve to the same field type, removing the indexed-access widening.
+  // RouteMatch.params: ParamsLike is the source field. UIMatch.params should
+  // resolve `RouteMatch["params"]` to that same type rather than widening.
+  assert_true(actual.contains("interface UIMatch"))
+  assert_true(actual.contains("interface RouteMatch"))
+  let ui_match_block = actual
+    .split("interface UIMatch")
+    .nth(1)
+    .or_default()
+    .to_string()
+  assert_false(ui_match_block.contains("params : @js.Any"))
+  assert_false(ui_match_block.contains("params : JSValue"))
+  assert_true(ui_match_block.contains("params : ParamsLike"))
+}
+
+///|
 async test "bridge: Params<K> alias renders as opaque Params in mbti" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/params-alias-narrow-entry.d.ts",

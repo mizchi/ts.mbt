@@ -630,5 +630,6 @@ pub fn needs_gc(type_ : @ast.TsType) -> Bool {
       needs_gc(target) ||
       needs_gc(true_type) ||
       needs_gc(false_type)
+    @ast.TsType::IndexedAccess(base, key) => needs_gc(base) || needs_gc(key)
   }
 }
