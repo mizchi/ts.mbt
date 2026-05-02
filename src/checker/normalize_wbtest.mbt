@@ -88,6 +88,24 @@ test "simplify_union: flattens nested unions before deduplication" {
 }
 
 ///|
+test "type_is_named: matches Named and Applied head" {
+  assert_true(type_is_named(Named("Foo"), ["Foo", "Bar"]))
+  assert_true(type_is_named(Applied("Foo", [String_]), ["Foo"]))
+  assert_false(type_is_named(Named("Baz"), ["Foo", "Bar"]))
+  assert_false(type_is_named(String_, ["Foo"]))
+}
+
+///|
+test "type_contains_named: looks through union members only" {
+  assert_true(type_contains_named(Named("Foo"), ["Foo"]))
+  assert_true(
+    type_contains_named(Union([String_, Named("Foo")]), ["Foo"]),
+  )
+  // Does NOT recurse into Array/Tuple/Object — by design.
+  assert_false(type_contains_named(Array(Named("Foo")), ["Foo"]))
+}
+
+///|
 test "simplify_union: deeply nested unions are flattened" {
   let raw : Array[@ast.TsType] = [
     Union([Union([String_, Number]), Boolean]),

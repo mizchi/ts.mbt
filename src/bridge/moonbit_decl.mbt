@@ -4846,14 +4846,14 @@ fn decl_specialize_generated_api_param_type(
       }
     "createReadStream" =>
       if param_name == "options" &&
-        decl_type_contains_named(type_, ["ReadStreamOptions"]) {
+        @checker.type_contains_named(type_, ["ReadStreamOptions"]) {
         Named("ReadStreamOptions")
       } else {
         type_
       }
     "createWriteStream" =>
       if param_name == "options" &&
-        decl_type_contains_named(type_, ["WriteStreamOptions"]) {
+        @checker.type_contains_named(type_, ["WriteStreamOptions"]) {
         Named("WriteStreamOptions")
       } else {
         type_
@@ -4902,7 +4902,7 @@ fn decl_type_is_read_file_buffer_options(type_ : @ast.TsType) -> Bool {
     Some((inner, _)) => return decl_type_is_read_file_buffer_options(inner)
     None => ()
   }
-  if decl_type_contains_named(type_, ["BufferEncoding"]) {
+  if @checker.type_contains_named(type_, ["BufferEncoding"]) {
     return false
   }
   match type_ {
@@ -4925,7 +4925,7 @@ fn decl_node_read_file_options_type(type_ : @ast.TsType) -> @ast.TsType {
   if decl_type_is_read_file_buffer_options(type_) {
     return Union([Named("ReadFileBufferOptions"), Undefined])
   }
-  if decl_type_contains_named(type_, ["BufferEncoding"]) {
+  if @checker.type_contains_named(type_, ["BufferEncoding"]) {
     match @checker.classify_optional_like_union(type_) {
       Some((_, true)) => Union([Named("BufferEncoding"), Undefined])
       _ => Named("BufferEncoding")
@@ -5817,29 +5817,8 @@ fn decl_specialize_generated_class_method_return_type(
 }
 
 ///|
-fn decl_type_is_named(type_ : @ast.TsType, names : Array[String]) -> Bool {
-  match type_ {
-    Named(name) | Applied(name, _) => names.contains(name)
-    _ => false
-  }
-}
-
-///|
-fn decl_type_contains_named(type_ : @ast.TsType, names : Array[String]) -> Bool {
-  if decl_type_is_named(type_, names) {
-    return true
-  }
-  match type_ {
-    Union(items) =>
-      for item in items {
-        if decl_type_contains_named(item, names) {
-          return true
-        }
-      }
-    _ => ()
-  }
-  false
-}
+// `decl_type_is_named` and `decl_type_contains_named` moved to checker as
+// `type_is_named` / `type_contains_named`.
 
 ///|
 fn decl_type_contains_string(type_ : @ast.TsType) -> Bool {
@@ -5887,7 +5866,7 @@ fn decl_union_has_string_and_named(
       for item in items {
         match item {
           String_ | Literal(_) => has_string = true
-          _ => if decl_type_is_named(item, names) { has_named = true }
+          _ => if @checker.type_is_named(item, names) { has_named = true }
         }
       }
       has_string && has_named

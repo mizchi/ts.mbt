@@ -2,6 +2,36 @@
 // future type-checking passes. They operate purely on @ast.TsType.
 
 ///|
+// True iff `type_` is `Named(n)` or `Applied(n, _)` with `n` in `names`.
+pub fn type_is_named(type_ : @ast.TsType, names : Array[String]) -> Bool {
+  match type_ {
+    Named(name) | Applied(name, _) => names.contains(name)
+    _ => false
+  }
+}
+
+///|
+// True iff `type_` directly is one of `names` or contains a Union member that
+// is. Does not recurse into Array/Tuple/Object/Func — by design, since callers
+// typically use this for "this top-level form references X".
+pub fn type_contains_named(type_ : @ast.TsType, names : Array[String]) -> Bool {
+  if type_is_named(type_, names) {
+    return true
+  }
+  match type_ {
+    Union(items) => {
+      for item in items {
+        if type_contains_named(item, names) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
 pub fn is_empty_object_type(type_ : @ast.TsType) -> Bool {
   match type_ {
     Object(fields) => fields.length() == 0

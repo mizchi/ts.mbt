@@ -77,6 +77,10 @@ pub fn standard_utility_types() -> Map[String, AliasBinding]
 
 pub fn substitute_inferred_type(@ast.TsType, Map[String, @ast.TsType]) -> @ast.TsType
 
+pub fn type_contains_named(@ast.TsType, Array[String]) -> Bool
+
+pub fn type_is_named(@ast.TsType, Array[String]) -> Bool
+
 pub fn unresolved_type_references(@ast.TsModule) -> Array[String]
 
 // Errors
