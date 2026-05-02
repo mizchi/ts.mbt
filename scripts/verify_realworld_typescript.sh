@@ -333,7 +333,7 @@ jsvalue_function_budget() {
     valibot) printf '92\n' ;;
     immer) printf '16\n' ;;
     execa) printf '1\n' ;;
-    preact) printf '10\n' ;;
+    preact) printf '8\n' ;;
     vitest/runtime) printf '3\n' ;;
     playwright) printf '209\n' ;;
     react-router) printf '80\n' ;;
@@ -378,7 +378,7 @@ jsvalue_cause_budget() {
     valibot) printf '659|539|28|27|19|31|15\n' ;;
     immer) printf '20|1|7|2|2|2|6\n' ;;
     execa) printf '1|0|0|0|1|0|0\n' ;;
-    preact) printf '32|12|1|6|11|1|1\n' ;;
+    preact) printf '26|8|1|4|11|1|1\n' ;;
     vitest/runtime) printf '5|0|1|0|4|0|0\n' ;;
     playwright) printf '618|98|0|50|413|56|1\n' ;;
     react-router) printf '194|79|32|27|27|12|17\n' ;;

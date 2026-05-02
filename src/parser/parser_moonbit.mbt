@@ -271,7 +271,11 @@ fn moonbit_should_preserve_interface_type_params(
   iface : @ast.TsInterface,
 ) -> Bool {
   match iface.name {
-    "StatsBase" | "StatsFsBase" => true
+    "StatsBase"
+    | "StatsFsBase"
+    | "SignalLike"
+    | "RefObject"
+    | "RefCallback" => true
     _ => false
   }
 }

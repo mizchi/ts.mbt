@@ -361,7 +361,11 @@ fn ffi_function_type_param_prefix(type_params : Array[String]) -> String {
 ///|
 fn ffi_should_preserve_interface_type_params(iface : @ast.TsInterface) -> Bool {
   match iface.name {
-    "StatsBase" | "StatsFsBase" => true
+    "StatsBase"
+    | "StatsFsBase"
+    | "SignalLike"
+    | "RefObject"
+    | "RefCallback" => true
     _ => false
   }
 }
