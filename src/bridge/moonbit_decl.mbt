@@ -2510,9 +2510,11 @@ fn utility_filter_union_type(
 
 ///|
 // Expand each `Named(name)` member of a Union (or the Union itself if it is
-// just a single Named) once via the local module's type alias table. Used to
-// crack open keys like `RequestHeader | CustomHeader` so subsequent
-// simplification can fold them to a primitive.
+// just a single Named) once via the local module's type alias table, falling
+// back to a cross-module lookup through `resolve_imported_type_origin` when
+// the alias is imported. Used to crack open keys like
+// `RequestHeader | CustomHeader` so subsequent simplification can fold them
+// to a primitive.
 fn expand_named_aliases_in_union(
   info : DeclModuleInfo,
   type_ : @ast.TsType,
@@ -2521,12 +2523,32 @@ fn expand_named_aliases_in_union(
 ) -> @ast.TsType {
   fn expand_one(t : @ast.TsType) -> @ast.TsType {
     match t {
-      Named(name) =>
+      Named(name) => {
+        // Local alias first.
         match find_type_alias_decl(info.module_, name) {
           Some(ta) if ta.type_params.length() == 0 =>
-            lower_react_utility_type(info, ta.type_, modules, canonical_types)
-          _ => t
+            return lower_react_utility_type(
+              info, ta.type_, modules, canonical_types,
+            )
+          _ => ()
         }
+        // Cross-module: follow the import edge to the source module's alias.
+        match resolve_imported_type_origin(info, name) {
+          Some((source_path, imported_name)) =>
+            match modules.get(source_path) {
+              Some(source_info) =>
+                match find_type_alias_decl(source_info.module_, imported_name) {
+                  Some(ta) if ta.type_params.length() == 0 =>
+                    lower_react_utility_type(
+                      source_info, ta.type_, modules, canonical_types,
+                    )
+                  _ => t
+                }
+              None => t
+            }
+          None => t
+        }
+      }
       _ => t
     }
   }
