@@ -164,6 +164,46 @@ test "checker: generic substitution works on parser-produced bindings" {
 }
 
 ///|
+test "checker: standard utility types resolve through real-parsed input" {
+  // Parse a function that uses a standard utility type as its return.
+  // Then build a resolver that combines parsed aliases with the bundled
+  // standard library and verify the checker resolves correctly.
+  let src =
+    #|export type Maybe<X> = X | undefined;
+    #|export declare function unwrap<T>(value: T | null | undefined): T;
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let table = @checker.standard_utility_types()
+  for ta in module_.type_aliases {
+    table[ta.name] = { type_params: ta.type_params, body: ta.type_ }
+  }
+  let resolve = fn(name) { table.get(name) }
+  // NonNullable<string | null> ⇨ string
+  let nn : @ast.TsType = Applied("NonNullable", [Union([String_, Null])])
+  if !@checker.is_assignable_to_with_generics(String_, nn, resolve) {
+    fail("string should be assignable to NonNullable<string | null>")
+  }
+  if @checker.is_assignable_to_with_generics(Null, nn, resolve) {
+    fail("null should not be assignable to NonNullable<string | null>")
+  }
+  // Exclude<"a" | "b", "a"> ⇨ "b"
+  let ex : @ast.TsType = Applied("Exclude", [
+    Union([Literal("a"), Literal("b")]),
+    Literal("a"),
+  ])
+  if !@checker.is_assignable_to_with_generics(Literal("b"), ex, resolve) {
+    fail("\"b\" should remain after Exclude")
+  }
+  if @checker.is_assignable_to_with_generics(Literal("a"), ex, resolve) {
+    fail("\"a\" should be excluded")
+  }
+}
+
+///|
 test "checker: simplify_union flattens redundant alias substitution result" {
   // type Pair<T> = T | string;
   // const x : Pair<string> = "hello"
