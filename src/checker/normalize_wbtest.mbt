@@ -73,3 +73,29 @@ test "collect_referenced_names: deduplicates" {
   let refs = collect_referenced_names(t)
   assert_eq(refs.length(), 2)
 }
+
+///|
+test "simplify_union: flattens nested unions before deduplication" {
+  let raw : Array[@ast.TsType] = [
+    String_,
+    Union([String_, Number]),
+    Number,
+  ]
+  let simplified = simplify_union(raw)
+  assert_eq(simplified.length(), 2)
+  assert_true(simplified.contains(String_))
+  assert_true(simplified.contains(Number))
+}
+
+///|
+test "simplify_union: deeply nested unions are flattened" {
+  let raw : Array[@ast.TsType] = [
+    Union([Union([String_, Number]), Boolean]),
+    Number,
+  ]
+  let simplified = simplify_union(raw)
+  assert_eq(simplified.length(), 3)
+  assert_true(simplified.contains(String_))
+  assert_true(simplified.contains(Number))
+  assert_true(simplified.contains(Boolean))
+}

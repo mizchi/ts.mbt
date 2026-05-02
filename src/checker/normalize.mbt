@@ -12,16 +12,19 @@ pub fn equivalent(a : @ast.TsType, b : @ast.TsType) -> Bool {
 // Reduce a list of union members by removing duplicates and members that are
 // subsumed by another member already kept. The result preserves the order of
 // the surviving members. If `Any` appears, the result is just `[Any]`.
+// Nested `Union(...)` members are flattened recursively before subsumption.
 pub fn simplify_union(members : Array[@ast.TsType]) -> Array[@ast.TsType] {
+  let flattened : Array[@ast.TsType] = []
+  flatten_into(members, flattened)
   // Short-circuit on Any.
-  for m in members {
+  for m in flattened {
     match m {
       Any => return [Any]
       _ => ()
     }
   }
   let kept : Array[@ast.TsType] = []
-  for m in members {
+  for m in flattened {
     let mut subsumed = false
     for k in kept {
       if is_assignable_to(m, k) {
@@ -47,6 +50,19 @@ pub fn simplify_union(members : Array[@ast.TsType]) -> Array[@ast.TsType] {
     kept.push(m)
   }
   kept
+}
+
+///|
+fn flatten_into(
+  members : Array[@ast.TsType],
+  acc : Array[@ast.TsType],
+) -> Unit {
+  for m in members {
+    match m {
+      Union(inner) => flatten_into(inner, acc)
+      _ => acc.push(m)
+    }
+  }
 }
 
 ///|
