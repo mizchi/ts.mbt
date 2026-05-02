@@ -356,6 +356,7 @@ pub(all) enum TsType {
   Conditional(TsType, TsType, TsType, TsType)
   Named(String)
   Applied(String, Array[TsType])
+  IndexedAccess(TsType, TsType)
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
 

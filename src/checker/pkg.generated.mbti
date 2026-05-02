@@ -1,0 +1,48 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/checker"
+
+import {
+  "mizchi/ts/ast",
+}
+
+// Values
+pub fn classify_optional_like_union(@ast.TsType) -> (@ast.TsType, Bool)?
+
+pub fn classify_transparent_intersection(@ast.TsType) -> @ast.TsType?
+
+pub fn is_assignable_to(@ast.TsType, @ast.TsType) -> Bool
+
+pub fn is_component_ref_like_name(String) -> Bool
+
+pub fn is_empty_object_type(@ast.TsType) -> Bool
+
+pub fn is_event_handler_alias_name(String) -> Bool
+
+pub fn is_mapped_interface_utility_name(String) -> Bool
+
+pub fn is_params_alias_name(String) -> Bool
+
+pub fn is_props_passthrough_name(String) -> Bool
+
+pub fn is_qualified_react_node_name(String) -> Bool
+
+pub fn is_react_node_like_name(String) -> Bool
+
+pub fn is_ref_alias_name(String) -> Bool
+
+pub fn is_signalish_alias_name(String) -> Bool
+
+pub fn is_simple_primitive_type(@ast.TsType) -> Bool
+
+pub fn normalize_literal_type(@ast.TsType) -> @ast.TsType
+
+pub fn reduce_uniform_union(@ast.TsType) -> @ast.TsType
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+
