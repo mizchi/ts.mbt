@@ -270,6 +270,32 @@ fn moonbit_receiver_self_type(
 }
 
 ///|
+// Restrict `type_params` to those actually referenced in `fields`. After
+// the parser substitutes generic-bound references away, declared type params
+// can become unreferenced; emitting `struct Foo[T, U, F] { ... }` with U/F
+// unused triggers MoonBit's unused_type_variable warning at consumer build.
+fn moonbit_used_type_params(
+  type_params : Array[String],
+  fields : Array[(String, @ast.TsType)],
+) -> Array[String] {
+  let referenced : Array[String] = []
+  for f in fields {
+    for r in @checker.collect_referenced_names(f.1) {
+      if !referenced.contains(r) {
+        referenced.push(r)
+      }
+    }
+  }
+  let result : Array[String] = []
+  for tp in type_params {
+    if referenced.contains(tp) {
+      result.push(tp)
+    }
+  }
+  result
+}
+
+///|
 fn moonbit_should_preserve_interface_type_params(
   iface : @ast.TsInterface,
 ) -> Bool {
@@ -507,7 +533,7 @@ fn interface_decl_to_moonbit(
   let active_type_params = if moonbit_should_preserve_interface_type_params(
       iface,
     ) {
-    iface.type_params
+    moonbit_used_type_params(iface.type_params, iface.fields)
   } else {
     []
   }

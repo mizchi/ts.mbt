@@ -4918,7 +4918,12 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     name: "StatsBase",
     type_params: ["T"],
     extends_names: [],
-    fields: [("isFile", @ast.TsType::Func([], @ast.TsType::Boolean))],
+    // Include a T-referencing field so the bridge keeps T in the rendered
+    // type parameter list — otherwise the unused-type-param filter strips it.
+    fields: [
+      ("dev", @ast.TsType::Named("T")),
+      ("isFile", @ast.TsType::Func([], @ast.TsType::Boolean)),
+    ],
     readonly_fields: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)

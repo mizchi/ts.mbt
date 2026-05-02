@@ -2509,13 +2509,58 @@ fn utility_filter_union_type(
 }
 
 ///|
+// Expand each `Named(name)` member of a Union (or the Union itself if it is
+// just a single Named) once via the local module's type alias table. Used to
+// crack open keys like `RequestHeader | CustomHeader` so subsequent
+// simplification can fold them to a primitive.
+fn expand_named_aliases_in_union(
+  info : DeclModuleInfo,
+  type_ : @ast.TsType,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType {
+  fn expand_one(t : @ast.TsType) -> @ast.TsType {
+    match t {
+      Named(name) =>
+        match find_type_alias_decl(info.module_, name) {
+          Some(ta) if ta.type_params.length() == 0 =>
+            lower_react_utility_type(info, ta.type_, modules, canonical_types)
+          _ => t
+        }
+      _ => t
+    }
+  }
+
+  match type_ {
+    Union(members) => {
+      let out : Array[@ast.TsType] = []
+      for m in members {
+        out.push(expand_one(m))
+      }
+      Union(out)
+    }
+    _ => expand_one(type_)
+  }
+}
+
+///|
 fn utility_record_key_suffix(type_ : @ast.TsType) -> String? {
   match type_ {
     String_ | Literal(_) => Some("String")
     Number | Int | NumberLiteral(_) => Some("Number")
     Symbol => Some("Symbol")
     Named("PropertyKey") => Some("PropertyKey")
-    _ => None
+    _ =>
+      // String-literal unions collapse to "String" (e.g. hono's RequestHeader).
+      if @checker.is_string_literal_union(type_) {
+        Some("String")
+      } else {
+        // `string & {}` and similar transparent intersections; try the inner.
+        match @checker.classify_transparent_intersection(type_) {
+          Some(inner) => utility_record_key_suffix(inner)
+          None => None
+        }
+      }
   }
 }
 
@@ -3225,7 +3270,20 @@ fn lower_react_utility_type(
       let lowered_value = lower_react_utility_type(
         info, value_type, modules, canonical_types,
       )
-      match utility_record_type_name(lowered_key, lowered_value) {
+      // Try the lowered key first; if it does not classify (e.g. `RequestHeader |
+      // CustomHeader`), expand each alias one level and run the checker's
+      // `simplify_type` to fold string-literal unions and transparent
+      // intersections back to a primitive.
+      let resolved_key = match utility_record_key_suffix(lowered_key) {
+        Some(_) => lowered_key
+        None =>
+          @checker.simplify_type(
+            expand_named_aliases_in_union(
+              info, lowered_key, modules, canonical_types,
+            ),
+          )
+      }
+      match utility_record_type_name(resolved_key, lowered_value) {
         Some(name) => Named(name)
         None => Any
       }

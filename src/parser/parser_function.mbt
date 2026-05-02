@@ -1134,11 +1134,6 @@ fn Parser::skip_type_alias(self : Parser) -> Unit {
 }
 
 ///|
-fn Parser::parse_type_param_names(self : Parser) -> Array[String] {
-  self.parse_type_param_names_and_bounds().0
-}
-
-///|
 fn type_alias_object_fields_to_interface(
   name : String,
   type_params : Array[String],
@@ -1181,11 +1176,16 @@ fn Parser::parse_type_alias_after_type_keyword(
   self : Parser,
 ) -> @ast.TsTypeAlias raise ParseError {
   let name = self.parse_binding_ident()
-  let type_params = self.parse_type_param_names()
+  // Capture the bounds in the AST so bridge passes can consult them at
+  // use sites; do NOT push them as local bindings, because doing so would let
+  // `parse_type` substitute `Named(T) → bound` inside the alias body, eagerly
+  // erasing the generic shape (e.g. `DateArg<DateType>` would become
+  // `Date | ...` and lose precision).
+  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
   let _ = self.expect(Eq)
   let alias_type = self.parse_type()
   self.consume_semicolon()
-  { name, type_params, type_: alias_type }
+  { name, type_params, type_param_bounds, type_: alias_type }
 }
 
 ///|

@@ -98,6 +98,7 @@ test "module_alias_resolver: combines parsed aliases with stdlib utilities" {
       {
         name: "Maybe",
         type_params: ["X"],
+        type_param_bounds: [],
         type_: Union([Named("X"), Undefined]),
       },
     ],
@@ -158,7 +159,12 @@ test "module_alias_resolver: module aliases shadow stdlib on name clash" {
     // Override `NonNullable` to mean `string` for this module — a contrived
     // example, but pins the shadowing rule.
     type_aliases: [
-      { name: "NonNullable", type_params: ["T"], type_: String_ },
+      {
+        name: "NonNullable",
+        type_params: ["T"],
+        type_param_bounds: [],
+        type_: String_,
+      },
     ],
     imports: [],
     values: [],

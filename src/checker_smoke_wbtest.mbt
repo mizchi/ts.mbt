@@ -168,22 +168,24 @@ test "checker: check_module on parsed fixtures stays clean" {
   // Collect a few real fixture-shaped declarations and assert they pass every
   // check_module diagnostic. If a future synthesis change introduces e.g.
   // duplicate fields or alias arity mismatches, this regression test surfaces it.
-  let cases : Array[String] = [
-    "export declare function double(input: number): number;",
+  let case_enum =
     #|export declare enum Mode {
     #|  Read = "read",
     #|  Write = "write",
     #|}
     #|export declare function next(m: Mode): Mode;
-    ,
+  let case_alias_chain =
     #|export type ID = string;
     #|export type UserId = ID;
     #|export interface User { id: UserId; name: string; }
     #|export declare function getUser(id: UserId): User;
-    ,
-    // NOTE: declare-function generic params are not preserved on TsFunc in
-    // the current AST, so we keep the smoke test to interfaces with their
-    // own type params (which TsInterface does carry).
+  // NOTE: declare-function generic params are not preserved on TsFunc in
+  // the current AST, so we keep the smoke test to interfaces with their
+  // own type params (which TsInterface does carry).
+  let cases : Array[String] = [
+    "export declare function double(input: number): number;",
+    case_enum,
+    case_alias_chain,
     "export interface Box<T> { value: T; }",
   ]
   for src in cases {

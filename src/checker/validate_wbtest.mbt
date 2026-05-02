@@ -25,7 +25,7 @@ fn iface(name : String, fields : Array[(String, @ast.TsType)]) -> @ast.TsInterfa
 
 ///|
 fn ta_(name : String, body : @ast.TsType) -> @ast.TsTypeAlias {
-  { name, type_params: [], type_: body }
+  { name, type_params: [], type_param_bounds: [], type_: body }
 }
 
 ///|

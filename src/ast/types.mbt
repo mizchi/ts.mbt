@@ -361,6 +361,11 @@ pub(all) struct TsInterface {
 pub(all) struct TsTypeAlias {
   name : String
   type_params : Array[String]
+  // `type T<P extends Bound = Default>` records `(P, Bound)` pairs here so
+  // bridge passes can resolve `P` to its bound at use sites (e.g. for
+  // `Record<P, ...>` key classification) without eagerly substituting the
+  // bound into the alias body and erasing the generic shape.
+  type_param_bounds : Array[(String, TsType)]
   type_ : TsType
 } derive(Debug)
 

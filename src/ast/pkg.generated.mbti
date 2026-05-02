@@ -363,6 +363,7 @@ pub impl Show for TsType
 pub(all) struct TsTypeAlias {
   name : String
   type_params : Array[String]
+  type_param_bounds : Array[(String, TsType)]
   type_ : TsType
 } derive(@debug.Debug)
 pub impl Show for TsTypeAlias

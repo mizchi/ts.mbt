@@ -372,6 +372,7 @@ fn enum_lowering_anonymous_literal_enum_decl(
           let type_alias : @ast.TsTypeAlias = {
             name,
             type_params: [],
+            type_param_bounds: [],
             type_: core,
           }
           enum_lowering_type_alias_enum_decl(type_alias)

@@ -32,7 +32,7 @@ fn alias_for_check(
   type_params : Array[String],
   body : @ast.TsType,
 ) -> @ast.TsTypeAlias {
-  { name, type_params, type_: body }
+  { name, type_params, type_param_bounds: [], type_: body }
 }
 
 ///|

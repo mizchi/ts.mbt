@@ -359,6 +359,31 @@ fn ffi_function_type_param_prefix(type_params : Array[String]) -> String {
 }
 
 ///|
+// Filter `type_params` down to only those names actually referenced by any
+// `fields` value type. Uses the checker's transitive name walk so it sees
+// through nested Array/Union/Func/Applied etc.
+fn ffi_used_type_params(
+  type_params : Array[String],
+  fields : Array[(String, @ast.TsType)],
+) -> Array[String] {
+  let referenced : Array[String] = []
+  for f in fields {
+    for r in @checker.collect_referenced_names(f.1) {
+      if !referenced.contains(r) {
+        referenced.push(r)
+      }
+    }
+  }
+  let result : Array[String] = []
+  for tp in type_params {
+    if referenced.contains(tp) {
+      result.push(tp)
+    }
+  }
+  result
+}
+
+///|
 fn ffi_should_preserve_interface_type_params(iface : @ast.TsInterface) -> Bool {
   match iface.name {
     "StatsBase"
@@ -950,7 +975,10 @@ fn ffi_struct_decl_to_moonbit(
   iface : @ast.TsInterface,
 ) -> String {
   let active_type_params = if ffi_should_preserve_interface_type_params(iface) {
-    iface.type_params
+    // Filter out type params that no field actually references — the bridge
+    // would otherwise emit `struct X[T, U, F] { ... }` with U/F unused after
+    // the parser substituted them away via their `extends` bounds.
+    ffi_used_type_params(iface.type_params, iface.fields)
   } else {
     []
   }
