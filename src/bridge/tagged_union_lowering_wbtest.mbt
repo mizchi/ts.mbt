@@ -146,3 +146,43 @@ test "tagged union alias: literal-only union is rejected" {
     None => ()
   }
 }
+
+///|
+test "tagged union: MoonBit enum section is rendered" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Input",
+    cases: [
+      ("NumberValue", @ast.TsType::Number),
+      ("StringValue", @ast.TsType::String_),
+      ("DateValue", @ast.TsType::Named("Date")),
+    ],
+  }
+  match tagged_union_decl_to_moonbit_section(decl) {
+    Some(section) => {
+      assert_true(section.contains("pub(all) enum Input"))
+      assert_true(section.contains("NumberValue(Double)"))
+      assert_true(section.contains("StringValue(String)"))
+      assert_true(section.contains("DateValue(Date)"))
+      assert_true(section.contains("derive(Eq, Debug)"))
+    }
+    None => fail("expected enum section to render")
+  }
+}
+
+///|
+test "tagged union: array of primitive renders Array[Inner]" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Path",
+    cases: [
+      ("StringValue", @ast.TsType::String_),
+      ("StringArray", @ast.TsType::Array(@ast.TsType::String_)),
+    ],
+  }
+  match tagged_union_decl_to_moonbit_section(decl) {
+    Some(section) => {
+      assert_true(section.contains("StringValue(String)"))
+      assert_true(section.contains("StringArray(Array[String])"))
+    }
+    None => fail("expected array case to lower")
+  }
+}

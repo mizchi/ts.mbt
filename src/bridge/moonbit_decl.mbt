@@ -7236,10 +7236,19 @@ pub async fn emit_moonbit_decl_from_entry_path(
     exported_classes,
     notes,
   ) = collect_exported_decls(graph, export_surface, modules)
+  let tagged_union_sections : Array[String] = []
+  let tagged_union_declared_names : Array[String] = []
   for tagged in exported_tagged_unions {
-    notes.push(
-      "///|\n/// Heterogeneous union \{tagged.export_name} (\{tagged.source_path}::\{tagged.local_name}) detected with \{tagged.decl.cases.length()} cases (auto-enum lowering pending).",
-    )
+    match tagged_union_decl_to_moonbit_section(tagged.decl) {
+      Some(section) => {
+        tagged_union_sections.push(section)
+        tagged_union_declared_names.push(tagged.decl.name)
+      }
+      None =>
+        notes.push(
+          "///|\n/// Heterogeneous union \{tagged.export_name} (\{tagged.source_path}::\{tagged.local_name}) could not be auto-lowered (unsupported case payload).",
+        )
+    }
   }
   let canonical_types = build_canonical_type_name_map(
     exported_interfaces, exported_enums, exported_classes,
@@ -7368,6 +7377,10 @@ pub async fn emit_moonbit_decl_from_entry_path(
   // issue in bridge synthesis.
   let report = @checker.check_module(emitted_module)
   for issue in report.issues {
+    if issue.kind is UnresolvedReference &&
+      tagged_union_declared_names.contains(issue.name) {
+      continue
+    }
     let prefix = match issue.kind {
       UnresolvedReference => "Unresolved type reference"
       DuplicateDeclaration => "Duplicate top-level name"
@@ -7383,7 +7396,17 @@ pub async fn emit_moonbit_decl_from_entry_path(
       notes.push(note)
     }
   }
-  @parser.emit_moonbit_decl_with_sections(
-    emitted_module, notes, notes_need_jsvalue,
+  let combined_extra_sections : Array[String] = []
+  for section in tagged_union_sections {
+    combined_extra_sections.push(section)
+  }
+  for note in notes {
+    combined_extra_sections.push(note)
+  }
+  @parser.emit_moonbit_decl_with_sections_and_types(
+    emitted_module,
+    combined_extra_sections,
+    tagged_union_declared_names,
+    notes_need_jsvalue,
   )
 }

@@ -2,6 +2,7 @@
 package "mizchi/ts/bridge"
 
 import {
+  "mizchi/ts/ast",
   "moonbitlang/core/debug",
 }
 
@@ -40,6 +41,20 @@ pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String)
 
 pub fn parse_typescript_import_rewrite_map_source(String) -> Map[String, String]?
 
+pub fn tagged_union_array_constructor_name(@ast.TsType) -> String?
+
+pub fn tagged_union_cases(Array[@ast.TsType]) -> Array[(String, @ast.TsType)]?
+
+pub fn tagged_union_member_constructor_name(@ast.TsType) -> String?
+
+pub fn tagged_union_member_is_literal_like(@ast.TsType) -> Bool
+
+pub fn tagged_union_named_constructor_name(String) -> String?
+
+pub fn tagged_union_primitive_constructor_name(@ast.TsType) -> String?
+
+pub fn tagged_union_type_alias_decl(@ast.TsTypeAlias) -> BridgeTaggedUnionDecl?
+
 // Errors
 pub suberror MbtiJsLinkConfigError {
   ReadError(String)
@@ -58,6 +73,11 @@ pub(all) suberror ModuleGraphError {
 } derive(@debug.Debug)
 
 // Types and methods
+pub(all) struct BridgeTaggedUnionDecl {
+  name : String
+  cases : Array[(String, @ast.TsType)]
+} derive(Eq, @debug.Debug)
+
 pub struct MbtiTypescriptPackageFile {
   relative_path : String
   content : String
