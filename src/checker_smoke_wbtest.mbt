@@ -82,6 +82,88 @@ test "checker: nested generic params in interfaces are recognised in scope" {
 }
 
 ///|
+test "checker: ambient class declarations satisfy unresolved-reference check" {
+  let src =
+    #|export declare class CounterState {
+    #|  readonly current: number;
+    #|  label: string;
+    #|  static readonly version: string;
+    #|  static step: number;
+    #|}
+    #|export declare function bump(state: CounterState): CounterState;
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let unresolved = @checker.unresolved_type_references(module_)
+  if unresolved.length() != 0 {
+    fail("Unexpected unresolved references: \{unresolved}")
+  }
+}
+
+///|
+test "checker: type alias chains parse cleanly" {
+  let src =
+    #|export type FeatureFlag = true | false;
+    #|export type AlwaysOn = true | undefined;
+    #|export declare function flipFlag(flag: FeatureFlag): FeatureFlag;
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let unresolved = @checker.unresolved_type_references(module_)
+  if unresolved.length() != 0 {
+    fail("Unexpected unresolved references: \{unresolved}")
+  }
+}
+
+///|
+test "checker: generic substitution works on parser-produced bindings" {
+  // Parse `type Maybe<X> = X | undefined;` then verify a generic application
+  // through is_assignable_to_with_generics.
+  let src = "export type Maybe<X> = X | undefined;"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {}) catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  let table : Map[String, @checker.AliasBinding] = {}
+  for ta in module_.type_aliases {
+    table[ta.name] = { type_params: ta.type_params, body: ta.type_ }
+  }
+  let resolve = fn(name) { table.get(name) }
+  // string flows into Maybe<string>
+  if !@checker.is_assignable_to_with_generics(
+      String_,
+      Applied("Maybe", [String_]),
+      resolve,
+    ) {
+    fail("string should be assignable to Maybe<string>")
+  }
+  // number does NOT flow into Maybe<string>
+  if @checker.is_assignable_to_with_generics(
+      Number,
+      Applied("Maybe", [String_]),
+      resolve,
+    ) {
+    fail("number should not be assignable to Maybe<string>")
+  }
+  // Maybe<string> accepts undefined
+  if !@checker.is_assignable_to_with_generics(
+      Undefined,
+      Applied("Maybe", [String_]),
+      resolve,
+    ) {
+    fail("undefined should be assignable to Maybe<string>")
+  }
+}
+
+///|
 test "checker: assignability roundtrips on parsed type aliases" {
   // Parse a couple of aliases, build a resolver from them, and check
   // assignability across the chain.
