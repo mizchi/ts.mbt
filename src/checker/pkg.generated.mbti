@@ -16,6 +16,8 @@ pub fn equivalent(@ast.TsType, @ast.TsType) -> Bool
 
 pub fn is_assignable_to(@ast.TsType, @ast.TsType) -> Bool
 
+pub fn is_assignable_to_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?) -> Bool
+
 pub fn is_component_ref_like_name(String) -> Bool
 
 pub fn is_empty_object_type(@ast.TsType) -> Bool
