@@ -3079,193 +3079,10 @@ fn applied_type_alias(
   }
 }
 
-///|
-fn decl_infer_marker_name(type_ : @ast.TsType) -> String? {
-  match type_ {
-    Applied("__tsmbt_infer", [Named(name)]) => Some(name)
-    _ => None
-  }
-}
-
-///|
-fn decl_bind_inferred_type(
-  bindings : Map[String, @ast.TsType],
-  name : String,
-  type_ : @ast.TsType,
-) -> Bool {
-  match bindings.get(name) {
-    Some(existing) => existing == type_
-    None => {
-      bindings[name] = type_
-      true
-    }
-  }
-}
-
-///|
-fn decl_match_infer_pattern(
-  source : @ast.TsType,
-  pattern : @ast.TsType,
-  bindings : Map[String, @ast.TsType],
-) -> Bool {
-  match decl_infer_marker_name(pattern) {
-    Some(name) => return decl_bind_inferred_type(bindings, name, source)
-    None => ()
-  }
-  if source == pattern {
-    return true
-  }
-  match (source, pattern) {
-    (_, Any) => true
-    (Array(source_inner), Array(pattern_inner)) =>
-      decl_match_infer_pattern(source_inner, pattern_inner, bindings)
-    (Array(source_inner), Applied("Array", [pattern_inner])) =>
-      decl_match_infer_pattern(source_inner, pattern_inner, bindings)
-    (Applied("Array", [source_inner]), Array(pattern_inner)) =>
-      decl_match_infer_pattern(source_inner, pattern_inner, bindings)
-    (Applied(source_name, source_args), Applied(pattern_name, pattern_args)) =>
-      if source_name != pattern_name ||
-        source_args.length() != pattern_args.length() {
-        false
-      } else {
-        for i in 0..<source_args.length() {
-          if !decl_match_infer_pattern(
-              source_args[i],
-              pattern_args[i],
-              bindings,
-            ) {
-            return false
-          }
-        }
-        true
-      }
-    (Tuple(source_items), Tuple(pattern_items)) =>
-      if source_items.length() != pattern_items.length() {
-        false
-      } else {
-        for i in 0..<source_items.length() {
-          if !decl_match_infer_pattern(
-              source_items[i],
-              pattern_items[i],
-              bindings,
-            ) {
-            return false
-          }
-        }
-        true
-      }
-    (Func(source_params, source_ret), Func(pattern_params, pattern_ret)) =>
-      if source_params.length() != pattern_params.length() {
-        false
-      } else {
-        for i in 0..<source_params.length() {
-          if !decl_match_infer_pattern(
-              source_params[i],
-              pattern_params[i],
-              bindings,
-            ) {
-            return false
-          }
-        }
-        decl_match_infer_pattern(source_ret, pattern_ret, bindings)
-      }
-    (_, Union(pattern_items)) => {
-      for pattern_item in pattern_items {
-        let branch_bindings : Map[String, @ast.TsType] = {}
-        if decl_match_infer_pattern(source, pattern_item, branch_bindings) {
-          for entry in branch_bindings {
-            let (name, type_) = entry
-            if !decl_bind_inferred_type(bindings, name, type_) {
-              return false
-            }
-          }
-          return true
-        }
-      }
-      false
-    }
-    _ => false
-  }
-}
-
-///|
-fn decl_substitute_inferred_type(
-  type_ : @ast.TsType,
-  bindings : Map[String, @ast.TsType],
-) -> @ast.TsType {
-  match decl_infer_marker_name(type_) {
-    Some(name) =>
-      match bindings.get(name) {
-        Some(type_) => return type_
-        None => ()
-      }
-    None => ()
-  }
-  match type_ {
-    Named(name) =>
-      match bindings.get(name) {
-        Some(type_) => type_
-        None => type_
-      }
-    Array(inner) => Array(decl_substitute_inferred_type(inner, bindings))
-    Tuple(items) => {
-      let out : Array[@ast.TsType] = []
-      for item in items {
-        out.push(decl_substitute_inferred_type(item, bindings))
-      }
-      Tuple(out)
-    }
-    Object(fields) => {
-      let out : Array[(@ast.TsType, @ast.TsType)] = []
-      for field in fields {
-        let (key, value) = field
-        out.push(
-          (
-            decl_substitute_inferred_type(key, bindings),
-            decl_substitute_inferred_type(value, bindings),
-          ),
-        )
-      }
-      Object(out)
-    }
-    Func(params, ret) => {
-      let out : Array[@ast.TsType] = []
-      for param in params {
-        out.push(decl_substitute_inferred_type(param, bindings))
-      }
-      Func(out, decl_substitute_inferred_type(ret, bindings))
-    }
-    Union(items) => {
-      let out : Array[@ast.TsType] = []
-      for item in items {
-        out.push(decl_substitute_inferred_type(item, bindings))
-      }
-      Union(out)
-    }
-    Intersection(items) => {
-      let out : Array[@ast.TsType] = []
-      for item in items {
-        out.push(decl_substitute_inferred_type(item, bindings))
-      }
-      Intersection(out)
-    }
-    Conditional(source, target, true_type, false_type) =>
-      Conditional(
-        decl_substitute_inferred_type(source, bindings),
-        decl_substitute_inferred_type(target, bindings),
-        decl_substitute_inferred_type(true_type, bindings),
-        decl_substitute_inferred_type(false_type, bindings),
-      )
-    Applied(name, args) => {
-      let out : Array[@ast.TsType] = []
-      for arg in args {
-        out.push(decl_substitute_inferred_type(arg, bindings))
-      }
-      Applied(name, out)
-    }
-    _ => type_
-  }
-}
+// `decl_infer_marker_name`, `decl_match_infer_pattern`, and
+// `decl_substitute_inferred_type` were duplicates of the helpers now in
+// `mizchi/ts/checker`. Bridge calls `@checker.match_infer_pattern` etc.
+// directly.
 
 ///|
 // `decl_type_extends_simple` moved to `mizchi/ts/checker` as
@@ -3434,12 +3251,12 @@ fn lower_react_utility_type(
         info, target, modules, canonical_types,
       )
       let infer_bindings : Map[String, @ast.TsType] = {}
-      if decl_match_infer_pattern(
+      if @checker.match_infer_pattern(
           lowered_source, lowered_target, infer_bindings,
         ) {
         lower_react_utility_type(
           info,
-          decl_substitute_inferred_type(true_type, infer_bindings),
+          @checker.substitute_inferred_type(true_type, infer_bindings),
           modules,
           canonical_types,
         )
