@@ -96,6 +96,35 @@ test "type_is_named: matches Named and Applied head" {
 }
 
 ///|
+test "type_contains_string: matches String_ and Literal" {
+  assert_true(type_contains_string(String_))
+  assert_true(type_contains_string(Literal("hi")))
+  assert_true(type_contains_string(Union([Number, String_])))
+  assert_false(type_contains_string(Number))
+}
+
+///|
+test "type_contains_boolean: traverses Promise/Array/Union/Intersection" {
+  assert_true(type_contains_boolean(Boolean))
+  assert_true(type_contains_boolean(BooleanLiteral(true)))
+  assert_true(type_contains_boolean(Union([String_, Boolean])))
+  assert_true(
+    type_contains_boolean(Applied("Promise", [Boolean])),
+  )
+  assert_true(type_contains_boolean(Array(Boolean)))
+  assert_false(type_contains_boolean(Union([String_, Number])))
+}
+
+///|
+test "type_contains_string_array: matches Array(string-like) variants" {
+  assert_true(type_contains_string_array(Array(String_)))
+  assert_true(type_contains_string_array(Applied("Array", [String_])))
+  assert_true(type_contains_string_array(Applied("ReadonlyArray", [String_])))
+  assert_true(type_contains_string_array(Union([Number, Array(String_)])))
+  assert_false(type_contains_string_array(Array(Number)))
+}
+
+///|
 test "type_contains_named: looks through union members only" {
   assert_true(type_contains_named(Named("Foo"), ["Foo"]))
   assert_true(

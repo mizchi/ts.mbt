@@ -4963,24 +4963,7 @@ fn decl_optionalize_if_needed(
   }
 }
 
-///|
-fn decl_type_contains_boolean(type_ : @ast.TsType) -> Bool {
-  match type_ {
-    Boolean | BooleanLiteral(_) => true
-    Union(items) | Intersection(items) | Tuple(items) => {
-      for item in items {
-        if decl_type_contains_boolean(item) {
-          return true
-        }
-      }
-      false
-    }
-    Array(inner)
-    | Applied("Promise", [inner])
-    | Applied("PromiseLike", [inner]) => decl_type_contains_boolean(inner)
-    _ => false
-  }
-}
+// `decl_type_contains_boolean` moved to checker as `type_contains_boolean`.
 
 ///|
 fn decl_copy_options_filter_type(type_ : @ast.TsType) -> @ast.TsType {
@@ -4989,7 +4972,7 @@ fn decl_copy_options_filter_type(type_ : @ast.TsType) -> @ast.TsType {
     None => type_
   }
   match inner_type {
-    Func([String_, String_], return_type) if decl_type_contains_boolean(
+    Func([String_, String_], return_type) if @checker.type_contains_boolean(
         return_type,
       ) => decl_optionalize_if_needed(type_, Func([String_, String_], Boolean))
     _ => type_
@@ -4998,7 +4981,7 @@ fn decl_copy_options_filter_type(type_ : @ast.TsType) -> @ast.TsType {
 
 ///|
 fn decl_glob_options_cwd_type(type_ : @ast.TsType) -> @ast.TsType {
-  if decl_type_contains_string(type_) {
+  if @checker.type_contains_string(type_) {
     decl_optionalize_if_needed(type_, String_)
   } else {
     type_
@@ -5007,7 +4990,7 @@ fn decl_glob_options_cwd_type(type_ : @ast.TsType) -> @ast.TsType {
 
 ///|
 fn decl_glob_options_exclude_type(type_ : @ast.TsType) -> @ast.TsType {
-  if decl_type_contains_string_array(type_) {
+  if @checker.type_contains_string_array(type_) {
     decl_optionalize_if_needed(type_, Array(String_))
   } else {
     type_
@@ -5087,7 +5070,7 @@ fn decl_url_pattern_base_url_type(type_ : @ast.TsType) -> @ast.TsType {
     None =>
       match type_ {
         Any | String_ | Named("URL") => decl_string_optional_type()
-        Union(_) if decl_type_contains_string(type_) =>
+        Union(_) if @checker.type_contains_string(type_) =>
           decl_string_optional_type()
         _ => type_
       }
@@ -5820,39 +5803,8 @@ fn decl_specialize_generated_class_method_return_type(
 // `decl_type_is_named` and `decl_type_contains_named` moved to checker as
 // `type_is_named` / `type_contains_named`.
 
-///|
-fn decl_type_contains_string(type_ : @ast.TsType) -> Bool {
-  match type_ {
-    String_ | Literal(_) => true
-    Union(items) => {
-      for item in items {
-        if decl_type_contains_string(item) {
-          return true
-        }
-      }
-      false
-    }
-    _ => false
-  }
-}
-
-///|
-fn decl_type_contains_string_array(type_ : @ast.TsType) -> Bool {
-  match type_ {
-    Array(inner) => decl_type_contains_string(inner)
-    Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
-      decl_type_contains_string(inner)
-    Union(items) => {
-      for item in items {
-        if decl_type_contains_string_array(item) {
-          return true
-        }
-      }
-      false
-    }
-    _ => false
-  }
-}
+// `decl_type_contains_string` and `decl_type_contains_string_array` moved to
+// checker as `type_contains_string` / `type_contains_string_array`.
 
 ///|
 fn decl_union_has_string_and_named(
@@ -5895,7 +5847,7 @@ fn decl_is_node_string_buffer_union(type_ : @ast.TsType) -> Bool {
 
 ///|
 fn decl_is_string_or_string_array_union(type_ : @ast.TsType) -> Bool {
-  decl_type_contains_string(type_) && decl_type_contains_string_array(type_)
+  @checker.type_contains_string(type_) && @checker.type_contains_string_array(type_)
 }
 
 ///|

@@ -32,6 +32,70 @@ pub fn type_contains_named(type_ : @ast.TsType, names : Array[String]) -> Bool {
 }
 
 ///|
+// True iff `type_` is a string-like primitive (`String_` or `Literal(_)`) or a
+// Union with a string-like member. Recurses only through Union — matches the
+// "this top-level form references string" pattern used by the bridge.
+pub fn type_contains_string(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    String_ | Literal(_) => true
+    Union(items) => {
+      for item in items {
+        if type_contains_string(item) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+// True iff `type_` carries a boolean primitive somewhere in the typical
+// containers. Unlike `type_contains_string`, this recurses through
+// Union / Intersection / Tuple, plus through `Array` and `Promise<…>` /
+// `PromiseLike<…>` payloads — boolean returns are interesting wherever
+// they show up in the bridge's flow.
+pub fn type_contains_boolean(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Boolean | BooleanLiteral(_) => true
+    Union(items) | Intersection(items) | Tuple(items) => {
+      for item in items {
+        if type_contains_boolean(item) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner)
+    | Applied("Promise", [inner])
+    | Applied("PromiseLike", [inner]) => type_contains_boolean(inner)
+    _ => false
+  }
+}
+
+///|
+// True iff `type_` is a `string[]` shape (`Array(String_-like)` or
+// `Array<...>` / `ReadonlyArray<...>` of string-like) or a Union containing
+// such a member.
+pub fn type_contains_string_array(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Array(inner) => type_contains_string(inner)
+    Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
+      type_contains_string(inner)
+    Union(items) => {
+      for item in items {
+        if type_contains_string_array(item) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
 pub fn is_empty_object_type(type_ : @ast.TsType) -> Bool {
   match type_ {
     Object(fields) => fields.length() == 0
