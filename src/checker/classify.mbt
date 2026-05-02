@@ -75,6 +75,28 @@ pub fn type_contains_boolean(type_ : @ast.TsType) -> Bool {
 }
 
 ///|
+// True iff `type_` is exactly a string-literal type or a Union whose every
+// member is a string literal. Empty unions are rejected.
+pub fn is_string_literal_union(type_ : @ast.TsType) -> Bool {
+  match type_ {
+    Literal(_) => true
+    Union(items) => {
+      if items.length() == 0 {
+        return false
+      }
+      for item in items {
+        match item {
+          Literal(_) => ()
+          _ => return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
 // True iff `type_` is a `string[]` shape (`Array(String_-like)` or
 // `Array<...>` / `ReadonlyArray<...>` of string-like) or a Union containing
 // such a member.

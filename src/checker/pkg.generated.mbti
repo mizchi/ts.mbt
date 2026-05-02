@@ -63,6 +63,8 @@ pub fn is_signalish_alias_name(String) -> Bool
 
 pub fn is_simple_primitive_type(@ast.TsType) -> Bool
 
+pub fn is_string_literal_union(@ast.TsType) -> Bool
+
 pub fn match_infer_pattern(@ast.TsType, @ast.TsType, Map[String, @ast.TsType]) -> Bool
 
 pub fn normalize_literal_type(@ast.TsType) -> @ast.TsType

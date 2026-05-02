@@ -5850,25 +5850,8 @@ fn decl_is_string_or_string_array_union(type_ : @ast.TsType) -> Bool {
   @checker.type_contains_string(type_) && @checker.type_contains_string_array(type_)
 }
 
-///|
-fn decl_is_string_literal_union_type(type_ : @ast.TsType) -> Bool {
-  match type_ {
-    Literal(_) => true
-    Union(items) => {
-      if items.length() == 0 {
-        return false
-      }
-      for item in items {
-        match item {
-          Literal(_) => ()
-          _ => return false
-        }
-      }
-      true
-    }
-    _ => false
-  }
-}
+// `decl_is_string_literal_union_type` moved to checker as
+// `is_string_literal_union`.
 
 ///|
 fn decl_querystring_stringify_type() -> @ast.TsType {
@@ -5920,7 +5903,7 @@ fn decl_widen_react_factory_tag_param(
   if param_index != 0 || !decl_is_react_factory_name(export_name) {
     return type_
   }
-  if decl_is_string_literal_union_type(type_) {
+  if @checker.is_string_literal_union(type_) {
     String_
   } else {
     type_

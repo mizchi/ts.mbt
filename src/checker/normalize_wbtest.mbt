@@ -116,6 +116,15 @@ test "type_contains_boolean: traverses Promise/Array/Union/Intersection" {
 }
 
 ///|
+test "is_string_literal_union: matches single literal and uniform unions" {
+  assert_true(is_string_literal_union(Literal("foo")))
+  assert_true(is_string_literal_union(Union([Literal("a"), Literal("b")])))
+  assert_false(is_string_literal_union(Union([])))
+  assert_false(is_string_literal_union(Union([Literal("a"), Number])))
+  assert_false(is_string_literal_union(String_))
+}
+
+///|
 test "type_contains_string_array: matches Array(string-like) variants" {
   assert_true(type_contains_string_array(Array(String_)))
   assert_true(type_contains_string_array(Applied("Array", [String_])))
