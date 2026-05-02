@@ -10,6 +10,10 @@ pub fn bind_inferred_type(Map[String, @ast.TsType], String, @ast.TsType) -> Bool
 
 pub fn check_assignable(@ast.TsType, @ast.TsType) -> Array[AssignabilityIssue]
 
+pub fn check_assignable_with(@ast.TsType, @ast.TsType, (String) -> @ast.TsType?) -> Array[AssignabilityIssue]
+
+pub fn check_assignable_with_generics(@ast.TsType, @ast.TsType, (String) -> AliasBinding?) -> Array[AssignabilityIssue]
+
 pub fn classify_optional_like_union(@ast.TsType) -> (@ast.TsType, Bool)?
 
 pub fn classify_transparent_intersection(@ast.TsType) -> @ast.TsType?
