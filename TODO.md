@@ -901,3 +901,129 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
 - Default `just ci` remains fixture-based and does not require local ghq checkouts.
 - `just verify-realworld-moonbit` is intentionally outside default CI because it probes developer-local MoonBit repositories and writes temporary glue packages into those source modules during `moon build --target js`.
 - `just verify-realworld-typescript` is intentionally outside default CI because it probes a developer-local npm package corpus via `TSMBT_REALWORLD_TYPESCRIPT_NODE_MODULES`.
+
+## Beyond 90%: Bridge Quality Gaps for Tier 2 / Tier 3 Packages (2026-05-03)
+
+After the 90% gate, the remaining `naturalize-target` and `budgeted-fallback`
+JSValue surfaces are dominated by a small set of structural limitations rather
+than ad-hoc fixes. The previous demand-driven plateau was reached at hono = 50,
+date-fns = 22, jose = 84, react-router = 194, etc., where each remaining
+fallback traces to one of the items below. Each item is a multi-commit
+structural change, not a one-off lowering tweak.
+
+Priority is by impact on real-world bridge JSValue surface, not by ease.
+
+### 1. Heterogeneous union -> auto-enum (highest ROI, bridge-local)
+
+Patterns: `number | string | Date` (jose setters), `(string | number)[]` (immer
+Patch.path), `string | string[]`, `boolean | "boundary"` (magic-string hires),
+`boolean | OverwriteOptions` (magic-string), schema-leaf branches in zod /
+valibot.
+
+- [ ] Detect heterogeneous unions whose members can each be discriminated at
+  runtime (`typeof` for primitives, `instanceof` for known classes, optional
+  fallback for plain objects).
+- [ ] Lower the alias / synthetic-named union into a `pub(all) enum` with one
+  case per member, where each case wraps the lowered MoonBit type (e.g.
+  `Number(Double) | StringValue(String) | DateValue(Date)`).
+- [ ] Generate paired conversion helpers: MoonBit-side `to_js(self) -> JSValue`
+  using primitive coercions, and JS-side discrimination wrappers in
+  `bridge.js`.
+- [ ] Reuse the existing literal-union synthetic naming pass for anonymous
+  heterogeneous unions on params / fields / return types.
+- [ ] Emit diagnostics and stay on JSValue when discrimination is ambiguous
+  (e.g. two struct members with overlapping shapes).
+- [ ] Add real-world budgets: jose, magic-string, immer, and zod / valibot
+  schema leaves where applicable.
+
+### 2. Method-level generics preserved through bridge
+
+Patterns: `Hono<E,S,P>.get<Path extends string>(path: Path, handler):
+Hono<E, S, P | Path>`, `Session.get<Key extends keyof Data>(key: Key)`,
+`zod.object<T extends ZodRawShape>(shape: T)`.
+
+- [ ] Capture method-level type parameter lists (and bounds) on
+  `TsClassMethodDecl` and `TsInterfaceMethodSignature`.
+- [ ] Plumb method-level generics through bridge generation so MoonBit method
+  signatures expose them where the bound is representable.
+- [ ] Apply bound substitution at the method boundary, parallel to the existing
+  alias-level bound substitution introduced for `Record<P, ...>`.
+- [ ] Add post-lowering type-param filtering so unused method generics drop
+  cleanly without `unused_type_variable` warnings.
+- [ ] Update the parser-side allowlist (`moonbit_should_preserve_interface_type_params`)
+  to reach method-level generics for hono / react-router.
+
+### 3. Mapped type partial evaluation + conditional reduction depth
+
+Patterns: zod `output<T>` / `infer<T>` mapped types, valibot equivalent,
+date-fns `EachDayOfIntervalResult<I, O>` (Array<conditional + infer + indexed
+access>), jose key-typed builders.
+
+- [ ] Extend `simplify_type` so distributive conditional types reduce when each
+  branch resolves to the same concrete shape after bound substitution and
+  infer extraction.
+- [ ] Add a "branch-join" pass: when an `Array<Conditional<...>>` survives all
+  reduction passes, collect leaf branches and accept the join only if every
+  leaf is structurally compatible with the conditional's terminal default.
+- [ ] Lower mapped types with key remapping (`{ [K in keyof T as ...]: ... }`)
+  for the common output-shape pattern used by zod / valibot.
+- [ ] Treat unresolvable infer patterns as their bound rather than `JSValue` so
+  generic `infer DateType extends Date` collapses to `Date` at the bridge
+  boundary.
+
+### 4. Template literal types
+
+Patterns: node:util `InspectColorBackground = bg${Capitalize<InspectColorForeground>}`,
+react-router path patterns, zod template-literal validators.
+
+- [ ] Add AST nodes for template literal types (`TsType::TemplateLiteral`)
+  including `Capitalize` / `Lowercase` / `Uppercase` / `Uncapitalize` intrinsic
+  string-mapping types.
+- [ ] Resolve template literal types to a string-literal union when the
+  parameter is a finite string-literal union.
+- [ ] Reuse the existing string-literal-union enum-lowering path for template
+  literal types whose parameter union is small and safely PascalCase-able.
+- [ ] Otherwise fall back to `String` rather than `JSValue` when the template
+  shape is statically known to produce strings.
+
+### 5. JSX / component layer
+
+Patterns: preact / react-router component definitions, `FunctionComponent<P>`,
+`ForwardRefExoticComponent`, JSX intrinsic elements.
+
+- [ ] Decide whether a JSX-aware bridge layer ships as a separate generator
+  output or as MoonBit-native types in the existing bridge.
+- [ ] Preserve `FunctionComponent<P>` as a callable opaque whose props are
+  represented as the resolved `P` struct.
+- [ ] Lower `JSX.Element` to a JS-opaque type that round-trips through bridge
+  glue without widening to `JSValue` for every render call.
+- [ ] Re-evaluate preact and react-router naturalize budgets after JSX layer.
+
+### 6. Class static-side / index signature / module augmentation
+
+Patterns: jose builder pattern (`new SignJWT(payload).setIssuedAt()...`),
+magic-string `MagicString` static helpers, hono `c.set()` per-context
+augmentation, React `HTMLAttributes` index signatures.
+
+- [ ] Separate class static-side (`typeof Class`) from instance-side at the
+  bridge boundary so static factories / properties live in their own MoonBit
+  module surface.
+- [ ] Lower `[key: string]: V` index signatures to a paired
+  getter / setter pair on the generated MoonBit struct.
+- [ ] Decide whether module augmentation gets a first-class lowering or stays
+  as a documented diagnostic.
+
+### 7. Modern syntax follow-ups (smaller)
+
+- [ ] `satisfies` operator at the expression level.
+- [ ] Stage-3 decorators (parser support).
+- [ ] `using` / `await using` declarations.
+- [ ] Const generics (`<const T>`).
+
+### Non-Goals (still)
+
+- [ ] Do not turn this list into a checklist for "all of TypeScript". Each item
+  must justify itself by removing real-world JSValue surface from the locked
+  corpus.
+- [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
+  consumer needs it; the JSValue count is unaffected.
