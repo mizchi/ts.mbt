@@ -3264,68 +3264,10 @@ fn decl_substitute_inferred_type(
 }
 
 ///|
-fn decl_type_extends_simple(
-  source : @ast.TsType,
-  target : @ast.TsType,
-) -> Bool? {
-  if source == target {
-    return Some(true)
-  }
-  match target {
-    Any => return Some(true)
-    Union(items) => {
-      let mut saw_unknown = false
-      for item in items {
-        match decl_type_extends_simple(source, item) {
-          Some(true) => return Some(true)
-          Some(false) => ()
-          None => saw_unknown = true
-        }
-      }
-      return if saw_unknown { None } else { Some(false) }
-    }
-    _ => ()
-  }
-  match source {
-    Never => return Some(true)
-    Union(items) => {
-      let mut saw_unknown = false
-      for item in items {
-        match decl_type_extends_simple(item, target) {
-          Some(true) => ()
-          Some(false) => return Some(false)
-          None => saw_unknown = true
-        }
-      }
-      return if saw_unknown { None } else { Some(true) }
-    }
-    Int if target == Number => return Some(true)
-    _ => ()
-  }
-  match (source, target) {
-    (
-      Number
-      | Int
-      | Boolean
-      | String_
-      | Void
-      | BigInt
-      | Symbol
-      | Null
-      | Undefined,
-      Number
-      | Int
-      | Boolean
-      | String_
-      | Void
-      | BigInt
-      | Symbol
-      | Null
-      | Undefined,
-    ) => Some(false)
-    _ => None
-  }
-}
+// `decl_type_extends_simple` moved to `mizchi/ts/checker` as
+// `extends_decision`. The shared version additionally recognises literal
+// narrowing (Literal extends String_, NumberLiteral extends Number, etc.),
+// which is strictly more permissive but does not regress any tests.
 
 ///|
 fn lower_react_utility_type(
@@ -3498,7 +3440,7 @@ fn lower_react_utility_type(
           canonical_types,
         )
       } else {
-        match decl_type_extends_simple(lowered_source, lowered_target) {
+        match @checker.extends_decision(lowered_source, lowered_target) {
           Some(true) =>
             lower_react_utility_type(info, true_type, modules, canonical_types)
           Some(false) =>
