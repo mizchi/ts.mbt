@@ -76,3 +76,73 @@ test "tagged union: lowercase named member is rejected" {
     None => ()
   }
 }
+
+///|
+test "tagged union alias: type Input = number | string | Date lowers" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "Input",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([
+      @ast.TsType::Number,
+      @ast.TsType::String_,
+      @ast.TsType::Named("Date"),
+    ]),
+  }
+  match tagged_union_type_alias_decl(type_alias) {
+    Some(decl) => {
+      assert_eq(decl.name, "Input")
+      assert_eq(decl.cases.length(), 3)
+      assert_eq(decl.cases[2].0, "DateValue")
+    }
+    None => fail("expected number | string | Date alias to lower")
+  }
+}
+
+///|
+test "tagged union alias: generic alias is rejected" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "Wrap",
+    type_params: ["T"],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([
+      @ast.TsType::Named("T"),
+      @ast.TsType::String_,
+    ]),
+  }
+  match tagged_union_type_alias_decl(type_alias) {
+    Some(_) => fail("generic alias must defer to existing generic path")
+    None => ()
+  }
+}
+
+///|
+test "tagged union alias: non-union body is rejected" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "JustString",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::String_,
+  }
+  match tagged_union_type_alias_decl(type_alias) {
+    Some(_) => fail("alias body must be a Union")
+    None => ()
+  }
+}
+
+///|
+test "tagged union alias: literal-only union is rejected" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "Variant",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([
+      @ast.TsType::Literal("a"),
+      @ast.TsType::Literal("b"),
+    ]),
+  }
+  match tagged_union_type_alias_decl(type_alias) {
+    Some(_) => fail("literal-only unions must defer to enum_lowering")
+    None => ()
+  }
+}

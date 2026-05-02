@@ -107,3 +107,41 @@ pub fn tagged_union_cases(
   }
   Some(cases)
 }
+
+///|
+/// Bridge-local description of a tagged enum lowered from a heterogeneous
+/// union type alias. The cases preserve declaration order and pair each
+/// PascalCase constructor name with the lowered MoonBit-side inner type.
+pub(all) struct BridgeTaggedUnionDecl {
+  name : String
+  cases : Array[(String, @ast.TsType)]
+} derive(Eq, Debug)
+
+///|
+/// Try to lower a `type X = A | B | C` alias to a tagged-union declaration.
+///
+/// Currently rejects:
+/// - generic aliases (any `type_params` present),
+/// - aliases whose body is not a `Union` of at least two members,
+/// - any union that fails the `tagged_union_cases` discriminability check
+///   (literal members, duplicate constructor names, non-PascalCase named
+///   members, etc.).
+///
+/// Returns `None` so callers fall back to existing widening behavior; this
+/// preserves the no-op contract of the current commit until later steps wire
+/// the decl through bridge emission.
+pub fn tagged_union_type_alias_decl(
+  type_alias : @ast.TsTypeAlias,
+) -> BridgeTaggedUnionDecl? {
+  if type_alias.type_params.length() != 0 {
+    return None
+  }
+  let union_members = match type_alias.type_ {
+    @ast.TsType::Union(items) => items
+    _ => return None
+  }
+  match tagged_union_cases(union_members) {
+    Some(cases) => Some({ name: type_alias.name, cases })
+    None => None
+  }
+}
