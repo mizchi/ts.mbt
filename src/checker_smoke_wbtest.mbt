@@ -164,6 +164,18 @@ test "checker: generic substitution works on parser-produced bindings" {
 }
 
 ///|
+test "checker: simplify_union flattens redundant alias substitution result" {
+  // type Pair<T> = T | string;
+  // const x : Pair<string> = "hello"
+  // After substitution Pair<string> ⇒ string | string ⇒ should collapse.
+  let after_substitution : Array[@ast.TsType] = [String_, String_, Number]
+  let simplified = @checker.simplify_union(after_substitution)
+  assert_eq(simplified.length(), 2)
+  assert_true(simplified.contains(String_))
+  assert_true(simplified.contains(Number))
+}
+
+///|
 test "checker: assignability roundtrips on parsed type aliases" {
   // Parse a couple of aliases, build a resolver from them, and check
   // assignability across the chain.

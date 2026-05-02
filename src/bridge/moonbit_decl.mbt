@@ -3019,7 +3019,11 @@ fn substitute_type_alias_params(
       for item in items {
         out.push(substitute_type_alias_params(item, params, args))
       }
-      Union(out)
+      // After substitution, members may collapse onto each other (e.g.
+      // `T | string` with T := string becomes `string | string`); simplify
+      // before re-wrapping. Keep the outer Union wrap even when only one
+      // member survives so downstream Eq-based matchers still see a Union.
+      Union(@checker.simplify_union(out))
     }
     Intersection(items) => {
       let out : Array[@ast.TsType] = []
