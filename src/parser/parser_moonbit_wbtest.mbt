@@ -181,11 +181,16 @@ test "parser: emit MoonBit declarations preserves optional complex unions when w
       return
     }
   }
-  assert_true(actual.contains("declare pub type JSValue"))
+  // `string | StringParams` is now lowered to a synthetic auto-tagged enum
+  // instead of widening to JSValue. The wrapper still preserves the outer
+  // Optional from `params?`. Constructor names are sorted in shortlex order
+  // (length-then-codepoint) by the deterministic naming helper.
   assert_true(
-    actual.contains("declare pub fn string(params : JSValue?) -> Schema"),
+    actual.contains(
+      "declare pub fn string(params : Auto_StringValue_or_StringParamsValue?) -> Schema",
+    ),
   )
-  assert_false(actual.contains("params : JSValue)"))
+  assert_false(actual.contains("params : JSValue?)"))
 }
 
 ///|

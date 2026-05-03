@@ -31,6 +31,12 @@ priv struct MoonBitJsFfiState {
   local_type_param_names : Array[String]
   function_field_method_wrapper_limit : Int
   tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl]
+  // Inline `A | B` unions encountered while lowering parameter / return /
+  // field types are auto-synthesized into PascalCase tagged-union aliases
+  // and stashed here so a later emission pass can append both the enum
+  // declaration and the bridge.js converter pair. Keyed by synthetic name
+  // for stable dedup across all lowering call sites.
+  synthesized_inline_unions : Map[String, BridgeTaggedUnionDecl]
   mut needs_js_any : Bool
 }
 
@@ -791,11 +797,78 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     // until step 4.3 lowers them to enum cases, fall back to plain String
     // rather than widening to JSValue.
     TemplateLiteralType(_, _) => "String"
+    Union(parts) =>
+      match ffi_synthesize_inline_union(state, parts) {
+        Some(synth_name) => synth_name
+        None => {
+          state.needs_js_any = true
+          "@js.Any"
+        }
+      }
     _ => {
       state.needs_js_any = true
       "@js.Any"
     }
   }
+}
+
+///|
+/// Build a deterministic PascalCase name for a heterogeneous inline union
+/// that the auto-lowerer accepted as a tagged-union shape. Cases are sorted
+/// by constructor name so two equivalent unions written in different orders
+/// (e.g. `string | string[]` vs `string[] | string`) collapse to the same
+/// synthetic alias instead of producing two parallel enums.
+fn ffi_inline_union_synthesized_name(
+  cases : Array[(String, @ast.TsType)],
+) -> String {
+  let names : Array[String] = []
+  for entry in cases {
+    let (case_name, _) = entry
+    names.push(case_name)
+  }
+  // Shortlex order from `String::compare`; deterministic and matches the
+  // parser-side helper so both paths produce the same synthetic alias name.
+  names.sort()
+  "Auto_" + names.join("_or_")
+}
+
+///|
+/// Try to lower an inline `Union(parts)` encountered while rendering a
+/// MoonBit type signature into a synthetic tagged-union alias, returning the
+/// alias name on success. The decl is registered both on the regular
+/// tagged-union map (so the inline JS converter helpers find it via name
+/// lookup) and on a dedicated `synthesized_inline_unions` map so the
+/// emission pass can append the enum decl + bridge.js converter pair.
+///
+/// Returns `None` when the union cannot be discriminated at the JS boundary
+/// or when any case payload is not MoonBit-renderable; callers fall back to
+/// the existing `@js.Any` widening.
+fn ffi_synthesize_inline_union(
+  state : MoonBitJsFfiState,
+  parts : Array[@ast.TsType],
+) -> String? {
+  let cases = match tagged_union_cases(parts) {
+    Some(c) => c
+    None => return None
+  }
+  for entry in cases {
+    let (_, inner) = entry
+    match tagged_union_case_discriminator(inner) {
+      Some(_) => ()
+      None => return None
+    }
+    match tagged_union_inner_moonbit_text(inner) {
+      Some(_) => ()
+      None => return None
+    }
+  }
+  let name = ffi_inline_union_synthesized_name(cases)
+  if !state.synthesized_inline_unions.contains(name) {
+    let decl : BridgeTaggedUnionDecl = { name, cases }
+    state.synthesized_inline_unions[name] = decl
+    state.tagged_union_decls_by_name[name] = decl
+  }
+  Some(name)
 }
 
 ///|
@@ -934,6 +1007,22 @@ fn ffi_inline_js_tagged_union_to_js(
           match s.tagged_union_decls_by_name.get(name) {
             Some(decl) =>
               tagged_union_to_js_function_name(decl.name) + "(" + expr + ")"
+            None => expr
+          }
+        // Inline `A | B` lowered to a synthesised tagged-union alias: the
+        // signature already reads `Auto_X_or_Y` but the AST keeps the
+        // original `Union(parts)` shape, so re-derive the synthesised name
+        // and route through its `_to_js` converter.
+        @ast.TsType::Union(parts) =>
+          match tagged_union_cases(parts) {
+            Some(cases) => {
+              let name = ffi_inline_union_synthesized_name(cases)
+              if s.tagged_union_decls_by_name.contains(name) {
+                tagged_union_to_js_function_name(name) + "(" + expr + ")"
+              } else {
+                expr
+              }
+            }
             None => expr
           }
         _ => expr
@@ -3666,6 +3755,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
     tagged_union_decls_by_name,
+    synthesized_inline_unions: {},
     needs_js_any: false,
   }
   let type_aliases_by_type_name = ffi_type_alias_map_by_type_name(modules)
@@ -4721,6 +4811,48 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           )
         }
       }
+      None => ()
+    }
+  }
+
+  // Emit any inline-union aliases that the lowering passes synthesised on
+  // the side. Names are sorted for deterministic output across runs. Run
+  // before the external-type emission below so any inner Named payloads
+  // referenced from synthesized cases get a `#external; type N` companion
+  // declaration in the same file.
+  let synthesized_names : Array[String] = []
+  for entry in state.synthesized_inline_unions {
+    synthesized_names.push(entry.0)
+  }
+  synthesized_names.sort()
+  for synth_name in synthesized_names {
+    let decl = state.synthesized_inline_unions.get(synth_name).unwrap()
+    if !emitted_type_names.contains(synth_name) {
+      emitted_type_names.push(synth_name)
+      for entry in decl.cases {
+        let (_, inner) = entry
+        let inner_named = match inner {
+          @ast.TsType::Named(name) => Some(name)
+          @ast.TsType::Array(@ast.TsType::Named(name)) => Some(name)
+          _ => None
+        }
+        match inner_named {
+          Some(inner_name) => {
+            let _ = ffi_mark_external_type(state, inner_name)
+          }
+          None => ()
+        }
+      }
+      match tagged_union_decl_to_moonbit_section(decl) {
+        Some(section) => ffi_sections.push(section)
+        None => ()
+      }
+    }
+    match
+      tagged_union_bridge_js_converter_decls_with_nested(
+        decl, state.tagged_union_decls_by_name,
+      ) {
+      Some(decls) => bridge_lines.push(decls)
       None => ()
     }
   }

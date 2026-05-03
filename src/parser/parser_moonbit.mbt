@@ -451,11 +451,107 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     // Template literal types resolve to a `string` subtype in TypeScript;
     // until enum lowering integrates them, fall back to plain `String`.
     TemplateLiteralType(_, _) => "String"
+    Union(parts) =>
+      match inline_union_synthesized_name_from_parts(parts) {
+        Some(name) => name
+        None => {
+          state.needs_jsvalue = true
+          "JSValue"
+        }
+      }
     _ => {
       state.needs_jsvalue = true
       "JSValue"
     }
   }
+}
+
+///|
+/// Constructor-name slot used by the inline union synthesiser. Mirrors the
+/// FFI-side discriminator in `bridge/tagged_union_lowering.mbt` so the two
+/// emission paths agree on the synthetic alias name without sharing state.
+/// Only types the FFI-side lowering can actually represent are recognised;
+/// any other shape returns `None` and the union widens back to JSValue.
+fn inline_union_constructor_name_for_part(t : @ast.TsType) -> String? {
+  match t {
+    @ast.TsType::Number => Some("NumberValue")
+    @ast.TsType::Int => Some("IntValue")
+    @ast.TsType::String_ => Some("StringValue")
+    @ast.TsType::Boolean => Some("BoolValue")
+    @ast.TsType::BigInt => Some("BigIntValue")
+    @ast.TsType::Array(@ast.TsType::Number) => Some("NumberArray")
+    @ast.TsType::Array(@ast.TsType::Int) => Some("IntArray")
+    @ast.TsType::Array(@ast.TsType::String_) => Some("StringArray")
+    @ast.TsType::Array(@ast.TsType::Boolean) => Some("BoolArray")
+    @ast.TsType::Array(@ast.TsType::Named(name)) =>
+      inline_union_named_constructor_name(name + "Array")
+    @ast.TsType::Named(name) => inline_union_named_constructor_name(name)
+    _ => None
+  }
+}
+
+///|
+fn inline_union_named_constructor_name(name : String) -> String? {
+  if name == "" {
+    return None
+  }
+  let first = name[0].unsafe_to_char()
+  if first < 'A' || first > 'Z' {
+    return None
+  }
+  for c in name {
+    if !((c >= 'A' && c <= 'Z') ||
+        (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9') ||
+        c == '_') {
+      return None
+    }
+  }
+  Some(name + "Value")
+}
+
+///|
+fn inline_union_member_is_literal_like(t : @ast.TsType) -> Bool {
+  match t {
+    @ast.TsType::Literal(_) => true
+    @ast.TsType::NumberLiteral(_) => true
+    @ast.TsType::BigIntLiteral(_) => true
+    @ast.TsType::BooleanLiteral(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Compute the synthetic alias name for an inline `A | B [| C ...]` shape,
+/// matching the FFI-side lowering exactly. Returns `None` when any member is
+/// a literal, lacks a runtime discriminator, or duplicates a constructor
+/// slot — those cases keep the existing JSValue widening.
+fn inline_union_synthesized_name_from_parts(
+  parts : Array[@ast.TsType],
+) -> String? {
+  if parts.length() < 2 {
+    return None
+  }
+  let names : Array[String] = []
+  for entry in parts {
+    if inline_union_member_is_literal_like(entry) {
+      return None
+    }
+    let name = match inline_union_constructor_name_for_part(entry) {
+      Some(n) => n
+      None => return None
+    }
+    if names.contains(name) {
+      return None
+    }
+    names.push(name)
+  }
+  // Sort with the standard shortlex order (the MoonBit `String::compare`
+  // ranks shorter strings ahead of longer ones, then breaks ties on code
+  // units). This is deterministic and identical to the FFI-side sort so
+  // both emission paths agree on the synthetic alias name.
+  names.sort()
+  Some("Auto_" + names.join("_or_"))
 }
 
 ///|
