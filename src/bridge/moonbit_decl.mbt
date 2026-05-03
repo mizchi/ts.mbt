@@ -3520,6 +3520,21 @@ fn lower_react_utility_type(
       }
     }
     Applied(name, args) => {
+      // `Array<T>` and `ReadonlyArray<T>` carry their element via the
+      // generic-application form when written with angle-bracket syntax
+      // (the postfix `T[]` form parses as `Array(inner)`). Funnel both
+      // through the same Conditional element joining as the `Array(_)`
+      // arm below so type aliases written as `Array<Conditional<...>>`
+      // also recover their default branch.
+      if args.length() == 1 && (name == "Array" || name == "ReadonlyArray") {
+        let lowered_inner = lower_react_utility_type(
+          info, args[0], modules, canonical_types,
+        )
+        match conditional_array_element_default_join(lowered_inner) {
+          Some(joined) => return Array(joined)
+          None => return Array(lowered_inner)
+        }
+      }
       // TypeScript intrinsic string-mapping types: `Capitalize<T>`,
       // `Uncapitalize<T>`, `Uppercase<T>`, `Lowercase<T>`. If the single
       // argument lowers to a finite literal union, apply the intrinsic
