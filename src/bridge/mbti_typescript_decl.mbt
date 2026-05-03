@@ -3675,11 +3675,17 @@ fn render_type_alias_decl(
 
 ///|
 fn render_private_type_alias_decl(alias_decl : MbtiTypeAliasDecl) -> String {
+  // Private (MoonBit-side `priv`) types that survive into the emitted
+  // `.d.ts` only get here because the public API references them. We
+  // export them so external TypeScript callers can name the same
+  // values they receive from the wrapped functions; the body stays
+  // opaque (or whatever the alias spelled out) so it's still clear the
+  // type is implementation-defined on the MoonBit side.
   let type_param_suffix = render_type_param_suffix(alias_decl.type_params)
   if alias_decl.is_opaque {
-    return "interface \{alias_decl.name}\{type_param_suffix} {\n}"
+    return "export interface \{alias_decl.name}\{type_param_suffix} {\n}"
   }
-  "type \{alias_decl.name}\{type_param_suffix} = \{alias_decl.body};"
+  "export type \{alias_decl.name}\{type_param_suffix} = \{alias_decl.body};"
 }
 
 ///|

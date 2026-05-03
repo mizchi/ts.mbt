@@ -552,7 +552,10 @@ test "bridge: emit TypeScript declarations keeps private local opaque types refe
       fail("MBTI emit error: \{msg}")
   }
   assert_true(actual.contains("interface Runtime {\n}"))
-  assert_true(actual.contains("interface Memo<T> {\n}"))
+  // Private opaque types referenced by public api are now exported with
+  // an empty interface body, so external TypeScript callers can name the
+  // values they receive from the wrapped functions.
+  assert_true(actual.contains("export interface Memo<T> {\n}"))
   assert_true(
     actual.contains(
       "export function use_runtime(value: Runtime): Iterable<string>;",
@@ -560,7 +563,7 @@ test "bridge: emit TypeScript declarations keeps private local opaque types refe
   )
   assert_true(actual.contains("  runtime: Runtime;"))
   assert_true(actual.contains("  memo: Memo<string>;"))
-  assert_false(actual.contains("export interface Runtime"))
+  assert_true(actual.contains("export interface Runtime"))
 }
 
 ///|
