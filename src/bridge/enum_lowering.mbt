@@ -125,6 +125,73 @@ fn enum_lowering_string_literal_values(
 }
 
 ///|
+/// Apply a TypeScript intrinsic string-mapping type (`Capitalize`,
+/// `Uncapitalize`, `Uppercase`, `Lowercase`) to one literal value.
+fn enum_lowering_apply_string_intrinsic(
+  intrinsic : String,
+  value : String,
+) -> String? {
+  if value.length() == 0 {
+    return Some(value)
+  }
+  let head = value[0].unsafe_to_char()
+  let rest = value[1:].to_string()
+  match intrinsic {
+    "Capitalize" =>
+      if head >= 'a' && head <= 'z' {
+        Some(((head.to_int() - 32).unsafe_to_char()).to_string() + rest)
+      } else {
+        Some(value)
+      }
+    "Uncapitalize" =>
+      if head >= 'A' && head <= 'Z' {
+        Some(((head.to_int() + 32).unsafe_to_char()).to_string() + rest)
+      } else {
+        Some(value)
+      }
+    "Uppercase" => Some(value.to_upper())
+    "Lowercase" => Some(value.to_lower())
+    _ => None
+  }
+}
+
+///|
+/// Resolve a `TsType` to its enumerated literal-value set when it is a
+/// string literal, a finite union of string literals, or a TypeScript
+/// intrinsic string-mapping (`Capitalize<...>` etc.) applied to one of
+/// those shapes.
+fn enum_lowering_resolve_literal_value_set(
+  type_ : @ast.TsType,
+) -> Array[String]? {
+  match type_ {
+    @ast.TsType::Literal(value) => Some([value])
+    @ast.TsType::Union(items) =>
+      enum_lowering_string_literal_values(items)
+    @ast.TsType::Applied(name, [inner]) =>
+      match enum_lowering_resolve_literal_value_set(inner) {
+        Some(values) => {
+          let mapped : Array[String] = []
+          for v in values {
+            match enum_lowering_apply_string_intrinsic(name, v) {
+              Some(new_v) => mapped.push(new_v)
+              None => return None
+            }
+          }
+          Some(mapped)
+        }
+        None => None
+      }
+    @ast.TsType::TemplateLiteralType(_, _) =>
+      match enum_lowering_template_literal_expand(type_) {
+        Some(literal_types) =>
+          enum_lowering_string_literal_values(literal_types)
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
 /// Expand a `TemplateLiteralType(parts, type_args)` to the equivalent
 /// `Literal(...)` AST nodes when every interpolated type argument is a
 /// finite string-literal union (or a single literal). Returns `None` if
@@ -135,16 +202,11 @@ fn enum_lowering_template_literal_expand(
 ) -> Array[@ast.TsType]? {
   match type_ {
     @ast.TsType::TemplateLiteralType(parts, type_args) => {
-      // Interpret each interpolation as a finite literal union. A single
-      // `Literal(v)` argument is treated as a one-element union.
+      // Interpret each interpolation as a finite literal union, a
+      // single literal, or an intrinsic string mapping over one.
       let arg_value_sets : Array[Array[String]] = []
       for arg in type_args {
-        let union_items = match arg {
-          @ast.TsType::Union(items) => items
-          @ast.TsType::Literal(_) => [arg]
-          _ => return None
-        }
-        match enum_lowering_string_literal_values(union_items) {
+        match enum_lowering_resolve_literal_value_set(arg) {
           Some(values) => arg_value_sets.push(values)
           None => return None
         }
