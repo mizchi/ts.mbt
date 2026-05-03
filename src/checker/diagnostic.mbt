@@ -101,10 +101,12 @@ fn expand_for_diagnostic(
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {
-        out.push((
-          expand_for_diagnostic(f.0, resolve, visited),
-          expand_for_diagnostic(f.1, resolve, visited),
-        ))
+        out.push(
+          (
+            expand_for_diagnostic(f.0, resolve, visited),
+            expand_for_diagnostic(f.1, resolve, visited),
+          ),
+        )
       }
       Object(out)
     }
@@ -150,7 +152,9 @@ fn expand_for_diagnostic_generic(
             if b.type_params.length() == 0 {
               visited.push(name)
               let expanded = expand_for_diagnostic_generic(
-                b.body, resolve, visited,
+                b.body,
+                resolve,
+                visited,
               )
               let _ = visited.pop()
               expanded
@@ -201,10 +205,12 @@ fn expand_for_diagnostic_generic(
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {
-        out.push((
-          expand_for_diagnostic_generic(f.0, resolve, visited),
-          expand_for_diagnostic_generic(f.1, resolve, visited),
-        ))
+        out.push(
+          (
+            expand_for_diagnostic_generic(f.0, resolve, visited),
+            expand_for_diagnostic_generic(f.1, resolve, visited),
+          ),
+        )
       }
       Object(out)
     }
@@ -310,9 +316,7 @@ fn check_at(
       for i in 0..<s_params.length() {
         // Contravariant: target param flows into source param.
         if !is_assignable_to(t_params[i], s_params[i]) {
-          check_at(
-            t_params[i], s_params[i], "\{path}.param[\{i}]", acc,
-          )
+          check_at(t_params[i], s_params[i], "\{path}.param[\{i}]", acc)
           found = true
         }
       }

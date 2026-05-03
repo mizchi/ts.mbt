@@ -11,10 +11,7 @@
 // method-shorthand parameters are bivariant.
 
 ///|
-pub fn is_assignable_to(
-  source : @ast.TsType,
-  target : @ast.TsType,
-) -> Bool {
+pub fn is_assignable_to(source : @ast.TsType, target : @ast.TsType) -> Bool {
   is_assignable_to_inner(source, target, false)
 }
 
@@ -119,7 +116,8 @@ fn is_assignable_to_inner(
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
     // Compound covariance/contravariance.
-    (Array(s_inner), Array(t_inner)) => is_assignable_to_inner(s_inner, t_inner, bivariant_params)
+    (Array(s_inner), Array(t_inner)) =>
+      is_assignable_to_inner(s_inner, t_inner, bivariant_params)
     (Tuple(s_items), Tuple(t_items)) => {
       if s_items.length() != t_items.length() {
         return false

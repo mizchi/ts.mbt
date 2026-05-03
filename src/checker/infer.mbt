@@ -87,11 +87,7 @@ pub fn match_infer_pattern(
           Array(rest_inner) =>
             match infer_marker_name(rest_inner) {
               Some(rest_name) =>
-                return bind_inferred_type(
-                  bindings,
-                  rest_name,
-                  Tuple(s_params),
-                ) &&
+                return bind_inferred_type(bindings, rest_name, Tuple(s_params)) &&
                   match_infer_pattern(s_ret, p_ret, bindings)
               None => {
                 for sp in s_params {
@@ -209,10 +205,12 @@ pub fn substitute_inferred_type(
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for field in fields {
         let (key, value) = field
-        out.push((
-          substitute_inferred_type(key, bindings),
-          substitute_inferred_type(value, bindings),
-        ))
+        out.push(
+          (
+            substitute_inferred_type(key, bindings),
+            substitute_inferred_type(value, bindings),
+          ),
+        )
       }
       Object(out)
     }

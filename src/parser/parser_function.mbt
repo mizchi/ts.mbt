@@ -1054,7 +1054,14 @@ pub fn Parser::parse_interface(
   }
   let _ = self.expect(RBrace)
   self.restore_local_type_param_bounds(local_type_param_bound_len)
-  { name, type_params, extends_names, fields, readonly_fields, index_signatures }
+  {
+    name,
+    type_params,
+    extends_names,
+    fields,
+    readonly_fields,
+    index_signatures,
+  }
 }
 
 ///|
@@ -1229,7 +1236,8 @@ fn type_alias_to_interface(type_alias : @ast.TsTypeAlias) -> @ast.TsInterface? {
   // Object bodies.
   let body = if type_alias.type_param_bounds.length() > 0 {
     substitute_alias_param_bounds(
-      type_alias.type_, type_alias.type_param_bounds,
+      type_alias.type_,
+      type_alias.type_param_bounds,
     )
   } else {
     type_alias.type_

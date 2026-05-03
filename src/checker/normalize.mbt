@@ -76,10 +76,7 @@ pub fn simplify_union(members : Array[@ast.TsType]) -> Array[@ast.TsType] {
 }
 
 ///|
-fn flatten_into(
-  members : Array[@ast.TsType],
-  acc : Array[@ast.TsType],
-) -> Unit {
+fn flatten_into(members : Array[@ast.TsType], acc : Array[@ast.TsType]) -> Unit {
   for m in members {
     match m {
       Union(inner) => flatten_into(inner, acc)

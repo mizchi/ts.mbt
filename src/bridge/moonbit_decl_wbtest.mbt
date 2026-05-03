@@ -1753,13 +1753,9 @@ async test "bridge: emit MoonBit declarations from Promise-returning APIs" {
     }
   }
   assert_true(
-    actual.contains(
-      "declare pub fn fetchLabel(id : String) -> Promise[String]",
-    ),
+    actual.contains("declare pub fn fetchLabel(id : String) -> Promise[String]"),
   )
-  assert_true(
-    actual.contains("declare pub fn fetchCount() -> Promise[Double]"),
-  )
+  assert_true(actual.contains("declare pub fn fetchCount() -> Promise[Double]"))
   // Bridge packages now ship a self-contained `declare pub type Promise[X]`
   // forward declaration so they don't depend on `mizchi/js/core::Promise`.
   assert_true(actual.contains("declare pub type Promise[X]"))
@@ -2251,9 +2247,7 @@ async test "bridge: emit MoonBit declarations sanitizes reserved exported functi
     ),
   )
   assert_true(
-    actual.contains(
-      "declare pub fn use_(promise : Promise[String]) -> String",
-    ),
+    actual.contains("declare pub fn use_(promise : Promise[String]) -> String"),
   )
   assert_true(
     actual.contains("declare pub fn forwardRef(component : JSValue) -> JSValue"),

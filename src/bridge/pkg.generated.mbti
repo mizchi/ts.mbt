@@ -7,6 +7,8 @@ import {
 }
 
 // Values
+pub fn apply_oracle_resolutions(@ast.TsModule, Map[String, @ast.TsType]) -> Unit
+
 pub async fn collect_moonbit_ts_scaffold_unsupported_exports(String) -> Array[String] raise ModuleGraphError
 
 pub async fn emit_moonbit_decl_from_entry_path(String) -> String raise ModuleGraphError
@@ -41,9 +43,13 @@ pub async fn normalize_moonbit_generated_typescript_decl_from_entry_path(String)
 
 pub fn parse_typescript_import_rewrite_map_source(String) -> Map[String, String]?
 
+pub async fn read_oracle_cache(String) -> Map[String, @ast.TsType]
+
 pub fn tagged_union_array_constructor_name(@ast.TsType) -> String?
 
 pub fn tagged_union_bridge_js_converter_decls(BridgeTaggedUnionDecl) -> String?
+
+pub fn tagged_union_bridge_js_converter_decls_with_nested(BridgeTaggedUnionDecl, Map[String, BridgeTaggedUnionDecl]) -> String?
 
 pub fn tagged_union_case_discriminator(@ast.TsType) -> TaggedUnionCaseDiscriminator?
 
@@ -66,6 +72,8 @@ pub fn tagged_union_named_constructor_name(String) -> String?
 pub fn tagged_union_primitive_constructor_name(@ast.TsType) -> String?
 
 pub fn tagged_union_to_js_expression(BridgeTaggedUnionDecl, String) -> String
+
+pub fn tagged_union_to_js_expression_with_nested(BridgeTaggedUnionDecl, String, Map[String, BridgeTaggedUnionDecl]) -> String
 
 pub fn tagged_union_to_js_function_name(String) -> String
 

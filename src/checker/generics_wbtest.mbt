@@ -2,9 +2,7 @@
 fn make_generic_resolver(
   table : Map[String, AliasBinding],
 ) -> (String) -> AliasBinding? {
-  fn(name) {
-    table.get(name)
-  }
+  fn(name) { table.get(name) }
 }
 
 ///|
@@ -32,11 +30,7 @@ test "is_assignable_to_with_generics: substitutes type params on Applied" {
   )
   // Number is NOT assignable to Maybe<string>
   assert_false(
-    is_assignable_to_with_generics(
-      Number,
-      Applied("Maybe", [String_]),
-      resolve,
-    ),
+    is_assignable_to_with_generics(Number, Applied("Maybe", [String_]), resolve),
   )
 }
 
@@ -81,11 +75,7 @@ test "is_assignable_to_with_generics: arity mismatch leaves Applied opaque" {
   let resolve = make_generic_resolver(table)
   // 0 args — substitution cannot proceed; falls back to nominal Applied match.
   assert_false(
-    is_assignable_to_with_generics(
-      String_,
-      Applied("Maybe", []),
-      resolve,
-    ),
+    is_assignable_to_with_generics(String_, Applied("Maybe", []), resolve),
   )
 }
 
@@ -289,10 +279,6 @@ test "is_assignable_to_with_generics: cycle through generics is safe" {
   let resolve = make_generic_resolver(table)
   // After cycle detection the body collapses to Any — flows freely.
   assert_true(
-    is_assignable_to_with_generics(
-      Applied("Loop", [String_]),
-      String_,
-      resolve,
-    ),
+    is_assignable_to_with_generics(Applied("Loop", [String_]), String_, resolve),
   )
 }

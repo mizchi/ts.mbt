@@ -83,6 +83,8 @@ pub impl Show for TsClassDecl
 
 pub(all) struct TsClassMethodDecl {
   name : String
+  type_params : Array[String]
+  type_param_bounds : Array[(String, TsType)]
   params : Array[(String, TsType)]
   return_type : TsType
   is_static : Bool
@@ -228,6 +230,7 @@ pub(all) struct TsInterface {
   extends_names : Array[String]
   fields : Array[(String, TsType)]
   readonly_fields : Array[String]
+  index_signatures : Array[(TsType, TsType)]
 } derive(@debug.Debug)
 pub impl Show for TsInterface
 
@@ -357,6 +360,7 @@ pub(all) enum TsType {
   Named(String)
   Applied(String, Array[TsType])
   IndexedAccess(TsType, TsType)
+  TemplateLiteralType(Array[String], Array[TsType])
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
 

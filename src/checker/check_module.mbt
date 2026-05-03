@@ -271,7 +271,10 @@ fn iface_extends_reaches(
       if iface.name == name {
         visited.push(name)
         let reached = iface_extends_reaches(
-          module_, target, iface.extends_names, visited,
+          module_,
+          target,
+          iface.extends_names,
+          visited,
         )
         let _ = visited.pop()
         if reached {
@@ -296,9 +299,11 @@ fn check_arity(
         match arities.get(name) {
           Some(expected) =>
             if expected != args.length() {
-              let already = issues.iter().any(fn(i) {
-                i.kind == TypeAliasArityMismatch && i.name == name
-              })
+              let already = issues
+                .iter()
+                .any(fn(i) {
+                  i.kind == TypeAliasArityMismatch && i.name == name
+                })
               if !already {
                 issues.push({
                   kind: TypeAliasArityMismatch,

@@ -138,9 +138,7 @@ test "check_module: detects duplicate class instance properties" {
     is_constructible: true,
   })
   let report = check_module(m)
-  let dups = report.issues.filter(fn(i) {
-    i.kind == ClassPropertyDuplicate
-  })
+  let dups = report.issues.filter(fn(i) { i.kind == ClassPropertyDuplicate })
   assert_eq(dups.length(), 1)
   assert_eq(dups[0].name, "Counter.value")
 }
@@ -161,9 +159,7 @@ test "check_module: instance and static with same name is OK" {
     is_constructible: true,
   })
   let report = check_module(m)
-  let dups = report.issues.filter(fn(i) {
-    i.kind == ClassPropertyDuplicate
-  })
+  let dups = report.issues.filter(fn(i) { i.kind == ClassPropertyDuplicate })
   assert_eq(dups.length(), 0)
 }
 
@@ -206,9 +202,7 @@ test "check_module: detects interface extends cycle" {
     index_signatures: [],
   })
   let report = check_module(m)
-  let cycles = report.issues.filter(fn(i) {
-    i.kind == InterfaceExtendsCycle
-  })
+  let cycles = report.issues.filter(fn(i) { i.kind == InterfaceExtendsCycle })
   assert_eq(cycles.length(), 2)
 }
 
@@ -232,9 +226,7 @@ test "check_module: terminating extends chain is fine" {
     index_signatures: [],
   })
   let report = check_module(m)
-  let cycles = report.issues.filter(fn(i) {
-    i.kind == InterfaceExtendsCycle
-  })
+  let cycles = report.issues.filter(fn(i) { i.kind == InterfaceExtendsCycle })
   assert_eq(cycles.length(), 0)
 }
 
@@ -242,11 +234,7 @@ test "check_module: terminating extends chain is fine" {
 test "check_module: detects duplicate interface fields" {
   let m = empty_module_for_check()
   m.interfaces.push(
-    iface_for_check("User", [
-      ("id", String_),
-      ("name", String_),
-      ("id", Number),
-    ]),
+    iface_for_check("User", [("id", String_), ("name", String_), ("id", Number)]),
   )
   let report = check_module(m)
   let dup_fields = report.issues.filter(fn(i) {
@@ -274,17 +262,11 @@ test "check_module: detects type alias arity mismatch" {
   let m = empty_module_for_check()
   // type Box<T> = { value: T };
   m.type_aliases.push(
-    alias_for_check(
-      "Box",
-      ["T"],
-      Object([(Literal("value"), Named("T"))]),
-    ),
+    alias_for_check("Box", ["T"], Object([(Literal("value"), Named("T"))])),
   )
   // interface User { box: Box<string, number>; }  // wrong arity
   m.interfaces.push(
-    iface_for_check("User", [
-      ("box", Applied("Box", [String_, Number])),
-    ]),
+    iface_for_check("User", [("box", Applied("Box", [String_, Number]))]),
   )
   let report = check_module(m)
   let arity_issues = report.issues.filter(fn(i) {
@@ -298,11 +280,7 @@ test "check_module: detects type alias arity mismatch" {
 test "check_module: matching arity does not surface arity issue" {
   let m = empty_module_for_check()
   m.type_aliases.push(
-    alias_for_check(
-      "Box",
-      ["T"],
-      Object([(Literal("value"), Named("T"))]),
-    ),
+    alias_for_check("Box", ["T"], Object([(Literal("value"), Named("T"))])),
   )
   m.interfaces.push(
     iface_for_check("User", [("box", Applied("Box", [String_]))]),

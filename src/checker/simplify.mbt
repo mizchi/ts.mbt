@@ -118,10 +118,7 @@ fn simplify_indexed_access(t : @ast.TsType) -> @ast.TsType {
         Object(fields) => {
           for f in fields {
             match f.0 {
-              Literal(field_name) =>
-                if field_name == key_name {
-                  return f.1
-                }
+              Literal(field_name) => if field_name == key_name { return f.1 }
               _ => ()
             }
           }

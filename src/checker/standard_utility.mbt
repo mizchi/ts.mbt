@@ -30,12 +30,7 @@ pub fn standard_utility_types() -> Map[String, AliasBinding] {
   // type NonNullable<T> = T extends null | undefined ? never : T
   table["NonNullable"] = {
     type_params: ["T"],
-    body: Conditional(
-      Named("T"),
-      Union([Null, Undefined]),
-      Never,
-      Named("T"),
-    ),
+    body: Conditional(Named("T"), Union([Null, Undefined]), Never, Named("T")),
   }
 
   // type ReturnType<F> = F extends (...args: any[]) => infer R ? R : any
@@ -54,10 +49,7 @@ pub fn standard_utility_types() -> Map[String, AliasBinding] {
     type_params: ["F"],
     body: Conditional(
       Named("F"),
-      Func(
-        [Array(Applied("__tsmbt_infer", [Named("P")]))],
-        Any,
-      ),
+      Func([Array(Applied("__tsmbt_infer", [Named("P")]))], Any),
       Named("P"),
       Never,
     ),

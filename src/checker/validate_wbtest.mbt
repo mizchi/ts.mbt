@@ -13,7 +13,10 @@ fn empty_module() -> @ast.TsModule {
 }
 
 ///|
-fn iface(name : String, fields : Array[(String, @ast.TsType)]) -> @ast.TsInterface {
+fn iface(
+  name : String,
+  fields : Array[(String, @ast.TsType)],
+) -> @ast.TsInterface {
   {
     name,
     type_params: [],
@@ -32,9 +35,7 @@ fn ta_(name : String, body : @ast.TsType) -> @ast.TsTypeAlias {
 ///|
 test "validate_module: clean module has no unresolved references" {
   let mod = empty_module()
-  mod.interfaces.push(
-    iface("User", [("id", String_), ("age", Number)]),
-  )
+  mod.interfaces.push(iface("User", [("id", String_), ("age", Number)]))
   let unresolved = unresolved_type_references(mod)
   assert_eq(unresolved.length(), 0)
 }

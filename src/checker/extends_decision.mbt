@@ -15,10 +15,7 @@
 // structural decision.
 
 ///|
-pub fn extends_decision(
-  source : @ast.TsType,
-  target : @ast.TsType,
-) -> Bool? {
+pub fn extends_decision(source : @ast.TsType, target : @ast.TsType) -> Bool? {
   if source == target {
     return Some(true)
   }

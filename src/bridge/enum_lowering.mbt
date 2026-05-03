@@ -139,13 +139,13 @@ fn enum_lowering_apply_string_intrinsic(
   match intrinsic {
     "Capitalize" =>
       if head >= 'a' && head <= 'z' {
-        Some(((head.to_int() - 32).unsafe_to_char()).to_string() + rest)
+        Some((head.to_int() - 32).unsafe_to_char().to_string() + rest)
       } else {
         Some(value)
       }
     "Uncapitalize" =>
       if head >= 'A' && head <= 'Z' {
-        Some(((head.to_int() + 32).unsafe_to_char()).to_string() + rest)
+        Some((head.to_int() + 32).unsafe_to_char().to_string() + rest)
       } else {
         Some(value)
       }
@@ -165,8 +165,7 @@ fn enum_lowering_resolve_literal_value_set(
 ) -> Array[String]? {
   match type_ {
     @ast.TsType::Literal(value) => Some([value])
-    @ast.TsType::Union(items) =>
-      enum_lowering_string_literal_values(items)
+    @ast.TsType::Union(items) => enum_lowering_string_literal_values(items)
     @ast.TsType::Applied(name, [inner]) =>
       match enum_lowering_resolve_literal_value_set(inner) {
         Some(values) => {

@@ -56,10 +56,12 @@ fn expand_aliases(
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {
-        out.push((
-          expand_aliases(f.0, resolve, visited),
-          expand_aliases(f.1, resolve, visited),
-        ))
+        out.push(
+          (
+            expand_aliases(f.0, resolve, visited),
+            expand_aliases(f.1, resolve, visited),
+          ),
+        )
       }
       Object(out)
     }

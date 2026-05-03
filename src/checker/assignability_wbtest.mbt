@@ -52,9 +52,7 @@ test "is_assignable_to: identical literals are assignable, distinct literals are
 
 ///|
 test "is_assignable_to: source union requires every member to be assignable" {
-  assert_true(
-    is_assignable_to(Union([Literal("a"), Literal("b")]), String_),
-  )
+  assert_true(is_assignable_to(Union([Literal("a"), Literal("b")]), String_))
   assert_false(is_assignable_to(Union([String_, Number]), String_))
 }
 
@@ -93,14 +91,12 @@ test "is_assignable_to: tuples require matching length and assignable elements" 
     is_assignable_to(Tuple([String_, Number]), Tuple([String_, Number])),
   )
   assert_true(
-    is_assignable_to(Tuple([Literal("a"), NumberLiteral("1")]), Tuple([
-      String_,
-      Number,
-    ])),
+    is_assignable_to(
+      Tuple([Literal("a"), NumberLiteral("1")]),
+      Tuple([String_, Number]),
+    ),
   )
-  assert_false(
-    is_assignable_to(Tuple([String_]), Tuple([String_, Number])),
-  )
+  assert_false(is_assignable_to(Tuple([String_]), Tuple([String_, Number])))
   assert_false(is_assignable_to(Tuple([String_, Number]), Tuple([String_])))
 }
 

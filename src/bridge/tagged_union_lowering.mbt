@@ -36,9 +36,9 @@ pub fn tagged_union_named_constructor_name(name : String) -> String? {
   // generated `pub(all) enum` body even via a `pub extern type` shim.
   for c in name {
     if !((c >= 'A' && c <= 'Z') ||
-        (c >= 'a' && c <= 'z') ||
-        (c >= '0' && c <= '9') ||
-        c == '_') {
+      (c >= 'a' && c <= 'z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_') {
       return None
     }
   }
@@ -52,7 +52,8 @@ pub fn tagged_union_array_constructor_name(inner : @ast.TsType) -> String? {
     @ast.TsType::Int => Some("IntArray")
     @ast.TsType::String_ => Some("StringArray")
     @ast.TsType::Boolean => Some("BoolArray")
-    @ast.TsType::Named(name) => tagged_union_named_constructor_name(name + "Array")
+    @ast.TsType::Named(name) =>
+      tagged_union_named_constructor_name(name + "Array")
     _ => None
   }
 }
@@ -138,6 +139,7 @@ pub(all) struct BridgeTaggedUnionDecl {
 /// Returns `None` so callers fall back to existing widening behavior; this
 /// preserves the no-op contract of the current commit until later steps wire
 /// the decl through bridge emission.
+
 ///|
 /// Discrimination strategy for one heterogeneous-union case at the JS
 /// boundary. The detector restricts inner types to runtime-discriminable
@@ -255,7 +257,11 @@ pub fn tagged_union_from_js_expression(
     } else {
       body = body + "else if (" + predicate + ") "
     }
-    body = body + "return { \"$tag\": " + i.to_string() + ", \"_0\": " + expr +
+    body = body +
+      "return { \"$tag\": " +
+      i.to_string() +
+      ", \"_0\": " +
+      expr +
       " }; "
   }
   body = body + "throw new Error(\"unexpected " + decl.name + " value\"); })()"
@@ -263,6 +269,7 @@ pub fn tagged_union_from_js_expression(
 }
 
 ///|
+
 ///|
 /// Render a `TsType` as MoonBit-side type text for a tagged-union case
 /// payload. Cases are restricted to primitive / `Named` / array-of-either,
@@ -323,7 +330,7 @@ fn tagged_union_to_snake_case(name : String) -> String {
       if i > 0 {
         out = out + "_"
       }
-      out = out + ((ch.to_int() + 32).unsafe_to_char()).to_string()
+      out = out + (ch.to_int() + 32).unsafe_to_char().to_string()
     } else {
       out = out + ch.to_string()
     }

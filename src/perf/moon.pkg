@@ -1,6 +1,0 @@
-import {
-  "moonbitlang/core/bench",
-  "mizchi/ts/parser" @parser,
-  "mizchi/ts/runtime" @runtime,
-  "mizchi/ts/aot" @aot,
-} for "test"

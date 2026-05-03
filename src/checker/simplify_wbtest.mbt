@@ -61,10 +61,7 @@ test "simplify_type_with: resolves alias before simplifying" {
   // type Box = { value: number; extra: number };
   // Then IndexedAccess(Named("Box"), Literal("value")) should reduce to number.
   let table : Map[String, @ast.TsType] = {
-    "Box": Object([
-      (Literal("value"), Number),
-      (Literal("extra"), Number),
-    ]),
+    "Box": Object([(Literal("value"), Number), (Literal("extra"), Number)]),
   }
   let resolve = fn(name) { table.get(name) }
   let t : @ast.TsType = IndexedAccess(Named("Box"), Literal("value"))

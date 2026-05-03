@@ -907,7 +907,10 @@ fn ffi_replace_this_token(rendered : String, owner_name : String) -> String {
   // Conservative: only rewrite ` This` and `>This` boundaries that appear in
   // generated MoonBit signatures (`-> This`, `> This`). The owner name is
   // already a sanitized type identifier so collision risk is bounded.
-  let mut result = rendered.replace(old="-> This?", new="-> " + owner_name + "?")
+  let mut result = rendered.replace(
+    old="-> This?",
+    new="-> " + owner_name + "?",
+  )
   result = result.replace(old="-> This\n", new="-> " + owner_name + "\n")
   result = result.replace(old="-> This)", new="-> " + owner_name + ")")
   if result.has_suffix("-> This") {
@@ -1071,7 +1074,11 @@ fn ffi_function_field_method_decl(
       let js_args : Array[String] = []
       for i, arg in args {
         js_args.push(
-          ffi_inline_js_arg_expr_with_state(Some(state), source_param_types[i], arg),
+          ffi_inline_js_arg_expr_with_state(
+            Some(state),
+            source_param_types[i],
+            arg,
+          ),
         )
       }
       let js_args_src = js_args.join(", ")
@@ -1160,7 +1167,9 @@ fn ffi_struct_decl_to_moonbit(
     }
     let raw_struct_field_type = ffi_struct_field_type_name(state, type_)
     // TypeScript `this` builder return -> owning struct.
-    let struct_field_type = ffi_replace_this_token(raw_struct_field_type, type_name)
+    let struct_field_type = ffi_replace_this_token(
+      raw_struct_field_type, type_name,
+    )
     lines.push("  \{field_name} : \{struct_field_type}")
     let force_method_wrapper = field_name == "_call_"
     if force_method_wrapper ||
@@ -1223,11 +1232,9 @@ fn ffi_index_signature_accessor_decls(
   } else {
     value_name + "?"
   }
-  let getter =
-    "pub extern \"js\" fn \{type_name}::op_get(self : \{type_name}, key : \{key_name}) -> \{getter_return} =\n" +
+  let getter = "pub extern \"js\" fn \{type_name}::op_get(self : \{type_name}, key : \{key_name}) -> \{getter_return} =\n" +
     "  #| (self, key) => { const v = self[key]; return v === undefined ? null : v; }"
-  let setter =
-    "pub extern \"js\" fn \{type_name}::op_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit =\n" +
+  let setter = "pub extern \"js\" fn \{type_name}::op_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit =\n" +
     "  #| (self, key, value) => { self[key] = value; }"
   Some([getter, setter])
 }
@@ -2076,11 +2083,13 @@ fn ffi_type_alias_constructors(
         if !seen_names.contains(ctor.fn_name) {
           seen_names.push(ctor.fn_name)
           let final_ctor = match tagged_decl {
-            Some(_) => {
-              ..ctor,
-              bridge_expr: "{ \"$tag\": " + index.to_string() +
+            Some(_) =>
+              {
+                ..ctor,
+                bridge_expr: "{ \"$tag\": " +
+                index.to_string() +
                 ", \"_0\": value }",
-            }
+              }
             None => ctor
           }
           ctors.push(final_ctor)
@@ -2862,7 +2871,9 @@ fn ffi_class_method_decl_to_moonbit(
     let safe_name = ffi_sanitize_identifier(name, "arg")
     let safe_type = ffi_type_name(state, type_)
     arg_names.push(safe_name)
-    js_args.push(ffi_inline_js_arg_expr_with_state(Some(state), type_, safe_name))
+    js_args.push(
+      ffi_inline_js_arg_expr_with_state(Some(state), type_, safe_name),
+    )
     params.push("\{safe_name} : \{safe_type}")
   }
   let raw_return_type = ffi_type_name(state, class_method.return_type)
@@ -3891,7 +3902,6 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         match inner_named {
           Some(inner_name) => {
             let _ = ffi_mark_external_type(state, inner_name)
-
           }
           None => ()
         }
@@ -3904,7 +3914,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     }
     match
       tagged_union_bridge_js_converter_decls_with_nested(
-        tagged.decl, state.tagged_union_decls_by_name,
+        tagged.decl,
+        state.tagged_union_decls_by_name,
       ) {
       Some(decls) => bridge_lines.push(decls)
       None =>
@@ -4858,7 +4869,8 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     }
     match
       tagged_union_bridge_js_converter_decls_with_nested(
-        decl, state.tagged_union_decls_by_name,
+        decl,
+        state.tagged_union_decls_by_name,
       ) {
       Some(decls) => bridge_lines.push(decls)
       None => ()

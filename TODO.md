@@ -1,5 +1,8 @@
 # TODO
 
+The wasm interpreter / codegen / AOT compiler that originally lived in this
+repo has been removed. Items below are scoped to the bridge generator only.
+
 ## Interop Bridge Quality Roadmap: 60% -> 90%
 
 Current assessment: the project is around 55-60% complete as a practical
@@ -801,84 +804,6 @@ Keep pushing real package support through `.d.ts` surface parsing and scaffold g
   - Minimized package fixtures live under `fixtures/resolver/project/node_modules/react` and `fixtures/resolver/project/node_modules/hono`; `just verify-scaffolds` now compiles/tests generated MoonBit packages against those package names.
 - [x] Keep JSX parser work deferred until `.d.ts` type-surface parsing is no longer the blocker.
   - Re-evaluate only if React/Hono support hits syntax that cannot be represented from declaration files alone.
-
-## Codegen Type Mismatch Bugs
-
-- [x] Re-verify the historical wasmtime mismatch regressions against the current codegen.
-  - `src/codegen/codegen_wbtest.mbt` now passes end-to-end under the current wasmtime-backed runner, including the previously tracked `if-else`, `int factorial`, `js simple arithmetic`, `typed module with nested scopes`, `switch`, `switch default only`, and `do-while` cases.
-  - The old hand-maintained mismatch list was stale and has been retired in favor of the executable regression suite.
-
-## Expansion Plan (easy + coverage mix)
-
-### Implemented (recent)
-- [x] Comma operator (Seq) codegen + compilability
-- [x] Logical `&&` / `||` short-circuit (i32/f64)
-- [x] Unary `void` (evaluate side effects, return undefined)
-- [x] `typeof` (restricted: only when operand type is statically known; return string literal)
-- [x] Logical assignments `&&=` / `||=` / `??=` (Var/Prop/Index variants)
-- [x] Template literals (untagged only, string-typed expressions only; desugar to concat)
-- [x] Full template literals (ToString coercion for non-strings)
-- [x] Computed property access in literals (const key only)
-- [x] Spread in array literals and known-signature function calls
-- [x] Conditional named function call expressions, e.g. `(flag ? f : g)(x)`
-- [x] IIFE call expressions for arrow/function expressions with expression or single-return block bodies
-  - Covered shapes now include zero-arg wrappers, multi-arg wrappers, named function IIFEs, nested IIFEs, and reusable function values when they are called directly without escaping.
-- [x] Local reusable function value aliases and conditional calls over local function values.
-  - Covered shapes include `const fn = inc; fn(x)` and
-    `(flag ? inc : dec)(x)` where `inc` / `dec` are local arrow or function
-    expression values.
-- [x] Static reassignment and conditional aliasing of local reusable function values.
-  - Covered shapes include `let fn = inc; fn = dec; fn(x)` and
-    `const fn = flag ? inc : dec; fn(x)` when both branches are local
-    function values.
-- [x] Inline conditional callees and assignment-expression function value calls.
-  - Covered shapes include
-    `(flag ? ((x) => x + 1) : ((x) => x - 1))(n)`,
-    `(fn = dec)(n)`, and `(fn = flag ? inc : dec)(n)` followed by later
-    `fn(...)` reuse.
-- [x] Static higher-order IIFE calls where local function values are passed as
-  inline parameters and called inside the IIFE body.
-  - Covered shapes include `((fn, x) => fn(x))(inc, n)` and the same pattern
-    through function expressions or conditional local function aliases.
-- [x] Static returned function-value calls where an inline IIFE returns a local
-  function value and the result is immediately called.
-  - Covered shapes include `((() => inc)())(n)`,
-    `((function () { return dec })())(n)`, `(((fn) => fn)(inc))(n)`, and
-    conditional returned aliases such as `((() => flag ? inc : dec)())(n)`.
-- [x] Static returned function values stored across statement boundaries.
-  - Covered shapes include `const fn = (() => inc)(); fn(n)`,
-    `const fn = ((value) => value)(inc); fn(n)`, conditional returned aliases,
-    and reassignment via `fn = (() => dec)()` before a later call.
-- [x] Static function values stored in data structures.
-  - Covered shapes include `const fns = [inc]; fns[0](n)`, `box.fn(n)`,
-    conditional static array indexes, returned function values inside object
-    fields, and reassigned object tables.
-- [x] Local function factories returning static function values across a local
-  function-expression boundary.
-  - Covered shapes include `choose(flag)(n)` where `choose` is an arrow or
-    function expression, factories returned from an IIFE, `const fn =
-    choose(flag); fn(n)`, and `const box = { fn: choose(flag) }; box.fn(n)`.
-- [x] Top-level factories returning top-level function references.
-  - Covered codegen shapes include `choose(flag)(n)`, `const fn =
-    choose(flag); fn(n)`, and `const box = { fn: choose(flag) }; box.fn(n)`
-    when `choose` returns top-level function references such as `inc` / `dec`.
-- [x] Module-aware compilability for top-level factory object storage.
-  - `can_compile_to_wasm_in_module(func, mod)` and the module-level analysis
-    rail now resolve `const box = { fn: choose(flag) }; box.fn(n)` when
-    `choose` returns top-level function references.
-- [x] Immutable captured values in returned local function values.
-  - Covered shapes include `const make = (base) => (x) => x + base; const fn =
-    make(seed); fn(n)`, function-expression factories, and object factories
-    that store captured returned functions in fields.
-
-### Next in order
-1. Continue from substitution-based immutable captures toward real closure
-   values that can cross top-level function boundaries, or add conservative
-   rejection tests for mutable captures.
-
-### Candidates (need more groundwork)
-- Arbitrary call expressions where function values escape, are reassigned, or
-  require captured mutable environments.
 
 ## Real-World MoonBit Package Probe
 

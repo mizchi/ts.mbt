@@ -158,10 +158,7 @@ test "match_infer_pattern: intersection pattern matches against intersection" {
     Named("A"),
     Applied("B", [infer_marker("X")]),
   ])
-  let source : @ast.TsType = Intersection([
-    Named("A"),
-    Applied("B", [String_]),
-  ])
+  let source : @ast.TsType = Intersection([Named("A"), Applied("B", [String_])])
   assert_true(match_infer_pattern(source, pattern, bindings))
   assert_eq(bindings.get("X"), Some(String_))
 }

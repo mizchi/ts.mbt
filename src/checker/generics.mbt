@@ -10,7 +10,7 @@
 // override stdlib utility shapes per-module.
 pub fn module_alias_resolver(
   module_ : @ast.TsModule,
-  include_standard~ : Bool = true,
+  include_standard? : Bool = true,
 ) -> (String) -> AliasBinding? {
   let table : Map[String, AliasBinding] = if include_standard {
     standard_utility_types()
@@ -104,10 +104,12 @@ fn expand_generic(
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {
-        out.push((
-          expand_generic(f.0, resolve, visited),
-          expand_generic(f.1, resolve, visited),
-        ))
+        out.push(
+          (
+            expand_generic(f.0, resolve, visited),
+            expand_generic(f.1, resolve, visited),
+          ),
+        )
       }
       Object(out)
     }
@@ -188,10 +190,9 @@ fn substitute_params(
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {
-        out.push((
-          substitute_params(f.0, bindings),
-          substitute_params(f.1, bindings),
-        ))
+        out.push(
+          (substitute_params(f.0, bindings), substitute_params(f.1, bindings)),
+        )
       }
       Object(out)
     }

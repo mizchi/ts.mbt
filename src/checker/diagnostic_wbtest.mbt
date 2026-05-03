@@ -32,10 +32,7 @@ test "check_assignable: object field mismatch reports field path" {
 ///|
 test "check_assignable: missing required field reports the field name" {
   let s : @ast.TsType = Object([(Literal("x"), Number)])
-  let t : @ast.TsType = Object([
-    (Literal("x"), Number),
-    (Literal("y"), Number),
-  ])
+  let t : @ast.TsType = Object([(Literal("x"), Number), (Literal("y"), Number)])
   let issues = check_assignable(s, t)
   assert_eq(issues.length(), 1)
   assert_eq(issues[0].path, ".y")

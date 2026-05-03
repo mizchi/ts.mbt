@@ -164,23 +164,8 @@ async fn wbtest_prepare_tmp_neverthrow_like_fixture(
 }
 
 ///|
-test "command_help_lines hides unstable wasm commands behind experimental names" {
+test "command_help_lines lists bridge-related commands" {
   let lines = command_help_lines()
-  assert_true(
-    lines.contains(
-      "  experimental-emit-gc <file> [out] Emit experimental wasm-gc binary (default: out.wasm)",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  experimental-analyze <file> Analyze experimental AOT compilability of functions",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  experimental-aot-check <file> Alias for experimental-analyze",
-    ),
-  )
   assert_true(
     lines.contains(
       "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
@@ -236,27 +221,19 @@ test "command_help_lines hides unstable wasm commands behind experimental names"
       "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] [--module-spec <specifier>] [--diagnostics <path>] [--strict] Generate a complete build-backed bridge scaffold in either direction",
     ),
   )
-  assert_true(
-    lines.contains(
-      "  benchmark-project <root> [limit] Benchmark local TS/.d.ts corpus coverage",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  benchmark-corpora [limit] Benchmark built-in local and optional real-world corpora",
-    ),
-  )
   assert_false(
-    lines.contains(
-      "  emit-gc <file> [out] Emit wasm-gc binary (default: out.wasm)",
-    ),
+    lines
+    .iter()
+    .any(fn(line) {
+      line.contains("experimental-emit-gc") ||
+      line.contains("experimental-analyze") ||
+      line.contains("experimental-aot-check") ||
+      line.contains("emit-gc ") ||
+      line.contains("test262") ||
+      line.contains("benchmark-project") ||
+      line.contains("benchmark-corpora")
+    }),
   )
-  assert_false(
-    lines.contains(
-      "  analyze <file>       Analyze AOT compilability of functions",
-    ),
-  )
-  assert_false(lines.contains("  aot-check <file>     Alias for analyze"))
 }
 
 ///|
@@ -746,18 +723,20 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
       "export interface Box<T> extends Show, Eq<Box<T>>, Hash, Comparable<Box<T>> {",
     ),
   )
-  assert_true(actual.contains("export function Box_unwrap<T>(self : Box<T>): T;"))
+  assert_true(
+    actual.contains("export function Box_unwrap<T>(self : Box<T>): T;"),
+  )
   assert_true(
     actual.contains(
       "export function Box_map<T, U>(self : Box<T>, fn_: (value: T) => U): Box<U>;",
     ),
   )
   assert_true(
-    actual.contains(
-      "export function Box_show_value<T>(self : Box<T>): string;",
-    ),
+    actual.contains("export function Box_show_value<T>(self : Box<T>): string;"),
   )
-  assert_true(actual.contains("export function Box_create<T>(value: T): Box<T>;"))
+  assert_true(
+    actual.contains("export function Box_create<T>(value: T): Box<T>;"),
+  )
   assert_true(actual.contains("export type Result<T, E> ="))
   assert_true(
     actual.contains(
@@ -1024,34 +1003,6 @@ async test "emit_typescript_facade_scaffold_from_mbti keeps root imports in faca
 }
 
 ///|
-async test "emit_typescript_decl_from_mbti_text keeps real analysis package output readable" {
-  let actual = emit_typescript_decl_from_mbti_text(
-    "src/analysis/pkg.generated.mbti",
-  ) catch {
-    @bridge.MbtiTypescriptDeclError::ReadError(msg)
-    | @bridge.MbtiTypescriptDeclError::ParseError(msg) =>
-      fail("Emit error: \{msg}")
-  }
-  assert_true(actual.contains("export type AnalysisResult<T> ="))
-  assert_true(actual.contains("export function AnalysisResult_is_ok<T>(self : AnalysisResult<T>):"))
-  assert_true(actual.contains("Eq<AnalysisErrorKind>"))
-  assert_false(actual.contains("debug.Debug"))
-  assert_true(actual.contains("& Show;"))
-  assert_true(
-    actual.contains(
-      "export function analyze_null_guard(value: ast.TsExpr): [string, boolean] | undefined;",
-    ),
-  )
-  assert_true(
-    actual.contains(
-      "export function analyze_typeof_guard(value: ast.TsExpr): [string, string] | undefined;",
-    ),
-  )
-  assert_false(actual.contains("(String, Bool)?"))
-  assert_false(actual.contains("Self["))
-}
-
-///|
 async test "emit_typescript_decl_text normalizes MoonBit generated d.ts" {
   let actual = emit_typescript_decl_text(
     "fixtures/typescript_decl/moonbit_generated/app.d.ts",
@@ -1225,112 +1176,6 @@ async test "emit_typescript_decl_text keeps conflicting optional members as inte
     actual.contains(
       "export function conflicting_optional_payload_result(): { name?: string } & { name: string } & { ok: boolean };",
     ),
-  )
-}
-
-///|
-async test "benchmark_ts_project summarizes fixture corpus" {
-  let result = benchmark_ts_project("fixtures/resolver/project/types", limit=64)
-  assert_true(result.total_files > 0)
-  assert_true(result.declaration_files > 0)
-  assert_true(result.module_source_files > 0)
-  assert_eq(result.module_parse_failed, 0)
-  assert_eq(result.decl_parse_failed, 0)
-  assert_eq(result.decl_emit_failed, 0)
-  assert_eq(result.decl_js_ffi_failed, 0)
-  let report = render_project_benchmark_report(result)
-  assert_true(report.contains("=== Project Benchmark ==="))
-  assert_true(report.contains("parse_module_block (.ts):"))
-  assert_true(report.contains("emit_moonbit_decl (.d.ts):"))
-  assert_true(report.contains("emit_moonbit_js_ffi (.d.ts):"))
-}
-
-///|
-async test "benchmark_ts_project summarizes jsx tsx fixture corpus" {
-  let result = benchmark_ts_project("fixtures/corpus/jsx-tsx", limit=64)
-  assert_true(result.total_files > 0)
-  assert_eq(result.declaration_files, 0)
-  assert_true(result.module_source_files > 0)
-  assert_eq(result.module_parse_failed, 0)
-  let report = render_project_benchmark_report(result)
-  assert_true(report.contains("fixtures/corpus/jsx-tsx"))
-  assert_true(report.contains("parse_module_block (.ts):"))
-}
-
-///|
-async test "benchmark_project_corpora skips missing optional roots" {
-  let runs = benchmark_project_corpora(
-    [
-      {
-        name: "fixture-jsx-tsx",
-        root: "fixtures/corpus/jsx-tsx",
-        description: "repo-local TSX corpus",
-        optional: false,
-      },
-      {
-        name: "missing-optional",
-        root: "fixtures/corpus/__missing__",
-        description: "missing corpus",
-        optional: true,
-      },
-    ],
-    limit=64,
-  )
-  assert_eq(runs.length(), 1)
-  assert_eq(runs[0].corpus.name, "fixture-jsx-tsx")
-  assert_eq(runs[0].result.module_parse_failed, 0)
-  let report = render_project_benchmark_corpora_report(runs)
-  assert_true(report.contains("=== Benchmark Corpora ==="))
-  assert_true(report.contains("fixture-jsx-tsx"))
-  assert_false(report.contains("missing-optional"))
-}
-
-///|
-async test "benchmark_ts_project skips node_modules and reports parse failures" {
-  let root = wbtest_tmp_project_benchmark_root("bad")
-  @async.with_task_group(async fn(group) {
-    group.add_defer(async fn() { let _ = try? @fs.rmdir(root, recursive=true) })
-    let src_dir = wbtest_join_path(root, "src")
-    let node_modules_dir = wbtest_join_path(root, "node_modules/pkg")
-    let _ = try? @fs.rmdir(root, recursive=true)
-    @fs.mkdir(root, permission=0o755)
-    @fs.mkdir(src_dir, permission=0o755)
-    @fs.mkdir(wbtest_join_path(root, "node_modules"), permission=0o755)
-    @fs.mkdir(node_modules_dir, permission=0o755)
-    @fs.write_file(
-      wbtest_join_path(src_dir, "good.ts"),
-      "export const good = 1;\n",
-      create=0o644,
-    )
-    @fs.write_file(
-      wbtest_join_path(src_dir, "bad.ts"),
-      "export const = 1;\n",
-      create=0o644,
-    )
-    @fs.write_file(
-      wbtest_join_path(node_modules_dir, "ignored.ts"),
-      "export const ignored = 1;\n",
-      create=0o644,
-    )
-    let result = benchmark_ts_project(root, limit=16)
-    assert_eq(result.total_files, 2)
-    assert_eq(result.module_source_files, 2)
-    assert_eq(result.module_parse_ok, 1)
-    assert_eq(result.module_parse_failed, 1)
-    assert_true(result.failures.length() > 0)
-    let report = render_project_benchmark_report(result)
-    assert_true(report.contains("bad.ts"))
-    assert_false(report.contains("ignored.ts"))
-  })
-}
-
-///|
-async test "resolve_module_path uses parser node module resolver" {
-  let resolved = resolve_module_path(
-    "fixtures/resolver/project/src/nested/deep/app.ts", "pkg-exports",
-  )
-  assert_eq(
-    resolved, "fixtures/resolver/project/node_modules/pkg-exports/dist/index.js",
   )
 }
 

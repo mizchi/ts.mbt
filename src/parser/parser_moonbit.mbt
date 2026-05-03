@@ -508,9 +508,9 @@ fn inline_union_named_constructor_name(name : String) -> String? {
   }
   for c in name {
     if !((c >= 'A' && c <= 'Z') ||
-        (c >= 'a' && c <= 'z') ||
-        (c >= '0' && c <= '9') ||
-        c == '_') {
+      (c >= 'a' && c <= 'z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_') {
       return None
     }
   }
@@ -948,7 +948,10 @@ pub fn emit_moonbit_decl_with_sections(
   force_jsvalue : Bool,
 ) -> String {
   emit_moonbit_decl_with_sections_and_types(
-    module_, extra_sections, [], force_jsvalue,
+    module_,
+    extra_sections,
+    [],
+    force_jsvalue,
   )
 }
 

@@ -5,17 +5,12 @@ import {
   "moonbitlang/core/env",
   "moonbitlang/core/json" @json,
   "moonbitlang/core/string",
-  "moonbitlang/core/encoding/utf8",
-  "mizchi/ts/ast" @ast,
-  "mizchi/ts/runtime" @runtime,
   "mizchi/ts/parser" @parser,
-  "mizchi/ts/codegen" @codegen,
-  "mizchi/wasmx/encode" @encode,
-  "mizchi/ts/analysis" @analysis,
   "mizchi/ts/bridge" @bridge,
 }
 
 import {
+  "mizchi/ts/ast" @ast,
   "mizchi/ts/checker" @checker,
 } for "wbtest"
 

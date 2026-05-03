@@ -107,11 +107,7 @@ test "collect_referenced_names: deduplicates" {
 
 ///|
 test "simplify_union: flattens nested unions before deduplication" {
-  let raw : Array[@ast.TsType] = [
-    String_,
-    Union([String_, Number]),
-    Number,
-  ]
+  let raw : Array[@ast.TsType] = [String_, Union([String_, Number]), Number]
   let simplified = simplify_union(raw)
   assert_eq(simplified.length(), 2)
   assert_true(simplified.contains(String_))
@@ -139,9 +135,7 @@ test "type_contains_boolean: traverses Promise/Array/Union/Intersection" {
   assert_true(type_contains_boolean(Boolean))
   assert_true(type_contains_boolean(BooleanLiteral(true)))
   assert_true(type_contains_boolean(Union([String_, Boolean])))
-  assert_true(
-    type_contains_boolean(Applied("Promise", [Boolean])),
-  )
+  assert_true(type_contains_boolean(Applied("Promise", [Boolean])))
   assert_true(type_contains_boolean(Array(Boolean)))
   assert_false(type_contains_boolean(Union([String_, Number])))
 }
@@ -167,9 +161,7 @@ test "type_contains_string_array: matches Array(string-like) variants" {
 ///|
 test "type_contains_named: looks through union members only" {
   assert_true(type_contains_named(Named("Foo"), ["Foo"]))
-  assert_true(
-    type_contains_named(Union([String_, Named("Foo")]), ["Foo"]),
-  )
+  assert_true(type_contains_named(Union([String_, Named("Foo")]), ["Foo"]))
   // Does NOT recurse into Array/Tuple/Object — by design.
   assert_false(type_contains_named(Array(Named("Foo")), ["Foo"]))
 }

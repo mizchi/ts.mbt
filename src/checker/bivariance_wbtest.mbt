@@ -63,9 +63,7 @@ test "is_assignable_to_bivariant: nested function fields use the same mode" {
       Func([Union([NumberLiteral("1"), NumberLiteral("2")])], Void),
     ),
   ])
-  let t : @ast.TsType = Object([
-    (Literal("handler"), Func([Number], Void)),
-  ])
+  let t : @ast.TsType = Object([(Literal("handler"), Func([Number], Void))])
   assert_false(is_assignable_to(s, t))
   assert_true(is_assignable_to_bivariant(s, t))
 }

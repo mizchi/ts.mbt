@@ -222,7 +222,11 @@ pub fn classify_optional_like_union(
         if has_any {
           // `T | string | any | undefined`: the explicit `any` swallows the
           // narrower members regardless of the rest.
-          if is_optional { Some((Any, true)) } else { None }
+          if is_optional {
+            Some((Any, true))
+          } else {
+            None
+          }
         } else if is_optional {
           // `T | U | undefined` (multiple distinct concretes plus the
           // optional marker). Returning `(Any, true)` here would force every

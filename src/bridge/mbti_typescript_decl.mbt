@@ -256,7 +256,7 @@ fn mbti_heuristic_param_name(ty_src : String) -> String? {
     "boolean" => Some("flag")
     "bigint" => Some("n")
     "void" | "Unit" => Some("v")
-    _ => {
+    _ =>
       if core_ty.has_prefix("Array<") || core_ty.has_prefix("ReadonlyArray<") {
         Some("items")
       } else if core_ty.has_prefix("Map<") || core_ty.has_prefix("ReadonlyMap<") {
@@ -268,7 +268,6 @@ fn mbti_heuristic_param_name(ty_src : String) -> String? {
       } else {
         None
       }
-    }
   }
 }
 
@@ -2429,7 +2428,9 @@ fn parse_mbti_params(
           "self"
         } else {
           mbti_dedup_param_name(
-            mbti_positional_param_name(ty, idx, total), used_names, idx,
+            mbti_positional_param_name(ty, idx, total),
+            used_names,
+            idx,
           )
         }
         used_names.push(param_name)
@@ -2744,7 +2745,14 @@ fn parse_mbti_function_signature(
               )
             None =>
               Some(
-                (None, cleaned_name, type_params, params_src, return_ty, is_async),
+                (
+                  None,
+                  cleaned_name,
+                  type_params,
+                  params_src,
+                  return_ty,
+                  is_async,
+                ),
               )
           }
         }
@@ -3138,7 +3146,8 @@ fn parse_trait_block_decl(
               owner_type_param_names,
             )
             let instance_params : Array[MbtiParam] = []
-            let instance_total = if params.length() > 0 && params[0].name == "self" {
+            let instance_total = if params.length() > 0 &&
+              params[0].name == "self" {
               params.length() - 1
             } else {
               params.length()
@@ -3150,7 +3159,9 @@ fn parse_trait_block_decl(
               }
               let normalized_name = if mbti_is_generated_param_name(param.name) {
                 mbti_positional_param_name(
-                  param.ty, instance_params.length(), instance_total,
+                  param.ty,
+                  instance_params.length(),
+                  instance_total,
                 )
               } else {
                 param.name
@@ -3709,7 +3720,9 @@ fn render_struct_decl(
   }
   let interface_section = "export interface \{struct_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
   let flat_methods = render_flat_instance_methods(
-    struct_decl.name, type_param_suffix, methods,
+    struct_decl.name,
+    type_param_suffix,
+    methods,
   )
   if flat_methods == "" {
     interface_section
@@ -3834,7 +3847,9 @@ fn render_enum_like_decl(
     "export type \{enum_decl.name}\{type_param_suffix} = \{enum_decl.union_body};\{extract_suffix}"
   }
   let flat_methods = render_flat_instance_methods(
-    enum_decl.name, type_param_suffix, methods,
+    enum_decl.name,
+    type_param_suffix,
+    methods,
   )
   if flat_methods == "" {
     alias_section
@@ -3855,9 +3870,7 @@ fn render_enum_like_decl(
 ///
 /// Returns an empty string when the enum has no variants (defensive — the
 /// regular emission path already rejects empty enum bodies upstream).
-fn render_enum_variant_extract_aliases(
-  enum_decl : MbtiEnumLikeDecl,
-) -> String {
+fn render_enum_variant_extract_aliases(enum_decl : MbtiEnumLikeDecl) -> String {
   if enum_decl.variant_names.length() == 0 {
     return ""
   }
@@ -3901,7 +3914,9 @@ fn render_type_alias_decl(
     let brand = mbti_branded_empty_interface_body(alias_decl.name)
     let interface_section = "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{brand}\n}"
     let flat_methods = render_flat_instance_methods(
-      alias_decl.name, type_param_suffix, methods,
+      alias_decl.name,
+      type_param_suffix,
+      methods,
     )
     if flat_methods == "" {
       return interface_section
@@ -3928,7 +3943,9 @@ fn render_type_alias_decl(
     "export type \{alias_decl.name}\{type_param_suffix} = \{alias_decl.body};"
   }
   let flat_methods = render_flat_instance_methods(
-    alias_decl.name, type_param_suffix, methods,
+    alias_decl.name,
+    type_param_suffix,
+    methods,
   )
   if flat_methods == "" {
     alias_section
@@ -4432,9 +4449,7 @@ fn parse_mbti_to_typescript_with_import_rewrites(
                 let normalized_name = if mbti_is_generated_param_name(
                     param.name,
                   ) {
-                  mbti_positional_param_name(
-                    param.ty, idx - 1, instance_total,
-                  )
+                  mbti_positional_param_name(param.ty, idx - 1, instance_total)
                 } else {
                   param.name
                 }

@@ -102,6 +102,7 @@ priv struct ExportedConstValueSet {
 }
 
 ///|
+
 ///|
 fn decl_is_string_intrinsic_name(name : String) -> Bool {
   name == "Capitalize" ||
@@ -123,13 +124,13 @@ fn decl_apply_string_intrinsic_to_value(
   match intrinsic {
     "Capitalize" =>
       if head >= 'a' && head <= 'z' {
-        Some(((head.to_int() - 32).unsafe_to_char()).to_string() + rest)
+        Some((head.to_int() - 32).unsafe_to_char().to_string() + rest)
       } else {
         Some(value)
       }
     "Uncapitalize" =>
       if head >= 'A' && head <= 'Z' {
-        Some(((head.to_int() + 32).unsafe_to_char()).to_string() + rest)
+        Some((head.to_int() + 32).unsafe_to_char().to_string() + rest)
       } else {
         Some(value)
       }
@@ -203,9 +204,7 @@ fn flatten_conditional_branches(
 /// Rejects: `T extends X ? T : never` (default is `never`), conditionals
 /// whose default is itself unresolved (`Conditional`, `Any`, generic), and
 /// conditionals with no `Named` default name.
-fn conditional_array_element_default_join(
-  inner : @ast.TsType,
-) -> @ast.TsType? {
+fn conditional_array_element_default_join(inner : @ast.TsType) -> @ast.TsType? {
   match inner {
     @ast.TsType::Conditional(_, _, _, _) => {
       let (_, default_) = flatten_conditional_branches(inner)
@@ -414,9 +413,7 @@ async fn load_decl_module_info(
   // `Named(name)` references through the standard alias path.
   match @env.get_env_var("TS_MBT_ORACLE_CACHE") {
     Some(cache_path) if cache_path != "" => {
-      let resolutions = try {
-        read_oracle_cache(cache_path)
-      } catch {
+      let resolutions = read_oracle_cache(cache_path) catch {
         _ => ({} : Map[String, @ast.TsType])
       }
       if resolutions.length() > 0 {
@@ -1549,7 +1546,10 @@ fn resolve_decl_from_local_name(
                   // raw alias names.
                   let canonical_types_for_lower : Map[String, String] = {}
                   let lowered_alias_type = lower_react_utility_type(
-                    info, type_alias.type_, modules, canonical_types_for_lower,
+                    info,
+                    type_alias.type_,
+                    modules,
+                    canonical_types_for_lower,
                   )
                   let lowered_alias : @ast.TsTypeAlias = {
                     ..type_alias,
@@ -2708,7 +2708,10 @@ fn expand_named_aliases_in_union(
         match find_type_alias_decl(info.module_, name) {
           Some(ta) if ta.type_params.length() == 0 =>
             return lower_react_utility_type(
-              info, ta.type_, modules, canonical_types,
+              info,
+              ta.type_,
+              modules,
+              canonical_types,
             )
           _ => ()
         }
@@ -2720,7 +2723,10 @@ fn expand_named_aliases_in_union(
                 match find_type_alias_decl(source_info.module_, imported_name) {
                   Some(ta) if ta.type_params.length() == 0 =>
                     lower_react_utility_type(
-                      source_info, ta.type_, modules, canonical_types,
+                      source_info,
+                      ta.type_,
+                      modules,
+                      canonical_types,
                     )
                   _ => t
                 }
@@ -3550,7 +3556,10 @@ fn lower_react_utility_type(
       // also recover their default branch.
       if args.length() == 1 && (name == "Array" || name == "ReadonlyArray") {
         let lowered_inner = lower_react_utility_type(
-          info, args[0], modules, canonical_types,
+          info,
+          args[0],
+          modules,
+          canonical_types,
         )
         match conditional_array_element_default_join(lowered_inner) {
           Some(joined) => return Array(joined)
@@ -3563,10 +3572,12 @@ fn lower_react_utility_type(
       // and emit the resulting union literally; this lets template
       // literal types like `bg${Capitalize<X>}` enumerate when X resolves
       // to a string-literal alias.
-      if args.length() == 1 &&
-        decl_is_string_intrinsic_name(name) {
+      if args.length() == 1 && decl_is_string_intrinsic_name(name) {
         let mut lowered_arg = lower_react_utility_type(
-          info, args[0], modules, canonical_types,
+          info,
+          args[0],
+          modules,
+          canonical_types,
         )
         // Walk through type alias references so the intrinsic can see the
         // underlying literal union behind a Named arg like
@@ -6174,10 +6185,7 @@ fn decl_replace_this_in_function_return(
 ) -> @ast.TsType {
   match type_ {
     @ast.TsType::Func(params, return_type) =>
-      @ast.TsType::Func(
-        params,
-        decl_replace_this_type(return_type, owner_name),
-      )
+      @ast.TsType::Func(params, decl_replace_this_type(return_type, owner_name))
     _ => type_
   }
 }
@@ -6265,7 +6273,8 @@ fn decl_is_node_string_buffer_union(type_ : @ast.TsType) -> Bool {
 
 ///|
 fn decl_is_string_or_string_array_union(type_ : @ast.TsType) -> Bool {
-  @checker.type_contains_string(type_) && @checker.type_contains_string_array(type_)
+  @checker.type_contains_string(type_) &&
+  @checker.type_contains_string_array(type_)
 }
 
 // `decl_is_string_literal_union_type` moved to checker as
@@ -7774,9 +7783,6 @@ pub async fn emit_moonbit_decl_from_entry_path(
     }
   }
   @parser.emit_moonbit_decl_with_sections_and_types(
-    emitted_module,
-    combined_extra_sections,
-    combined_declared_names,
-    notes_need_jsvalue,
+    emitted_module, combined_extra_sections, combined_declared_names, notes_need_jsvalue,
   )
 }

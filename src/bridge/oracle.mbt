@@ -16,17 +16,9 @@
 /// successful resolutions. Failed entries (missing alias, parse error,
 /// unknown shape on the JS side) are dropped silently — the caller falls
 /// back to the in-house lowering for those names.
-pub async fn read_oracle_cache(
-  path : String,
-) -> Map[String, @ast.TsType] {
-  let text = @fs.read_file(path).text() catch {
-    _ => return {}
-  }
-  let json = try {
-    @json.parse(text)
-  } catch {
-    _ => return {}
-  }
+pub async fn read_oracle_cache(path : String) -> Map[String, @ast.TsType] {
+  let text = @fs.read_file(path).text() catch { _ => return {} }
+  let json = @json.parse(text) catch { _ => return {} }
   let resolutions = match json {
     Object(fields) =>
       match fields.get("resolutions") {
@@ -292,7 +284,10 @@ pub fn apply_oracle_resolutions(
   for i, func in module_.funcs {
     let new_params : Array[@ast.TsParam] = []
     for p in func.params {
-      new_params.push({ ..p, type_: substitute_named_types(p.type_, resolutions) })
+      new_params.push({
+        ..p,
+        type_: substitute_named_types(p.type_, resolutions),
+      })
     }
     module_.funcs[i] = {
       ..func,

@@ -30,10 +30,7 @@ test "tagged union: string literal members reject candidate" {
 
 ///|
 test "tagged union: duplicate inner names are rejected" {
-  let members : Array[@ast.TsType] = [
-    @ast.TsType::Number,
-    @ast.TsType::Number,
-  ]
+  let members : Array[@ast.TsType] = [@ast.TsType::Number, @ast.TsType::Number]
   match tagged_union_cases(members) {
     Some(_) => fail("duplicate primitive members are ambiguous")
     None => ()
@@ -105,10 +102,7 @@ test "tagged union alias: generic alias is rejected" {
     name: "Wrap",
     type_params: ["T"],
     type_param_bounds: [],
-    type_: @ast.TsType::Union([
-      @ast.TsType::Named("T"),
-      @ast.TsType::String_,
-    ]),
+    type_: @ast.TsType::Union([@ast.TsType::Named("T"), @ast.TsType::String_]),
   }
   match tagged_union_type_alias_decl(type_alias) {
     Some(_) => fail("generic alias must defer to existing generic path")

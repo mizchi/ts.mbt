@@ -121,33 +121,6 @@ async test "bridge: emit TypeScript declarations keeps pub(all) types used by pu
 }
 
 ///|
-async test "bridge: emit TypeScript declarations from real pkg.generated.mbti keeps public helper types readable" {
-  let actual = emit_typescript_decl_from_mbti_path(
-    "src/analysis/pkg.generated.mbti",
-  ) catch {
-    MbtiTypescriptDeclError::ReadError(msg)
-    | MbtiTypescriptDeclError::ParseError(msg) =>
-      fail("MBTI emit error: \{msg}")
-  }
-  assert_true(actual.contains("export type AnalysisResult<T> ="))
-  assert_true(actual.contains("export function AnalysisResult_is_ok<T>(self : AnalysisResult<T>):"))
-  assert_true(
-    actual.contains(
-      "export function analyze_null_guard(value: ast.TsExpr): [string, boolean] | undefined;",
-    ),
-  )
-  assert_true(
-    actual.contains(
-      "export function analyze_typeof_guard(value: ast.TsExpr): [string, string] | undefined;",
-    ),
-  )
-  assert_true(actual.contains("Eq<AnalysisErrorKind>"))
-  assert_false(actual.contains("debug.Debug"))
-  assert_false(actual.contains("(String, Bool)?"))
-  assert_false(actual.contains("Self["))
-}
-
-///|
 async test "bridge: emit TypeScript declarations sanitizes imported namespace aliases" {
   let actual = emit_typescript_decl_from_mbti_path(
     "fixtures/mbti_typescript/import_keyword_alias.pkg.generated.mbti",
@@ -182,21 +155,6 @@ async test "bridge: emit TypeScript declarations unwraps grouped optional functi
     #|  cont: ((s: string) => Signal) | undefined;
     #|}
   assert_eq(actual, expected)
-}
-
-///|
-async test "bridge: emit TypeScript declarations keeps real runtime function fields valid" {
-  let actual = emit_typescript_decl_from_mbti_path(
-    "src/runtime/pkg.generated.mbti",
-  ) catch {
-    MbtiTypescriptDeclError::ReadError(msg)
-    | MbtiTypescriptDeclError::ParseError(msg) =>
-      fail("MBTI emit error: \{msg}")
-  }
-  assert_true(
-    actual.contains("cont: ((value: JSValue) => GenSignal) | undefined;"),
-  )
-  assert_false(actual.contains("->"))
 }
 
 ///|
@@ -246,7 +204,9 @@ test "bridge: emit TypeScript declarations supports opaque public types and tupl
   assert_true(actual.contains("Eq<Revision>"))
   assert_true(actual.contains("Compare"))
   assert_true(actual.contains("Hash"))
-  assert_true(actual.contains("export function Revision_next(self : Revision): Revision;"))
+  assert_true(
+    actual.contains("export function Revision_next(self : Revision): Revision;"),
+  )
 }
 
 ///|
@@ -271,9 +231,7 @@ test "bridge: emit TypeScript declarations normalizes StringView" {
   }
   assert_true(actual.contains("export function format(s: string): string;"))
   assert_true(
-    actual.contains(
-      "export function parse(s: string): Result<string, Error>;",
-    ),
+    actual.contains("export function parse(s: string): Result<string, Error>;"),
   )
   assert_false(actual.contains("StringView"))
 }
@@ -383,9 +341,7 @@ test "bridge: emit TypeScript declarations normalizes async and raising function
   )
   assert_true(actual.contains("  children: () => Node<E, A>;"))
   assert_true(
-    actual.contains(
-      "  fallback: (arg0: Error, fn_: () => void) => Node<E, A>;",
-    ),
+    actual.contains("  fallback: (arg0: Error, fn_: () => void) => Node<E, A>;"),
   )
   assert_true(actual.contains("  render: () => Promise<Node<E, A>>;"))
   assert_false(actual.contains("async ()"))

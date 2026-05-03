@@ -183,9 +183,7 @@ test "checker: check_module on parsed fixtures stays clean" {
   // the current AST, so we keep the smoke test to interfaces with their
   // own type params (which TsInterface does carry).
   let cases : Array[String] = [
-    "export declare function double(input: number): number;",
-    case_enum,
-    case_alias_chain,
+    "export declare function double(input: number): number;", case_enum, case_alias_chain,
     "export interface Box<T> { value: T; }",
   ]
   for src in cases {
@@ -198,9 +196,7 @@ test "checker: check_module on parsed fixtures stays clean" {
     let report = @checker.check_module(module_)
     if report.issues.length() != 0 {
       let names = report.issues.map(fn(i) { i.name })
-      fail(
-        "check_module surfaced unexpected issues for fixture: \{names}",
-      )
+      fail("check_module surfaced unexpected issues for fixture: \{names}")
     }
   }
 }

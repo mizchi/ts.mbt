@@ -1,10 +1,6 @@
 ///|
-fn make_resolver(
-  table : Map[String, @ast.TsType],
-) -> (String) -> @ast.TsType? {
-  fn(name) {
-    table.get(name)
-  }
+fn make_resolver(table : Map[String, @ast.TsType]) -> (String) -> @ast.TsType? {
+  fn(name) { table.get(name) }
 }
 
 ///|
@@ -53,9 +49,7 @@ test "is_assignable_to_with: unresolved name falls back to nominal match" {
 test "is_assignable_to_with: applied alias is treated as opaque (best effort)" {
   // A resolver currently only resolves Named. Applied references stay nominal
   // because we do not perform generic substitution.
-  let table : Map[String, @ast.TsType] = {
-    "Box": Applied("Box", [String_]),
-  }
+  let table : Map[String, @ast.TsType] = { "Box": Applied("Box", [String_]) }
   let resolve = make_resolver(table)
   assert_true(
     is_assignable_to_with(
@@ -78,10 +72,7 @@ test "is_assignable_to_with: resolves IndexedAccess against alias body" {
   // type User = { id: string; age: number };
   // User["id"] should resolve to string after alias expansion.
   let table : Map[String, @ast.TsType] = {
-    "User": Object([
-      (Literal("id"), String_),
-      (Literal("age"), Number),
-    ]),
+    "User": Object([(Literal("id"), String_), (Literal("age"), Number)]),
   }
   let resolve = make_resolver(table)
   let access : @ast.TsType = IndexedAccess(Named("User"), Literal("id"))
@@ -114,13 +105,9 @@ test "is_assignable_to_with_generics: IndexedAccess resolves through generic ali
 test "is_assignable_to_with: resolves through union aliases" {
   // type Maybe<X> would need substitution; keep it simple with a non-generic
   // alias `MaybeString = string | undefined`.
-  let table = {
-    "MaybeString": (Union([String_, Undefined]) : @ast.TsType),
-  }
+  let table = { "MaybeString": (Union([String_, Undefined]) : @ast.TsType) }
   let resolve = make_resolver(table)
   assert_true(is_assignable_to_with(String_, Named("MaybeString"), resolve))
-  assert_true(
-    is_assignable_to_with(Undefined, Named("MaybeString"), resolve),
-  )
+  assert_true(is_assignable_to_with(Undefined, Named("MaybeString"), resolve))
   assert_false(is_assignable_to_with(Number, Named("MaybeString"), resolve))
 }

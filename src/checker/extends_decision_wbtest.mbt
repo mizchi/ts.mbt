@@ -35,27 +35,18 @@ test "extends_decision: unknown for non-primitive nominal types without info" {
 
 ///|
 test "extends_decision: target union — short-circuit on a confirmed match" {
-  assert_eq(
-    extends_decision(String_, Union([String_, Number])),
-    Some(true),
-  )
+  assert_eq(extends_decision(String_, Union([String_, Number])), Some(true))
 }
 
 ///|
 test "extends_decision: target union — all branches definitely false" {
-  assert_eq(
-    extends_decision(Boolean, Union([String_, Number])),
-    Some(false),
-  )
+  assert_eq(extends_decision(Boolean, Union([String_, Number])), Some(false))
 }
 
 ///|
 test "extends_decision: target union — propagates unknown" {
   // Boolean vs Named("Foo") is unknown ⇒ overall is unknown.
-  assert_eq(
-    extends_decision(Boolean, Union([String_, Named("Foo")])),
-    None,
-  )
+  assert_eq(extends_decision(Boolean, Union([String_, Named("Foo")])), None)
 }
 
 ///|
@@ -64,18 +55,12 @@ test "extends_decision: source union — every branch must extend" {
     extends_decision(Union([Literal("a"), Literal("b")]), String_),
     Some(true),
   )
-  assert_eq(
-    extends_decision(Union([String_, Number]), String_),
-    Some(false),
-  )
+  assert_eq(extends_decision(Union([String_, Number]), String_), Some(false))
 }
 
 ///|
 test "extends_decision: source union — propagates unknown" {
-  assert_eq(
-    extends_decision(Union([String_, Named("Foo")]), String_),
-    None,
-  )
+  assert_eq(extends_decision(Union([String_, Named("Foo")]), String_), None)
 }
 
 ///|
