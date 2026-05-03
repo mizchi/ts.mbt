@@ -229,7 +229,7 @@ EOF
 }
 EOF
 
-  grep -F 'export function worker_new(arg0: string): Promise<Worker>;' "$root/out/index.d.ts" >/dev/null
+  grep -F 'export function worker_new(s: string): Promise<Worker>;' "$root/out/index.d.ts" >/dev/null
   grep -F 'export function worker_load(self: Worker, key?: string): Promise<string>;' "$root/out/index.d.ts" >/dev/null
   assert_declared_value_exports_present "./$root/out/index.js" "$root/out/index.d.ts"
   pnpm exec tsc -p "$root/tsconfig.json" --pretty false

@@ -4421,7 +4421,13 @@ fn parse_mbti_to_typescript_with_import_rewrites(
               function_decl.fn_name,
               "method",
             )
-            let member_name = if kind == "struct" {
+            // In interface emission, struct methods become members of the
+            // generated `interface Owner` and would shadow a same-named
+            // field. Flat-instance emission promotes them to top-level
+            // `Owner_method` functions, so the field-name check is only
+            // relevant when interfaces are emitted.
+            let member_name = if kind == "struct" &&
+              mbti_method_style_is_interface() {
               match struct_decls.get(owner) {
                 Some(struct_decl) =>
                   if struct_decl_has_field_name(struct_decl, member_name) {
@@ -4948,6 +4954,7 @@ fn ts_decl_export_function_name(line : String) -> String? {
 fn strip_runtime_inaccessible_typescript_members(
   source : String,
   inaccessible_function_names : Array[String],
+  runtime_export_names : Array[String],
 ) -> String {
   let lines : Array[String] = []
   let mut in_interface = false
@@ -4982,20 +4989,54 @@ fn strip_runtime_inaccessible_typescript_members(
     }
     match ts_decl_export_function_name(line) {
       Some(name) if inaccessible_function_names.contains(name) => continue
-      _ => ()
+      Some(name) if ts_decl_line_is_flat_method_export(line) =>
+        // Flat-method emissions (`export function Owner_member(...)`,
+        // including both instance methods that take `self` and static
+        // factories) only have a runtime export when facade glue is
+        // generated for them. Drop the declaration when the runtime
+        // can't reach it.
+        if runtime_export_names.contains(name) {
+          lines.push(line)
+        }
+      _ => {
+        if ts_decl_line_is_runtime_inaccessible_function(line) {
+          continue
+        }
+        lines.push(line)
+      }
     }
-    if ts_decl_line_is_runtime_inaccessible_function(line) {
-      continue
-    }
-    lines.push(line)
   }
   lines.join("\n")
+}
+
+///|
+/// Detects a flat-method export emission such as
+/// `export function Owner_member(...)`. Used to recognize both
+/// instance-method and static-method flattenings produced by mbt-to-ts
+/// emission so they can be filtered against the runtime export set.
+fn ts_decl_line_is_flat_method_export(line : String) -> Bool {
+  let trimmed = line.trim().to_string()
+  if !trimmed.has_prefix("export function ") {
+    return false
+  }
+  match ts_decl_export_function_name(line) {
+    Some(name) =>
+      match name.find("_") {
+        Some(idx) if idx > 0 => {
+          let first = name[0].unsafe_to_char()
+          first >= 'A' && first <= 'Z'
+        }
+        _ => false
+      }
+    None => false
+  }
 }
 
 ///|
 fn strip_runtime_inaccessible_typescript_package_files(
   loaded : LoadedMbtiPackageSources,
   files : Array[MbtiTypescriptPackageFile],
+  runtime_export_names? : Array[String] = [],
 ) -> Array[MbtiTypescriptPackageFile] {
   let inaccessible_by_path : Map[String, Array[String]] = {}
   for package_name in loaded.ordered_packages {
@@ -5024,6 +5065,7 @@ fn strip_runtime_inaccessible_typescript_package_files(
       content: strip_runtime_inaccessible_typescript_members(
         file.content,
         inaccessible_function_names,
+        runtime_export_names,
       ),
     })
   }
@@ -5155,6 +5197,7 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
     emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
       root_file_path, external_import_spec_rewrites,
     ),
+    runtime_export_names=export_names,
   )
   let files_with_runtime : Array[MbtiTypescriptPackageFile] = []
   for file in files {
@@ -5225,6 +5268,7 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
     emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
       root_file_path, external_import_spec_rewrites,
     ),
+    runtime_export_names=facade_export_names,
   )
   let files_with_facades : Array[MbtiTypescriptPackageFile] = []
   for file in files {

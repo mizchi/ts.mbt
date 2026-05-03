@@ -401,7 +401,7 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   grep_generated_mbt "$out" 'pub fn createElement(tag : String) -> JsxElement'
-  grep_generated_mbt "$out" 'pub extern "js" fn get_default() -> @js.Any'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_default() -> JSValue'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_react" <<'EOF'
@@ -457,7 +457,7 @@ extern "js" fn test_transition_scope() -> TransitionFunction =
 test "generated @types/react bridge smoke" {
   let element = createElement("div", Some(test_props()), test_children())
   let _ = cloneElement(element, None, test_children())
-  assert_true(isValidElement(Some(unsafeCast(element))))
+  assert_true(isValidElement(unsafeCast(element)))
   let _ = memo(test_function_component(), None)
   let _ = forwardRef(test_forward_ref_render())
   startTransition(test_transition_scope())
@@ -477,7 +477,7 @@ EOF
   grep_generated_mbt "$out" 'pub fn useState(initialState : JSValue) -> UseStateResult'
   grep_generated_mbt "$out" 'pub fn useTransition() -> UseTransitionResult'
   grep_generated_mbt "$out" 'pub fn startTransition(scope : TransitionFunction) -> Unit'
-  grep_generated_mbt "$out" 'pub extern "js" fn get_default() -> @js.Any'
+  grep_generated_mbt "$out" 'pub extern "js" fn get_default() -> JSValue'
   grep -F 'No unsupported exports were detected.' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
@@ -500,7 +500,7 @@ extern "js" fn test_transition_scope() -> @sut.TransitionFunction =
 fn main {
   let element = @sut.createElement("div", Some(test_props()), test_children())
   let _ = @sut.cloneElement(element, None, test_children())
-  if !@sut.isValidElement(Some(@sut.unsafeCast(element))) {
+  if !@sut.isValidElement(@sut.unsafeCast(element)) {
     abort("expected generated React element to be valid")
   }
   let _ = @sut.memo(test_function_component(), None)

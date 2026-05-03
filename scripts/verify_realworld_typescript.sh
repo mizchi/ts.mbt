@@ -1854,10 +1854,9 @@ verify_package() {
     cd "$project"
     run_logged "$repo_root/$log_root/${module_name}_generate.log" \
       "${generate_env[@]}" \
-      moon run "$repo_root/src" -- \
+      moon run "$repo_root/src/cmd/ts2mbt" -- \
       --input "$package_spec" \
-      --out "dist/$module_name" \
-      --direction ts-to-mbt
+      --out "dist/$module_name"
   )
 
   local generated_glue_manifest="$log_root/${module_name}_generated_glue.sha256"

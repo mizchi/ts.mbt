@@ -16,7 +16,7 @@ extern "js" fn test_transition_scope() -> @sut.TransitionFunction =
 fn main {
   let element = @sut.createElement("div", Some(test_props()), test_children())
   let _ = @sut.cloneElement(element, None, test_children())
-  if !@sut.isValidElement(Some(@sut.unsafeCast(element))) {
+  if !@sut.isValidElement(@sut.unsafeCast(element)) {
     abort("expected generated React element to be valid")
   }
   let _ = @sut.memo(test_function_component(), None)

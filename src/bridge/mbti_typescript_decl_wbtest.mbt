@@ -486,20 +486,23 @@ test "bridge: emit TypeScript declarations avoids field method and import alias 
     actual.contains("export function symbol(s: string): symbol_.Symbol;"),
   )
   // Fields stay on the interface; methods flatten into top-level
-  // `Owner_method` exports so the renamed `resolve_` / `reject_`
-  // collisions still hold but participate in tree-shaking.
+  // `Owner_method` exports. Flat emission already disambiguates from
+  // the field via the `Owner_` prefix, so the trailing `_` collision
+  // workaround is unnecessary here and should not appear.
   assert_true(actual.contains("  resolve: (value: T) => void;"))
   assert_true(actual.contains("  reject: (value: Error) => void;"))
   assert_true(
     actual.contains(
-      "export function PromiseResolvers_resolve_<T>(self : PromiseResolvers<T>, value: T): void;",
+      "export function PromiseResolvers_resolve<T>(self : PromiseResolvers<T>, value: T): void;",
     ),
   )
   assert_true(
     actual.contains(
-      "export function PromiseResolvers_reject_<T>(self : PromiseResolvers<T>, value: Error): void;",
+      "export function PromiseResolvers_reject<T>(self : PromiseResolvers<T>, value: Error): void;",
     ),
   )
+  assert_false(actual.contains("PromiseResolvers_resolve_"))
+  assert_false(actual.contains("PromiseResolvers_reject_"))
 }
 
 ///|

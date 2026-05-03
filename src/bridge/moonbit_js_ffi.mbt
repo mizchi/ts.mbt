@@ -783,6 +783,15 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     Named(name) if ffi_named_type_is_double_int_enum(state, name) => "Double"
     Applied(name, _) if ffi_named_type_is_double_int_enum(state, name) =>
       "Double"
+    // Bare `Promise` / `PromiseLike` references with no type argument can
+    // appear in Vitest-style declarations where the resolved value type is
+    // unrecoverable. Default to `Promise[JSValue]` so it stays compatible
+    // with the public `pub type Promise[X]` declaration.
+    Named("Promise") | Named("PromiseLike") => {
+      state.needs_promise = true
+      state.needs_js_any = true
+      "Promise[JSValue]"
+    }
     Named(name) => ffi_mark_external_type(state, name)
     Applied(name, args) => {
       let type_name = ffi_type_identifier(name, "OpaqueType")
@@ -1010,13 +1019,23 @@ fn ffi_inline_js_tagged_union_to_js(
   type_ : @ast.TsType,
   expr : String,
 ) -> String {
+  // Inline the tagged-union -> JS conversion expression directly into the
+  // generated `extern "js" fn` lambda body. Calling the named bridge.js
+  // helper (`__ts_mbt_tagged_union_X_to_js(...)`) by name would require
+  // every consumer extern to also import that helper, which the MoonBit JS
+  // backend doesn't do automatically for inline lambda bodies. Inlining
+  // the IIFE keeps the conversion self-contained.
   match state {
     Some(s) =>
       match type_ {
         @ast.TsType::Named(name) =>
           match s.tagged_union_decls_by_name.get(name) {
             Some(decl) =>
-              tagged_union_to_js_function_name(decl.name) + "(" + expr + ")"
+              tagged_union_to_js_expression_with_nested(
+                decl,
+                expr,
+                s.tagged_union_decls_by_name,
+              )
             None => expr
           }
         // Inline `A | B` lowered to a synthesised tagged-union alias: the
@@ -1027,10 +1046,14 @@ fn ffi_inline_js_tagged_union_to_js(
           match tagged_union_cases(parts) {
             Some(cases) => {
               let name = ffi_inline_union_synthesized_name(cases)
-              if s.tagged_union_decls_by_name.contains(name) {
-                tagged_union_to_js_function_name(name) + "(" + expr + ")"
-              } else {
-                expr
+              match s.tagged_union_decls_by_name.get(name) {
+                Some(decl) =>
+                  tagged_union_to_js_expression_with_nested(
+                    decl,
+                    expr,
+                    s.tagged_union_decls_by_name,
+                  )
+                None => expr
               }
             }
             None => expr
@@ -1984,6 +2007,23 @@ fn ffi_type_alias_constructor_param_type(
     Number | Int | NumberLiteral(_) => Some("Double")
     BigInt | BigIntLiteral(_) => Some("Int64")
     Boolean | BooleanLiteral(_) => Some("Bool")
+    // Bare `Promise` / `PromiseLike` references default to `Promise[JSValue]`
+    // so they don't collide with the public `pub type Promise[X]`.
+    Named("Promise") | Named("PromiseLike") => {
+      state.needs_promise = true
+      state.needs_js_any = true
+      Some("Promise[JSValue]")
+    }
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) => {
+      state.needs_promise = true
+      match ffi_type_alias_constructor_param_type(state, inner) {
+        Some(inner_type) => Some("Promise[\{inner_type}]")
+        None => {
+          state.needs_js_any = true
+          Some("Promise[JSValue]")
+        }
+      }
+    }
     Struct(name, _) | Named(name) | Applied(name, _) =>
       Some(ffi_mark_external_type(state, name))
     Array(inner) =>
@@ -2175,7 +2215,18 @@ fn ffi_type_js_converter_expr(
         Named(name) if ffi_named_type_is_generated_struct(state, name) =>
           ffi_struct_converter_call_expr(name, expr)
         Named(name) if state.tagged_union_decls_by_name.contains(name) =>
-          "(\{expr} == null ? undefined : \{tagged_union_to_js_function_name(name)}(\{ffi_inline_js_unwrap_option_expr(expr)}))"
+          match state.tagged_union_decls_by_name.get(name) {
+            Some(decl) => {
+              let inner_expr = ffi_inline_js_unwrap_option_expr(expr)
+              let converted = tagged_union_to_js_expression_with_nested(
+                decl,
+                inner_expr,
+                state.tagged_union_decls_by_name,
+              )
+              "(\{expr} == null ? undefined : \{converted})"
+            }
+            None => "__ts_mbt_unwrap_option(\{expr})"
+          }
         Applied(name, _) if ffi_named_type_is_generated_struct(state, name) =>
           ffi_struct_converter_call_expr(name, expr)
         _ => "__ts_mbt_unwrap_option(\{expr})"
@@ -2192,7 +2243,15 @@ fn ffi_type_js_converter_expr(
     Named(name) if ffi_named_type_is_generated_struct(state, name) =>
       ffi_struct_converter_call_expr(name, expr)
     Named(name) if state.tagged_union_decls_by_name.contains(name) =>
-      "\{tagged_union_to_js_function_name(name)}(\{expr})"
+      match state.tagged_union_decls_by_name.get(name) {
+        Some(decl) =>
+          tagged_union_to_js_expression_with_nested(
+            decl,
+            expr,
+            state.tagged_union_decls_by_name,
+          )
+        None => expr
+      }
     Applied(name, _) if ffi_named_type_is_generated_struct(state, name) =>
       ffi_struct_converter_call_expr(name, expr)
     Array(inner) => {
@@ -4880,6 +4939,14 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   state.external_type_names.sort()
   for type_name in state.external_type_names {
     if state.declared_type_names.contains(type_name) {
+      continue
+    }
+    // The self-contained `pub type Promise[X]` / `pub type JSValue`
+    // declarations below own these names. Skip the parameterless
+    // `#external type Promise` / `#external type JSValue` emission so the
+    // generated package doesn't redeclare them.
+    if (type_name == "Promise" && state.needs_promise) ||
+      (type_name == "JSValue" && state.needs_js_any) {
       continue
     }
     ffi_sections.push("#warnings(\"-3\")\n#external\ntype \{type_name}")

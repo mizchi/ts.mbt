@@ -209,6 +209,20 @@ pub fn tagged_union_to_js_expression_with_nested(
   nested : Map[String, BridgeTaggedUnionDecl],
 ) -> String {
   let mut body = "(() => { "
+  // Allow `@sut.unsafeCast(rawValue)` callers to pass primitives or
+  // already-shaped JS values straight through. A real MoonBit tagged-union
+  // payload is an object with both `$tag` and `_0`; anything else is
+  // already in the JS-side shape, so return it as-is.
+  body = body +
+    "if (" +
+    expr +
+    " === null || typeof " +
+    expr +
+    " !== \"object\" || !(\"$tag\" in " +
+    expr +
+    ")) return " +
+    expr +
+    "; "
   for i, entry in decl.cases {
     let (_, inner) = entry
     if i == 0 {
@@ -362,8 +376,14 @@ pub fn tagged_union_bridge_js_converter_decls_with_nested(
   }
   let to_name = tagged_union_to_js_function_name(decl.name)
   let from_name = tagged_union_from_js_function_name(decl.name)
-  let to_decl = "function " + to_name + "(value) { return " + to_js_body + "; }"
-  let from_decl = "function " +
+  // `export function` so MoonBit `extern "js" fn ... = "<name>"` ESM
+  // imports can resolve the helper from the generated bridge module.
+  let to_decl = "export function " +
+    to_name +
+    "(value) { return " +
+    to_js_body +
+    "; }"
+  let from_decl = "export function " +
     from_name +
     "(value) { return " +
     from_js_body +
