@@ -493,6 +493,12 @@ fn Parser::parse_type_param_names_and_bounds(
       let _ = self.advance()
       break
     }
+    // Optional `const` modifier introduced in TypeScript 5.0:
+    // `<const T extends ...>`. The const modifier has no impact on the
+    // erased generic shape we keep, so consume and discard it.
+    if self.check(Const) {
+      let _ = self.advance()
+    }
     let mut name = ""
     if self.is_qualified_type_name_part(0) {
       name = self.parse_binding_ident() catch { _ => "_" }

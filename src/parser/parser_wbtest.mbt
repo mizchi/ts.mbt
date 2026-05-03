@@ -1964,6 +1964,39 @@ test "parser: parse generic function declaration in ts module" {
 }
 
 ///|
+test "parser: parse function with const-modifier type parameter" {
+  // TypeScript 5.0 introduced `<const T>` to opt the inferred type
+  // parameter into a more literal-preserving inference. The const
+  // modifier has no effect on the erased generic shape we keep.
+  let src =
+    #|function asConst<const T>(value: T): T {
+    #|  return value;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+  assert_eq(module_.funcs[0].name, "asConst")
+}
+
+///|
+test "parser: parse interface method with const-modifier type parameter" {
+  let src =
+    #|interface Asserts {
+    #|  assertReadonly<const T>(value: T): T;
+    #|}
+  let parser = Parser::from_source(src)
+  let iface = parser.parse_interface()
+  assert_eq(iface.name, "Asserts")
+  assert_eq(iface.fields.length(), 1)
+  let (name, _) = iface.fields[0]
+  assert_eq(name, "assertReadonly")
+}
+
+///|
 test "parser: parse const enum declaration in ts module block" {
   let src =
     #|export const enum ReactiveFlags {
