@@ -1787,8 +1787,12 @@ fn Parser::parse_declare_class(
     let member_name = self.parse_declare_class_member_name()
     let _ = self.match_(Question)
     let mut local_type_param_bound_len = self.local_type_param_bounds.length()
+    let mut method_type_params : Array[String] = []
+    let mut method_type_param_bounds : Array[(String, @ast.TsType)] = []
     if self.check(Lt) {
-      let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+      let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
+      method_type_params = names
+      method_type_param_bounds = type_param_bounds
       local_type_param_bound_len = self.push_local_type_param_bounds(
         type_param_bounds,
       )
@@ -1840,6 +1844,8 @@ fn Parser::parse_declare_class(
               } else if is_public {
                 methods.push({
                   name: member_name,
+                  type_params: method_type_params,
+                  type_param_bounds: method_type_param_bounds,
                   params,
                   return_type,
                   is_static,

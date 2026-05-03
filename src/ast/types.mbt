@@ -398,6 +398,12 @@ pub(all) struct TsClassPropertyDecl {
 // / class method declaration
 pub(all) struct TsClassMethodDecl {
   name : String
+  // Method-level generics: `get<Path extends string>(path: Path): ...` records
+  // `(Path, string)` here so bridge passes can substitute the bound at the
+  // method boundary without losing the generic shape on the public MoonBit
+  // signature. Empty for non-generic methods.
+  type_params : Array[String]
+  type_param_bounds : Array[(String, TsType)]
   params : Array[(String, TsType)]
   return_type : TsType
   is_static : Bool

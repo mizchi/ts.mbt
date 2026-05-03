@@ -6897,6 +6897,8 @@ fn clone_class_method_in_scope(
   }
   {
     name: class_method.name,
+    type_params: class_method.type_params,
+    type_param_bounds: class_method.type_param_bounds,
     params,
     return_type: decl_specialize_generated_class_method_return_type(
       class_name,
@@ -6959,6 +6961,8 @@ fn callable_method_from_func_type(
   )
   {
     name: method_name,
+    type_params: [],
+    type_param_bounds: [],
     params: method_params,
     return_type: decl_specialize_generated_class_method_return_type(
       class_name, method_name, lowered_return_type,

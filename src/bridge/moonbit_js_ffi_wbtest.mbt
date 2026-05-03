@@ -4899,6 +4899,8 @@ test "bridge: FFI class methods unwrap optional arguments" {
   }
   let class_method : @ast.TsClassMethodDecl = {
     name: "setIssuedAt",
+    type_params: [],
+    type_param_bounds: [],
     params: [
       ("input", @ast.TsType::Union([@ast.TsType::Any, @ast.TsType::Undefined])),
     ],

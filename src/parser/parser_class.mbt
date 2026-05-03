@@ -97,6 +97,8 @@ fn build_runtime_class_decl(
               }
               methods.push({
                 name: method_name,
+                type_params: [],
+                type_param_bounds: [],
                 params,
                 return_type: func.return_type,
                 is_static,
