@@ -1084,12 +1084,56 @@ fn ffi_struct_decl_to_moonbit(
     }
   }
   lines.push("}")
+  for sig in iface.index_signatures {
+    match ffi_index_signature_accessor_decls(state, type_name, sig) {
+      Some(decls) =>
+        for decl in decls {
+          method_lines.push(decl)
+        }
+      None => ()
+    }
+  }
   ffi_restore_local_type_params(state, local_type_param_len)
   if method_lines.length() == 0 {
     lines.join("\n")
   } else {
     lines.join("\n") + "\n\n" + method_lines.join("\n\n")
   }
+}
+
+///|
+/// Render `op_get` / `op_set` extern wrappers for an index signature
+/// `[k: K]: V`. Returns `None` when V is unknown/never, since emitting
+/// `op_get(...) -> JSValue?` would only widen the public surface without
+/// helping the caller — the dynamic access can still be done via raw JS.
+fn ffi_index_signature_accessor_decls(
+  state : MoonBitJsFfiState,
+  type_name : String,
+  sig : (@ast.TsType, @ast.TsType),
+) -> Array[String]? {
+  let (key_type, value_type) = sig
+  match value_type {
+    @ast.TsType::Any | @ast.TsType::Never => return None
+    _ => ()
+  }
+  let key_name = ffi_struct_field_type_name(state, key_type)
+  let value_name = ffi_struct_field_type_name(state, value_type)
+  // Avoid double-wrapping when the value type is already an Option (e.g.
+  // `[k: string]: string | undefined`). The accessor semantics — `None` for
+  // missing keys — fold the explicit-undefined case into the same outer
+  // `None`, which matches how callers use op_get on a record.
+  let getter_return = if value_name.has_suffix("?") {
+    value_name
+  } else {
+    value_name + "?"
+  }
+  let getter =
+    "pub extern \"js\" fn \{type_name}::op_get(self : \{type_name}, key : \{key_name}) -> \{getter_return} =\n" +
+    "  #| (self, key) => { const v = self[key]; return v === undefined ? null : v; }"
+  let setter =
+    "pub extern \"js\" fn \{type_name}::op_set(self : \{type_name}, key : \{key_name}, value : \{value_name}) -> Unit =\n" +
+    "  #| (self, key, value) => { self[key] = value; }"
+  Some([getter, setter])
 }
 
 ///|
