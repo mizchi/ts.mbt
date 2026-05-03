@@ -164,79 +164,6 @@ async fn wbtest_prepare_tmp_neverthrow_like_fixture(
 }
 
 ///|
-test "command_help_lines lists bridge-related commands" {
-  let lines = command_help_lines()
-  assert_true(
-    lines.contains(
-      "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  emit-moonbit-scaffold-from-ts <file> <module-spec> <out-dir> Emit a MoonBit bridge scaffold from a TS entrypoint",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  normalize-moonbit-dts <file> [out] Normalize MoonBit-generated TypeScript declarations into clearer .d.ts output",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  emit-typescript-from-mbti <file> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  emit-js-link-config-from-mbti <file> [out] Emit MoonBit link.js.exports config from a .mbti interface",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  emit-typescript-package-from-mbti <file> <out-dir> [import-rewrite-json] Emit a recursive TypeScript declaration package from a root .mbti interface",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold from a MoonBit package interface",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold plus facade wrappers for omitted local methods",
-    ),
-  )
-  assert_true(
-    lines.contains(
-      "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] [--module-spec <specifier>] [--diagnostics <path>] [--strict] Generate a complete build-backed bridge scaffold in either direction",
-    ),
-  )
-  assert_false(
-    lines
-    .iter()
-    .any(fn(line) {
-      line.contains("experimental-emit-gc") ||
-      line.contains("experimental-analyze") ||
-      line.contains("experimental-aot-check") ||
-      line.contains("emit-gc ") ||
-      line.contains("test262") ||
-      line.contains("benchmark-project") ||
-      line.contains("benchmark-corpora")
-    }),
-  )
-}
-
-///|
 test "parse_unified_tsmbt_options accepts input out and direction flags" {
   let args = [
     "tsmbt", "--input", "mizchi/foo", "--out", "dist", "--direction", "mbt-to-ts",
@@ -281,8 +208,28 @@ test "parse_unified_tsmbt_options accepts positional generate args and equals fl
 }
 
 ///|
-async test "run_unified_tsmbt_cli reports invalid unified args" {
-  assert_false(run_unified_tsmbt_cli(["tsmbt", "--input", "missing"], 1))
+async test "run_ts_to_mbt_unified_cli reports invalid unified args" {
+  let mut help_called = false
+  assert_false(
+    run_ts_to_mbt_unified_cli(["ts2mbt", "--input", "missing"], 1, print_help=fn() {
+      help_called = true
+    }),
+  )
+  assert_true(help_called)
+}
+
+///|
+async test "run_mbt_to_ts_unified_cli rejects --direction mismatch" {
+  let mut help_called = false
+  assert_false(
+    run_mbt_to_ts_unified_cli(
+      ["mbt2ts", "--input", "foo", "--out", "dist", "--direction", "ts-to-mbt"],
+      1,
+      print_help=fn() { help_called = true },
+    ),
+  )
+  // Help is not invoked for the direction conflict message, only for usage errors.
+  assert_false(help_called)
 }
 
 ///|

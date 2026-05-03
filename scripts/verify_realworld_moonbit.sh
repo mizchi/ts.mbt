@@ -150,7 +150,7 @@ verify_package() {
   fi
 
   rm -rf "$out"
-  moon run src -- --input "$package_name" --out "$out" >/dev/null
+  moon run src/cmd/mbt2ts -- --input "$package_name" --out "$out" >/dev/null
 
   local generated_package_manifest="$report_root/logs/${safe_name}_generated_package.sha256"
   record_generated_package_manifest "$out" "$generated_package_manifest"

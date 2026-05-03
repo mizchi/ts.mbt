@@ -26,54 +26,60 @@ Generated packages are deterministic and diff-friendly. Each side writes a
 diagnostics file (`SCAFFOLD_DIAGNOSTICS.md` or `AUTOLINK_DIAGNOSTICS.md`) so
 widened, omitted, or wrapped surfaces stay inspectable.
 
-## Unified CLI
+## Two CLIs
 
-For the common "generate everything for this package" path, use the unified
-CLI. It accepts either a MoonBit package name / `pkg.generated.mbti` path or a
-TypeScript entrypoint / installed package specifier.
+Bridge generation is split into two binaries, one per direction:
+
+- `mbt2ts` — MoonBit `pkg.generated.mbti` → TypeScript declaration package
+  (build-backed by `moon build --target js`).
+- `ts2mbt` — TypeScript `.d.ts` / `.ts` entrypoint → MoonBit bridge package
+  (`bridge.mbti`, `bridge.mbt`, `bridge.js`, `moon.pkg.json`).
+
+Each CLI exposes a high-level `--input ... --out ...` "do everything" flow
+plus low-level subcommands.
 
 ```bash
 # MoonBit -> TypeScript. Run `moon info` first so pkg.generated.mbti exists.
 # This creates temporary MoonBit glue code, runs `moon build --target js`,
 # and emits a TypeScript package backed by the built JS output.
-tsmbt --input mizchi/foo --out dist
+moon run src/cmd/mbt2ts -- --input mizchi/foo --out dist
 
 # TypeScript -> MoonBit. For bare npm-style inputs, the runtime module spec
 # defaults to the input specifier.
-tsmbt --input neverthrow --out dist --direction ts-to-mbt
+moon run src/cmd/ts2mbt -- --input neverthrow --out dist
 
 # File input also works; pass the runtime module when it differs from the
 # declaration entry path.
-tsmbt --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist --direction ts-to-mbt
+moon run src/cmd/ts2mbt -- --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist
 
 # Diagnostics can be redirected. Strict mode fails when unsupported exports,
 # omitted MoonBit autolink members, or unbudgeted TS JSValue fallbacks are found.
-tsmbt --input neverthrow --out dist --direction ts-to-mbt --diagnostics dist/diagnostics.md --strict
+moon run src/cmd/ts2mbt -- --input neverthrow --out dist --diagnostics dist/diagnostics.md --strict
 ```
 
-`--direction auto` is the default. It resolves MoonBit package names by
-scanning for matching `pkg.generated.mbti` files under the current project,
-and resolves bare TypeScript inputs through the TypeScript package resolver.
 The MoonBit -> TypeScript unified path emits facade glue by default, builds
-it with `moon build --target js`, and copies the built JS to `index.js`; pass
-`--no-facade` to emit only top-level free-function glue.
+it with `moon build --target js`, and copies the built JS to `index.js`;
+pass `--no-facade` to emit only top-level free-function glue.
 
-Unified CLI contract:
+Shared `--input` flow flags:
 
-- `--input <pkg-or-entry>` accepts a MoonBit package name,
-  `pkg.generated.mbti` path, TypeScript declaration / source entrypoint, or
-  installed package specifier.
-- `--out <dir>` writes a complete scaffold package.
-- `--direction auto|mbt-to-ts|ts-to-mbt` defaults to `auto`.
-- `--module-spec <specifier>` overrides the runtime import used by generated
-  TypeScript -> MoonBit bridge code.
-- `--diagnostics <path>` redirects the generated diagnostics report. Without
-  it, TS -> MoonBit writes `SCAFFOLD_DIAGNOSTICS.md` and MoonBit -> TypeScript
-  writes `AUTOLINK_DIAGNOSTICS.md` in the output directory.
-- `--strict` fails the command when diagnostics contain unsupported exports,
-  omitted autolink members, or unbudgeted `JSValue` fallbacks. The default
+- `--input <pkg-or-entry>` — for `mbt2ts` accepts a MoonBit package name or
+  `pkg.generated.mbti` path; for `ts2mbt` accepts a TypeScript declaration /
+  source entrypoint or an installed package specifier.
+- `--out <dir>` — writes a complete scaffold package.
+- `--module-spec <specifier>` (`ts2mbt` only) — overrides the runtime import
+  used by generated bridge code.
+- `--import-rewrites <json>` (`mbt2ts` only) — JSON map of MoonBit-package
+  imports to publishable TypeScript specifiers.
+- `--diagnostics <path>` — redirects the generated diagnostics report.
+  Without it, `ts2mbt` writes `SCAFFOLD_DIAGNOSTICS.md` and `mbt2ts` writes
+  `AUTOLINK_DIAGNOSTICS.md` in the output directory.
+- `--strict` — fails when diagnostics contain unsupported exports, omitted
+  autolink members, or unbudgeted `JSValue` fallbacks. The default
   non-strict mode still emits a buildable scaffold with diagnostics when
   possible.
+- `--no-facade` (`mbt2ts` only) — skip facade-wrapper generation and emit
+  only top-level free-function glue.
 
 ## MoonBit -> TypeScript
 
@@ -96,26 +102,26 @@ The temporary glue package contains generated wrapper functions and
 after the built JS is copied to `index.js`.
 
 ```bash
-moon run src -- emit-typescript-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg
+moon run src/cmd/mbt2ts -- scaffold src/pkg.generated.mbti out/ts-pkg
 
 # optional: rewrite external MoonBit package imports to publishable TS specifiers
-moon run src -- emit-typescript-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg import-rewrites.json
+moon run src/cmd/mbt2ts -- scaffold src/pkg.generated.mbti out/ts-pkg import-rewrites.json
 
 # opt-in: also emit top-level MoonBit wrappers for omitted local methods/constructors
-moon run src -- emit-typescript-facade-scaffold-from-mbti src/pkg.generated.mbti out/ts-pkg
+moon run src/cmd/mbt2ts -- facade-scaffold src/pkg.generated.mbti out/ts-pkg
 ```
 
 Lower-level commands are also available:
 
 ```bash
 # only link.js.exports JSON
-moon run src -- emit-js-link-config-from-mbti src/pkg.generated.mbti
+moon run src/cmd/mbt2ts -- link-config src/pkg.generated.mbti
 
 # only recursive .d.ts package
-moon run src -- emit-typescript-package-from-mbti src/pkg.generated.mbti out/ts-pkg
+moon run src/cmd/mbt2ts -- package src/pkg.generated.mbti out/ts-pkg
 
 # single .d.ts from one .mbti file without recursive rewrite
-moon run src -- emit-typescript-from-mbti src/pkg.generated.mbti
+moon run src/cmd/mbt2ts -- decl src/pkg.generated.mbti
 ```
 
 Current export model:
@@ -126,7 +132,7 @@ Current export model:
   scaffold `.d.ts` output unless wrapper glue is generated for them.
 - Scaffold output includes `AUTOLINK_DIAGNOSTICS.md` so omitted public members
   are explicit.
-- `emit-typescript-facade-scaffold-from-mbti` is an opt-in variant that adds
+- `mbt2ts facade-scaffold` is an opt-in variant that adds
   generated top-level wrappers for local non-generic methods and constructors
   to the temporary glue package, then exposes those wrappers from the built
   JS and the matching package `.d.ts`. Async wrappers are exposed as
@@ -142,7 +148,7 @@ Current export model:
   only; they are not written to the final TypeScript package.
 - Recursive `.mbti` resolution only rewrites imports that stay under the same
   root package prefix. External imports remain bare specifiers.
-- `emit-typescript-package-from-mbti` and `emit-typescript-scaffold-from-mbti`
+- `mbt2ts package` and `mbt2ts scaffold`
   accept an optional JSON object for external import rewrites, for example
   `{ "moonbitlang/core/debug": "demo-debug" }`.
 - Generated `package.json` names are derived from the MoonBit package path,
@@ -180,19 +186,19 @@ Unsupported or limited surface:
 Start from a TypeScript entrypoint and emit a MoonBit bridge scaffold:
 
 ```bash
-moon run src -- emit-moonbit-scaffold-from-ts path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+moon run src/cmd/ts2mbt -- scaffold path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
 ```
 
 Lower-level commands are also available:
 
 ```bash
 # full bridge package
-moon run src -- emit-moonbit-bridge-package path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+moon run src/cmd/ts2mbt -- package path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
 
 # inspect generated decl/ffi/bridge snippets without writing a package
-moon run src -- emit-moonbit-bridge path/to/entry.d.ts /runtime/module.js
-moon run src -- emit-moonbit-js-ffi path/to/entry.d.ts /runtime/module.js
-moon run src -- emit-moonbit-decl path/to/entry.d.ts
+moon run src/cmd/ts2mbt -- bridge path/to/entry.d.ts /runtime/module.js
+moon run src/cmd/ts2mbt -- ffi path/to/entry.d.ts /runtime/module.js
+moon run src/cmd/ts2mbt -- decl path/to/entry.d.ts
 ```
 
 The TS -> MoonBit path resolves exported surface recursively through local

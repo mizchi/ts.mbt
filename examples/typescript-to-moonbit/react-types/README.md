@@ -4,10 +4,9 @@ This pattern uses the real `@types/react` declaration entrypoint as input and
 binds the generated MoonBit package to the real `react` runtime module.
 
 ```bash
-moon run src -- \
+moon run src/cmd/ts2mbt -- \
   --input node_modules/@types/react/index.d.ts \
   --out _build/examples/typescript-to-moonbit-react-types/dist \
-  --direction ts-to-mbt \
   --module-spec react
 ```
 

@@ -4,10 +4,9 @@ This pattern starts from a React-like `export =` declaration with a nested
 `JSX` namespace and `keyof JSX.IntrinsicElements` parameter.
 
 ```bash
-moon run src -- \
+moon run src/cmd/ts2mbt -- \
   --input examples/typescript-to-moonbit/react/src/index.d.ts \
   --out examples/typescript-to-moonbit/react/dist \
-  --direction ts-to-mbt \
   --module-spec ../runtime/react-like.js
 ```
 

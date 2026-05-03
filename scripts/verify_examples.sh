@@ -23,7 +23,7 @@ verify_moonbit_to_typescript_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src -- \
+  moon run src/cmd/mbt2ts -- \
     --input examples/counter \
     --out "$root/dist" >/dev/null
 
@@ -87,10 +87,9 @@ verify_typescript_to_moonbit_example() {
 
   cp examples/typescript-to-moonbit/runtime/greetings.js "$root/runtime/greetings.js"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input examples/typescript-to-moonbit/src/index.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec ../runtime/greetings.js >/dev/null
 
   cat > "$out/moon.mod.json" <<'EOF'
@@ -242,10 +241,9 @@ verify_typescript_to_moonbit_hono_example() {
 
   cp examples/typescript-to-moonbit/hono/runtime/hono.js "$root/runtime/hono.js"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input examples/typescript-to-moonbit/hono/src/index.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec ../runtime/hono.js >/dev/null
 
   write_js_any_stub "$out"
@@ -298,10 +296,9 @@ verify_typescript_to_moonbit_hono_real_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input node_modules/hono/dist/types/index.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec hono >/dev/null
 
   write_js_any_stub "$out"
@@ -373,10 +370,9 @@ verify_typescript_to_moonbit_react_example() {
 
   cp examples/typescript-to-moonbit/react/runtime/react-like.js "$root/runtime/react-like.js"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input examples/typescript-to-moonbit/react/src/index.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec ../runtime/react-like.js >/dev/null
 
   write_js_any_stub "$out"
@@ -423,10 +419,9 @@ verify_typescript_to_moonbit_react_types_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input node_modules/@types/react/index.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec react >/dev/null
 
   write_js_any_stub "$out"
@@ -523,10 +518,9 @@ verify_typescript_to_moonbit_vitest_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input node_modules/vitest/dist/index.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec vitest >/dev/null
 
   write_js_any_stub "$out"
@@ -599,10 +593,9 @@ verify_typescript_to_moonbit_result_example() {
 
   cp examples/typescript-to-moonbit/result/runtime/result.js "$root/runtime/result.js"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input examples/typescript-to-moonbit/result/src/index.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec ../runtime/result.js >/dev/null
 
   write_js_any_stub "$out"
@@ -651,10 +644,9 @@ verify_typescript_to_moonbit_reducer_example() {
 
   cp examples/typescript-to-moonbit/reducer/runtime/reducer.js "$root/runtime/reducer.js"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input examples/typescript-to-moonbit/reducer/src/index.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec ../runtime/reducer.js >/dev/null
 
   cat > "$out/moon.mod.json" <<'EOF'
@@ -733,10 +725,9 @@ verify_typescript_to_moonbit_default_class_example() {
 
   cp examples/typescript-to-moonbit/default-class/runtime/counter.js "$root/runtime/counter.js"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input examples/typescript-to-moonbit/default-class/src/index.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec ../runtime/counter.js >/dev/null
 
   cat > "$out/moon.mod.json" <<'EOF'
@@ -796,10 +787,9 @@ verify_typescript_to_moonbit_const_table_example() {
   cp examples/typescript-to-moonbit/const-table/runtime/index.js "$root/runtime/index.js"
   cp examples/typescript-to-moonbit/const-table/runtime/table.js "$root/runtime/table.js"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input examples/typescript-to-moonbit/const-table/src/index.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec ../runtime/index.js >/dev/null
 
   cat > "$out/moon.mod.json" <<'EOF'
@@ -848,10 +838,9 @@ verify_typescript_to_moonbit_typescript_ast_example() {
   rm -rf "$root"
   mkdir -p "$root"
 
-  moon run src -- \
+  moon run src/cmd/ts2mbt -- \
     --input node_modules/typescript/lib/typescript.d.ts \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec typescript >/dev/null
 
   write_js_any_stub "$out"

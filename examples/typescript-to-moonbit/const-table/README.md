@@ -4,10 +4,9 @@ This pattern starts from a runtime TypeScript module that destructures exported
 values using keys imported from a const table.
 
 ```bash
-moon run src -- \
+moon run src/cmd/ts2mbt -- \
   --input examples/typescript-to-moonbit/const-table/src/index.ts \
   --out examples/typescript-to-moonbit/const-table/dist \
-  --direction ts-to-mbt \
   --module-spec ../runtime/index.js
 ```
 

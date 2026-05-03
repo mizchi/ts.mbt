@@ -4,10 +4,9 @@ This pattern uses the real `vitest` declaration entrypoint as input and binds
 the generated MoonBit package to the real `vitest` runtime module.
 
 ```bash
-moon run src -- \
+moon run src/cmd/ts2mbt -- \
   --input node_modules/vitest/dist/index.d.ts \
   --out _build/examples/typescript-to-moonbit-vitest/dist \
-  --direction ts-to-mbt \
   --module-spec vitest
 ```
 

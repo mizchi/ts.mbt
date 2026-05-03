@@ -1,8 +1,6 @@
 import {
-  "moonbitlang/async",
   "moonbitlang/async/fs",
   "moonbitlang/async/process" @process,
-  "moonbitlang/core/env",
   "moonbitlang/core/json" @json,
   "moonbitlang/core/string",
   "mizchi/ts/parser" @parser,
@@ -10,10 +8,8 @@ import {
 }
 
 import {
+  "moonbitlang/async",
+  "moonbitlang/core/env",
   "mizchi/ts/ast" @ast,
   "mizchi/ts/checker" @checker,
 } for "wbtest"
-
-options(
-  is_main: true,
-)

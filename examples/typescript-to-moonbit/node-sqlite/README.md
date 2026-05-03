@@ -4,10 +4,9 @@ This pattern uses the real `@types/node/sqlite.d.ts` ambient module declaration
 as the TypeScript input and binds it to the Node built-in `node:sqlite` module.
 
 ```bash
-moon run src -- \
+moon run src/cmd/ts2mbt -- \
   --input "$TSMBT_NODE_SQLITE_TYPES" \
   --out _build/examples/node-sqlite/dist \
-  --direction ts-to-mbt \
   --module-spec node:sqlite
 ```
 

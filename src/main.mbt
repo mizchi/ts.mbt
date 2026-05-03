@@ -1,238 +1,8 @@
 ///|
-fn cli_command_failed() -> Unit {
-  println("tsmbt command failed")
-  cli_exit(1)
-}
-
-///|
-#cfg(target="native")
-extern "C" fn cli_exit(code : Int) = "exit"
-
-///|
-#cfg(not(target="native"))
-fn cli_exit(code : Int) -> Unit {
-  let _ = code
-  abort("tsmbt command failed")
-}
-
-///|
-async fn main_async() -> Unit {
-  let args = @env.args()
-  if args.length() < 2 {
-    print_usage()
-    return
-  }
-  if args[1].has_prefix("--") {
-    if !run_unified_tsmbt_cli(args, 1) {
-      cli_command_failed()
-    }
-    return
-  }
-  let command = args[1]
-  match command {
-    "generate" | "scaffold" =>
-      if !run_unified_tsmbt_cli(args, 2) {
-        cli_command_failed()
-      }
-    "emit-moonbit-decl" => {
-      if args.length() < 3 {
-        println("Error: no file specified")
-        return
-      }
-      let file_path = args[2]
-      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
-      emit_moonbit_decl(file_path, output_path)
-    }
-    "normalize-moonbit-dts" => {
-      if args.length() < 3 {
-        println("Error: no file specified")
-        return
-      }
-      let file_path = args[2]
-      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
-      emit_typescript_decl(file_path, output_path)
-    }
-    "emit-typescript-from-mbti" => {
-      if args.length() < 3 {
-        println("Error: no file specified")
-        return
-      }
-      let file_path = args[2]
-      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
-      emit_typescript_decl_from_mbti(file_path, output_path)
-    }
-    "emit-js-link-config-from-mbti" => {
-      if args.length() < 3 {
-        println("Error: no file specified")
-        return
-      }
-      let file_path = args[2]
-      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
-      emit_js_link_config_from_mbti(file_path, output_path)
-    }
-    "emit-typescript-package-from-mbti" => {
-      if args.length() < 4 {
-        println("Error: expected <file> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let output_dir = args[3]
-      let import_rewrite_path = if args.length() >= 5 {
-        Some(args[4])
-      } else {
-        None
-      }
-      emit_typescript_package_from_mbti(
-        file_path, output_dir, import_rewrite_path,
-      )
-    }
-    "emit-typescript-scaffold-from-mbti" => {
-      if args.length() < 4 {
-        println("Error: expected <file> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let output_dir = args[3]
-      let import_rewrite_path = if args.length() >= 5 {
-        Some(args[4])
-      } else {
-        None
-      }
-      if !emit_typescript_scaffold_from_mbti(
-          file_path, output_dir, import_rewrite_path,
-        ) {
-        cli_command_failed()
-      }
-    }
-    "emit-typescript-facade-scaffold-from-mbti" => {
-      if args.length() < 4 {
-        println("Error: expected <file> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let output_dir = args[3]
-      let import_rewrite_path = if args.length() >= 5 {
-        Some(args[4])
-      } else {
-        None
-      }
-      if !emit_typescript_facade_scaffold_from_mbti(
-          file_path, output_dir, import_rewrite_path,
-        ) {
-        cli_command_failed()
-      }
-    }
-    "emit-moonbit-js-ffi" => {
-      if args.length() < 4 {
-        println("Error: expected <entry> <module-spec>")
-        return
-      }
-      let file_path = args[2]
-      let module_spec = args[3]
-      let ffi_output_path = if args.length() >= 5 {
-        Some(args[4])
-      } else {
-        None
-      }
-      let bridge_output_path = if args.length() >= 6 {
-        Some(args[5])
-      } else {
-        None
-      }
-      emit_moonbit_js_ffi(
-        file_path, module_spec, ffi_output_path, bridge_output_path,
-      )
-    }
-    "emit-moonbit-bridge" => {
-      if args.length() < 4 {
-        println("Error: expected <ts-entry> <module-spec>")
-        return
-      }
-      let file_path = args[2]
-      let module_spec = args[3]
-      let decl_output_path = if args.length() >= 5 {
-        Some(args[4])
-      } else {
-        None
-      }
-      let ffi_output_path = if args.length() >= 6 {
-        Some(args[5])
-      } else {
-        None
-      }
-      let bridge_output_path = if args.length() >= 7 {
-        Some(args[6])
-      } else {
-        None
-      }
-      emit_moonbit_bridge(
-        file_path, module_spec, decl_output_path, ffi_output_path, bridge_output_path,
-      )
-    }
-    "emit-moonbit-bridge-package" => {
-      if args.length() < 5 {
-        println("Error: expected <ts-entry> <module-spec> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let module_spec = args[3]
-      let output_dir = args[4]
-      emit_moonbit_bridge_package(file_path, module_spec, output_dir)
-    }
-    "emit-moonbit-scaffold-from-ts" => {
-      if args.length() < 5 {
-        println("Error: expected <ts-entry> <module-spec> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let module_spec = args[3]
-      let output_dir = args[4]
-      emit_moonbit_scaffold_from_ts(file_path, module_spec, output_dir)
-    }
-    _ => {
-      println("Unknown command: \{command}")
-      print_usage()
-    }
-  }
-}
-
-///|
-fn main {
-  @async.run_async_main(main_async)
-}
-
-///|
-fn print_usage() -> Unit {
-  println(
-    "Usage: tsmbt [--input <pkg-or-entry> --out <dir>] [command] [args...]",
-  )
-  println("")
-  println("Commands:")
-  for line in command_help_lines() {
-    println(line)
-  }
-}
-
-///|
-fn command_help_lines() -> Array[String] {
-  [
-    "  --input <pkg-or-entry> --out <dir> [--direction auto|mbt-to-ts|ts-to-mbt] [--module-spec <specifier>] [--diagnostics <path>] [--strict] Generate a complete build-backed bridge scaffold in either direction",
-    "  emit-moonbit-decl <file> [out] Emit MoonBit declare stubs from a TypeScript entrypoint",
-    "  normalize-moonbit-dts <file> [out] Normalize MoonBit-generated TypeScript declarations into clearer .d.ts output",
-    "  emit-typescript-from-mbti <file> [out] Emit TypeScript declarations directly from a MoonBit .mbti interface",
-    "  emit-js-link-config-from-mbti <file> [out] Emit MoonBit link.js.exports config from a .mbti interface",
-    "  emit-typescript-package-from-mbti <file> <out-dir> [import-rewrite-json] Emit a recursive TypeScript declaration package from a root .mbti interface",
-    "  emit-typescript-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold from a MoonBit package interface",
-    "  emit-typescript-facade-scaffold-from-mbti <file> <out-dir> [import-rewrite-json] Emit build-backed JS/TypeScript scaffold plus facade wrappers for omitted local methods",
-    "  emit-moonbit-js-ffi <file> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
-    "  emit-moonbit-bridge <file> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TS entrypoint",
-    "  emit-moonbit-bridge-package <file> <module-spec> <out-dir> Emit a generated MoonBit bridge package directory",
-    "  emit-moonbit-scaffold-from-ts <file> <module-spec> <out-dir> Emit a MoonBit bridge scaffold from a TS entrypoint",
-  ]
-}
-
-///|
-async fn emit_moonbit_decl(file_path : String, output_path : String?) -> Unit {
+pub async fn emit_moonbit_decl(
+  file_path : String,
+  output_path : String?,
+) -> Unit {
   let emitted = emit_moonbit_decl_text(file_path) catch {
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
@@ -263,7 +33,7 @@ async fn emit_moonbit_decl_text(
 }
 
 ///|
-async fn emit_typescript_decl(
+pub async fn emit_typescript_decl(
   file_path : String,
   output_path : String?,
 ) -> Unit {
@@ -297,7 +67,7 @@ async fn emit_typescript_decl_text(
 }
 
 ///|
-async fn emit_typescript_decl_from_mbti(
+pub async fn emit_typescript_decl_from_mbti(
   file_path : String,
   output_path : String?,
 ) -> Unit {
@@ -330,7 +100,7 @@ async fn emit_typescript_decl_from_mbti_text(
 }
 
 ///|
-async fn emit_js_link_config_from_mbti(
+pub async fn emit_js_link_config_from_mbti(
   file_path : String,
   output_path : String?,
 ) -> Unit {
@@ -425,7 +195,7 @@ async fn ensure_dir_tree(path : String) -> Unit raise Error {
 }
 
 ///|
-async fn emit_typescript_package_from_mbti(
+pub async fn emit_typescript_package_from_mbti(
   file_path : String,
   output_dir : String,
   import_rewrite_path : String?,
@@ -983,7 +753,7 @@ async fn write_typescript_scaffold_bundle_files(
 }
 
 ///|
-async fn emit_typescript_scaffold_from_mbti(
+pub async fn emit_typescript_scaffold_from_mbti(
   file_path : String,
   output_dir : String,
   import_rewrite_path : String?,
@@ -1013,7 +783,7 @@ async fn emit_typescript_scaffold_from_mbti(
 }
 
 ///|
-async fn emit_typescript_facade_scaffold_from_mbti(
+pub async fn emit_typescript_facade_scaffold_from_mbti(
   file_path : String,
   output_dir : String,
   import_rewrite_path : String?,
@@ -1043,7 +813,7 @@ async fn emit_typescript_facade_scaffold_from_mbti(
 }
 
 ///|
-async fn emit_moonbit_js_ffi(
+pub async fn emit_moonbit_js_ffi(
   file_path : String,
   module_spec : String,
   ffi_output_path : String?,
@@ -1098,7 +868,7 @@ async fn emit_moonbit_js_ffi(
 }
 
 ///|
-async fn emit_moonbit_bridge(
+pub async fn emit_moonbit_bridge(
   file_path : String,
   module_spec : String,
   decl_output_path : String?,
@@ -1173,7 +943,7 @@ async fn emit_moonbit_bridge(
 }
 
 ///|
-async fn emit_moonbit_bridge_package(
+pub async fn emit_moonbit_bridge_package(
   file_path : String,
   module_spec : String,
   output_dir : String,
@@ -1323,7 +1093,7 @@ async fn collect_moonbit_ts_scaffold_unsupported_exports(
 }
 
 ///|
-async fn emit_moonbit_scaffold_from_ts(
+pub async fn emit_moonbit_scaffold_from_ts(
   file_path : String,
   module_spec : String,
   output_dir : String,

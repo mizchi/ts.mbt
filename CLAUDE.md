@@ -40,12 +40,15 @@ product surfaces now.
 typescript.mbt/
 ├── moon.mod.json
 └── src/
-    ├── ast/        # Shared AST types
-    ├── parser/     # TypeScript / JavaScript parser + module resolver
-    ├── checker/    # Declaration-level TS type system
-    ├── bridge/     # Bridge code generation (both directions)
-    ├── main.mbt    # CLI entry: tsmbt
-    └── unified_cli.mbt  # `tsmbt --input ... --out ...` driver
+    ├── ast/                 # Shared AST types
+    ├── parser/              # TypeScript / JavaScript parser + module resolver
+    ├── checker/             # Declaration-level TS type system
+    ├── bridge/              # Bridge code generation (both directions)
+    ├── main.mbt             # `mizchi/ts` library: bridge entry helpers
+    ├── unified_cli.mbt      # `--input ... --out ...` unified driver
+    └── cmd/
+        ├── ts2mbt/main.mbt  # CLI binary: TypeScript -> MoonBit
+        └── mbt2ts/main.mbt  # CLI binary: MoonBit -> TypeScript
 ```
 
 ## Dependencies

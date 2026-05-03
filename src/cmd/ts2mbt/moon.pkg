@@ -1,0 +1,9 @@
+import {
+  "moonbitlang/async",
+  "moonbitlang/core/env",
+  "mizchi/ts" @ts,
+}
+
+options(
+  is_main: true,
+)

@@ -35,11 +35,11 @@ verify-mbti-dts:
     rm -rf "$ROOT"
     mkdir -p "$TS_ROOT" "$MOONBIT_ROOT"
 
-    moon run src -- emit-typescript-from-mbti src/ast/pkg.generated.mbti "$TS_ROOT/ast.d.ts" >/dev/null
-    moon run src -- emit-typescript-from-mbti src/parser/pkg.generated.mbti "$TS_ROOT/parser.d.ts" >/dev/null
-    moon run src -- emit-typescript-from-mbti src/checker/pkg.generated.mbti "$TS_ROOT/checker.d.ts" >/dev/null
-    moon run src -- emit-typescript-from-mbti src/bridge/pkg.generated.mbti "$TS_ROOT/bridge.d.ts" >/dev/null
-    moon run src -- emit-typescript-from-mbti src/pkg.generated.mbti "$TS_ROOT/root.d.ts" >/dev/null
+    moon run src/cmd/mbt2ts -- decl src/ast/pkg.generated.mbti "$TS_ROOT/ast.d.ts" >/dev/null
+    moon run src/cmd/mbt2ts -- decl src/parser/pkg.generated.mbti "$TS_ROOT/parser.d.ts" >/dev/null
+    moon run src/cmd/mbt2ts -- decl src/checker/pkg.generated.mbti "$TS_ROOT/checker.d.ts" >/dev/null
+    moon run src/cmd/mbt2ts -- decl src/bridge/pkg.generated.mbti "$TS_ROOT/bridge.d.ts" >/dev/null
+    moon run src/cmd/mbt2ts -- decl src/pkg.generated.mbti "$TS_ROOT/root.d.ts" >/dev/null
 
     cat <<'EOF' > "$MOONBIT_ROOT/debug.d.ts"
     export interface Debug {}

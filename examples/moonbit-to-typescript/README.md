@@ -5,7 +5,7 @@ This example starts from a small MoonBit module. The checked-in
 and the generator uses the real MoonBit source package to build JavaScript.
 
 ```bash
-moon run src -- --input examples/counter --out examples/moonbit-to-typescript/dist
+moon run src/cmd/mbt2ts -- --input examples/counter --out examples/moonbit-to-typescript/dist
 ```
 
 `--direction` is omitted on purpose. The unified CLI resolves

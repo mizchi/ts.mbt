@@ -755,20 +755,43 @@ async fn emit_unified_tsmbt_scaffold(
 }
 
 ///|
-async fn run_unified_tsmbt_cli(args : Array[String], start : Int) -> Bool {
+/// Run the unified `--input/--out/...` driver with a forced direction.
+/// `print_help` is invoked on `--help`, missing required flags, or option
+/// errors so each cmd module owns its own help banner.
+async fn run_unified_cli_with_direction(
+  args : Array[String],
+  start : Int,
+  forced_direction~ : TsmbtDirection,
+  print_help~ : () -> Unit,
+) -> Bool {
   let options = match parse_unified_tsmbt_options(args, start) {
     (Some(options), None) => options
     (_, Some("help")) => {
-      print_usage()
+      print_help()
       return true
     }
     (_, Some(message)) => {
       println("Error: \{message}")
-      print_usage()
+      print_help()
       return false
     }
     _ => {
-      print_usage()
+      print_help()
+      return false
+    }
+  }
+  let direction = match (forced_direction, options.direction) {
+    (TsmbtDirection::Auto, requested) => requested
+    (TsmbtDirection::TsToMbt, TsmbtDirection::Auto)
+    | (TsmbtDirection::TsToMbt, TsmbtDirection::TsToMbt) =>
+      TsmbtDirection::TsToMbt
+    (TsmbtDirection::MbtToTs, TsmbtDirection::Auto)
+    | (TsmbtDirection::MbtToTs, TsmbtDirection::MbtToTs) =>
+      TsmbtDirection::MbtToTs
+    _ => {
+      println(
+        "Error: --direction conflicts with this command's fixed direction.",
+      )
       return false
     }
   }
@@ -776,7 +799,7 @@ async fn run_unified_tsmbt_cli(args : Array[String], start : Int) -> Bool {
     Some(input) => input
     None => {
       println("Error: expected --input <pkg-or-entry>")
-      print_usage()
+      print_help()
       return false
     }
   }
@@ -784,18 +807,50 @@ async fn run_unified_tsmbt_cli(args : Array[String], start : Int) -> Bool {
     Some(out) => out
     None => {
       println("Error: expected --out <dir>")
-      print_usage()
+      print_help()
       return false
     }
   }
   emit_unified_tsmbt_scaffold(
     input,
     out,
-    direction=options.direction,
+    direction~,
     module_spec=options.module_spec,
     import_rewrite_path=options.import_rewrite_path,
     diagnostics_path=options.diagnostics_path,
     strict=options.strict,
     facade=options.facade,
+  )
+}
+
+///|
+/// Public entry: run the unified TS -> MoonBit scaffold driver with the
+/// direction locked to `ts-to-mbt`. Used by `src/cmd/ts2mbt`.
+pub async fn run_ts_to_mbt_unified_cli(
+  args : Array[String],
+  start : Int,
+  print_help~ : () -> Unit,
+) -> Bool {
+  run_unified_cli_with_direction(
+    args,
+    start,
+    forced_direction=TsmbtDirection::TsToMbt,
+    print_help~,
+  )
+}
+
+///|
+/// Public entry: run the unified MoonBit -> TypeScript scaffold driver with
+/// the direction locked to `mbt-to-ts`. Used by `src/cmd/mbt2ts`.
+pub async fn run_mbt_to_ts_unified_cli(
+  args : Array[String],
+  start : Int,
+  print_help~ : () -> Unit,
+) -> Bool {
+  run_unified_cli_with_direction(
+    args,
+    start,
+    forced_direction=TsmbtDirection::MbtToTs,
+    print_help~,
   )
 }

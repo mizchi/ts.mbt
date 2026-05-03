@@ -2011,10 +2011,9 @@ verify_node_sqlite() {
   mkdir -p "$out"
 
   run_logged "$log_root/${module_name}_generate.log" \
-    moon run src -- \
+    moon run src/cmd/ts2mbt -- \
     --input "$types_path" \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec node:sqlite
 
   local generated_glue_manifest="$log_root/${module_name}_generated_glue.sha256"
@@ -2057,10 +2056,9 @@ verify_node_fs() {
   mkdir -p "$out"
 
   run_logged "$log_root/${module_name}_generate.log" \
-    moon run src -- \
+    moon run src/cmd/ts2mbt -- \
     --input "$types_path" \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec node:fs
 
   local generated_glue_manifest="$log_root/${module_name}_generated_glue.sha256"
@@ -2106,10 +2104,9 @@ verify_node_builtin() {
   mkdir -p "$out"
 
   run_logged "$log_root/${module_name}_generate.log" \
-    moon run src -- \
+    moon run src/cmd/ts2mbt -- \
     --input "$types_path" \
     --out "$out" \
-    --direction ts-to-mbt \
     --module-spec "$package_spec"
 
   local generated_glue_manifest="$log_root/${module_name}_generated_glue.sha256"
