@@ -531,6 +531,7 @@ test "bridge: FFI type name treats generic intersections with empty object as op
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let actual = ffi_type_name(
@@ -555,6 +556,7 @@ test "bridge: FFI type name collapses named option intersections" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let actual = ffi_type_name(
@@ -582,6 +584,7 @@ test "bridge: FFI type name preserves optional complex unions when widened" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let actual = ffi_type_name(
@@ -606,6 +609,7 @@ test "bridge: FFI type name renders declared generic applications" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let actual = ffi_type_name(
@@ -626,6 +630,7 @@ test "bridge: FFI type name lowers bigint primitive" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   assert_eq(ffi_type_name(state, @ast.TsType::BigInt), "Int64")
@@ -642,6 +647,7 @@ test "bridge: FFI type name lowers tuple payloads to arrays" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   assert_eq(ffi_type_name(state, @ast.TsType::Tuple([])), "Array[Unit]")
@@ -666,6 +672,7 @@ test "bridge: FFI type name lowers function types" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   assert_eq(
@@ -691,6 +698,7 @@ test "bridge: FFI struct field type parenthesizes optional function types" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   assert_eq(
@@ -743,6 +751,7 @@ test "bridge: FFI type name widens likely generic placeholders" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   assert_eq(ffi_type_name(state, @ast.TsType::Named("T")), "@js.Any")
@@ -4697,6 +4706,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -4752,6 +4762,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -4799,6 +4810,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -4835,6 +4847,7 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -4872,6 +4885,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let class_ : @ast.TsClassDecl = {
@@ -4912,6 +4926,7 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -4945,6 +4960,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: 2,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -4977,6 +4993,7 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: 1,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {
@@ -5016,6 +5033,7 @@ test "bridge: FFI struct JS converter emits callable wrappers for call signature
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let actual = ffi_struct_js_converter_decl(state, "ForwardRefRenderFunction", [
@@ -5051,6 +5069,7 @@ test "bridge: FFI struct preserves selected interface type parameters locally" {
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name: {},
     needs_js_any: false,
   }
   let iface : @ast.TsInterface = {

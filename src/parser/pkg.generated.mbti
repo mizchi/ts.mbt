@@ -15,6 +15,8 @@ pub fn emit_moonbit_decl_from_source(String) -> String raise ParseError
 
 pub fn emit_moonbit_decl_with_sections(@ast.TsModule, Array[String], Bool) -> String
 
+pub fn emit_moonbit_decl_with_sections_and_types(@ast.TsModule, Array[String], Array[String], Bool) -> String
+
 pub fn parse_block_from_source(String) -> @ast.TsBlock raise ParseError
 
 pub fn parse_block_from_source_strict(String, Bool) -> @ast.TsBlock raise ParseError

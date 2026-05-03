@@ -30,6 +30,7 @@ priv struct MoonBitJsFfiState {
   external_type_names : Array[String]
   local_type_param_names : Array[String]
   function_field_method_wrapper_limit : Int
+  tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl]
   mut needs_js_any : Bool
 }
 
@@ -875,22 +876,50 @@ fn ffi_inline_js_unwrap_option_expr(expr : String) -> String {
 }
 
 ///|
-fn ffi_inline_js_arg_expr(type_ : @ast.TsType, expr : String) -> String {
+fn ffi_inline_js_arg_expr_with_state(
+  state : MoonBitJsFfiState?,
+  type_ : @ast.TsType,
+  expr : String,
+) -> String {
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       if !is_optional {
-        return ffi_inline_js_arg_expr(collapsed, expr)
+        return ffi_inline_js_arg_expr_with_state(state, collapsed, expr)
       }
+      let inner_expr = ffi_inline_js_unwrap_option_expr(expr)
+      let collapsed_inner = ffi_inline_js_tagged_union_to_js(
+        state, collapsed, inner_expr,
+      )
       return match collapsed {
-        Boolean =>
-          "(\{expr} === -1 ? undefined : \{ffi_inline_js_unwrap_option_expr(expr)})"
-        _ => ffi_inline_js_unwrap_option_expr(expr)
+        Boolean => "(\{expr} === -1 ? undefined : \{collapsed_inner})"
+        _ => collapsed_inner
       }
     }
     None => ()
   }
   match @checker.classify_transparent_intersection(type_) {
-    Some(inner) => ffi_inline_js_arg_expr(inner, expr)
+    Some(inner) => ffi_inline_js_arg_expr_with_state(state, inner, expr)
+    None => ffi_inline_js_tagged_union_to_js(state, type_, expr)
+  }
+}
+
+///|
+fn ffi_inline_js_tagged_union_to_js(
+  state : MoonBitJsFfiState?,
+  type_ : @ast.TsType,
+  expr : String,
+) -> String {
+  match state {
+    Some(s) =>
+      match type_ {
+        @ast.TsType::Named(name) =>
+          match s.tagged_union_decls_by_name.get(name) {
+            Some(decl) =>
+              tagged_union_to_js_function_name(decl.name) + "(" + expr + ")"
+            None => expr
+          }
+        _ => expr
+      }
     None => expr
   }
 }
@@ -920,7 +949,9 @@ fn ffi_function_field_method_decl(
       let args_src = args.join(", ")
       let js_args : Array[String] = []
       for i, arg in args {
-        js_args.push(ffi_inline_js_arg_expr(source_param_types[i], arg))
+        js_args.push(
+          ffi_inline_js_arg_expr_with_state(Some(state), source_param_types[i], arg),
+        )
       }
       let js_args_src = js_args.join(", ")
       let fn_prefix = ffi_function_type_param_prefix(receiver_type_params)
@@ -1869,14 +1900,23 @@ fn ffi_type_alias_constructors(
   }
   let alias_type_name = ffi_type_identifier(type_alias.name, "OpaqueType")
   let alias_fn_prefix = ffi_to_snake_case(alias_type_name)
+  let tagged_decl = state.tagged_union_decls_by_name.get(alias_type_name)
   let ctors : Array[FfiAliasConstructor] = []
   let seen_names : Array[String] = []
-  for item in items {
+  for index, item in items {
     match ffi_type_alias_constructor_for_item(state, alias_fn_prefix, item) {
       Some(ctor) =>
         if !seen_names.contains(ctor.fn_name) {
           seen_names.push(ctor.fn_name)
-          ctors.push(ctor)
+          let final_ctor = match tagged_decl {
+            Some(_) => {
+              ..ctor,
+              bridge_expr: "{ \"$tag\": " + index.to_string() +
+                ", \"_0\": value }",
+            }
+            None => ctor
+          }
+          ctors.push(final_ctor)
         }
       None => ()
     }
@@ -1958,6 +1998,8 @@ fn ffi_type_js_converter_expr(
         Struct(name, _) => ffi_struct_converter_call_expr(name, expr)
         Named(name) if ffi_named_type_is_generated_struct(state, name) =>
           ffi_struct_converter_call_expr(name, expr)
+        Named(name) if state.tagged_union_decls_by_name.contains(name) =>
+          "(\{expr} == null ? undefined : \{tagged_union_to_js_function_name(name)}(\{ffi_inline_js_unwrap_option_expr(expr)}))"
         Applied(name, _) if ffi_named_type_is_generated_struct(state, name) =>
           ffi_struct_converter_call_expr(name, expr)
         _ => "__ts_mbt_unwrap_option(\{expr})"
@@ -1973,6 +2015,8 @@ fn ffi_type_js_converter_expr(
     Struct(name, _) => ffi_struct_converter_call_expr(name, expr)
     Named(name) if ffi_named_type_is_generated_struct(state, name) =>
       ffi_struct_converter_call_expr(name, expr)
+    Named(name) if state.tagged_union_decls_by_name.contains(name) =>
+      "\{tagged_union_to_js_function_name(name)}(\{expr})"
     Applied(name, _) if ffi_named_type_is_generated_struct(state, name) =>
       ffi_struct_converter_call_expr(name, expr)
     Array(inner) => {
@@ -2651,7 +2695,7 @@ fn ffi_class_method_decl_to_moonbit(
     let safe_name = ffi_sanitize_identifier(name, "arg")
     let safe_type = ffi_type_name(state, type_)
     arg_names.push(safe_name)
-    js_args.push(ffi_inline_js_arg_expr(type_, safe_name))
+    js_args.push(ffi_inline_js_arg_expr_with_state(Some(state), type_, safe_name))
     params.push("\{safe_name} : \{safe_type}")
   }
   let return_type = ffi_type_name(state, class_method.return_type)
@@ -3530,6 +3574,12 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   for class_ in classes {
     declared_type_names.push(ffi_class_type_name(class_.name))
   }
+  let tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl] = {}
+  for tagged in exported_tagged_unions {
+    let type_name = ffi_type_identifier(tagged.decl.name, "OpaqueType")
+    declared_type_names.push(type_name)
+    tagged_union_decls_by_name[type_name] = tagged.decl
+  }
   let state : MoonBitJsFfiState = {
     declared_type_names,
     struct_type_names,
@@ -3538,6 +3588,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     external_type_names: [],
     local_type_param_names: [],
     function_field_method_wrapper_limit: ffi_function_field_method_wrapper_limit,
+    tagged_union_decls_by_name,
     needs_js_any: false,
   }
   let type_aliases_by_type_name = ffi_type_alias_map_by_type_name(modules)
@@ -3648,7 +3699,38 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   }
 
   for tagged in exported_tagged_unions {
-    match tagged_union_bridge_js_converter_decls(tagged.decl) {
+    let type_name = ffi_type_identifier(tagged.decl.name, "OpaqueType")
+    if !emitted_type_names.contains(type_name) {
+      // Inner Named payloads must already be visible to the .mbt
+      // file. Register them as external so the existing
+      // `state.external_type_names` loop emits a `#external; type N`
+      // declaration once, and skips emission if the package already
+      // declares N as an enum, struct, or class.
+      for entry in tagged.decl.cases {
+        let (_, inner) = entry
+        let inner_named = match inner {
+          @ast.TsType::Named(name) => Some(name)
+          @ast.TsType::Array(@ast.TsType::Named(name)) => Some(name)
+          _ => None
+        }
+        match inner_named {
+          Some(inner_name) => {
+            let _ = ffi_mark_external_type(state, inner_name)
+
+          }
+          None => ()
+        }
+      }
+      emitted_type_names.push(type_name)
+      match tagged_union_decl_to_moonbit_section(tagged.decl) {
+        Some(section) => ffi_sections.push(section)
+        None => ()
+      }
+    }
+    match
+      tagged_union_bridge_js_converter_decls_with_nested(
+        tagged.decl, state.tagged_union_decls_by_name,
+      ) {
       Some(decls) => bridge_lines.push(decls)
       None =>
         bridge_lines.push(
@@ -4536,8 +4618,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   for type_name in state.external_type_names {
     alias_candidate_type_names.push(type_name)
   }
+  for tagged in exported_tagged_unions {
+    let type_name = ffi_type_identifier(tagged.decl.name, "OpaqueType")
+    if !alias_candidate_type_names.contains(type_name) {
+      alias_candidate_type_names.push(type_name)
+    }
+  }
   for type_name in alias_candidate_type_names {
-    if state.declared_type_names.contains(type_name) {
+    if state.declared_type_names.contains(type_name) &&
+      !state.tagged_union_decls_by_name.contains(type_name) {
       continue
     }
     match type_aliases_by_type_name.get(type_name) {

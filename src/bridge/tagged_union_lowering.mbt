@@ -26,13 +26,21 @@ pub fn tagged_union_named_constructor_name(name : String) -> String? {
   if name == "" {
     return None
   }
-  // Already-PascalCase named types map to a `<Name>Value` constructor unless
-  // the inner type name is already distinct enough to stand alone. We always
-  // suffix `Value` for primitives via the helper above; for named types we
-  // suffix `Value` too so cases stay grammatically uniform.
+  // Already-PascalCase named types map to a `<Name>Value` constructor.
   let first = name[0].unsafe_to_char()
   if first < 'A' || first > 'Z' {
     return None
+  }
+  // Reject identifiers that contain non-MoonBit characters such as `.`
+  // (e.g. `NodeJS.ArrayBufferView`) — they cannot be referenced from the
+  // generated `pub(all) enum` body even via a `pub extern type` shim.
+  for c in name {
+    if !((c >= 'A' && c <= 'Z') ||
+        (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9') ||
+        c == '_') {
+      return None
+    }
   }
   Some(name + "Value")
 }
@@ -179,18 +187,43 @@ fn tagged_union_case_predicate_text(
 /// and returns its inner JS payload by reading `$tag` and the positional
 /// `_0` field. Cases keep declaration order so `$tag === i` matches the
 /// `i`-th case in the MoonBit enum.
+///
+/// `nested` maps `Named` payload types that are themselves tagged-union
+/// aliases to their declaration; when a case payload references one of
+/// those names the snippet recursively unwraps the inner value, so
+/// nested aliases like `PathOrFileDescriptor = PathLike | number`
+/// resolve to a single primitive at the JS boundary.
 pub fn tagged_union_to_js_expression(
   decl : BridgeTaggedUnionDecl,
   expr : String,
 ) -> String {
+  tagged_union_to_js_expression_with_nested(decl, expr, {})
+}
+
+///|
+pub fn tagged_union_to_js_expression_with_nested(
+  decl : BridgeTaggedUnionDecl,
+  expr : String,
+  nested : Map[String, BridgeTaggedUnionDecl],
+) -> String {
   let mut body = "(() => { "
-  for i, _entry in decl.cases {
+  for i, entry in decl.cases {
+    let (_, inner) = entry
     if i == 0 {
       body = body + "if (" + expr + ".$tag === " + i.to_string() + ") "
     } else {
       body = body + "else if (" + expr + ".$tag === " + i.to_string() + ") "
     }
-    body = body + "return " + expr + "._0; "
+    let payload_expr = match inner {
+      @ast.TsType::Named(name) =>
+        match nested.get(name) {
+          Some(_) =>
+            tagged_union_to_js_function_name(name) + "(" + expr + "._0)"
+          None => expr + "._0"
+        }
+      _ => expr + "._0"
+    }
+    body = body + "return " + payload_expr + "; "
   }
   body = body +
     "throw new Error(\"unexpected " +
@@ -231,6 +264,45 @@ pub fn tagged_union_from_js_expression(
 
 ///|
 ///|
+/// Render a `TsType` as MoonBit-side type text for a tagged-union case
+/// payload. Cases are restricted to primitive / `Named` / array-of-either,
+/// which keeps the inner type text stateless.
+pub fn tagged_union_inner_moonbit_text(t : @ast.TsType) -> String? {
+  match t {
+    @ast.TsType::Number => Some("Double")
+    @ast.TsType::Int => Some("Int")
+    @ast.TsType::String_ => Some("String")
+    @ast.TsType::Boolean => Some("Bool")
+    @ast.TsType::BigInt => Some("Int64")
+    @ast.TsType::Named(name) => Some(name)
+    @ast.TsType::Array(inner) =>
+      match tagged_union_inner_moonbit_text(inner) {
+        Some(text) => Some("Array[" + text + "]")
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Render a `BridgeTaggedUnionDecl` as a `pub(all) enum` MoonBit section.
+pub fn tagged_union_decl_to_moonbit_section(
+  decl : BridgeTaggedUnionDecl,
+) -> String? {
+  let mut body = "///|\npub(all) enum " + decl.name + " {\n"
+  for entry in decl.cases {
+    let (case_name, inner) = entry
+    let inner_text = match tagged_union_inner_moonbit_text(inner) {
+      Some(text) => text
+      None => return None
+    }
+    body = body + "  " + case_name + "(" + inner_text + ")\n"
+  }
+  body = body + "}"
+  Some(body)
+}
+
+///|
 /// Stable JS function name pair for the bridge.js converters of one
 /// tagged-union alias.
 pub fn tagged_union_to_js_function_name(decl_name : String) -> String {
@@ -266,7 +338,17 @@ fn tagged_union_to_snake_case(name : String) -> String {
 pub fn tagged_union_bridge_js_converter_decls(
   decl : BridgeTaggedUnionDecl,
 ) -> String? {
-  let to_js_body = tagged_union_to_js_expression(decl, "value")
+  tagged_union_bridge_js_converter_decls_with_nested(decl, {})
+}
+
+///|
+pub fn tagged_union_bridge_js_converter_decls_with_nested(
+  decl : BridgeTaggedUnionDecl,
+  nested : Map[String, BridgeTaggedUnionDecl],
+) -> String? {
+  let to_js_body = tagged_union_to_js_expression_with_nested(
+    decl, "value", nested,
+  )
   let from_js_body = match tagged_union_from_js_expression(decl, "value") {
     Some(body) => body
     None => return None
