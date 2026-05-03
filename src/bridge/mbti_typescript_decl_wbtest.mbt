@@ -44,9 +44,7 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|  show_value(): string;
     #|}
     #|
-    #|export namespace Box {
-    #|  function new_<T>(value: T): Box<T>;
-    #|}
+    #|export function Box_new_<T>(value: T): Box<T>;
     #|
     #|export interface ResultMethods<T, E> {
     #|  is_ok(): boolean;
@@ -91,7 +89,7 @@ async test "bridge: emit TypeScript declaration from real-world jsonschema mbti 
   assert_true(actual.contains("import type * as json"))
   assert_true(actual.contains("export function build_resolver"))
   assert_true(actual.contains("export interface Validatable"))
-  assert_true(actual.contains("export namespace Builder"))
+  assert_true(actual.contains("export function Builder_"))
   assert_true(actual.contains("export type JsonSchema ="))
 }
 

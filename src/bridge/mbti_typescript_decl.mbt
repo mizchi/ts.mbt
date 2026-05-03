@@ -3700,13 +3700,35 @@ fn render_trait_decl(trait_decl : MbtiTraitDecl) -> String {
 }
 
 ///|
+/// Render static / constructor-style members as flat top-level
+/// `export function` declarations prefixed with the owning type's name.
+///
+/// `export namespace Foo { function new_(...) }` is the natural fit for
+/// the `Foo::new_(...)` source signature, but TypeScript namespaces
+/// compile down to an IIFE (`let Foo; (function(_Foo) { _Foo.new_ = ...
+/// })(Foo || (Foo = {}))`), and bundlers can't statically prove which
+/// `Foo.new_` / `Foo.fromArray` / ... attributes the consumer reads.
+/// Verified against rolldown 1.0.0-rc.18: namespace members survive into
+/// the bundle even when only one is imported, while top-level
+/// `export function` declarations participate in tree-shaking normally.
+///
+/// To stay aligned with how lodash / date-fns / zod / hono etc. ship
+/// their public API — and so a `import { Box_new_ } from "..."` actually
+/// drops `Box_fromArray` / `Box_fromMap` from the bundle — the emitter
+/// flattens the members into `Owner_member` named exports.
 fn render_namespace_decl(name : String, members : Array[String]) -> String {
-  let body_lines : Array[String] = []
+  let lines : Array[String] = []
   for member_decl in members {
-    body_lines.push("  " + member_decl)
+    if member_decl.has_prefix("function ") {
+      let rest = member_decl["function ".length():member_decl.length()].to_string()
+      lines.push("export function \{name}_\{rest}")
+    } else {
+      // Defensive: anything that didn't come through the static-member
+      // path stays verbatim.
+      lines.push(member_decl)
+    }
   }
-  let rendered_body = body_lines.join("\n")
-  "export namespace \{name} {\n\{rendered_body}\n}"
+  lines.join("\n")
 }
 
 ///|

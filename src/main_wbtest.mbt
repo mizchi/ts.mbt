@@ -749,7 +749,7 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
   assert_true(actual.contains("unwrap(): T;"))
   assert_true(actual.contains("map<U>(fn_: (value: T) => U): Box<U>;"))
   assert_true(actual.contains("show_value(): string;"))
-  assert_true(actual.contains("function new_<T>(value: T): Box<T>;"))
+  assert_true(actual.contains("export function Box_new_<T>(value: T): Box<T>;"))
   assert_true(actual.contains("export type Result<T, E> ="))
   assert_true(actual.contains("export interface ResultMethods<T, E> {"))
   assert_true(actual.contains("module: ast.TsModule;"))
