@@ -601,8 +601,11 @@ test "bridge: FFI type name preserves optional complex unions when widened" {
       @ast.TsType::Undefined,
     ]),
   )
-  assert_eq(actual, "JSValue?")
-  assert_true(state.needs_js_any)
+  // `string | StringParams | undefined`: the optional marker no longer
+  // forces the inner `string | StringParams` to widen — the auto inline
+  // union synthesiser kicks in and produces a tagged-enum alias.
+  assert_eq(actual, "Auto_StringValue_or_StringParamsValue?")
+  assert_false(state.needs_js_any)
 }
 
 ///|

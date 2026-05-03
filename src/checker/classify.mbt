@@ -219,8 +219,31 @@ pub fn classify_optional_like_union(
         concrete = Some(Named("Error"))
       }
       if has_conflicting_concrete {
-        if is_optional {
-          Some((Any, true))
+        if has_any {
+          // `T | string | any | undefined`: the explicit `any` swallows the
+          // narrower members regardless of the rest.
+          if is_optional { Some((Any, true)) } else { None }
+        } else if is_optional {
+          // `T | U | undefined` (multiple distinct concretes plus the
+          // optional marker). Returning `(Any, true)` here would force every
+          // call site to widen to JSValue and lose the chance to lower the
+          // inner heterogeneous union to a tagged-enum alias. Instead, hand
+          // back the inner `Union(concretes)` so the caller can recurse and
+          // either auto-synthesise a tagged enum or fall back to `Any`.
+          let concretes : Array[@ast.TsType] = []
+          for item in items {
+            match item {
+              Undefined | Null => ()
+              _ => concretes.push(item)
+            }
+          }
+          if concretes.length() >= 2 {
+            Some((Union(concretes), true))
+          } else if concretes.length() == 1 {
+            Some((concretes[0], true))
+          } else {
+            Some((Any, true))
+          }
         } else {
           None
         }
