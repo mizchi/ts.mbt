@@ -3539,6 +3539,19 @@ fn render_type_alias_trait_suffix(
 }
 
 ///|
+/// Decide whether to render instance methods as top-level
+/// `Owner_method(self, ...)` (flat — default, tree-shake friendly) or
+/// inline them on the surrounding interface body (chainable —
+/// `b.map(fn)` style, but the runtime bundle still exports the
+/// flattened functions, so this style describes a TypeScript-only view).
+fn mbti_method_style_is_interface() -> Bool {
+  match @env.get_env_var("TS_MBT_METHOD_STYLE") {
+    Some(value) => value == "interface" || value == "chain"
+    None => false
+  }
+}
+
+///|
 fn render_struct_decl(
   struct_decl : MbtiStructDecl,
   methods : Array[String],
@@ -3554,6 +3567,17 @@ fn render_struct_decl(
     " extends " + extends_items.join(", ")
   } else {
     ""
+  }
+  if mbti_method_style_is_interface() {
+    let body_lines : Array[String] = []
+    for field_decl in struct_decl.fields {
+      body_lines.push(field_decl)
+    }
+    for method_decl in methods {
+      body_lines.push("  " + method_decl)
+    }
+    let rendered_body = body_lines.join("\n")
+    return "export interface \{struct_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
   }
   let body_lines : Array[String] = []
   for field_decl in struct_decl.fields {
@@ -3672,6 +3696,15 @@ fn render_enum_like_decl(
   } else {
     "\n\n" + extract_lines
   }
+  if mbti_method_style_is_interface() && methods.length() > 0 {
+    let methods_name = "\{enum_decl.name}Methods"
+    let body_lines : Array[String] = []
+    for method_decl in methods {
+      body_lines.push("  " + method_decl)
+    }
+    let rendered_body = body_lines.join("\n")
+    return "export interface \{methods_name}\{type_param_suffix} {\n\{rendered_body}\n}\n\nexport type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body}) & \{methods_name}\{type_param_suffix}\{trait_suffix};\{extract_suffix}"
+  }
   let alias_section = if trait_suffix != "" {
     "export type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body})\{trait_suffix};\{extract_suffix}"
   } else {
@@ -3734,6 +3767,14 @@ fn render_type_alias_decl(
     } else {
       ""
     }
+    if mbti_method_style_is_interface() {
+      let body_lines : Array[String] = []
+      for method_decl in methods {
+        body_lines.push("  " + method_decl)
+      }
+      let rendered_body = body_lines.join("\n")
+      return "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
+    }
     let interface_section = "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n}"
     let flat_methods = render_flat_instance_methods(
       alias_decl.name, type_param_suffix, methods,
@@ -3748,6 +3789,15 @@ fn render_type_alias_decl(
     alias_decl.name,
     type_param_suffix,
   )
+  if mbti_method_style_is_interface() && methods.length() > 0 {
+    let methods_name = "\{alias_decl.name}Methods"
+    let body_lines : Array[String] = []
+    for method_decl in methods {
+      body_lines.push("  " + method_decl)
+    }
+    let rendered_body = body_lines.join("\n")
+    return "export interface \{methods_name}\{type_param_suffix} {\n\{rendered_body}\n}\n\nexport type \{alias_decl.name}\{type_param_suffix} = (\{alias_decl.body}) & \{methods_name}\{type_param_suffix}\{trait_suffix};"
+  }
   let alias_section = if trait_suffix != "" {
     "export type \{alias_decl.name}\{type_param_suffix} = (\{alias_decl.body})\{trait_suffix};"
   } else {
@@ -3807,6 +3857,14 @@ fn render_trait_decl(trait_decl : MbtiTraitDecl) -> String {
 /// drops `Box_fromArray` / `Box_fromMap` from the bundle — the emitter
 /// flattens the members into `Owner_member` named exports.
 fn render_namespace_decl(name : String, members : Array[String]) -> String {
+  if mbti_method_style_is_interface() {
+    let body_lines : Array[String] = []
+    for member_decl in members {
+      body_lines.push("  " + member_decl)
+    }
+    let rendered_body = body_lines.join("\n")
+    return "export namespace \{name} {\n\{rendered_body}\n}"
+  }
   let lines : Array[String] = []
   for member_decl in members {
     if member_decl.has_prefix("function ") {
