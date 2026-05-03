@@ -26,23 +26,23 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|export interface Comparable<T0> {
     #|}
     #|
-    #|export function identity<T>(arg0: T): T;
+    #|export function identity<T>(value: T): T;
     #|
-    #|export function debug_identity<T extends debug.Debug>(arg0: T): T;
+    #|export function debug_identity<T extends debug.Debug>(value: T): T;
     #|
-    #|export function wrap_pair(arg0: string, arg1: number): [string, number];
+    #|export function wrap_pair(s: string, n: number): [string, number];
     #|
     #|export type ParseError = ({ $tag: "InvalidFormat"; _0: string } | { $tag: "Overflow"; _0: number; _1: string }) & Show & Eq<ParseError>;
     #|
     #|export interface Box<T> extends Show, Eq<Box<T>>, Hash, Comparable<Box<T>> {
     #|  value: T;
     #|  unwrap(): T;
-    #|  map<U>(arg0: (arg0: T) => U): Box<U>;
+    #|  map<U>(fn_: (value: T) => U): Box<U>;
     #|  show_value(): string;
     #|}
     #|
     #|export namespace Box {
-    #|  function new_<T>(arg0: T): Box<T>;
+    #|  function new_<T>(value: T): Box<T>;
     #|}
     #|
     #|export interface ResultMethods<T, E> {
@@ -95,7 +95,7 @@ async test "bridge: emit TypeScript declarations keeps pub(all) types used by pu
       fail("MBTI emit error: \{msg}")
   }
   let expected =
-    #|export function analyze_truthiness_guard(arg0: string): [string, boolean] | undefined;
+    #|export function analyze_truthiness_guard(s: string): [string, boolean] | undefined;
     #|
     #|export interface AnalysisResultMethods<T> {
     #|  is_ok(): boolean;
@@ -120,12 +120,12 @@ async test "bridge: emit TypeScript declarations from real pkg.generated.mbti ke
   assert_true(actual.contains("export interface AnalysisResultMethods<T> {"))
   assert_true(
     actual.contains(
-      "export function analyze_null_guard(arg0: ast.TsExpr): [string, boolean] | undefined;",
+      "export function analyze_null_guard(value: ast.TsExpr): [string, boolean] | undefined;",
     ),
   )
   assert_true(
     actual.contains(
-      "export function analyze_typeof_guard(arg0: ast.TsExpr): [string, string] | undefined;",
+      "export function analyze_typeof_guard(value: ast.TsExpr): [string, string] | undefined;",
     ),
   )
   assert_true(actual.contains("Eq<AnalysisErrorKind>"))
@@ -164,7 +164,7 @@ async test "bridge: emit TypeScript declarations unwraps grouped optional functi
     #|export type Signal = { $tag: "Continue" };
     #|
     #|export interface Holder {
-    #|  cont: ((arg0: string) => Signal) | undefined;
+    #|  cont: ((s: string) => Signal) | undefined;
     #|}
   assert_eq(actual, expected)
 }
@@ -179,7 +179,7 @@ async test "bridge: emit TypeScript declarations keeps real runtime function fie
       fail("MBTI emit error: \{msg}")
   }
   assert_true(
-    actual.contains("cont: ((arg0: JSValue) => GenSignal) | undefined;"),
+    actual.contains("cont: ((value: JSValue) => GenSignal) | undefined;"),
   )
   assert_false(actual.contains("->"))
 }
@@ -218,7 +218,7 @@ test "bridge: emit TypeScript declarations supports opaque public types and tupl
   )
   assert_true(
     actual.contains(
-      "export function read_id(arg0: InternId): Result<string, Error>;",
+      "export function read_id(value: InternId): Result<string, Error>;",
     ),
   )
   assert_true(actual.contains("export interface Any {"))
@@ -254,10 +254,10 @@ test "bridge: emit TypeScript declarations normalizes StringView" {
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI emit error: \{msg}")
   }
-  assert_true(actual.contains("export function format(arg0: string): string;"))
+  assert_true(actual.contains("export function format(s: string): string;"))
   assert_true(
     actual.contains(
-      "export function parse(arg0: string): Result<string, Error>;",
+      "export function parse(s: string): Result<string, Error>;",
     ),
   )
   assert_false(actual.contains("StringView"))
@@ -284,7 +284,7 @@ test "bridge: emit TypeScript declarations declares builtin StringBuilder" {
   }
   assert_true(actual.contains("export interface StringBuilder {\n}"))
   assert_true(
-    actual.contains("export function write_to(arg0: StringBuilder): void;"),
+    actual.contains("export function write_to(value: StringBuilder): void;"),
   )
 }
 
@@ -310,7 +310,7 @@ test "bridge: emit TypeScript declarations keeps required params after optional 
   }
   assert_true(
     actual.contains(
-      "export function view(id: string | undefined, gap: number | undefined, arg2: Array<string>): void;",
+      "export function view(id: string | undefined, gap: number | undefined, items: Array<string>): void;",
     ),
   )
   assert_true(
@@ -351,7 +351,7 @@ test "bridge: emit TypeScript declarations normalizes async and raising function
   }
   assert_true(
     actual.contains(
-      "export function async_<E, A>(render_: () => Promise<Node<E, A>>, fallback_: () => Node<E, A>, on_error?: ((arg0: Error) => Node<E, A>) | undefined): Node<E, A>;",
+      "export function async_<E, A>(render_: () => Promise<Node<E, A>>, fallback_: () => Node<E, A>, on_error?: ((value: Error) => Node<E, A>) | undefined): Node<E, A>;",
     ),
   )
   assert_true(
@@ -365,7 +365,7 @@ test "bridge: emit TypeScript declarations normalizes async and raising function
   assert_true(actual.contains("  children: () => Node<E, A>;"))
   assert_true(
     actual.contains(
-      "  fallback: (arg0: Error, arg1: () => void) => Node<E, A>;",
+      "  fallback: (arg0: Error, fn_: () => void) => Node<E, A>;",
     ),
   )
   assert_true(actual.contains("  render: () => Promise<Node<E, A>>;"))
@@ -386,7 +386,7 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   }
   assert_true(
     actual.contains(
-      "export function consume_callbacks(handler: (arg0: string, arg1: number) => void, on_error: ((arg0: Error) => void) | undefined, required: Array<string>): void;",
+      "export function consume_callbacks(handler: (s: string, n: number) => void, on_error: ((value: Error) => void) | undefined, required: Array<string>): void;",
     ),
   )
   assert_true(
@@ -396,7 +396,7 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export function borrow_bytes(arg0: Uint8Array): Uint8Array;",
+      "export function borrow_bytes(value: Uint8Array): Uint8Array;",
     ),
   )
   assert_true(
@@ -406,7 +406,7 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export interface CallbackBox<T> {\n  current: T;\n  on_change: ((arg0: T) => void) | undefined;\n  meta: Map<string, Array<boolean>>;\n  map<U>(mapper: (arg0: T) => U): CallbackBox<U>;\n  tap(effect: (self: CallbackBox<T>) => void): CallbackBox<T>;\n}",
+      "export interface CallbackBox<T> {\n  current: T;\n  on_change: ((value: T) => void) | undefined;\n  meta: Map<string, Array<boolean>>;\n  map<U>(mapper: (value: T) => U): CallbackBox<U>;\n  tap(effect: (self: CallbackBox<T>) => void): CallbackBox<T>;\n}",
     ),
   )
   assert_true(
@@ -424,7 +424,7 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export type MaybeHandler<T> = ((arg0: T) => void) | undefined;",
+      "export type MaybeHandler<T> = ((value: T) => void) | undefined;",
     ),
   )
   assert_false(actual.contains(" raise"))
@@ -456,7 +456,7 @@ test "bridge: emit TypeScript declarations normalizes trait bounds and reserved 
   }
   assert_true(
     actual.contains(
-      "export function export_sync<E extends Show & Error>(arg0: () => Any): Any;",
+      "export function export_sync<E extends Show & Error>(fn_: () => Any): Any;",
     ),
   )
   assert_true(actual.contains("export interface Show {"))
@@ -498,12 +498,12 @@ test "bridge: emit TypeScript declarations avoids field method and import alias 
   }
   assert_true(actual.contains("import type * as symbol_ from"))
   assert_true(
-    actual.contains("export function symbol(arg0: string): symbol_.Symbol;"),
+    actual.contains("export function symbol(s: string): symbol_.Symbol;"),
   )
-  assert_true(actual.contains("  resolve: (arg0: T) => void;"))
-  assert_true(actual.contains("  resolve_(arg0: T): void;"))
-  assert_true(actual.contains("  reject: (arg0: Error) => void;"))
-  assert_true(actual.contains("  reject_(arg0: Error): void;"))
+  assert_true(actual.contains("  resolve: (value: T) => void;"))
+  assert_true(actual.contains("  resolve_(value: T): void;"))
+  assert_true(actual.contains("  reject: (value: Error) => void;"))
+  assert_true(actual.contains("  reject_(value: Error): void;"))
 }
 
 ///|
@@ -537,7 +537,7 @@ test "bridge: emit TypeScript declarations keeps private local opaque types refe
   assert_true(actual.contains("interface Memo<T> {\n}"))
   assert_true(
     actual.contains(
-      "export function use_runtime(arg0: Runtime): Iterable<string>;",
+      "export function use_runtime(value: Runtime): Iterable<string>;",
     ),
   )
   assert_true(actual.contains("  runtime: Runtime;"))
@@ -571,7 +571,7 @@ test "bridge: emit TypeScript declarations imports fully qualified external type
   )
   assert_true(
     actual.contains(
-      "export function nodes(arg0: Array<mizchi_luna_core.Node<void, string>>): mizchi_luna_core.Node<void, string>;",
+      "export function nodes(items: Array<mizchi_luna_core.Node<void, string>>): mizchi_luna_core.Node<void, string>;",
     ),
   )
   let rewrites : Map[String, String] = {}
@@ -623,7 +623,7 @@ test "bridge: emit TypeScript declarations unwraps borrowed types" {
   )
   assert_true(
     actual.contains(
-      "export function read(arg0: io.Reader, arg1: Array<Node>): Node;",
+      "export function read(arg0: io.Reader, items: Array<Node>): Node;",
     ),
   )
   assert_true(actual.contains("  reader: io.Reader;"))
@@ -654,7 +654,7 @@ test "bridge: emit TypeScript declarations emits builtin Json when referenced" {
   }
   assert_true(actual.contains("export type Json ="))
   assert_true(
-    actual.contains("export function ok(arg0: Json): Result<Json, Error>;"),
+    actual.contains("export function ok(value: Json): Result<Json, Error>;"),
   )
 }
 
@@ -694,9 +694,9 @@ test "bridge: emit TypeScript declarations renders public trait blocks as interf
   assert_true(actual.contains("  size: number;"))
   assert_true(actual.contains("export interface FileSystem {"))
   assert_true(
-    actual.contains("  read_file_sync(arg0: string): Result<string, Error>;"),
+    actual.contains("  read_file_sync(s: string): Result<string, Error>;"),
   )
-  assert_true(actual.contains("  exists_sync(arg0: string): boolean;"))
+  assert_true(actual.contains("  exists_sync(s: string): boolean;"))
   assert_true(
     actual.contains(
       "export interface StatInfo extends Eq<StatInfo>, FileStat {",
@@ -1084,7 +1084,7 @@ async test "bridge: emit TypeScript facade scaffold bundle from mbti adds facade
     }
   }
   assert_true(
-    root_content.contains("export function loader_new(arg0: string): Loader;"),
+    root_content.contains("export function loader_new(s: string): Loader;"),
   )
   assert_true(
     root_content.contains("export function loader_load(self: Loader): string;"),
@@ -1190,7 +1190,7 @@ async test "bridge: emit TypeScript facade scaffold bundle sorts review-facing f
   }
   let expected_facade_decls =
     #|export function worker_a(self: Worker): string;
-    #|export function worker_new(arg0: string): Worker;
+    #|export function worker_new(s: string): Worker;
     #|export function worker_z(self: Worker): string;
   assert_true(root_content.contains(expected_facade_decls))
 }
@@ -1298,7 +1298,7 @@ async test "bridge: emit TypeScript facade scaffold bundle includes async method
   }
   assert_true(
     root_content.contains(
-      "export function worker_new(arg0: string): Promise<Worker>;",
+      "export function worker_new(s: string): Promise<Worker>;",
     ),
   )
   assert_true(
@@ -1324,11 +1324,11 @@ async test "bridge: emit TypeScript declarations reflects top-level raise effect
   )
   assert_true(
     actual.contains(
-      "export function parse(arg0: string): Result<SemVer, SemVerError>;",
+      "export function parse(s: string): Result<SemVer, SemVerError>;",
     ),
   )
   assert_true(
-    actual.contains("parse_next(arg0: string): Result<SemVer, SemVerError>;"),
+    actual.contains("parse_next(s: string): Result<SemVer, SemVerError>;"),
   )
 }
 

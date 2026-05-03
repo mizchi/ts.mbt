@@ -215,6 +215,9 @@ fn mbti_ascii_lower_char(c : Char) -> Char {
 
 ///|
 fn mbti_is_generated_param_name(name : String) -> Bool {
+  if name == "value" {
+    return true
+  }
   if !name.has_prefix("arg") || name.length() <= 3 {
     return false
   }
@@ -224,6 +227,62 @@ fn mbti_is_generated_param_name(name : String) -> Bool {
     }
   }
   true
+}
+
+///|
+/// Heuristic name for an unnamed positional parameter, looked up by its
+/// rendered TypeScript type. `.mbti` files don't carry parameter names for
+/// non-labelled arguments, so the emitter previously fell back to `arg0` /
+/// `arg1` / ... — those are noisy in IDE hints, so prefer a short
+/// type-flavored name when the shape is recognisable. Returns `None` for
+/// shapes the heuristic doesn't know about, in which case callers stick
+/// with the numbered fallback.
+fn mbti_heuristic_param_name(ty_src : String) -> String? {
+  let trimmed = ty_src.trim().to_string()
+  // Strip optional/`undefined` tail so `string | undefined` and `string`
+  // map to the same heuristic slot.
+  let core_ty = if trimmed.has_suffix(" | undefined") {
+    trimmed[:trimmed.length() - " | undefined".length()].trim().to_string()
+  } else {
+    trimmed
+  }
+  match core_ty {
+    "string" => Some("s")
+    "number" => Some("n")
+    "boolean" => Some("flag")
+    "bigint" => Some("n")
+    "void" | "Unit" => Some("v")
+    _ => {
+      if core_ty.has_prefix("Array<") || core_ty.has_prefix("ReadonlyArray<") {
+        Some("items")
+      } else if core_ty.has_prefix("Map<") || core_ty.has_prefix("ReadonlyMap<") {
+        Some("entries")
+      } else if core_ty.has_prefix("(") && core_ty.contains("=>") {
+        Some("fn_")
+      } else if core_ty.has_prefix("Promise<") {
+        Some("promise")
+      } else {
+        None
+      }
+    }
+  }
+}
+
+///|
+/// Decide a positional-parameter name. When the shape is recognisable we
+/// pick a short heuristic name — `s` / `n` / `items` / `fn_` etc. When the
+/// function only takes one parameter we use the bland but readable
+/// `value`; otherwise fall back to the numbered placeholder so adjacent
+/// args stay distinguishable.
+fn mbti_positional_param_name(
+  ty_src : String,
+  idx : Int,
+  total : Int,
+) -> String {
+  match mbti_heuristic_param_name(ty_src) {
+    Some(name) => name
+    None => if total == 1 { "value" } else { "arg\{idx}" }
+  }
 }
 
 ///|
@@ -925,6 +984,12 @@ fn parse_mbti_raw_facade_params(
         params.push({ name, ty_src, optional })
       }
       None => {
+        // Raw facade params are also consumed by the MoonBit-side
+        // autolink glue generator, where an `arg0` placeholder is the
+        // expected stable name (the wrapped MoonBit signature uses the
+        // same identifier). Don't run the TypeScript-flavored heuristic
+        // here — the TS-only `parse_mbti_facade_params` does that on its
+        // own copy of the data.
         let name = if idx == 0 && trimmed.has_prefix("Self") {
           "self"
         } else {
@@ -937,6 +1002,31 @@ fn parse_mbti_raw_facade_params(
     idx += 1
   }
   Some(params)
+}
+
+///|
+/// Make sure a positional parameter name doesn't collide with one already
+/// claimed by an earlier slot. When the heuristic picks `s` twice (two
+/// `string` params in a row), append a suffix so the TypeScript signature
+/// stays a valid distinct-parameter list. Falls back to `arg{idx}` if even
+/// the suffixed candidate is taken.
+fn mbti_dedup_param_name(
+  candidate : String,
+  used : Array[String],
+  idx : Int,
+) -> String {
+  if !used.contains(candidate) {
+    return candidate
+  }
+  let mut counter = 2
+  while counter < 100 {
+    let probe = "\{candidate}\{counter}"
+    if !used.contains(probe) {
+      return probe
+    }
+    counter += 1
+  }
+  "arg\{idx}"
 }
 
 ///|
@@ -2181,8 +2271,11 @@ fn parse_mbti_params(
   owner_type_params : Array[String],
 ) -> Array[MbtiParam] raise MbtiTypescriptDeclError {
   let params : Array[MbtiParam] = []
+  let raw_items = split_top_level_items(source)
+  let total = raw_items.length()
+  let used_names : Array[String] = []
   let mut idx = 0
-  for raw in split_top_level_items(source) {
+  for raw in raw_items {
     let trimmed = raw.trim().to_string()
     if trimmed == "" {
       continue
@@ -2207,6 +2300,7 @@ fn parse_mbti_params(
         } else {
           sanitize_ts_identifier(name, "arg\{idx}")
         }
+        used_names.push(param_name)
         params.push({ name: param_name, ty, optional: raw_name.has_suffix("?") })
       }
       None => {
@@ -2216,8 +2310,11 @@ fn parse_mbti_params(
         let param_name = if idx == 0 && trimmed.has_prefix("Self") {
           "self"
         } else {
-          "arg\{idx}"
+          mbti_dedup_param_name(
+            mbti_positional_param_name(ty, idx, total), used_names, idx,
+          )
         }
+        used_names.push(param_name)
         params.push({ name: param_name, ty, optional: false })
       }
     }
@@ -2898,13 +2995,20 @@ fn parse_trait_block_decl(
               owner_type_param_names,
             )
             let instance_params : Array[MbtiParam] = []
+            let instance_total = if params.length() > 0 && params[0].name == "self" {
+              params.length() - 1
+            } else {
+              params.length()
+            }
             for param_idx in 0..<params.length() {
               let param = params[param_idx]
               if param_idx == 0 && param.name == "self" {
                 continue
               }
               let normalized_name = if mbti_is_generated_param_name(param.name) {
-                "arg\{instance_params.length()}"
+                mbti_positional_param_name(
+                  param.ty, instance_params.length(), instance_total,
+                )
               } else {
                 param.name
               }
@@ -3920,12 +4024,15 @@ fn parse_mbti_to_typescript_with_import_rewrites(
               params.length() > 0 &&
               params[0].name == "self" {
               let instance_params : Array[MbtiParam] = []
+              let instance_total = params.length() - 1
               for idx in 1..<params.length() {
                 let param = params[idx]
                 let normalized_name = if mbti_is_generated_param_name(
                     param.name,
                   ) {
-                  "arg\{idx - 1}"
+                  mbti_positional_param_name(
+                    param.ty, idx - 1, instance_total,
+                  )
                 } else {
                   param.name
                 }

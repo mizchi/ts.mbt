@@ -728,10 +728,10 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) =>
       fail("Emit error: \{msg}")
   }
-  assert_true(actual.contains("export function identity<T>(arg0: T): T;"))
+  assert_true(actual.contains("export function identity<T>(value: T): T;"))
   assert_true(
     actual.contains(
-      "export function debug_identity<T extends debug.Debug>(arg0: T): T;",
+      "export function debug_identity<T extends debug.Debug>(value: T): T;",
     ),
   )
   assert_true(
@@ -747,9 +747,9 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
     ),
   )
   assert_true(actual.contains("unwrap(): T;"))
-  assert_true(actual.contains("map<U>(arg0: (arg0: T) => U): Box<U>;"))
+  assert_true(actual.contains("map<U>(fn_: (value: T) => U): Box<U>;"))
   assert_true(actual.contains("show_value(): string;"))
-  assert_true(actual.contains("function new_<T>(arg0: T): Box<T>;"))
+  assert_true(actual.contains("function new_<T>(value: T): Box<T>;"))
   assert_true(actual.contains("export type Result<T, E> ="))
   assert_true(actual.contains("export interface ResultMethods<T, E> {"))
   assert_true(actual.contains("module: ast.TsModule;"))
@@ -953,7 +953,7 @@ async test "emit_typescript_scaffold_from_mbti handles moon.mod source subdir" {
     e => fail("failed to read source-subdir index.js: \{e}")
   }
   assert_true(package_json.contains("\"name\": \"@fixture/source-subdir-pkg\""))
-  assert_true(root_decl.contains("export function make(arg0: string): Cell;"))
+  assert_true(root_decl.contains("export function make(s: string): Cell;"))
   assert_true(root_js.contains("export {"))
 }
 
@@ -1023,12 +1023,12 @@ async test "emit_typescript_decl_from_mbti_text keeps real analysis package outp
   assert_true(actual.contains("& Show;"))
   assert_true(
     actual.contains(
-      "export function analyze_null_guard(arg0: ast.TsExpr): [string, boolean] | undefined;",
+      "export function analyze_null_guard(value: ast.TsExpr): [string, boolean] | undefined;",
     ),
   )
   assert_true(
     actual.contains(
-      "export function analyze_typeof_guard(arg0: ast.TsExpr): [string, string] | undefined;",
+      "export function analyze_typeof_guard(value: ast.TsExpr): [string, string] | undefined;",
     ),
   )
   assert_false(actual.contains("(String, Bool)?"))
