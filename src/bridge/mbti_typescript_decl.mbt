@@ -75,6 +75,10 @@ priv struct MbtiEnumLikeDecl {
   name : String
   type_params : Array[MbtiTypeParam]
   union_body : String
+  // Discriminant values for the `$tag` field (one entry per variant) so
+  // emission can append `Extract<T, { $tag: "X" }>` aliases without
+  // re-parsing the rendered union body.
+  variant_names : Array[String]
 }
 
 ///|
@@ -2859,6 +2863,7 @@ fn parse_enum_like_block_decl(
       let (name, type_params) = header
       let owner_type_param_names = type_param_names(type_params)
       let variants : Array[String] = []
+      let variant_names : Array[String] = []
       for idx in 1..<lines.length() {
         let trimmed = trim_trailing_comma_or_semicolon(
           lines[idx].trim().to_string(),
@@ -2873,6 +2878,7 @@ fn parse_enum_like_block_decl(
             let fields = parse_variant_payload(
               payload_src, imports, used_aliases, name, owner_type_param_names,
             )
+            variant_names.push(variant_name)
             if fields.length() == 0 {
               variants.push("{ $tag: \"\{variant_name}\" }")
             } else {
@@ -2880,11 +2886,14 @@ fn parse_enum_like_block_decl(
               variants.push("{ $tag: \"\{variant_name}\"; \{joined_fields} }")
             }
           }
-          _ => variants.push("{ $tag: \"\{trimmed}\" }")
+          _ => {
+            variant_names.push(trimmed)
+            variants.push("{ $tag: \"\{trimmed}\" }")
+          }
         }
       }
       let joined_variants = variants.join(" | ")
-      { name, type_params, union_body: joined_variants }
+      { name, type_params, union_body: joined_variants, variant_names }
     }
     None =>
       raise MbtiTypescriptDeclError::ParseError(
@@ -3549,11 +3558,17 @@ fn render_enum_like_decl(
     enum_decl.name,
     type_param_suffix,
   )
+  let extract_lines = render_enum_variant_extract_aliases(enum_decl)
+  let extract_suffix = if extract_lines == "" {
+    ""
+  } else {
+    "\n\n" + extract_lines
+  }
   if methods.length() == 0 {
     if trait_suffix != "" {
-      return "export type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body})\{trait_suffix};"
+      return "export type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body})\{trait_suffix};\{extract_suffix}"
     }
-    return "export type \{enum_decl.name}\{type_param_suffix} = \{enum_decl.union_body};"
+    return "export type \{enum_decl.name}\{type_param_suffix} = \{enum_decl.union_body};\{extract_suffix}"
   }
   let methods_name = "\{enum_decl.name}Methods"
   let body_lines : Array[String] = []
@@ -3561,7 +3576,36 @@ fn render_enum_like_decl(
     body_lines.push("  " + method_decl)
   }
   let rendered_body = body_lines.join("\n")
-  "export interface \{methods_name}\{type_param_suffix} {\n\{rendered_body}\n}\n\nexport type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body}) & \{methods_name}\{type_param_suffix}\{trait_suffix};"
+  "export interface \{methods_name}\{type_param_suffix} {\n\{rendered_body}\n}\n\nexport type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body}) & \{methods_name}\{type_param_suffix}\{trait_suffix};\{extract_suffix}"
+}
+
+///|
+/// Emit one `Extract<EnumName, { $tag: "X" }>` type alias per variant so
+/// callers can narrow to a specific case without having to write the
+/// `Extract<...>` boilerplate themselves. The aliases are grouped right
+/// below the union itself for proximity.
+///
+/// Generic enums forward the type parameters intact so the per-variant
+/// alias stays usable at instantiation: `Result_Ok<T, E>` extracts the
+/// `Ok` arm of `Result<T, E>`.
+///
+/// Returns an empty string when the enum has no variants (defensive — the
+/// regular emission path already rejects empty enum bodies upstream).
+fn render_enum_variant_extract_aliases(
+  enum_decl : MbtiEnumLikeDecl,
+) -> String {
+  if enum_decl.variant_names.length() == 0 {
+    return ""
+  }
+  let type_param_suffix = render_type_param_suffix(enum_decl.type_params)
+  let lines : Array[String] = []
+  for variant_name in enum_decl.variant_names {
+    let safe_variant = sanitize_ts_identifier(variant_name, "Variant")
+    lines.push(
+      "export type \{enum_decl.name}_\{safe_variant}\{type_param_suffix} = Extract<\{enum_decl.name}\{type_param_suffix}, { $tag: \"\{variant_name}\" }>;",
+    )
+  }
+  lines.join("\n")
 }
 
 ///|

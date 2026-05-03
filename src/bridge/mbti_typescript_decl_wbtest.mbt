@@ -34,6 +34,9 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|
     #|export type ParseError = ({ $tag: "InvalidFormat"; _0: string } | { $tag: "Overflow"; _0: number; _1: string }) & Show & Eq<ParseError>;
     #|
+    #|export type ParseError_InvalidFormat = Extract<ParseError, { $tag: "InvalidFormat" }>;
+    #|export type ParseError_Overflow = Extract<ParseError, { $tag: "Overflow" }>;
+    #|
     #|export interface Box<T> extends Show, Eq<Box<T>>, Hash, Comparable<Box<T>> {
     #|  value: T;
     #|  unwrap(): T;
@@ -51,11 +54,16 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|
     #|export type Result<T, E> = ({ $tag: "Ok"; _0: T } | { $tag: "Err"; _0: E }) & ResultMethods<T, E>;
     #|
+    #|export type Result_Ok<T, E> = Extract<Result<T, E>, { $tag: "Ok" }>;
+    #|export type Result_Err<T, E> = Extract<Result<T, E>, { $tag: "Err" }>;
+    #|
     #|export interface TypedModuleHolder {
     #|  module: ast.TsModule;
     #|}
     #|
     #|export type InternalThing<T> = ({ $tag: "Hidden"; _0: T }) & Eq<InternalThing<T>> & Hash;
+    #|
+    #|export type InternalThing_Hidden<T> = Extract<InternalThing<T>, { $tag: "Hidden" }>;
     #|
     #|export type Identity<T> = T;
     #|
@@ -66,6 +74,8 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|export type MaybeString = (string | undefined) & MaybeStringMethods & Show & Hash & json.ToJson;
     #|
     #|export type DerivedStatus = ({ $tag: "Ready" }) & Eq<DerivedStatus>;
+    #|
+    #|export type DerivedStatus_Ready = Extract<DerivedStatus, { $tag: "Ready" }>;
   assert_eq(actual, expected)
 }
 
@@ -103,7 +113,13 @@ async test "bridge: emit TypeScript declarations keeps pub(all) types used by pu
     #|
     #|export type AnalysisResult<T> = ({ $tag: "Ok"; _0: T; _1: Array<string> } | { $tag: "Err"; _0: Array<string> }) & AnalysisResultMethods<T>;
     #|
+    #|export type AnalysisResult_Ok<T> = Extract<AnalysisResult<T>, { $tag: "Ok" }>;
+    #|export type AnalysisResult_Err<T> = Extract<AnalysisResult<T>, { $tag: "Err" }>;
+    #|
     #|export type AnalysisErrorKind = { $tag: "SyntaxError" } | { $tag: "ReferenceError" };
+    #|
+    #|export type AnalysisErrorKind_SyntaxError = Extract<AnalysisErrorKind, { $tag: "SyntaxError" }>;
+    #|export type AnalysisErrorKind_ReferenceError = Extract<AnalysisErrorKind, { $tag: "ReferenceError" }>;
   assert_eq(actual, expected)
 }
 
@@ -162,6 +178,8 @@ async test "bridge: emit TypeScript declarations unwraps grouped optional functi
   }
   let expected =
     #|export type Signal = { $tag: "Continue" };
+    #|
+    #|export type Signal_Continue = Extract<Signal, { $tag: "Continue" }>;
     #|
     #|export interface Holder {
     #|  cont: ((s: string) => Signal) | undefined;
