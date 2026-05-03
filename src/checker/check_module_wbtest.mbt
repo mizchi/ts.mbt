@@ -23,6 +23,7 @@ fn iface_for_check(
     extends_names: [],
     fields,
     readonly_fields: [],
+    index_signatures: [],
   }
 }
 
@@ -194,6 +195,7 @@ test "check_module: detects interface extends cycle" {
     extends_names: ["B"],
     fields: [],
     readonly_fields: [],
+    index_signatures: [],
   })
   m.interfaces.push({
     name: "B",
@@ -201,6 +203,7 @@ test "check_module: detects interface extends cycle" {
     extends_names: ["A"],
     fields: [],
     readonly_fields: [],
+    index_signatures: [],
   })
   let report = check_module(m)
   let cycles = report.issues.filter(fn(i) {
@@ -218,6 +221,7 @@ test "check_module: terminating extends chain is fine" {
     extends_names: [],
     fields: [],
     readonly_fields: [],
+    index_signatures: [],
   })
   m.interfaces.push({
     name: "Dog",
@@ -225,6 +229,7 @@ test "check_module: terminating extends chain is fine" {
     extends_names: ["Animal"],
     fields: [],
     readonly_fields: [],
+    index_signatures: [],
   })
   let report = check_module(m)
   let cycles = report.issues.filter(fn(i) {
@@ -321,6 +326,7 @@ test "check_module: arity check ignores generic params in scope" {
     extends_names: [],
     fields: [("value", Applied("Wrap", [Named("U")]))],
     readonly_fields: [],
+    index_signatures: [],
   })
   let report = check_module(m)
   let arity_issues = report.issues.filter(fn(i) {

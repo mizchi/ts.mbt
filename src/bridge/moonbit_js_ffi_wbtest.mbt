@@ -4719,6 +4719,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
       ("<new>", @ast.TsType::Named("DateType")),
     ],
     readonly_fields: [],
+    index_signatures: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_eq(count_occurrences_in_ffi_output(actual, "  _new_ : DateType"), 1)
@@ -4785,6 +4786,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
       ),
     ],
     readonly_fields: [],
+    index_signatures: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  declare_ : DeclarationParser"))
@@ -4827,6 +4829,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
       ),
     ],
     readonly_fields: [],
+    index_signatures: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  createIdentifier : (String) -> Identifier"))
@@ -4864,6 +4867,7 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
       ),
     ],
     readonly_fields: [],
+    index_signatures: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(
@@ -4942,6 +4946,7 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
       ("isFile", @ast.TsType::Func([], @ast.TsType::Boolean)),
     ],
     readonly_fields: [],
+    index_signatures: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(
@@ -4975,6 +4980,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
       ("call2", @ast.TsType::Func([], @ast.TsType::Void)),
     ],
     readonly_fields: [],
+    index_signatures: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  call2 : () -> Unit"))
@@ -5014,6 +5020,7 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
       ),
     ],
     readonly_fields: [],
+    index_signatures: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("  _call_ : (String) -> Assertion"))
@@ -5083,6 +5090,7 @@ test "bridge: FFI struct preserves selected interface type parameters locally" {
       ("isFile", @ast.TsType::Func([], @ast.TsType::Boolean)),
     ],
     readonly_fields: [],
+    index_signatures: [],
   }
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(actual.contains("pub(all) struct StatsBase[T]"))

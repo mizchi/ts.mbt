@@ -728,6 +728,7 @@ pub fn Parser::parse_interface(
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
   let readonly_fields : Array[String] = []
+  let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   while !self.check(RBrace) && !self.check(Eof) {
     // Skip readonly modifier
     let mut is_readonly_field = false
@@ -752,12 +753,39 @@ pub fn Parser::parse_interface(
       // Computed property / index signature: [key: T]: U or [Symbol.xxx]: T
       LBracket => {
         let _ = self.advance()
-        // Distinguish a TypeScript index signature `[key: T]` (carrying a
-        // type annotation inside the brackets) from a computed property
-        // key like `[Symbol.iterator]`. The parser treats both as a
-        // single field, but later passes drop the index-signature form
-        // because MoonBit cannot represent dynamic-keyed structs without
-        // a dedicated getter/setter pair.
+        // An index signature has the canonical form `[<ident>: <type>]: <type>`,
+        // distinguished from a computed property like `[Symbol.iterator]` by
+        // the `<ident>` immediately followed by `:`. When recognised we parse
+        // the key type directly so later passes can lower the signature into
+        // `op_get` / `op_set` accessors instead of dropping the field.
+        let is_index_sig_start = match self.peek().kind {
+          Ident(_) => self.peek_at(1).kind == Colon
+          _ => false
+        }
+        if is_index_sig_start {
+          let _ = self.advance() // consume index name (ignored)
+          let _ = self.expect(Colon)
+          let key_type = self.parse_type()
+          let _ = self.expect(RBracket)
+          // Optional `?` is not meaningful on index signatures; consume to be
+          // forgiving but ignore.
+          let _ = self.match_(Question)
+          let value_type = if self.check(Colon) {
+            let _ = self.advance()
+            self.parse_type()
+          } else {
+            @ast.TsType::Any
+          }
+          // Stash on a dedicated index_signatures channel so bridge passes
+          // can lower the dynamic key/value pair to `op_get`/`op_set`
+          // accessors without contaminating the regular named-field walk.
+          index_signatures.push((key_type, value_type))
+          let _ = is_readonly_field
+          if self.check(Semicolon) || self.check(Comma) {
+            let _ = self.advance()
+          }
+          continue
+        }
         let mut saw_colon = false
         while !self.check(RBracket) && !self.check(Eof) {
           if self.check(Colon) {
@@ -1026,7 +1054,7 @@ pub fn Parser::parse_interface(
   }
   let _ = self.expect(RBrace)
   self.restore_local_type_param_bounds(local_type_param_bound_len)
-  { name, type_params, extends_names, fields, readonly_fields }
+  { name, type_params, extends_names, fields, readonly_fields, index_signatures }
 }
 
 ///|
@@ -1181,6 +1209,7 @@ fn type_alias_object_fields_to_interface(
         extends_names: [],
         fields: iface_fields,
         readonly_fields: [],
+        index_signatures: [],
       })
     }
     _ => None

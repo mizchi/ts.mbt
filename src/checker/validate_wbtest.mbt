@@ -20,6 +20,7 @@ fn iface(name : String, fields : Array[(String, @ast.TsType)]) -> @ast.TsInterfa
     extends_names: [],
     fields,
     readonly_fields: [],
+    index_signatures: [],
   }
 }
 
@@ -94,6 +95,7 @@ test "validate_module: ignores generic parameters in scope" {
     extends_names: [],
     fields: [("value", Named("T"))],
     readonly_fields: [],
+    index_signatures: [],
   })
   let unresolved = unresolved_type_references(mod)
   assert_eq(unresolved.length(), 0)

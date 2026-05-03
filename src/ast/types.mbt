@@ -359,6 +359,11 @@ pub(all) struct TsInterface {
   extends_names : Array[String]
   fields : Array[(String, TsType)] // (fieldName, type)
   readonly_fields : Array[String]
+  // Index signatures `[k: K]: V` declared on this interface. Stored as
+  // `(key_type, value_type)` pairs so bridge passes can lower them to
+  // `op_get` / `op_set` accessors without conflating them with regular
+  // named fields. Empty for interfaces with no index signature.
+  index_signatures : Array[(TsType, TsType)]
 } derive(Debug)
 
 ///|

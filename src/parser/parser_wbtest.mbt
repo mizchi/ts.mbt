@@ -5369,13 +5369,15 @@ test "parser: parse array field followed by index signature on next line" {
     e => fail("expected array field followed by index signature to parse: \{e}")
   }
   assert_eq(module_.interfaces.length(), 1)
-  // Index signatures (`[propName: string]: unknown`) are no longer
-  // surfaced as opaque `<computed>` struct fields; only the named
-  // properties remain. The bridge cannot represent dynamic-keyed
-  // structs without a dedicated getter/setter pair, which is tracked
-  // separately on the Phase 7 / step 6 roadmap.
+  // Index signatures (`[propName: string]: unknown`) are now retained on the
+  // dedicated `index_signatures` channel with their key/value types preserved,
+  // so bridge passes can lower them to `op_get` / `op_set` accessors without
+  // contaminating the regular named-field walk.
   assert_eq(module_.interfaces[0].fields.length(), 1)
   assert_eq(module_.interfaces[0].fields[0].0, "crit")
+  assert_eq(module_.interfaces[0].index_signatures.length(), 1)
+  assert_eq(module_.interfaces[0].index_signatures[0].0, @ast.TsType::String_)
+  assert_eq(module_.interfaces[0].index_signatures[0].1, @ast.TsType::Any)
 }
 
 ///|

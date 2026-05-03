@@ -2227,6 +2227,7 @@ fn props_with_children_named_interface_spec(
           origin.iface.readonly_fields,
           fields,
         ),
+        index_signatures: origin.iface.index_signatures,
       })
     }
     None => None
@@ -2274,6 +2275,7 @@ fn props_with_children_interface_spec(
         extends_names: [],
         fields,
         readonly_fields: [],
+        index_signatures: [],
       })
     }
     _ =>
@@ -2386,6 +2388,7 @@ fn component_props_with_ref_interface_spec(
               origin.iface.readonly_fields,
               fields,
             ),
+            index_signatures: origin.iface.index_signatures,
           })
         }
         None => None
@@ -2548,6 +2551,7 @@ fn utility_mapped_interface_spec(
         } else {
           readonly_fields_for_fields(origin.iface.readonly_fields, fields)
         },
+        index_signatures: origin.iface.index_signatures,
       })
     }
     None => None
@@ -2608,6 +2612,7 @@ fn utility_projection_interface_spec(
           origin.iface.readonly_fields,
           fields,
         ),
+        index_signatures: [],
       })
     }
     None => None
@@ -4075,6 +4080,7 @@ fn tuple_result_interface_spec(
           extends_names: [],
           fields,
           readonly_fields: [],
+          index_signatures: [],
         },
       })
     }
@@ -4119,6 +4125,7 @@ fn inline_object_result_interface_spec(
           extends_names: [],
           fields: iface_fields,
           readonly_fields: [],
+          index_signatures: [],
         },
       })
     None => None
@@ -4472,6 +4479,7 @@ fn normalize_specialized_node_interfaces(
         ("irq", @ast.TsType::Number),
       ],
       readonly_fields: [],
+      index_signatures: [],
     })
   }
   if needs_crypto_helpers {
@@ -4482,6 +4490,7 @@ fn normalize_specialized_node_interfaces(
         extends_names: [],
         fields: [("plaintextLength", @ast.TsType::Number)],
         readonly_fields: [],
+        index_signatures: [],
       })
     }
     if !exported_names.contains("GenerateKeyOptions") {
@@ -4491,6 +4500,7 @@ fn normalize_specialized_node_interfaces(
         extends_names: [],
         fields: [("length", @ast.TsType::Number)],
         readonly_fields: [],
+        index_signatures: [],
       })
     }
     if !exported_names.contains("DiffieHellmanOptions") {
@@ -4503,6 +4513,7 @@ fn normalize_specialized_node_interfaces(
           ("publicKey", @ast.TsType::Named("KeyObject")),
         ],
         readonly_fields: [],
+        index_signatures: [],
       })
     }
   }
@@ -4517,6 +4528,7 @@ fn normalize_specialized_node_interfaces(
         ("jsdom", @ast.TsType::Named("Environment")),
       ],
       readonly_fields: [],
+      index_signatures: [],
     })
   }
   interfaces
@@ -4634,6 +4646,7 @@ fn clone_resolved_interface_origin(
     extends_names: [],
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
+    index_signatures: origin.iface.index_signatures,
   }
 }
 
@@ -4976,6 +4989,7 @@ fn clone_exported_interface(
     extends_names: [],
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
+    index_signatures: exported.iface.index_signatures,
   }
 }
 
