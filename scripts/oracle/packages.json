@@ -1,0 +1,35 @@
+{
+  "_comment": "Per-package config for `build-cache.mjs --all`. `entry` is the .d.ts the tsc oracle parses; `bridge_mbti` is the in-house bridge output the unresolved-name list is scraped from. Paths are repo-relative or absolute.",
+  "packages": [
+    {
+      "pkg": "react_router",
+      "entry": "/Users/mz/ghq/github.com/mizchi/npm_typed.mbt/node_modules/react-router/dist/development/index.d.mts",
+      "bridge_mbti": "_build/realworld-typescript/project/dist/react_router/bridge.mbti"
+    },
+    {
+      "pkg": "jose",
+      "entry": "/Users/mz/ghq/github.com/mizchi/npm_typed.mbt/node_modules/jose/dist/types/index.d.ts",
+      "bridge_mbti": "_build/realworld-typescript/project/dist/jose/bridge.mbti"
+    },
+    {
+      "pkg": "hono",
+      "entry": "/Users/mz/ghq/github.com/mizchi/npm_typed.mbt/node_modules/hono/dist/types/index.d.ts",
+      "bridge_mbti": "_build/realworld-typescript/project/dist/hono/bridge.mbti"
+    },
+    {
+      "pkg": "glob",
+      "entry": "/Users/mz/ghq/github.com/mizchi/npm_typed.mbt/node_modules/glob/dist/esm/index.d.ts",
+      "bridge_mbti": "_build/realworld-typescript/project/dist/glob/bridge.mbti"
+    },
+    {
+      "pkg": "magic_string",
+      "entry": "/Users/mz/ghq/github.com/mizchi/npm_typed.mbt/node_modules/magic-string/dist/magic-string.cjs.d.ts",
+      "bridge_mbti": "_build/realworld-typescript/project/dist/magic_string/bridge.mbti"
+    },
+    {
+      "pkg": "source_map",
+      "entry": "/Users/mz/ghq/github.com/mizchi/npm_typed.mbt/node_modules/source-map/source-map.d.ts",
+      "bridge_mbti": "_build/realworld-typescript/project/dist/source_map/bridge.mbti"
+    }
+  ]
+}
