@@ -102,6 +102,56 @@ priv struct ExportedConstValueSet {
 }
 
 ///|
+///|
+/// Walk a `Conditional` to its terminal `false` branch, collecting `true`
+/// branches along the way. Returns `(true_branches, default_branch)`.
+fn flatten_conditional_branches(
+  t : @ast.TsType,
+) -> (Array[@ast.TsType], @ast.TsType) {
+  let trues : Array[@ast.TsType] = []
+  let mut current = t
+  while true {
+    match current {
+      @ast.TsType::Conditional(_, _, true_, false_) => {
+        trues.push(true_)
+        current = false_
+      }
+      _ => break
+    }
+  }
+  (trues, current)
+}
+
+///|
+/// If `inner` is a `Conditional` that survived all reduction passes, accept
+/// its terminal `false` branch as the join when the default is a concrete,
+/// non-trivial `Named(N)`. Real-world TypeScript patterns like
+/// `Array<O extends X<infer T> ? T : I["start"] extends Date ? I["start"] :
+/// ... : Date>` carry a default branch (`Date`) that all true branches are
+/// expected to be assignable to via their own `extends` checks; widening to
+/// the default upper bound matches what TypeScript itself emits for the
+/// declared return type.
+///
+/// Rejects: `T extends X ? T : never` (default is `never`), conditionals
+/// whose default is itself unresolved (`Conditional`, `Any`, generic), and
+/// conditionals with no `Named` default name.
+fn conditional_array_element_default_join(
+  inner : @ast.TsType,
+) -> @ast.TsType? {
+  match inner {
+    @ast.TsType::Conditional(_, _, _, _) => {
+      let (_, default_) = flatten_conditional_branches(inner)
+      match default_ {
+        @ast.TsType::Named(name) if name != "never" =>
+          Some(@ast.TsType::Named(name))
+        _ => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
 priv enum ResolvedDecl {
   Interface(ExportedInterfaceDecl)
   Enum(ExportedEnumDecl)
@@ -3396,8 +3446,23 @@ fn lower_react_utility_type(
           Applied(name, next_args)
         }
       }
-    Array(inner) =>
-      Array(lower_react_utility_type(info, inner, modules, canonical_types))
+    Array(inner) => {
+      let lowered_inner = lower_react_utility_type(
+        info, inner, modules, canonical_types,
+      )
+      // If the lowered Array element is still a Conditional after the main
+      // utility-type pass, fall back to the conditional's terminal default
+      // branch when every leaf is a `Named(N)` (incl. `infer X`-bounded by
+      // N or `Foo[K]` whose top is N) that the default also names.
+      // This recovers concrete element types for patterns like
+      // `Array<O extends X<infer T> ? T : ...: Date>` where the parser cannot
+      // statically pick a branch but the union of all branches is a single
+      // named class.
+      match conditional_array_element_default_join(lowered_inner) {
+        Some(joined) => Array(joined)
+        None => Array(lowered_inner)
+      }
+    }
     Tuple(items) => {
       let next_items : Array[@ast.TsType] = []
       for item in items {
