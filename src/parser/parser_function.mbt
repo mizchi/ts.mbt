@@ -746,12 +746,25 @@ pub fn Parser::parse_interface(
       // Computed property / index signature: [key: T]: U or [Symbol.xxx]: T
       LBracket => {
         let _ = self.advance()
-        // Skip until ]
+        // Distinguish a TypeScript index signature `[key: T]` (carrying a
+        // type annotation inside the brackets) from a computed property
+        // key like `[Symbol.iterator]`. The parser treats both as a
+        // single field, but later passes drop the index-signature form
+        // because MoonBit cannot represent dynamic-keyed structs without
+        // a dedicated getter/setter pair.
+        let mut saw_colon = false
         while !self.check(RBracket) && !self.check(Eof) {
+          if self.check(Colon) {
+            saw_colon = true
+          }
           let _ = self.advance()
         }
         let _ = self.expect(RBracket)
-        "<computed>"
+        if saw_colon {
+          "<index_signature>"
+        } else {
+          "<computed>"
+        }
       }
       // Regular identifier
       Ident(n) => {
@@ -953,43 +966,49 @@ pub fn Parser::parse_interface(
         param_types.push(param.type_)
       }
       let field_type = @ast.TsType::Func(param_types, return_type)
-      fields.push(
-        (
-          field_name,
-          if is_optional {
-            wrap_optional_ts_type(field_type)
-          } else {
-            field_type
-          },
-        ),
-      )
+      if field_name != "<index_signature>" {
+        fields.push(
+          (
+            field_name,
+            if is_optional {
+              wrap_optional_ts_type(field_type)
+            } else {
+              field_type
+            },
+          ),
+        )
+      }
     } else if self.check(Colon) {
       // Property: name: T
       let _ = self.advance()
       let field_type = self.parse_type()
-      fields.push(
-        (
-          field_name,
-          if is_optional {
-            wrap_optional_ts_type(field_type)
-          } else {
-            field_type
-          },
-        ),
-      )
+      if field_name != "<index_signature>" {
+        fields.push(
+          (
+            field_name,
+            if is_optional {
+              wrap_optional_ts_type(field_type)
+            } else {
+              field_type
+            },
+          ),
+        )
+      }
     } else {
       // No type annotation - use Any
       let field_type = @ast.TsType::Any
-      fields.push(
-        (
-          field_name,
-          if is_optional {
-            wrap_optional_ts_type(field_type)
-          } else {
-            field_type
-          },
-        ),
-      )
+      if field_name != "<index_signature>" {
+        fields.push(
+          (
+            field_name,
+            if is_optional {
+              wrap_optional_ts_type(field_type)
+            } else {
+              field_type
+            },
+          ),
+        )
+      }
     }
     if is_readonly_field {
       readonly_fields.push(field_name)
