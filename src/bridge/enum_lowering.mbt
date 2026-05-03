@@ -107,12 +107,82 @@ fn enum_lowering_literal_alias_is_safe_string_value(value : String) -> Bool {
 }
 
 ///|
+/// Return the literal values an `Array[TsType]` represents when treated as a
+/// finite string-literal union, or `None` if any element is not a string
+/// literal. `Literal(value)` is the only accepted shape; non-literal members
+/// abort the expansion so callers can fall back to a non-enum lowering.
+fn enum_lowering_string_literal_values(
+  items : Array[@ast.TsType],
+) -> Array[String]? {
+  let values : Array[String] = []
+  for item in items {
+    match item {
+      @ast.TsType::Literal(value) => values.push(value)
+      _ => return None
+    }
+  }
+  Some(values)
+}
+
+///|
+/// Expand a `TemplateLiteralType(parts, type_args)` to the equivalent
+/// `Literal(...)` AST nodes when every interpolated type argument is a
+/// finite string-literal union (or a single literal). Returns `None` if
+/// any interpolation cannot be enumerated, so callers fall back to plain
+/// `String` lowering.
+fn enum_lowering_template_literal_expand(
+  type_ : @ast.TsType,
+) -> Array[@ast.TsType]? {
+  match type_ {
+    @ast.TsType::TemplateLiteralType(parts, type_args) => {
+      // Interpret each interpolation as a finite literal union. A single
+      // `Literal(v)` argument is treated as a one-element union.
+      let arg_value_sets : Array[Array[String]] = []
+      for arg in type_args {
+        let union_items = match arg {
+          @ast.TsType::Union(items) => items
+          @ast.TsType::Literal(_) => [arg]
+          _ => return None
+        }
+        match enum_lowering_string_literal_values(union_items) {
+          Some(values) => arg_value_sets.push(values)
+          None => return None
+        }
+      }
+      // Cartesian product across interpolation positions, threaded through
+      // the literal `parts` between them.
+      let mut accumulators : Array[String] = [parts[0]]
+      for i in 0..<arg_value_sets.length() {
+        let next_accumulators : Array[String] = []
+        for prefix in accumulators {
+          for value in arg_value_sets[i] {
+            next_accumulators.push(prefix + value + parts[i + 1])
+          }
+        }
+        accumulators = next_accumulators
+      }
+      let result : Array[@ast.TsType] = []
+      for s in accumulators {
+        result.push(@ast.TsType::Literal(s))
+      }
+      Some(result)
+    }
+    _ => None
+  }
+}
+
+///|
 fn enum_lowering_type_alias_string_enum_members(
   type_ : @ast.TsType,
 ) -> Array[@ast.TsEnumMember]? {
   let items = match type_ {
     @ast.TsType::Union(items) => items
     @ast.TsType::Literal(_) => [type_]
+    @ast.TsType::TemplateLiteralType(_, _) =>
+      match enum_lowering_template_literal_expand(type_) {
+        Some(literals) => literals
+        None => return None
+      }
     _ => return None
   }
   if items.length() == 0 {
