@@ -23,7 +23,7 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|export interface Hash {
     #|}
     #|
-    #|export interface Comparable<T0> {
+    #|export interface Comparable<T> {
     #|}
     #|
     #|export function identity<T>(value: T): T;

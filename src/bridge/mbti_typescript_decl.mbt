@@ -3993,11 +3993,29 @@ fn render_marker_trait_decl(decl : MbtiMarkerTraitDecl) -> String {
   }
   let type_params : Array[String] = []
   for idx = 0; idx < decl.arity; idx = idx + 1 {
-    type_params.push("T\{idx}")
+    type_params.push(mbti_default_type_param_name(idx))
   }
   let joined_type_params = type_params.join(", ")
   let suffix = "<\{joined_type_params}>"
   "export interface \{decl.name}\{suffix} {\n}"
+}
+
+///|
+/// Default identifier for a synthetic generic parameter. TypeScript
+/// convention is `T`, `U`, `V`, `W`, ... for the first few and a
+/// `T<n>` fallback past that, so `Comparable<T>` reads as a normal
+/// generic interface rather than `Comparable<T0>`.
+fn mbti_default_type_param_name(idx : Int) -> String {
+  match idx {
+    0 => "T"
+    1 => "U"
+    2 => "V"
+    3 => "W"
+    4 => "X"
+    5 => "Y"
+    6 => "Z"
+    _ => "T\{idx}"
+  }
 }
 
 ///|

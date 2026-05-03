@@ -740,7 +740,7 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
   assert_true(actual.contains("export interface Show {"))
   assert_true(actual.contains("export interface Eq<T> {"))
   assert_true(actual.contains("export interface Hash {"))
-  assert_true(actual.contains("export interface Comparable<T0> {"))
+  assert_true(actual.contains("export interface Comparable<T> {"))
   assert_true(
     actual.contains(
       "export interface Box<T> extends Show, Eq<Box<T>>, Hash, Comparable<Box<T>> {",
