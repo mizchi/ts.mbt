@@ -103,6 +103,74 @@ priv struct ExportedConstValueSet {
 
 ///|
 ///|
+fn decl_is_string_intrinsic_name(name : String) -> Bool {
+  name == "Capitalize" ||
+  name == "Uncapitalize" ||
+  name == "Uppercase" ||
+  name == "Lowercase"
+}
+
+///|
+fn decl_apply_string_intrinsic_to_value(
+  intrinsic : String,
+  value : String,
+) -> String? {
+  if value.length() == 0 {
+    return Some(value)
+  }
+  let head = value[0].unsafe_to_char()
+  let rest = value[1:].to_string()
+  match intrinsic {
+    "Capitalize" =>
+      if head >= 'a' && head <= 'z' {
+        Some(((head.to_int() - 32).unsafe_to_char()).to_string() + rest)
+      } else {
+        Some(value)
+      }
+    "Uncapitalize" =>
+      if head >= 'A' && head <= 'Z' {
+        Some(((head.to_int() + 32).unsafe_to_char()).to_string() + rest)
+      } else {
+        Some(value)
+      }
+    "Uppercase" => Some(value.to_upper())
+    "Lowercase" => Some(value.to_lower())
+    _ => None
+  }
+}
+
+///|
+/// If `arg` is a literal string union (or a single literal), apply the
+/// intrinsic string mapping pointwise and return the resulting type.
+/// Returns `None` when any element is not a string literal.
+fn decl_apply_string_intrinsic_to_literal_union(
+  intrinsic : String,
+  arg : @ast.TsType,
+) -> @ast.TsType? {
+  let items = match arg {
+    @ast.TsType::Literal(_) => [arg]
+    @ast.TsType::Union(members) => members
+    _ => return None
+  }
+  let next_items : Array[@ast.TsType] = []
+  for item in items {
+    match item {
+      @ast.TsType::Literal(value) =>
+        match decl_apply_string_intrinsic_to_value(intrinsic, value) {
+          Some(mapped) => next_items.push(@ast.TsType::Literal(mapped))
+          None => return None
+        }
+      _ => return None
+    }
+  }
+  if next_items.length() == 1 {
+    Some(next_items[0])
+  } else {
+    Some(@ast.TsType::Union(next_items))
+  }
+}
+
+///|
 /// Walk a `Conditional` to its terminal `false` branch, collecting `true`
 /// branches along the way. Returns `(true_branches, default_branch)`.
 fn flatten_conditional_branches(
@@ -1454,12 +1522,27 @@ fn resolve_decl_from_local_name(
               }
             None =>
               match find_type_alias_decl(info.module_, local_name) {
-                Some(type_alias) =>
-                  match enum_lowering_type_alias_enum_decl(type_alias) {
+                Some(type_alias) => {
+                  // Pre-lower the alias body so template literal types and
+                  // string-mapping intrinsics (`Capitalize<X>` etc.) get a
+                  // chance to enumerate before enum lowering inspects the
+                  // alias for a closed string-literal union. Canonical
+                  // type names are not yet known at this resolve step;
+                  // pass an empty map so the lower path falls back to the
+                  // raw alias names.
+                  let canonical_types_for_lower : Map[String, String] = {}
+                  let lowered_alias_type = lower_react_utility_type(
+                    info, type_alias.type_, modules, canonical_types_for_lower,
+                  )
+                  let lowered_alias : @ast.TsTypeAlias = {
+                    ..type_alias,
+                    type_: lowered_alias_type,
+                  }
+                  match enum_lowering_type_alias_enum_decl(lowered_alias) {
                     Some(enum_) =>
                       Enum({ source_path, local_name, export_name, enum_ })
                     None =>
-                      match tagged_union_type_alias_decl(type_alias) {
+                      match tagged_union_type_alias_decl(lowered_alias) {
                         Some(decl) =>
                           TaggedUnion({
                             source_path,
@@ -1469,12 +1552,15 @@ fn resolve_decl_from_local_name(
                           })
                         None =>
                           match
-                            type_alias_enum_like_unsupported_reason(type_alias) {
+                            type_alias_enum_like_unsupported_reason(
+                              lowered_alias,
+                            ) {
                             Some(reason) => Unsupported(export_name, reason)
                             None => Missing
                           }
                       }
                   }
+                }
                 None =>
                   match find_import_decl(info.module_, local_name) {
                     Some(import_) =>
@@ -3433,7 +3519,37 @@ fn lower_react_utility_type(
         }
       }
     }
-    Applied(name, args) =>
+    Applied(name, args) => {
+      // TypeScript intrinsic string-mapping types: `Capitalize<T>`,
+      // `Uncapitalize<T>`, `Uppercase<T>`, `Lowercase<T>`. If the single
+      // argument lowers to a finite literal union, apply the intrinsic
+      // and emit the resulting union literally; this lets template
+      // literal types like `bg${Capitalize<X>}` enumerate when X resolves
+      // to a string-literal alias.
+      if args.length() == 1 &&
+        decl_is_string_intrinsic_name(name) {
+        let mut lowered_arg = lower_react_utility_type(
+          info, args[0], modules, canonical_types,
+        )
+        // Walk through type alias references so the intrinsic can see the
+        // underlying literal union behind a Named arg like
+        // `Capitalize<InspectColorForeground>`.
+        match lowered_arg {
+          @ast.TsType::Named(alias_name) =>
+            match applied_type_alias(info, alias_name, []) {
+              Some(resolved) =>
+                lowered_arg = lower_react_utility_type(
+                  info, resolved, modules, canonical_types,
+                )
+              None => ()
+            }
+          _ => ()
+        }
+        match decl_apply_string_intrinsic_to_literal_union(name, lowered_arg) {
+          Some(applied) => return applied
+          None => ()
+        }
+      }
       match applied_type_alias(info, name, args) {
         Some(resolved) =>
           lower_react_utility_type(info, resolved, modules, canonical_types)
@@ -3447,6 +3563,32 @@ fn lower_react_utility_type(
           Applied(name, next_args)
         }
       }
+    }
+    TemplateLiteralType(parts, type_args) => {
+      // Lower each interpolated arg first so Named alias references and
+      // intrinsic strings resolve before expansion runs. If every arg
+      // resolves to a finite literal union, materialize the cartesian
+      // product as a `Union(Literal(...))` so downstream enum lowering
+      // picks it up like any other string-literal alias.
+      let lowered_args : Array[@ast.TsType] = []
+      for arg in type_args {
+        lowered_args.push(
+          lower_react_utility_type(info, arg, modules, canonical_types),
+        )
+      }
+      let resolved_template = @ast.TsType::TemplateLiteralType(
+        parts, lowered_args,
+      )
+      match enum_lowering_template_literal_expand(resolved_template) {
+        Some(literals) =>
+          if literals.length() == 1 {
+            literals[0]
+          } else {
+            @ast.TsType::Union(literals)
+          }
+        None => resolved_template
+      }
+    }
     Array(inner) => {
       let lowered_inner = lower_react_utility_type(
         info, inner, modules, canonical_types,
