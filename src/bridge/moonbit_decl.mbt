@@ -2754,6 +2754,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     }
     IndexedAccess(base, key) =>
       utility_record_type_suffix(base) + "At" + utility_record_type_suffix(key)
+    TemplateLiteralType(_, _) => "String"
   }
 }
 

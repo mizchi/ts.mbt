@@ -38,6 +38,11 @@ pub(all) enum TsType {
   // variant lets later passes resolve it when T is a concrete interface or
   // object literal and K is a string literal.
   IndexedAccess(TsType, TsType)
+  // Template literal type: `prefix${T1}mid${T2}suffix`. Stored as
+  // (parts, type_args) where parts.length() == type_args.length() + 1, so
+  // the rendered string is parts[0] + type_args[0] + parts[1] + ... +
+  // parts[N]. Used by patterns like `bg${ForegroundColorName}`.
+  TemplateLiteralType(Array[String], Array[TsType])
 } derive(Eq, Debug)
 
 ///|

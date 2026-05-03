@@ -814,8 +814,11 @@ test "parser: parse template literal type" {
   let parser = Parser::from_source("`section-${string}`")
   let t = parser.parse_type()
   match t {
-    String_ => ()
-    _ => fail("expected String_ for template literal type, got \{t}")
+    @ast.TsType::TemplateLiteralType(parts, args) => {
+      assert_eq(parts, ["section-", ""])
+      assert_eq(args, [@ast.TsType::String_])
+    }
+    _ => fail("expected TemplateLiteralType, got \{t}")
   }
 }
 
@@ -831,7 +834,11 @@ test "parser: parse interface method with template literal return type" {
   assert_eq(iface.fields.length(), 1)
   let (name, type_) = iface.fields[0]
   assert_eq(name, "randomUUID")
-  assert_eq(type_, @ast.TsType::Func([], String_))
+  match type_ {
+    @ast.TsType::Func(params, @ast.TsType::TemplateLiteralType(_, _)) =>
+      assert_eq(params.length(), 0)
+    _ => fail("expected Func returning template literal, got \{type_}")
+  }
 }
 
 ///|

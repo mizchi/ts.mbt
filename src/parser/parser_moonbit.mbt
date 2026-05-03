@@ -448,6 +448,9 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
         rendered
       }
     }
+    // Template literal types resolve to a `string` subtype in TypeScript;
+    // until enum lowering integrates them, fall back to plain `String`.
+    TemplateLiteralType(_, _) => "String"
     _ => {
       state.needs_jsvalue = true
       "JSValue"

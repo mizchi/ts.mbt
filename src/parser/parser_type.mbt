@@ -398,9 +398,22 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
         Void
       }
     }
-    Template(_, _, _) => {
+    // Template literal type: `bg${ForegroundColorName}`. Falls back to
+    // `String_` for non-interpolating templates so the prior conservative
+    // behavior is preserved.
+    Template(cooked_parts, _, expr_sources) => {
       let _ = self.advance()
-      String_
+      if expr_sources.length() == 0 {
+        String_
+      } else {
+        let type_args : Array[@ast.TsType] = []
+        for src in expr_sources {
+          let sub_parser = Parser::from_source(src)
+          let arg_type = sub_parser.parse_type()
+          type_args.push(arg_type)
+        }
+        TemplateLiteralType(cooked_parts, type_args)
+      }
     }
     // Literal types: "foo", 1, true, false
     Str(value) => {

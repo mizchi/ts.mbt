@@ -787,6 +787,10 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
         None => ffi_mark_external_type(state, name)
       }
     }
+    // Template literal types resolve to a `string` subtype in TypeScript;
+    // until step 4.3 lowers them to enum cases, fall back to plain String
+    // rather than widening to JSValue.
+    TemplateLiteralType(_, _) => "String"
     _ => {
       state.needs_js_any = true
       "@js.Any"
