@@ -3347,7 +3347,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let (
     exported_interfaces,
     exported_enums,
-    _exported_tagged_unions,
+    exported_tagged_unions,
     exported_imports,
     exported_funcs,
     exported_values,
@@ -3645,6 +3645,18 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       }
     }
     handled_export_names.push(enum_.name)
+  }
+
+  for tagged in exported_tagged_unions {
+    match tagged_union_bridge_js_converter_decls(tagged.decl) {
+      Some(decls) => bridge_lines.push(decls)
+      None =>
+        bridge_lines.push(
+          "// Heterogeneous union " +
+          tagged.decl.name +
+          " could not be auto-lowered (unsupported case payload).",
+        )
+    }
   }
 
   for iface in interfaces {

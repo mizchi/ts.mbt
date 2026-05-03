@@ -230,6 +230,59 @@ pub fn tagged_union_from_js_expression(
 }
 
 ///|
+///|
+/// Stable JS function name pair for the bridge.js converters of one
+/// tagged-union alias.
+pub fn tagged_union_to_js_function_name(decl_name : String) -> String {
+  "__ts_mbt_tagged_union_" + tagged_union_to_snake_case(decl_name) + "_to_js"
+}
+
+///|
+pub fn tagged_union_from_js_function_name(decl_name : String) -> String {
+  "__ts_mbt_tagged_union_" + tagged_union_to_snake_case(decl_name) + "_from_js"
+}
+
+///|
+fn tagged_union_to_snake_case(name : String) -> String {
+  let mut out = ""
+  for i, c in name {
+    let ch = c
+    if ch >= 'A' && ch <= 'Z' {
+      if i > 0 {
+        out = out + "_"
+      }
+      out = out + ((ch.to_int() + 32).unsafe_to_char()).to_string()
+    } else {
+      out = out + ch.to_string()
+    }
+  }
+  out
+}
+
+///|
+/// Render the bridge.js converter pair for one tagged-union alias.
+/// Returns `None` when any case payload lacks a discriminator (the alias
+/// then falls back to existing JSValue widening).
+pub fn tagged_union_bridge_js_converter_decls(
+  decl : BridgeTaggedUnionDecl,
+) -> String? {
+  let to_js_body = tagged_union_to_js_expression(decl, "value")
+  let from_js_body = match tagged_union_from_js_expression(decl, "value") {
+    Some(body) => body
+    None => return None
+  }
+  let to_name = tagged_union_to_js_function_name(decl.name)
+  let from_name = tagged_union_from_js_function_name(decl.name)
+  let to_decl = "function " + to_name + "(value) { return " + to_js_body + "; }"
+  let from_decl = "function " +
+    from_name +
+    "(value) { return " +
+    from_js_body +
+    "; }"
+  Some(to_decl + "\n" + from_decl)
+}
+
+///|
 pub fn tagged_union_type_alias_decl(
   type_alias : @ast.TsTypeAlias,
 ) -> BridgeTaggedUnionDecl? {
