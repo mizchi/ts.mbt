@@ -330,7 +330,7 @@ jsvalue_function_budget() {
     colorette) printf '1\n' ;;
     magic-string) printf '9\n' ;;
     source-map) printf '9\n' ;;
-    valibot) printf '92\n' ;;
+    valibot) printf '112\n' ;;
     immer) printf '16\n' ;;
     execa) printf '1\n' ;;
     preact) printf '8\n' ;;
@@ -375,7 +375,7 @@ jsvalue_cause_budget() {
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '12|3|0|2|0|0|7\n' ;;
     source-map) printf '14|2|0|5|4|2|1\n' ;;
-    valibot) printf '659|539|28|27|19|31|15\n' ;;
+    valibot) printf '675|535|47|21|21|34|17\n' ;;
     immer) printf '20|1|7|2|2|2|6\n' ;;
     execa) printf '1|0|0|0|1|0|0\n' ;;
     preact) printf '26|8|1|4|11|1|1\n' ;;
