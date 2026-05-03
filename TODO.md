@@ -942,16 +942,27 @@ Patterns: `Hono<E,S,P>.get<Path extends string>(path: Path, handler):
 Hono<E, S, P | Path>`, `Session.get<Key extends keyof Data>(key: Key)`,
 `zod.object<T extends ZodRawShape>(shape: T)`.
 
-- [ ] Capture method-level type parameter lists (and bounds) on
-  `TsClassMethodDecl` and `TsInterfaceMethodSignature`.
-- [ ] Plumb method-level generics through bridge generation so MoonBit method
-  signatures expose them where the bound is representable.
-- [ ] Apply bound substitution at the method boundary, parallel to the existing
-  alias-level bound substitution introduced for `Record<P, ...>`.
-- [ ] Add post-lowering type-param filtering so unused method generics drop
-  cleanly without `unused_type_variable` warnings.
-- [ ] Update the parser-side allowlist (`moonbit_should_preserve_interface_type_params`)
-  to reach method-level generics for hono / react-router.
+- [x] Capture method-level type parameter lists (and bounds) on
+  `TsClassMethodDecl`. (commit `eeb94a6`)
+- Investigation result (2026-05-03): bound substitution at method
+  boundaries is **already happening** in `parser_type.mbt:639`
+  (`local_type_param_bound`), which short-circuits any `Ident(name)`
+  to its registered bound during type parsing. Methods like
+  `HonoRequest.valid<T extends keyof ValidationTargets>(target: T)`
+  already render as `valid(target : String) -> ...` because `T` is
+  substituted away before the AST escapes the parser.
+- MoonBit JS backend rejects `pub extern "js" fn[T] ...`
+  (`Error 4008: FFI function cannot have type parameters`), so a
+  generic-preserving public signature would require a separate
+  wrapper layer (`pub fn[T] Class::method(...) { Class::method_raw(...) }`).
+  This only buys typing precision when the bound is itself
+  representable as a MoonBit trait, which is rare for the
+  string-literal / interface bounds used in real corpora.
+- [x] Conclusion: keep the AST fields populated so a later
+  wrapper-layer pass can use them, but do not generate a separate
+  generic surface yet. The bound-substitute path covers the common
+  cases. Revisit only when a real-world consumer needs a generic
+  return type that is not represented by the substituted bound.
 
 ### 3. Mapped type partial evaluation + conditional reduction depth
 
