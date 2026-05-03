@@ -5109,6 +5109,14 @@ fn decl_specialize_generated_api_param_type(
   if param_index == 0 && (export_name == "isUtf8" || export_name == "isAscii") {
     return Named("Uint8Array")
   }
+  // Preact / React `isValidElement(vnode: any): vnode is ReactElement` is a
+  // type guard whose runtime cost is just a property check; lower the
+  // parameter to the bridge's already-declared `VNode` opaque so MoonBit
+  // callers can pass the typed VNode they already have without a manual
+  // cast through JSValue.
+  if export_name == "isValidElement" && param_index == 0 {
+    return Named("VNode")
+  }
   if param_name == "data" && decl_is_node_file_data_union(type_) {
     return String_
   }
