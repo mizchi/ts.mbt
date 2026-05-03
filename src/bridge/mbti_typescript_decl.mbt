@@ -343,6 +343,84 @@ fn sanitize_ts_identifier(name : String, fallback : String) -> String {
   if mbti_is_ascii_digit(first) {
     result = "_" + result
   }
+  // MoonBit source often spells reserved words with a trailing `_`
+  // (e.g. `Builder::const_`, `Builder::ref_`, `Builder::null_`)
+  // because the same word is reserved on the MoonBit side. Strip the
+  // convention and apply the verb-flavored rename below so a single
+  // table covers both spellings; the same renamed identifier flows
+  // through to autolink_glue / moon.pkg.json / runtime JS exports
+  // because `sanitize_ts_identifier` is the shared name source.
+  if result.has_suffix("_") {
+    let stripped = result[:result.length() - 1].to_string()
+    let ts_renamed = mbti_typescript_reserved_rename(stripped)
+    if ts_renamed != "" {
+      return ts_renamed
+    }
+    let moonbit_renamed = mbti_moonbit_only_reserved_rename(stripped)
+    if moonbit_renamed != "" {
+      return moonbit_renamed
+    }
+  }
+  // TypeScript reserved words can't appear as identifiers. Common
+  // factory / constructor keywords get a verb-flavored alternative
+  // (`new` → `create`, `enum` → `enumOf`, ...) so completion lists
+  // read naturally; rare reserved words still fall through to a `_`
+  // suffix because their typical meaning isn't a factory.
+  let renamed = mbti_typescript_reserved_rename(result)
+  if renamed != "" {
+    return renamed
+  }
+  match result {
+    "break"
+    | "case"
+    | "catch"
+    | "continue"
+    | "debugger"
+    | "delete"
+    | "do"
+    | "else"
+    | "export"
+    | "extends"
+    | "finally"
+    | "for"
+    | "if"
+    | "import"
+    | "in"
+    | "return"
+    | "super"
+    | "switch"
+    | "this"
+    | "throw"
+    | "try"
+    | "var"
+    | "while"
+    | "with"
+    | "yield" => result + "_"
+    _ => result
+  }
+}
+
+///|
+/// Like `sanitize_ts_identifier` but always uses the `_` suffix for
+/// reserved words instead of the verb-flavored alias. Used for
+/// namespace import aliases (`import type * as class_ from "..."`)
+/// where a factory-style rename like `classOf` would be misleading.
+fn sanitize_ts_namespace_alias(name : String, fallback : String) -> String {
+  let mut result = ""
+  for c in name {
+    if mbti_is_ascii_letter(c) || mbti_is_ascii_digit(c) || c == '_' || c == '$' {
+      result += c.to_string()
+    } else {
+      result += "_"
+    }
+  }
+  if result == "" {
+    result = fallback
+  }
+  let first = result[0].unsafe_to_char()
+  if mbti_is_ascii_digit(first) {
+    result = "_" + result
+  }
   match result {
     "break"
     | "case"
@@ -383,6 +461,42 @@ fn sanitize_ts_identifier(name : String, fallback : String) -> String {
     | "with"
     | "yield" => result + "_"
     _ => result
+  }
+}
+
+///|
+/// Map a TypeScript reserved word to a verb-flavored alternative.
+/// Returns `""` for words that don't have a friendly factory-style
+/// alias — callers fall back to suffixing `_`.
+fn mbti_typescript_reserved_rename(word : String) -> String {
+  match word {
+    "new" => "create"
+    "null" => "nullValue"
+    "undefined" => "undefinedValue"
+    "void" => "voidValue"
+    "true" => "trueValue"
+    "false" => "falseValue"
+    "enum" => "enumOf"
+    "const" => "constValue"
+    "class" => "classOf"
+    "function" => "fn"
+    "default" => "defaultValue"
+    "typeof" => "typeOf"
+    "instanceof" => "instanceOf"
+    _ => ""
+  }
+}
+
+///|
+/// MoonBit-only reserved words: legal TypeScript identifiers, but the
+/// MoonBit source had to spell them with a trailing `_`. Pick a more
+/// readable factory-flavored alias instead of leaving the `_` artifact
+/// in the public TypeScript API.
+fn mbti_moonbit_only_reserved_rename(word : String) -> String {
+  match word {
+    "ref" => "refOf"
+    "move" => "moveOf"
+    _ => ""
   }
 }
 
@@ -786,7 +900,7 @@ fn parse_mbti_imports(source : String) -> Array[MbtiImportRef] {
     let line = trim_trailing_comma_or_semicolon(trimmed)
     match parse_mbti_import_line(line) {
       Some({ alias_name, module_spec }) => {
-        let mut ts_alias = sanitize_ts_identifier(alias_name, "pkg")
+        let mut ts_alias = sanitize_ts_namespace_alias(alias_name, "pkg")
         while imports.any(fn(existing) { existing.ts_alias == ts_alias }) {
           ts_alias += "_"
         }
@@ -2237,7 +2351,7 @@ fn lookup_import_ts_alias(
       return import_ref.ts_alias
     }
   }
-  sanitize_ts_identifier(alias_name, "pkg")
+  sanitize_ts_namespace_alias(alias_name, "pkg")
 }
 
 ///|
@@ -2258,7 +2372,7 @@ fn collect_used_import_refs(
     if !found {
       refs.push({
         alias_name,
-        ts_alias: sanitize_ts_identifier(alias_name, "pkg"),
+        ts_alias: sanitize_ts_namespace_alias(alias_name, "pkg"),
         module_spec: alias_name,
       })
     }

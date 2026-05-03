@@ -757,7 +757,7 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
       "export function Box_show_value<T>(self : Box<T>): string;",
     ),
   )
-  assert_true(actual.contains("export function Box_new_<T>(value: T): Box<T>;"))
+  assert_true(actual.contains("export function Box_create<T>(value: T): Box<T>;"))
   assert_true(actual.contains("export type Result<T, E> ="))
   assert_true(
     actual.contains(

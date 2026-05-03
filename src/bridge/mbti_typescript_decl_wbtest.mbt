@@ -49,7 +49,7 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|
     #|export function Box_show_value<T>(self : Box<T>): string;
     #|
-    #|export function Box_new_<T>(value: T): Box<T>;
+    #|export function Box_create<T>(value: T): Box<T>;
     #|
     #|export type Result<T, E> = { $tag: "Ok"; _0: T } | { $tag: "Err"; _0: E };
     #|
@@ -490,7 +490,7 @@ test "bridge: emit TypeScript declarations normalizes trait bounds and reserved 
   )
   assert_true(actual.contains("export interface Show {"))
   assert_true(actual.contains("export interface Eq {"))
-  assert_true(actual.contains("export function null_(): Any;"))
+  assert_true(actual.contains("export function nullValue(): Any;"))
   assert_true(actual.contains("export function watch<T extends Eq>"))
   assert_false(actual.contains("Show + Error"))
   assert_false(actual.contains("export function null():"))
@@ -1014,8 +1014,8 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
       fail("MBTI scaffold bundle emit error: \{msg}")
   }
   assert_true(bundle.moon_pkg_json.contains("\"consume_callbacks\""))
-  assert_true(bundle.moon_pkg_json.contains("\"null_\""))
-  assert_true(bundle.moon_pkg_json.contains("\"undefined_\""))
+  assert_true(bundle.moon_pkg_json.contains("\"nullValue\""))
+  assert_true(bundle.moon_pkg_json.contains("\"undefinedValue\""))
   assert_false(bundle.moon_pkg_json.contains("\"identity\""))
   assert_false(bundle.moon_pkg_json.contains("\"make_secret\""))
   assert_true(bundle.autolink_diagnostics_md.contains("- `identity`"))
@@ -1066,10 +1066,10 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
       "@tsmbt_source.update_ref(state, next[:])",
     ),
   )
-  assert_true(bundle.autolink_glue_mbt.contains("pub fn null_() -> Unit {"))
+  assert_true(bundle.autolink_glue_mbt.contains("pub fn nullValue() -> Unit {"))
   assert_true(bundle.autolink_glue_mbt.contains("@tsmbt_source.null()"))
   assert_true(
-    bundle.autolink_glue_mbt.contains("pub fn undefined_() -> Unit {"),
+    bundle.autolink_glue_mbt.contains("pub fn undefinedValue() -> Unit {"),
   )
   assert_true(bundle.autolink_glue_mbt.contains("@tsmbt_source.undefined()"))
   assert_false(bundle.autolink_glue_mbt.contains("pub fn[T] identity"))
