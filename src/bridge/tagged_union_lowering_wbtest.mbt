@@ -146,3 +146,72 @@ test "tagged union alias: literal-only union is rejected" {
     None => ()
   }
 }
+
+///|
+test "tagged union: to-JS snippet reads $tag and _0" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Mode",
+    cases: [
+      ("NumberValue", @ast.TsType::Number),
+      ("StringValue", @ast.TsType::String_),
+    ],
+  }
+  let snippet = tagged_union_to_js_expression(decl, "x")
+  assert_true(snippet.contains("x.$tag === 0"))
+  assert_true(snippet.contains("x.$tag === 1"))
+  assert_true(snippet.contains("x._0"))
+  assert_true(snippet.contains("unexpected Mode tag"))
+}
+
+///|
+test "tagged union: from-JS snippet uses typeof predicates" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Mode",
+    cases: [
+      ("NumberValue", @ast.TsType::Number),
+      ("StringValue", @ast.TsType::String_),
+    ],
+  }
+  match tagged_union_from_js_expression(decl, "v") {
+    Some(snippet) => {
+      assert_true(snippet.contains("typeof v === \"number\""))
+      assert_true(snippet.contains("typeof v === \"string\""))
+      assert_true(snippet.contains("\"$tag\": 0"))
+      assert_true(snippet.contains("\"$tag\": 1"))
+    }
+    None => fail("number / string discrimination should succeed")
+  }
+}
+
+///|
+test "tagged union: from-JS snippet uses instanceof for Named" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Input",
+    cases: [
+      ("DateValue", @ast.TsType::Named("Date")),
+      ("StringValue", @ast.TsType::String_),
+    ],
+  }
+  match tagged_union_from_js_expression(decl, "v") {
+    Some(snippet) => {
+      assert_true(snippet.contains("v instanceof Date"))
+      assert_true(snippet.contains("typeof v === \"string\""))
+    }
+    None => fail("instanceof Date should be a valid discriminator")
+  }
+}
+
+///|
+test "tagged union: from-JS snippet uses Array.isArray for arrays" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Path",
+    cases: [
+      ("StringArray", @ast.TsType::Array(@ast.TsType::String_)),
+      ("StringValue", @ast.TsType::String_),
+    ],
+  }
+  match tagged_union_from_js_expression(decl, "v") {
+    Some(snippet) => assert_true(snippet.contains("Array.isArray(v)"))
+    None => fail("Array.isArray should be a valid discriminator")
+  }
+}

@@ -130,6 +130,106 @@ pub(all) struct BridgeTaggedUnionDecl {
 /// Returns `None` so callers fall back to existing widening behavior; this
 /// preserves the no-op contract of the current commit until later steps wire
 /// the decl through bridge emission.
+///|
+/// Discrimination strategy for one heterogeneous-union case at the JS
+/// boundary. The detector restricts inner types to runtime-discriminable
+/// shapes; this enum names the JS predicate the converter should use.
+pub(all) enum TaggedUnionCaseDiscriminator {
+  TypeofString
+  TypeofNumber
+  TypeofBoolean
+  TypeofBigInt
+  IsArrayPredicate
+  InstanceOfNamed(String)
+} derive(Eq, Debug)
+
+///|
+pub fn tagged_union_case_discriminator(
+  inner : @ast.TsType,
+) -> TaggedUnionCaseDiscriminator? {
+  match inner {
+    @ast.TsType::String_ => Some(TypeofString)
+    @ast.TsType::Number => Some(TypeofNumber)
+    @ast.TsType::Int => Some(TypeofNumber)
+    @ast.TsType::Boolean => Some(TypeofBoolean)
+    @ast.TsType::BigInt => Some(TypeofBigInt)
+    @ast.TsType::Array(_) => Some(IsArrayPredicate)
+    @ast.TsType::Named(name) => Some(InstanceOfNamed(name))
+    _ => None
+  }
+}
+
+///|
+fn tagged_union_case_predicate_text(
+  d : TaggedUnionCaseDiscriminator,
+  expr : String,
+) -> String {
+  match d {
+    TypeofString => "typeof " + expr + " === \"string\""
+    TypeofNumber => "typeof " + expr + " === \"number\""
+    TypeofBoolean => "typeof " + expr + " === \"boolean\""
+    TypeofBigInt => "typeof " + expr + " === \"bigint\""
+    IsArrayPredicate => "Array.isArray(" + expr + ")"
+    InstanceOfNamed(name) => expr + " instanceof " + name
+  }
+}
+
+///|
+/// JS-side snippet that takes a MoonBit tagged-union value bound to `expr`
+/// and returns its inner JS payload by reading `$tag` and the positional
+/// `_0` field. Cases keep declaration order so `$tag === i` matches the
+/// `i`-th case in the MoonBit enum.
+pub fn tagged_union_to_js_expression(
+  decl : BridgeTaggedUnionDecl,
+  expr : String,
+) -> String {
+  let mut body = "(() => { "
+  for i, _entry in decl.cases {
+    if i == 0 {
+      body = body + "if (" + expr + ".$tag === " + i.to_string() + ") "
+    } else {
+      body = body + "else if (" + expr + ".$tag === " + i.to_string() + ") "
+    }
+    body = body + "return " + expr + "._0; "
+  }
+  body = body +
+    "throw new Error(\"unexpected " +
+    decl.name +
+    " tag: \" + " +
+    expr +
+    ".$tag); })()"
+  body
+}
+
+///|
+/// JS-side snippet that takes a JS value bound to `expr` and constructs the
+/// matching MoonBit tagged-union representation (`{$tag, _0}`). Returns
+/// `None` if any case lacks a runtime discriminator. Call sites must fall
+/// back to a primitive widening when this returns `None`.
+pub fn tagged_union_from_js_expression(
+  decl : BridgeTaggedUnionDecl,
+  expr : String,
+) -> String? {
+  let mut body = "(() => { "
+  for i, entry in decl.cases {
+    let (_, inner) = entry
+    let predicate = match tagged_union_case_discriminator(inner) {
+      Some(d) => tagged_union_case_predicate_text(d, expr)
+      None => return None
+    }
+    if i == 0 {
+      body = body + "if (" + predicate + ") "
+    } else {
+      body = body + "else if (" + predicate + ") "
+    }
+    body = body + "return { \"$tag\": " + i.to_string() + ", \"_0\": " + expr +
+      " }; "
+  }
+  body = body + "throw new Error(\"unexpected " + decl.name + " value\"); })()"
+  Some(body)
+}
+
+///|
 pub fn tagged_union_type_alias_decl(
   type_alias : @ast.TsTypeAlias,
 ) -> BridgeTaggedUnionDecl? {
