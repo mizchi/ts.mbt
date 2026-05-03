@@ -3597,10 +3597,6 @@ fn lower_react_utility_type(
       // utility-type pass, fall back to the conditional's terminal default
       // branch when every leaf is a `Named(N)` (incl. `infer X`-bounded by
       // N or `Foo[K]` whose top is N) that the default also names.
-      // This recovers concrete element types for patterns like
-      // `Array<O extends X<infer T> ? T : ...: Date>` where the parser cannot
-      // statically pick a branch but the union of all branches is a single
-      // named class.
       match conditional_array_element_default_join(lowered_inner) {
         Some(joined) => Array(joined)
         None => Array(lowered_inner)
@@ -6146,7 +6142,8 @@ fn decl_replace_this_type(
   class_name : String,
 ) -> @ast.TsType {
   match type_ {
-    @ast.TsType::Named("This") => @ast.TsType::Named(class_name)
+    @ast.TsType::Named(n) if n == "this" || n == "This" =>
+      @ast.TsType::Named(class_name)
     @ast.TsType::Array(inner) =>
       @ast.TsType::Array(decl_replace_this_type(inner, class_name))
     @ast.TsType::Tuple(items) => {

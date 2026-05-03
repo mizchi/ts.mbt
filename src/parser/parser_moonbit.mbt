@@ -546,7 +546,10 @@ fn moonbit_replace_this_in_function_return(
   match type_ {
     @ast.TsType::Func(params, return_type) => {
       let new_return = match return_type {
-        @ast.TsType::Named("This") => @ast.TsType::Named(owner_name)
+        // Parser stores TypeScript `this` as `Named("this")` (lowercase);
+        // some downstream paths sanitize to `Named("This")`. Match both.
+        @ast.TsType::Named(n) if n == "this" || n == "This" =>
+          @ast.TsType::Named(owner_name)
         _ => return_type
       }
       @ast.TsType::Func(params, new_return)
@@ -575,9 +578,7 @@ fn interface_decl_to_moonbit(
   let type_name = moonbit_type_identifier(iface.name, "OpaqueType")
   for field in iface.fields {
     let (name, raw_type) = field
-    // Replace TypeScript builder `this` return with the owning interface
-    // (`Named("This")` → `Named(iface.name)`). The render path below
-    // stringifies the type so we substitute on the AST shape first.
+    // Replace TypeScript builder `this` return with the owning interface.
     let type_ = moonbit_replace_this_in_function_return(raw_type, iface.name)
     let moonbit_type = moonbit_function_field_type_name(state, type_)
     if iface.readonly_fields.contains(name) {
