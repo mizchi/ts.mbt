@@ -506,10 +506,16 @@ fn interface_function_field_method_decl(
   field_type : @ast.TsType,
 ) -> String? {
   match moonbit_function_type_parts(state, field_type) {
-    Some((param_types, return_type)) => {
+    Some((param_types, raw_return)) => {
       let self_type = moonbit_receiver_self_type(
         receiver_type, receiver_type_params,
       )
+      // TypeScript `this` builder return -> owning receiver.
+      let return_type = match raw_return {
+        "This" => self_type
+        "This?" => self_type + "?"
+        _ => raw_return
+      }
       let params : Array[String] = []
       for i, param_type in param_types {
         let arg_name = "arg" + i.to_string()
@@ -526,6 +532,23 @@ fn interface_function_field_method_decl(
       )
     }
     None => None
+  }
+}
+
+///|
+fn moonbit_replace_this_in_function_return(
+  type_ : @ast.TsType,
+  owner_name : String,
+) -> @ast.TsType {
+  match type_ {
+    @ast.TsType::Func(params, return_type) => {
+      let new_return = match return_type {
+        @ast.TsType::Named("This") => @ast.TsType::Named(owner_name)
+        _ => return_type
+      }
+      @ast.TsType::Func(params, new_return)
+    }
+    _ => type_
   }
 }
 
@@ -548,7 +571,11 @@ fn interface_decl_to_moonbit(
   let mut method_wrapper_count = 0
   let type_name = moonbit_type_identifier(iface.name, "OpaqueType")
   for field in iface.fields {
-    let (name, type_) = field
+    let (name, raw_type) = field
+    // Replace TypeScript builder `this` return with the owning interface
+    // (`Named("This")` → `Named(iface.name)`). The render path below
+    // stringifies the type so we substitute on the AST shape first.
+    let type_ = moonbit_replace_this_in_function_return(raw_type, iface.name)
     let moonbit_type = moonbit_function_field_type_name(state, type_)
     if iface.readonly_fields.contains(name) {
       lines.push("/// readonly \{name} : \{moonbit_type}")
@@ -757,7 +784,12 @@ fn class_decl_to_moonbit_sections(
       let safe_type = moonbit_type_name(state, param_type)
       params.push("\{safe_name} : \{safe_type}")
     }
-    let return_type = moonbit_type_name(state, class_method.return_type)
+    let raw_return = moonbit_type_name(state, class_method.return_type)
+    let return_type = match raw_return {
+      "This" => class_.name
+      "This?" => class_.name + "?"
+      _ => raw_return
+    }
     let fn_name = if class_method.is_static {
       "\{to_snake_case(class_.name)}_\{to_snake_case(class_method.name)}"
     } else {

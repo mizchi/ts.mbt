@@ -296,7 +296,7 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
           @ast.TsType::Undefined,
         ]),
       ],
-      @ast.TsType::Named("This"),
+      @ast.TsType::Named("CipherGCM"),
     ),
   )
   assert_eq(

@@ -4868,7 +4868,7 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(
     actual.contains(
-      "pub extern \"js\" fn SignJWT::setIssuedAt(self : SignJWT, arg0 : @js.Any?) -> This =",
+      "pub extern \"js\" fn SignJWT::setIssuedAt(self : SignJWT, arg0 : @js.Any?) -> SignJWT =",
     ),
   )
   assert_true(actual.contains("self.setIssuedAt("))
@@ -4910,7 +4910,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
   let actual = ffi_class_method_decl_to_moonbit(state, class_, class_method)
   assert_true(
     actual.contains(
-      "pub extern \"js\" fn SignJWT::sign_jwt_set_issued_at(self : SignJWT, input : @js.Any?) -> This =",
+      "pub extern \"js\" fn SignJWT::sign_jwt_set_issued_at(self : SignJWT, input : @js.Any?) -> SignJWT =",
     ),
   )
   assert_true(actual.contains("#| (self, input) =>"))

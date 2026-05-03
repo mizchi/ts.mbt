@@ -5542,6 +5542,10 @@ fn decl_specialize_generated_interface_field_type(
   field_name : String,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
+  // Builder-style methods like `setIssuer(): this` parse as `Named("This")`.
+  // Rewrite the function-typed-field's return so chained calls keep
+  // type-checking on the owning interface / class.
+  let type_ = decl_replace_this_in_function_return(type_, owner_name)
   if decl_is_crypto_aad_owner(owner_name) && field_name == "setAAD" {
     return decl_crypto_set_aad_method_type(owner_name, type_)
   }
@@ -5942,6 +5946,10 @@ fn decl_specialize_generated_class_method_return_type(
   method_name : String,
   type_ : @ast.TsType,
 ) -> @ast.TsType {
+  // TypeScript `this` types in builder-style chains (`setIssuedAt(): this`)
+  // are parsed as `Named("This")`. Replace them with the owning class so
+  // chained calls keep type-checking.
+  let type_ = decl_replace_this_type(type_, class_name)
   if class_name == "Context" &&
     decl_is_hono_context_response_method(method_name) {
     return Named("Response")
@@ -5963,6 +5971,55 @@ fn decl_specialize_generated_class_method_return_type(
     decl_stream_listener_array_type(class_name, type_)
   } else {
     type_
+  }
+}
+
+///|
+fn decl_replace_this_in_function_return(
+  type_ : @ast.TsType,
+  owner_name : String,
+) -> @ast.TsType {
+  match type_ {
+    @ast.TsType::Func(params, return_type) =>
+      @ast.TsType::Func(
+        params,
+        decl_replace_this_type(return_type, owner_name),
+      )
+    _ => type_
+  }
+}
+
+///|
+fn decl_replace_this_type(
+  type_ : @ast.TsType,
+  class_name : String,
+) -> @ast.TsType {
+  match type_ {
+    @ast.TsType::Named("This") => @ast.TsType::Named(class_name)
+    @ast.TsType::Array(inner) =>
+      @ast.TsType::Array(decl_replace_this_type(inner, class_name))
+    @ast.TsType::Tuple(items) => {
+      let next : Array[@ast.TsType] = []
+      for item in items {
+        next.push(decl_replace_this_type(item, class_name))
+      }
+      @ast.TsType::Tuple(next)
+    }
+    @ast.TsType::Union(items) => {
+      let next : Array[@ast.TsType] = []
+      for item in items {
+        next.push(decl_replace_this_type(item, class_name))
+      }
+      @ast.TsType::Union(next)
+    }
+    @ast.TsType::Applied(name, args) => {
+      let next_args : Array[@ast.TsType] = []
+      for arg in args {
+        next_args.push(decl_replace_this_type(arg, class_name))
+      }
+      @ast.TsType::Applied(name, next_args)
+    }
+    _ => type_
   }
 }
 

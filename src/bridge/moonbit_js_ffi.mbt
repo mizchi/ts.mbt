@@ -819,6 +819,20 @@ fn ffi_function_field_type_name(
 }
 
 ///|
+fn ffi_replace_this_token(rendered : String, owner_name : String) -> String {
+  // Conservative: only rewrite ` This` and `>This` boundaries that appear in
+  // generated MoonBit signatures (`-> This`, `> This`). The owner name is
+  // already a sanitized type identifier so collision risk is bounded.
+  let mut result = rendered.replace(old="-> This?", new="-> " + owner_name + "?")
+  result = result.replace(old="-> This\n", new="-> " + owner_name + "\n")
+  result = result.replace(old="-> This)", new="-> " + owner_name + ")")
+  if result.has_suffix("-> This") {
+    result = result[:result.length() - 7].to_string() + "-> " + owner_name
+  }
+  result
+}
+
+///|
 fn ffi_struct_field_type_name(
   state : MoonBitJsFfiState,
   type_ : @ast.TsType,
@@ -938,6 +952,13 @@ fn ffi_function_field_method_decl(
       let self_type = ffi_receiver_self_type(
         receiver_type, receiver_type_params,
       )
+      // Replace TypeScript `this` return-type sentinel ("This" / "This?")
+      // with the owning receiver so builder-style chains type-check.
+      let return_type = match return_type {
+        "This" => self_type
+        "This?" => self_type + "?"
+        _ => return_type
+      }
       let params : Array[String] = ["self : \{self_type}"]
       let args : Array[String] = []
       for i, param_type in param_types {
@@ -1037,7 +1058,9 @@ fn ffi_struct_decl_to_moonbit(
         "  // readonly in TypeScript; not enforced by generated MoonBit struct",
       )
     }
-    let struct_field_type = ffi_struct_field_type_name(state, type_)
+    let raw_struct_field_type = ffi_struct_field_type_name(state, type_)
+    // TypeScript `this` builder return -> owning struct.
+    let struct_field_type = ffi_replace_this_token(raw_struct_field_type, type_name)
     lines.push("  \{field_name} : \{struct_field_type}")
     let force_method_wrapper = field_name == "_call_"
     if force_method_wrapper ||
@@ -2698,7 +2721,13 @@ fn ffi_class_method_decl_to_moonbit(
     js_args.push(ffi_inline_js_arg_expr_with_state(Some(state), type_, safe_name))
     params.push("\{safe_name} : \{safe_type}")
   }
-  let return_type = ffi_type_name(state, class_method.return_type)
+  let raw_return_type = ffi_type_name(state, class_method.return_type)
+  let class_self_type = ffi_class_type_name(class_.name)
+  let return_type = match raw_return_type {
+    "This" => class_self_type
+    "This?" => class_self_type + "?"
+    _ => raw_return_type
+  }
   let fn_name = ffi_to_snake_case(class_.name) +
     "_" +
     ffi_to_snake_case(class_method.name)
