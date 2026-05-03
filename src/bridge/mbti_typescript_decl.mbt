@@ -2596,12 +2596,32 @@ fn parse_mbti_function_signature(
           let return_ty = strip_mbti_top_level_effect(
             rest[2:rest.length()].trim().to_string(),
           )
-          match raw_name.find("::") {
+          // The raw name may carry a method-level type-parameter list, e.g.
+          // `map[U]` inside `pub fn[T] Box::map[U](Self[T], (T) -> U) -> Box[U]`.
+          // Split the `[...]` off the name so it can join the function-level
+          // `type_params` instead of being mangled into the rendered
+          // identifier (which the downstream sanitiser turns into `map_U_`).
+          let cleaned_name = match raw_name.find("[") {
+            Some(bracket_idx) =>
+              match find_matching(raw_name, bracket_idx, '[', ']') {
+                Some(close_idx) => {
+                  let inner = raw_name[bracket_idx + 1:close_idx].to_string()
+                  for p in parse_type_params(inner, imports, used_aliases) {
+                    type_params.push(p)
+                  }
+                  raw_name[:bracket_idx].to_string() +
+                  raw_name[close_idx + 1:raw_name.length()].to_string()
+                }
+                None => raw_name
+              }
+            None => raw_name
+          }
+          match cleaned_name.find("::") {
             Some(sep_idx) =>
               Some(
                 (
-                  Some(raw_name[:sep_idx].to_string()),
-                  raw_name[sep_idx + 2:raw_name.length()].to_string(),
+                  Some(cleaned_name[:sep_idx].to_string()),
+                  cleaned_name[sep_idx + 2:cleaned_name.length()].to_string(),
                   type_params,
                   params_src,
                   return_ty,
@@ -2610,7 +2630,7 @@ fn parse_mbti_function_signature(
               )
             None =>
               Some(
-                (None, raw_name, type_params, params_src, return_ty, is_async),
+                (None, cleaned_name, type_params, params_src, return_ty, is_async),
               )
           }
         }
