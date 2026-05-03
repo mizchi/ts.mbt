@@ -21,9 +21,11 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|}
     #|
     #|export interface Hash {
+    #|  readonly __HashBrand?: never;
     #|}
     #|
     #|export interface Comparable<T> {
+    #|  readonly __ComparableBrand?: never;
     #|}
     #|
     #|export function identity<T>(value: T): T;
@@ -295,7 +297,11 @@ test "bridge: emit TypeScript declarations declares builtin StringBuilder" {
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI emit error: \{msg}")
   }
-  assert_true(actual.contains("export interface StringBuilder {\n}"))
+  assert_true(
+    actual.contains(
+      "export interface StringBuilder {\n  readonly __StringBuilderBrand?: never;\n}",
+    ),
+  )
   assert_true(
     actual.contains("export function write_to(value: StringBuilder): void;"),
   )
@@ -567,11 +573,20 @@ test "bridge: emit TypeScript declarations keeps private local opaque types refe
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI emit error: \{msg}")
   }
-  assert_true(actual.contains("interface Runtime {\n}"))
+  assert_true(
+    actual.contains(
+      "interface Runtime {\n  readonly __RuntimeBrand?: never;\n}",
+    ),
+  )
   // Private opaque types referenced by public api are now exported with
-  // an empty interface body, so external TypeScript callers can name the
-  // values they receive from the wrapped functions.
-  assert_true(actual.contains("export interface Memo<T> {\n}"))
+  // a brand-tagged empty interface body, so external TypeScript callers
+  // can name the values they receive from the wrapped functions while
+  // still satisfying `@typescript-eslint/no-empty-interface`.
+  assert_true(
+    actual.contains(
+      "export interface Memo<T> {\n  readonly __MemoBrand?: never;\n}",
+    ),
+  )
   assert_true(
     actual.contains(
       "export function use_runtime(value: Runtime): Iterable<string>;",

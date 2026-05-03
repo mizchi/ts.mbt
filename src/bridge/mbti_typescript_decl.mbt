@@ -3294,7 +3294,8 @@ fn decls_reference_builtin_json(
 
 ///|
 fn render_builtin_string_builder_decl() -> String {
-  "export interface StringBuilder {\n}"
+  let brand = mbti_branded_empty_interface_body("StringBuilder")
+  "export interface StringBuilder {\n\{brand}\n}"
 }
 
 ///|
@@ -3576,14 +3577,22 @@ fn render_struct_decl(
     for method_decl in methods {
       body_lines.push("  " + method_decl)
     }
-    let rendered_body = body_lines.join("\n")
+    let rendered_body = if body_lines.length() == 0 {
+      mbti_branded_empty_interface_body(struct_decl.name)
+    } else {
+      body_lines.join("\n")
+    }
     return "export interface \{struct_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
   }
   let body_lines : Array[String] = []
   for field_decl in struct_decl.fields {
     body_lines.push(field_decl)
   }
-  let rendered_body = body_lines.join("\n")
+  let rendered_body = if body_lines.length() == 0 {
+    mbti_branded_empty_interface_body(struct_decl.name)
+  } else {
+    body_lines.join("\n")
+  }
   let interface_section = "export interface \{struct_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
   let flat_methods = render_flat_instance_methods(
     struct_decl.name, type_param_suffix, methods,
@@ -3775,7 +3784,8 @@ fn render_type_alias_decl(
       let rendered_body = body_lines.join("\n")
       return "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
     }
-    let interface_section = "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n}"
+    let brand = mbti_branded_empty_interface_body(alias_decl.name)
+    let interface_section = "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{brand}\n}"
     let flat_methods = render_flat_instance_methods(
       alias_decl.name, type_param_suffix, methods,
     )
@@ -3823,7 +3833,8 @@ fn render_private_type_alias_decl(alias_decl : MbtiTypeAliasDecl) -> String {
   // type is implementation-defined on the MoonBit side.
   let type_param_suffix = render_type_param_suffix(alias_decl.type_params)
   if alias_decl.is_opaque {
-    return "export interface \{alias_decl.name}\{type_param_suffix} {\n}"
+    let brand = mbti_branded_empty_interface_body(alias_decl.name)
+    return "export interface \{alias_decl.name}\{type_param_suffix} {\n\{brand}\n}"
   }
   "export type \{alias_decl.name}\{type_param_suffix} = \{alias_decl.body};"
 }
@@ -3835,7 +3846,11 @@ fn render_trait_decl(trait_decl : MbtiTraitDecl) -> String {
   for method_decl in trait_decl.methods {
     body_lines.push("  " + method_decl)
   }
-  let rendered_body = body_lines.join("\n")
+  let rendered_body = if body_lines.length() == 0 {
+    mbti_branded_empty_interface_body(trait_decl.name)
+  } else {
+    body_lines.join("\n")
+  }
   "export interface \{trait_decl.name}\{type_param_suffix} {\n\{rendered_body}\n}"
 }
 
@@ -3988,16 +4003,31 @@ fn is_simple_ts_trait_name(name : String) -> Bool {
 
 ///|
 fn render_marker_trait_decl(decl : MbtiMarkerTraitDecl) -> String {
-  if decl.arity == 0 {
-    return "export interface \{decl.name} {\n}"
+  let suffix = if decl.arity == 0 {
+    ""
+  } else {
+    let type_params : Array[String] = []
+    for idx = 0; idx < decl.arity; idx = idx + 1 {
+      type_params.push(mbti_default_type_param_name(idx))
+    }
+    let comma_separator = ", "
+    let joined = type_params.join(comma_separator)
+    "<\{joined}>"
   }
-  let type_params : Array[String] = []
-  for idx = 0; idx < decl.arity; idx = idx + 1 {
-    type_params.push(mbti_default_type_param_name(idx))
-  }
-  let joined_type_params = type_params.join(", ")
-  let suffix = "<\{joined_type_params}>"
-  "export interface \{decl.name}\{suffix} {\n}"
+  let brand = mbti_branded_empty_interface_body(decl.name)
+  "export interface \{decl.name}\{suffix} {\n\{brand}\n}"
+}
+
+///|
+/// Body for an otherwise-empty interface that lints clean under
+/// `@typescript-eslint/no-empty-interface`. The optional `never` field
+/// gives the interface a member, but a `never`-typed value can never
+/// be supplied at runtime, so structurally this is still equivalent
+/// to an empty interface — `interface Box extends Hash {}` and
+/// `Box satisfies Hash` keep working without anyone ever providing
+/// `__HashBrand`.
+fn mbti_branded_empty_interface_body(name : String) -> String {
+  "  readonly __\{name}Brand?: never;"
 }
 
 ///|
