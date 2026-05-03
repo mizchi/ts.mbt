@@ -3559,11 +3559,99 @@ fn render_struct_decl(
   for field_decl in struct_decl.fields {
     body_lines.push(field_decl)
   }
-  for method_decl in methods {
-    body_lines.push("  " + method_decl)
-  }
   let rendered_body = body_lines.join("\n")
-  "export interface \{struct_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
+  let interface_section = "export interface \{struct_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
+  let flat_methods = render_flat_instance_methods(
+    struct_decl.name, type_param_suffix, methods,
+  )
+  if flat_methods == "" {
+    interface_section
+  } else {
+    interface_section + "\n\n" + flat_methods
+  }
+}
+
+///|
+/// Flatten the instance-method declarations rendered by the upstream
+/// member-collection step into top-level `export function` declarations
+/// keyed `Owner_method`. The first parameter becomes an explicit
+/// `self : Owner<...>` so the generated bundle JS (which already exports
+/// methods as flat functions) matches the `.d.ts` description, and so
+/// rolldown / esbuild can drop unused methods independently of the
+/// owning type.
+///
+/// `method_decl` arrives in the form
+///   `name<U>(arg0: A, arg1: B): R;`
+/// — split out the leading `name` (and any optional method-level type
+/// params), merge those generics with the owner's, and prepend the
+/// `self` parameter to the argument list.
+fn render_flat_instance_methods(
+  owner_name : String,
+  owner_type_param_suffix : String,
+  methods : Array[String],
+) -> String {
+  let lines : Array[String] = []
+  for method_decl in methods {
+    match
+      flatten_instance_method_decl(
+        owner_name, owner_type_param_suffix, method_decl,
+      ) {
+      Some(line) => lines.push(line)
+      None => lines.push(method_decl) // defensive — keep the original
+    }
+  }
+  lines.join("\n\n")
+}
+
+///|
+fn flatten_instance_method_decl(
+  owner_name : String,
+  owner_type_param_suffix : String,
+  method_decl : String,
+) -> String? {
+  let trimmed = method_decl.trim().to_string()
+  let stripped = if trimmed.has_suffix(";") {
+    trimmed[:trimmed.length() - 1].to_string()
+  } else {
+    trimmed
+  }
+  let paren_idx = match stripped.find("(") {
+    Some(idx) => idx
+    None => return None
+  }
+  let head = stripped[:paren_idx].to_string()
+  let rest = stripped[paren_idx:stripped.length()].to_string()
+  let (raw_name, method_tp_suffix) = match head.find("<") {
+    Some(lt_idx) =>
+      (head[:lt_idx].to_string(), head[lt_idx:head.length()].to_string())
+    None => (head, "")
+  }
+  let merged_tp = merge_type_param_suffixes(
+    owner_type_param_suffix, method_tp_suffix,
+  )
+  let self_ty = "\{owner_name}\{owner_type_param_suffix}"
+  // `rest` always starts with `(`. Insert the `self` parameter as the
+  // first argument and drop the leading `(` we replaced.
+  let after_paren = rest[1:rest.length()].to_string()
+  let new_rest = if after_paren.has_prefix(")") {
+    "(self : \{self_ty})" + after_paren[1:after_paren.length()].to_string()
+  } else {
+    "(self : \{self_ty}, " + after_paren
+  }
+  Some("export function \{owner_name}_\{raw_name}\{merged_tp}\{new_rest};")
+}
+
+///|
+fn merge_type_param_suffixes(owner : String, method_tp : String) -> String {
+  if owner == "" {
+    return method_tp
+  }
+  if method_tp == "" {
+    return owner
+  }
+  let owner_inner = owner[1:owner.length() - 1].to_string()
+  let method_inner = method_tp[1:method_tp.length() - 1].to_string()
+  "<\{owner_inner}, \{method_inner}>"
 }
 
 ///|
@@ -3584,19 +3672,19 @@ fn render_enum_like_decl(
   } else {
     "\n\n" + extract_lines
   }
-  if methods.length() == 0 {
-    if trait_suffix != "" {
-      return "export type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body})\{trait_suffix};\{extract_suffix}"
-    }
-    return "export type \{enum_decl.name}\{type_param_suffix} = \{enum_decl.union_body};\{extract_suffix}"
+  let alias_section = if trait_suffix != "" {
+    "export type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body})\{trait_suffix};\{extract_suffix}"
+  } else {
+    "export type \{enum_decl.name}\{type_param_suffix} = \{enum_decl.union_body};\{extract_suffix}"
   }
-  let methods_name = "\{enum_decl.name}Methods"
-  let body_lines : Array[String] = []
-  for method_decl in methods {
-    body_lines.push("  " + method_decl)
+  let flat_methods = render_flat_instance_methods(
+    enum_decl.name, type_param_suffix, methods,
+  )
+  if flat_methods == "" {
+    alias_section
+  } else {
+    alias_section + "\n\n" + flat_methods
   }
-  let rendered_body = body_lines.join("\n")
-  "export interface \{methods_name}\{type_param_suffix} {\n\{rendered_body}\n}\n\nexport type \{enum_decl.name}\{type_param_suffix} = (\{enum_decl.union_body}) & \{methods_name}\{type_param_suffix}\{trait_suffix};\{extract_suffix}"
 }
 
 ///|
@@ -3646,31 +3734,33 @@ fn render_type_alias_decl(
     } else {
       ""
     }
-    let body_lines : Array[String] = []
-    for method_decl in methods {
-      body_lines.push("  " + method_decl)
+    let interface_section = "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n}"
+    let flat_methods = render_flat_instance_methods(
+      alias_decl.name, type_param_suffix, methods,
+    )
+    if flat_methods == "" {
+      return interface_section
     }
-    let rendered_body = body_lines.join("\n")
-    return "export interface \{alias_decl.name}\{type_param_suffix}\{extends_suffix} {\n\{rendered_body}\n}"
+    return interface_section + "\n\n" + flat_methods
   }
   let trait_suffix = render_type_alias_trait_suffix(
     traits,
     alias_decl.name,
     type_param_suffix,
   )
-  if methods.length() == 0 {
-    if trait_suffix != "" {
-      return "export type \{alias_decl.name}\{type_param_suffix} = (\{alias_decl.body})\{trait_suffix};"
-    }
-    return "export type \{alias_decl.name}\{type_param_suffix} = \{alias_decl.body};"
+  let alias_section = if trait_suffix != "" {
+    "export type \{alias_decl.name}\{type_param_suffix} = (\{alias_decl.body})\{trait_suffix};"
+  } else {
+    "export type \{alias_decl.name}\{type_param_suffix} = \{alias_decl.body};"
   }
-  let methods_name = "\{alias_decl.name}Methods"
-  let body_lines : Array[String] = []
-  for method_decl in methods {
-    body_lines.push("  " + method_decl)
+  let flat_methods = render_flat_instance_methods(
+    alias_decl.name, type_param_suffix, methods,
+  )
+  if flat_methods == "" {
+    alias_section
+  } else {
+    alias_section + "\n\n" + flat_methods
   }
-  let rendered_body = body_lines.join("\n")
-  "export interface \{methods_name}\{type_param_suffix} {\n\{rendered_body}\n}\n\nexport type \{alias_decl.name}\{type_param_suffix} = (\{alias_decl.body}) & \{methods_name}\{type_param_suffix}\{trait_suffix};"
 }
 
 ///|

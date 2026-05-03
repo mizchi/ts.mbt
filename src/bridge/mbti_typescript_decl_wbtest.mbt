@@ -39,21 +39,22 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|
     #|export interface Box<T> extends Show, Eq<Box<T>>, Hash, Comparable<Box<T>> {
     #|  value: T;
-    #|  unwrap(): T;
-    #|  map<U>(fn_: (value: T) => U): Box<U>;
-    #|  show_value(): string;
     #|}
+    #|
+    #|export function Box_unwrap<T>(self : Box<T>): T;
+    #|
+    #|export function Box_map<T, U>(self : Box<T>, fn_: (value: T) => U): Box<U>;
+    #|
+    #|export function Box_show_value<T>(self : Box<T>): string;
     #|
     #|export function Box_new_<T>(value: T): Box<T>;
     #|
-    #|export interface ResultMethods<T, E> {
-    #|  is_ok(): boolean;
-    #|}
-    #|
-    #|export type Result<T, E> = ({ $tag: "Ok"; _0: T } | { $tag: "Err"; _0: E }) & ResultMethods<T, E>;
+    #|export type Result<T, E> = { $tag: "Ok"; _0: T } | { $tag: "Err"; _0: E };
     #|
     #|export type Result_Ok<T, E> = Extract<Result<T, E>, { $tag: "Ok" }>;
     #|export type Result_Err<T, E> = Extract<Result<T, E>, { $tag: "Err" }>;
+    #|
+    #|export function Result_is_ok<T, E>(self : Result<T, E>): boolean;
     #|
     #|export interface TypedModuleHolder {
     #|  module: ast.TsModule;
@@ -65,11 +66,9 @@ async test "bridge: emit TypeScript declarations directly from mbti" {
     #|
     #|export type Identity<T> = T;
     #|
-    #|export interface MaybeStringMethods {
-    #|  is_empty(): boolean;
-    #|}
+    #|export type MaybeString = (string | undefined) & Show & Hash & json.ToJson;
     #|
-    #|export type MaybeString = (string | undefined) & MaybeStringMethods & Show & Hash & json.ToJson;
+    #|export function MaybeString_is_empty(self : MaybeString): boolean;
     #|
     #|export type DerivedStatus = ({ $tag: "Ready" }) & Eq<DerivedStatus>;
     #|
@@ -105,14 +104,12 @@ async test "bridge: emit TypeScript declarations keeps pub(all) types used by pu
   let expected =
     #|export function analyze_truthiness_guard(s: string): [string, boolean] | undefined;
     #|
-    #|export interface AnalysisResultMethods<T> {
-    #|  is_ok(): boolean;
-    #|}
-    #|
-    #|export type AnalysisResult<T> = ({ $tag: "Ok"; _0: T; _1: Array<string> } | { $tag: "Err"; _0: Array<string> }) & AnalysisResultMethods<T>;
+    #|export type AnalysisResult<T> = { $tag: "Ok"; _0: T; _1: Array<string> } | { $tag: "Err"; _0: Array<string> };
     #|
     #|export type AnalysisResult_Ok<T> = Extract<AnalysisResult<T>, { $tag: "Ok" }>;
     #|export type AnalysisResult_Err<T> = Extract<AnalysisResult<T>, { $tag: "Err" }>;
+    #|
+    #|export function AnalysisResult_is_ok<T>(self : AnalysisResult<T>): boolean;
     #|
     #|export type AnalysisErrorKind = { $tag: "SyntaxError" } | { $tag: "ReferenceError" };
     #|
@@ -131,7 +128,7 @@ async test "bridge: emit TypeScript declarations from real pkg.generated.mbti ke
       fail("MBTI emit error: \{msg}")
   }
   assert_true(actual.contains("export type AnalysisResult<T> ="))
-  assert_true(actual.contains("export interface AnalysisResultMethods<T> {"))
+  assert_true(actual.contains("export function AnalysisResult_is_ok<T>(self : AnalysisResult<T>):"))
   assert_true(
     actual.contains(
       "export function analyze_null_guard(value: ast.TsExpr): [string, boolean] | undefined;",
@@ -247,7 +244,7 @@ test "bridge: emit TypeScript declarations supports opaque public types and tupl
   assert_true(actual.contains("Eq<Revision>"))
   assert_true(actual.contains("Compare"))
   assert_true(actual.contains("Hash"))
-  assert_true(actual.contains("  next(): Revision;"))
+  assert_true(actual.contains("export function Revision_next(self : Revision): Revision;"))
 }
 
 ///|
@@ -422,7 +419,17 @@ async test "bridge: emit TypeScript declarations covers reverse-direction edge t
   )
   assert_true(
     actual.contains(
-      "export interface CallbackBox<T> {\n  current: T;\n  on_change: ((value: T) => void) | undefined;\n  meta: Map<string, Array<boolean>>;\n  map<U>(mapper: (value: T) => U): CallbackBox<U>;\n  tap(effect: (self: CallbackBox<T>) => void): CallbackBox<T>;\n}",
+      "export interface CallbackBox<T> {\n  current: T;\n  on_change: ((value: T) => void) | undefined;\n  meta: Map<string, Array<boolean>>;\n}",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "export function CallbackBox_map<T, U>(self : CallbackBox<T>, mapper: (value: T) => U): CallbackBox<U>;",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "export function CallbackBox_tap<T>(self : CallbackBox<T>, effect: (self: CallbackBox<T>) => void): CallbackBox<T>;",
     ),
   )
   assert_true(
@@ -516,10 +523,21 @@ test "bridge: emit TypeScript declarations avoids field method and import alias 
   assert_true(
     actual.contains("export function symbol(s: string): symbol_.Symbol;"),
   )
+  // Fields stay on the interface; methods flatten into top-level
+  // `Owner_method` exports so the renamed `resolve_` / `reject_`
+  // collisions still hold but participate in tree-shaking.
   assert_true(actual.contains("  resolve: (value: T) => void;"))
-  assert_true(actual.contains("  resolve_(value: T): void;"))
   assert_true(actual.contains("  reject: (value: Error) => void;"))
-  assert_true(actual.contains("  reject_(value: Error): void;"))
+  assert_true(
+    actual.contains(
+      "export function PromiseResolvers_resolve_<T>(self : PromiseResolvers<T>, value: T): void;",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "export function PromiseResolvers_reject_<T>(self : PromiseResolvers<T>, value: Error): void;",
+    ),
+  )
 }
 
 ///|
@@ -1347,7 +1365,9 @@ async test "bridge: emit TypeScript declarations reflects top-level raise effect
     ),
   )
   assert_true(
-    actual.contains("parse_next(s: string): Result<SemVer, SemVerError>;"),
+    actual.contains(
+      "export function SemVer_parse_next(self : SemVer, s: string): Result<SemVer, SemVerError>;",
+    ),
   )
 }
 

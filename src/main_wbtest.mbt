@@ -746,20 +746,36 @@ async test "emit_typescript_decl_from_mbti_text emits TypeScript declarations fr
       "export interface Box<T> extends Show, Eq<Box<T>>, Hash, Comparable<Box<T>> {",
     ),
   )
-  assert_true(actual.contains("unwrap(): T;"))
-  assert_true(actual.contains("map<U>(fn_: (value: T) => U): Box<U>;"))
-  assert_true(actual.contains("show_value(): string;"))
+  assert_true(actual.contains("export function Box_unwrap<T>(self : Box<T>): T;"))
+  assert_true(
+    actual.contains(
+      "export function Box_map<T, U>(self : Box<T>, fn_: (value: T) => U): Box<U>;",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "export function Box_show_value<T>(self : Box<T>): string;",
+    ),
+  )
   assert_true(actual.contains("export function Box_new_<T>(value: T): Box<T>;"))
   assert_true(actual.contains("export type Result<T, E> ="))
-  assert_true(actual.contains("export interface ResultMethods<T, E> {"))
+  assert_true(
+    actual.contains(
+      "export function Result_is_ok<T, E>(self : Result<T, E>): boolean;",
+    ),
+  )
   assert_true(actual.contains("module: ast.TsModule;"))
   assert_true(actual.contains("export type InternalThing<T> ="))
   assert_true(actual.contains("Eq<ParseError>"))
   assert_true(actual.contains("Eq<InternalThing<T>> & Hash"))
-  assert_true(actual.contains("export interface MaybeStringMethods {"))
   assert_true(
     actual.contains(
-      "export type MaybeString = (string | undefined) & MaybeStringMethods & Show & Hash & json.ToJson;",
+      "export function MaybeString_is_empty(self : MaybeString): boolean;",
+    ),
+  )
+  assert_true(
+    actual.contains(
+      "export type MaybeString = (string | undefined) & Show & Hash & json.ToJson;",
     ),
   )
   assert_true(actual.contains("json.ToJson"))
@@ -1017,7 +1033,7 @@ async test "emit_typescript_decl_from_mbti_text keeps real analysis package outp
       fail("Emit error: \{msg}")
   }
   assert_true(actual.contains("export type AnalysisResult<T> ="))
-  assert_true(actual.contains("export interface AnalysisResultMethods<T> {"))
+  assert_true(actual.contains("export function AnalysisResult_is_ok<T>(self : AnalysisResult<T>):"))
   assert_true(actual.contains("Eq<AnalysisErrorKind>"))
   assert_false(actual.contains("debug.Debug"))
   assert_true(actual.contains("& Show;"))
