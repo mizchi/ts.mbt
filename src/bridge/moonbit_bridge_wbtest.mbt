@@ -30,7 +30,7 @@ async test "bridge: emit MoonBit TS bridge bundle from runtime entry" {
 }
 
 ///|
-async test "bridge: emit MoonBit TS bridge package bundle adds js import when widened types require it" {
+async test "bridge: emit MoonBit TS bridge package bundle has no mizchi/js dependency for widened exports" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
   ) catch {
@@ -42,8 +42,11 @@ async test "bridge: emit MoonBit TS bridge package bundle adds js import when wi
       return
     }
   }
-  assert_true(bundle.moon_pkg_json.contains("\"path\": \"mizchi/js/core\""))
-  assert_true(bundle.moon_pkg_json.contains("\"alias\": \"js\""))
+  // The generated bridge now ships its own `JSValue` / `Promise[X]`
+  // `#external` types, so the package descriptor must not pull in
+  // `mizchi/js`.
+  assert_false(bundle.moon_pkg_json.contains("mizchi/js"))
+  assert_true(bundle.bridge_mbt.contains("#external\npub type JSValue"))
   assert_true(bundle.bridge_mbti.contains("declare pub fn get_default()"))
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
   assert_true(bundle.bridge_js.contains("export function __ts_mbt_get_default"))
@@ -153,7 +156,7 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes object type al
   }
   assert_true(bundle.bridge_mbti.contains("pub(all) struct HonoOptions {"))
   assert_true(bundle.bridge_mbti.contains("  strict : Bool?"))
-  assert_true(bundle.bridge_mbti.contains("  bindings : @js.Any?"))
+  assert_true(bundle.bridge_mbti.contains("  bindings : JSValue?"))
   assert_false(bundle.bridge_mbti.contains("declare pub type HonoOptions"))
 }
 
@@ -300,7 +303,7 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes ambient enums"
       "pub fn maybeMode(mode : Mode?) -> Mode? {\n  __ts_mbt_mode_from_js_optional(maybe_mode(__ts_mbt_mode_to_js_optional(mode)))\n}",
     ),
   )
-  assert_false(bundle.bridge_mbt.contains("get_mode() -> @js.Any"))
+  assert_false(bundle.bridge_mbt.contains("get_mode() -> JSValue"))
   assert_false(bundle.bridge_js.contains("import { Mode }"))
 }
 
@@ -674,8 +677,8 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes namespace expo
     bundle.bridge_mbti.contains("declare pub fn get_shapes() -> Shapes"),
   )
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_shapes()"))
-  assert_true(bundle.moon_pkg_json.contains("\"path\": \"mizchi/js/core\""))
-  assert_true(bundle.moon_pkg_json.contains("\"alias\": \"js\""))
+  // No `mizchi/js` dependency: the bridge declares `JSValue` itself.
+  assert_false(bundle.moon_pkg_json.contains("mizchi/js"))
   assert_true(
     bundle.bridge_js.contains("export function __ts_mbt_get_shapes()"),
   )

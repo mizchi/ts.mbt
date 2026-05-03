@@ -37,7 +37,12 @@ priv struct MoonBitJsFfiState {
   // declaration and the bridge.js converter pair. Keyed by synthetic name
   // for stable dedup across all lowering call sites.
   synthesized_inline_unions : Map[String, BridgeTaggedUnionDecl]
+  // `JSValue` / `Promise[X]` are emitted as self-contained `#external`
+  // types so the generated bridge package has no `mizchi/js` dependency.
+  // Track whether either appeared in the lowered output so the emission
+  // pass can decide whether to write the corresponding extern declaration.
   mut needs_js_any : Bool
+  mut needs_promise : Bool
 }
 
 ///|
@@ -611,7 +616,7 @@ fn ffi_tuple_type_name(
   for i in 1..<items.length() {
     if ffi_type_name(state, items[i]) != first {
       state.needs_js_any = true
-      return "Array[@js.Any]"
+      return "Array[JSValue]"
     }
   }
   "Array[\{first}]"
@@ -749,25 +754,27 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     Struct(name, _) => ffi_type_identifier(name, "OpaqueType")
     Named("any") | Named("Function") => {
       state.needs_js_any = true
-      "@js.Any"
+      "JSValue"
     }
     Named("Array") | Named("ReadonlyArray") => {
       state.needs_js_any = true
-      "Array[@js.Any]"
+      "Array[JSValue]"
     }
     Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
       "Array[" + ffi_type_name(state, inner) + "]"
-    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
-      "@js.Promise[" + ffi_type_name(state, inner) + "]"
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) => {
+      state.needs_promise = true
+      "Promise[" + ffi_type_name(state, inner) + "]"
+    }
     Named(name) if ffi_is_local_type_param(state, name) => name
     Applied(name, _) if ffi_is_local_type_param(state, name) => name
     Named(name) if ffi_should_widen_unresolved_type_param(state, name) => {
       state.needs_js_any = true
-      "@js.Any"
+      "JSValue"
     }
     Applied(name, _) if ffi_should_widen_unresolved_type_param(state, name) => {
       state.needs_js_any = true
-      "@js.Any"
+      "JSValue"
     }
     Named(name) if ffi_named_type_is_string_enum(state, name) => "String"
     Applied(name, _) if ffi_named_type_is_string_enum(state, name) => "String"
@@ -802,12 +809,12 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
         Some(synth_name) => synth_name
         None => {
           state.needs_js_any = true
-          "@js.Any"
+          "JSValue"
         }
       }
     _ => {
       state.needs_js_any = true
-      "@js.Any"
+      "JSValue"
     }
   }
 }
@@ -3757,6 +3764,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     tagged_union_decls_by_name,
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let type_aliases_by_type_name = ffi_type_alias_map_by_type_name(modules)
   let emitted_type_names : Array[String] = []
@@ -4868,10 +4876,15 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     ffi_sections.push(section)
   }
 
+  // Emit self-contained `#external` declarations for the opaque types
+  // the FFI layer references. Keeping them in `externs.mbt` (instead of
+  // only `bridge.mbt`) means the file still compiles in isolation
+  // without any `mizchi/js` import.
   if state.needs_js_any {
-    ffi_sections.insert(
-      2, "// Requires mizchi/js (alias @js) for @js.Any in widened signatures.",
-    )
+    ffi_sections.insert(2, "#external\npub type JSValue")
+  }
+  if state.needs_promise {
+    ffi_sections.insert(2, "#external\npub type Promise[X]")
   }
 
   let rendered_bridge_lines : Array[String] = [

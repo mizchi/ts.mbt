@@ -7,6 +7,11 @@ priv struct MoonBitDeclState {
   // `Applied(name, args)` references (e.g. `Box<string>` ⇒ `Box[String]`).
   generic_preserved_type_names : Array[String]
   mut needs_jsvalue : Bool
+  // Track whether `Applied("Promise"|"PromiseLike", ...)` was emitted so
+  // the declarations file can append a self-contained
+  // `declare pub type Promise[X]` opaque alias instead of pulling in
+  // `mizchi/js/core::Promise`.
+  mut needs_promise : Bool
 }
 
 ///|
@@ -418,8 +423,10 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     }
     Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
       "Array[" + moonbit_type_name(state, inner) + "]"
-    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
-      "@js.Promise[" + moonbit_type_name(state, inner) + "]"
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) => {
+      state.needs_promise = true
+      "Promise[" + moonbit_type_name(state, inner) + "]"
+    }
     Named(name) if is_local_type_param(state, name) => name
     Applied(name, _) if is_local_type_param(state, name) => name
     Named(name) if should_widen_unresolved_type_param(state, name) => {
@@ -977,6 +984,7 @@ pub fn emit_moonbit_decl_with_sections_and_types(
     local_type_param_names: [],
     generic_preserved_type_names,
     needs_jsvalue: false,
+    needs_promise: false,
   }
   let interface_sections : Array[String] = []
   let seen_type_decl_names : Array[String] = []
@@ -1055,6 +1063,9 @@ pub fn emit_moonbit_decl_with_sections_and_types(
   referenced.sort()
   if state.needs_jsvalue || force_jsvalue {
     sections.push("///|\ndeclare pub type JSValue")
+  }
+  if state.needs_promise {
+    sections.push("///|\ndeclare pub type Promise[X]")
   }
   for section in extra_sections {
     sections.push(section)

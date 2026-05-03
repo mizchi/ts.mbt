@@ -582,14 +582,14 @@ test "unified JSValue diagnostics ignore shared declarations" {
   collect_unified_jsvalue_fallbacks_from_source(
     "bridge.mbt",
     [
-      "pub type JSValue = @js.Any", "pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\"",
+      "#external\npub type JSValue", "pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\"",
     ].join("\n"),
     out,
   )
   inspect(
     out,
     content=(
-      #|["bridge.mbti:3: declare pub fn parse(input : String) -> JSValue", "bridge.mbt:2: pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\""]
+      #|["bridge.mbti:3: declare pub fn parse(input : String) -> JSValue", "bridge.mbt:3: pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\""]
     ),
   )
 }
@@ -1391,7 +1391,11 @@ async test "emit_moonbit_bridge_package_texts generates a compileable package bu
       return
     }
   }
-  assert_true(bundle.moon_pkg_json.contains("\"path\": \"mizchi/js/core\""))
+  // Generated bridge packages are now self-contained — no `mizchi/js`
+  // dependency since `JSValue` and `Promise[X]` are emitted as
+  // `#external` types directly in the package.
+  assert_false(bundle.moon_pkg_json.contains("mizchi/js"))
+  assert_true(bundle.bridge_mbt.contains("#external\npub type JSValue"))
   assert_true(bundle.bridge_mbti.contains("declare pub fn get_default()"))
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
   assert_true(bundle.bridge_js.contains("export function __ts_mbt_get_default"))
@@ -1400,7 +1404,8 @@ async test "emit_moonbit_bridge_package_texts generates a compileable package bu
 ///|
 test "emit_moonbit_bridge_package splits large generated source into review files" {
   let bridge_mbt =
-    #|pub type JSValue = @js.Any
+    #|#external
+    #|pub type JSValue
     #|
     #|#external
     #|type RuntimePoint
@@ -1436,7 +1441,7 @@ test "emit_moonbit_bridge_package splits large generated source into review file
   let externs_mbt = wbtest_find_file_content(files, "externs.mbt")
   let guards_mbt = wbtest_find_file_content(files, "guards.mbt")
   let bridge_mbt = wbtest_find_file_content(files, "bridge.mbt")
-  assert_true(types_mbt.contains("pub type JSValue = @js.Any"))
+  assert_true(types_mbt.contains("#external\npub type JSValue"))
   assert_true(types_mbt.contains("#external\ntype RuntimePoint"))
   assert_true(converters_mbt.contains("fn __ts_mbt_mode_to_js"))
   assert_true(converters_mbt.contains("__ts_mbt_mode_from_js"))
@@ -1690,7 +1695,7 @@ async test "emit_moonbit_bridge_package rewrites bare class-property alias reexp
 }
 
 ///|
-async test "emit_moonbit_bridge_package preserves js import metadata for relative widened exports" {
+async test "emit_moonbit_bridge_package emits self-contained widened exports without mizchi/js" {
   let root = wbtest_tmp_project_benchmark_root("bridge_package_export_equals")
   let _ = try? @fs.rmdir(root, recursive=true)
   emit_moonbit_bridge_package(
@@ -1712,11 +1717,13 @@ async test "emit_moonbit_bridge_package preserves js import metadata for relativ
   let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
     _ => wbtest_join_path(root, "bridge.js")
   }
-  assert_true(pkg_json.contains("\"path\": \"mizchi/js/core\""))
-  assert_true(pkg_json.contains("\"alias\": \"js\""))
+  // Self-contained bridge: no `mizchi/js` import in the package
+  // descriptor; `JSValue` is declared inline.
+  assert_false(pkg_json.contains("mizchi/js"))
+  assert_true(bridge_mbt.contains("#external\npub type JSValue"))
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_default() -> @js.Any = \"__ts_mbt_get_default\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_default() -> JSValue = \"__ts_mbt_get_default\"",
     ),
   )
   let _ = try? @fs.rmdir(root, recursive=true)
@@ -4524,17 +4531,17 @@ async test "emit_moonbit_bridge_package widens imported reassigned local let-tab
   assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> JSValue = \"__ts_mbt_get_runtime_version\"",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> JSValue = \"__ts_mbt_get_build\"",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> JSValue = \"__ts_mbt_get_rest_meta\"",
     ),
   )
   assert_true(
@@ -4574,17 +4581,17 @@ async test "emit_moonbit_bridge_package widens imported prop-mutated local let-t
   assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> JSValue = \"__ts_mbt_get_runtime_version\"",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> JSValue = \"__ts_mbt_get_build\"",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> JSValue = \"__ts_mbt_get_rest_meta\"",
     ),
   )
   assert_true(
@@ -4624,17 +4631,17 @@ async test "emit_moonbit_bridge_package widens imported index-mutated local let-
   assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> JSValue = \"__ts_mbt_get_runtime_version\"",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> JSValue = \"__ts_mbt_get_build\"",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> JSValue = \"__ts_mbt_get_rest_meta\"",
     ),
   )
   assert_true(
@@ -4949,17 +4956,17 @@ async test "emit_moonbit_bridge_package widens conflicting star const-table comp
   assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> JSValue = \"__ts_mbt_get_runtime_version\"",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_build() -> JSValue = \"__ts_mbt_get_build\"",
     ),
   )
   assert_true(
     bridge_mbt.contains(
-      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+      "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_rest_meta() -> JSValue = \"__ts_mbt_get_rest_meta\"",
     ),
   )
   assert_true(
@@ -5368,7 +5375,7 @@ async test "emit_moonbit_scaffold_from_ts handles exported JSX namespace members
       "#module(\"react/jsx-runtime\")\npub extern \"js\" fn jsx(tag : String, props : BadgeProps) -> JsxElement = \"jsx\"",
     ),
   )
-  assert_true(bridge_mbt.contains("pub type JSValue = @js.Any"))
+  assert_true(bridge_mbt.contains("#external\npub type JSValue"))
   assert_false(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
 
@@ -5704,7 +5711,7 @@ async test "emit_moonbit_scaffold_from_ts sanitizes reserved exported function a
   )
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn use_(promise : @js.Promise[String]) -> String",
+      "declare pub fn use_(promise : Promise[String]) -> String",
     ),
   )
   assert_true(
@@ -5753,7 +5760,7 @@ async test "emit_moonbit_scaffold_from_ts handles imported object type alias mem
   assert_true(bridge_mbti.contains("/// bindings : JSValue?"))
   assert_true(bridge_mbt.contains("pub(all) struct HonoOptions {"))
   assert_true(bridge_mbt.contains("  strict : Bool?"))
-  assert_true(bridge_mbt.contains("  bindings : @js.Any?"))
+  assert_true(bridge_mbt.contains("  bindings : JSValue?"))
   assert_true(
     bridge_mbt.contains(
       "pub extern \"js\" fn new_hono(options : HonoOptions?) -> Hono = \"__ts_mbt_new_hono\"",

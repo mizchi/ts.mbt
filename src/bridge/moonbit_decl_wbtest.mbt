@@ -576,12 +576,12 @@ async test "bridge: emit MoonBit declarations names inline object promise result
   assert_true(actual.contains("buffer : NodeJS_ArrayBufferView"))
   assert_true(
     actual.contains(
-      "declare pub fn readPromisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> @js.Promise[ReadPromisifyResult]",
+      "declare pub fn readPromisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> Promise[ReadPromisifyResult]",
     ),
   )
   assert_false(
     actual.contains(
-      "readPromisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> @js.Promise[JSValue]",
+      "readPromisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> Promise[JSValue]",
     ),
   )
 }
@@ -1287,12 +1287,12 @@ async test "bridge: emit MoonBit declarations specializes node fs readFile and g
   )
   assert_true(
     actual.contains(
-      "declare pub fn readFilePromisify(path : PathOrFileDescriptor, options : ReadFileBufferOptions?) -> @js.Promise[NonSharedBuffer]",
+      "declare pub fn readFilePromisify(path : PathOrFileDescriptor, options : ReadFileBufferOptions?) -> Promise[NonSharedBuffer]",
     ),
   )
   assert_false(
     actual.contains(
-      "declare pub fn readFilePromisify(path : PathOrFileDescriptor, options : JSValue?) -> @js.Promise[NonSharedBuffer]",
+      "declare pub fn readFilePromisify(path : PathOrFileDescriptor, options : JSValue?) -> Promise[NonSharedBuffer]",
     ),
   )
   assert_true(actual.contains("/// filter : ((String, String) -> Bool)?"))
@@ -1754,13 +1754,15 @@ async test "bridge: emit MoonBit declarations from Promise-returning APIs" {
   }
   assert_true(
     actual.contains(
-      "declare pub fn fetchLabel(id : String) -> @js.Promise[String]",
+      "declare pub fn fetchLabel(id : String) -> Promise[String]",
     ),
   )
   assert_true(
-    actual.contains("declare pub fn fetchCount() -> @js.Promise[Double]"),
+    actual.contains("declare pub fn fetchCount() -> Promise[Double]"),
   )
-  assert_false(actual.contains("declare pub type Promise"))
+  // Bridge packages now ship a self-contained `declare pub type Promise[X]`
+  // forward declaration so they don't depend on `mizchi/js/core::Promise`.
+  assert_true(actual.contains("declare pub type Promise[X]"))
 }
 
 ///|
@@ -2250,7 +2252,7 @@ async test "bridge: emit MoonBit declarations sanitizes reserved exported functi
   )
   assert_true(
     actual.contains(
-      "declare pub fn use_(promise : @js.Promise[String]) -> String",
+      "declare pub fn use_(promise : Promise[String]) -> String",
     ),
   )
   assert_true(
@@ -2506,7 +2508,7 @@ async test "bridge: Ref<T> alias renders as opaque Ref in mbti" {
   // that the generator widens to JSValue. Lower it to the opaque MoonBit
   // type `Ref` so consumers can at least pass the value through.
   assert_false(actual.contains("ref : JSValue"))
-  assert_false(actual.contains("ref : @js.Any"))
+  assert_false(actual.contains("ref : JSValue"))
   assert_true(actual.contains("ref : Ref?"))
 }
 
@@ -2534,7 +2536,7 @@ async test "bridge: indexed access T[\"k\"] resolves to the field type in mbti" 
     .nth(1)
     .unwrap_or_default()
     .to_string()
-  assert_false(ui_match_block.contains("params : @js.Any"))
+  assert_false(ui_match_block.contains("params : JSValue"))
   assert_false(ui_match_block.contains("params : JSValue"))
   assert_true(ui_match_block.contains("params : ParamsLike"))
 }
@@ -2553,9 +2555,9 @@ async test "bridge: Params<K> alias renders as opaque Params in mbti" {
     }
   }
   // Params<Key> is a string-keyed mapped record; treat the alias as an
-  // opaque type instead of widening the field to @js.Any when the generic
+  // opaque type instead of widening the field to JSValue when the generic
   // key parameter prevents expansion.
-  assert_false(actual.contains("params : @js.Any"))
+  assert_false(actual.contains("params : JSValue"))
   assert_false(actual.contains("params : JSValue"))
   assert_true(actual.contains("params : Params"))
 }
@@ -2573,10 +2575,10 @@ async test "bridge: Signalish<T> alias renders as opaque Signalish in mbti" {
       return
     }
   }
-  // Signalish<T> wraps a value-or-signal union; rendering it as @js.Any
+  // Signalish<T> wraps a value-or-signal union; rendering it as JSValue
   // hides the field shape entirely. Treat the alias as an opaque type so
   // the JSValue surface drops.
-  assert_false(actual.contains("accentHeight : @js.Any?"))
+  assert_false(actual.contains("accentHeight : JSValue?"))
   assert_false(actual.contains("accentHeight : JSValue?"))
   assert_true(actual.contains("accentHeight : Signalish?"))
   assert_true(actual.contains("fill : Signalish?"))
@@ -2599,12 +2601,12 @@ async test "bridge: EventHandler alias narrows to function type in mbti" {
     }
   }
   // Direct EventHandler<TargetedEvent<Target>> usage should expose the event
-  // type as a function param rather than collapsing to @js.Any.
-  assert_false(actual.contains("onClick : @js.Any?"))
+  // type as a function param rather than collapsing to JSValue.
+  assert_false(actual.contains("onClick : JSValue?"))
   assert_false(actual.contains("onClick : JSValue?"))
   // GenericEventHandler<Target> aliases EventHandler internally; the alias
   // name still ends with EventHandler so it should narrow as well.
-  assert_false(actual.contains("onLoad : @js.Any?"))
+  assert_false(actual.contains("onLoad : JSValue?"))
   assert_false(actual.contains("onLoad : JSValue?"))
   // Generic arguments on the event type aren't preserved by the current type
   // identifier renderer; checking the function shape is enough to confirm the
@@ -2629,5 +2631,5 @@ async test "bridge: qualified React.ReactNode renders as opaque ReactNode in mbt
   assert_true(actual.contains("element : ReactNode?"))
   assert_true(actual.contains("errorElement : ReactNode?"))
   assert_false(actual.contains("element : JSValue?"))
-  assert_false(actual.contains("element : @js.Any?"))
+  assert_false(actual.contains("element : JSValue?"))
 }

@@ -55,23 +55,16 @@ priv struct BridgeStructDecl {
 }
 
 ///|
-fn render_bridge_pkg_json(needs_js_import : Bool) -> String {
-  if needs_js_import {
-    let content =
-      #|{
-      #|  "import": [
-      #|    { "path": "mizchi/js/core", "alias": "js" }
-      #|  ]
-      #|}
-    content
-  } else {
-    "{}"
-  }
+fn render_bridge_pkg_json(_needs_js_import : Bool) -> String {
+  // Generated bridge packages are now fully self-contained: `JSValue`
+  // and `Promise[X]` are emitted as `#external` types in the bridge
+  // itself, so there's no compile-time `mizchi/js` dependency.
+  "{}"
 }
 
 ///|
-fn bridge_bundle_needs_js_import(bundle : MoonBitTsBridgeBundle) -> Bool {
-  bundle.ffi_mbt.contains("@js.")
+fn bridge_bundle_needs_js_import(_bundle : MoonBitTsBridgeBundle) -> Bool {
+  false
 }
 
 ///|
@@ -1019,9 +1012,16 @@ fn inject_bridge_public_type_aliases(
   bridge_mbt : String,
 ) -> String {
   let mut next_bridge_mbt = bridge_mbt
+  // Match the public-interface forward declarations from `bridge.mbti`
+  // with self-contained `#external` definitions in `bridge.mbt` so the
+  // generated package compiles without a `mizchi/js` dependency.
+  if bridge_mbti.contains("declare pub type Promise[X]") &&
+    !next_bridge_mbt.contains("#external\npub type Promise[X]") {
+    next_bridge_mbt = "#external\npub type Promise[X]\n\n" + next_bridge_mbt
+  }
   if bridge_mbti.contains("declare pub type JSValue") &&
-    !next_bridge_mbt.contains("pub type JSValue = @js.Any") {
-    next_bridge_mbt = "pub type JSValue = @js.Any\n\n" + next_bridge_mbt
+    !next_bridge_mbt.contains("#external\npub type JSValue") {
+    next_bridge_mbt = "#external\npub type JSValue\n\n" + next_bridge_mbt
   }
   next_bridge_mbt
 }

@@ -315,36 +315,40 @@ append_metrics() {
 jsvalue_function_budget() {
   local package_spec="$1"
 
+  # Budgets recalibrated after the `mizchi/js` removal: the in-house
+  # `JSValue` extern type now appears literally in struct field types
+  # too (where it previously rendered as `@js.Any` and slipped past the
+  # `JSValue`-only metric grep), so historical numbers move up.
   case "$package_spec" in
     clsx) printf '0\n' ;;
     chalk) printf '4\n' ;;
-    dotenv) printf '1\n' ;;
+    dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '35\n' ;;
-    zod) printf '239\n' ;;
-    date-fns) printf '18\n' ;;
+    zod) printf '249\n' ;;
+    date-fns) printf '9\n' ;;
     node:sqlite) printf '0\n' ;;
     node:fs) printf '2\n' ;;
     node:path) printf '0\n' ;;
-    node:crypto) printf '0\n' ;;
+    node:crypto) printf '1\n' ;;
     colorette) printf '1\n' ;;
-    magic-string) printf '9\n' ;;
-    source-map) printf '9\n' ;;
-    valibot) printf '112\n' ;;
+    magic-string) printf '5\n' ;;
+    source-map) printf '7\n' ;;
+    valibot) printf '125\n' ;;
     immer) printf '16\n' ;;
     execa) printf '1\n' ;;
-    preact) printf '8\n' ;;
-    vitest/runtime) printf '3\n' ;;
-    playwright) printf '209\n' ;;
-    react-router) printf '80\n' ;;
-    jose) printf '63\n' ;;
+    preact) printf '6\n' ;;
+    vitest/runtime) printf '4\n' ;;
+    playwright) printf '202\n' ;;
+    react-router) printf '88\n' ;;
+    jose) printf '51\n' ;;
     express) printf '4\n' ;;
-    glob) printf '19\n' ;;
+    glob) printf '11\n' ;;
     node:os) printf '0\n' ;;
     node:url) printf '0\n' ;;
     node:querystring) printf '0\n' ;;
-    node:assert) printf '22\n' ;;
-    node:util) printf '13\n' ;;
+    node:assert) printf '23\n' ;;
+    node:util) printf '11\n' ;;
     node:buffer) printf '0\n' ;;
     *) printf '0\n' ;;
   esac
@@ -364,36 +368,39 @@ unsupported_export_budget() {
 jsvalue_cause_budget() {
   local package_spec="$1"
 
+  # See `jsvalue_function_budget` for the rationale: post-`mizchi/js`-removal
+  # numbers include the formerly-hidden `Array[@js.Any]` widening that now
+  # renders as `Array[JSValue]` in struct fields and is therefore counted.
   case "$package_spec" in
     clsx) printf '0|0|0|0|0|0|0\n' ;;
-    chalk) printf '5|0|0|0|0|2|3\n' ;;
-    dotenv) printf '2|1|1|0|0|0|0\n' ;;
-    ignore) printf '2|1|0|1|0|0|0\n' ;;
-    hono) printf '50|4|6|21|3|7|9\n' ;;
-    zod) printf '431|161|93|111|26|21|19\n' ;;
-    date-fns) printf '22|4|7|1|0|8|2\n' ;;
+    chalk) printf '6|0|0|0|0|3|3\n' ;;
+    dotenv) printf '2|2|0|0|0|0|0\n' ;;
+    ignore) printf '3|2|0|1|0|0|0\n' ;;
+    hono) printf '64|8|6|28|4|9|9\n' ;;
+    zod) printf '633|323|96|119|38|31|26\n' ;;
+    date-fns) printf '9|0|7|0|0|0|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
-    magic-string) printf '12|3|0|2|0|0|7\n' ;;
-    source-map) printf '14|2|0|5|4|2|1\n' ;;
-    valibot) printf '675|535|47|21|21|34|17\n' ;;
-    immer) printf '20|1|7|2|2|2|6\n' ;;
+    magic-string) printf '11|6|0|1|0|0|4\n' ;;
+    source-map) printf '11|2|0|5|0|3|1\n' ;;
+    valibot) printf '1231|1056|48|22|21|43|41\n' ;;
+    immer) printf '22|4|7|2|2|1|6\n' ;;
     execa) printf '1|0|0|0|1|0|0\n' ;;
-    preact) printf '26|8|1|4|11|1|1\n' ;;
-    vitest/runtime) printf '5|0|1|0|4|0|0\n' ;;
-    playwright) printf '618|98|0|50|413|56|1\n' ;;
-    react-router) printf '194|79|32|27|27|12|17\n' ;;
-    jose) printf '84|21|2|28|11|10|12\n' ;;
+    preact) printf '37|12|1|6|17|0|1\n' ;;
+    vitest/runtime) printf '8|0|1|0|6|0|1\n' ;;
+    playwright) printf '985|176|0|49|672|86|2\n' ;;
+    react-router) printf '300|154|33|34|39|15|25\n' ;;
+    jose) printf '75|24|2|16|11|10|12\n' ;;
     express) printf '4|0|0|0|0|0|4\n' ;;
-    glob) printf '27|8|6|2|0|2|9\n' ;;
-    node:sqlite) printf '3|3|0|0|0|0|0\n' ;;
-    node:fs) printf '11|4|0|0|0|7|0\n' ;;
+    glob) printf '25|14|0|1|0|2|8\n' ;;
+    node:sqlite) printf '2|2|0|0|0|0|0\n' ;;
+    node:fs) printf '20|8|0|0|0|12|0\n' ;;
     node:path) printf '0|0|0|0|0|0|0\n' ;;
-    node:crypto) printf '0|0|0|0|0|0|0\n' ;;
+    node:crypto) printf '1|0|0|0|0|0|1\n' ;;
     node:os) printf '0|0|0|0|0|0|0\n' ;;
     node:url) printf '0|0|0|0|0|0|0\n' ;;
     node:querystring) printf '0|0|0|0|0|0|0\n' ;;
-    node:assert) printf '25|3|14|3|2|0|3\n' ;;
-    node:util) printf '22|8|9|1|1|2|1\n' ;;
+    node:assert) printf '29|6|15|3|2|0|3\n' ;;
+    node:util) printf '29|16|7|1|1|2|2\n' ;;
     node:buffer) printf '0|0|0|0|0|0|0\n' ;;
     *) printf '0|0|0|0|0|0|0\n' ;;
   esac

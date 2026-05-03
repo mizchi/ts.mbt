@@ -580,6 +580,7 @@ fn unified_jsvalue_line_is_fallback(line : String) -> Bool {
   match line {
     "/// Complex or unsupported TypeScript types are widened to JSValue."
     | "declare pub type JSValue"
+    | "pub type JSValue"
     | "pub type JSValue = @js.Any" => false
     _ => true
   }

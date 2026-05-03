@@ -139,7 +139,10 @@ test "parser: emit MoonBit declarations lowers callbacks and preserves Promise p
     #|/// Complex or unsupported TypeScript types are widened to JSValue.
     #|
     #|///|
-    #|declare pub fn later(callback : (Double) -> Unit, promise : @js.Promise[String]) -> @js.Promise[Double]
+    #|declare pub type Promise[X]
+    #|
+    #|///|
+    #|declare pub fn later(callback : (Double) -> Unit, promise : Promise[String]) -> Promise[Double]
   assert_eq(actual, expected)
 }
 

@@ -534,6 +534,7 @@ test "bridge: FFI type name treats generic intersections with empty object as op
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let actual = ffi_type_name(
     state,
@@ -560,6 +561,7 @@ test "bridge: FFI type name collapses named option intersections" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let actual = ffi_type_name(
     state,
@@ -589,6 +591,7 @@ test "bridge: FFI type name preserves optional complex unions when widened" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let actual = ffi_type_name(
     state,
@@ -598,7 +601,7 @@ test "bridge: FFI type name preserves optional complex unions when widened" {
       @ast.TsType::Undefined,
     ]),
   )
-  assert_eq(actual, "@js.Any?")
+  assert_eq(actual, "JSValue?")
   assert_true(state.needs_js_any)
 }
 
@@ -615,6 +618,7 @@ test "bridge: FFI type name renders declared generic applications" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let actual = ffi_type_name(
     state,
@@ -637,6 +641,7 @@ test "bridge: FFI type name lowers bigint primitive" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   assert_eq(ffi_type_name(state, @ast.TsType::BigInt), "Int64")
   assert_false(state.needs_js_any)
@@ -655,6 +660,7 @@ test "bridge: FFI type name lowers tuple payloads to arrays" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   assert_eq(ffi_type_name(state, @ast.TsType::Tuple([])), "Array[Unit]")
   assert_eq(
@@ -681,6 +687,7 @@ test "bridge: FFI type name lowers function types" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   assert_eq(
     ffi_type_name(
@@ -708,6 +715,7 @@ test "bridge: FFI struct field type parenthesizes optional function types" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   assert_eq(
     ffi_struct_field_type_name(
@@ -743,10 +751,10 @@ async test "bridge: emit MoonBit JS FFI bundle names inline object promise resul
   assert_true(bundle.ffi_mbt.contains("buffer : NodeJS_ArrayBufferView"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "extern \"js\" fn read_promisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> @js.Promise[ReadPromisifyResult] =",
+      "extern \"js\" fn read_promisify(fd : Double, buffer : NodeJS_ArrayBufferView) -> Promise[ReadPromisifyResult] =",
     ),
   )
-  assert_false(bundle.ffi_mbt.contains("@js.Promise[@js.Any]"))
+  assert_false(bundle.ffi_mbt.contains("Promise[JSValue]"))
 }
 
 ///|
@@ -762,9 +770,10 @@ test "bridge: FFI type name widens likely generic placeholders" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
-  assert_eq(ffi_type_name(state, @ast.TsType::Named("T")), "@js.Any")
-  assert_eq(ffi_type_name(state, @ast.TsType::Named("K")), "@js.Any")
+  assert_eq(ffi_type_name(state, @ast.TsType::Named("T")), "JSValue")
+  assert_eq(ffi_type_name(state, @ast.TsType::Named("K")), "JSValue")
   assert_true(state.needs_js_any)
   assert_false(state.external_type_names.contains("T"))
   assert_false(state.external_type_names.contains("K"))
@@ -1231,17 +1240,17 @@ async test "bridge: emit primitive node assert wrappers without widening values 
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn ok(value : @js.Any, message : String?) -> @js.Any = \"__ts_mbt_ok\"",
+      "pub extern \"js\" fn ok(value : JSValue, message : String?) -> JSValue = \"__ts_mbt_ok\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn equal(actual : @js.Any, expected : @js.Any, message : String?) -> Unit = \"__ts_mbt_equal\"",
+      "pub extern \"js\" fn equal(actual : JSValue, expected : JSValue, message : String?) -> Unit = \"__ts_mbt_equal\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn not_equal(actual : @js.Any, expected : @js.Any, message : String?) -> Unit = \"__ts_mbt_not_equal\"",
+      "pub extern \"js\" fn not_equal(actual : JSValue, expected : JSValue, message : String?) -> Unit = \"__ts_mbt_not_equal\"",
     ),
   )
 }
@@ -2738,17 +2747,17 @@ async test "bridge: emit MoonBit JS FFI bundle widens imported reassigned local 
   assert_false(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+      "pub extern \"js\" fn get_runtime_version() -> JSValue = \"__ts_mbt_get_runtime_version\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+      "pub extern \"js\" fn get_build() -> JSValue = \"__ts_mbt_get_build\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+      "pub extern \"js\" fn get_rest_meta() -> JSValue = \"__ts_mbt_get_rest_meta\"",
     ),
   )
   assert_true(
@@ -2775,17 +2784,17 @@ async test "bridge: emit MoonBit JS FFI bundle widens imported prop-mutated loca
   assert_false(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+      "pub extern \"js\" fn get_runtime_version() -> JSValue = \"__ts_mbt_get_runtime_version\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+      "pub extern \"js\" fn get_build() -> JSValue = \"__ts_mbt_get_build\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+      "pub extern \"js\" fn get_rest_meta() -> JSValue = \"__ts_mbt_get_rest_meta\"",
     ),
   )
   assert_true(
@@ -2812,17 +2821,17 @@ async test "bridge: emit MoonBit JS FFI bundle widens imported index-mutated loc
   assert_false(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+      "pub extern \"js\" fn get_runtime_version() -> JSValue = \"__ts_mbt_get_runtime_version\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+      "pub extern \"js\" fn get_build() -> JSValue = \"__ts_mbt_get_build\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+      "pub extern \"js\" fn get_rest_meta() -> JSValue = \"__ts_mbt_get_rest_meta\"",
     ),
   )
   assert_true(
@@ -3064,17 +3073,17 @@ async test "bridge: emit MoonBit JS FFI bundle widens conflicting star const-tab
   assert_false(bundle.ffi_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_runtime_version() -> @js.Any = \"__ts_mbt_get_runtime_version\"",
+      "pub extern \"js\" fn get_runtime_version() -> JSValue = \"__ts_mbt_get_runtime_version\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_build() -> @js.Any = \"__ts_mbt_get_build\"",
+      "pub extern \"js\" fn get_build() -> JSValue = \"__ts_mbt_get_build\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_rest_meta() -> @js.Any = \"__ts_mbt_get_rest_meta\"",
+      "pub extern \"js\" fn get_rest_meta() -> JSValue = \"__ts_mbt_get_rest_meta\"",
     ),
   )
   assert_true(
@@ -3453,7 +3462,7 @@ async test "bridge: emit MoonBit JS FFI bundle from namespace export assignment"
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn get_default() -> @js.Any = \"__ts_mbt_get_default\"",
+      "pub extern \"js\" fn get_default() -> JSValue = \"__ts_mbt_get_default\"",
     ),
   )
   assert_true(
@@ -3565,7 +3574,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace assignme
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn create_context(defaultValue : @js.Any) -> Context = \"__ts_mbt_create_context\"",
+      "pub extern \"js\" fn create_context(defaultValue : JSValue) -> Context = \"__ts_mbt_create_context\"",
     ),
   )
   assert_true(
@@ -3732,12 +3741,12 @@ async test "bridge: emit MoonBit JS FFI bundle from Promise-returning APIs" {
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn fetch_label(id : String) -> @js.Promise[String] = \"__ts_mbt_fetch_label\"",
+      "pub extern \"js\" fn fetch_label(id : String) -> Promise[String] = \"__ts_mbt_fetch_label\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn fetch_count() -> @js.Promise[Double] = \"__ts_mbt_fetch_count\"",
+      "pub extern \"js\" fn fetch_count() -> Promise[Double] = \"__ts_mbt_fetch_count\"",
     ),
   )
   assert_true(
@@ -3813,10 +3822,10 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub(all) struct UseStateResult"))
-  assert_true(bundle.ffi_mbt.contains("  state : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  state : JSValue"))
   assert_true(bundle.ffi_mbt.contains("  setState : Dispatch"))
   assert_true(bundle.ffi_mbt.contains("pub(all) struct UseReducerResult"))
-  assert_true(bundle.ffi_mbt.contains("  state : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  state : JSValue"))
   assert_true(bundle.ffi_mbt.contains("  dispatch : ActionDispatch"))
   assert_true(bundle.ffi_mbt.contains("pub(all) struct UseTransitionResult"))
   assert_true(bundle.ffi_mbt.contains("  isPending : Bool"))
@@ -3840,12 +3849,12 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace hook tup
   assert_true(bundle.ffi_mbt.contains("  isPending : Bool"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_state(initialState : @js.Any) -> UseStateResult = \"__ts_mbt_use_state\"",
+      "pub extern \"js\" fn use_state(initialState : JSValue) -> UseStateResult = \"__ts_mbt_use_state\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_reducer(reducer : UseReducerReducerCallback, initialState : @js.Any) -> UseReducerResult = \"__ts_mbt_use_reducer\"",
+      "pub extern \"js\" fn use_reducer(reducer : UseReducerReducerCallback, initialState : JSValue) -> UseReducerResult = \"__ts_mbt_use_reducer\"",
     ),
   )
   assert_true(
@@ -3910,7 +3919,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace JSX name
   assert_true(
     bundle.ffi_mbt.contains("pub(all) struct JsxLibraryManagedAttributes"),
   )
-  assert_true(bundle.ffi_mbt.contains("  props : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  props : JSValue"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_element(tag : String) -> JsxElement = \"__ts_mbt_create_element\"",
@@ -3966,7 +3975,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace PropsWit
   }
   assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgePropsWithChildren"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
-  assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  children : JSValue"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : BadgePropsWithChildren) -> BadgePropsWithChildren = \"__ts_mbt_create_badge\"",
@@ -4148,7 +4157,7 @@ async test "bridge: emit MoonBit JS FFI bundle lowers Pick and Omit utility type
       "pub extern \"js\" fn UtilityError::get_utility_error_issues(self : UtilityError) -> Array[User]",
     ),
   )
-  assert_false(bundle.ffi_mbt.contains("@js.Any"))
+  assert_false(bundle.ffi_mbt.contains("JSValue"))
   assert_false(bundle.ffi_mbt.contains("#external\ntype Pick"))
   assert_false(bundle.ffi_mbt.contains("#external\ntype Omit"))
   assert_false(bundle.ffi_mbt.contains("#external\ntype Record"))
@@ -4229,7 +4238,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace nested P
   }
   assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgePropsWithChildren"))
   assert_true(bundle.ffi_mbt.contains("  label : String"))
-  assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  children : JSValue"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : BadgePropsWithChildren) -> BadgePropsWithChildren = \"__ts_mbt_create_badge\"",
@@ -4293,7 +4302,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace optional
   }
   assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgeProps"))
   assert_true(bundle.ffi_mbt.contains("  label : String?"))
-  assert_true(bundle.ffi_mbt.contains("  children : @js.Any?"))
+  assert_true(bundle.ffi_mbt.contains("  children : JSValue?"))
   assert_true(bundle.ffi_mbt.contains("  ref_ : Ref?"))
   assert_true(
     bundle.ffi_mbt.contains(
@@ -4321,7 +4330,7 @@ async test "bridge: emit MoonBit JS FFI bundle from exported jsx-dev-runtime sig
   assert_true(bundle.ffi_mbt.contains("  columnNumber : Double?"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn jsx_dev(type_ : ElementType, props : @js.Any, key : Key?, isStatic : Bool, source : JSXSource?, self : @js.Any?) -> ReactElement = \"__ts_mbt_jsx_dev\"",
+      "pub extern \"js\" fn jsx_dev(type_ : ElementType, props : JSValue, key : Key?, isStatic : Bool, source : JSXSource?, self : JSValue?) -> ReactElement = \"__ts_mbt_jsx_dev\"",
     ),
   )
   assert_true(
@@ -4350,7 +4359,7 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace inline P
   )
   assert_true(bundle.ffi_mbt.contains("  label : String"))
   assert_true(bundle.ffi_mbt.contains("  count : Double"))
-  assert_true(bundle.ffi_mbt.contains("  children : @js.Any"))
+  assert_true(bundle.ffi_mbt.contains("  children : JSValue"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_badge(props : LabelCountPropsWithChildren) -> LabelCountPropsWithChildren = \"__ts_mbt_create_badge\"",
@@ -4383,17 +4392,17 @@ async test "bridge: emit MoonBit JS FFI bundle sanitizes reserved exported funct
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_(promise : @js.Promise[String]) -> String = \"__ts_mbt_use\"",
+      "pub extern \"js\" fn use_(promise : Promise[String]) -> String = \"__ts_mbt_use\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn forward_ref(component : @js.Any) -> @js.Any = \"__ts_mbt_forward_ref\"",
+      "pub extern \"js\" fn forward_ref(component : JSValue) -> JSValue = \"__ts_mbt_forward_ref\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_action_state(fn_ : @js.Any, initialState : String, permalink : String) -> String = \"__ts_mbt_use_action_state\"",
+      "pub extern \"js\" fn use_action_state(fn_ : JSValue, initialState : String, permalink : String) -> String = \"__ts_mbt_use_action_state\"",
     ),
   )
   assert_true(
@@ -4426,7 +4435,7 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
   }
   assert_true(bundle.ffi_mbt.contains("pub(all) struct HonoOptions"))
   assert_true(bundle.ffi_mbt.contains("  strict : Bool?"))
-  assert_true(bundle.ffi_mbt.contains("  bindings : @js.Any?"))
+  assert_true(bundle.ffi_mbt.contains("  bindings : JSValue?"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn new_hono(options : HonoOptions?) -> Hono = \"__ts_mbt_new_hono\"",
@@ -4491,7 +4500,7 @@ async test "bridge: emit MoonBit JS FFI bundle names anonymous literal unions" {
       return
     }
   }
-  assert_false(bundle.ffi_mbt.contains("pub type JSValue = @js.Any"))
+  assert_false(bundle.ffi_mbt.contains("#external\npub type JSValue"))
   assert_true(bundle.ffi_mbt.contains("pub(all) enum ButtonOptionsVariant"))
   assert_true(bundle.ffi_mbt.contains("pub(all) enum RenderButtonVariant"))
   assert_true(bundle.ffi_mbt.contains("pub(all) enum RenderButtonReturn"))
@@ -4518,7 +4527,7 @@ async test "bridge: emit MoonBit JS FFI bundle names anonymous string literal un
       return
     }
   }
-  assert_false(bundle.ffi_mbt.contains("pub type JSValue = @js.Any"))
+  assert_false(bundle.ffi_mbt.contains("#external\npub type JSValue"))
   assert_true(bundle.ffi_mbt.contains("pub(all) enum OrderedListPropsType"))
   assert_true(
     bundle.ffi_mbt.contains("pub(all) enum OrderedListPropsSetModeArg0"),
@@ -4556,12 +4565,12 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React package surfac
   assert_false(bundle.ffi_mbt.contains("pub(all) struct FunctionComponent"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn create_element(type_ : String, props : DOMAttributes?, children : Array[@js.Any]) -> ReactElement = \"__ts_mbt_create_element\"",
+      "pub extern \"js\" fn create_element(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement = \"__ts_mbt_create_element\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn clone_element(element : ReactElement, props : DOMAttributesPartial?, children : Array[@js.Any]) -> ReactElement = \"__ts_mbt_clone_element\"",
+      "pub extern \"js\" fn clone_element(element : ReactElement, props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement = \"__ts_mbt_clone_element\"",
     ),
   )
   assert_true(
@@ -4584,7 +4593,7 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React package surfac
       "pub extern \"js\" fn use_component_ref(ref_ : Ref) -> Ref = \"__ts_mbt_use_component_ref\"",
     ),
   )
-  assert_false(bundle.ffi_mbt.contains("props : @js.Any?"))
+  assert_false(bundle.ffi_mbt.contains("props : JSValue?"))
 }
 
 ///|
@@ -4700,7 +4709,7 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture Hono JSX package sub
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn memo(component : MemoComponentCallback) -> (@js.Any) -> JsxElement = \"memo\"",
+      "pub extern \"js\" fn memo(component : MemoComponentCallback) -> (JSValue) -> JsxElement = \"memo\"",
     ),
   )
 }
@@ -4718,6 +4727,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let iface : @ast.TsInterface = {
     name: "GenericDateConstructor",
@@ -4776,6 +4786,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let iface : @ast.TsInterface = {
     name: "Scope",
@@ -4826,6 +4837,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let iface : @ast.TsInterface = {
     name: "NodeFactory",
@@ -4865,6 +4877,7 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let iface : @ast.TsInterface = {
     name: "SignJWT",
@@ -4885,7 +4898,7 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
   let actual = ffi_struct_decl_to_moonbit(state, iface)
   assert_true(
     actual.contains(
-      "pub extern \"js\" fn SignJWT::setIssuedAt(self : SignJWT, arg0 : @js.Any?) -> SignJWT =",
+      "pub extern \"js\" fn SignJWT::setIssuedAt(self : SignJWT, arg0 : JSValue?) -> SignJWT =",
     ),
   )
   assert_true(actual.contains("self.setIssuedAt("))
@@ -4905,6 +4918,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let class_ : @ast.TsClassDecl = {
     name: "SignJWT",
@@ -4928,7 +4942,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
   let actual = ffi_class_method_decl_to_moonbit(state, class_, class_method)
   assert_true(
     actual.contains(
-      "pub extern \"js\" fn SignJWT::sign_jwt_set_issued_at(self : SignJWT, input : @js.Any?) -> SignJWT =",
+      "pub extern \"js\" fn SignJWT::sign_jwt_set_issued_at(self : SignJWT, input : JSValue?) -> SignJWT =",
     ),
   )
   assert_true(actual.contains("#| (self, input) =>"))
@@ -4949,6 +4963,7 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let iface : @ast.TsInterface = {
     name: "StatsBase",
@@ -4985,6 +5000,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let iface : @ast.TsInterface = {
     name: "LargeApi",
@@ -5020,6 +5036,7 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let iface : @ast.TsInterface = {
     name: "ExpectStatic",
@@ -5062,6 +5079,7 @@ test "bridge: FFI struct JS converter emits callable wrappers for call signature
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let actual = ffi_struct_js_converter_decl(state, "ForwardRefRenderFunction", [
     (
@@ -5099,6 +5117,7 @@ test "bridge: FFI struct preserves selected interface type parameters locally" {
     tagged_union_decls_by_name: {},
     synthesized_inline_unions: {},
     needs_js_any: false,
+    needs_promise: false,
   }
   let iface : @ast.TsInterface = {
     name: "StatsBase",
