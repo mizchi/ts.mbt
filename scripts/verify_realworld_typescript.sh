@@ -1831,9 +1831,22 @@ verify_package() {
   mkdir -p "$project"
   ensure_project_node_modules "$project" "$selected_node_modules_root"
 
+  # Per-package oracle scope: when an oracle cache exists for this
+  # module under `_build/oracle-cache/<module_name>.json`, expose it via
+  # `TS_MBT_ORACLE_CACHE` so the bridge splices in the tsc-resolved
+  # types for this run only. Adjacent packages stay on the in-house
+  # lowering — the previous global env experiment showed that naive
+  # cross-package application widens hono-style aliases.
+  local oracle_cache_path="$repo_root/_build/oracle-cache/${module_name}.json"
+  local generate_env=(env)
+  if [ -f "$oracle_cache_path" ]; then
+    generate_env+=("TS_MBT_ORACLE_CACHE=$oracle_cache_path")
+  fi
+
   (
     cd "$project"
     run_logged "$repo_root/$log_root/${module_name}_generate.log" \
+      "${generate_env[@]}" \
       moon run "$repo_root/src" -- \
       --input "$package_spec" \
       --out "dist/$module_name" \

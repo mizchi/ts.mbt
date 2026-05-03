@@ -55,10 +55,102 @@ function isUseful(resolution) {
   // looked up by name — no new information for the bridge.
   if (t.kind === "named" && t.name === resolution.key) return false;
   // Plain primitive widening (`any` / `unknown`) is rarely an upgrade —
-  // the in-house lowering would have done the same thing. Keep them
-  // out of the cache so we don't churn the bridge output for nothing.
+  // the in-house lowering would have done the same thing.
   if (t.kind === "any" || t.kind === "void" || t.kind === "never") return false;
+  // Heuristic: drop expansions that are likely to widen the bridge surface
+  // more than they tighten it.
+  //
+  // (1) Large literal unions (HTTP status codes, MIME types, etc.) are
+  //     usually emitted as opaque named types by the in-house lowering —
+  //     expanding them inline forces every consumer's signature to inline
+  //     a 60-part union, which the existing tagged-enum lowering then
+  //     widens to JSValue.
+  // (2) Anything whose expansion still bottoms out in `any` / `unknown`
+  //     would just paint that `any` onto every consumer site, which is
+  //     usually worse than the opaque alias the in-house lowering kept.
+  if (containsHeavyExpansion(t)) return false;
+  if (containsAnyLeaf(t)) return false;
+  // Tuple-of-different-arities unions can't fold into a tagged enum
+  // (the in-house lowering needs a per-case constructor name and tuples
+  // collide), so they widen to JSValue post-expansion. Better to keep
+  // the opaque alias.
+  if (containsUnionOfTuples(t)) return false;
+  // Function types whose return type is a union/intersection of complex
+  // shapes (Func / Object / Intersection / Union of more than 2 parts)
+  // tend to introduce new JSValue widening at every call site.
+  // The opaque alias keeps the call-site signature compact even though
+  // the body stays mysterious.
+  if (t.kind === "func" && returnIsComplexShape(t.return)) return false;
   return true;
+}
+
+function returnIsComplexShape(ret) {
+  if (ret.kind === "intersection") return true;
+  if (ret.kind === "union" && ret.parts.length > 2) return true;
+  if (ret.kind === "func") return true;
+  return false;
+}
+
+function containsUnionOfTuples(t) {
+  if (t.kind === "union") {
+    if (t.parts.some((p) => p.kind === "tuple")) return true;
+    return t.parts.some(containsUnionOfTuples);
+  }
+  if (t.kind === "intersection") return t.parts.some(containsUnionOfTuples);
+  if (t.kind === "func") {
+    return (
+      t.params.some(containsUnionOfTuples) || containsUnionOfTuples(t.return)
+    );
+  }
+  if (t.kind === "array") return containsUnionOfTuples(t.element);
+  if (t.kind === "tuple") return t.items.some(containsUnionOfTuples);
+  if (t.kind === "applied") return t.args.some(containsUnionOfTuples);
+  if (t.kind === "object") {
+    return t.entries.some(
+      (e) => containsUnionOfTuples(e.key) || containsUnionOfTuples(e.value)
+    );
+  }
+  return false;
+}
+
+function containsAnyLeaf(t) {
+  if (t.kind === "any") return true;
+  if (t.kind === "union" || t.kind === "intersection") {
+    return t.parts.some(containsAnyLeaf);
+  }
+  if (t.kind === "func") {
+    return t.params.some(containsAnyLeaf) || containsAnyLeaf(t.return);
+  }
+  if (t.kind === "array") return containsAnyLeaf(t.element);
+  if (t.kind === "tuple") return t.items.some(containsAnyLeaf);
+  if (t.kind === "applied") return t.args.some(containsAnyLeaf);
+  if (t.kind === "object") {
+    return t.entries.some(
+      (e) => containsAnyLeaf(e.key) || containsAnyLeaf(e.value)
+    );
+  }
+  return false;
+}
+
+function containsHeavyExpansion(t) {
+  if (t.kind === "union" || t.kind === "intersection") {
+    if (t.parts.length > 12) return true;
+    return t.parts.some(containsHeavyExpansion);
+  }
+  if (t.kind === "func") {
+    return (
+      t.params.some(containsHeavyExpansion) || containsHeavyExpansion(t.return)
+    );
+  }
+  if (t.kind === "array") return containsHeavyExpansion(t.element);
+  if (t.kind === "tuple") return t.items.some(containsHeavyExpansion);
+  if (t.kind === "applied") return t.args.some(containsHeavyExpansion);
+  if (t.kind === "object") {
+    return t.entries.some(
+      (e) => containsHeavyExpansion(e.key) || containsHeavyExpansion(e.value)
+    );
+  }
+  return false;
 }
 
 function runOracle(entries, requests) {
