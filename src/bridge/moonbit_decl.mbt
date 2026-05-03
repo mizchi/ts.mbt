@@ -408,6 +408,23 @@ async fn load_decl_module_info(
         }
       }
   }
+  // Optional hybrid oracle: when `TS_MBT_ORACLE_CACHE` is set, splice the
+  // resolved-type cache produced by `scripts/oracle/resolve-types.mjs` into
+  // this module's type-alias table. The rest of the bridge then resolves
+  // `Named(name)` references through the standard alias path.
+  match @env.get_env_var("TS_MBT_ORACLE_CACHE") {
+    Some(cache_path) if cache_path != "" => {
+      let resolutions = try {
+        read_oracle_cache(cache_path)
+      } catch {
+        _ => ({} : Map[String, @ast.TsType])
+      }
+      if resolutions.length() > 0 {
+        apply_oracle_resolutions(module_, resolutions)
+      }
+    }
+    _ => ()
+  }
   { record, module_ }
 }
 
