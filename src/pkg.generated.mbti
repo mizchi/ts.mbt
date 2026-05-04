@@ -20,6 +20,8 @@ pub fn cli_subcommand_is_help(String) -> Bool
 
 pub fn cli_token_is_version(String) -> Bool
 
+pub fn compute_vendor_root(String, String) -> String
+
 pub async fn emit_js_link_config_from_mbti(String, String?) -> Bool
 
 pub async fn emit_moonbit_bridge(String, String, String?, String?, String?) -> Bool

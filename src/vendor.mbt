@@ -263,6 +263,34 @@ fn default_runtime_module_spec(pkg_spec : String) -> String {
 }
 
 ///|
+/// Pure-function variant of `resolve_default_vendor_root` for testing.
+/// Given a moon module root and the raw `moon.mod.json` contents,
+/// returns the directory the vendor pipeline should write into.
+///
+/// When `moon.mod.json` does not declare a `source` field MoonBit
+/// treats the module root itself as the source directory, so the
+/// fallback here is `"."` rather than `"src"`. Picking `"src"` for
+/// missing-source projects would emit the bridge under a phantom
+/// `<root>/src/internal/generated/...` path that the moon module
+/// can't see, and `moon build` would silently skip it.
+pub fn compute_vendor_root(
+  module_root : String,
+  moon_mod_source : String,
+) -> String {
+  let source_dir_rel = match
+    parse_moon_mod_string_field(moon_mod_source, "source") {
+    Some(value) => value
+    None => "."
+  }
+  let source_dir = if source_dir_rel == "" || source_dir_rel == "." {
+    module_root
+  } else {
+    main_join_path(module_root, source_dir_rel)
+  }
+  main_join_path(source_dir, "internal/generated")
+}
+
+///|
 /// Resolve `<moon.mod source>/internal/generated` from the cwd's
 /// nearest `moon.mod.json`. Returns `None` if no module is found.
 async fn resolve_default_vendor_root() -> String? {
@@ -272,16 +300,7 @@ async fn resolve_default_vendor_root() -> String? {
   }
   let moon_mod_path = main_join_path(module_root, "moon.mod.json")
   let source = @fs.read_file(moon_mod_path).text() catch { _ => return None }
-  let source_dir_rel = match parse_moon_mod_string_field(source, "source") {
-    Some(value) => value
-    None => "src"
-  }
-  let source_dir = if source_dir_rel == "" || source_dir_rel == "." {
-    module_root
-  } else {
-    main_join_path(module_root, source_dir_rel)
-  }
-  Some(main_join_path(source_dir, "internal/generated"))
+  Some(compute_vendor_root(module_root, source))
 }
 
 ///|

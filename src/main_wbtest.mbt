@@ -5769,3 +5769,52 @@ async test "emit_moonbit_js_ffi_texts handles node-like ambient entry" {
   assert_true(bundle.ffi_mbt.contains("#external\npub type NodeJS_ProcessEnv"))
   assert_false(bundle.bridge_js.contains("__ts_mbt_has_env"))
 }
+
+///|
+test "compute_vendor_root: missing source field falls back to module root, not src/" {
+  // moon.mod.json without a `source` field — MoonBit treats the module
+  // root itself as the source directory, so the bridge has to land at
+  // `<root>/internal/generated/...`. A `<root>/src/internal/generated/...`
+  // fallback would be invisible to the consumer's `moon build`.
+  let mod_json = "{ \"name\": \"acme/app\", \"version\": \"0.0.0\" }"
+  assert_eq(
+    compute_vendor_root("/proj", mod_json),
+    "/proj/internal/generated",
+  )
+}
+
+///|
+test "compute_vendor_root: explicit source=src nests under src/" {
+  let mod_json = "{ \"name\": \"acme/app\", \"source\": \"src\" }"
+  assert_eq(
+    compute_vendor_root("/proj", mod_json),
+    "/proj/src/internal/generated",
+  )
+}
+
+///|
+test "compute_vendor_root: explicit source=. matches missing-source behavior" {
+  let mod_json = "{ \"name\": \"acme/app\", \"source\": \".\" }"
+  assert_eq(
+    compute_vendor_root("/proj", mod_json),
+    "/proj/internal/generated",
+  )
+}
+
+///|
+test "compute_vendor_root: empty source string is treated as module root" {
+  let mod_json = "{ \"name\": \"acme/app\", \"source\": \"\" }"
+  assert_eq(
+    compute_vendor_root("/proj", mod_json),
+    "/proj/internal/generated",
+  )
+}
+
+///|
+test "compute_vendor_root: nested source path stacks under module root" {
+  let mod_json = "{ \"name\": \"acme/app\", \"source\": \"packages/lib\" }"
+  assert_eq(
+    compute_vendor_root("/proj", mod_json),
+    "/proj/packages/lib/internal/generated",
+  )
+}
