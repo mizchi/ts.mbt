@@ -1288,7 +1288,19 @@ async fn ensure_bridge_node_modules_link(
   }
   let link_path = main_join_path(scope_dir, name)
   let _ = @fs.remove(link_path) catch { _ => () }
-  let target = @fs.realpath(bridge_output_dir) catch { _ => bridge_output_dir }
+  // Use a relative symlink target so the link survives moving / vendoring
+  // the moon module to a new path. Both endpoints are computed from the
+  // module root so the relative offset is stable.
+  let bridge_real = @fs.realpath(bridge_output_dir) catch {
+    _ => bridge_output_dir
+  }
+  let module_real = @fs.realpath(module_root) catch { _ => module_root }
+  let bridge_rel_to_module = match strip_dir_prefix(module_real, bridge_real) {
+    Some(rest) => rest
+    None => bridge_real
+  }
+  let link_rel_to_module = "node_modules/" + scope + "/" + name
+  let target = relative_path_between(link_rel_to_module, bridge_rel_to_module)
   let _ = @fs.symlink(link_path, target~) catch {
     e => {
       println("vendor: failed to symlink \{link_path} -> \{target}: \{e}")
@@ -1296,6 +1308,55 @@ async fn ensure_bridge_node_modules_link(
     }
   }
   true
+}
+
+///|
+/// Compute a POSIX relative path from `from_rel` to `to_rel` where both
+/// are paths relative to the same anchor. Each `..` segment in the
+/// result moves up one directory in `from_rel`'s parents before
+/// descending into `to_rel`. Used for portable symlink targets.
+fn relative_path_between(from_rel : String, to_rel : String) -> String {
+  let from_parts = split_path_segments(from_rel)
+  let to_parts = split_path_segments(to_rel)
+  // Drop the link's basename — the target is relative to its containing dir.
+  let from_dir = from_parts[:from_parts.length() - 1].to_array()
+  let mut common = 0
+  let limit = if from_dir.length() < to_parts.length() {
+    from_dir.length()
+  } else {
+    to_parts.length()
+  }
+  for i in 0..<limit {
+    if from_dir[i] == to_parts[i] {
+      common += 1
+    } else {
+      break
+    }
+  }
+  let segments : Array[String] = []
+  for _ in common..<from_dir.length() {
+    segments.push("..")
+  }
+  for i in common..<to_parts.length() {
+    segments.push(to_parts[i])
+  }
+  if segments.length() == 0 {
+    "."
+  } else {
+    segments.join("/")
+  }
+}
+
+///|
+fn split_path_segments(path : String) -> Array[String] {
+  let segments : Array[String] = []
+  for chunk in path.split("/") {
+    let s = chunk.to_string()
+    if s != "" && s != "." {
+      segments.push(s)
+    }
+  }
+  segments
 }
 
 ///|

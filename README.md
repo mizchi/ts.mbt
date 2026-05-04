@@ -36,20 +36,19 @@ widened, omitted, or wrapped surfaces stay inspectable.
 
 ## Install
 
-`ts2mbt` and `mbt2ts` are MoonBit binaries published to mooncakes. Install
-them once, then call them like any other CLI on `$PATH`
-(`~/.moon/bin/ts2mbt`, `~/.moon/bin/mbt2ts`).
+`ts2mbt` and `mbt2ts` are MoonBit binaries published to mooncakes.
+Install whichever direction(s) you need; each binary is independent.
 
 ```bash
-moon install mizchi/ts/cmd/ts2mbt   # TS  -> MoonBit
-moon install mizchi/ts/cmd/mbt2ts   # MoonBit -> TS
+moon install mizchi/ts/cmd/ts2mbt   # TS  -> MoonBit (vendor / sync / scaffold)
+moon install mizchi/ts/cmd/mbt2ts   # MoonBit -> TS  (decl / scaffold / facade-scaffold)
 
-# Or install both in one go
+# Or install both binaries in one go
 moon install mizchi/ts/...
-
-ts2mbt --help
-mbt2ts --help
 ```
+
+Both land at `~/.moon/bin/` and are usable as `ts2mbt` / `mbt2ts` once
+that directory is on `$PATH`. Verify with `ts2mbt --version`.
 
 To run from source (for hacking on the bridge generator itself), clone
 the repo and use `moon run src/cmd/{ts2mbt,mbt2ts} -- ...` instead.
@@ -149,11 +148,14 @@ node_modules/
 The bridge `bridge.mbt` references each helper via the bare specifier
 `#module("@tsmbt-bridge/<safe>")`, not an absolute path. Every bridge
 generation path (`vendor`, `sync`, `scaffold`, `package`) writes a
-`package.json` next to the bridge and refreshes a
+`package.json` next to the bridge and refreshes a relative
 `node_modules/@tsmbt-bridge/<safe>` symlink under the consumer's moon
 module root, so node's resolver can follow `#module(...)` to the
-generated JS at build time. Move or copy the moon module wherever you
-like — re-run the same command to refresh the symlink, and
+generated JS at build time. The symlink target is relative to the
+moon module root, so the whole package — generated bridges and all —
+moves cleanly to a new location with the source. The generated
+`moon.pkg.json` is just `{}`; the consumer adds the `import` line
+themselves (see "Consume the generated bridge" below).
 `moon check --target js` will fail loudly on a broken link.
 
 Naming: the directory slug strips the leading `@`, replaces `/` with
@@ -161,6 +163,28 @@ Naming: the directory slug strips the leading `@`, replaces `/` with
 `@types/<name>` packages default the runtime module spec to the unscoped
 name (`react`, `express`, ...), since the runtime code lives in the
 non-types package.
+
+### Consume the generated bridge
+
+The bridge is just another MoonBit sub-package. Add it to your
+consumer `moon.pkg.json`'s `import` list using `<your-module-name>` +
+the in-source path:
+
+```json
+{
+  "is-main": true,
+  "import": [
+    { "path": "yourname/yourmod/internal/generated/hono", "alias": "hono" }
+  ]
+}
+```
+
+Then call it from MoonBit as `@hono.<exported-symbol>`. The generated
+`bridge.mbti` is the source of truth for the public surface;
+`SCAFFOLD_DIAGNOSTICS.md` records anything that was widened to
+`JSValue` so you know where the typed surface ends.
+
+Build & run as usual: `moon run <your-pkg> --target js`.
 
 Flags:
 
