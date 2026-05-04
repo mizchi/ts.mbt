@@ -2,7 +2,7 @@
 package "mizchi/ts"
 
 // Values
-pub const CLI_VERSION : String = "0.2.7"
+pub const CLI_VERSION : String = "0.2.8"
 
 pub fn cli_bail(String) -> Unit
 
