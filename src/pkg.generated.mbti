@@ -2,10 +2,61 @@
 package "mizchi/ts"
 
 // Values
+pub const CLI_VERSION : String = "0.2.1"
+
+pub fn cli_bail(String) -> Unit
+
+pub fn cli_clean_error(String) -> String
+
+pub fn cli_exit(Int) -> Unit
+
+pub fn cli_fail(String) -> Unit
+
+pub fn cli_parse_subcommand_args(Array[String], Int, Int, String, help_hint? : String) -> CliArgScan
+
+pub fn cli_print_version(String) -> Unit
+
+pub fn cli_subcommand_is_help(String) -> Bool
+
+pub fn cli_token_is_version(String) -> Bool
+
+pub async fn emit_js_link_config_from_mbti(String, String?) -> Bool
+
+pub async fn emit_moonbit_bridge(String, String, String?, String?, String?) -> Bool
+
+pub async fn emit_moonbit_bridge_package(String, String, String, bare_module_specifier? : String?) -> Bool
+
+pub async fn emit_moonbit_decl(String, String?) -> Bool
+
+pub async fn emit_moonbit_js_ffi(String, String, String?, String?) -> Bool
+
+pub async fn emit_moonbit_scaffold_from_ts(String, String, String, write_diagnostics? : Bool, bare_module_specifier? : String?) -> Bool
+
+pub async fn emit_typescript_decl(String, String?) -> Bool
+
+pub async fn emit_typescript_decl_from_mbti(String, String?) -> Bool
+
+pub async fn emit_typescript_facade_scaffold_from_mbti(String, String, String?) -> Bool
+
+pub async fn emit_typescript_package_from_mbti(String, String, String?) -> Bool
+
+pub async fn emit_typescript_scaffold_from_mbti(String, String, String?) -> Bool
+
+pub async fn run_mbt_to_ts_unified_cli(Array[String], Int, print_help~ : () -> Unit) -> Bool
+
+pub async fn run_ts_to_mbt_unified_cli(Array[String], Int, print_help~ : () -> Unit) -> Bool
+
+pub async fn ts2mbt_sync_package_json(package_json_path_override? : String?, vendor_root_override? : String?) -> Bool
+
+pub async fn ts2mbt_vendor_package(String, module_spec_override? : String?, vendor_root_override? : String?, print_import_hint? : Bool) -> Bool
 
 // Errors
 
 // Types and methods
+pub enum CliArgScan {
+  Args(Array[String])
+  HelpRequested
+}
 
 // Type aliases
 

@@ -6,9 +6,6 @@ on:
       - main
   pull_request:
 
-env:
-  WASMTIME_VERSION: 43.0.1
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -21,24 +18,43 @@ jobs:
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
-      - name: Install wasmtime
-        run: |
-          set -eux
-          version="v${WASMTIME_VERSION}"
-          asset="wasmtime-${version}-x86_64-linux.tar.xz"
-          url="https://github.com/bytecodealliance/wasmtime/releases/download/${version}/${asset}"
-          tmp_dir="$(mktemp -d)"
-          curl -fsSL "$url" -o "$tmp_dir/wasmtime.tar.xz"
-          tar -xJf "$tmp_dir/wasmtime.tar.xz" -C "$tmp_dir"
-          mkdir -p "$HOME/.wasmtime/bin"
-          install "$tmp_dir/wasmtime-${version}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/wasmtime"
-          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install npm dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Moon update
         run: moon update
+
+      - name: Moon fmt check
+        run: moon fmt --check
 
       - name: Moon check
         run: moon check --deny-warn
 
       - name: Moon test
         run: moon test --target native
+
+      - name: Verify mbti -> .d.ts
+        run: just verify-mbti-dts
+
+      - name: Verify scaffolds
+        run: just verify-scaffolds
+
+      - name: Verify generated fixtures
+        run: just verify-generated-fixtures
+
+      - name: Verify examples
+        run: just verify-examples

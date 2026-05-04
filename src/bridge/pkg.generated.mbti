@@ -49,7 +49,7 @@ pub fn tagged_union_array_constructor_name(@ast.TsType) -> String?
 
 pub fn tagged_union_bridge_js_converter_decls(BridgeTaggedUnionDecl) -> String?
 
-pub fn tagged_union_bridge_js_converter_decls_with_nested(BridgeTaggedUnionDecl, Map[String, BridgeTaggedUnionDecl]) -> String?
+pub fn tagged_union_bridge_js_converter_decls_with_nested(BridgeTaggedUnionDecl, Map[String, BridgeTaggedUnionDecl], struct_converter_names? : Array[String]) -> String?
 
 pub fn tagged_union_case_discriminator(@ast.TsType) -> TaggedUnionCaseDiscriminator?
 
@@ -73,7 +73,7 @@ pub fn tagged_union_primitive_constructor_name(@ast.TsType) -> String?
 
 pub fn tagged_union_to_js_expression(BridgeTaggedUnionDecl, String) -> String
 
-pub fn tagged_union_to_js_expression_with_nested(BridgeTaggedUnionDecl, String, Map[String, BridgeTaggedUnionDecl]) -> String
+pub fn tagged_union_to_js_expression_with_nested(BridgeTaggedUnionDecl, String, Map[String, BridgeTaggedUnionDecl], struct_converter_names? : Array[String]) -> String
 
 pub fn tagged_union_to_js_function_name(String) -> String
 

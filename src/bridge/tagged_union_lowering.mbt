@@ -207,6 +207,7 @@ pub fn tagged_union_to_js_expression_with_nested(
   decl : BridgeTaggedUnionDecl,
   expr : String,
   nested : Map[String, BridgeTaggedUnionDecl],
+  struct_converter_names? : Array[String] = [],
 ) -> String {
   let mut body = "(() => { "
   // Allow `@sut.unsafeCast(rawValue)` callers to pass primitives or
@@ -230,12 +231,22 @@ pub fn tagged_union_to_js_expression_with_nested(
     } else {
       body = body + "else if (" + expr + ".$tag === " + i.to_string() + ") "
     }
+    // For a `Named(name)` payload, prefer (1) a nested tagged-union
+    // converter, (2) a per-struct `__ts_mbt_to_js_<snake>` converter when
+    // the case wraps a generated interface that needs JS-shape conversion
+    // (e.g. enum-tag fields rewritten from `type_: 0` to `type:
+    // "increment"`), or (3) a bare `_0` unwrap when neither applies.
     let payload_expr = match inner {
       @ast.TsType::Named(name) =>
         match nested.get(name) {
           Some(_) =>
             tagged_union_to_js_function_name(name) + "(" + expr + "._0)"
-          None => expr + "._0"
+          None =>
+            if struct_converter_names.contains(name) {
+              ffi_struct_converter_name(name) + "(" + expr + "._0)"
+            } else {
+              expr + "._0"
+            }
         }
       _ => expr + "._0"
     }
@@ -366,9 +377,13 @@ pub fn tagged_union_bridge_js_converter_decls(
 pub fn tagged_union_bridge_js_converter_decls_with_nested(
   decl : BridgeTaggedUnionDecl,
   nested : Map[String, BridgeTaggedUnionDecl],
+  struct_converter_names? : Array[String] = [],
 ) -> String? {
   let to_js_body = tagged_union_to_js_expression_with_nested(
-    decl, "value", nested,
+    decl,
+    "value",
+    nested,
+    struct_converter_names~,
   )
   let from_js_body = match tagged_union_from_js_expression(decl, "value") {
     Some(body) => body

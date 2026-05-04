@@ -194,8 +194,8 @@ import { pathToFileURL } from "node:url";
 
 const out = process.argv[2];
 const mod = await import(pathToFileURL(path.resolve(out, "index.js")).href);
-const value = mod.undefined_();
-const valueType = mod.typeof_(value);
+const value = mod.undefinedValue();
+const valueType = mod.typeOf(value);
 if (valueType !== "undefined") {
   throw new Error(`expected typeof undefined to be undefined, got ${valueType}`);
 }
@@ -653,22 +653,22 @@ let typeSource = "";
 switch (packageName) {
   case "mizchi/js":
     runtimeSource = `
-import { undefined_, typeof_ } from "@mizchi/js";
-import { log, new_object, typeof_ as coreTypeof, undefined_ as coreUndefined } from "@mizchi/js/core";
+import * as root from "@mizchi/js";
+import * as core from "@mizchi/js/core";
 
-if (typeof_(undefined_()) !== "undefined") throw new Error("@mizchi/js root import failed");
-if (typeof log !== "function") throw new Error("@mizchi/js/core log export failed");
-if (coreTypeof(coreUndefined()) !== "undefined") throw new Error("@mizchi/js/core undefined export failed");
-if (coreTypeof(new_object()) !== "object") throw new Error("@mizchi/js/core subpath import failed");
+if (root.typeOf(root.undefinedValue()) !== "undefined") throw new Error("@mizchi/js root import failed");
+if (typeof core.log !== "function") throw new Error("@mizchi/js/core log export failed");
+if (core.typeOf(core.undefinedValue()) !== "undefined") throw new Error("@mizchi/js/core undefined export failed");
+if (core.typeOf(core.new_object()) !== "object") throw new Error("@mizchi/js/core subpath import failed");
 `;
     typeSource = `
-import { undefined_, typeof_ } from "@mizchi/js";
-import { log, new_object, typeof_ as coreTypeof, undefined_ as coreUndefined } from "@mizchi/js/core";
+import * as root from "@mizchi/js";
+import * as core from "@mizchi/js/core";
 
-const valueType: string = typeof_(undefined_());
-const logger: typeof log = log;
-const subpathValueType: string = coreTypeof(coreUndefined());
-const objectType: string = coreTypeof(new_object());
+const valueType: string = root.typeOf(root.undefinedValue());
+const logger: typeof core.log = core.log;
+const subpathValueType: string = core.typeOf(core.undefinedValue());
+const objectType: string = core.typeOf(core.new_object());
 void logger;
 void valueType;
 void subpathValueType;
