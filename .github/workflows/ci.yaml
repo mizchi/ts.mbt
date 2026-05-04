@@ -6,6 +6,12 @@ on:
       - main
   pull_request:
 
+env:
+  # Pin MoonBit toolchain so a bleeding-edge release cannot fail CI on a
+  # deprecation that hasn't been triaged locally yet. Bump alongside local
+  # `moon upgrade`.
+  MOONBIT_INSTALL_VERSION: "0.1.20260409"
+
 jobs:
   test:
     runs-on: ubuntu-latest
