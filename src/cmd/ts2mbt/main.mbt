@@ -38,11 +38,19 @@ pub fn ts2mbt_help_lines() -> Array[String] {
 async fn ts2mbt_dispatch(
   args : Array[String],
   start : Int,
+  subcommand : String,
   min_args : Int,
   usage : String,
   handler : async (Array[String]) -> Bool,
 ) -> Unit {
-  match @ts.cli_parse_subcommand_args(args, start, min_args, usage) {
+  match
+    @ts.cli_parse_subcommand_args(
+      args,
+      start,
+      min_args,
+      usage,
+      help_hint="ts2mbt \{subcommand} --help",
+    ) {
     HelpRequested => ts2mbt_print_usage()
     Args(positionals) => if !handler(positionals) { @ts.cli_fail("ts2mbt") }
   }
@@ -53,6 +61,10 @@ async fn ts2mbt_main_async() -> Unit {
   let args = @env.args()
   if args.length() < 2 {
     ts2mbt_print_usage()
+    return
+  }
+  if @ts.cli_token_is_version(args[1]) {
+    @ts.cli_print_version("ts2mbt")
     return
   }
   if args[1].has_prefix("--") || args[1] == "-h" {
@@ -72,22 +84,28 @@ async fn ts2mbt_main_async() -> Unit {
         @ts.cli_fail("ts2mbt")
       }
     "decl" =>
-      ts2mbt_dispatch(args, 2, 1, "ts2mbt decl: expected <ts-entry> [out]", async fn(
-        p,
-      ) {
-        @ts.emit_moonbit_decl(
-          p[0],
-          if p.length() >= 2 {
-            Some(p[1])
-          } else {
-            None
-          },
-        )
-      })
+      ts2mbt_dispatch(
+        args,
+        2,
+        "decl",
+        1,
+        "ts2mbt decl: expected <ts-entry> [out]",
+        async fn(p) {
+          @ts.emit_moonbit_decl(
+            p[0],
+            if p.length() >= 2 {
+              Some(p[1])
+            } else {
+              None
+            },
+          )
+        },
+      )
     "ffi" =>
       ts2mbt_dispatch(
         args,
         2,
+        "ffi",
         2,
         "ts2mbt ffi: expected <ts-entry> <module-spec> [ffi-out] [bridge-out]",
         async fn(p) {
@@ -111,6 +129,7 @@ async fn ts2mbt_main_async() -> Unit {
       ts2mbt_dispatch(
         args,
         2,
+        "bridge",
         2,
         "ts2mbt bridge: expected <ts-entry> <module-spec> [decl-out] [ffi-out] [bridge-out]",
         async fn(p) {
@@ -139,6 +158,7 @@ async fn ts2mbt_main_async() -> Unit {
       ts2mbt_dispatch(
         args,
         2,
+        "package",
         3,
         "ts2mbt package: expected <ts-entry> <module-spec> <out-dir>",
         async fn(p) { @ts.emit_moonbit_bridge_package(p[0], p[1], p[2]) },
@@ -147,11 +167,13 @@ async fn ts2mbt_main_async() -> Unit {
       ts2mbt_dispatch(
         args,
         2,
+        "scaffold",
         3,
         "ts2mbt scaffold: expected <ts-entry> <module-spec> <out-dir>",
         async fn(p) { @ts.emit_moonbit_scaffold_from_ts(p[0], p[1], p[2]) },
       )
     "--help" | "-h" | "help" => ts2mbt_print_usage()
+    "--version" | "-V" => @ts.cli_print_version("ts2mbt")
     _ => {
       println("Unknown subcommand: \{command}")
       ts2mbt_print_usage()

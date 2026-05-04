@@ -7736,7 +7736,11 @@ pub async fn emit_moonbit_decl_from_entry_path(
       InterfaceExtendsCycle => "Interface extends cycle"
       ClassPropertyDuplicate => "Duplicate class property"
     }
-    let note = "///|\n/// \{prefix} \{issue.name}: \{issue.detail}"
+    // Emit as a plain `//` comment instead of `///` so the diagnostic
+    // doesn't look like a doc comment binding to whatever entity follows
+    // it. Without this guard, an "Unresolved type reference" line gets
+    // attached as the public doc of the next struct / type declaration.
+    let note = "// \{prefix} \{issue.name}: \{issue.detail}"
     if !notes.contains(note) {
       notes.push(note)
     }

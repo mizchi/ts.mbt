@@ -4444,6 +4444,8 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
       return
     }
   }
+  // The bridge now preserves `HonoOptions<E>`'s type param, so
+  // `bindings : E?` instead of the previous widened `bindings : JSValue?`.
   assert_true(bundle.ffi_mbt.contains("pub(all) struct HonoOptions"))
   assert_true(bundle.ffi_mbt.contains("  strict : Bool?"))
   assert_true(bundle.ffi_mbt.contains("  bindings : JSValue?"))

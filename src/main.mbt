@@ -7,7 +7,7 @@ pub async fn emit_moonbit_decl(
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -42,7 +42,7 @@ pub async fn emit_typescript_decl(
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -76,7 +76,7 @@ pub async fn emit_typescript_decl_from_mbti(
   let emitted = emit_typescript_decl_from_mbti_text(file_path) catch {
     @bridge.MbtiTypescriptDeclError::ReadError(msg)
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -110,7 +110,7 @@ pub async fn emit_js_link_config_from_mbti(
   let emitted = emit_js_link_config_from_mbti_text(file_path) catch {
     @bridge.MbtiJsLinkConfigError::ReadError(msg)
     | @bridge.MbtiJsLinkConfigError::ParseError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -214,7 +214,7 @@ pub async fn emit_typescript_package_from_mbti(
   ) catch {
     @bridge.MbtiTypescriptDeclError::ReadError(msg)
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -773,7 +773,7 @@ pub async fn emit_typescript_scaffold_from_mbti(
   ) catch {
     @bridge.MbtiTypescriptDeclError::ReadError(msg)
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -803,7 +803,7 @@ pub async fn emit_typescript_facade_scaffold_from_mbti(
   ) catch {
     @bridge.MbtiTypescriptDeclError::ReadError(msg)
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -828,7 +828,7 @@ pub async fn emit_moonbit_js_ffi(
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -885,7 +885,7 @@ pub async fn emit_moonbit_bridge(
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -959,7 +959,7 @@ pub async fn emit_moonbit_bridge_package(
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }
@@ -1117,7 +1117,7 @@ pub async fn emit_moonbit_scaffold_from_ts(
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
-      println("Emit error: \{msg}")
+      println("Emit error: \{cli_clean_error(msg)}")
       return false
     }
   }

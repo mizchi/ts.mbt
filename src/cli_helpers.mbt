@@ -40,6 +40,60 @@ pub fn cli_bail(message : String) -> Unit {
 }
 
 ///|
+/// `mizchi/ts` package version reported by `--version` / `-V` from each
+/// cmd binary. Sourced from `moon.mod.json` and bumped together with it
+/// at release time.
+pub const CLI_VERSION : String = "0.1.4"
+
+///|
+/// Print the version banner for the given binary name and exit with
+/// status 0. Cmd dispatchers should intercept `--version` / `-V` and
+/// route here.
+pub fn cli_print_version(binary_name : String) -> Unit {
+  println("\{binary_name} \{CLI_VERSION} (mizchi/ts)")
+}
+
+///|
+/// Treat the given top-level token as a version request — `--version`
+/// or `-V`. Cmd dispatchers use this to short-circuit the help/dispatch
+/// pipeline and just print the version banner.
+pub fn cli_token_is_version(token : String) -> Bool {
+  token == "--version" || token == "-V"
+}
+
+///|
+/// Sanitize a raw bridge / IO error message so the printed CLI text
+/// doesn't leak the MoonBit `OSError("@fs.open(): ...")` debug shape.
+/// Specifically: when the message contains `OSError("...")`, replace
+/// that fragment with the inner reason (after the first `: ` delimiter)
+/// so users see a single-quoted file path + plain reason.
+pub fn cli_clean_error(message : String) -> String {
+  let marker = "OSError(\""
+  match message.find(marker) {
+    None => message
+    Some(start_idx) => {
+      let prefix = message[:start_idx].to_string()
+      let body_start = start_idx + marker.length()
+      let after = message[body_start:message.length()].to_string()
+      // The body looks like:
+      //   <syscall>: \"<path>\": <reason>")
+      // Strip the trailing `")` and pull the trailing reason after the
+      // last `\": `.
+      let trimmed = if after.has_suffix("\")") {
+        after[:after.length() - 2].to_string()
+      } else {
+        after
+      }
+      let reason = match trimmed.rev_find("\\\": ") {
+        Some(idx) => trimmed[idx + 4:trimmed.length()].to_string()
+        None => trimmed
+      }
+      prefix + reason
+    }
+  }
+}
+
+///|
 /// Treat the given subcommand token as a help request — `--help`, `-h`, or
 /// `help`. Cmd dispatchers use this to short-circuit per-subcommand help
 /// before treating the next positional as a path.
@@ -62,23 +116,33 @@ pub enum CliArgScan {
 ///|
 /// Parse the positional arguments for a subcommand. Returns `HelpRequested`
 /// when the user passed `--help` / `-h` / `help`. Calls `cli_bail` (which
-/// exits with status 1) when fewer than `min_args` positionals are present.
+/// exits with status 1) when fewer than `min_args` positionals are present
+/// — the bail message includes a hint pointing at the per-subcommand
+/// `--help` so users know how to recover.
 ///
 /// `args` is the full process argv slice (`@env.args()`), `start` is the
 /// index of the first positional after the subcommand verb, and
-/// `usage` is the bail message printed when the arity check fails.
+/// `usage` is the bail message printed when the arity check fails. The
+/// optional `help_hint` (e.g. `"ts2mbt decl --help"`) is appended to the
+/// bail message; pass `""` to suppress it.
 pub fn cli_parse_subcommand_args(
   args : Array[String],
   start : Int,
   min_args : Int,
   usage : String,
+  help_hint? : String = "",
 ) -> CliArgScan {
   if start < args.length() && cli_subcommand_is_help(args[start]) {
     return HelpRequested
   }
   let provided = args.length() - start
   if provided < min_args {
-    cli_bail(usage)
+    let suffix = if help_hint == "" {
+      ""
+    } else {
+      " (run `\{help_hint}` for usage)"
+    }
+    cli_bail("\{usage} — got \{provided} arg(s), need \{min_args}\{suffix}")
   }
   let positionals : Array[String] = []
   for i in start..<args.length() {

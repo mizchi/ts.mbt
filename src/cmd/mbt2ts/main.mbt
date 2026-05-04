@@ -41,11 +41,19 @@ pub fn mbt2ts_help_lines() -> Array[String] {
 async fn mbt2ts_dispatch(
   args : Array[String],
   start : Int,
+  subcommand : String,
   min_args : Int,
   usage : String,
   handler : async (Array[String]) -> Bool,
 ) -> Unit {
-  match @ts.cli_parse_subcommand_args(args, start, min_args, usage) {
+  match
+    @ts.cli_parse_subcommand_args(
+      args,
+      start,
+      min_args,
+      usage,
+      help_hint="mbt2ts \{subcommand} --help",
+    ) {
     HelpRequested => mbt2ts_print_usage()
     Args(positionals) => if !handler(positionals) { @ts.cli_fail("mbt2ts") }
   }
@@ -56,6 +64,10 @@ async fn mbt2ts_main_async() -> Unit {
   let args = @env.args()
   if args.length() < 2 {
     mbt2ts_print_usage()
+    return
+  }
+  if @ts.cli_token_is_version(args[1]) {
+    @ts.cli_print_version("mbt2ts")
     return
   }
   if args[1].has_prefix("--") || args[1] == "-h" {
@@ -75,35 +87,46 @@ async fn mbt2ts_main_async() -> Unit {
         @ts.cli_fail("mbt2ts")
       }
     "decl" =>
-      mbt2ts_dispatch(args, 2, 1, "mbt2ts decl: expected <mbti> [out]", async fn(
-        p,
-      ) {
-        @ts.emit_typescript_decl_from_mbti(
-          p[0],
-          if p.length() >= 2 {
-            Some(p[1])
-          } else {
-            None
-          },
-        )
-      })
+      mbt2ts_dispatch(
+        args,
+        2,
+        "decl",
+        1,
+        "mbt2ts decl: expected <mbti> [out]",
+        async fn(p) {
+          @ts.emit_typescript_decl_from_mbti(
+            p[0],
+            if p.length() >= 2 {
+              Some(p[1])
+            } else {
+              None
+            },
+          )
+        },
+      )
     "link-config" =>
-      mbt2ts_dispatch(args, 2, 1, "mbt2ts link-config: expected <mbti> [out]", async fn(
-        p,
-      ) {
-        @ts.emit_js_link_config_from_mbti(
-          p[0],
-          if p.length() >= 2 {
-            Some(p[1])
-          } else {
-            None
-          },
-        )
-      })
+      mbt2ts_dispatch(
+        args,
+        2,
+        "link-config",
+        1,
+        "mbt2ts link-config: expected <mbti> [out]",
+        async fn(p) {
+          @ts.emit_js_link_config_from_mbti(
+            p[0],
+            if p.length() >= 2 {
+              Some(p[1])
+            } else {
+              None
+            },
+          )
+        },
+      )
     "package" =>
       mbt2ts_dispatch(
         args,
         2,
+        "package",
         2,
         "mbt2ts package: expected <mbti> <out-dir> [import-rewrite-json]",
         async fn(p) {
@@ -122,6 +145,7 @@ async fn mbt2ts_main_async() -> Unit {
       mbt2ts_dispatch(
         args,
         2,
+        "scaffold",
         2,
         "mbt2ts scaffold: expected <mbti> <out-dir> [import-rewrite-json]",
         async fn(p) {
@@ -140,6 +164,7 @@ async fn mbt2ts_main_async() -> Unit {
       mbt2ts_dispatch(
         args,
         2,
+        "facade-scaffold",
         2,
         "mbt2ts facade-scaffold: expected <mbti> <out-dir> [import-rewrite-json]",
         async fn(p) {
@@ -155,19 +180,25 @@ async fn mbt2ts_main_async() -> Unit {
         },
       )
     "normalize" =>
-      mbt2ts_dispatch(args, 2, 1, "mbt2ts normalize: expected <ts> [out]", async fn(
-        p,
-      ) {
-        @ts.emit_typescript_decl(
-          p[0],
-          if p.length() >= 2 {
-            Some(p[1])
-          } else {
-            None
-          },
-        )
-      })
+      mbt2ts_dispatch(
+        args,
+        2,
+        "normalize",
+        1,
+        "mbt2ts normalize: expected <ts> [out]",
+        async fn(p) {
+          @ts.emit_typescript_decl(
+            p[0],
+            if p.length() >= 2 {
+              Some(p[1])
+            } else {
+              None
+            },
+          )
+        },
+      )
     "--help" | "-h" | "help" => mbt2ts_print_usage()
+    "--version" | "-V" => @ts.cli_print_version("mbt2ts")
     _ => {
       println("Unknown subcommand: \{command}")
       mbt2ts_print_usage()
