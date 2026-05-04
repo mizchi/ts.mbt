@@ -98,6 +98,53 @@ Shared `--input` flow flags:
 - `--no-facade` (`mbt2ts` only) — skip facade-wrapper generation and emit
   only top-level free-function glue.
 
+## Vendor & sync (TypeScript -> MoonBit)
+
+When you're consuming a MoonBit package and want bridges for the
+TypeScript libraries listed in your `package.json`, run `ts2mbt vendor`
+or `ts2mbt sync` from inside your moon module.
+
+```bash
+# Vendor one npm package: resolve its types via node_modules and write a
+# bridge sub-package under <moon-source>/internal/generated/<safe>/.
+moon run src/cmd/ts2mbt -- vendor hono
+
+# Vendor everything in dependencies + devDependencies of ./package.json.
+moon run src/cmd/ts2mbt -- sync
+```
+
+Output layout (with `moon.mod.json`'s `source` set to `src`):
+
+```
+src/
+└── internal/
+    └── generated/
+        ├── hono/
+        │   ├── bridge.mbti
+        │   ├── bridge.mbt
+        │   ├── bridge.js
+        │   ├── moon.pkg.json
+        │   └── SCAFFOLD_DIAGNOSTICS.md
+        └── types__react/
+            └── ... (same shape, runtime spec defaults to `react`)
+```
+
+Naming: the directory slug strips the leading `@`, replaces `/` with
+`__`, and replaces other non-`[A-Za-z0-9]` characters with `_`.
+`@types/<name>` packages default the runtime module spec to the unscoped
+name (`react`, `express`, ...), since the runtime code lives in the
+non-types package.
+
+Flags:
+
+- `--module-spec <spec>` (`vendor`) — override the runtime import used by
+  the generated `bridge.js`. Useful when the package ships its types
+  separately from its runtime entry.
+- `--out <dir>` — override the vendor root. Defaults to
+  `<moon source>/internal/generated`.
+- `--package-json <path>` (`sync`) — read deps from a non-default
+  `package.json`.
+
 ## MoonBit -> TypeScript
 
 Start from a root `pkg.generated.mbti` for a real MoonBit source package and

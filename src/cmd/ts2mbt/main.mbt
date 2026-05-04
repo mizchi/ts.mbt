@@ -23,6 +23,8 @@ fn ts2mbt_print_usage() -> Unit {
 pub fn ts2mbt_help_lines() -> Array[String] {
   [
     "  --input <ts-entry> --out <dir> [--module-spec <spec>] [--diagnostics <path>] [--strict] Generate a complete build-backed MoonBit bridge scaffold from a TypeScript entrypoint",
+    "  vendor <pkg> [--module-spec <spec>] [--out <dir>] Resolve <pkg> from node_modules and write a bridge sub-package under <source>/internal/generated/<safe>/",
+    "  sync [--package-json <path>] [--out <dir>] Vendor every dependency / devDependency listed in package.json",
     "  decl <ts-entry> [out] Emit MoonBit declare stubs from a TypeScript entrypoint",
     "  ffi <ts-entry> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  bridge <ts-entry> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TypeScript entrypoint",
@@ -53,6 +55,138 @@ async fn ts2mbt_dispatch(
     ) {
     HelpRequested => ts2mbt_print_usage()
     Args(positionals) => if !handler(positionals) { @ts.cli_fail("ts2mbt") }
+  }
+}
+
+///|
+/// Parse `vendor`'s positional + flag arguments into
+/// `(pkg_spec, module_spec_override, vendor_root_override)`.
+fn parse_vendor_args(
+  args : Array[String],
+  start : Int,
+) -> (String?, String?, String?) {
+  let mut pkg_spec : String? = None
+  let mut module_spec : String? = None
+  let mut out_dir : String? = None
+  let mut idx = start
+  while idx < args.length() {
+    let arg = args[idx]
+    if arg == "--module-spec" || arg == "--runtime-module" {
+      if idx + 1 >= args.length() {
+        return (None, None, None)
+      }
+      module_spec = Some(args[idx + 1])
+      idx += 2
+      continue
+    }
+    if arg == "--out" || arg == "-o" {
+      if idx + 1 >= args.length() {
+        return (None, None, None)
+      }
+      out_dir = Some(args[idx + 1])
+      idx += 2
+      continue
+    }
+    if arg.has_prefix("--module-spec=") {
+      module_spec = Some(
+        arg["--module-spec=".length():arg.length()].to_string(),
+      )
+      idx += 1
+      continue
+    }
+    if arg.has_prefix("--out=") {
+      out_dir = Some(arg["--out=".length():arg.length()].to_string())
+      idx += 1
+      continue
+    }
+    if arg.has_prefix("-") {
+      idx += 1
+      continue
+    }
+    if pkg_spec is None {
+      pkg_spec = Some(arg)
+    }
+    idx += 1
+  }
+  (pkg_spec, module_spec, out_dir)
+}
+
+///|
+async fn ts2mbt_run_vendor(args : Array[String], start : Int) -> Unit {
+  if start < args.length() && @ts.cli_subcommand_is_help(args[start]) {
+    ts2mbt_print_usage()
+    return
+  }
+  let (pkg_spec, module_spec, out_dir) = parse_vendor_args(args, start)
+  let pkg = match pkg_spec {
+    Some(p) => p
+    None => {
+      @ts.cli_bail(
+        "ts2mbt vendor: expected <pkg> [--module-spec <spec>] [--out <dir>]",
+      )
+      return
+    }
+  }
+  if !@ts.ts2mbt_vendor_package(
+      pkg,
+      module_spec_override=module_spec,
+      vendor_root_override=out_dir,
+    ) {
+    @ts.cli_fail("ts2mbt")
+  }
+}
+
+///|
+/// Parse `sync`'s flag arguments into `(package_json_path?, vendor_root?)`.
+fn parse_sync_args(args : Array[String], start : Int) -> (String?, String?) {
+  let mut pkg_json : String? = None
+  let mut out_dir : String? = None
+  let mut idx = start
+  while idx < args.length() {
+    let arg = args[idx]
+    if arg == "--package-json" {
+      if idx + 1 >= args.length() {
+        return (None, None)
+      }
+      pkg_json = Some(args[idx + 1])
+      idx += 2
+      continue
+    }
+    if arg == "--out" || arg == "-o" {
+      if idx + 1 >= args.length() {
+        return (None, None)
+      }
+      out_dir = Some(args[idx + 1])
+      idx += 2
+      continue
+    }
+    if arg.has_prefix("--package-json=") {
+      pkg_json = Some(arg["--package-json=".length():arg.length()].to_string())
+      idx += 1
+      continue
+    }
+    if arg.has_prefix("--out=") {
+      out_dir = Some(arg["--out=".length():arg.length()].to_string())
+      idx += 1
+      continue
+    }
+    idx += 1
+  }
+  (pkg_json, out_dir)
+}
+
+///|
+async fn ts2mbt_run_sync(args : Array[String], start : Int) -> Unit {
+  if start < args.length() && @ts.cli_subcommand_is_help(args[start]) {
+    ts2mbt_print_usage()
+    return
+  }
+  let (pkg_json, out_dir) = parse_sync_args(args, start)
+  if !@ts.ts2mbt_sync_package_json(
+      package_json_path_override=pkg_json,
+      vendor_root_override=out_dir,
+    ) {
+    @ts.cli_fail("ts2mbt")
   }
 }
 
@@ -172,6 +306,8 @@ async fn ts2mbt_main_async() -> Unit {
         "ts2mbt scaffold: expected <ts-entry> <module-spec> <out-dir>",
         async fn(p) { @ts.emit_moonbit_scaffold_from_ts(p[0], p[1], p[2]) },
       )
+    "vendor" => ts2mbt_run_vendor(args, 2)
+    "sync" => ts2mbt_run_sync(args, 2)
     "--help" | "-h" | "help" => ts2mbt_print_usage()
     "--version" | "-V" => @ts.cli_print_version("ts2mbt")
     _ => {
