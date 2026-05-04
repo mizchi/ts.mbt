@@ -893,7 +893,7 @@ EOF
   cat > "$root/bridge_test.mbt" <<'EOF'
 test "generated bridge package keeps bare default class reexports self-contained" {
   let counter = new_runtime_counter(2.0)
-  assert_eq(counter.runtime_counter_inc(5.0), 7.0)
+  assert_eq(counter.inc(5.0), 7.0)
   let seeded = runtime_counter_from(4.0)
   assert_eq(seeded.get_runtime_counter_count(), 4.0)
   assert_eq(get_runtime_counter_version(), "v1")
@@ -2314,7 +2314,7 @@ EOF
 test "generated bridge package keeps default class bindings self-contained" {
   let counter = new_default(2.0)
   assert_eq(counter.get_default_count(), 2.0)
-  assert_eq(counter.default_inc(5.0), 7.0)
+  assert_eq(counter.inc(5.0), 7.0)
   counter.set_default_count(9.0)
   assert_eq(counter.get_default_count(), 9.0)
   let seeded = default_from(4.0)
@@ -2350,7 +2350,7 @@ EOF
   cat > "$pkg_root/bridge_test.mbt" <<'EOF'
 test "generated bridge package keeps deep parent-relative mixed default class bindings self-contained" {
   let counter = new_default(2.0)
-  assert_eq(counter.default_inc(5.0), 7.0)
+  assert_eq(counter.inc(5.0), 7.0)
   assert_eq(surround("ok", "!"), "!ok!")
   assert_eq(get_version(), "v2")
 }
@@ -2384,7 +2384,7 @@ EOF
   cat > "$pkg_root/bridge_test.mbt" <<'EOF'
 test "generated bridge package keeps deep parent-relative mixed default class reexports self-contained" {
   let counter = new_runtime_counter(2.0)
-  assert_eq(counter.runtime_counter_inc(5.0), 7.0)
+  assert_eq(counter.inc(5.0), 7.0)
   assert_eq(decorate("ok", "!"), "!ok!")
   assert_eq(get_runtime_version(), "v2")
 }

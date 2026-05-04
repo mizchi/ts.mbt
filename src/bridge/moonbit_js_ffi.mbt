@@ -2971,14 +2971,13 @@ fn ffi_class_method_decl_to_moonbit(
     } else {
       method_params
     }
-    let prefixed_decl = "pub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{fn_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
-    let natural_name = ffi_value_fn_name(class_method.name)
-    if natural_name == fn_name {
-      prefixed_decl
-    } else {
-      prefixed_decl +
-      "\n\npub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{natural_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
-    }
+    // Emit the method under its natural TypeScript name
+    // (`Hono::get`) — `<lowercased_class>_<method>` (`Hono::hono_get`)
+    // was a redundant alias that doubled the type name in user code.
+    // Reserved-word sanitization in `ffi_value_fn_name` keeps the
+    // identifier safe (e.g. `match` -> `match_`).
+    let method_name = ffi_value_fn_name(class_method.name)
+    "pub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{method_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
   }
 }
 

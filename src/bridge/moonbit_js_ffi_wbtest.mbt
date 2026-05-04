@@ -83,12 +83,12 @@ async test "bridge: emit MoonBit JS FFI bundle from ambient external module" {
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn DatabaseSync::database_sync_exec(self : DatabaseSync, sql : String) -> Unit",
+      "pub extern \"js\" fn DatabaseSync::exec(self : DatabaseSync, sql : String) -> Unit",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn DatabaseSync::database_sync_prepare(self : DatabaseSync, sql : String) -> StatementSync",
+      "pub extern \"js\" fn DatabaseSync::prepare(self : DatabaseSync, sql : String) -> StatementSync",
     ),
   )
   assert_true(bundle.ffi_mbt.contains("#external\npub type SQLInputValue"))
@@ -294,7 +294,7 @@ async test "bridge: emit MoonBit JS FFI bundle for exported classes" {
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn Counter::counter_inc(self : Counter, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
+      "pub extern \"js\" fn Counter::inc(self : Counter, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
     ),
   )
   assert_true(
@@ -331,7 +331,7 @@ async test "bridge: emit MoonBit JS FFI bundle for abstract classes without cons
   assert_true(bundle.ffi_mbt.contains("#external\npub type Shape"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn Shape::shape_area(self : Shape) -> Double =\n  #| (self) => self.area()",
+      "pub extern \"js\" fn Shape::area(self : Shape) -> Double =\n  #| (self) => self.area()",
     ),
   )
   assert_false(bundle.ffi_mbt.contains("pub extern \"js\" fn new_shape("))
@@ -962,7 +962,7 @@ async test "bridge: emit MoonBit JS FFI bundle collapse overloads by generated b
   assert_eq(
     count_occurrences_in_ffi_output(
       bundle.ffi_mbt,
-      "pub extern \"js\" fn Counter::counter_value(",
+      "pub extern \"js\" fn Counter::value(",
     ),
     1,
   )
@@ -3215,7 +3215,7 @@ async test "bridge: emit MoonBit JS FFI bundle from runtime default exported cla
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn Default::default_inc(self : Default, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
+      "pub extern \"js\" fn Default::inc(self : Default, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
     ),
   )
   assert_true(
@@ -3252,7 +3252,7 @@ async test "bridge: emit MoonBit JS FFI bundle uses adapter helpers for relative
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn Default::default_inc(self : Default, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
+      "pub extern \"js\" fn Default::inc(self : Default, delta : Double) -> Double =\n  #| (self, delta) => self.inc(delta)",
     ),
   )
   assert_true(
@@ -4959,7 +4959,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
   let actual = ffi_class_method_decl_to_moonbit(state, class_, class_method)
   assert_true(
     actual.contains(
-      "pub extern \"js\" fn SignJWT::sign_jwt_set_issued_at(self : SignJWT, input : JSValue?) -> SignJWT =",
+      "pub extern \"js\" fn SignJWT::set_issued_at(self : SignJWT, input : JSValue?) -> SignJWT =",
     ),
   )
   assert_true(actual.contains("#| (self, input) =>"))

@@ -1699,7 +1699,7 @@ async test "emit_moonbit_bridge_package rewrites relative default class helpers 
   )
   assert_true(
     bridge_mbt.contains(
-      "pub extern \"js\" fn Default::default_inc(self : Default, delta : Double) -> Double =",
+      "pub extern \"js\" fn Default::inc(self : Default, delta : Double) -> Double =",
     ),
   )
   assert_true(
