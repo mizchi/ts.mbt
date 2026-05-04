@@ -13,7 +13,7 @@ Input:
 Generate a TypeScript package backed by `moon build --target js`:
 
 ```bash
-moon run src/cmd/mbt2ts -- --input examples/counter --out examples/moonbit-to-typescript/dist
+moon run src/cmd/mbt2ts -- --input examples/moonbit-to-typescript/counter --out examples/moonbit-to-typescript/dist
 ```
 
 The generated output includes `index.js`, `index.d.ts`, `child/index.js`,

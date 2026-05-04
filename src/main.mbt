@@ -2,13 +2,13 @@
 pub async fn emit_moonbit_decl(
   file_path : String,
   output_path : String?,
-) -> Unit {
+) -> Bool {
   let emitted = emit_moonbit_decl_text(file_path) catch {
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   match output_path {
@@ -16,13 +16,14 @@ pub async fn emit_moonbit_decl(
       let _ = @fs.write_file(path, string_to_bytes(emitted), create=0o644) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote MoonBit declarations to \{path}")
     }
     None => println(emitted)
   }
+  true
 }
 
 ///|
@@ -36,13 +37,13 @@ async fn emit_moonbit_decl_text(
 pub async fn emit_typescript_decl(
   file_path : String,
   output_path : String?,
-) -> Unit {
+) -> Bool {
   let emitted = emit_typescript_decl_text(file_path) catch {
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   match output_path {
@@ -50,13 +51,14 @@ pub async fn emit_typescript_decl(
       let _ = @fs.write_file(path, string_to_bytes(emitted), create=0o644) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote normalized TypeScript declarations to \{path}")
     }
     None => println(emitted)
   }
+  true
 }
 
 ///|
@@ -70,12 +72,12 @@ async fn emit_typescript_decl_text(
 pub async fn emit_typescript_decl_from_mbti(
   file_path : String,
   output_path : String?,
-) -> Unit {
+) -> Bool {
   let emitted = emit_typescript_decl_from_mbti_text(file_path) catch {
     @bridge.MbtiTypescriptDeclError::ReadError(msg)
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   match output_path {
@@ -83,13 +85,14 @@ pub async fn emit_typescript_decl_from_mbti(
       let _ = @fs.write_file(path, string_to_bytes(emitted), create=0o644) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote TypeScript declarations to \{path}")
     }
     None => println(emitted)
   }
+  true
 }
 
 ///|
@@ -103,12 +106,12 @@ async fn emit_typescript_decl_from_mbti_text(
 pub async fn emit_js_link_config_from_mbti(
   file_path : String,
   output_path : String?,
-) -> Unit {
+) -> Bool {
   let emitted = emit_js_link_config_from_mbti_text(file_path) catch {
     @bridge.MbtiJsLinkConfigError::ReadError(msg)
     | @bridge.MbtiJsLinkConfigError::ParseError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   match output_path {
@@ -116,13 +119,14 @@ pub async fn emit_js_link_config_from_mbti(
       let _ = @fs.write_file(path, string_to_bytes(emitted), create=0o644) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote MoonBit JS link config to \{path}")
     }
     None => println(emitted)
   }
+  true
 }
 
 ///|
@@ -199,11 +203,11 @@ pub async fn emit_typescript_package_from_mbti(
   file_path : String,
   output_dir : String,
   import_rewrite_path : String?,
-) -> Unit {
+) -> Bool {
   let import_rewrites = match
     load_typescript_import_rewrite_map(import_rewrite_path) {
     Some(rewrites) => rewrites
-    None => return
+    None => return false
   }
   let files = @bridge.emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
     file_path, import_rewrites,
@@ -211,13 +215,13 @@ pub async fn emit_typescript_package_from_mbti(
     @bridge.MbtiTypescriptDeclError::ReadError(msg)
     | @bridge.MbtiTypescriptDeclError::ParseError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   let _ = ensure_dir_tree(output_dir) catch {
     e => {
       println("Write error: \{e}")
-      return
+      return false
     }
   }
   for file in files {
@@ -226,7 +230,7 @@ pub async fn emit_typescript_package_from_mbti(
     let _ = ensure_dir_tree(parent_dir) catch {
       e => {
         println("Write error: \{e}")
-        return
+        return false
       }
     }
     let _ = @fs.write_file(
@@ -236,11 +240,12 @@ pub async fn emit_typescript_package_from_mbti(
     ) catch {
       e => {
         println("Write error: \{e}")
-        return
+        return false
       }
     }
   }
   println("Wrote TypeScript declaration package to \{output_dir}")
+  true
 }
 
 ///|
@@ -818,13 +823,13 @@ pub async fn emit_moonbit_js_ffi(
   module_spec : String,
   ffi_output_path : String?,
   bridge_output_path : String?,
-) -> Unit {
+) -> Bool {
   let bundle = emit_moonbit_js_ffi_texts(file_path, module_spec) catch {
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   match ffi_output_path {
@@ -836,7 +841,7 @@ pub async fn emit_moonbit_js_ffi(
       ) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote MoonBit JS FFI stubs to \{path}")
@@ -855,7 +860,7 @@ pub async fn emit_moonbit_js_ffi(
       ) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote JS bridge to \{path}")
@@ -865,6 +870,7 @@ pub async fn emit_moonbit_js_ffi(
       println(bundle.bridge_js)
     }
   }
+  true
 }
 
 ///|
@@ -874,13 +880,13 @@ pub async fn emit_moonbit_bridge(
   decl_output_path : String?,
   ffi_output_path : String?,
   bridge_output_path : String?,
-) -> Unit {
+) -> Bool {
   let bundle = emit_moonbit_bridge_texts(file_path, module_spec) catch {
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   match decl_output_path {
@@ -892,7 +898,7 @@ pub async fn emit_moonbit_bridge(
       ) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote MoonBit declarations to \{path}")
@@ -911,7 +917,7 @@ pub async fn emit_moonbit_bridge(
       ) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote MoonBit JS FFI stubs to \{path}")
@@ -930,7 +936,7 @@ pub async fn emit_moonbit_bridge(
       ) catch {
         e => {
           println("Write error: \{e}")
-          return
+          return false
         }
       }
       println("Wrote JS bridge to \{path}")
@@ -940,6 +946,7 @@ pub async fn emit_moonbit_bridge(
       println(bundle.bridge_js)
     }
   }
+  true
 }
 
 ///|
@@ -947,23 +954,27 @@ pub async fn emit_moonbit_bridge_package(
   file_path : String,
   module_spec : String,
   output_dir : String,
-) -> Unit {
+) -> Bool {
   let bundle = emit_moonbit_bridge_package_texts(file_path, module_spec) catch {
     @bridge.ModuleGraphError::ReadError(msg)
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
   if !@fs.exists(output_dir) {
     let _ = ensure_dir_tree(output_dir) catch {
       e => {
         println("Write error: \{e}")
-        return
+        return false
       }
     }
   }
+  // MoonBit's `#module(...)` rejects relative paths, so the absolute
+  // scaffold path is baked into every binding. The generated package is
+  // therefore not portable — consumers that move or vendor the output
+  // need to regenerate the bridge against the new location.
   let output_dir_realpath = @fs.realpath(output_dir) catch { _ => output_dir }
   let bridge_js_output_path = join_output_path(output_dir_realpath, "bridge.js")
   let bridge_mbt = rewrite_bridge_package_module_path(
@@ -984,11 +995,12 @@ pub async fn emit_moonbit_bridge_package(
     let _ = @fs.write_file(path, string_to_bytes(content), create=0o644) catch {
       e => {
         println("Write error: \{e}")
-        return
+        return false
       }
     }
   }
   println("Wrote MoonBit bridge package to \{output_dir}")
+  true
 }
 
 ///|
@@ -1097,7 +1109,8 @@ pub async fn emit_moonbit_scaffold_from_ts(
   file_path : String,
   module_spec : String,
   output_dir : String,
-) -> Unit {
+  write_diagnostics? : Bool = true,
+) -> Bool {
   let unsupported_exports = collect_moonbit_ts_scaffold_unsupported_exports(
     file_path,
   ) catch {
@@ -1105,29 +1118,37 @@ pub async fn emit_moonbit_scaffold_from_ts(
     | @bridge.ModuleGraphError::ParseError(msg)
     | @bridge.ModuleGraphError::ResolveError(msg) => {
       println("Emit error: \{msg}")
-      return
+      return false
     }
   }
-  emit_moonbit_bridge_package(file_path, module_spec, output_dir)
-  if unsupported_exports.length() > 0 {
-    let diagnostics_path = join_output_path(
-      output_dir, "SCAFFOLD_DIAGNOSTICS.md",
-    )
-    let diagnostics_md = render_moonbit_scaffold_diagnostics_md(
-      unsupported_exports,
-    )
-    let _ = @fs.write_file(
-      diagnostics_path,
-      string_to_bytes(diagnostics_md),
-      create=0o644,
-    ) catch {
-      e => {
-        println("Write error: \{e}")
-        return
-      }
-    }
-    println("Wrote scaffold diagnostics to \{diagnostics_path}")
+  if !emit_moonbit_bridge_package(file_path, module_spec, output_dir) {
+    return false
   }
+  // The unified `--input/--out` driver emits a richer SCAFFOLD_DIAGNOSTICS.md
+  // (with JSValue fallbacks). Skip the inner write when called from there
+  // to avoid the duplicate "Wrote scaffold diagnostics" log line and a
+  // shorter file getting overwritten by the unified renderer anyway.
+  if !write_diagnostics {
+    return true
+  }
+  // Always emit SCAFFOLD_DIAGNOSTICS.md so direct subcommand callers can
+  // inspect even the happy-path "no unsupported exports" report.
+  let diagnostics_path = join_output_path(output_dir, "SCAFFOLD_DIAGNOSTICS.md")
+  let diagnostics_md = render_moonbit_scaffold_diagnostics_md(
+    unsupported_exports,
+  )
+  let _ = @fs.write_file(
+    diagnostics_path,
+    string_to_bytes(diagnostics_md),
+    create=0o644,
+  ) catch {
+    e => {
+      println("Write error: \{e}")
+      return false
+    }
+  }
+  println("Wrote scaffold diagnostics to \{diagnostics_path}")
+  true
 }
 
 ///|

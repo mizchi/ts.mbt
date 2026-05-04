@@ -424,12 +424,15 @@ Implemented in the current real-world TypeScript probe order:
 ### Phase 6: Productization and Safety (88% -> 90%)
 
 - [x] Define the public CLI contract:
-  - [x] `tsmbt --input mizchi/foo --out dist`
-  - [x] `tsmbt --input npm-package --out dist --direction ts-to-mbt`
-  - [x] `--module-spec`
+  - [x] `mbt2ts --input mizchi/foo --out dist`
+  - [x] `ts2mbt --input npm-package --out dist`
+  - [x] `--module-spec` (`ts2mbt` only)
   - [x] `--diagnostics`
   - [x] `--strict`
-  - Unified CLI help, parser tests, and README now document the public contract.
+  - The `tsmbt` binary was split into per-direction `ts2mbt` / `mbt2ts`
+    binaries; the `--direction` flag was retired since each binary picks
+    its own direction. Unified CLI help, parser tests, and README now
+    document the per-binary public contract.
 - [x] Add strict mode that fails on any unsupported export or unbudgeted
   `JSValue` fallback.
   - TS -> MoonBit strict mode rejects ambiguous/unsupported export surfaces

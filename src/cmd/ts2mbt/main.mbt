@@ -1,27 +1,15 @@
 ///|
-fn ts2mbt_command_failed() -> Unit {
-  println("ts2mbt command failed")
-  ts2mbt_cli_exit(1)
-}
-
-///|
-#cfg(target="native")
-extern "C" fn ts2mbt_cli_exit(code : Int) = "exit"
-
-///|
-#cfg(not(target="native"))
-fn ts2mbt_cli_exit(code : Int) -> Unit {
-  let _ = code
-  abort("ts2mbt command failed")
-}
-
-///|
 fn ts2mbt_print_usage() -> Unit {
   println(
     "Usage: ts2mbt [--input <ts-entry> --out <dir>] [<subcommand> args...]",
   )
   println("")
   println("Generate MoonBit bridge artifacts from a TypeScript entrypoint.")
+  println("")
+  println(
+    "Recommended: use the unified `--input/--out` flow for build-backed scaffolds.",
+  )
+  println("Subcommands expose individual generation stages.")
   println("")
   println("Subcommands:")
   for line in ts2mbt_help_lines() {
@@ -44,15 +32,36 @@ pub fn ts2mbt_help_lines() -> Array[String] {
 }
 
 ///|
+/// Run a subcommand handler against the parsed positional args. Centralises
+/// the per-arm `parse args -> dispatch -> propagate exit code` pipeline so
+/// each cmd arm shrinks to a single line.
+async fn ts2mbt_dispatch(
+  args : Array[String],
+  start : Int,
+  min_args : Int,
+  usage : String,
+  handler : async (Array[String]) -> Bool,
+) -> Unit {
+  match @ts.cli_parse_subcommand_args(args, start, min_args, usage) {
+    HelpRequested => ts2mbt_print_usage()
+    Args(positionals) => if !handler(positionals) { @ts.cli_fail("ts2mbt") }
+  }
+}
+
+///|
 async fn ts2mbt_main_async() -> Unit {
   let args = @env.args()
   if args.length() < 2 {
     ts2mbt_print_usage()
     return
   }
-  if args[1].has_prefix("--") {
+  if args[1].has_prefix("--") || args[1] == "-h" {
+    if args[1] == "--help" || args[1] == "-h" {
+      ts2mbt_print_usage()
+      return
+    }
     if !@ts.run_ts_to_mbt_unified_cli(args, 1, print_help=ts2mbt_print_usage) {
-      ts2mbt_command_failed()
+      @ts.cli_fail("ts2mbt")
     }
     return
   }
@@ -60,66 +69,93 @@ async fn ts2mbt_main_async() -> Unit {
   match command {
     "generate" | "scaffold-from-input" =>
       if !@ts.run_ts_to_mbt_unified_cli(args, 2, print_help=ts2mbt_print_usage) {
-        ts2mbt_command_failed()
+        @ts.cli_fail("ts2mbt")
       }
-    "decl" => {
-      if args.length() < 3 {
-        println("Error: expected <ts-entry>")
-        return
-      }
-      let file_path = args[2]
-      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
-      @ts.emit_moonbit_decl(file_path, output_path)
-    }
-    "ffi" => {
-      if args.length() < 4 {
-        println("Error: expected <ts-entry> <module-spec>")
-        return
-      }
-      let file_path = args[2]
-      let module_spec = args[3]
-      let ffi_out = if args.length() >= 5 { Some(args[4]) } else { None }
-      let bridge_out = if args.length() >= 6 { Some(args[5]) } else { None }
-      @ts.emit_moonbit_js_ffi(file_path, module_spec, ffi_out, bridge_out)
-    }
-    "bridge" => {
-      if args.length() < 4 {
-        println("Error: expected <ts-entry> <module-spec>")
-        return
-      }
-      let file_path = args[2]
-      let module_spec = args[3]
-      let decl_out = if args.length() >= 5 { Some(args[4]) } else { None }
-      let ffi_out = if args.length() >= 6 { Some(args[5]) } else { None }
-      let bridge_out = if args.length() >= 7 { Some(args[6]) } else { None }
-      @ts.emit_moonbit_bridge(
-        file_path, module_spec, decl_out, ffi_out, bridge_out,
+    "decl" =>
+      ts2mbt_dispatch(args, 2, 1, "ts2mbt decl: expected <ts-entry> [out]", async fn(
+        p,
+      ) {
+        @ts.emit_moonbit_decl(
+          p[0],
+          if p.length() >= 2 {
+            Some(p[1])
+          } else {
+            None
+          },
+        )
+      })
+    "ffi" =>
+      ts2mbt_dispatch(
+        args,
+        2,
+        2,
+        "ts2mbt ffi: expected <ts-entry> <module-spec> [ffi-out] [bridge-out]",
+        async fn(p) {
+          @ts.emit_moonbit_js_ffi(
+            p[0],
+            p[1],
+            if p.length() >= 3 {
+              Some(p[2])
+            } else {
+              None
+            },
+            if p.length() >= 4 {
+              Some(p[3])
+            } else {
+              None
+            },
+          )
+        },
       )
-    }
-    "package" => {
-      if args.length() < 5 {
-        println("Error: expected <ts-entry> <module-spec> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let module_spec = args[3]
-      let output_dir = args[4]
-      @ts.emit_moonbit_bridge_package(file_path, module_spec, output_dir)
-    }
-    "scaffold" => {
-      if args.length() < 5 {
-        println("Error: expected <ts-entry> <module-spec> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let module_spec = args[3]
-      let output_dir = args[4]
-      @ts.emit_moonbit_scaffold_from_ts(file_path, module_spec, output_dir)
-    }
+    "bridge" =>
+      ts2mbt_dispatch(
+        args,
+        2,
+        2,
+        "ts2mbt bridge: expected <ts-entry> <module-spec> [decl-out] [ffi-out] [bridge-out]",
+        async fn(p) {
+          @ts.emit_moonbit_bridge(
+            p[0],
+            p[1],
+            if p.length() >= 3 {
+              Some(p[2])
+            } else {
+              None
+            },
+            if p.length() >= 4 {
+              Some(p[3])
+            } else {
+              None
+            },
+            if p.length() >= 5 {
+              Some(p[4])
+            } else {
+              None
+            },
+          )
+        },
+      )
+    "package" =>
+      ts2mbt_dispatch(
+        args,
+        2,
+        3,
+        "ts2mbt package: expected <ts-entry> <module-spec> <out-dir>",
+        async fn(p) { @ts.emit_moonbit_bridge_package(p[0], p[1], p[2]) },
+      )
+    "scaffold" =>
+      ts2mbt_dispatch(
+        args,
+        2,
+        3,
+        "ts2mbt scaffold: expected <ts-entry> <module-spec> <out-dir>",
+        async fn(p) { @ts.emit_moonbit_scaffold_from_ts(p[0], p[1], p[2]) },
+      )
     "--help" | "-h" | "help" => ts2mbt_print_usage()
     _ => {
       println("Unknown subcommand: \{command}")
       ts2mbt_print_usage()
+      @ts.cli_fail("ts2mbt")
     }
   }
 }

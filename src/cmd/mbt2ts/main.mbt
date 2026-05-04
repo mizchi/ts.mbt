@@ -1,21 +1,4 @@
 ///|
-fn mbt2ts_command_failed() -> Unit {
-  println("mbt2ts command failed")
-  mbt2ts_cli_exit(1)
-}
-
-///|
-#cfg(target="native")
-extern "C" fn mbt2ts_cli_exit(code : Int) = "exit"
-
-///|
-#cfg(not(target="native"))
-fn mbt2ts_cli_exit(code : Int) -> Unit {
-  let _ = code
-  abort("mbt2ts command failed")
-}
-
-///|
 fn mbt2ts_print_usage() -> Unit {
   println(
     "Usage: mbt2ts [--input <pkg-or-mbti> --out <dir>] [<subcommand> args...]",
@@ -24,6 +7,11 @@ fn mbt2ts_print_usage() -> Unit {
   println(
     "Generate TypeScript declarations and JS-backed packages from a MoonBit interface.",
   )
+  println("")
+  println(
+    "Recommended: use the unified `--input/--out` flow for build-backed scaffolds.",
+  )
+  println("Subcommands expose individual generation stages.")
   println("")
   println("Subcommands:")
   for line in mbt2ts_help_lines() {
@@ -47,15 +35,36 @@ pub fn mbt2ts_help_lines() -> Array[String] {
 }
 
 ///|
+/// Run a subcommand handler against the parsed positional args. Centralises
+/// the per-arm `parse args -> dispatch -> propagate exit code` pipeline so
+/// each cmd arm shrinks to a single line.
+async fn mbt2ts_dispatch(
+  args : Array[String],
+  start : Int,
+  min_args : Int,
+  usage : String,
+  handler : async (Array[String]) -> Bool,
+) -> Unit {
+  match @ts.cli_parse_subcommand_args(args, start, min_args, usage) {
+    HelpRequested => mbt2ts_print_usage()
+    Args(positionals) => if !handler(positionals) { @ts.cli_fail("mbt2ts") }
+  }
+}
+
+///|
 async fn mbt2ts_main_async() -> Unit {
   let args = @env.args()
   if args.length() < 2 {
     mbt2ts_print_usage()
     return
   }
-  if args[1].has_prefix("--") {
+  if args[1].has_prefix("--") || args[1] == "-h" {
+    if args[1] == "--help" || args[1] == "-h" {
+      mbt2ts_print_usage()
+      return
+    }
     if !@ts.run_mbt_to_ts_unified_cli(args, 1, print_help=mbt2ts_print_usage) {
-      mbt2ts_command_failed()
+      @ts.cli_fail("mbt2ts")
     }
     return
   }
@@ -63,91 +72,106 @@ async fn mbt2ts_main_async() -> Unit {
   match command {
     "generate" | "scaffold-from-input" =>
       if !@ts.run_mbt_to_ts_unified_cli(args, 2, print_help=mbt2ts_print_usage) {
-        mbt2ts_command_failed()
+        @ts.cli_fail("mbt2ts")
       }
-    "decl" => {
-      if args.length() < 3 {
-        println("Error: expected <mbti>")
-        return
-      }
-      let file_path = args[2]
-      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
-      @ts.emit_typescript_decl_from_mbti(file_path, output_path)
-    }
-    "link-config" => {
-      if args.length() < 3 {
-        println("Error: expected <mbti>")
-        return
-      }
-      let file_path = args[2]
-      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
-      @ts.emit_js_link_config_from_mbti(file_path, output_path)
-    }
-    "package" => {
-      if args.length() < 4 {
-        println("Error: expected <mbti> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let output_dir = args[3]
-      let import_rewrite_path = if args.length() >= 5 {
-        Some(args[4])
-      } else {
-        None
-      }
-      @ts.emit_typescript_package_from_mbti(
-        file_path, output_dir, import_rewrite_path,
+    "decl" =>
+      mbt2ts_dispatch(args, 2, 1, "mbt2ts decl: expected <mbti> [out]", async fn(
+        p,
+      ) {
+        @ts.emit_typescript_decl_from_mbti(
+          p[0],
+          if p.length() >= 2 {
+            Some(p[1])
+          } else {
+            None
+          },
+        )
+      })
+    "link-config" =>
+      mbt2ts_dispatch(args, 2, 1, "mbt2ts link-config: expected <mbti> [out]", async fn(
+        p,
+      ) {
+        @ts.emit_js_link_config_from_mbti(
+          p[0],
+          if p.length() >= 2 {
+            Some(p[1])
+          } else {
+            None
+          },
+        )
+      })
+    "package" =>
+      mbt2ts_dispatch(
+        args,
+        2,
+        2,
+        "mbt2ts package: expected <mbti> <out-dir> [import-rewrite-json]",
+        async fn(p) {
+          @ts.emit_typescript_package_from_mbti(
+            p[0],
+            p[1],
+            if p.length() >= 3 {
+              Some(p[2])
+            } else {
+              None
+            },
+          )
+        },
       )
-    }
-    "scaffold" => {
-      if args.length() < 4 {
-        println("Error: expected <mbti> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let output_dir = args[3]
-      let import_rewrite_path = if args.length() >= 5 {
-        Some(args[4])
-      } else {
-        None
-      }
-      if !@ts.emit_typescript_scaffold_from_mbti(
-          file_path, output_dir, import_rewrite_path,
-        ) {
-        mbt2ts_command_failed()
-      }
-    }
-    "facade-scaffold" => {
-      if args.length() < 4 {
-        println("Error: expected <mbti> <out-dir>")
-        return
-      }
-      let file_path = args[2]
-      let output_dir = args[3]
-      let import_rewrite_path = if args.length() >= 5 {
-        Some(args[4])
-      } else {
-        None
-      }
-      if !@ts.emit_typescript_facade_scaffold_from_mbti(
-          file_path, output_dir, import_rewrite_path,
-        ) {
-        mbt2ts_command_failed()
-      }
-    }
-    "normalize" => {
-      if args.length() < 3 {
-        println("Error: expected <ts>")
-        return
-      }
-      let file_path = args[2]
-      let output_path = if args.length() >= 4 { Some(args[3]) } else { None }
-      @ts.emit_typescript_decl(file_path, output_path)
-    }
+    "scaffold" =>
+      mbt2ts_dispatch(
+        args,
+        2,
+        2,
+        "mbt2ts scaffold: expected <mbti> <out-dir> [import-rewrite-json]",
+        async fn(p) {
+          @ts.emit_typescript_scaffold_from_mbti(
+            p[0],
+            p[1],
+            if p.length() >= 3 {
+              Some(p[2])
+            } else {
+              None
+            },
+          )
+        },
+      )
+    "facade-scaffold" =>
+      mbt2ts_dispatch(
+        args,
+        2,
+        2,
+        "mbt2ts facade-scaffold: expected <mbti> <out-dir> [import-rewrite-json]",
+        async fn(p) {
+          @ts.emit_typescript_facade_scaffold_from_mbti(
+            p[0],
+            p[1],
+            if p.length() >= 3 {
+              Some(p[2])
+            } else {
+              None
+            },
+          )
+        },
+      )
+    "normalize" =>
+      mbt2ts_dispatch(args, 2, 1, "mbt2ts normalize: expected <ts> [out]", async fn(
+        p,
+      ) {
+        @ts.emit_typescript_decl(
+          p[0],
+          if p.length() >= 2 {
+            Some(p[1])
+          } else {
+            None
+          },
+        )
+      })
     "--help" | "-h" | "help" => mbt2ts_print_usage()
     _ => {
       println("Unknown subcommand: \{command}")
       mbt2ts_print_usage()
+      @ts.cli_fail("mbt2ts")
     }
   }
 }

@@ -520,7 +520,17 @@ fn render_unified_ts_scaffold_diagnostics_md(
   unsupported_exports : Array[String],
   jsvalue_fallbacks : Array[String],
 ) -> String {
-  let base = render_moonbit_scaffold_diagnostics_md(unsupported_exports)
+  let mut base = render_moonbit_scaffold_diagnostics_md(unsupported_exports)
+  // Avoid the contradictory "No unsupported exports were detected." banner
+  // when the JSValue fallback list below it is non-empty: those JSValue
+  // occurrences are themselves widened TypeScript boundary surfaces and
+  // count as unsupported in any practical sense.
+  if unsupported_exports.length() == 0 && jsvalue_fallbacks.length() > 0 {
+    base = base.replace(
+      old="No unsupported exports were detected.",
+      new="No structural unsupported exports were detected; \{jsvalue_fallbacks.length()} `JSValue` boundary fallbacks are listed below.",
+    )
+  }
   let fallback_policy = render_unified_ts_fallback_policy_md(module_spec)
   if jsvalue_fallbacks.length() == 0 {
     return [base, "", fallback_policy].join("\n")
@@ -733,7 +743,14 @@ async fn emit_unified_tsmbt_scaffold(
         )
         return false
       }
-      emit_moonbit_scaffold_from_ts(entry_path, runtime_module_spec, out)
+      if !emit_moonbit_scaffold_from_ts(
+          entry_path,
+          runtime_module_spec,
+          out,
+          write_diagnostics=false,
+        ) {
+        return false
+      }
       let jsvalue_fallbacks = collect_unified_moonbit_scaffold_jsvalue_fallbacks(
         out,
       )

@@ -1298,7 +1298,7 @@ fn ffi_is_react_callable_component_interface(name : String) -> Bool {
 
 ///|
 fn ffi_interface_type_decl_to_moonbit(iface : @ast.TsInterface) -> String {
-  "#warnings(\"-3\")\n#external\ntype " +
+  "#warnings(\"-3\")\n#external\npub type " +
   ffi_type_identifier(iface.name, "OpaqueType")
 }
 
@@ -2882,7 +2882,7 @@ fn ffi_class_type_name(class_name : String) -> String {
 
 ///|
 fn ffi_class_type_decl(class_name : String) -> String {
-  "#warnings(\"-3\")\n#external\ntype " + ffi_class_type_name(class_name)
+  "#warnings(\"-3\")\n#external\npub type " + ffi_class_type_name(class_name)
 }
 
 ///|
@@ -3045,7 +3045,7 @@ fn ffi_class_property_setter_decl_to_moonbit(
 ///|
 fn ffi_namespace_decl(export_name : String) -> (String, String) {
   let type_name = ffi_type_identifier(export_name, "OpaqueType")
-  let ffi_decl = "#warnings(\"-3\")\n#external\ntype \{type_name}\n\npub extern \"js\" fn \{ffi_namespace_getter_name(export_name)}() -> \{type_name} = \"__ts_mbt_get_\{ffi_to_snake_case(export_name)}\""
+  let ffi_decl = "#warnings(\"-3\")\n#external\npub type \{type_name}\n\npub extern \"js\" fn \{ffi_namespace_getter_name(export_name)}() -> \{type_name} = \"__ts_mbt_get_\{ffi_to_snake_case(export_name)}\""
   (type_name, ffi_decl)
 }
 
@@ -4949,7 +4949,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       (type_name == "JSValue" && state.needs_js_any) {
       continue
     }
-    ffi_sections.push("#warnings(\"-3\")\n#external\ntype \{type_name}")
+    // Match the `.mbti` declaration of the same type (`declare pub type X`)
+    // by emitting `pub type X` here. Without `pub`, consumers of the
+    // generated package can't see the type even though `.mbti` says they
+    // can, breaking the publicly-advertised surface.
+    ffi_sections.push("#warnings(\"-3\")\n#external\npub type \{type_name}")
   }
   for section in alias_constructor_sections {
     ffi_sections.push(section)

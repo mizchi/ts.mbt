@@ -26,6 +26,23 @@ Generated packages are deterministic and diff-friendly. Each side writes a
 diagnostics file (`SCAFFOLD_DIAGNOSTICS.md` or `AUTOLINK_DIAGNOSTICS.md`) so
 widened, omitted, or wrapped surfaces stay inspectable.
 
+## Prerequisites
+
+- [MoonBit toolchain](https://www.moonbitlang.com/) (`moon` on `$PATH`).
+- Node.js 20+ (the verification harness imports built JS through Node).
+- `pnpm` (used by `just verify-mbti-dts` to run `tsc`).
+- Optional: [`just`](https://github.com/casey/just) for the `just verify-*`
+  recipes; otherwise invoke the corresponding `bash scripts/*.sh` directly.
+
+Quick start after `git clone`:
+
+```bash
+moon update                            # fetch deps
+moon check --deny-warn                 # build the library + cmd binaries
+moon run src/cmd/ts2mbt -- --help      # TS -> MoonBit
+moon run src/cmd/mbt2ts -- --help      # MoonBit -> TS
+```
+
 ## Two CLIs
 
 Bridge generation is split into two binaries, one per direction:
@@ -167,8 +184,7 @@ Supported surface:
 - Declaration-only structural interfaces for public MoonBit traits and local
   trait impl relationships.
 - Opt-in facade wrappers for local non-generic methods and constructors via
-  `emit-typescript-facade-scaffold-from-mbti`, including async constructors
-  and methods.
+  `mbt2ts facade-scaffold`, including async constructors and methods.
 
 Unsupported or limited surface:
 

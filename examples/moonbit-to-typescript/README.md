@@ -5,13 +5,14 @@ This example starts from a small MoonBit module. The checked-in
 and the generator uses the real MoonBit source package to build JavaScript.
 
 ```bash
-moon run src/cmd/mbt2ts -- --input examples/counter --out examples/moonbit-to-typescript/dist
+moon run src/cmd/mbt2ts -- --input examples/moonbit-to-typescript/counter --out examples/moonbit-to-typescript/dist
 ```
 
-`--direction` is omitted on purpose. The unified CLI resolves
-`examples/counter` to `counter/pkg.generated.mbti`, creates a temporary glue
-package inside this MoonBit module, runs `moon build --target js`, and emits a
-TypeScript package backed by the built JavaScript output.
+`mbt2ts` is the MoonBit -> TypeScript binary. The unified `--input/--out`
+flow resolves `examples/moonbit-to-typescript/counter` to
+`counter/pkg.generated.mbti`, creates a temporary glue package inside this
+MoonBit module, runs `moon build --target js`, and emits a TypeScript
+package backed by the built JavaScript output.
 
 Generated files:
 
