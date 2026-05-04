@@ -5,7 +5,7 @@ action type and verifies MoonBit can construct each tagged variant, lift it to
 the union alias, and call the reducer through generated bridge code.
 
 ```bash
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input examples/typescript-to-moonbit/reducer/src/index.d.ts \
   --out _build/examples/typescript-to-moonbit-reducer/dist \
   --module-spec ../runtime/reducer.js

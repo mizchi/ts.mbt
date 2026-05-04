@@ -4,7 +4,7 @@ This pattern uses the real `@types/node/fs.d.ts` ambient module declaration as
 the TypeScript input and binds it to the Node built-in `node:fs` module.
 
 ```bash
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input "$TSMBT_NODE_FS_TYPES" \
   --out _build/examples/node-fs/dist \
   --module-spec node:fs

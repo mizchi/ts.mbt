@@ -4,7 +4,7 @@ This example starts from a TypeScript declaration entrypoint and a small
 runtime JavaScript module.
 
 ```bash
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input examples/typescript-to-moonbit/src/index.d.ts \
   --out examples/typescript-to-moonbit/dist \
   --module-spec ../runtime/greetings.js

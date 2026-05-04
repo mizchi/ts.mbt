@@ -34,14 +34,25 @@ widened, omitted, or wrapped surfaces stay inspectable.
 - Optional: [`just`](https://github.com/casey/just) for the `just verify-*`
   recipes; otherwise invoke the corresponding `bash scripts/*.sh` directly.
 
-Quick start after `git clone`:
+## Install
+
+`ts2mbt` and `mbt2ts` are MoonBit binaries published to mooncakes. Install
+them once, then call them like any other CLI on `$PATH`
+(`~/.moon/bin/ts2mbt`, `~/.moon/bin/mbt2ts`).
 
 ```bash
-moon update                            # fetch deps
-moon check --deny-warn                 # build the library + cmd binaries
-moon run src/cmd/ts2mbt -- --help      # TS -> MoonBit
-moon run src/cmd/mbt2ts -- --help      # MoonBit -> TS
+moon install mizchi/ts/cmd/ts2mbt   # TS  -> MoonBit
+moon install mizchi/ts/cmd/mbt2ts   # MoonBit -> TS
+
+# Or install both in one go
+moon install mizchi/ts/...
+
+ts2mbt --help
+mbt2ts --help
 ```
+
+To run from source (for hacking on the bridge generator itself), clone
+the repo and use `moon run src/cmd/{ts2mbt,mbt2ts} -- ...` instead.
 
 ## Two CLIs
 
@@ -59,19 +70,19 @@ plus low-level subcommands.
 # MoonBit -> TypeScript. Run `moon info` first so pkg.generated.mbti exists.
 # This creates temporary MoonBit glue code, runs `moon build --target js`,
 # and emits a TypeScript package backed by the built JS output.
-moon run src/cmd/mbt2ts -- --input mizchi/foo --out dist
+mbt2ts --input mizchi/foo --out dist
 
 # TypeScript -> MoonBit. For bare npm-style inputs, the runtime module spec
 # defaults to the input specifier.
-moon run src/cmd/ts2mbt -- --input neverthrow --out dist
+ts2mbt --input neverthrow --out dist
 
 # File input also works; pass the runtime module when it differs from the
 # declaration entry path.
-moon run src/cmd/ts2mbt -- --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist
+ts2mbt --input path/to/entry.d.ts --module-spec /runtime/module.js --out dist
 
 # Diagnostics can be redirected. Strict mode fails when unsupported exports,
 # omitted MoonBit autolink members, or unbudgeted TS JSValue fallbacks are found.
-moon run src/cmd/ts2mbt -- --input neverthrow --out dist --diagnostics dist/diagnostics.md --strict
+ts2mbt --input neverthrow --out dist --diagnostics dist/diagnostics.md --strict
 ```
 
 The MoonBit -> TypeScript unified path emits facade glue by default, builds
@@ -107,10 +118,10 @@ or `ts2mbt sync` from inside your moon module.
 ```bash
 # Vendor one npm package: resolve its types via node_modules and write a
 # bridge sub-package under <moon-source>/internal/generated/<safe>/.
-moon run src/cmd/ts2mbt -- vendor hono
+ts2mbt vendor hono
 
 # Vendor everything in dependencies + devDependencies of ./package.json.
-moon run src/cmd/ts2mbt -- sync
+ts2mbt sync
 ```
 
 Output layout (with `moon.mod.json`'s `source` set to `src`):
@@ -182,26 +193,26 @@ The temporary glue package contains generated wrapper functions and
 after the built JS is copied to `index.js`.
 
 ```bash
-moon run src/cmd/mbt2ts -- scaffold src/pkg.generated.mbti out/ts-pkg
+mbt2ts scaffold src/pkg.generated.mbti out/ts-pkg
 
 # optional: rewrite external MoonBit package imports to publishable TS specifiers
-moon run src/cmd/mbt2ts -- scaffold src/pkg.generated.mbti out/ts-pkg import-rewrites.json
+mbt2ts scaffold src/pkg.generated.mbti out/ts-pkg import-rewrites.json
 
 # opt-in: also emit top-level MoonBit wrappers for omitted local methods/constructors
-moon run src/cmd/mbt2ts -- facade-scaffold src/pkg.generated.mbti out/ts-pkg
+mbt2ts facade-scaffold src/pkg.generated.mbti out/ts-pkg
 ```
 
 Lower-level commands are also available:
 
 ```bash
 # only link.js.exports JSON
-moon run src/cmd/mbt2ts -- link-config src/pkg.generated.mbti
+mbt2ts link-config src/pkg.generated.mbti
 
 # only recursive .d.ts package
-moon run src/cmd/mbt2ts -- package src/pkg.generated.mbti out/ts-pkg
+mbt2ts package src/pkg.generated.mbti out/ts-pkg
 
 # single .d.ts from one .mbti file without recursive rewrite
-moon run src/cmd/mbt2ts -- decl src/pkg.generated.mbti
+mbt2ts decl src/pkg.generated.mbti
 ```
 
 Current export model:
@@ -265,19 +276,19 @@ Unsupported or limited surface:
 Start from a TypeScript entrypoint and emit a MoonBit bridge scaffold:
 
 ```bash
-moon run src/cmd/ts2mbt -- scaffold path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+ts2mbt scaffold path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
 ```
 
 Lower-level commands are also available:
 
 ```bash
 # full bridge package
-moon run src/cmd/ts2mbt -- package path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
+ts2mbt package path/to/entry.d.ts /runtime/module.js out/moonbit-pkg
 
 # inspect generated decl/ffi/bridge snippets without writing a package
-moon run src/cmd/ts2mbt -- bridge path/to/entry.d.ts /runtime/module.js
-moon run src/cmd/ts2mbt -- ffi path/to/entry.d.ts /runtime/module.js
-moon run src/cmd/ts2mbt -- decl path/to/entry.d.ts
+ts2mbt bridge path/to/entry.d.ts /runtime/module.js
+ts2mbt ffi path/to/entry.d.ts /runtime/module.js
+ts2mbt decl path/to/entry.d.ts
 ```
 
 The TS -> MoonBit path resolves exported surface recursively through local

@@ -13,7 +13,7 @@ Input:
 Generate a TypeScript package backed by `moon build --target js`:
 
 ```bash
-moon run src/cmd/mbt2ts -- --input examples/moonbit-to-typescript/counter --out examples/moonbit-to-typescript/dist
+mbt2ts --input examples/moonbit-to-typescript/counter --out examples/moonbit-to-typescript/dist
 ```
 
 The generated output includes `index.js`, `index.d.ts`, `child/index.js`,
@@ -49,7 +49,7 @@ Input:
 Generate a MoonBit bridge package:
 
 ```bash
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input examples/typescript-to-moonbit/src/index.d.ts \
   --out examples/typescript-to-moonbit/dist \
   --module-spec ../runtime/greetings.js
@@ -61,57 +61,57 @@ The generated output includes `bridge.mbti`, `bridge.mbt`, `bridge.js`, and
 Additional patterns:
 
 ```bash
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input examples/typescript-to-moonbit/hono/src/index.d.ts \
   --out examples/typescript-to-moonbit/hono/dist \
   --module-spec ../runtime/hono.js
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input node_modules/hono/dist/types/index.d.ts \
   --out _build/examples/typescript-to-moonbit-hono-real/dist \
   --module-spec hono
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input examples/typescript-to-moonbit/react/src/index.d.ts \
   --out examples/typescript-to-moonbit/react/dist \
   --module-spec ../runtime/react-like.js
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input node_modules/@types/react/index.d.ts \
   --out _build/examples/typescript-to-moonbit-react-types/dist \
   --module-spec react
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input node_modules/vitest/dist/index.d.ts \
   --out _build/examples/typescript-to-moonbit-vitest/dist \
   --module-spec vitest
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input examples/typescript-to-moonbit/result/src/index.d.ts \
   --out examples/typescript-to-moonbit/result/dist \
   --module-spec ../runtime/result.js
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input examples/typescript-to-moonbit/default-class/src/index.ts \
   --out examples/typescript-to-moonbit/default-class/dist \
   --module-spec ../runtime/counter.js
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input examples/typescript-to-moonbit/const-table/src/index.ts \
   --out examples/typescript-to-moonbit/const-table/dist \
   --module-spec ../runtime/index.js
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input "$TSMBT_NODE_SQLITE_TYPES" \
   --out _build/examples/node-sqlite/dist \
   --module-spec node:sqlite
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input "$TSMBT_NODE_FS_TYPES" \
   --out _build/examples/node-fs/dist \
   --module-spec node:fs
 
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input node_modules/typescript/lib/typescript.d.ts \
   --out _build/examples/typescript-to-moonbit-typescript-ast/dist \
   --module-spec typescript

@@ -4,7 +4,7 @@ This pattern uses the real `typescript/lib/typescript.d.ts` declaration file as
 input and binds the generated MoonBit package to the `typescript` npm module.
 
 ```bash
-moon run src/cmd/ts2mbt -- \
+ts2mbt \
   --input node_modules/typescript/lib/typescript.d.ts \
   --out _build/examples/typescript-to-moonbit-typescript-ast/dist \
   --module-spec typescript

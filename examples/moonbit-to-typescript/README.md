@@ -5,7 +5,7 @@ This example starts from a small MoonBit module. The checked-in
 and the generator uses the real MoonBit source package to build JavaScript.
 
 ```bash
-moon run src/cmd/mbt2ts -- --input examples/moonbit-to-typescript/counter --out examples/moonbit-to-typescript/dist
+mbt2ts --input examples/moonbit-to-typescript/counter --out examples/moonbit-to-typescript/dist
 ```
 
 `mbt2ts` is the MoonBit -> TypeScript binary. The unified `--input/--out`
