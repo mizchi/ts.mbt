@@ -995,6 +995,10 @@ pub async fn emit_moonbit_bridge_package(
     files.push(file)
   }
   files.push(("bridge.js", bundle.bridge_js))
+  // Scope-style specifiers resolve via npm node_modules layout; refresh
+  // the sibling symlink so `require("@tsmbt-bridge/<safe>")` from
+  // generated test code lands at the bridge dir. `#`-prefix specifiers
+  // resolve via package.json imports field instead; nothing to symlink.
   if !ensure_bridge_node_modules_link(output_dir, resolved_specifier) {
     return false
   }
@@ -1187,46 +1191,10 @@ fn bridge_binding_needs_generated_module(line : String) -> Bool {
 }
 
 ///|
-/// Derive a default `@tsmbt-bridge/<slug>` bare specifier from the
-/// output directory path. The basename is sanitized so it survives as
-/// an npm package-name segment (`[a-z0-9_-]`).
-fn default_bridge_bare_specifier(output_dir : String) -> String {
-  let basename = match output_dir.rev_find("/") {
-    Some(idx) => output_dir[idx + 1:output_dir.length()].to_string()
-    None => output_dir
-  }
-  let mut slug = ""
-  for c in basename {
-    if (c >= 'a' && c <= 'z') ||
-      (c >= 'A' && c <= 'Z') ||
-      (c >= '0' && c <= '9') ||
-      c == '-' ||
-      c == '_' {
-      slug += c.to_string()
-    } else {
-      slug += "_"
-    }
-  }
-  if slug == "" {
-    slug = "bridge"
-  }
-  "@tsmbt-bridge/" + slug
-}
-
-///|
-/// Render the `package.json` co-located with `bridge.{mbti,mbt,js}` so
-/// node treats the bridge directory as an npm package and resolves
-/// `#module("<bare_specifier>")` to the generated `bridge.js`.
-fn render_bridge_package_json(bare_specifier : String) -> String {
-  "{\n  \"name\": \"" +
-  bare_specifier +
-  "\",\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"main\": \"bridge.js\",\n  \"private\": true\n}\n"
-}
-
-///|
-/// Strip the leading `@tsmbt-bridge/` (or any `@scope/`) prefix from a
-/// bare specifier, returning the unscoped name. Used when computing the
-/// directory layout under `node_modules/@<scope>/<name>`.
+/// Strip the leading `@<scope>/` prefix from a bare specifier,
+/// returning `(scope, name)`. Returns `None` when the input doesn't
+/// look like an npm scope specifier (e.g. unscoped names or
+/// `#`-prefix Node imports specifiers).
 fn split_scoped_specifier(specifier : String) -> (String, String)? {
   if !specifier.has_prefix("@") {
     return None
@@ -1243,11 +1211,8 @@ fn split_scoped_specifier(specifier : String) -> (String, String)? {
 
 ///|
 /// Resolve the consumer's moon module root by walking up from the
-/// generated bridge directory. The bridge typically lives under
-/// `<module-root>/<source>/internal/generated/<slug>/`, but we only
-/// require that some ancestor contain a `moon.mod.json`. Returns `None`
-/// if no moon module is found (e.g. when scaffolding outside a moon
-/// project).
+/// generated bridge directory. Returns `None` when the bridge isn't
+/// inside any moon module.
 async fn resolve_consumer_moon_module_root(
   bridge_output_dir : String,
 ) -> String? {
@@ -1259,11 +1224,14 @@ async fn resolve_consumer_moon_module_root(
 }
 
 ///|
-/// Create / refresh the `<consumer-module>/node_modules/@<scope>/<name>`
-/// symlink that points at the generated bridge directory so node's
-/// resolver can follow `#module("<bare_specifier>")` at build time.
-/// Skips silently when the bridge isn't inside a moon module (we can't
-/// know where to place the link).
+/// Create / refresh `<consumer>/node_modules/@<scope>/<name>` pointing
+/// at the bridge dir so node's `require()`/`import` for the bare
+/// specifier resolves at build time. Skips silently for `#`-prefix
+/// specifiers (they don't need node_modules at all) and for bridges
+/// not under a moon module (we can't infer where to write).
+///
+/// The link target is computed relative to the consumer module root
+/// so the bridge stays portable when the moon module is moved.
 async fn ensure_bridge_node_modules_link(
   bridge_output_dir : String,
   bare_specifier : String,
@@ -1288,9 +1256,6 @@ async fn ensure_bridge_node_modules_link(
   }
   let link_path = main_join_path(scope_dir, name)
   let _ = @fs.remove(link_path) catch { _ => () }
-  // Use a relative symlink target so the link survives moving / vendoring
-  // the moon module to a new path. Both endpoints are computed from the
-  // module root so the relative offset is stable.
   let bridge_real = @fs.realpath(bridge_output_dir) catch {
     _ => bridge_output_dir
   }
@@ -1311,14 +1276,13 @@ async fn ensure_bridge_node_modules_link(
 }
 
 ///|
-/// Compute a POSIX relative path from `from_rel` to `to_rel` where both
-/// are paths relative to the same anchor. Each `..` segment in the
-/// result moves up one directory in `from_rel`'s parents before
-/// descending into `to_rel`. Used for portable symlink targets.
+/// POSIX relative path from `from_rel` to `to_rel` where both are
+/// paths relative to the same anchor. Each `..` segment moves up
+/// one directory in `from_rel`'s parents before descending into
+/// `to_rel`. Used for portable symlink targets.
 fn relative_path_between(from_rel : String, to_rel : String) -> String {
   let from_parts = split_path_segments(from_rel)
   let to_parts = split_path_segments(to_rel)
-  // Drop the link's basename — the target is relative to its containing dir.
   let from_dir = from_parts[:from_parts.length() - 1].to_array()
   let mut common = 0
   let limit = if from_dir.length() < to_parts.length() {
@@ -1357,6 +1321,85 @@ fn split_path_segments(path : String) -> Array[String] {
     }
   }
   segments
+}
+
+///|
+/// Derive a default `@tsmbt-bridge/<slug>` bare specifier from the
+/// output directory path. The basename is sanitized so it survives as
+/// an npm package-name segment (`[a-z0-9_-]`).
+///
+/// Scaffold-style outputs (where consumer `.mbt` files and `bridge.js`
+/// sit at the same moon module root) use this default and rely on a
+/// sibling `node_modules/@tsmbt-bridge/<slug>` symlink for resolution.
+/// Vendor-style outputs override with `#tsmbt-bridge/<slug>` and route
+/// resolution through the consumer's `package.json#imports` map
+/// instead — the symlink approach is incompatible with `pnpm install`
+/// which wipes ad-hoc node_modules entries.
+fn default_bridge_bare_specifier(output_dir : String) -> String {
+  let basename = match output_dir.rev_find("/") {
+    Some(idx) => output_dir[idx + 1:output_dir.length()].to_string()
+    None => output_dir
+  }
+  let mut slug = ""
+  for c in basename {
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '-' ||
+      c == '_' {
+      slug += c.to_string()
+    } else {
+      slug += "_"
+    }
+  }
+  if slug == "" {
+    slug = "bridge"
+  }
+  "@tsmbt-bridge/" + slug
+}
+
+///|
+/// Render the `package.json` co-located with `bridge.{mbti,mbt,js}`.
+/// Always declares `"type": "module"` so node treats `bridge.js` as
+/// ESM regardless of the consumer's outer package.json.
+///
+/// For npm-scope specifiers (`@tsmbt-bridge/<slug>`) the file also
+/// declares `name` so `node_modules/@<scope>/<name>` resolution lands
+/// here. For Node imports-field specifiers (`#tsmbt-bridge/<slug>`)
+/// the file declares the matching `imports` mapping so calling code
+/// inside the same package boundary can resolve the specifier
+/// directly; consumers outside this boundary still need a wildcard
+/// `imports` entry in their own package.json — that is what
+/// `print_vendor_package_json_imports_hint` walks the user through.
+fn render_bridge_package_json(bare_specifier : String) -> String {
+  if bare_specifier.has_prefix("#") {
+    "{\n  \"type\": \"module\",\n  \"main\": \"bridge.js\",\n  \"imports\": {\n    \"" +
+    ffi_escape_json_string(bare_specifier) +
+    "\": \"./bridge.js\"\n  },\n  \"private\": true\n}\n"
+  } else {
+    "{\n  \"name\": \"" +
+    ffi_escape_json_string(bare_specifier) +
+    "\",\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"main\": \"bridge.js\",\n  \"private\": true\n}\n"
+  }
+}
+
+///|
+/// Minimal JSON string escaper for the small subset of characters
+/// that appear in a `bare_specifier` we generated ourselves
+/// (`[#@a-zA-Z0-9-_/]`). Backslash and quote pass-through suffices;
+/// we never embed control characters.
+fn ffi_escape_json_string(s : String) -> String {
+  let mut out = ""
+  for c in s {
+    if c == '"' {
+      out += "\\\""
+    } else if c == '\\' {
+      out += "\\\\"
+    } else {
+      out += c.to_string()
+    }
+  }
+  out
 }
 
 ///|
