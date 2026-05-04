@@ -40,7 +40,7 @@ widened, omitted, or wrapped surfaces stay inspectable.
 Install whichever direction(s) you need; each binary is independent.
 
 ```bash
-moon install mizchi/ts/cmd/ts2mbt   # TS  -> MoonBit (vendor / sync / scaffold)
+moon install mizchi/ts/cmd/ts2mbt   # TS  -> MoonBit (generate / vendor / scaffold)
 moon install mizchi/ts/cmd/mbt2ts   # MoonBit -> TS  (decl / scaffold / facade-scaffold)
 
 # Or install both binaries in one go
@@ -108,11 +108,11 @@ Shared `--input` flow flags:
 - `--no-facade` (`mbt2ts` only) — skip facade-wrapper generation and emit
   only top-level free-function glue.
 
-## Vendor & sync (TypeScript -> MoonBit)
+## Generate / vendor (TypeScript -> MoonBit)
 
 When you're consuming a MoonBit package and want bridges for the
 TypeScript libraries listed in your `package.json`, run `ts2mbt vendor`
-or `ts2mbt sync` from inside your moon module.
+or `ts2mbt generate` from inside your moon module.
 
 ```bash
 # Vendor one npm package: resolve its types via node_modules and write a
@@ -120,7 +120,7 @@ or `ts2mbt sync` from inside your moon module.
 ts2mbt vendor hono
 
 # Vendor everything in dependencies + devDependencies of ./package.json.
-ts2mbt sync
+ts2mbt generate
 ```
 
 Output layout (with `moon.mod.json`'s `source` set to `src`):
@@ -147,7 +147,7 @@ node_modules/
 
 The bridge `bridge.mbt` references each helper via the bare specifier
 `#module("@tsmbt-bridge/<safe>")`, not an absolute path. Every bridge
-generation path (`vendor`, `sync`, `scaffold`, `package`) writes a
+generation path (`generate`, `vendor`, `scaffold`, `package`) writes a
 `package.json` next to the bridge and refreshes a relative
 `node_modules/@tsmbt-bridge/<safe>` symlink under the consumer's moon
 module root, so node's resolver can follow `#module(...)` to the
@@ -175,7 +175,7 @@ side to drop unused bindings.
 ### Guardrails for generated code
 
 Treat `<source>/internal/generated/` as a cache, not as source. The
-first `vendor` / `sync` invocation drops two markers at the vendor
+first `generate` / `vendor` invocation drops two markers at the vendor
 root so humans and AI agents can recognise the boundary:
 
 - `.gitignore` — `*` plus `!.gitignore` `!AGENTS.md`, so the directory
@@ -188,11 +188,11 @@ root so humans and AI agents can recognise the boundary:
   `AUTO-GENERATED ... DO NOT EDIT` line that points at the regenerate
   command.
 
-Regenerate via `ts2mbt vendor <pkg>` or `ts2mbt sync`.
+Regenerate via `ts2mbt vendor <pkg>` or `ts2mbt generate`.
 
 ### Consume the generated bridge
 
-The bridge is just another MoonBit sub-package. `vendor` and `sync`
+The bridge is just another MoonBit sub-package. `generate` and `vendor`
 print a copy-paste-ready import line (with your module name resolved
 from `moon.mod.json`); the shape is `<your-module-name>` + the
 in-source path:
@@ -220,7 +220,7 @@ Flags:
   separately from its runtime entry.
 - `--out <dir>` — override the vendor root. Defaults to
   `<moon source>/internal/generated`.
-- `--package-json <path>` (`sync`) — read deps from a non-default
+- `--package-json <path>` (`generate`) — read deps from a non-default
   `package.json`.
 
 ## MoonBit -> TypeScript

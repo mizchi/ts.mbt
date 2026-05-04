@@ -2,7 +2,7 @@
 package "mizchi/ts"
 
 // Values
-pub const CLI_VERSION : String = "0.2.6"
+pub const CLI_VERSION : String = "0.2.7"
 
 pub fn cli_bail(String) -> Unit
 
@@ -48,7 +48,7 @@ pub async fn run_mbt_to_ts_unified_cli(Array[String], Int, print_help~ : () -> U
 
 pub async fn run_ts_to_mbt_unified_cli(Array[String], Int, print_help~ : () -> Unit) -> Bool
 
-pub async fn ts2mbt_sync_package_json(package_json_path_override? : String?, vendor_root_override? : String?) -> Bool
+pub async fn ts2mbt_generate_from_package_json(package_json_path_override? : String?, vendor_root_override? : String?) -> Bool
 
 pub async fn ts2mbt_vendor_package(String, module_spec_override? : String?, vendor_root_override? : String?, print_import_hint? : Bool) -> Bool
 

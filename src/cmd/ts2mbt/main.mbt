@@ -23,8 +23,8 @@ fn ts2mbt_print_usage() -> Unit {
 pub fn ts2mbt_help_lines() -> Array[String] {
   [
     "  --input <ts-entry> --out <dir> [--module-spec <spec>] [--diagnostics <path>] [--strict] Generate a complete build-backed MoonBit bridge scaffold from a TypeScript entrypoint",
-    "  vendor <pkg> [--module-spec <spec>] [--out <dir>] Resolve <pkg> from node_modules and write a bridge sub-package under <source>/internal/generated/<safe>/",
-    "  sync [--package-json <path>] [--out <dir>] Vendor every dependency / devDependency listed in package.json",
+    "  generate [--package-json <path>] [--out <dir>] Generate bridges for every dependency / devDependency listed in package.json",
+    "  vendor <pkg> [--module-spec <spec>] [--out <dir>] Resolve a single <pkg> from node_modules and write its bridge sub-package",
     "  decl <ts-entry> [out] Emit MoonBit declare stubs from a TypeScript entrypoint",
     "  ffi <ts-entry> <module-spec> [ffi-out] [bridge-out] Emit MoonBit JS FFI stubs and ESM bridge from a TypeScript entrypoint",
     "  bridge <ts-entry> <module-spec> [decl-out] [ffi-out] [bridge-out] Emit a full MoonBit bridge bundle from a TypeScript entrypoint",
@@ -137,7 +137,7 @@ async fn ts2mbt_run_vendor(args : Array[String], start : Int) -> Unit {
 }
 
 ///|
-/// Parse `sync`'s flag arguments into `(package_json_path?, vendor_root?)`.
+/// Parse `generate`'s flag arguments into `(package_json_path?, vendor_root?)`.
 fn parse_sync_args(args : Array[String], start : Int) -> (String?, String?) {
   let mut pkg_json : String? = None
   let mut out_dir : String? = None
@@ -176,13 +176,13 @@ fn parse_sync_args(args : Array[String], start : Int) -> (String?, String?) {
 }
 
 ///|
-async fn ts2mbt_run_sync(args : Array[String], start : Int) -> Unit {
+async fn ts2mbt_run_generate(args : Array[String], start : Int) -> Unit {
   if start < args.length() && @ts.cli_subcommand_is_help(args[start]) {
     ts2mbt_print_usage()
     return
   }
   let (pkg_json, out_dir) = parse_sync_args(args, start)
-  if !@ts.ts2mbt_sync_package_json(
+  if !@ts.ts2mbt_generate_from_package_json(
       package_json_path_override=pkg_json,
       vendor_root_override=out_dir,
     ) {
@@ -213,7 +213,7 @@ async fn ts2mbt_main_async() -> Unit {
   }
   let command = args[1]
   match command {
-    "generate" | "scaffold-from-input" =>
+    "scaffold-from-input" =>
       if !@ts.run_ts_to_mbt_unified_cli(args, 2, print_help=ts2mbt_print_usage) {
         @ts.cli_fail("ts2mbt")
       }
@@ -307,7 +307,7 @@ async fn ts2mbt_main_async() -> Unit {
         async fn(p) { @ts.emit_moonbit_scaffold_from_ts(p[0], p[1], p[2]) },
       )
     "vendor" => ts2mbt_run_vendor(args, 2)
-    "sync" => ts2mbt_run_sync(args, 2)
+    "generate" => ts2mbt_run_generate(args, 2)
     "--help" | "-h" | "help" => ts2mbt_print_usage()
     "--version" | "-V" => @ts.cli_print_version("ts2mbt")
     _ => {

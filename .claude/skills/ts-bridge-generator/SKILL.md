@@ -1,6 +1,6 @@
 ---
 name: ts-bridge-generator
-description: Use when modifying the TypeScript-to-MoonBit bridge generator in this repo — `src/bridge/`, the `ts2mbt` CLI (vendor / sync / scaffold / package / bridge / ffi / decl), `bridge.mbti` / `bridge.mbt` / `bridge.js` synthesis, or the companion vite-plugin-moonbit integration.
+description: Use when modifying the TypeScript-to-MoonBit bridge generator in this repo — `src/bridge/`, the `ts2mbt` CLI (generate / vendor / scaffold / package / bridge / ffi / decl), `bridge.mbti` / `bridge.mbt` / `bridge.js` synthesis, or the companion vite-plugin-moonbit integration.
 ---
 
 # TS Bridge Generator
@@ -23,7 +23,7 @@ Read these files first:
   shapes and the inline pass-through fallback
 - `src/main.mbt` — CLI emit_* entry helpers (return `Bool`, route exit
   through cmd dispatchers)
-- `src/vendor.mbt` — `ts2mbt vendor` / `ts2mbt sync` workflow
+- `src/vendor.mbt` — `ts2mbt generate` / `ts2mbt vendor` workflow
 - `src/cmd/ts2mbt/main.mbt` — dispatcher + per-subcommand flag parsing
 - `src/main_wbtest.mbt` — end-to-end fixture coverage
 
@@ -43,7 +43,7 @@ direction and lives in `src/cmd/mbt2ts/main.mbt`):
 - `ts2mbt vendor <pkg> [--module-spec <spec>] [--out <dir>]` —
   resolve a single npm package via `node_modules` and emit a sub-package
   under `<moon source>/internal/generated/<safe>/`
-- `ts2mbt sync [--package-json <path>] [--out <dir>]` — vendor every
+- `ts2mbt generate [--package-json <path>] [--out <dir>]` — generate every
   dependency / devDependency listed in `package.json`
 - `ts2mbt scaffold <ts-entry> <module-spec> <out-dir>` — low-level
   package writer (always emits `SCAFFOLD_DIAGNOSTICS.md`)
