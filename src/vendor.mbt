@@ -17,6 +17,7 @@ pub async fn ts2mbt_vendor_package(
   pkg_spec : String,
   module_spec_override? : String? = None,
   vendor_root_override? : String? = None,
+  print_import_hint? : Bool = true,
 ) -> Bool {
   let vendor_root = match vendor_root_override {
     Some(root) => root
@@ -56,11 +57,71 @@ pub async fn ts2mbt_vendor_package(
   // `<module>/node_modules/@tsmbt-bridge/<safe>` symlink so the bare
   // `#module("@tsmbt-bridge/<safe>")` baked into `bridge.mbt` resolves
   // at build time.
-  emit_moonbit_scaffold_from_ts(
-    entry_path,
-    runtime_spec,
-    output_dir,
-    bare_module_specifier=Some(bare_specifier),
+  if !emit_moonbit_scaffold_from_ts(
+      entry_path,
+      runtime_spec,
+      output_dir,
+      bare_module_specifier=Some(bare_specifier),
+    ) {
+    return false
+  }
+  if print_import_hint {
+    print_vendor_import_hint(safe_dir)
+    print_vendor_module_type_hint()
+  }
+  true
+}
+
+///|
+/// Print a copy-paste-ready `moon.pkg.json` import entry for a freshly
+/// vendored package. Resolves the consumer's module name from
+/// `moon.mod.json` so the suggestion is concrete, falling back to a
+/// `<your-module>` placeholder when no module is found.
+async fn print_vendor_import_hint(safe_dir : String) -> Unit {
+  let module_name = read_consumer_module_name()
+  let import_path = "\{module_name}/internal/generated/\{safe_dir}"
+  println("")
+  println("Add to your consumer moon.pkg.json import list:")
+  println("  { \"path\": \"\{import_path}\", \"alias\": \"\{safe_dir}\" }")
+}
+
+///|
+/// Resolve the consumer's moon module name from `moon.mod.json`. Falls
+/// back to a `<your-module>` placeholder so the printed hint still
+/// reads as a template even outside a moon module.
+async fn read_consumer_module_name() -> String {
+  let module_root = match find_nearest_moon_mod_dir(".") {
+    Some(root) => root
+    None => return "<your-module>"
+  }
+  let path = main_join_path(module_root, "moon.mod.json")
+  let source = @fs.read_file(path).text() catch { _ => return "<your-module>" }
+  match parse_moon_mod_string_field(source, "name") {
+    Some(name) => name
+    None => "<your-module>"
+  }
+}
+
+///|
+/// Detect a missing `"type": "module"` in the consumer's `package.json`
+/// and surface a one-line hint. Generated `bridge.js` is ESM, so Node
+/// prints a perf warning ("Reparsing as ES module ...") when the
+/// containing package.json doesn't declare `type: module`.
+async fn print_vendor_module_type_hint() -> Unit {
+  let module_root = match find_nearest_moon_mod_dir(".") {
+    Some(root) => root
+    None => return
+  }
+  let pkg_json_path = main_join_path(module_root, "package.json")
+  if !@fs.exists(pkg_json_path) {
+    return
+  }
+  let source = @fs.read_file(pkg_json_path).text() catch { _ => return }
+  if source.contains("\"type\"") {
+    return
+  }
+  println(
+    "  (note) add `\"type\": \"module\"` to package.json to silence Node's ESM-reparse warning",
   )
 }
 
@@ -88,7 +149,11 @@ pub async fn ts2mbt_sync_package_json(
   let succeeded : Array[String] = []
   let failed : Array[String] = []
   for pkg_spec in deps {
-    if ts2mbt_vendor_package(pkg_spec, vendor_root_override~) {
+    if ts2mbt_vendor_package(
+        pkg_spec,
+        vendor_root_override~,
+        print_import_hint=false,
+      ) {
       succeeded.push(pkg_spec)
     } else {
       failed.push(pkg_spec)
@@ -104,7 +169,29 @@ pub async fn ts2mbt_sync_package_json(
       println("  - \{pkg}")
     }
   }
+  // Print one consolidated import block at the end so the user gets a
+  // copy-paste-ready chunk for their `moon.pkg.json`.
+  if succeeded.length() > 0 {
+    print_sync_import_block(succeeded)
+    print_vendor_module_type_hint()
+  }
   failed.length() == 0
+}
+
+///|
+/// Print one combined `moon.pkg.json` import block listing every
+/// successfully vendored package.
+async fn print_sync_import_block(pkg_specs : Array[String]) -> Unit {
+  let module_name = read_consumer_module_name()
+  println("")
+  println("Add to your consumer moon.pkg.json import list:")
+  for i, pkg_spec in pkg_specs {
+    let safe_dir = vendor_safe_pkg_dir(pkg_spec)
+    let suffix = if i == pkg_specs.length() - 1 { "" } else { "," }
+    println(
+      "  { \"path\": \"\{module_name}/internal/generated/\{safe_dir}\", \"alias\": \"\{safe_dir}\" }\{suffix}",
+    )
+  }
 }
 
 ///|

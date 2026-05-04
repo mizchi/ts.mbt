@@ -164,11 +164,21 @@ Naming: the directory slug strips the leading `@`, replaces `/` with
 name (`react`, `express`, ...), since the runtime code lives in the
 non-types package.
 
+### Generated artifact size
+
+Generated bridges scale with the upstream `.d.ts` surface. Tiny
+packages produce a few KB; large packages (`typescript`, `react`,
+`vitest`, `node:fs`) produce hundreds of KB of `bridge.mbti` /
+`bridge.js` / split source files. Treat the output directory as a
+checked-in cache (or regenerate on demand) and rely on tree-shaking
+on the JS side to drop unused bindings.
+
 ### Consume the generated bridge
 
-The bridge is just another MoonBit sub-package. Add it to your
-consumer `moon.pkg.json`'s `import` list using `<your-module-name>` +
-the in-source path:
+The bridge is just another MoonBit sub-package. `vendor` and `sync`
+print a copy-paste-ready import line (with your module name resolved
+from `moon.mod.json`); the shape is `<your-module-name>` + the
+in-source path:
 
 ```json
 {
