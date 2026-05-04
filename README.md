@@ -1,4 +1,4 @@
-# typescript.mbt
+# mizchi/ts
 
 Status: Experimental
 
