@@ -136,13 +136,14 @@ node_modules/
 ```
 
 The bridge `bridge.mbt` references each helper via the bare specifier
-`#module("@tsmbt-bridge/<safe>")`, not an absolute path. `vendor` writes
-a `package.json` next to the bridge and a `node_modules/@tsmbt-bridge/<safe>`
-symlink so node's resolver can follow `#module(...)` to the generated
-JS at build time. Move or copy the moon module wherever you like — the
-generated bridges keep working as long as the symlink is regenerated
-(re-run `vendor` / `sync`, or `moon check --target js` will fail loudly
-on a broken symlink).
+`#module("@tsmbt-bridge/<safe>")`, not an absolute path. Every bridge
+generation path (`vendor`, `sync`, `scaffold`, `package`) writes a
+`package.json` next to the bridge and refreshes a
+`node_modules/@tsmbt-bridge/<safe>` symlink under the consumer's moon
+module root, so node's resolver can follow `#module(...)` to the
+generated JS at build time. Move or copy the moon module wherever you
+like — re-run the same command to refresh the symlink, and
+`moon check --target js` will fail loudly on a broken link.
 
 Naming: the directory slug strips the leading `@`, replaces `/` with
 `__`, and replaces other non-`[A-Za-z0-9]` characters with `_`.

@@ -972,36 +972,32 @@ pub async fn emit_moonbit_bridge_package(
       }
     }
   }
-  // `#module(...)` accepts only npm-style bare specifiers. Two modes:
-  //
-  // - `bare_module_specifier=Some(name)`: emit `#module("<name>")` so the
-  //   generated package can be moved / vendored / committed without
-  //   rewriting paths. Caller is responsible for making `<name>`
-  //   resolvable (typically via a `node_modules` entry or symlink).
-  // - default `None`: bake the absolute path of the generated `bridge.js`.
-  //   Works without any extra setup but ties the package to its
-  //   generation-time location.
-  let module_spec_for_bridge = match bare_module_specifier {
+  // `#module(...)` only accepts npm-style bare specifiers — no relative
+  // or absolute filesystem paths. The generated bridge therefore always
+  // references its sibling `bridge.js` through a bare specifier under
+  // the `@tsmbt-bridge/` scope. Callers can override the slug; the
+  // default derives it from the output directory name.
+  let resolved_specifier = match bare_module_specifier {
     Some(name) => name
-    None => {
-      let output_dir_realpath = @fs.realpath(output_dir) catch {
-        _ => output_dir
-      }
-      join_output_path(output_dir_realpath, "bridge.js")
-    }
+    None => default_bridge_bare_specifier(output_dir)
   }
   let bridge_mbt = rewrite_bridge_package_module_path(
     bundle.bridge_mbt,
-    module_spec_for_bridge,
+    resolved_specifier,
   )
+  let package_json = render_bridge_package_json(resolved_specifier)
   let files : Array[(String, String)] = [
     ("moon.pkg.json", bundle.moon_pkg_json),
     ("bridge.mbti", bundle.bridge_mbti),
+    ("package.json", package_json),
   ]
   for file in bridge_package_mbt_files(bridge_mbt, force_split=false) {
     files.push(file)
   }
   files.push(("bridge.js", bundle.bridge_js))
+  if !ensure_bridge_node_modules_link(output_dir, resolved_specifier) {
+    return false
+  }
   for file in files {
     let (name, content) = file
     let path = join_output_path(output_dir, name)
@@ -1188,6 +1184,118 @@ fn escape_moonbit_module_path(path : String) -> String {
 ///|
 fn bridge_binding_needs_generated_module(line : String) -> Bool {
   line.contains("extern \"js\" fn ") && line.contains(" = \"__ts_mbt_")
+}
+
+///|
+/// Derive a default `@tsmbt-bridge/<slug>` bare specifier from the
+/// output directory path. The basename is sanitized so it survives as
+/// an npm package-name segment (`[a-z0-9_-]`).
+fn default_bridge_bare_specifier(output_dir : String) -> String {
+  let basename = match output_dir.rev_find("/") {
+    Some(idx) => output_dir[idx + 1:output_dir.length()].to_string()
+    None => output_dir
+  }
+  let mut slug = ""
+  for c in basename {
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '-' ||
+      c == '_' {
+      slug += c.to_string()
+    } else {
+      slug += "_"
+    }
+  }
+  if slug == "" {
+    slug = "bridge"
+  }
+  "@tsmbt-bridge/" + slug
+}
+
+///|
+/// Render the `package.json` co-located with `bridge.{mbti,mbt,js}` so
+/// node treats the bridge directory as an npm package and resolves
+/// `#module("<bare_specifier>")` to the generated `bridge.js`.
+fn render_bridge_package_json(bare_specifier : String) -> String {
+  "{\n  \"name\": \"" +
+  bare_specifier +
+  "\",\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"main\": \"bridge.js\",\n  \"private\": true\n}\n"
+}
+
+///|
+/// Strip the leading `@tsmbt-bridge/` (or any `@scope/`) prefix from a
+/// bare specifier, returning the unscoped name. Used when computing the
+/// directory layout under `node_modules/@<scope>/<name>`.
+fn split_scoped_specifier(specifier : String) -> (String, String)? {
+  if !specifier.has_prefix("@") {
+    return None
+  }
+  match specifier.find("/") {
+    None => None
+    Some(idx) => {
+      let scope = specifier[:idx].to_string()
+      let name = specifier[idx + 1:specifier.length()].to_string()
+      Some((scope, name))
+    }
+  }
+}
+
+///|
+/// Resolve the consumer's moon module root by walking up from the
+/// generated bridge directory. The bridge typically lives under
+/// `<module-root>/<source>/internal/generated/<slug>/`, but we only
+/// require that some ancestor contain a `moon.mod.json`. Returns `None`
+/// if no moon module is found (e.g. when scaffolding outside a moon
+/// project).
+async fn resolve_consumer_moon_module_root(
+  bridge_output_dir : String,
+) -> String? {
+  let realpath = @fs.realpath(bridge_output_dir) catch {
+    _ => bridge_output_dir
+  }
+  let parent = main_dirname(realpath)
+  find_nearest_moon_mod_dir(parent)
+}
+
+///|
+/// Create / refresh the `<consumer-module>/node_modules/@<scope>/<name>`
+/// symlink that points at the generated bridge directory so node's
+/// resolver can follow `#module("<bare_specifier>")` at build time.
+/// Skips silently when the bridge isn't inside a moon module (we can't
+/// know where to place the link).
+async fn ensure_bridge_node_modules_link(
+  bridge_output_dir : String,
+  bare_specifier : String,
+) -> Bool {
+  let (scope, name) = match split_scoped_specifier(bare_specifier) {
+    Some(parts) => parts
+    None => return true
+  }
+  let module_root = match resolve_consumer_moon_module_root(bridge_output_dir) {
+    Some(root) => root
+    None => return true
+  }
+  let scope_dir = main_join_path(
+    main_join_path(module_root, "node_modules"),
+    scope,
+  )
+  let _ = ensure_dir_tree(scope_dir) catch {
+    e => {
+      println("vendor: failed to create \{scope_dir}: \{e}")
+      return false
+    }
+  }
+  let link_path = main_join_path(scope_dir, name)
+  let _ = @fs.remove(link_path) catch { _ => () }
+  let target = @fs.realpath(bridge_output_dir) catch { _ => bridge_output_dir }
+  let _ = @fs.symlink(link_path, target~) catch {
+    e => {
+      println("vendor: failed to symlink \{link_path} -> \{target}: \{e}")
+      return false
+    }
+  }
+  true
 }
 
 ///|

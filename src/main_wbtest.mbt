@@ -8,6 +8,14 @@ fn wbtest_join_path(base : String, child : String) -> String {
 }
 
 ///|
+fn wbtest_basename(path : String) -> String {
+  match path.rev_find("/") {
+    Some(idx) => path[idx + 1:path.length()].to_string()
+    None => path
+  }
+}
+
+///|
 fn wbtest_tmp_neverthrow_like_root(name : String) -> String {
   "/tmp/ts_mbt_neverthrow_like_" + name
 }
@@ -455,10 +463,14 @@ async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
   assert_eq(
     wbtest_relative_file_snapshot(root),
     [
-      "bridge.js", "bridge.mbt", "bridge.mbti", "moon.pkg.json", "SCAFFOLD_DIAGNOSTICS.md",
+      "bridge.js", "bridge.mbt", "bridge.mbti", "package.json", "moon.pkg.json",
+      "SCAFFOLD_DIAGNOSTICS.md",
     ].join("\n"),
   )
   assert_eq(moon_pkg_json, "{}")
+  // The neverthrow-like fixture has directly-callable runtime exports,
+  // so the bridge.mbt extern lines pull from `/runtime/neverthrow-like.js`
+  // rather than going through a `__ts_mbt_*` helper indirection.
   assert_true(bridge_mbt.contains("#module(\"/runtime/neverthrow-like.js\")"))
   assert_true(diagnostics.contains("No unsupported exports were detected."))
 }
@@ -1330,9 +1342,7 @@ async test "emit_moonbit_bridge_package rewrites relative runtime bridge to self
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\nextern \"js\" fn scale_point(point : RuntimePoint, factor : Double) -> RuntimePoint = \"__ts_mbt_scale_point\"",
@@ -1365,9 +1375,7 @@ async test "emit_moonbit_bridge_package rewrites multiple relative generated bin
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_counter_state()",
@@ -1419,9 +1427,7 @@ async test "emit_moonbit_bridge_package rewrites rooted class-property alias ree
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
@@ -1476,9 +1482,7 @@ async test "emit_moonbit_bridge_package rewrites bare class-property alias reexp
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
@@ -1525,9 +1529,7 @@ async test "emit_moonbit_bridge_package emits self-contained widened exports wit
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   // Self-contained bridge: no `mizchi/js` import in the package
   // descriptor; `JSValue` is declared inline.
   assert_false(pkg_json.contains("mizchi/js"))
@@ -1562,9 +1564,7 @@ async test "emit_moonbit_bridge_package rewrites parent-relative default functio
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(pkg_root, "bridge.js")) catch {
-    _ => wbtest_join_path(pkg_root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(pkg_root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn default(label : String) -> String = \"__ts_mbt_default\"",
@@ -1601,9 +1601,7 @@ async test "emit_moonbit_bridge_package rewrites bare default class alias reexpo
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_counter(initial : Double) -> RuntimeCounter = \"__ts_mbt_new_runtime_counter\"",
@@ -1646,9 +1644,7 @@ async test "emit_moonbit_bridge_package rewrites subpath class alias reexport ge
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_state() -> RuntimeState = \"__ts_mbt_new_runtime_state\"",
@@ -1690,9 +1686,7 @@ async test "emit_moonbit_bridge_package rewrites relative default class helpers 
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_default(initial : Double) -> Default = \"__ts_mbt_new_default\"",
@@ -1747,9 +1741,7 @@ async test "emit_moonbit_bridge_package rewrites deep parent-relative mixed defa
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(pkg_root, "bridge.js")) catch {
-    _ => wbtest_join_path(pkg_root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(pkg_root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_default(initial : Double) -> Default = \"__ts_mbt_new_default\"",
@@ -1804,9 +1796,7 @@ async test "emit_moonbit_bridge_package keeps aliased default reexports bound to
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(pkg_root, "bridge.js")) catch {
-    _ => wbtest_join_path(pkg_root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(pkg_root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn new_runtime_counter(initial : Double) -> RuntimeCounter = \"__ts_mbt_new_runtime_counter\"",
@@ -2852,9 +2842,7 @@ async test "emit_moonbit_bridge_package rewrites destructured value helpers to b
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -2904,9 +2892,7 @@ async test "emit_moonbit_bridge_package rewrites nested and array-rest destructu
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(
     bridge_mbt.contains(
       "#module(\"\{bridge_js_path}\")\npub extern \"js\" fn get_runtime_version() -> String = \"__ts_mbt_get_runtime_version\"",
@@ -2961,9 +2947,7 @@ async test "emit_moonbit_bridge_package rewrites object-rest destructured value 
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3006,9 +2990,7 @@ async test "emit_moonbit_bridge_package rewrites computed-key destructured value
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3061,9 +3043,7 @@ async test "emit_moonbit_bridge_package rewrites template-literal computed-key d
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3116,9 +3096,7 @@ async test "emit_moonbit_bridge_package rewrites concatenated computed-key destr
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3171,9 +3149,7 @@ async test "emit_moonbit_bridge_package rewrites primitive-literal computed-key 
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3236,9 +3212,7 @@ async test "emit_moonbit_bridge_package rewrites void-and-negative-bigint comput
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3291,9 +3265,7 @@ async test "emit_moonbit_bridge_package rewrites const-reference computed-key de
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3346,9 +3318,7 @@ async test "emit_moonbit_bridge_package rewrites destructured-const-reference co
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3401,9 +3371,7 @@ async test "emit_moonbit_bridge_package rewrites const-object-access computed-ke
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3456,9 +3424,7 @@ async test "emit_moonbit_bridge_package rewrites nested-const-object-access comp
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3511,9 +3477,7 @@ async test "emit_moonbit_bridge_package rewrites const-array-access computed-key
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3566,9 +3530,7 @@ async test "emit_moonbit_bridge_package rewrites nested-const-array-access compu
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3621,9 +3583,7 @@ async test "emit_moonbit_bridge_package rewrites const-index-alias computed-key 
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3676,9 +3636,7 @@ async test "emit_moonbit_bridge_package rewrites const-index-table computed-key 
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3731,9 +3689,7 @@ async test "emit_moonbit_bridge_package rewrites nested-index-table computed-key
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3786,9 +3742,7 @@ async test "emit_moonbit_bridge_package rewrites imported const-table computed-k
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3841,9 +3795,7 @@ async test "emit_moonbit_bridge_package rewrites imported namespace const-table 
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3896,9 +3848,7 @@ async test "emit_moonbit_bridge_package rewrites imported default const-table co
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -3951,9 +3901,7 @@ async test "emit_moonbit_bridge_package rewrites imported inline default const-t
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4006,9 +3954,7 @@ async test "emit_moonbit_bridge_package rewrites imported inline default const-t
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4061,9 +4007,7 @@ async test "emit_moonbit_bridge_package rewrites imported iife default const-tab
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4116,9 +4060,7 @@ async test "emit_moonbit_bridge_package rewrites imported iife local const-table
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4171,9 +4113,7 @@ async test "emit_moonbit_bridge_package rewrites imported function iife local co
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4226,9 +4166,7 @@ async test "emit_moonbit_bridge_package rewrites imported iife local let-table c
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4281,9 +4219,7 @@ async test "emit_moonbit_bridge_package rewrites imported function iife local le
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4336,9 +4272,7 @@ async test "emit_moonbit_bridge_package widens imported reassigned local let-tab
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4386,9 +4320,7 @@ async test "emit_moonbit_bridge_package widens imported prop-mutated local let-t
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4436,9 +4368,7 @@ async test "emit_moonbit_bridge_package widens imported index-mutated local let-
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4486,9 +4416,7 @@ async test "emit_moonbit_bridge_package rewrites imported reexported const-table
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4541,9 +4469,7 @@ async test "emit_moonbit_bridge_package rewrites imported chained const-table co
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4596,9 +4522,7 @@ async test "emit_moonbit_bridge_package rewrites imported star const-table compu
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4651,9 +4575,7 @@ async test "emit_moonbit_bridge_package rewrites imported deep star const-table 
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4706,9 +4628,7 @@ async test "emit_moonbit_bridge_package rewrites imported mixed barrel const-tab
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_true(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
@@ -4761,9 +4681,7 @@ async test "emit_moonbit_bridge_package widens conflicting star const-table comp
       return
     }
   }
-  let bridge_js_path = @fs.realpath(wbtest_join_path(root, "bridge.js")) catch {
-    _ => wbtest_join_path(root, "bridge.js")
-  }
+  let bridge_js_path = "@tsmbt-bridge/" + wbtest_basename(root)
   assert_false(bridge_mbt.contains("pub(all) struct RestMeta"))
   assert_true(
     bridge_mbt.contains(
