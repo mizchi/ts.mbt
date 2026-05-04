@@ -34,6 +34,12 @@ fixtures/resolver/project/node_modules/*
 !fixtures/resolver/project/node_modules/@scope/**
 !fixtures/resolver/project/node_modules/@types/
 !fixtures/resolver/project/node_modules/@types/**
+!fixtures/resolver/project/node_modules/pkg-class-property/
+!fixtures/resolver/project/node_modules/pkg-class-property/**
+!fixtures/resolver/project/node_modules/pkg-class-subpath/
+!fixtures/resolver/project/node_modules/pkg-class-subpath/**
+!fixtures/resolver/project/node_modules/pkg-default-class/
+!fixtures/resolver/project/node_modules/pkg-default-class/**
 
 # Example generated outputs
 examples/**/dist/
