@@ -169,9 +169,26 @@ non-types package.
 Generated bridges scale with the upstream `.d.ts` surface. Tiny
 packages produce a few KB; large packages (`typescript`, `react`,
 `vitest`, `node:fs`) produce hundreds of KB of `bridge.mbti` /
-`bridge.js` / split source files. Treat the output directory as a
-checked-in cache (or regenerate on demand) and rely on tree-shaking
-on the JS side to drop unused bindings.
+`bridge.js` / split source files. Rely on tree-shaking on the JS
+side to drop unused bindings.
+
+### Guardrails for generated code
+
+Treat `<source>/internal/generated/` as a cache, not as source. The
+first `vendor` / `sync` invocation drops two markers at the vendor
+root so humans and AI agents can recognise the boundary:
+
+- `.gitignore` — `*` plus `!.gitignore` `!AGENTS.md`, so the directory
+  stays out of version control by default while the guardrail markers
+  remain visible to anyone browsing the tree. Move the entries up to
+  your repo-root `.gitignore` if you'd rather track nothing here.
+- `AGENTS.md` — the standard "do not edit this directory by hand"
+  notice for AI coding agents (Claude / Cursor / Aider / Codex). The
+  generated `bridge.{mbti,mbt,js}` headers also start with an
+  `AUTO-GENERATED ... DO NOT EDIT` line that points at the regenerate
+  command.
+
+Regenerate via `ts2mbt vendor <pkg>` or `ts2mbt sync`.
 
 ### Consume the generated bridge
 
