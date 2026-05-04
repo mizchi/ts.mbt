@@ -108,7 +108,7 @@ test "generated TypeScript to MoonBit example" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -142,9 +142,7 @@ write_js_any_stub() {
 }
 EOF
 
-  cat > "$root/_stubs/mizchi_js/core/moon.pkg.json" <<'EOF'
-{}
-EOF
+  : > "$root/_stubs/mizchi_js/core/moon.pkg"
 
   cat > "$root/_stubs/mizchi_js/core/core.mbt" <<'EOF'
 ///|
@@ -167,19 +165,19 @@ run_typescript_to_moonbit_js_build_smoke() {
   rm -rf "$smoke_dir" "$root/_build/js/debug/build"
   mkdir -p "$smoke_dir"
 
-  local js_import_suffix=""
+  local js_import_line=""
   if [ "$needs_js_import" = "true" ]; then
-    js_import_suffix=$',
-    { "path": "mizchi/js/core", "alias": "js" }'
+    js_import_line=$'\n  "mizchi/js/core" @js,'
   fi
 
-  cat > "$smoke_dir/moon.pkg.json" <<EOF
-{
-  "is-main": true,
-  "import": [
-    { "path": "$module_name", "alias": "sut" }$js_import_suffix
-  ]
+  cat > "$smoke_dir/moon.pkg" <<EOF
+import {
+  "$module_name" @sut,$js_import_line
 }
+
+options(
+  "is-main": true,
+)
 EOF
 
   cat > "$smoke_dir/main.mbt"
@@ -206,13 +204,14 @@ run_typescript_ast_build_smoke() {
   rm -rf "$smoke_dir" "$root/_build/js/debug/build"
   mkdir -p "$smoke_dir"
 
-  cat > "$smoke_dir/moon.pkg.json" <<EOF
-{
-  "is-main": true,
-  "import": [
-    { "path": "$module_name", "alias": "sut" }
-  ]
+  cat > "$smoke_dir/moon.pkg" <<EOF
+import {
+  "$module_name" @sut,
 }
+
+options(
+  "is-main": true,
+)
 EOF
 
   cp examples/typescript-to-moonbit/typescript-ast/smoke/main.mbt "$smoke_dir/main.mbt"
@@ -270,7 +269,7 @@ test "generated Hono pattern" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -346,7 +345,7 @@ test "generated real Hono bridge smoke" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -396,7 +395,7 @@ test "generated React pattern" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -465,7 +464,7 @@ test "generated @types/react bridge smoke" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -563,7 +562,7 @@ test "generated real Vitest bridge smoke" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -619,7 +618,7 @@ test "generated Result pattern" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -688,7 +687,7 @@ test "generated reducer tagged union pattern" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -750,7 +749,7 @@ test "generated default class pattern" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -809,7 +808,7 @@ test "generated const table pattern" {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
@@ -857,7 +856,7 @@ verify_typescript_to_moonbit_typescript_ast_example() {
 }
 EOF
 
-  [ -f "$out/moon.pkg.json" ]
+  [ -f "$out/moon.pkg" ]
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]

@@ -59,7 +59,13 @@ fn render_bridge_pkg_json(_needs_js_import : Bool) -> String {
   // Generated bridge packages are now fully self-contained: `JSValue`
   // and `Promise[X]` are emitted as `#external` types in the bridge
   // itself, so there's no compile-time `mizchi/js` dependency.
-  "{}"
+  //
+  // Returned content is the new `moon.pkg` text format (an empty
+  // body); written by callers as `moon.pkg`, never `moon.pkg.json`.
+  // The MoonBit toolchain auto-migrates a stray `moon.pkg.json` to
+  // `moon.pkg` on every build, so emitting the JSON form would print
+  // a "deprecated moon.pkg.json is removed" warning every vendor run.
+  ""
 }
 
 ///|

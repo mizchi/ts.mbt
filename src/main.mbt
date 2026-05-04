@@ -987,7 +987,7 @@ pub async fn emit_moonbit_bridge_package(
   )
   let package_json = render_bridge_package_json(resolved_specifier)
   let files : Array[(String, String)] = [
-    ("moon.pkg.json", bundle.moon_pkg_json),
+    ("moon.pkg", bundle.moon_pkg_json),
     ("bridge.mbti", bundle.bridge_mbti),
     ("package.json", package_json),
   ]

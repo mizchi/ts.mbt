@@ -545,14 +545,10 @@ verify_bridge_promise_return_fixture() {
 }
 EOF
 
-  cat > "$root/moon.pkg.json" <<'EOF'
-{
-  "import": [
-  ],
-  "test-import": [
-    "moonbitlang/async"
-  ]
-}
+  cat > "$root/moon.pkg" <<'EOF'
+import {
+  "moonbitlang/async",
+} for "test"
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'

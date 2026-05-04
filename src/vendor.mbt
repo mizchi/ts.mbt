@@ -53,7 +53,7 @@ pub async fn ts2mbt_vendor_package(
     "vendor: \{pkg_spec} -> \{output_dir} (#module \"\{bare_specifier}\")",
   )
   // `emit_moonbit_scaffold_from_ts` writes `bridge.{mbti,mbt,js}`,
-  // `package.json`, `moon.pkg.json`. The bare specifier baked into
+  // `package.json`, `moon.pkg`. The bare specifier baked into
   // `bridge.mbt` is a Node subpath import (`#tsmbt-bridge/<safe>`)
   // resolved by the consumer's `package.json#imports` map — see
   // `ensure_consumer_package_json_imports_entry` below. This avoids
@@ -106,7 +106,7 @@ async fn ensure_vendor_root_guardrails(vendor_root : String) -> Bool {
 }
 
 ///|
-/// Print a copy-paste-ready `moon.pkg.json` import entry for a freshly
+/// Print a copy-paste-ready `moon.pkg` import entry for a freshly
 /// vendored package. Resolves the consumer's module name from
 /// `moon.mod.json` so the suggestion is concrete, falling back to a
 /// `<your-module>` placeholder when no module is found.
@@ -114,8 +114,8 @@ async fn print_vendor_import_hint(safe_dir : String) -> Unit {
   let module_name = read_consumer_module_name()
   let import_path = "\{module_name}/internal/generated/\{safe_dir}"
   println("")
-  println("Add to your consumer moon.pkg.json import list:")
-  println("  { \"path\": \"\{import_path}\", \"alias\": \"\{safe_dir}\" }")
+  println("Add to your consumer moon.pkg import block:")
+  println("  \"\{import_path}\" @\{safe_dir},")
 }
 
 ///|
@@ -270,7 +270,7 @@ pub async fn ts2mbt_sync_package_json(
     }
   }
   // Print one consolidated import block at the end so the user gets a
-  // copy-paste-ready chunk for their `moon.pkg.json`.
+  // copy-paste-ready chunk for their `moon.pkg`.
   if succeeded.length() > 0 {
     print_sync_import_block(succeeded)
     let vendor_root = match vendor_root_override {
@@ -288,17 +288,16 @@ pub async fn ts2mbt_sync_package_json(
 }
 
 ///|
-/// Print one combined `moon.pkg.json` import block listing every
+/// Print one combined `moon.pkg` import block listing every
 /// successfully vendored package.
 async fn print_sync_import_block(pkg_specs : Array[String]) -> Unit {
   let module_name = read_consumer_module_name()
   println("")
-  println("Add to your consumer moon.pkg.json import list:")
-  for i, pkg_spec in pkg_specs {
+  println("Add to your consumer moon.pkg import block:")
+  for pkg_spec in pkg_specs {
     let safe_dir = vendor_safe_pkg_dir(pkg_spec)
-    let suffix = if i == pkg_specs.length() - 1 { "" } else { "," }
     println(
-      "  { \"path\": \"\{module_name}/internal/generated/\{safe_dir}\", \"alias\": \"\{safe_dir}\" }\{suffix}",
+      "  \"\{module_name}/internal/generated/\{safe_dir}\" @\{safe_dir},",
     )
   }
 }

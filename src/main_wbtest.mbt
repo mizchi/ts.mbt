@@ -449,7 +449,7 @@ async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
       facade=true,
     ),
   )
-  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg")).text() catch {
     e => fail("failed to read unified TS moon.pkg.json: \{e}")
   }
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
@@ -463,11 +463,11 @@ async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
   assert_eq(
     wbtest_relative_file_snapshot(root),
     [
-      "bridge.js", "bridge.mbt", "bridge.mbti", "package.json", "moon.pkg.json",
+      "moon.pkg", "bridge.js", "bridge.mbt", "bridge.mbti", "package.json",
       "SCAFFOLD_DIAGNOSTICS.md",
     ].join("\n"),
   )
-  assert_eq(moon_pkg_json, "{}")
+  assert_eq(moon_pkg_json, "")
   // The neverthrow-like fixture has directly-callable runtime exports,
   // so the bridge.mbt extern lines pull from `/runtime/neverthrow-like.js`
   // rather than going through a `__ts_mbt_*` helper indirection.
@@ -1282,7 +1282,7 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
     "fixtures/resolver/project/types/runtime-function-entry.ts", "/runtime/runtime-function.js",
     root,
   )
-  let pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+  let pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg")).text() catch {
     e => {
       fail("Read error: \{e}")
       return
@@ -1306,7 +1306,7 @@ async test "emit_moonbit_bridge_package writes package files to output dir" {
       return
     }
   }
-  assert_eq(pkg_json, "{}")
+  assert_eq(pkg_json, "")
   assert_true(bridge_mbti.contains("declare pub fn scalePoint("))
   assert_true(
     bridge_mbt.contains(
@@ -1517,7 +1517,7 @@ async test "emit_moonbit_bridge_package emits self-contained widened exports wit
     "fixtures/resolver/project/types/export-equals-entry.d.ts", "./runtime/export-equals.js",
     root,
   )
-  let pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg.json")).text() catch {
+  let pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg")).text() catch {
     e => {
       fail("Read error: \{e}")
       return

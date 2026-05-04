@@ -381,9 +381,7 @@ write_js_any_stub() {
 }
 EOF
 
-  cat > "$root/_stubs/mizchi_js/core/moon.pkg.json" <<'EOF'
-{}
-EOF
+  : > "$root/_stubs/mizchi_js/core/moon.pkg"
 
   cat > "$root/_stubs/mizchi_js/core/core.mbt" <<'EOF'
 ///|
@@ -406,19 +404,19 @@ run_typescript_to_moonbit_js_build_smoke() {
   rm -rf "$smoke_dir" "$root/_build/js/debug/build"
   mkdir -p "$smoke_dir"
 
-  local js_import_suffix=""
+  local js_import_line=""
   if [ "$needs_js_import" = "true" ]; then
-    js_import_suffix=$',
-    { "path": "mizchi/js/core", "alias": "js" }'
+    js_import_line=$'\n  "mizchi/js/core" @js,'
   fi
 
-  cat > "$smoke_dir/moon.pkg.json" <<EOF
-{
-  "is-main": true,
-  "import": [
-    { "path": "$module_name", "alias": "sut" }$js_import_suffix
-  ]
+  cat > "$smoke_dir/moon.pkg" <<EOF
+import {
+  "$module_name" @sut,$js_import_line
 }
+
+options(
+  "is-main": true,
+)
 EOF
 
   cat > "$smoke_dir/main.mbt"
