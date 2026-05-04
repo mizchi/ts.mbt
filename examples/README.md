@@ -30,6 +30,8 @@ Input:
 - `typescript-to-moonbit/hono/runtime/hono.js`
 - `node_modules/hono/dist/types/index.d.ts`
 - `typescript-to-moonbit/hono-real/smoke/main.mbt`
+- `node_modules/@hono/node-server/dist/index.d.mts`
+- `typescript-to-moonbit/hono-server/smoke/main.mbt` (combo: hono + adapter)
 - `typescript-to-moonbit/react/src/index.d.ts`
 - `typescript-to-moonbit/react/runtime/react-like.js`
 - `node_modules/@types/react/index.d.ts`
@@ -70,6 +72,14 @@ ts2mbt \
   --input node_modules/hono/dist/types/index.d.ts \
   --out _build/examples/typescript-to-moonbit-hono-real/dist \
   --module-spec hono
+
+# Combo: vendor `hono` AND `@hono/node-server` from package.json in
+# one shot via the canonical `generate` command. The smoke at
+# `examples/typescript-to-moonbit/hono-server/smoke/main.mbt`
+# imports both bridges and starts a real Node server on port 0.
+ts2mbt generate \
+  --package-json _build/examples/typescript-to-moonbit-hono-server/package.json \
+  --out _build/examples/typescript-to-moonbit-hono-server/internal/generated
 
 ts2mbt \
   --input examples/typescript-to-moonbit/react/src/index.d.ts \

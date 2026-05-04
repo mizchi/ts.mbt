@@ -876,10 +876,88 @@ EOF
   run_typescript_ast_build_smoke "$out" "examples/typescript_to_moonbit_typescript_ast"
 }
 
+# `ts2mbt generate` E2E: synthesize a tiny consumer project that
+# depends on both `hono` and `@hono/node-server`, drive the bridge
+# pipeline through the canonical `generate` command, and run the
+# combined smoke from `examples/typescript-to-moonbit/hono-server/`
+# against the freshly generated bridges. Proves both bridges
+# co-resolve through the consumer's `package.json#imports` map.
+verify_typescript_to_moonbit_hono_server_example() {
+  local root="_build/examples/typescript-to-moonbit-hono-server"
+
+  rm -rf "$root"
+  mkdir -p "$root/cmd/main"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_hono_server",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/package.json" <<'EOF'
+{
+  "name": "tsmbt-hono-server-smoke",
+  "type": "module",
+  "private": true,
+  "imports": {
+    "#tsmbt-bridge/*": "./internal/generated/*/bridge.js"
+  },
+  "dependencies": {
+    "hono": "*",
+    "@hono/node-server": "*"
+  }
+}
+EOF
+
+  moon run src/cmd/ts2mbt -- \
+    generate --package-json "$root/package.json" \
+    --out "$root/internal/generated" >/dev/null
+
+  cat > "$root/cmd/main/moon.pkg" <<'EOF'
+import {
+  "examples/typescript_to_moonbit_hono_server/internal/generated/hono" @sut,
+  "examples/typescript_to_moonbit_hono_server/internal/generated/hono__node_server" @sut_node_server,
+}
+
+options(
+  "is-main": true,
+)
+EOF
+
+  cp examples/typescript-to-moonbit/hono-server/smoke/main.mbt \
+    "$root/cmd/main/main.mbt"
+
+  [ -f "$root/internal/generated/hono/bridge.mbt" ]
+  [ -f "$root/internal/generated/hono/bridge.js" ]
+  [ -f "$root/internal/generated/hono__node_server/bridge.mbt" ]
+  [ -f "$root/internal/generated/hono__node_server/bridge.js" ]
+
+  moon -C "$root" check --target js
+  moon -C "$root" build --target js cmd/main
+
+  local built_js
+  built_js="$(find "$root/_build/js/debug/build/cmd/main" -type f -name '*.js' | head -n 1)"
+  if [ -z "$built_js" ]; then
+    echo "moon build did not emit cmd/main JS" >&2
+    exit 1
+  fi
+
+  local output
+  output="$(node "$built_js")"
+  if [ "$output" != "ok" ]; then
+    echo "expected hono+node-server smoke to print 'ok', got: $output" >&2
+    exit 1
+  fi
+}
+
 verify_moonbit_to_typescript_example
 verify_typescript_to_moonbit_example
 verify_typescript_to_moonbit_hono_example
 verify_typescript_to_moonbit_hono_real_example
+verify_typescript_to_moonbit_hono_server_example
 verify_typescript_to_moonbit_react_example
 verify_typescript_to_moonbit_react_types_example
 verify_typescript_to_moonbit_vitest_example
