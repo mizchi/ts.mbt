@@ -18,6 +18,10 @@ pub async fn ts2mbt_vendor_package(
   module_spec_override? : String? = None,
   vendor_root_override? : String? = None,
 ) -> Bool {
+  let module_root = match find_nearest_moon_mod_dir(".") {
+    Some(root) => root
+    None => "."
+  }
   let vendor_root = match vendor_root_override {
     Some(root) => root
     None =>
@@ -47,8 +51,31 @@ pub async fn ts2mbt_vendor_package(
   }
   let safe_dir = vendor_safe_pkg_dir(pkg_spec)
   let output_dir = main_join_path(vendor_root, safe_dir)
-  println("vendor: \{pkg_spec} -> \{output_dir}")
-  emit_moonbit_scaffold_from_ts(entry_path, runtime_spec, output_dir)
+  let bare_specifier = "@tsmbt-bridge/\{safe_dir}"
+  println(
+    "vendor: \{pkg_spec} -> \{output_dir} (#module \"\{bare_specifier}\")",
+  )
+  if !emit_moonbit_scaffold_from_ts(
+      entry_path,
+      runtime_spec,
+      output_dir,
+      bare_module_specifier=Some(bare_specifier),
+    ) {
+    return false
+  }
+  // Drop a `package.json` so node treats the bridge directory as an npm
+  // package, then symlink it under `<module>/node_modules/@tsmbt-bridge/`
+  // so MoonBit's `#module("@tsmbt-bridge/<safe>")` resolves with no
+  // absolute path baked in. `moon check --target js` validates the link
+  // because the compiled `require(...)` will fail if the symlink is
+  // broken.
+  if !write_vendor_package_json(output_dir, bare_specifier) {
+    return false
+  }
+  if !ensure_vendor_node_modules_link(module_root, safe_dir, output_dir) {
+    return false
+  }
+  true
 }
 
 ///|
@@ -152,6 +179,71 @@ async fn resolve_default_vendor_root() -> String? {
     main_join_path(module_root, source_dir_rel)
   }
   Some(main_join_path(source_dir, "internal/generated"))
+}
+
+///|
+/// Drop a `package.json` next to the generated bridge so node treats
+/// the directory as an npm package. The package's `name` is the bare
+/// module specifier baked into `bridge.mbt` via `#module(...)`; `main`
+/// points at the generated `bridge.js`.
+async fn write_vendor_package_json(
+  output_dir : String,
+  bare_specifier : String,
+) -> Bool {
+  let body = "{\n  \"name\": \"" +
+    bare_specifier +
+    "\",\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"main\": \"bridge.js\",\n  \"private\": true\n}\n"
+  let path = main_join_path(output_dir, "package.json")
+  let _ = @fs.write_file(path, string_to_bytes(body), create=0o644) catch {
+    e => {
+      println("vendor: failed to write package.json at \{path}: \{e}")
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Create / refresh the `<module>/node_modules/@tsmbt-bridge/<safe>`
+/// symlink that points at the generated package directory. node's
+/// resolver follows the symlink and finds `bridge.js` via the
+/// generated `package.json#main`, so the moon-emitted `require(...)`
+/// works from any compile output location without absolute paths.
+async fn ensure_vendor_node_modules_link(
+  module_root : String,
+  safe_dir : String,
+  output_dir : String,
+) -> Bool {
+  let scope_dir = main_join_path(
+    main_join_path(module_root, "node_modules"),
+    "@tsmbt-bridge",
+  )
+  let _ = ensure_dir_tree(scope_dir) catch {
+    e => {
+      println("vendor: failed to create \{scope_dir}: \{e}")
+      return false
+    }
+  }
+  let link_path = main_join_path(scope_dir, safe_dir)
+  // `@fs.remove` only takes regular files; symlink replacement needs the
+  // raw `unlink`. The symlink may already exist if the user re-vendors,
+  // and Node's resolver dereferences it lazily so a stale link is fine
+  // until the build, but we still refresh to keep the manifest tidy.
+  let _ = @fs.remove(link_path) catch { _ => () }
+  let target = if output_dir.has_prefix("/") {
+    output_dir
+  } else {
+    @fs.realpath(output_dir) catch {
+      _ => output_dir
+    }
+  }
+  let _ = @fs.symlink(link_path, target~) catch {
+    e => {
+      println("vendor: failed to symlink \{link_path} -> \{target}: \{e}")
+      return false
+    }
+  }
+  true
 }
 
 ///|

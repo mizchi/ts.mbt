@@ -954,6 +954,7 @@ pub async fn emit_moonbit_bridge_package(
   file_path : String,
   module_spec : String,
   output_dir : String,
+  bare_module_specifier? : String? = None,
 ) -> Bool {
   let bundle = emit_moonbit_bridge_package_texts(file_path, module_spec) catch {
     @bridge.ModuleGraphError::ReadError(msg)
@@ -971,15 +972,27 @@ pub async fn emit_moonbit_bridge_package(
       }
     }
   }
-  // MoonBit's `#module(...)` rejects relative paths, so the absolute
-  // scaffold path is baked into every binding. The generated package is
-  // therefore not portable — consumers that move or vendor the output
-  // need to regenerate the bridge against the new location.
-  let output_dir_realpath = @fs.realpath(output_dir) catch { _ => output_dir }
-  let bridge_js_output_path = join_output_path(output_dir_realpath, "bridge.js")
+  // `#module(...)` accepts only npm-style bare specifiers. Two modes:
+  //
+  // - `bare_module_specifier=Some(name)`: emit `#module("<name>")` so the
+  //   generated package can be moved / vendored / committed without
+  //   rewriting paths. Caller is responsible for making `<name>`
+  //   resolvable (typically via a `node_modules` entry or symlink).
+  // - default `None`: bake the absolute path of the generated `bridge.js`.
+  //   Works without any extra setup but ties the package to its
+  //   generation-time location.
+  let module_spec_for_bridge = match bare_module_specifier {
+    Some(name) => name
+    None => {
+      let output_dir_realpath = @fs.realpath(output_dir) catch {
+        _ => output_dir
+      }
+      join_output_path(output_dir_realpath, "bridge.js")
+    }
+  }
   let bridge_mbt = rewrite_bridge_package_module_path(
     bundle.bridge_mbt,
-    bridge_js_output_path,
+    module_spec_for_bridge,
   )
   let files : Array[(String, String)] = [
     ("moon.pkg.json", bundle.moon_pkg_json),
@@ -1110,6 +1123,7 @@ pub async fn emit_moonbit_scaffold_from_ts(
   module_spec : String,
   output_dir : String,
   write_diagnostics? : Bool = true,
+  bare_module_specifier? : String? = None,
 ) -> Bool {
   let unsupported_exports = collect_moonbit_ts_scaffold_unsupported_exports(
     file_path,
@@ -1121,7 +1135,12 @@ pub async fn emit_moonbit_scaffold_from_ts(
       return false
     }
   }
-  if !emit_moonbit_bridge_package(file_path, module_spec, output_dir) {
+  if !emit_moonbit_bridge_package(
+      file_path,
+      module_spec,
+      output_dir,
+      bare_module_specifier~,
+    ) {
     return false
   }
   // The unified `--input/--out` driver emits a richer SCAFFOLD_DIAGNOSTICS.md

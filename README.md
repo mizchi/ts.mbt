@@ -124,10 +124,25 @@ src/
         │   ├── bridge.mbt
         │   ├── bridge.js
         │   ├── moon.pkg.json
+        │   ├── package.json          # name = "@tsmbt-bridge/hono"
         │   └── SCAFFOLD_DIAGNOSTICS.md
         └── types__react/
             └── ... (same shape, runtime spec defaults to `react`)
+
+node_modules/
+└── @tsmbt-bridge/
+    ├── hono           -> ../../src/internal/generated/hono
+    └── types__react   -> ../../src/internal/generated/types__react
 ```
+
+The bridge `bridge.mbt` references each helper via the bare specifier
+`#module("@tsmbt-bridge/<safe>")`, not an absolute path. `vendor` writes
+a `package.json` next to the bridge and a `node_modules/@tsmbt-bridge/<safe>`
+symlink so node's resolver can follow `#module(...)` to the generated
+JS at build time. Move or copy the moon module wherever you like — the
+generated bridges keep working as long as the symlink is regenerated
+(re-run `vendor` / `sync`, or `moon check --target js` will fail loudly
+on a broken symlink).
 
 Naming: the directory slug strips the leading `@`, replaces `/` with
 `__`, and replaces other non-`[A-Za-z0-9]` characters with `_`.
