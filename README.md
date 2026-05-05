@@ -16,7 +16,7 @@ bridge generator only.
 
 - **TypeScript -> MoonBit**: read a `.d.ts` (or `.ts`) entry plus a runtime
   module specifier and emit a MoonBit bridge package (`bridge.mbti`,
-  `bridge.mbt`, `bridge.js`, `moon.pkg.json`, plus split source files for
+  `bridge.mbt`, `bridge.js`, `moon.pkg`, plus split source files for
   larger packages).
 - **MoonBit -> TypeScript**: read a `pkg.generated.mbti` interface (and its
   recursively discovered child packages) and emit a TypeScript declaration
@@ -29,7 +29,7 @@ widened, omitted, or wrapped surfaces stay inspectable.
 ## Prerequisites
 
 - [MoonBit toolchain](https://www.moonbitlang.com/) (`moon` on `$PATH`).
-- Node.js 20+ (the verification harness imports built JS through Node).
+- Node.js 24+ (the verification harness imports built JS through Node).
 - `pnpm` (used by `just verify-mbti-dts` to run `tsc`).
 - Optional: [`just`](https://github.com/casey/just) for the `just verify-*`
   recipes; otherwise invoke the corresponding `bash scripts/*.sh` directly.
@@ -60,7 +60,7 @@ Bridge generation is split into two binaries, one per direction:
 - `mbt2ts` — MoonBit `pkg.generated.mbti` → TypeScript declaration package
   (build-backed by `moon build --target js`).
 - `ts2mbt` — TypeScript `.d.ts` / `.ts` entrypoint → MoonBit bridge package
-  (`bridge.mbti`, `bridge.mbt`, `bridge.js`, `moon.pkg.json`).
+  (`bridge.mbti`, `bridge.mbt`, `bridge.js`, `moon.pkg`).
 
 Each CLI exposes a high-level `--input ... --out ...` "do everything" flow
 plus low-level subcommands.
@@ -133,30 +133,33 @@ src/
         │   ├── bridge.mbti
         │   ├── bridge.mbt
         │   ├── bridge.js
-        │   ├── moon.pkg.json
-        │   ├── package.json          # name = "@tsmbt-bridge/hono"
+        │   ├── moon.pkg
+        │   ├── package.json    # type=module + self-contained imports
         │   └── SCAFFOLD_DIAGNOSTICS.md
         └── types__react/
             └── ... (same shape, runtime spec defaults to `react`)
-
-node_modules/
-└── @tsmbt-bridge/
-    ├── hono           -> ../../src/internal/generated/hono
-    └── types__react   -> ../../src/internal/generated/types__react
 ```
 
-The bridge `bridge.mbt` references each helper via the bare specifier
-`#module("@tsmbt-bridge/<safe>")`, not an absolute path. Every bridge
-generation path (`generate`, `vendor`, `scaffold`, `package`) writes a
-`package.json` next to the bridge and refreshes a relative
-`node_modules/@tsmbt-bridge/<safe>` symlink under the consumer's moon
-module root, so node's resolver can follow `#module(...)` to the
-generated JS at build time. The symlink target is relative to the
-moon module root, so the whole package — generated bridges and all —
-moves cleanly to a new location with the source. The generated
-`moon.pkg.json` is just `{}`; the consumer adds the `import` line
-themselves (see "Consume the generated bridge" below).
-`moon check --target js` will fail loudly on a broken link.
+The bridge `bridge.mbt` references each helper via a Node subpath
+import: `#module("#tsmbt-bridge/<safe>")`. Resolution goes through
+the consumer's `package.json#imports` map under a single wildcard
+entry — `vendor` / `generate` print a copy-paste-ready snippet on
+first run:
+
+```json
+{
+  "imports": {
+    "#tsmbt-bridge/*": "./src/internal/generated/*/bridge.js"
+  }
+}
+```
+
+This survives `pnpm install` / `npm install` because the mapping
+lives in your source-controlled `package.json` rather than as an
+ad-hoc `node_modules/` symlink (which package managers prune on
+reinstall). The generated `moon.pkg` is empty (no extra imports
+needed); the consumer adds the `import` line themselves to their
+own `moon.pkg` (see "Consume the generated bridge" below).
 
 Naming: the directory slug strips the leading `@`, replaces `/` with
 `__`, and replaces other non-`[A-Za-z0-9]` characters with `_`.
@@ -192,26 +195,32 @@ Regenerate via `ts2mbt vendor <pkg>` or `ts2mbt generate`.
 
 ### Consume the generated bridge
 
-The bridge is just another MoonBit sub-package. `generate` and `vendor`
-print a copy-paste-ready import line (with your module name resolved
-from `moon.mod.json`); the shape is `<your-module-name>` + the
-in-source path:
+The bridge is just another MoonBit sub-package. `generate` and
+`vendor` print a copy-paste-ready import block (with your module
+name resolved from `moon.mod.json`) in the new `moon.pkg` text
+format:
 
-```json
-{
-  "is-main": true,
-  "import": [
-    { "path": "yourname/yourmod/internal/generated/hono", "alias": "hono" }
-  ]
+```
+import {
+  "yourname/yourmod/internal/generated/hono" @hono,
 }
+
+options(
+  "is-main": true,
+)
 ```
 
-Then call it from MoonBit as `@hono.<exported-symbol>`. The generated
+Then call it from MoonBit as `@hono.<exported-symbol>`. Class
+methods preserve their TypeScript names — `app.get("/", ...)`,
+`c.text("ok", None, None)` — and reserved-word collisions get a
+trailing underscore (e.g. `match` → `match_`). The generated
 `bridge.mbti` is the source of truth for the public surface;
 `SCAFFOLD_DIAGNOSTICS.md` records anything that was widened to
 `JSValue` so you know where the typed surface ends.
 
-Build & run as usual: `moon run <your-pkg> --target js`.
+Build & run as usual: `moon run <your-pkg> --target js`. With
+`"preferred-target": "js"` in `moon.mod.json` you can drop the
+`--target js` flag.
 
 Flags:
 
@@ -286,7 +295,7 @@ Current export model:
 - Generated glue declarations, runtime export lists, package `exports`, and
   child-package re-export files are sorted deterministically to keep scaffold
   diffs reviewable.
-- The temporary `moon.pkg.json` and wrapper `.mbt` files are build inputs
+- The temporary `moon.pkg` and wrapper `.mbt` files are build inputs
   only; they are not written to the final TypeScript package.
 - Recursive `.mbti` resolution only rewrites imports that stay under the same
   root package prefix. External imports remain bare specifiers.
@@ -320,7 +329,7 @@ Unsupported or limited surface:
 - External MoonBit imports are left as bare TypeScript imports unless an
   import rewrite map is provided.
 - The final package should not contain temporary glue files such as
-  `moon.pkg.json` or generated facade `.mbt`; those are build inputs only.
+  `moon.pkg` or generated facade `.mbt`; those are build inputs only.
 
 ## TypeScript -> MoonBit
 
@@ -401,7 +410,7 @@ Package-specific practical coverage:
   `node:sqlite`, `node:fs`, `node:assert`, and `node:util`.
 - Hono is the current example of that policy: the basic application route
   shape works directly from MoonBit as
-  `app.hono_get("/", fn(c) { c.text("ok", None, None) })`, with route paths
+  `app.get("/", fn(c) { c.text("ok", None, None) })`, with route paths
   as `String`, handlers as `(Context) -> Response`, and common `Context`
   response helpers returning `Response`.
 - Glob now exercises the same policy for function-valued constant exports.
