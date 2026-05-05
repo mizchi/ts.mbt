@@ -486,7 +486,10 @@ may widen or omit them and report the decision in diagnostics.
 
 ## Examples
 
-See [`examples/`](./examples/) for runnable demos of both directions.
+- [Quick start](./docs/quick-start.md) — vendor `hono` and
+  `@hono/node-server` from npm and serve real HTTP from MoonBit.
+- [`examples/`](./examples/) — runnable fixtures used by
+  `just verify-examples`.
 
 ## Development
 
