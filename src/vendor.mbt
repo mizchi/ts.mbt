@@ -298,9 +298,7 @@ async fn print_generate_import_block(pkg_specs : Array[String]) -> Unit {
   println("Add to your consumer moon.pkg import block:")
   for pkg_spec in pkg_specs {
     let safe_dir = vendor_safe_pkg_dir(pkg_spec)
-    println(
-      "  \"\{module_name}/internal/generated/\{safe_dir}\" @\{safe_dir},",
-    )
+    println("  \"\{module_name}/internal/generated/\{safe_dir}\" @\{safe_dir},")
   }
 }
 

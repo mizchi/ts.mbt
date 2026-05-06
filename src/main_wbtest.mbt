@@ -449,8 +449,8 @@ async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
       facade=true,
     ),
   )
-  let moon_pkg_json = @fs.read_file(wbtest_join_path(root, "moon.pkg")).text() catch {
-    e => fail("failed to read unified TS moon.pkg.json: \{e}")
+  let moon_pkg = @fs.read_file(wbtest_join_path(root, "moon.pkg")).text() catch {
+    e => fail("failed to read unified TS moon.pkg: \{e}")
   }
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read unified TS bridge.mbt: \{e}")
@@ -463,11 +463,10 @@ async test "emit_unified_tsmbt_scaffold emits TypeScript to MoonBit scaffold" {
   assert_eq(
     wbtest_relative_file_snapshot(root),
     [
-      "moon.pkg", "bridge.js", "bridge.mbt", "bridge.mbti", "package.json",
-      "SCAFFOLD_DIAGNOSTICS.md",
+      "moon.pkg", "bridge.js", "bridge.mbt", "bridge.mbti", "package.json", "SCAFFOLD_DIAGNOSTICS.md",
     ].join("\n"),
   )
-  assert_eq(moon_pkg_json, "")
+  assert_eq(moon_pkg, "")
   // The neverthrow-like fixture has directly-callable runtime exports,
   // so the bridge.mbt extern lines pull from `/runtime/neverthrow-like.js`
   // rather than going through a `__ts_mbt_*` helper indirection.
@@ -1217,7 +1216,7 @@ async test "emit_moonbit_bridge_package_texts generates a compileable package bu
   // Generated bridge packages are now self-contained — no `mizchi/js`
   // dependency since `JSValue` and `Promise[X]` are emitted as
   // `#external` types directly in the package.
-  assert_false(bundle.moon_pkg_json.contains("mizchi/js"))
+  assert_false(bundle.moon_pkg.contains("mizchi/js"))
   assert_true(bundle.bridge_mbt.contains("#external\npub type JSValue"))
   assert_true(bundle.bridge_mbti.contains("declare pub fn get_default()"))
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
@@ -5777,10 +5776,7 @@ test "compute_vendor_root: missing source field falls back to module root, not s
   // `<root>/internal/generated/...`. A `<root>/src/internal/generated/...`
   // fallback would be invisible to the consumer's `moon build`.
   let mod_json = "{ \"name\": \"acme/app\", \"version\": \"0.0.0\" }"
-  assert_eq(
-    compute_vendor_root("/proj", mod_json),
-    "/proj/internal/generated",
-  )
+  assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
 }
 
 ///|
@@ -5795,19 +5791,13 @@ test "compute_vendor_root: explicit source=src nests under src/" {
 ///|
 test "compute_vendor_root: explicit source=. matches missing-source behavior" {
   let mod_json = "{ \"name\": \"acme/app\", \"source\": \".\" }"
-  assert_eq(
-    compute_vendor_root("/proj", mod_json),
-    "/proj/internal/generated",
-  )
+  assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
 }
 
 ///|
 test "compute_vendor_root: empty source string is treated as module root" {
   let mod_json = "{ \"name\": \"acme/app\", \"source\": \"\" }"
-  assert_eq(
-    compute_vendor_root("/proj", mod_json),
-    "/proj/internal/generated",
-  )
+  assert_eq(compute_vendor_root("/proj", mod_json), "/proj/internal/generated")
 }
 
 ///|

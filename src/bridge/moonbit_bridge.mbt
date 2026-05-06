@@ -11,7 +11,7 @@ pub struct MoonBitTsBridgeBundle {
 pub struct MoonBitTsBridgePackageBundle {
   entry_path : String
   module_spec : String
-  moon_pkg_json : String
+  moon_pkg : String
   bridge_mbti : String
   bridge_mbt : String
   bridge_js : String
@@ -1148,7 +1148,7 @@ pub async fn emit_moonbit_ts_bridge_package_bundle_from_entry_path(
   {
     entry_path: bundle.entry_path,
     module_spec: bundle.module_spec,
-    moon_pkg_json: render_bridge_pkg_json(
+    moon_pkg: render_bridge_pkg_json(
       bridge_bundle_needs_js_import(bundle) || bridge_mbt.contains("@js."),
     ),
     bridge_mbti,

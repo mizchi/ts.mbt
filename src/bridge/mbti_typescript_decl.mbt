@@ -12,7 +12,7 @@ pub struct MbtiTypescriptPackageFile {
 
 ///|
 pub struct MbtiTypescriptScaffoldBundle {
-  moon_pkg_json : String
+  moon_pkg : String
   package_json : String
   autolink_diagnostics_md : String
   autolink_glue_mbt : String
@@ -1899,7 +1899,7 @@ fn json_escape_string(source : String) -> String {
 
 ///|
 fn render_glue_import_entry(path : String, alias_name : String) -> String {
-  "    { \"path\": \"\{json_escape_string(path)}\", \"alias\": \"\{json_escape_string(alias_name)}\" }"
+  "  \"\{json_escape_string(path)}\" @\{alias_name},"
 }
 
 ///|
@@ -1917,7 +1917,7 @@ fn push_unique_glue_import_entry(
 }
 
 ///|
-fn render_moonbit_js_glue_pkg_json(
+fn render_moonbit_js_glue_moon_pkg(
   loaded : LoadedMbtiPackageSources,
   export_names : Array[String],
 ) -> String raise MbtiTypescriptDeclError {
@@ -1961,14 +1961,15 @@ fn render_moonbit_js_glue_pkg_json(
   sort_strings_ascending(import_entries)
   let sorted_export_names = export_names.copy()
   sort_strings_ascending(sorted_export_names)
-  let lines : Array[String] = ["{"]
-  lines.push("  \"import\": [")
-  for idx in 0..<import_entries.length() {
-    let suffix = if idx + 1 < import_entries.length() { "," } else { "" }
-    lines.push(import_entries[idx] + suffix)
+  let lines : Array[String] = []
+  lines.push("import {")
+  for entry in import_entries {
+    lines.push(entry)
   }
-  lines.push("  ],")
-  lines.push("  \"link\": {")
+  lines.push("}")
+  lines.push("")
+  lines.push("options(")
+  lines.push("  link: {")
   lines.push("    \"js\": {")
   lines.push("      \"exports\": [")
   for idx in 0..<sorted_export_names.length() {
@@ -1978,10 +1979,10 @@ fn render_moonbit_js_glue_pkg_json(
     )
   }
   lines.push("      ],")
-  lines.push("      \"format\": \"esm\"")
-  lines.push("    }")
-  lines.push("  }")
-  lines.push("}")
+  lines.push("      \"format\": \"esm\",")
+  lines.push("    },")
+  lines.push("  },")
+  lines.push(")")
   lines.join("\n")
 }
 
@@ -5191,7 +5192,7 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
   for decl in glue_decls {
     export_names.push(decl.runtime_export_name)
   }
-  let moon_pkg_json = render_moonbit_js_glue_pkg_json(loaded, export_names)
+  let moon_pkg = render_moonbit_js_glue_moon_pkg(loaded, export_names)
   let files = strip_runtime_inaccessible_typescript_package_files(
     loaded,
     emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
@@ -5212,7 +5213,7 @@ pub async fn emit_typescript_scaffold_bundle_from_mbti_path_with_import_rewrites
     files_with_runtime.push(file)
   }
   {
-    moon_pkg_json,
+    moon_pkg,
     package_json: render_typescript_package_json(
       root_package_name, files_with_runtime,
     ),
@@ -5260,9 +5261,7 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
       }
     }
   }
-  let moon_pkg_json = render_moonbit_js_glue_pkg_json(
-    loaded, facade_export_names,
-  )
+  let moon_pkg = render_moonbit_js_glue_moon_pkg(loaded, facade_export_names)
   let files = strip_runtime_inaccessible_typescript_package_files(
     loaded,
     emit_typescript_package_bundle_from_mbti_path_with_import_rewrites(
@@ -5292,7 +5291,7 @@ pub async fn emit_typescript_facade_scaffold_bundle_from_mbti_path_with_import_r
     files_with_facades.push(file)
   }
   {
-    moon_pkg_json,
+    moon_pkg,
     package_json: render_typescript_package_json(
       root_package_name, files_with_facades,
     ),

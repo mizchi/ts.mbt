@@ -45,7 +45,7 @@ async test "bridge: emit MoonBit TS bridge package bundle has no mizchi/js depen
   // The generated bridge now ships its own `JSValue` / `Promise[X]`
   // `#external` types, so the package descriptor must not pull in
   // `mizchi/js`.
-  assert_false(bundle.moon_pkg_json.contains("mizchi/js"))
+  assert_false(bundle.moon_pkg.contains("mizchi/js"))
   assert_true(bundle.bridge_mbt.contains("#external\npub type JSValue"))
   assert_true(bundle.bridge_mbti.contains("declare pub fn get_default()"))
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_default()"))
@@ -678,7 +678,7 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes namespace expo
   )
   assert_true(bundle.bridge_mbt.contains("pub extern \"js\" fn get_shapes()"))
   // No `mizchi/js` dependency: the bridge declares `JSValue` itself.
-  assert_false(bundle.moon_pkg_json.contains("mizchi/js"))
+  assert_false(bundle.moon_pkg.contains("mizchi/js"))
   assert_true(
     bundle.bridge_js.contains("export function __ts_mbt_get_shapes()"),
   )

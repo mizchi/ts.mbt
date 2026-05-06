@@ -98,6 +98,9 @@ fn collect_mbti_public_free_function_names(
 }
 
 ///|
+/// Render a standalone `moon.pkg` text-format options block describing
+/// the JS link config. Suitable for dropping in as the package's
+/// `moon.pkg` (or merging into an existing `options(...)` block by hand).
 fn render_moonbit_js_link_config(function_names : Array[String]) -> String {
   let export_lines : Array[String] = []
   for i = 0; i < function_names.length(); i = i + 1 {
@@ -105,16 +108,16 @@ fn render_moonbit_js_link_config(function_names : Array[String]) -> String {
     export_lines.push("        \"\{function_names[i]}\"\{suffix}")
   }
   let lines = [
-    "{",
-    "  \"link\": {",
+    "options(",
+    "  link: {",
     "    \"js\": {",
     "      \"exports\": [",
     export_lines.join("\n"),
     "      ],",
-    "      \"format\": \"esm\"",
-    "    }",
-    "  }",
-    "}",
+    "      \"format\": \"esm\",",
+    "    },",
+    "  },",
+    ")",
   ]
   lines.join("\n")
 }

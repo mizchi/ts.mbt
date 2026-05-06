@@ -108,7 +108,7 @@ pub struct MbtiTypescriptPackageFile {
 }
 
 pub struct MbtiTypescriptScaffoldBundle {
-  moon_pkg_json : String
+  moon_pkg : String
   package_json : String
   autolink_diagnostics_md : String
   autolink_glue_mbt : String
@@ -133,7 +133,7 @@ pub struct MoonBitTsBridgeBundle {
 pub struct MoonBitTsBridgePackageBundle {
   entry_path : String
   module_spec : String
-  moon_pkg_json : String
+  moon_pkg : String
   bridge_mbti : String
   bridge_mbt : String
   bridge_js : String

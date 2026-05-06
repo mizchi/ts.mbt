@@ -743,18 +743,18 @@ async test "bridge: emit MoonBit JS link config from mbti keeps only top-level f
       fail("MBTI JS link emit error: \{msg}")
   }
   let expected =
-    #|{
-    #|  "link": {
+    #|options(
+    #|  link: {
     #|    "js": {
     #|      "exports": [
     #|        "identity",
     #|        "debug_identity",
     #|        "wrap_pair"
     #|      ],
-    #|      "format": "esm"
-    #|    }
-    #|  }
-    #|}
+    #|      "format": "esm",
+    #|    },
+    #|  },
+    #|)
   assert_eq(actual, expected)
 }
 
@@ -768,17 +768,17 @@ async test "bridge: emit MoonBit JS link config from mbti includes top-level asy
       fail("MBTI JS link emit error: \{msg}")
   }
   let expected =
-    #|{
-    #|  "link": {
+    #|options(
+    #|  link: {
     #|    "js": {
     #|      "exports": [
     #|        "fetch_value",
     #|        "transform"
     #|      ],
-    #|      "format": "esm"
-    #|    }
-    #|  }
-    #|}
+    #|      "format": "esm",
+    #|    },
+    #|  },
+    #|)
   assert_eq(actual, expected)
 }
 
@@ -860,9 +860,9 @@ async test "bridge: emit TypeScript scaffold bundle from mbti combines autolink 
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI scaffold bundle emit error: \{msg}")
   }
-  assert_true(bundle.moon_pkg_json.contains("\"make\""))
-  assert_false(bundle.moon_pkg_json.contains("\"render\""))
-  assert_false(bundle.moon_pkg_json.contains("Holder::"))
+  assert_true(bundle.moon_pkg.contains("\"make\""))
+  assert_false(bundle.moon_pkg.contains("\"render\""))
+  assert_false(bundle.moon_pkg.contains("Holder::"))
   assert_true(bundle.package_json.contains("\"name\": \"@demo/pkg\""))
   assert_true(bundle.package_json.contains("\"types\": \"./index.d.ts\""))
   assert_true(
@@ -895,21 +895,13 @@ async test "bridge: emit TypeScript scaffold bundle exposes child package runtim
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI scaffold bundle emit error: \{msg}")
   }
-  assert_true(bundle.moon_pkg_json.contains("\"tsmbt_source_child_make_item\""))
+  assert_true(bundle.moon_pkg.contains("\"tsmbt_source_child_make_item\""))
   assert_true(
-    bundle.moon_pkg_json.contains(
-      "\"path\": \"examples/counter/child\", \"alias\": \"tsmbt_source_child\"",
-    ),
+    bundle.moon_pkg.contains("\"examples/counter/child\" @tsmbt_source_child"),
   )
+  assert_false(bundle.moon_pkg.contains("\"examples/counter/child\" @child,"))
   assert_false(
-    bundle.moon_pkg_json.contains(
-      "\"path\": \"examples/counter/child\", \"alias\": \"child\"",
-    ),
-  )
-  assert_false(
-    bundle.moon_pkg_json.contains(
-      "\"path\": \"examples/counter/child/grand\", \"alias\": \"grand\"",
-    ),
+    bundle.moon_pkg.contains("\"examples/counter/child/grand\" @grand,"),
   )
   assert_true(
     bundle.package_json.contains(
@@ -972,11 +964,11 @@ async test "bridge: emit TypeScript scaffold bundle keeps optional named params 
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI scaffold bundle emit error: \{msg}")
   }
-  assert_true(bundle.moon_pkg_json.contains("\"consume_callbacks\""))
-  assert_true(bundle.moon_pkg_json.contains("\"nullValue\""))
-  assert_true(bundle.moon_pkg_json.contains("\"undefinedValue\""))
-  assert_false(bundle.moon_pkg_json.contains("\"identity\""))
-  assert_false(bundle.moon_pkg_json.contains("\"make_secret\""))
+  assert_true(bundle.moon_pkg.contains("\"consume_callbacks\""))
+  assert_true(bundle.moon_pkg.contains("\"nullValue\""))
+  assert_true(bundle.moon_pkg.contains("\"undefinedValue\""))
+  assert_false(bundle.moon_pkg.contains("\"identity\""))
+  assert_false(bundle.moon_pkg.contains("\"make_secret\""))
   assert_true(bundle.autolink_diagnostics_md.contains("- `identity`"))
   assert_true(bundle.autolink_diagnostics_md.contains("- `make_secret`"))
   let mut root_content = ""
@@ -1070,10 +1062,10 @@ async test "bridge: emit TypeScript facade scaffold bundle from mbti adds facade
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI facade scaffold bundle emit error: \{msg}")
   }
-  assert_true(bundle.moon_pkg_json.contains("\"fetch_value\""))
-  assert_true(bundle.moon_pkg_json.contains("\"transform\""))
-  assert_true(bundle.moon_pkg_json.contains("\"loader_new\""))
-  assert_true(bundle.moon_pkg_json.contains("\"loader_load\""))
+  assert_true(bundle.moon_pkg.contains("\"fetch_value\""))
+  assert_true(bundle.moon_pkg.contains("\"transform\""))
+  assert_true(bundle.moon_pkg.contains("\"loader_new\""))
+  assert_true(bundle.moon_pkg.contains("\"loader_load\""))
   assert_true(
     bundle.autolink_glue_mbt.contains(
       "pub fn loader_new(arg0 : String) -> @tsmbt_source.Loader {",
@@ -1111,11 +1103,9 @@ async test "bridge: emit TypeScript facade scaffold bundle adds child package fa
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI facade scaffold bundle emit error: \{msg}")
   }
+  assert_true(bundle.moon_pkg.contains("\"tsmbt_source_child_item_display\""))
   assert_true(
-    bundle.moon_pkg_json.contains("\"tsmbt_source_child_item_display\""),
-  )
-  assert_true(
-    bundle.moon_pkg_json.contains("\"tsmbt_source_child_grand_tag_label\""),
+    bundle.moon_pkg.contains("\"tsmbt_source_child_grand_tag_label\""),
   )
   assert_true(
     bundle.autolink_glue_mbt.contains(
@@ -1171,7 +1161,7 @@ async test "bridge: emit TypeScript facade scaffold bundle sorts review-facing f
     #|        "worker_z",
     #|        "zeta"
     #|      ]
-  assert_true(bundle.moon_pkg_json.contains(expected_exports))
+  assert_true(bundle.moon_pkg.contains(expected_exports))
   let expected_glue =
     #|pub fn alpha() -> String {
     #|  @tsmbt_source.alpha()
@@ -1225,9 +1215,10 @@ async test "bridge: emit TypeScript facade scaffold bundle keeps root imports in
       "pub fn loader_load(self_ : @tsmbt_source.Loader) -> @tsmbt_source_child.Item {",
     ),
   )
-  assert_true(bundle.moon_pkg_json.contains("\"path\": \"demo/facade\""))
-  assert_true(bundle.moon_pkg_json.contains("\"alias\": \"tsmbt_source\""))
-  assert_true(bundle.moon_pkg_json.contains("\"path\": \"demo/facade/child\""))
+  assert_true(bundle.moon_pkg.contains("\"demo/facade\" @tsmbt_source,"))
+  assert_true(
+    bundle.moon_pkg.contains("\"demo/facade/child\" @tsmbt_source_child,"),
+  )
 }
 
 ///|
@@ -1285,8 +1276,8 @@ async test "bridge: emit TypeScript facade scaffold bundle includes async method
     | MbtiTypescriptDeclError::ParseError(msg) =>
       fail("MBTI facade scaffold bundle emit error: \{msg}")
   }
-  assert_true(bundle.moon_pkg_json.contains("\"worker_new\""))
-  assert_true(bundle.moon_pkg_json.contains("\"worker_load\""))
+  assert_true(bundle.moon_pkg.contains("\"worker_new\""))
+  assert_true(bundle.moon_pkg.contains("\"worker_load\""))
   assert_true(
     bundle.autolink_glue_mbt.contains(
       "pub async fn worker_new(arg0 : String) -> @tsmbt_source.Worker {",

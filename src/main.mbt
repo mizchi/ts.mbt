@@ -668,8 +668,8 @@ async fn build_moonbit_js_runtime_from_mbti(
     }
   }
   if !write_text_file(
-      main_join_path(context.glue_dir_path, "moon.pkg.json"),
-      bundle.moon_pkg_json,
+      main_join_path(context.glue_dir_path, "moon.pkg"),
+      bundle.moon_pkg,
     ) {
     remove_moonbit_js_glue_dir(context.glue_dir_path)
     return false
@@ -987,7 +987,7 @@ pub async fn emit_moonbit_bridge_package(
   )
   let package_json = render_bridge_package_json(resolved_specifier)
   let files : Array[(String, String)] = [
-    ("moon.pkg", bundle.moon_pkg_json),
+    ("moon.pkg", bundle.moon_pkg),
     ("bridge.mbti", bundle.bridge_mbti),
     ("package.json", package_json),
   ]

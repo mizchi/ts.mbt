@@ -741,7 +741,7 @@ EOF
   cat > "$out/bridge_test.mbt" <<'EOF'
 test "generated default class pattern" {
   let counter = new_default(10.0)
-  assert_eq(counter.default_inc(5.0), 15.0)
+  assert_eq(counter.inc(5.0), 15.0)
   counter.set_default_count(20.0)
   assert_eq(counter.get_default_count(), 20.0)
   let seeded = default_from(3.0)
@@ -754,15 +754,15 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   grep_generated_mbt "$out" 'pub extern "js" fn new_default(initial : Double) -> Default'
-  grep_generated_mbt "$out" 'pub extern "js" fn Default::default_inc(self : Default, delta : Double) -> Double'
+  grep_generated_mbt "$out" 'pub extern "js" fn Default::inc(self : Default, delta : Double) -> Double'
   grep_generated_mbt "$out" 'pub extern "js" fn default_from(seed : Double) -> Default'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_default_class" <<'EOF'
 fn main {
   let counter = @sut.new_default(10.0)
-  if counter.default_inc(5.0) != 15.0 {
-    abort("unexpected default_inc output")
+  if counter.inc(5.0) != 15.0 {
+    abort("unexpected inc output")
   }
   counter.set_default_count(20.0)
   if counter.get_default_count() != 20.0 {
