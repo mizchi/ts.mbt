@@ -72,13 +72,52 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
         None => Intersection(inner)
       }
     }
-    Conditional(check, extends, t_branch, f_branch) =>
-      Conditional(
-        simplify_type(check),
-        simplify_type(extends),
-        simplify_type(t_branch),
-        simplify_type(f_branch),
-      )
+    Conditional(check, extends_, t_branch, f_branch) => {
+      let s_check = simplify_type(check)
+      let s_extends = simplify_type(extends_)
+      let s_t = simplify_type(t_branch)
+      let s_f = simplify_type(f_branch)
+      // Distributive conditional: `(A | B) extends T ? X : Y`
+      // -> `(A extends T ? X : Y) | (B extends T ? X : Y)`. Each leaf is
+      // resolved through `extends_decision`; only commit the distribution
+      // when every leaf resolves definitively, otherwise keep the original
+      // conditional so callers can retry after additional substitution.
+      match s_check {
+        Union(items) => {
+          let results : Array[@ast.TsType] = []
+          let mut all_resolved = true
+          for item in items {
+            match extends_decision(item, s_extends) {
+              Some(true) => results.push(s_t)
+              Some(false) => results.push(s_f)
+              None => {
+                all_resolved = false
+                break
+              }
+            }
+          }
+          if all_resolved {
+            let collapsed = simplify_union(results)
+            if collapsed.length() == 0 {
+              Never
+            } else if collapsed.length() == 1 {
+              collapsed[0]
+            } else {
+              Union(collapsed)
+            }
+          } else {
+            Conditional(s_check, s_extends, s_t, s_f)
+          }
+        }
+        _ =>
+          // Direct decision for a non-union check.
+          match extends_decision(s_check, s_extends) {
+            Some(true) => s_t
+            Some(false) => s_f
+            None => Conditional(s_check, s_extends, s_t, s_f)
+          }
+      }
+    }
     IndexedAccess(base, key) =>
       IndexedAccess(simplify_type(base), simplify_type(key))
     _ => type_

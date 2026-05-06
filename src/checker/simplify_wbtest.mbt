@@ -93,3 +93,53 @@ test "simplify_type: idempotent" {
   let twice = simplify_type(once)
   assert_eq(once, twice)
 }
+
+///|
+test "simplify_type: collapses concrete conditional via direct decision" {
+  // `string extends string ? "y" : "n"` -> `"y"`.
+  let t : @ast.TsType = Conditional(
+    String_,
+    String_,
+    Literal("y"),
+    Literal("n"),
+  )
+  assert_eq(simplify_type(t), Literal("y"))
+}
+
+///|
+test "simplify_type: distributes conditional over a union check" {
+  // `(string | number) extends string ? "y" : "n"`
+  // -> `("y") | ("n")` after distribution.
+  let t : @ast.TsType = Conditional(
+    Union([String_, Number]),
+    String_,
+    Literal("y"),
+    Literal("n"),
+  )
+  // Both branches reduce, so we get a 2-member union.
+  assert_eq(simplify_type(t), Union([Literal("y"), Literal("n")]))
+}
+
+///|
+test "simplify_type: distributes and collapses when all branches agree" {
+  // `(string | number) extends string | number ? "y" : "n"` -> `"y"`.
+  let t : @ast.TsType = Conditional(
+    Union([String_, Number]),
+    Union([String_, Number]),
+    Literal("y"),
+    Literal("n"),
+  )
+  assert_eq(simplify_type(t), Literal("y"))
+}
+
+///|
+test "simplify_type: leaves conditional unresolved when decision is undecidable" {
+  // `Foo extends Bar ? "y" : "n"` — both Named, no resolver — undecidable.
+  let t : @ast.TsType = Conditional(
+    Named("Foo"),
+    Named("Bar"),
+    Literal("y"),
+    Literal("n"),
+  )
+  assert_eq(simplify_type(t), t)
+}
