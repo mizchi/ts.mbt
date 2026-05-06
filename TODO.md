@@ -848,17 +848,28 @@ Patch.path), `string | string[]`, `boolean | "boundary"` (magic-string hires),
 `boolean | OverwriteOptions` (magic-string), schema-leaf branches in zod /
 valibot.
 
-- [ ] Detect heterogeneous unions whose members can each be discriminated at
+- [x] Detect heterogeneous unions whose members can each be discriminated at
   runtime (`typeof` for primitives, `instanceof` for known classes, optional
   fallback for plain objects).
-- [ ] Lower the alias / synthetic-named union into a `pub(all) enum` with one
+- [x] Lower the alias / synthetic-named union into a `pub(all) enum` with one
   case per member, where each case wraps the lowered MoonBit type (e.g.
   `Number(Double) | StringValue(String) | DateValue(Date)`).
-- [ ] Generate paired conversion helpers: MoonBit-side `to_js(self) -> JSValue`
+- [x] Generate paired conversion helpers: MoonBit-side `to_js(self) -> JSValue`
   using primitive coercions, and JS-side discrimination wrappers in
   `bridge.js`.
-- [ ] Reuse the existing literal-union synthetic naming pass for anonymous
+- [x] Reuse the existing literal-union synthetic naming pass for anonymous
   heterogeneous unions on params / fields / return types.
+  - Mixed primitive + string/number/bigint/boolean literal unions now lower
+    too: literal cases become no-payload enum constructors (e.g. `Boundary`)
+    discriminated via `=== "boundary"`. Pure literal unions still defer to
+    `enum_lowering`, and a literal whose primitive type collides with a
+    non-literal sibling stays on JSValue.
+- [x] Auto-wrap return values to the MoonBit-side `<alias>_from_js`
+  representation when the discriminator is purely typeof / isArray / strict
+  equality. Tagged-union aliases that depend on `instanceof <NamedClass>`
+  (e.g. `ServerType = Server | Http2Server | Http2SecureServer` from
+  `node:net` / `node:http2`) are skipped because the named classes aren't
+  reachable from `bridge.js`.
 - [ ] Emit diagnostics and stay on JSValue when discrimination is ambiguous
   (e.g. two struct members with overlapping shapes).
 - [ ] Add real-world budgets: jose, magic-string, immer, and zod / valibot

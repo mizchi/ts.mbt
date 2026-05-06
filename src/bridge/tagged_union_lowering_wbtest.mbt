@@ -17,14 +17,120 @@ test "tagged union: primitive plus named class is a candidate" {
 }
 
 ///|
-test "tagged union: string literal members reject candidate" {
+test "tagged union: mixed primitive + string literal lowers" {
+  // magic-string `hires: boolean | "boundary"` style. Boolean and a string
+  // literal share no overlapping primitive type, so the literal becomes a
+  // dedicated no-payload enum case.
   let members : Array[@ast.TsType] = [
     @ast.TsType::Boolean,
     @ast.TsType::Literal("boundary"),
   ]
   match tagged_union_cases(members) {
-    Some(_) => fail("literal members must defer to literal-union path")
+    Some(cases) => {
+      assert_eq(cases.length(), 2)
+      assert_eq(cases[0].0, "BoolValue")
+      assert_eq(cases[1].0, "Boundary")
+    }
+    None => fail("expected boolean | \"boundary\" to lower")
+  }
+}
+
+///|
+test "tagged union: pure literal-only union still rejected" {
+  // Pure literal unions defer to enum_lowering, even with mixed acceptance.
+  let members : Array[@ast.TsType] = [
+    @ast.TsType::Literal("a"),
+    @ast.TsType::Literal("b"),
+  ]
+  match tagged_union_cases(members) {
+    Some(_) => fail("pure literals must still go to enum_lowering")
     None => ()
+  }
+}
+
+///|
+test "tagged union: literal sharing primitive type with non-literal is rejected" {
+  // `string | "x"` has overlapping discriminators (both pass typeof === "string").
+  let members : Array[@ast.TsType] = [
+    @ast.TsType::String_,
+    @ast.TsType::Literal("x"),
+  ]
+  match tagged_union_cases(members) {
+    Some(_) =>
+      fail("literal whose primitive overlaps a non-literal must be rejected")
+    None => ()
+  }
+}
+
+///|
+test "tagged union: literal case discriminator uses strict equality" {
+  match tagged_union_case_discriminator(@ast.TsType::Literal("boundary")) {
+    Some(StrictEqualsString(value)) => assert_eq(value, "boundary")
+    _ => fail("expected StrictEqualsString discriminator")
+  }
+}
+
+///|
+test "tagged union: literal case is no-payload" {
+  assert_true(tagged_union_case_is_no_payload(@ast.TsType::Literal("boundary")))
+  assert_true(tagged_union_case_is_no_payload(@ast.TsType::NumberLiteral("42")))
+  assert_true(
+    tagged_union_case_is_no_payload(@ast.TsType::BooleanLiteral(true)),
+  )
+  assert_false(tagged_union_case_is_no_payload(@ast.TsType::Boolean))
+}
+
+///|
+test "tagged union decl: mixed primitive + literal renders no-payload case" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Hires",
+    cases: [
+      ("BoolValue", @ast.TsType::Boolean),
+      ("Boundary", @ast.TsType::Literal("boundary")),
+    ],
+  }
+  match tagged_union_decl_to_moonbit_section(decl) {
+    Some(section) => {
+      assert_true(section.contains("BoolValue(Bool)"))
+      // No-payload literal case must omit parentheses.
+      assert_true(section.contains("\n  Boundary\n"))
+    }
+    None => fail("decl section should render with no-payload literal case")
+  }
+}
+
+///|
+test "tagged union to-js: literal case emits literal value" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Hires",
+    cases: [
+      ("BoolValue", @ast.TsType::Boolean),
+      ("Boundary", @ast.TsType::Literal("boundary")),
+    ],
+  }
+  let snippet = tagged_union_to_js_expression(decl, "x")
+  assert_true(snippet.contains("\"boundary\""))
+  // Literal case payload must NOT read `_0`; only the boolean case does.
+  assert_true(snippet.contains("x.$tag === 1"))
+}
+
+///|
+test "tagged union from-js: literal case uses strict equality" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Hires",
+    cases: [
+      ("BoolValue", @ast.TsType::Boolean),
+      ("Boundary", @ast.TsType::Literal("boundary")),
+    ],
+  }
+  match tagged_union_from_js_expression(decl, "v") {
+    Some(snippet) => {
+      assert_true(snippet.contains("typeof v === \"boolean\""))
+      assert_true(snippet.contains("v === \"boundary\""))
+      // No-payload literal case must produce { "$tag": i } without `_0`.
+      assert_true(snippet.contains("{ \"$tag\": 1 }"))
+    }
+    None => fail("from_js should produce predicates for mixed boolean+literal")
   }
 }
 
@@ -138,6 +244,73 @@ test "tagged union alias: literal-only union is rejected" {
   match tagged_union_type_alias_decl(type_alias) {
     Some(_) => fail("literal-only unions must defer to enum_lowering")
     None => ()
+  }
+}
+
+///|
+test "tagged union alias: type Hires = boolean | \"boundary\" lowers" {
+  // magic-string `hires` style alias: a primitive plus a string literal that
+  // does not overlap any non-literal sibling.
+  let type_alias : @ast.TsTypeAlias = {
+    name: "Hires",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([
+      @ast.TsType::Boolean,
+      @ast.TsType::Literal("boundary"),
+    ]),
+  }
+  match tagged_union_type_alias_decl(type_alias) {
+    Some(decl) => {
+      assert_eq(decl.name, "Hires")
+      assert_eq(decl.cases.length(), 2)
+      assert_eq(decl.cases[0].0, "BoolValue")
+      assert_eq(decl.cases[1].0, "Boundary")
+    }
+    None => fail("expected boolean | \"boundary\" alias to lower")
+  }
+}
+
+///|
+test "tagged union alias: numeric literal mixed with string lowers" {
+  // `string | 0` keeps the numeric literal as a no-payload case while the
+  // string side discriminates by typeof.
+  let type_alias : @ast.TsTypeAlias = {
+    name: "PathOrZero",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([
+      @ast.TsType::String_,
+      @ast.TsType::NumberLiteral("0"),
+    ]),
+  }
+  match tagged_union_type_alias_decl(type_alias) {
+    Some(decl) => {
+      assert_eq(decl.cases.length(), 2)
+      assert_eq(decl.cases[1].0, "Lit0")
+    }
+    None => fail("expected string | 0 alias to lower")
+  }
+}
+
+///|
+test "tagged union: bridge.js converter pair works for mixed primitive + literal" {
+  let decl : BridgeTaggedUnionDecl = {
+    name: "Hires",
+    cases: [
+      ("BoolValue", @ast.TsType::Boolean),
+      ("Boundary", @ast.TsType::Literal("boundary")),
+    ],
+  }
+  match tagged_union_bridge_js_converter_decls(decl) {
+    Some(snippet) => {
+      assert_true(snippet.contains("__ts_mbt_tagged_union_hires_to_js"))
+      assert_true(snippet.contains("__ts_mbt_tagged_union_hires_from_js"))
+      assert_true(snippet.contains("\"boundary\""))
+      assert_true(snippet.contains("typeof value === \"boolean\""))
+    }
+    None =>
+      fail("converter pair should be available for mixed boolean+literal alias")
   }
 }
 

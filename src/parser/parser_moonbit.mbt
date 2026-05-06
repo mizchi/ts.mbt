@@ -500,7 +500,80 @@ fn inline_union_constructor_name_for_part(t : @ast.TsType) -> String? {
     @ast.TsType::Array(@ast.TsType::Named(name)) =>
       inline_union_named_constructor_name(name + "Array")
     @ast.TsType::Named(name) => inline_union_named_constructor_name(name)
+    @ast.TsType::Literal(value) =>
+      inline_union_literal_string_constructor(value)
+    @ast.TsType::NumberLiteral(value) =>
+      inline_union_literal_numeric_constructor("Lit", value)
+    @ast.TsType::BigIntLiteral(value) =>
+      inline_union_literal_numeric_constructor("LitBigInt", value)
+    @ast.TsType::BooleanLiteral(true) => Some("TrueValue")
+    @ast.TsType::BooleanLiteral(false) => Some("FalseValue")
     _ => None
+  }
+}
+
+///|
+fn inline_union_literal_string_constructor(value : String) -> String? {
+  if value == "" {
+    return None
+  }
+  let mut out = ""
+  let mut next_upper = true
+  for c in value {
+    if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+      let ch = if next_upper && c >= 'a' && c <= 'z' {
+        (c.to_int() - 32).unsafe_to_char()
+      } else {
+        c
+      }
+      out += ch.to_string()
+      next_upper = false
+    } else if c >= '0' && c <= '9' {
+      if out == "" {
+        out += "Lit"
+      }
+      out += c.to_string()
+      next_upper = true
+    } else {
+      next_upper = true
+    }
+  }
+  if out == "" {
+    return None
+  }
+  let first = out[0].unsafe_to_char()
+  if first >= '0' && first <= '9' {
+    out = "Lit" + out
+  }
+  Some(out)
+}
+
+///|
+fn inline_union_literal_numeric_constructor(
+  prefix : String,
+  value : String,
+) -> String? {
+  if value == "" {
+    return None
+  }
+  let mut out = prefix
+  for c in value {
+    if (c >= '0' && c <= '9') ||
+      (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') {
+      out += c.to_string()
+    } else if c == '-' {
+      out += "Neg"
+    } else if c == '.' {
+      out += "Dot"
+    } else if c == '_' {
+      out += "_"
+    }
+  }
+  if out == prefix {
+    None
+  } else {
+    Some(out)
   }
 }
 
@@ -537,9 +610,11 @@ fn inline_union_member_is_literal_like(t : @ast.TsType) -> Bool {
 
 ///|
 /// Compute the synthetic alias name for an inline `A | B [| C ...]` shape,
-/// matching the FFI-side lowering exactly. Returns `None` when any member is
-/// a literal, lacks a runtime discriminator, or duplicates a constructor
-/// slot — those cases keep the existing JSValue widening.
+/// matching the FFI-side lowering exactly. Returns `None` when any member
+/// lacks a runtime discriminator, when the union is pure literals (those go
+/// through the literal-union enum lowering), or when a literal's primitive
+/// type collides with a non-literal sibling — those cases keep the existing
+/// JSValue widening.
 fn inline_union_synthesized_name_from_parts(
   parts : Array[@ast.TsType],
 ) -> String? {
@@ -547,9 +622,10 @@ fn inline_union_synthesized_name_from_parts(
     return None
   }
   let names : Array[String] = []
+  let mut has_non_literal = false
   for entry in parts {
-    if inline_union_member_is_literal_like(entry) {
-      return None
+    if !inline_union_member_is_literal_like(entry) {
+      has_non_literal = true
     }
     let name = match inline_union_constructor_name_for_part(entry) {
       Some(n) => n
@@ -560,12 +636,58 @@ fn inline_union_synthesized_name_from_parts(
     }
     names.push(name)
   }
+  if !has_non_literal {
+    return None
+  }
+  if inline_union_has_primitive_overlap(parts) {
+    return None
+  }
   // Sort with the standard shortlex order (the MoonBit `String::compare`
   // ranks shorter strings ahead of longer ones, then breaks ties on code
   // units). This is deterministic and identical to the FFI-side sort so
   // both emission paths agree on the synthetic alias name.
   names.sort()
   Some("Auto_" + names.join("_or_"))
+}
+
+///|
+fn inline_union_member_primitive_kind(t : @ast.TsType) -> String? {
+  match t {
+    @ast.TsType::String_ => Some("string")
+    @ast.TsType::Number | @ast.TsType::Int => Some("number")
+    @ast.TsType::Boolean => Some("boolean")
+    @ast.TsType::BigInt => Some("bigint")
+    _ => None
+  }
+}
+
+///|
+fn inline_union_literal_primitive_kind(t : @ast.TsType) -> String? {
+  match t {
+    @ast.TsType::Literal(_) => Some("string")
+    @ast.TsType::NumberLiteral(_) => Some("number")
+    @ast.TsType::BooleanLiteral(_) => Some("boolean")
+    @ast.TsType::BigIntLiteral(_) => Some("bigint")
+    _ => None
+  }
+}
+
+///|
+fn inline_union_has_primitive_overlap(parts : Array[@ast.TsType]) -> Bool {
+  let primitive_kinds : Array[String] = []
+  for m in parts {
+    match inline_union_member_primitive_kind(m) {
+      Some(k) => if !primitive_kinds.contains(k) { primitive_kinds.push(k) }
+      None => ()
+    }
+  }
+  for m in parts {
+    match inline_union_literal_primitive_kind(m) {
+      Some(k) => if primitive_kinds.contains(k) { return true }
+      None => ()
+    }
+  }
+  false
 }
 
 ///|

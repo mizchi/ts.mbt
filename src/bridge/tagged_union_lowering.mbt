@@ -67,7 +67,106 @@ pub fn tagged_union_member_constructor_name(t : @ast.TsType) -> String? {
   match t {
     @ast.TsType::Named(name) => tagged_union_named_constructor_name(name)
     @ast.TsType::Array(inner) => tagged_union_array_constructor_name(inner)
+    @ast.TsType::Literal(_)
+    | @ast.TsType::NumberLiteral(_)
+    | @ast.TsType::BooleanLiteral(_)
+    | @ast.TsType::BigIntLiteral(_) => tagged_union_literal_constructor_name(t)
     _ => None
+  }
+}
+
+///|
+/// PascalCase constructor name for a literal-typed union member. Returns
+/// `None` for empty / unsanitisable values; callers fall back to widening.
+pub fn tagged_union_literal_constructor_name(t : @ast.TsType) -> String? {
+  match t {
+    @ast.TsType::Literal(value) =>
+      tagged_union_literal_string_to_constructor(value)
+    @ast.TsType::NumberLiteral(value) =>
+      tagged_union_literal_numeric_to_constructor("Lit", value)
+    @ast.TsType::BigIntLiteral(value) =>
+      tagged_union_literal_numeric_to_constructor("LitBigInt", value)
+    @ast.TsType::BooleanLiteral(value) =>
+      Some(if value { "TrueValue" } else { "FalseValue" })
+    _ => None
+  }
+}
+
+///|
+fn tagged_union_literal_string_to_constructor(value : String) -> String? {
+  if value == "" {
+    return None
+  }
+  let mut out = ""
+  let mut next_upper = true
+  for c in value {
+    if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+      let ch = if next_upper && c >= 'a' && c <= 'z' {
+        (c.to_int() - 32).unsafe_to_char()
+      } else if !next_upper && c >= 'A' && c <= 'Z' {
+        c
+      } else {
+        c
+      }
+      out += ch.to_string()
+      next_upper = false
+    } else if c >= '0' && c <= '9' {
+      if out == "" {
+        out += "Lit"
+      }
+      out += c.to_string()
+      next_upper = true
+    } else {
+      next_upper = true
+    }
+  }
+  if out == "" {
+    return None
+  }
+  let first = out[0].unsafe_to_char()
+  if first >= '0' && first <= '9' {
+    out = "Lit" + out
+  }
+  Some(out)
+}
+
+///|
+fn tagged_union_literal_numeric_to_constructor(
+  prefix : String,
+  value : String,
+) -> String? {
+  if value == "" {
+    return None
+  }
+  let mut out = prefix
+  for c in value {
+    if (c >= '0' && c <= '9') ||
+      (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') {
+      out += c.to_string()
+    } else if c == '-' {
+      out += "Neg"
+    } else if c == '.' {
+      out += "Dot"
+    } else if c == '_' {
+      out += "_"
+    }
+  }
+  if out == prefix {
+    None
+  } else {
+    Some(out)
+  }
+}
+
+///|
+pub fn tagged_union_case_is_no_payload(t : @ast.TsType) -> Bool {
+  match t {
+    @ast.TsType::Literal(_)
+    | @ast.TsType::NumberLiteral(_)
+    | @ast.TsType::BigIntLiteral(_)
+    | @ast.TsType::BooleanLiteral(_) => true
+    _ => false
   }
 }
 
@@ -86,9 +185,10 @@ pub fn tagged_union_member_is_literal_like(t : @ast.TsType) -> Bool {
 /// Decide whether a union of member types can be lowered to a tagged enum.
 ///
 /// Returns `Some` of `(constructor_name, inner_type)` pairs when every member:
-/// - is runtime-discriminable (primitive, `Array<primitive>`, or `Named`),
-/// - is not a string / number / boolean literal (those go through the existing
-///   literal-union enum lowering instead),
+/// - is runtime-discriminable (primitive, `Array<primitive>`, `Named`, or a
+///   literal whose primitive type does not overlap a non-literal sibling),
+/// - has at least one non-literal member (pure literal-only unions defer to
+///   `enum_lowering`),
 /// - has a unique constructor name after PascalCase normalization.
 ///
 /// Returns `None` otherwise. Callers must fall back to existing JSValue widening.
@@ -100,9 +200,10 @@ pub fn tagged_union_cases(
   }
   let cases : Array[(String, @ast.TsType)] = []
   let seen_names : Array[String] = []
+  let mut has_non_literal = false
   for entry in members {
-    if tagged_union_member_is_literal_like(entry) {
-      return None
+    if !tagged_union_member_is_literal_like(entry) {
+      has_non_literal = true
     }
     let name = match tagged_union_member_constructor_name(entry) {
       Some(n) => n
@@ -114,7 +215,58 @@ pub fn tagged_union_cases(
     seen_names.push(name)
     cases.push((name, entry))
   }
+  // Pure literal unions defer to enum_lowering; that path already produces
+  // a closed `pub(all) enum` with primitive bridge conversion.
+  if !has_non_literal {
+    return None
+  }
+  // A literal whose underlying primitive type collides with a non-literal
+  // sibling cannot be discriminated unambiguously at runtime.
+  if tagged_union_has_primitive_overlap(members) {
+    return None
+  }
   Some(cases)
+}
+
+///|
+fn tagged_union_member_primitive_kind(t : @ast.TsType) -> String? {
+  match t {
+    @ast.TsType::String_ => Some("string")
+    @ast.TsType::Number => Some("number")
+    @ast.TsType::Int => Some("number")
+    @ast.TsType::Boolean => Some("boolean")
+    @ast.TsType::BigInt => Some("bigint")
+    _ => None
+  }
+}
+
+///|
+fn tagged_union_literal_primitive_kind(t : @ast.TsType) -> String? {
+  match t {
+    @ast.TsType::Literal(_) => Some("string")
+    @ast.TsType::NumberLiteral(_) => Some("number")
+    @ast.TsType::BooleanLiteral(_) => Some("boolean")
+    @ast.TsType::BigIntLiteral(_) => Some("bigint")
+    _ => None
+  }
+}
+
+///|
+fn tagged_union_has_primitive_overlap(members : Array[@ast.TsType]) -> Bool {
+  let primitive_kinds : Array[String] = []
+  for m in members {
+    match tagged_union_member_primitive_kind(m) {
+      Some(k) => if !primitive_kinds.contains(k) { primitive_kinds.push(k) }
+      None => ()
+    }
+  }
+  for m in members {
+    match tagged_union_literal_primitive_kind(m) {
+      Some(k) => if primitive_kinds.contains(k) { return true }
+      None => ()
+    }
+  }
+  false
 }
 
 ///|
@@ -151,6 +303,10 @@ pub(all) enum TaggedUnionCaseDiscriminator {
   TypeofBigInt
   IsArrayPredicate
   InstanceOfNamed(String)
+  StrictEqualsString(String)
+  StrictEqualsNumber(String)
+  StrictEqualsBigInt(String)
+  StrictEqualsBool(Bool)
 } derive(Eq, Debug)
 
 ///|
@@ -165,6 +321,10 @@ pub fn tagged_union_case_discriminator(
     @ast.TsType::BigInt => Some(TypeofBigInt)
     @ast.TsType::Array(_) => Some(IsArrayPredicate)
     @ast.TsType::Named(name) => Some(InstanceOfNamed(name))
+    @ast.TsType::Literal(value) => Some(StrictEqualsString(value))
+    @ast.TsType::NumberLiteral(value) => Some(StrictEqualsNumber(value))
+    @ast.TsType::BigIntLiteral(value) => Some(StrictEqualsBigInt(value))
+    @ast.TsType::BooleanLiteral(value) => Some(StrictEqualsBool(value))
     _ => None
   }
 }
@@ -181,6 +341,53 @@ fn tagged_union_case_predicate_text(
     TypeofBigInt => "typeof " + expr + " === \"bigint\""
     IsArrayPredicate => "Array.isArray(" + expr + ")"
     InstanceOfNamed(name) => expr + " instanceof " + name
+    StrictEqualsString(value) =>
+      expr + " === " + tagged_union_js_string_literal(value)
+    StrictEqualsNumber(value) => expr + " === " + value
+    StrictEqualsBigInt(value) => expr + " === " + value + "n"
+    StrictEqualsBool(true) => expr + " === true"
+    StrictEqualsBool(false) => expr + " === false"
+  }
+}
+
+///|
+/// JS-quoted string literal text for use inside a generated `bridge.js` /
+/// inline lambda body. Escapes `\\` and `"`, and replaces newlines with `\\n`
+/// so the literal stays valid on a single source line.
+fn tagged_union_js_string_literal(value : String) -> String {
+  let mut out = "\""
+  for c in value {
+    if c == '\\' {
+      out += "\\\\"
+    } else if c == '"' {
+      out += "\\\""
+    } else if c == '\n' {
+      out += "\\n"
+    } else if c == '\r' {
+      out += "\\r"
+    } else if c == '\t' {
+      out += "\\t"
+    } else {
+      out += c.to_string()
+    }
+  }
+  out += "\""
+  out
+}
+
+///|
+/// Render the JS-side payload expression for a tagged-union case at the
+/// `to_js` boundary. For literal cases we re-emit the literal text directly
+/// instead of reading `_0`, since MoonBit no-payload enum cases are stored
+/// as `{ "$tag": i }` without a `_0` slot.
+fn tagged_union_case_to_js_literal_text(t : @ast.TsType) -> String? {
+  match t {
+    @ast.TsType::Literal(value) => Some(tagged_union_js_string_literal(value))
+    @ast.TsType::NumberLiteral(value) => Some(value)
+    @ast.TsType::BigIntLiteral(value) => Some(value + "n")
+    @ast.TsType::BooleanLiteral(true) => Some("true")
+    @ast.TsType::BooleanLiteral(false) => Some("false")
+    _ => None
   }
 }
 
@@ -236,19 +443,23 @@ pub fn tagged_union_to_js_expression_with_nested(
     // the case wraps a generated interface that needs JS-shape conversion
     // (e.g. enum-tag fields rewritten from `type_: 0` to `type:
     // "increment"`), or (3) a bare `_0` unwrap when neither applies.
-    let payload_expr = match inner {
-      @ast.TsType::Named(name) =>
-        match nested.get(name) {
-          Some(_) =>
-            tagged_union_to_js_function_name(name) + "(" + expr + "._0)"
-          None =>
-            if struct_converter_names.contains(name) {
-              ffi_struct_converter_name(name) + "(" + expr + "._0)"
-            } else {
-              expr + "._0"
+    let payload_expr = match tagged_union_case_to_js_literal_text(inner) {
+      Some(literal_text) => literal_text
+      None =>
+        match inner {
+          @ast.TsType::Named(name) =>
+            match nested.get(name) {
+              Some(_) =>
+                tagged_union_to_js_function_name(name) + "(" + expr + "._0)"
+              None =>
+                if struct_converter_names.contains(name) {
+                  ffi_struct_converter_name(name) + "(" + expr + "._0)"
+                } else {
+                  expr + "._0"
+                }
             }
+          _ => expr + "._0"
         }
-      _ => expr + "._0"
     }
     body = body + "return " + payload_expr + "; "
   }
@@ -282,12 +493,16 @@ pub fn tagged_union_from_js_expression(
     } else {
       body = body + "else if (" + predicate + ") "
     }
-    body = body +
-      "return { \"$tag\": " +
-      i.to_string() +
-      ", \"_0\": " +
-      expr +
-      " }; "
+    if tagged_union_case_is_no_payload(inner) {
+      body = body + "return { \"$tag\": " + i.to_string() + " }; "
+    } else {
+      body = body +
+        "return { \"$tag\": " +
+        i.to_string() +
+        ", \"_0\": " +
+        expr +
+        " }; "
+    }
   }
   body = body + "throw new Error(\"unexpected " + decl.name + " value\"); })()"
   Some(body)
@@ -324,11 +539,15 @@ pub fn tagged_union_decl_to_moonbit_section(
   let mut body = "///|\npub(all) enum " + decl.name + " {\n"
   for entry in decl.cases {
     let (case_name, inner) = entry
-    let inner_text = match tagged_union_inner_moonbit_text(inner) {
-      Some(text) => text
-      None => return None
+    if tagged_union_case_is_no_payload(inner) {
+      body = body + "  " + case_name + "\n"
+    } else {
+      let inner_text = match tagged_union_inner_moonbit_text(inner) {
+        Some(text) => text
+        None => return None
+      }
+      body = body + "  " + case_name + "(" + inner_text + ")\n"
     }
-    body = body + "  " + case_name + "(" + inner_text + ")\n"
   }
   body = body + "}"
   Some(body)

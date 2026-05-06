@@ -1005,9 +1005,13 @@ fn ffi_synthesize_inline_union(
       Some(_) => ()
       None => return None
     }
-    match tagged_union_inner_moonbit_text(inner) {
-      Some(_) => ()
-      None => return None
+    // No-payload literal cases need no MoonBit-side payload type — only
+    // payload-bearing cases gate on `tagged_union_inner_moonbit_text`.
+    if !tagged_union_case_is_no_payload(inner) {
+      match tagged_union_inner_moonbit_text(inner) {
+        Some(_) => ()
+        None => return None
+      }
     }
   }
   let name = ffi_inline_union_synthesized_name(cases)
@@ -1127,6 +1131,31 @@ fn ffi_inline_js_arg_expr_with_state(
     Some((collapsed, is_optional)) => {
       if !is_optional {
         return ffi_inline_js_arg_expr_with_state(state, collapsed, expr)
+      }
+      // Tagged-union optional params come in as the raw value or `null` /
+      // `undefined`: MoonBit's JS encoding for `Option[T]` of a non-primitive
+      // `T` does not wrap with `{$tag, _0}`. Going through the generic
+      // option unwrap would mis-read `value._0` (undefined for no-payload
+      // cases like `Boundary`), so detect the tagged-union case first.
+      let tagged_named_name = match state {
+        Some(s) =>
+          match collapsed {
+            @ast.TsType::Named(name) =>
+              if s.tagged_union_decls_by_name.contains(name) {
+                Some(name)
+              } else {
+                None
+              }
+            _ => None
+          }
+        None => None
+      }
+      match tagged_named_name {
+        Some(_) => {
+          let inner_expr = "(\{expr} == null ? undefined : \{expr})"
+          return ffi_inline_js_tagged_union_to_js(state, collapsed, inner_expr)
+        }
+        None => ()
       }
       let inner_expr = ffi_inline_js_unwrap_option_expr(expr)
       let collapsed_inner = ffi_inline_js_tagged_union_to_js(
@@ -2272,6 +2301,14 @@ fn ffi_type_alias_constructors(
   let ctors : Array[FfiAliasConstructor] = []
   let seen_names : Array[String] = []
   for index, item in items {
+    // Tagged-union cases whose payload is a no-payload literal already have
+    // a public enum constructor (`Boundary`) — generating an
+    // `<alias>_from_string(value)` helper would produce an invalid
+    // `{$tag, _0}` runtime shape that doesn't match MoonBit's no-payload
+    // representation, and would silently accept arbitrary strings.
+    if tagged_decl is Some(_) && tagged_union_case_is_no_payload(item) {
+      continue
+    }
     match ffi_type_alias_constructor_for_item(state, alias_fn_prefix, item) {
       Some(ctor) =>
         if !seen_names.contains(ctor.fn_name) {
@@ -2371,10 +2408,15 @@ fn ffi_type_js_converter_expr(
         Named(name) if state.tagged_union_decls_by_name.contains(name) =>
           match state.tagged_union_decls_by_name.get(name) {
             Some(decl) => {
-              let inner_expr = ffi_inline_js_unwrap_option_expr(expr)
+              // MoonBit JS encodes `Option[T]` for non-primitive `T` as the
+              // raw value (or `undefined` for None) without the `{$tag, _0}`
+              // wrap. Going through the generic option-unwrap would
+              // mis-read tagged-union values whose own `$tag` happens to be
+              // `1` (e.g. no-payload literal cases), so route the raw value
+              // straight into the to-JS converter.
               let converted = tagged_union_to_js_expression_with_nested(
                 decl,
-                inner_expr,
+                expr,
                 state.tagged_union_decls_by_name,
                 struct_converter_names=state.struct_type_names,
               )
@@ -2599,25 +2641,111 @@ fn ffi_type_needs_js_return_conversion(type_ : @ast.TsType) -> Bool {
 }
 
 ///|
-fn ffi_import_needs_js_return_conversion(import_ : @ast.TsImport) -> Bool {
-  ffi_type_needs_js_return_conversion(import_.return_type)
-}
-
-///|
-fn ffi_func_needs_js_return_conversion(func : @ast.TsFunc) -> Bool {
-  ffi_type_needs_js_return_conversion(func.return_type)
-}
-
-///|
-fn ffi_type_js_return_expr(type_ : @ast.TsType, expr : String) -> String {
+/// State-aware variant: also flags returns whose type is a tagged-union
+/// alias known to the FFI state, since those need a `__ts_mbt_<alias>_from_js`
+/// wrapper around the raw JS value.
+fn ffi_type_needs_js_return_conversion_with_state(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+) -> Bool {
+  if ffi_type_needs_js_return_conversion(type_) {
+    return true
+  }
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) =>
-      if is_optional && collapsed == Boolean {
-        return "__ts_mbt_wrap_bool_option(\{expr})"
+      if is_optional {
+        match collapsed {
+          Named(name) =>
+            return ffi_tagged_union_return_is_safe_to_wrap(state, name)
+          _ => ()
+        }
       }
     None => ()
   }
-  expr
+  match type_ {
+    Named(name) => ffi_tagged_union_return_is_safe_to_wrap(state, name)
+    _ => false
+  }
+}
+
+///|
+/// Decide whether the auto-emitted return-side `__ts_mbt_<alias>_from_js`
+/// wrapper would actually run cleanly in `bridge.js`. The discriminator
+/// `instanceof <Name>` requires the named JS class to be in scope; for
+/// alias surfaces synthesised from ambient `node:*` exports those classes
+/// are not reachable from the generated bridge module, so we skip the
+/// auto-wrap and let the raw JS value flow through unchanged. Tagged
+/// unions whose cases all use primitive `typeof` / `Array.isArray` /
+/// strict-equality predicates are always safe to wrap.
+fn ffi_tagged_union_return_is_safe_to_wrap(
+  state : MoonBitJsFfiState,
+  name : String,
+) -> Bool {
+  match state.tagged_union_decls_by_name.get(name) {
+    Some(decl) => {
+      for entry in decl.cases {
+        let (_, inner) = entry
+        match tagged_union_case_discriminator(inner) {
+          Some(InstanceOfNamed(_)) => return false
+          _ => ()
+        }
+      }
+      true
+    }
+    None => false
+  }
+}
+
+///|
+fn ffi_import_needs_js_return_conversion(
+  state : MoonBitJsFfiState,
+  import_ : @ast.TsImport,
+) -> Bool {
+  ffi_type_needs_js_return_conversion_with_state(state, import_.return_type)
+}
+
+///|
+fn ffi_func_needs_js_return_conversion(
+  state : MoonBitJsFfiState,
+  func : @ast.TsFunc,
+) -> Bool {
+  ffi_type_needs_js_return_conversion_with_state(state, func.return_type)
+}
+
+///|
+fn ffi_type_js_return_expr(
+  state : MoonBitJsFfiState,
+  type_ : @ast.TsType,
+  expr : String,
+) -> String {
+  match @checker.classify_optional_like_union(type_) {
+    Some((collapsed, is_optional)) => {
+      if is_optional && collapsed == Boolean {
+        return "__ts_mbt_wrap_bool_option(\{expr})"
+      }
+      // `Hires?` returns: MoonBit JS encodes `Option[T]` for non-primitive
+      // `T` as the raw value with `undefined` for `None` (instead of the
+      // `{$tag, _0}` wrap form), so we just need to convert the raw JS
+      // value to a Hires shape and pass `undefined` through unchanged.
+      if is_optional {
+        match collapsed {
+          Named(name) if ffi_tagged_union_return_is_safe_to_wrap(state, name) => {
+            let from_name = tagged_union_from_js_function_name(name)
+            return "(\{expr} == null ? undefined : \{from_name}(\{expr}))"
+          }
+          _ => ()
+        }
+      }
+    }
+    None => ()
+  }
+  match type_ {
+    Named(name) if ffi_tagged_union_return_is_safe_to_wrap(state, name) => {
+      let from_name = tagged_union_from_js_function_name(name)
+      "\{from_name}(\{expr})"
+    }
+    _ => expr
+  }
 }
 
 ///|
@@ -4566,7 +4694,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       state, import_,
     )
     let needs_js_return_conversion = ffi_import_needs_js_return_conversion(
-      import_,
+      state, import_,
     )
     if needs_js_arg_conversion || needs_js_return_conversion {
       bridge_needs_option_unwrap = true
@@ -4639,6 +4767,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   runtime_export_name,
                 )
                 let return_expr = ffi_type_js_return_expr(
+                  state,
                   import_.return_type,
                   "\{runtime_access}(\{call_args_str})",
                 )
@@ -4663,6 +4792,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   runtime_export_name,
                 )
                 let return_expr = ffi_type_js_return_expr(
+                  state,
                   import_.return_type,
                   "\{runtime_access}(\{call_args_str})",
                 )
@@ -4688,7 +4818,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         state, import_,
       )
       let subset_needs_js_return_conversion = ffi_import_needs_js_return_conversion(
-        import_,
+        state, import_,
       )
       if subset_needs_js_arg_conversion || subset_needs_js_return_conversion {
         bridge_needs_option_unwrap = true
@@ -4723,6 +4853,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
         )
         let return_expr = ffi_type_js_return_expr(
+          state,
           import_.return_type,
           "\{runtime_access}(\{call_args_str})",
         )
@@ -4776,7 +4907,9 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       func.name,
     )
     let needs_js_arg_conversion = ffi_func_needs_js_arg_conversion(state, func)
-    let needs_js_return_conversion = ffi_func_needs_js_return_conversion(func)
+    let needs_js_return_conversion = ffi_func_needs_js_return_conversion(
+      state, func,
+    )
     if needs_js_arg_conversion || needs_js_return_conversion {
       bridge_needs_option_unwrap = true
     }
@@ -4846,6 +4979,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   runtime_export_name,
                 )
                 let return_expr = ffi_type_js_return_expr(
+                  state,
                   func.return_type,
                   "\{runtime_access}(\{call_args_str})",
                 )
@@ -4868,6 +5002,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
                   runtime_export_name,
                 )
                 let return_expr = ffi_type_js_return_expr(
+                  state,
                   func.return_type,
                   "\{runtime_access}(\{call_args_str})",
                 )
@@ -4893,7 +5028,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         state, func,
       )
       let subset_needs_js_return_conversion = ffi_func_needs_js_return_conversion(
-        func,
+        state, func,
       )
       if subset_needs_js_arg_conversion || subset_needs_js_return_conversion {
         bridge_needs_option_unwrap = true
@@ -4926,6 +5061,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           seen_bridge_import_keys, bridge_imports, namespace_import_roots, runtime_export_name,
         )
         let return_expr = ffi_type_js_return_expr(
+          state,
           func.return_type,
           "\{runtime_access}(\{call_args_str})",
         )
@@ -5164,6 +5300,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
             runtime_export_name,
           )
           let return_expr = ffi_type_js_return_expr(
+            state,
             return_type,
             "\{runtime_access}(\{call_args_str})",
           )

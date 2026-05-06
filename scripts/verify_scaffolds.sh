@@ -966,6 +966,69 @@ fn main {
 EOF
 }
 
+verify_moonbit_scaffold_heterogeneous_union_fixture() {
+  local root="_build/scaffold_ts_to_moonbit_heterogeneous_union"
+
+  rm -rf "$root"
+  mkdir -p "$root/runtime"
+
+  moon run src/cmd/ts2mbt -- scaffold \
+    fixtures/resolver/project/types/heterogeneous-union-alias-entry.d.ts \
+    ./runtime/hires.js \
+    "$root" >/dev/null
+
+  write_js_any_stub "$root"
+
+  cat > "$root/runtime/hires.js" <<'EOF'
+export function setHires(value) {
+  return value;
+}
+
+export function maybeHires(value) {
+  return value;
+}
+EOF
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "fixture/scaffold_ts_to_moonbit_heterogeneous_union",
+  "version": "0.1.0",
+  "deps": {
+    "mizchi/js": { "path": "./_stubs/mizchi_js" }
+  },
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  cat > "$root/bridge_test.mbt" <<'EOF'
+test "generated heterogeneous union scaffold smoke" {
+  // Round-trip a primitive case and a no-payload literal case through the
+  // generated MoonBit -> JS -> MoonBit converter chain.
+  let bool_in = hires_from_bool(true)
+  match setHires(bool_in) {
+    BoolValue(v) => assert_eq(v, true)
+    _ => abort("expected BoolValue")
+  }
+  match setHires(Boundary) {
+    Boundary => ()
+    _ => abort("expected Boundary")
+  }
+  match maybeHires(Some(Boundary)) {
+    Some(Boundary) => ()
+    _ => abort("expected Some(Boundary)")
+  }
+  match maybeHires(None) {
+    None => ()
+    _ => abort("expected None")
+  }
+}
+EOF
+
+  moon -C "$root" check --target js
+  moon -C "$root" test --target js
+}
+
 verify_moonbit_scaffold_handles_ambiguous_surface() {
   local root="_build/scaffold_ts_to_moonbit_ambiguous"
 
@@ -1013,4 +1076,5 @@ verify_moonbit_scaffold_react_jsx_dev_runtime_fixture
 verify_moonbit_scaffold_hono_jsx_fixture
 verify_moonbit_scaffold_hono_options_fixture
 verify_moonbit_scaffold_namespace_fixture
+verify_moonbit_scaffold_heterogeneous_union_fixture
 verify_moonbit_scaffold_handles_ambiguous_surface

@@ -458,6 +458,38 @@ async test "bridge: emit MoonBit TS bridge package bundle widens int-min numeric
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle exposes heterogeneous unions as tagged enums" {
+  // magic-string `hires: boolean | "boundary"` style alias. The bundle should
+  // emit a public tagged enum, primitive externs, public wrappers, and the
+  // bridge.js converter pair.
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/heterogeneous-union-alias-entry.d.ts", "./runtime/heterogeneous-union-alias.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Public tagged-union enum decl — Boundary is no-payload.
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum Hires {"))
+  assert_true(bundle.bridge_mbti.contains("BoolValue(Bool)"))
+  assert_true(bundle.bridge_mbt.contains("\n  Boundary\n"))
+  // The bridge.js converter pair for `Hires` must be present.
+  assert_true(bundle.bridge_js.contains("__ts_mbt_tagged_union_hires_to_js"))
+  assert_true(bundle.bridge_js.contains("__ts_mbt_tagged_union_hires_from_js"))
+  assert_true(bundle.bridge_js.contains("\"boundary\""))
+  // Public wrapper: `setHires(value : Hires) -> Hires`.
+  assert_true(
+    bundle.bridge_mbti.contains(
+      "declare pub fn setHires(value : Hires) -> Hires",
+    ),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle exposes string literal aliases as enums" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/literal-union-alias-entry.d.ts", "./runtime/literal-union-alias.js",
