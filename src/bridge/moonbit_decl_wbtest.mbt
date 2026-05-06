@@ -1651,7 +1651,9 @@ async test "bridge: emit MoonBit declarations from export-as-namespace ambient m
   assert_true(actual.contains("declare pub fn get_version() -> String"))
   assert_true(actual.contains("declare pub type Component"))
   assert_true(
-    actual.contains("declare pub fn useContext(context : Context) -> JSValue"),
+    actual.contains(
+      "declare pub fn useContext(context : Context[JSValue]) -> JSValue",
+    ),
   )
 }
 
@@ -2174,7 +2176,7 @@ async test "bridge: emit MoonBit declarations from export-as-namespace optional 
   assert_true(actual.contains("declare pub type BadgeProps"))
   assert_true(actual.contains("/// label : String?"))
   assert_true(actual.contains("/// children : JSValue?"))
-  assert_true(actual.contains("/// ref : Ref?"))
+  assert_true(actual.contains("/// ref : Ref[JSValue]?"))
   assert_true(
     actual.contains(
       "declare pub fn renderBadge(props : BadgeProps) -> BadgeProps",
@@ -2285,15 +2287,19 @@ async test "bridge: emit MoonBit declarations from imported object type alias me
       return
     }
   }
-  assert_true(actual.contains("declare pub type HonoOptions"))
+  assert_true(actual.contains("declare pub type HonoOptions[E]"))
   assert_true(actual.contains("/// strict : Bool?"))
-  assert_true(actual.contains("/// bindings : JSValue?"))
+  assert_true(actual.contains("/// bindings : E?"))
   assert_true(actual.contains("declare pub type Hono"))
   assert_true(
-    actual.contains("declare pub fn new_hono(options : HonoOptions?) -> Hono"),
+    actual.contains(
+      "declare pub fn new_hono(options : HonoOptions[JSValue]?) -> Hono",
+    ),
   )
   assert_true(
-    actual.contains("declare pub fn createApp(options : HonoOptions) -> Hono"),
+    actual.contains(
+      "declare pub fn createApp(options : HonoOptions[JSValue]) -> Hono",
+    ),
   )
 }
 
@@ -2336,28 +2342,28 @@ async test "bridge: emit MoonBit declarations from fixture React package surface
       return
     }
   }
-  assert_true(actual.contains("declare pub type FunctionComponent"))
-  assert_true(actual.contains("declare pub type NamedExoticComponent"))
-  assert_true(actual.contains("declare pub type ForwardRefExoticComponent"))
-  assert_true(actual.contains("declare pub type MemoExoticComponent"))
+  assert_true(actual.contains("declare pub type FunctionComponent[P]"))
+  assert_true(actual.contains("declare pub type NamedExoticComponent[P]"))
+  assert_true(actual.contains("declare pub type ForwardRefExoticComponent[P]"))
+  assert_true(actual.contains("declare pub type MemoExoticComponent[T]"))
   assert_true(
     actual.contains(
-      "declare pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement",
+      "declare pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement[DOMAttributes, String]",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn cloneElement(element : ReactElement, props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement",
+      "declare pub fn cloneElement(element : ReactElement[JSValue, JSValue], props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement[JSValue, JSValue]",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn forwardRef(render : ForwardRefRenderCallback) -> ForwardRefExoticComponent",
+      "declare pub fn forwardRef(render : ForwardRefRenderCallback) -> ForwardRefExoticComponent[JSValue]",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn memo(component : FunctionComponent, propsAreEqual : MemoPropsAreEqualCallback?) -> MemoExoticComponent",
+      "declare pub fn memo(component : FunctionComponent[JSValue], propsAreEqual : MemoPropsAreEqualCallback?) -> MemoExoticComponent[FunctionComponent[JSValue]]",
     ),
   )
   assert_true(
@@ -2366,7 +2372,9 @@ async test "bridge: emit MoonBit declarations from fixture React package surface
     ),
   )
   assert_true(
-    actual.contains("declare pub fn useComponentRef(ref_ : Ref) -> Ref"),
+    actual.contains(
+      "declare pub fn useComponentRef(ref_ : Ref[JSValue]) -> Ref[JSValue]",
+    ),
   )
   assert_false(actual.contains("declare pub type ReactNode"))
   assert_false(actual.contains("props : JSValue?"))
@@ -2606,7 +2614,7 @@ async test "bridge: EventHandler alias narrows to function type in mbti" {
   // Generic arguments on the event type aren't preserved by the current type
   // identifier renderer; checking the function shape is enough to confirm the
   // alias was lowered into a real function.
-  assert_true(actual.contains("onClick : ((TargetedEvent) -> Unit)?"))
+  assert_true(actual.contains("onClick : ((TargetedEvent[Target]) -> Unit)?"))
   assert_true(actual.contains("onLoad : ((Target) -> Unit)?"))
 }
 

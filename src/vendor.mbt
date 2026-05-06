@@ -438,6 +438,12 @@ async fn read_package_json_dependency_names(path : String) -> Array[String] {
       guard value is Object(deps) else { continue }
       for dep_pair in deps {
         let (dep_name, _) = dep_pair
+        // Skip bridges already vendored under `@tsmbt-bridge/...`; they
+        // are bridge artifacts the consumer wired up via `file:` deps,
+        // not upstream npm packages we should re-vendor.
+        if dep_name.has_prefix("@tsmbt-bridge/") {
+          continue
+        }
         if !result.contains(dep_name) {
           result.push(dep_name)
         }

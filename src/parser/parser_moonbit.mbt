@@ -6,12 +6,24 @@ priv struct MoonBitDeclState {
   // Names of declared types whose generic parameters should appear on
   // `Applied(name, args)` references (e.g. `Box<string>` ⇒ `Box[String]`).
   generic_preserved_type_names : Array[String]
+  // Arity of each generic-preserved type, keyed by interface name. Used
+  // to widen bare references (`Ref` ⇒ `Ref[JSValue]`) and arity-mismatched
+  // references to a syntactically valid form matching the struct decl.
+  generic_preserved_type_arity_by_name : Map[String, Int]
   mut needs_jsvalue : Bool
   // Track whether `Applied("Promise"|"PromiseLike", ...)` was emitted so
   // the declarations file can append a self-contained
   // `declare pub type Promise[X]` opaque alias instead of pulling in
   // `mizchi/js/core::Promise`.
   mut needs_promise : Bool
+}
+
+///|
+fn generic_preserved_type_arity(state : MoonBitDeclState, name : String) -> Int {
+  match state.generic_preserved_type_arity_by_name.get(name) {
+    Some(arity) => arity
+    None => 0
+  }
 }
 
 ///|
@@ -275,49 +287,14 @@ fn moonbit_receiver_self_type(
 }
 
 ///|
-// Restrict `type_params` to those actually referenced in `fields`. After
-// the parser substitutes generic-bound references away, declared type params
-// can become unreferenced; emitting `struct Foo[T, U, F] { ... }` with U/F
-// unused triggers MoonBit's unused_type_variable warning at consumer build.
-fn moonbit_used_type_params(
-  type_params : Array[String],
-  fields : Array[(String, @ast.TsType)],
-) -> Array[String] {
-  let referenced : Array[String] = []
-  for f in fields {
-    for r in @checker.collect_referenced_names(f.1) {
-      if !referenced.contains(r) {
-        referenced.push(r)
-      }
-    }
-  }
-  let result : Array[String] = []
-  for tp in type_params {
-    if referenced.contains(tp) {
-      result.push(tp)
-    }
-  }
-  result
-}
-
-///|
+/// Whether to keep an interface's TypeScript type parameters when emitting
+/// MoonBit declarations. Mirrors `ffi_should_preserve_interface_type_params`
+/// in `src/bridge/moonbit_js_ffi.mbt` so the FFI side and the decl side
+/// agree on which interfaces emit `Foo[T, U]` vs bare `Foo`.
 fn moonbit_should_preserve_interface_type_params(
   iface : @ast.TsInterface,
 ) -> Bool {
-  match iface.name {
-    "StatsBase"
-    | "StatsFsBase"
-    | "SignalLike"
-    | "RefObject"
-    | "RefCallback"
-    | "Router"
-    | "TypedResponse" => true
-    // NOTE: Session<Data, FlashData> body uses FlashSessionData<Data, FlashData>
-    // which lowers to `Partial`, erasing the generic references — adding
-    // Session to this list would emit `struct Session[Data]` with Data unused.
-    // Revisit once we have post-lowering type-param filtering.
-    _ => false
-  }
+  iface.type_params.length() > 0
 }
 
 ///|
@@ -439,18 +416,48 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     }
     Named(name) => {
       mark_referenced_type(state, name)
-      moonbit_type_identifier(name, "OpaqueType")
+      let rendered = moonbit_type_identifier(name, "OpaqueType")
+      // A bare reference to a generic-preserved type fills in `JSValue`
+      // for each missing type-parameter slot so the emitted name matches
+      // the struct's arity (`Ref` -> `Ref[JSValue]`).
+      let arity = generic_preserved_type_arity(state, name)
+      if arity > 0 {
+        state.needs_jsvalue = true
+        let parts : Array[String] = []
+        for _ in 0..<arity {
+          parts.push("JSValue")
+        }
+        let joined = parts.join(", ")
+        "\{rendered}[\{joined}]"
+      } else {
+        rendered
+      }
     }
     Applied(name, args) => {
       mark_referenced_type(state, name)
       let rendered = moonbit_type_identifier(name, "OpaqueType")
-      if state.generic_preserved_type_names.contains(name) && args.length() > 0 {
-        let parts : Array[String] = []
-        for arg in args {
-          parts.push(moonbit_type_name(state, arg))
+      if state.generic_preserved_type_names.contains(name) {
+        let arity = generic_preserved_type_arity(state, name)
+        if arity == args.length() && arity > 0 {
+          let parts : Array[String] = []
+          for arg in args {
+            parts.push(moonbit_type_name(state, arg))
+          }
+          let joined = parts.join(", ")
+          "\{rendered}[\{joined}]"
+        } else if arity > 0 {
+          // Arity mismatch: widen each unfilled slot to `JSValue` so the
+          // signature stays syntactically aligned with the struct decl.
+          state.needs_jsvalue = true
+          let parts : Array[String] = []
+          for _ in 0..<arity {
+            parts.push("JSValue")
+          }
+          let joined = parts.join(", ")
+          "\{rendered}[\{joined}]"
+        } else {
+          rendered
         }
-        let joined = parts.join(", ")
-        "\{rendered}[\{joined}]"
       } else {
         rendered
       }
@@ -666,10 +673,18 @@ fn interface_decl_to_moonbit(
   state : MoonBitDeclState,
   iface : @ast.TsInterface,
 ) -> String {
-  let active_type_params = if moonbit_should_preserve_interface_type_params(
-      iface,
+  // Keep the full type-param list. The decl emitter only produces
+  // `declare pub type Foo[T]` opaque forms (no struct body), so unused
+  // type parameters don't trigger MoonBit's `unused_type_variable`
+  // warning the way they would on a `pub(all) struct Foo[T] {...}`.
+  //
+  // Gate on whether this iface was registered as generic-preserved
+  // (a class/iface name overlap leaves the iface unregistered so it
+  // matches the class's bare `declare pub type ClassName`).
+  let active_type_params = if state.generic_preserved_type_names.contains(
+      iface.name,
     ) {
-    moonbit_used_type_params(iface.type_params, iface.fields)
+    iface.type_params
   } else {
     []
   }
@@ -964,10 +979,26 @@ pub fn emit_moonbit_decl_with_sections_and_types(
 ) -> String {
   let declared_type_names : Array[String] = []
   let generic_preserved_type_names : Array[String] = []
+  let generic_preserved_type_arity_by_name : Map[String, Int] = {}
+  // Pre-collect class names so interfaces that share a name with a class
+  // (TS lets you declare both to merge them) don't register a
+  // type-param arity. The class decl emits a bare `declare pub type
+  // ClassName`, so call sites referencing the merged name need to keep
+  // matching that bare arity.
+  let class_decl_names : Array[String] = []
+  for class_ in module_.classes {
+    class_decl_names.push(class_.name)
+  }
   for iface in module_.interfaces {
     declared_type_names.push(iface.name)
-    if moonbit_should_preserve_interface_type_params(iface) {
+    if moonbit_should_preserve_interface_type_params(iface) &&
+      iface.type_params.length() > 0 &&
+      !class_decl_names.contains(iface.name) {
+      // `interface_decl_to_moonbit` emits `declare pub type Foo[T, U]`
+      // with the full type-param list, so call sites must propagate the
+      // matching arity instead of widening to bare `Foo`.
       generic_preserved_type_names.push(iface.name)
+      generic_preserved_type_arity_by_name[iface.name] = iface.type_params.length()
     }
   }
   for class_ in module_.classes {
@@ -986,6 +1017,7 @@ pub fn emit_moonbit_decl_with_sections_and_types(
     referenced_type_names: [],
     local_type_param_names: [],
     generic_preserved_type_names,
+    generic_preserved_type_arity_by_name,
     needs_jsvalue: false,
     needs_promise: false,
   }

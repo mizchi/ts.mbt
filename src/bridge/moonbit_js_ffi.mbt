@@ -371,42 +371,13 @@ fn ffi_function_type_param_prefix(type_params : Array[String]) -> String {
 }
 
 ///|
-// Filter `type_params` down to only those names actually referenced by any
-// `fields` value type. Uses the checker's transitive name walk so it sees
-// through nested Array/Union/Func/Applied etc.
-fn ffi_used_type_params(
-  type_params : Array[String],
-  fields : Array[(String, @ast.TsType)],
-) -> Array[String] {
-  let referenced : Array[String] = []
-  for f in fields {
-    for r in @checker.collect_referenced_names(f.1) {
-      if !referenced.contains(r) {
-        referenced.push(r)
-      }
-    }
-  }
-  let result : Array[String] = []
-  for tp in type_params {
-    if referenced.contains(tp) {
-      result.push(tp)
-    }
-  }
-  result
-}
-
-///|
+/// Whether to keep an interface's TypeScript type parameters when emitting the
+/// MoonBit struct. We preserve them whenever the interface declares any —
+/// the resulting `pub(all) struct Foo[T, U] { ... }` lets call sites with
+/// `Applied("Foo", [JSValue, String])` propagate concrete arguments instead
+/// of widening to bare opaque external types.
 fn ffi_should_preserve_interface_type_params(iface : @ast.TsInterface) -> Bool {
-  match iface.name {
-    "StatsBase"
-    | "StatsFsBase"
-    | "SignalLike"
-    | "RefObject"
-    | "RefCallback"
-    | "Router"
-    | "TypedResponse" => true
-    _ => false
-  }
+  iface.type_params.length() > 0
 }
 
 ///|
@@ -792,7 +763,24 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       state.needs_js_any = true
       "Promise[JSValue]"
     }
-    Named(name) => ffi_mark_external_type(state, name)
+    Named(name) => {
+      // A bare reference to a generic-preserved type (`Ref` instead of
+      // `Ref<T>`) leaves the type-parameter slots unspecified. Fill them
+      // with `JSValue` so the emitted MoonBit signature matches the
+      // struct's arity.
+      let type_name = ffi_type_identifier(name, "OpaqueType")
+      match state.generic_type_params_by_name.get(type_name) {
+        Some(type_params) if type_params.length() > 0 => {
+          state.needs_js_any = true
+          let rendered_args : Array[String] = []
+          for _ in 0..<type_params.length() {
+            rendered_args.push("JSValue")
+          }
+          type_name + "[" + rendered_args.join(", ") + "]"
+        }
+        _ => ffi_mark_external_type(state, name)
+      }
+    }
     Applied(name, args) => {
       let type_name = ffi_type_identifier(name, "OpaqueType")
       match state.generic_type_params_by_name.get(type_name) {
@@ -801,6 +789,16 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
             let rendered_args : Array[String] = []
             for arg in args {
               rendered_args.push(ffi_type_name(state, arg))
+            }
+            type_name + "[" + rendered_args.join(", ") + "]"
+          } else if type_params.length() > 0 {
+            // Arity mismatch: fall back to widened `JSValue` slots so we
+            // still emit a syntactically valid `T[JSValue, ...]` form
+            // matching the struct declaration.
+            state.needs_js_any = true
+            let rendered_args : Array[String] = []
+            for _ in 0..<type_params.length() {
+              rendered_args.push("JSValue")
             }
             type_name + "[" + rendered_args.join(", ") + "]"
           } else {
@@ -1108,7 +1106,15 @@ fn ffi_function_field_method_decl(
       }
       let js_args_src = js_args.join(", ")
       let fn_prefix = ffi_function_type_param_prefix(receiver_type_params)
-      if field_name == "_call_" {
+      // MoonBit's `extern "js" fn[T]` is forbidden ([4008]), so any method
+      // on a generic-preserved receiver has to fall through to the
+      // pure-MoonBit wrapper form which accesses the underlying function
+      // field via `self.<field>(...)`.
+      if receiver_type_params.length() > 0 {
+        Some(
+          "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
+        )
+      } else if field_name == "_call_" {
         let js_params : Array[String] = ["self"]
         for arg in args {
           js_params.push(arg)
@@ -1129,10 +1135,6 @@ fn ffi_function_field_method_decl(
           ")"
         Some(
           "pub extern \"js\" \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} =\n  #| (\{js_params_src}) => \{js_call}",
-        )
-      } else if receiver_type_params.length() > 0 {
-        Some(
-          "pub \{fn_prefix} \{receiver_type}::\{field_name}(\{params_src}) -> \{return_type} {\n  (self.\{field_name})(\{args_src})\n}",
         )
       } else {
         let js_params : Array[String] = ["self"]
@@ -1158,11 +1160,16 @@ fn ffi_struct_decl_to_moonbit(
   state : MoonBitJsFfiState,
   iface : @ast.TsInterface,
 ) -> String {
+  // Keep the full type-param list. The arity registered in
+  // `state.generic_type_params_by_name` matches `iface.type_params`, so
+  // call sites referencing `Foo[A, B]` against a `pub(all) struct Foo[T, U]`
+  // resolve correctly even when one of T/U is no longer referenced in the
+  // body (the parser sometimes substitutes generic-bound references away
+  // via `extends`). Unused-type-variable warnings ([0005]) on the
+  // resulting decl can't be suppressed per-item, so `warning_guard.sh`
+  // filters them out for the regenerated bridge.
   let active_type_params = if ffi_should_preserve_interface_type_params(iface) {
-    // Filter out type params that no field actually references — the bridge
-    // would otherwise emit `struct X[T, U, F] { ... }` with U/F unused after
-    // the parser substituted them away via their `extends` bounds.
-    ffi_used_type_params(iface.type_params, iface.fields)
+    iface.type_params
   } else {
     []
   }
@@ -1214,13 +1221,18 @@ fn ffi_struct_decl_to_moonbit(
     }
   }
   lines.push("}")
-  for sig in iface.index_signatures {
-    match ffi_index_signature_accessor_decls(state, type_name, sig) {
-      Some(decls) =>
-        for decl in decls {
-          method_lines.push(decl)
-        }
-      None => ()
+  // Skip index-signature accessors on generic-preserved interfaces:
+  // `op_get` / `op_set` would need to be `extern "js" fn[T]` to thread
+  // the value type, but MoonBit forbids generic FFI functions.
+  if active_type_params.length() == 0 {
+    for sig in iface.index_signatures {
+      match ffi_index_signature_accessor_decls(state, type_name, sig) {
+        Some(decls) =>
+          for decl in decls {
+            method_lines.push(decl)
+          }
+        None => ()
+      }
     }
   }
   ffi_restore_local_type_params(state, local_type_param_len)
@@ -1300,8 +1312,14 @@ fn ffi_is_react_callable_component_interface(name : String) -> Bool {
 
 ///|
 fn ffi_interface_type_decl_to_moonbit(iface : @ast.TsInterface) -> String {
+  let type_param_suffix = if ffi_should_preserve_interface_type_params(iface) {
+    ffi_type_param_suffix(iface.type_params)
+  } else {
+    ""
+  }
   "#warnings(\"-3\")\n#external\npub type " +
-  ffi_type_identifier(iface.name, "OpaqueType")
+  ffi_type_identifier(iface.name, "OpaqueType") +
+  type_param_suffix
 }
 
 ///|
@@ -3802,11 +3820,26 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let declared_type_names : Array[String] = []
   let struct_type_names : Array[String] = []
   let generic_type_params_by_name : Map[String, Array[String]] = {}
+  // Names that are emitted as bare `#external pub type ClassName` from a
+  // class decl (no type-parameter slots). When an interface shares the
+  // name (TS lets you declare an interface and class together to merge
+  // them), don't register the interface's type-parameter arity — the
+  // class-method emission would otherwise emit `Foo` (arity 0) against a
+  // registry that says `Foo` has arity N, breaking call sites.
+  let class_type_names : Array[String] = []
+  for class_ in classes {
+    class_type_names.push(ffi_class_type_name(class_.name))
+  }
   for iface in interfaces {
     let type_name = ffi_type_identifier(iface.name, "OpaqueType")
     declared_type_names.push(type_name)
+    // Match the arity actually emitted on the struct / `#external pub
+    // type` declaration. Both `ffi_struct_decl_to_moonbit` and
+    // `ffi_interface_type_decl_to_moonbit` use the full
+    // `iface.type_params` list, so register the full arity here too.
     if ffi_should_preserve_interface_type_params(iface) &&
-      iface.type_params.length() > 0 {
+      iface.type_params.length() > 0 &&
+      !class_type_names.contains(type_name) {
       generic_type_params_by_name[type_name] = iface.type_params
     }
     if !ffi_is_react_callable_component_interface(iface.name) &&
@@ -3991,8 +4024,21 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     }
   }
 
+  // TS lets you declare an `interface Foo<...>` and a `class Foo<...>`
+  // together to merge them. When both exist with the same name, the
+  // class drives the runtime emission (`#external pub type Foo` plus
+  // bare-`Foo` class methods); skip the interface struct decl to avoid a
+  // duplicate / arity-mismatched `pub(all) struct Foo[T, U, V]`.
+  let class_type_names_for_iface_skip : Array[String] = []
+  for class_ in classes {
+    class_type_names_for_iface_skip.push(ffi_class_type_name(class_.name))
+  }
   for iface in interfaces {
     let type_name = ffi_type_identifier(iface.name, "OpaqueType")
+    if class_type_names_for_iface_skip.contains(type_name) {
+      handled_export_names.push(iface.name)
+      continue
+    }
     if !emitted_type_names.contains(type_name) {
       emitted_type_names.push(type_name)
       if ffi_is_react_callable_component_interface(iface.name) {
@@ -4959,7 +5005,18 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     // by emitting `pub type X` here. Without `pub`, consumers of the
     // generated package can't see the type even though `.mbti` says they
     // can, breaking the publicly-advertised surface.
-    ffi_sections.push("#warnings(\"-3\")\n#external\npub type \{type_name}")
+    //
+    // If the type was registered as generic-preserved, suffix the
+    // declaration with the type-param list so call-site references
+    // `Foo[JSValue]` resolve against a matching arity.
+    let type_param_suffix = match
+      state.generic_type_params_by_name.get(type_name) {
+      Some(type_params) => ffi_type_param_suffix(type_params)
+      None => ""
+    }
+    ffi_sections.push(
+      "#warnings(\"-3\")\n#external\npub type \{type_name}\{type_param_suffix}",
+    )
   }
   for section in alias_constructor_sections {
     ffi_sections.push(section)

@@ -45,11 +45,15 @@ test "parser: emit MoonBit declarations widens interface type parameters locally
       return
     }
   }
-  assert_true(actual.contains("/// value : JSValue"))
-  assert_true(actual.contains("/// map : (JSValue) -> JSValue"))
-  assert_true(actual.contains("declare pub type JSValue"))
-  assert_true(actual.contains("declare pub type Box"))
-  assert_true(actual.contains("declare pub fn consume(box : Box) -> Unit"))
+  // Box<T> is generic-preserved: the field/method doc comments and the
+  // function signature flow `T` / `String` through to MoonBit's
+  // `Box[T]` / `Box[String]` form rather than widening to JSValue.
+  assert_true(actual.contains("/// value : T"))
+  assert_true(actual.contains("/// map : (T) -> T"))
+  assert_true(actual.contains("declare pub type Box[T]"))
+  assert_true(
+    actual.contains("declare pub fn consume(box : Box[String]) -> Unit"),
+  )
   assert_false(actual.contains("declare pub type T"))
 }
 

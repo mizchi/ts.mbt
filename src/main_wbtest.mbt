@@ -4879,16 +4879,16 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace declaratio
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read export-as-namespace bridge.mbt: \{e}")
   }
-  assert_true(bridge_mbti.contains("pub(all) struct Context"))
+  assert_true(bridge_mbti.contains("pub(all) struct Context[T] {"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn createContext(defaultValue : JSValue) -> Context",
+      "declare pub fn createContext(defaultValue : JSValue) -> Context[JSValue]",
     ),
   )
   assert_true(bridge_mbti.contains("declare pub fn get_default() -> JSValue"))
   assert_true(
     bridge_mbt.contains(
-      "pub fn createContext(defaultValue : JSValue) -> Context {\n  create_context(defaultValue)\n}",
+      "pub fn createContext(defaultValue : JSValue) -> Context[JSValue] {\n  create_context(defaultValue)\n}",
     ),
   )
   assert_true(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
@@ -4912,7 +4912,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace ambient me
   assert_true(bridge_mbti.contains("declare pub type Component"))
   assert_true(
     bridge_mbti.contains(
-      "declare pub fn useContext(context : Context) -> JSValue",
+      "declare pub fn useContext(context : Context[JSValue]) -> JSValue",
     ),
   )
   assert_true(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
@@ -5103,7 +5103,6 @@ async test "emit_moonbit_scaffold_from_ts handles exported JSX namespace members
       "#module(\"react/jsx-runtime\")\npub extern \"js\" fn jsx(tag : String, props : BadgeProps) -> JsxElement = \"jsx\"",
     ),
   )
-  assert_true(bridge_mbt.contains("#external\npub type JSValue"))
   assert_true(@fs.exists(wbtest_join_path(root, "SCAFFOLD_DIAGNOSTICS.md")))
 }
 
@@ -5344,7 +5343,7 @@ async test "emit_moonbit_scaffold_from_ts handles export as namespace optional R
   assert_true(bridge_mbti.contains("pub(all) struct BadgeProps"))
   assert_true(bridge_mbti.contains("/// label : String?"))
   assert_true(bridge_mbti.contains("/// children : JSValue?"))
-  assert_true(bridge_mbti.contains("/// ref : Ref?"))
+  assert_true(bridge_mbti.contains("/// ref : Ref[JSValue]?"))
   assert_true(
     bridge_mbti.contains(
       "declare pub fn renderBadge(props : BadgeProps) -> BadgeProps",
@@ -5483,15 +5482,15 @@ async test "emit_moonbit_scaffold_from_ts handles imported object type alias mem
   let bridge_mbt = @fs.read_file(wbtest_join_path(root, "bridge.mbt")).text() catch {
     e => fail("failed to read hono-options bridge.mbt: \{e}")
   }
-  assert_true(bridge_mbti.contains("pub(all) struct HonoOptions"))
+  assert_true(bridge_mbti.contains("pub(all) struct HonoOptions[E] {"))
   assert_true(bridge_mbti.contains("/// strict : Bool?"))
-  assert_true(bridge_mbti.contains("/// bindings : JSValue?"))
-  assert_true(bridge_mbt.contains("pub(all) struct HonoOptions {"))
+  assert_true(bridge_mbti.contains("/// bindings : E?"))
+  assert_true(bridge_mbt.contains("pub(all) struct HonoOptions[E] {"))
   assert_true(bridge_mbt.contains("  strict : Bool?"))
-  assert_true(bridge_mbt.contains("  bindings : JSValue?"))
+  assert_true(bridge_mbt.contains("  bindings : E?"))
   assert_true(
     bridge_mbt.contains(
-      "pub extern \"js\" fn new_hono(options : HonoOptions?) -> Hono = \"__ts_mbt_new_hono\"",
+      "pub extern \"js\" fn new_hono(options : HonoOptions[JSValue]?) -> Hono = \"__ts_mbt_new_hono\"",
     ),
   )
 }

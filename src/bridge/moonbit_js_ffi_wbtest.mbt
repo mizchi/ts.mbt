@@ -3579,9 +3579,10 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace assignme
   }
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn create_context(defaultValue : JSValue) -> Context = \"__ts_mbt_create_context\"",
+      "extern \"js\" fn create_context(defaultValue : JSValue) -> Context[JSValue] = \"__ts_mbt_create_context\"",
     ),
   )
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct Context[T] {"))
   assert_true(
     bundle.bridge_js.contains(
       "import default_ from \"./runtime/react-like.js\";",
@@ -3926,7 +3927,10 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace JSX name
   assert_true(
     bundle.ffi_mbt.contains("pub(all) struct JsxLibraryManagedAttributes"),
   )
-  assert_true(bundle.ffi_mbt.contains("  props : JSValue"))
+  assert_true(
+    bundle.ffi_mbt.contains("pub(all) struct JsxLibraryManagedAttributes[C, P]"),
+  )
+  assert_true(bundle.ffi_mbt.contains("  props : P"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn create_element(tag : String) -> JsxElement = \"__ts_mbt_create_element\"",
@@ -4314,10 +4318,10 @@ async test "bridge: emit MoonBit JS FFI bundle from export-as-namespace optional
   assert_true(bundle.ffi_mbt.contains("pub(all) struct BadgeProps"))
   assert_true(bundle.ffi_mbt.contains("  label : String?"))
   assert_true(bundle.ffi_mbt.contains("  children : JSValue?"))
-  assert_true(bundle.ffi_mbt.contains("  ref_ : Ref?"))
+  assert_true(bundle.ffi_mbt.contains("  ref_ : Ref[JSValue]?"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn render_badge(props : BadgeProps) -> BadgeProps = \"__ts_mbt_render_badge\"",
+      "extern \"js\" fn render_badge(props : BadgeProps) -> BadgeProps = \"__ts_mbt_render_badge\"",
     ),
   )
 }
@@ -4444,19 +4448,20 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
       return
     }
   }
-  // The bridge now preserves `HonoOptions<E>`'s type param, so
-  // `bindings : E?` instead of the previous widened `bindings : JSValue?`.
-  assert_true(bundle.ffi_mbt.contains("pub(all) struct HonoOptions"))
+  // The bridge preserves `HonoOptions<E>`'s type param. With `E` widened
+  // to `JSValue` at the function call site, `bindings : E?` becomes the
+  // generic type parameter and the call site sees `HonoOptions[JSValue]`.
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct HonoOptions[E] {"))
   assert_true(bundle.ffi_mbt.contains("  strict : Bool?"))
-  assert_true(bundle.ffi_mbt.contains("  bindings : JSValue?"))
+  assert_true(bundle.ffi_mbt.contains("  bindings : E?"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn new_hono(options : HonoOptions?) -> Hono = \"__ts_mbt_new_hono\"",
+      "pub extern \"js\" fn new_hono(options : HonoOptions[JSValue]?) -> Hono = \"__ts_mbt_new_hono\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn create_app(options : HonoOptions) -> Hono = \"__ts_mbt_create_app\"",
+      "extern \"js\" fn create_app(options : HonoOptions[JSValue]) -> Hono = \"__ts_mbt_create_app\"",
     ),
   )
 }
@@ -4582,32 +4587,32 @@ async test "bridge: emit MoonBit JS FFI bundle from fixture React package surfac
   assert_false(bundle.ffi_mbt.contains("pub(all) struct FunctionComponent"))
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn create_element(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement = \"__ts_mbt_create_element\"",
+      "extern \"js\" fn create_element(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement[DOMAttributes, String] = \"__ts_mbt_create_element\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn clone_element(element : ReactElement, props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement = \"__ts_mbt_clone_element\"",
+      "extern \"js\" fn clone_element(element : ReactElement[JSValue, JSValue], props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement[JSValue, JSValue] = \"__ts_mbt_clone_element\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn forward_ref(render : ForwardRefRenderCallback) -> ForwardRefExoticComponent = \"__ts_mbt_forward_ref\"",
+      "extern \"js\" fn forward_ref(render : ForwardRefRenderCallback) -> ForwardRefExoticComponent[JSValue] = \"__ts_mbt_forward_ref\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn memo(component : FunctionComponent, propsAreEqual : MemoPropsAreEqualCallback?) -> MemoExoticComponent = \"__ts_mbt_memo\"",
+      "pub extern \"js\" fn memo(component : FunctionComponent[JSValue], propsAreEqual : MemoPropsAreEqualCallback?) -> MemoExoticComponent[FunctionComponent[JSValue]] = \"__ts_mbt_memo\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn normalize_props(props : ButtonHTMLAttributes) -> ButtonHTMLAttributes = \"__ts_mbt_normalize_props\"",
+      "extern \"js\" fn normalize_props(props : ButtonHTMLAttributes) -> ButtonHTMLAttributes = \"__ts_mbt_normalize_props\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn use_component_ref(ref_ : Ref) -> Ref = \"__ts_mbt_use_component_ref\"",
+      "extern \"js\" fn use_component_ref(ref_ : Ref[JSValue]) -> Ref[JSValue] = \"__ts_mbt_use_component_ref\"",
     ),
   )
   assert_false(bundle.ffi_mbt.contains("props : JSValue?"))
@@ -4650,21 +4655,20 @@ async test "bridge: emit MoonBit JS FFI bundle expands callable interface inheri
     }
   }
   assert_true(bundle.ffi_mbt.contains("pub(all) struct ExpectStatic"))
-  assert_true(bundle.ffi_mbt.contains("pub(all) struct Assertion"))
+  assert_true(bundle.ffi_mbt.contains("pub(all) struct Assertion[T]"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn ExpectStatic::_call_(self : ExpectStatic",
     ),
   )
+  // Generic-preserved receivers can't host `extern "js"` methods (MoonBit
+  // forbids `extern "js" fn[T]`), so the FFI emits a pure-MoonBit wrapper
+  // that calls the underlying function field directly.
   assert_true(
-    bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn Assertion::toBe(self : Assertion",
-    ),
+    bundle.ffi_mbt.contains("pub fn[T] Assertion::toBe(self : Assertion[T]"),
   )
   assert_true(
-    bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn Assertion::toEqual(self : Assertion",
-    ),
+    bundle.ffi_mbt.contains("pub fn[T] Assertion::toEqual(self : Assertion[T]"),
   )
 }
 
