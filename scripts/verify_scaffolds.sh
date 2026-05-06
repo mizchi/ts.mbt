@@ -608,24 +608,24 @@ extern "js" fn test_dom_attributes_partial() -> DOMAttributesPartial =
 extern "js" fn test_button_attributes() -> ButtonHTMLAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_function_component() -> FunctionComponent =
+extern "js" fn test_function_component() -> FunctionComponent[JSValue] =
   #| () => (props) => ({ type: "component", props, key: null })
 
 extern "js" fn test_forward_ref_render() -> ForwardRefRenderCallback =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
-extern "js" fn test_ref() -> Ref =
+extern "js" fn test_ref() -> Ref[JSValue] =
   #| () => ({ current: null })
 
 extern "js" fn test_children() -> Array[JSValue] =
   #| () => []
 
 test "generated React package scaffold smoke" {
-  let element = createElement(
+  let element : ReactElement[JSValue, JSValue] = unsafeCast(createElement(
     "div",
     Some(test_dom_attributes()),
     test_children(),
-  )
+  ))
   let _ = cloneElement(element, Some(test_dom_attributes_partial()), test_children())
   let _ = forwardRef(test_forward_ref_render())
   let _ = memo(test_function_component(), None)
@@ -635,8 +635,10 @@ test "generated React package scaffold smoke" {
 }
 EOF
 
-  grep_generated_mbt "$root" 'pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement'
-  grep_generated_mbt "$root" 'pub fn cloneElement(element : ReactElement, props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement'
+  # `interface ReactElement<P, T>` is generic-preserved, so wrappers
+  # show the full arity instead of bare `ReactElement`.
+  grep_generated_mbt "$root" 'pub fn createElement(type_ : String, props : DOMAttributes?, children : Array[JSValue]) -> ReactElement[DOMAttributes, String]'
+  grep_generated_mbt "$root" 'pub fn cloneElement(element : ReactElement[JSValue, JSValue], props : DOMAttributesPartial?, children : Array[JSValue]) -> ReactElement[JSValue, JSValue]'
   grep_generated_mbt "$root" '#external'
   moon -C "$root" check --target js
   moon -C "$root" test --target js
@@ -650,23 +652,25 @@ extern "js" fn test_dom_attributes_partial() -> @sut.DOMAttributesPartial =
 extern "js" fn test_button_attributes() -> @sut.ButtonHTMLAttributes =
   #| () => ({ disabled: true })
 
-extern "js" fn test_function_component() -> @sut.FunctionComponent =
+extern "js" fn test_function_component() -> @sut.FunctionComponent[@sut.JSValue] =
   #| () => (props) => ({ type: "component", props, key: null })
 
 extern "js" fn test_forward_ref_render() -> @sut.ForwardRefRenderCallback =
   #| () => (props, ref) => ({ type: "forward", props, ref, key: null })
 
-extern "js" fn test_ref() -> @sut.Ref =
+extern "js" fn test_ref() -> @sut.Ref[@sut.JSValue] =
   #| () => ({ current: null })
 
 extern "js" fn test_children() -> Array[@sut.JSValue] =
   #| () => []
 
 fn main {
-  let element = @sut.createElement(
-    "div",
-    Some(test_dom_attributes()),
-    test_children(),
+  let element : @sut.ReactElement[@sut.JSValue, @sut.JSValue] = @sut.unsafeCast(
+    @sut.createElement(
+      "div",
+      Some(test_dom_attributes()),
+      test_children(),
+    ),
   )
   let _ = @sut.cloneElement(element, Some(test_dom_attributes_partial()), test_children())
   let _ = @sut.forwardRef(test_forward_ref_render())
@@ -899,11 +903,11 @@ export function createApp(options) {
 EOF
 
   cat > "$root/bridge_test.mbt" <<'EOF'
-extern "js" fn test_hono_options() -> HonoOptions =
+extern "js" fn test_hono_options() -> HonoOptions[JSValue] =
   #| () => ({ strict: true })
 
 test "generated hono options scaffold smoke" {
-  let _ = new_hono(None)
+  let _ : Hono[JSValue] = new_hono(None)
   let _ = createApp(test_hono_options())
 }
 EOF
@@ -911,11 +915,11 @@ EOF
   moon -C "$root" check --target js
   moon -C "$root" test --target js
   run_typescript_to_moonbit_js_build_smoke "$root" "fixture/scaffold_ts_to_moonbit_hono_options" <<'EOF'
-extern "js" fn test_hono_options() -> @sut.HonoOptions =
+extern "js" fn test_hono_options() -> @sut.HonoOptions[@sut.JSValue] =
   #| () => ({ strict: true })
 
 fn main {
-  let _ = @sut.new_hono(None)
+  let _ : @sut.Hono[@sut.JSValue] = @sut.new_hono(None)
   let _ = @sut.createApp(test_hono_options())
 }
 EOF
