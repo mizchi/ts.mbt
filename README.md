@@ -140,26 +140,31 @@ src/
             └── ... (same shape, runtime spec defaults to `react`)
 ```
 
-The bridge `bridge.mbt` references each helper via a Node subpath
-import: `#module("#tsmbt-bridge/<safe>")`. Resolution goes through
-the consumer's `package.json#imports` map under a single wildcard
-entry — `vendor` / `generate` print a copy-paste-ready snippet on
-first run:
+The bridge `bridge.mbt` references each helper via a scoped npm
+specifier: `#module("@tsmbt-bridge/<safe>")`. Resolution goes
+through standard `node_modules/@tsmbt-bridge/<safe>` lookup, with
+each generated bridge listed as a `file:` dependency in the
+consumer's `package.json` — `vendor` / `generate` print a
+copy-paste-ready snippet on first run:
 
 ```json
 {
-  "imports": {
-    "#tsmbt-bridge/*": "./src/internal/generated/*/bridge.js"
+  "dependencies": {
+    "@tsmbt-bridge/hono": "file:./src/internal/generated/hono"
   }
 }
 ```
 
-This survives `pnpm install` / `npm install` because the mapping
-lives in your source-controlled `package.json` rather than as an
-ad-hoc `node_modules/` symlink (which package managers prune on
-reinstall). The generated `moon.pkg` is empty (no extra imports
-needed); the consumer adds the `import` line themselves to their
-own `moon.pkg` (see "Consume the generated bridge" below).
+`pnpm install` / `npm install` then materializes the bridge under
+`node_modules/@tsmbt-bridge/`, and that link survives every
+subsequent install (it's a real dep, not an ad-hoc symlink). The
+scoped-name approach also lets `moon test --target js` resolve
+`require("@tsmbt-bridge/<safe>")` from any depth — the test
+scaffold writes intermediate empty `package.json {}` files that
+would otherwise shadow a `package.json#imports` mapping. The
+generated `moon.pkg` is empty (no extra imports needed); the
+consumer adds the `import` line themselves to their own `moon.pkg`
+(see "Consume the generated bridge" below).
 
 Naming: the directory slug strips the leading `@`, replaces `/` with
 `__`, and replaces other non-`[A-Za-z0-9]` characters with `_`.

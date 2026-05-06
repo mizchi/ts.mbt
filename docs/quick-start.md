@@ -57,34 +57,7 @@ pnpm init
 pnpm add hono @hono/node-server
 ```
 
-## 4. Wire `package.json#imports`
-
-`ts2mbt` resolves bridge runtimes through Node's subpath-imports
-field — a single wildcard line covers every package you'll ever
-vendor:
-
-```json
-{
-  "name": "app",
-  "type": "module",
-  "imports": {
-    "#tsmbt-bridge/*": "./internal/generated/*/bridge.js"
-  },
-  "dependencies": {
-    "hono": "^4.12.0",
-    "@hono/node-server": "^2.0.0"
-  }
-}
-```
-
-The path on the right side is relative to the `package.json` and
-should point at `<source>/internal/generated/*/bridge.js`. If your
-moon module sets `"source": "src"`, the path becomes
-`./src/internal/generated/*/bridge.js`. (`moon new` defaults to a
-flat layout with no `source` field, in which case the path above is
-correct.)
-
-## 5. Generate the bridges
+## 4. Generate the bridges
 
 ```bash
 ts2mbt generate
@@ -93,15 +66,54 @@ ts2mbt generate
 Output:
 
 ```
-vendor: @hono/node-server -> internal/generated/hono__node_server (#module "#tsmbt-bridge/hono__node_server")
-vendor: hono              -> internal/generated/hono              (#module "#tsmbt-bridge/hono")
+vendor: @hono/node-server -> internal/generated/hono__node_server (#module "@tsmbt-bridge/hono__node_server")
+vendor: hono              -> internal/generated/hono              (#module "@tsmbt-bridge/hono")
 
 generate summary: 2 ok, 0 failed (of 2)
 
 Add to your consumer moon.pkg import block:
   "yourname/app/internal/generated/hono__node_server" @hono__node_server,
   "yourname/app/internal/generated/hono" @hono,
+
+Add to your consumer package.json (`dependencies` field):
+  "dependencies": {
+    "@tsmbt-bridge/hono": "file:./internal/generated/hono",
+    "@tsmbt-bridge/hono__node_server": "file:./internal/generated/hono__node_server"
+  }
+Then run `pnpm install` / `npm install` to materialize the link.
 ```
+
+## 5. Wire the `file:` deps and install
+
+Each generated bridge is a real npm package under
+`@tsmbt-bridge/<name>`. List them as `file:` dependencies so
+`pnpm install` / `npm install` materialize them under
+`node_modules/@tsmbt-bridge/`:
+
+```json
+{
+  "name": "app",
+  "type": "module",
+  "dependencies": {
+    "hono": "^4.12.0",
+    "@hono/node-server": "^2.0.0",
+    "@tsmbt-bridge/hono": "file:./internal/generated/hono",
+    "@tsmbt-bridge/hono__node_server": "file:./internal/generated/hono__node_server"
+  }
+}
+```
+
+Then:
+
+```bash
+pnpm install
+```
+
+`pnpm install` survives every regeneration, and `moon test --target js`
+can resolve `require("@tsmbt-bridge/<name>")` because the bridge
+sits at a stable `node_modules/` path rather than behind a
+`package.json#imports` mapping that the test scaffold's intermediate
+`package.json` would shadow.
 
 Layout under your module:
 

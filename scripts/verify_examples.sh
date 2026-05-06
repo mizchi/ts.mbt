@@ -902,12 +902,11 @@ EOF
   "name": "tsmbt-hono-server-smoke",
   "type": "module",
   "private": true,
-  "imports": {
-    "#tsmbt-bridge/*": "./internal/generated/*/bridge.js"
-  },
   "dependencies": {
     "hono": "*",
-    "@hono/node-server": "*"
+    "@hono/node-server": "*",
+    "@tsmbt-bridge/hono": "file:./internal/generated/hono",
+    "@tsmbt-bridge/hono__node_server": "file:./internal/generated/hono__node_server"
   }
 }
 EOF
@@ -937,6 +936,13 @@ EOF
 
   moon -C "$root" check --target js
   moon -C "$root" build --target js cmd/main
+
+  cat > "$root/cmd/main/main_test.mbt" <<'EOF'
+test "smoke: hono + node-server bridges resolve under moon test --target js" {
+  let _ = @sut.new_hono(None)
+}
+EOF
+  moon -C "$root" test --target js
 
   local built_js
   built_js="$(find "$root/_build/js/debug/build/cmd/main" -type f -name '*.js' | head -n 1)"

@@ -995,10 +995,12 @@ pub async fn emit_moonbit_bridge_package(
     files.push(file)
   }
   files.push(("bridge.js", bundle.bridge_js))
-  // Scope-style specifiers resolve via npm node_modules layout; refresh
-  // the sibling symlink so `require("@tsmbt-bridge/<safe>")` from
-  // generated test code lands at the bridge dir. `#`-prefix specifiers
-  // resolve via package.json imports field instead; nothing to symlink.
+  // Refresh the sibling `node_modules/@tsmbt-bridge/<safe>` symlink so
+  // `require("@tsmbt-bridge/<safe>")` from generated test code lands at
+  // the bridge dir. The vendor flow expects users to also list this
+  // bridge as a `file:` dependency; `pnpm install` then replaces our
+  // symlink with its own pnpm-managed link, but both states resolve to
+  // the same bridge directory.
   if !ensure_bridge_node_modules_link(output_dir, resolved_specifier) {
     return false
   }
@@ -1328,13 +1330,12 @@ fn split_path_segments(path : String) -> Array[String] {
 /// output directory path. The basename is sanitized so it survives as
 /// an npm package-name segment (`[a-z0-9_-]`).
 ///
-/// Scaffold-style outputs (where consumer `.mbt` files and `bridge.js`
-/// sit at the same moon module root) use this default and rely on a
-/// sibling `node_modules/@tsmbt-bridge/<slug>` symlink for resolution.
-/// Vendor-style outputs override with `#tsmbt-bridge/<slug>` and route
-/// resolution through the consumer's `package.json#imports` map
-/// instead — the symlink approach is incompatible with `pnpm install`
-/// which wipes ad-hoc node_modules entries.
+/// Both scaffold and vendor flows use this scoped name. The bridge is
+/// installed under `node_modules/@tsmbt-bridge/<slug>` either via a
+/// sibling symlink we refresh on every run or via a `file:` dep the
+/// consumer adds to their `package.json`; both paths resolve through
+/// standard `node_modules` lookup so `moon test --target js` can
+/// `require("@tsmbt-bridge/<slug>")` from any depth.
 fn default_bridge_bare_specifier(output_dir : String) -> String {
   let basename = match output_dir.rev_find("/") {
     Some(idx) => output_dir[idx + 1:output_dir.length()].to_string()
@@ -1361,26 +1362,16 @@ fn default_bridge_bare_specifier(output_dir : String) -> String {
 ///|
 /// Render the `package.json` co-located with `bridge.{mbti,mbt,js}`.
 /// Always declares `"type": "module"` so node treats `bridge.js` as
-/// ESM regardless of the consumer's outer package.json.
+/// ESM regardless of the consumer's outer `package.json`.
 ///
-/// For npm-scope specifiers (`@tsmbt-bridge/<slug>`) the file also
-/// declares `name` so `node_modules/@<scope>/<name>` resolution lands
-/// here. For Node imports-field specifiers (`#tsmbt-bridge/<slug>`)
-/// the file declares the matching `imports` mapping so calling code
-/// inside the same package boundary can resolve the specifier
-/// directly; consumers outside this boundary still need a wildcard
-/// `imports` entry in their own package.json — that is what
-/// `print_vendor_package_json_imports_hint` walks the user through.
+/// `bare_specifier` is a scoped npm name (`@tsmbt-bridge/<slug>`); the
+/// emitted `name` field lets consumer-side
+/// `"@tsmbt-bridge/<slug>": "file:..."` deps resolve through standard
+/// `node_modules/@<scope>/<name>` lookup.
 fn render_bridge_package_json(bare_specifier : String) -> String {
-  if bare_specifier.has_prefix("#") {
-    "{\n  \"type\": \"module\",\n  \"main\": \"bridge.js\",\n  \"imports\": {\n    \"" +
-    ffi_escape_json_string(bare_specifier) +
-    "\": \"./bridge.js\"\n  },\n  \"private\": true\n}\n"
-  } else {
-    "{\n  \"name\": \"" +
-    ffi_escape_json_string(bare_specifier) +
-    "\",\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"main\": \"bridge.js\",\n  \"private\": true\n}\n"
-  }
+  "{\n  \"name\": \"" +
+  ffi_escape_json_string(bare_specifier) +
+  "\",\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"main\": \"bridge.js\",\n  \"private\": true\n}\n"
 }
 
 ///|
