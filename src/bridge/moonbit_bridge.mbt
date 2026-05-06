@@ -1004,13 +1004,44 @@ fn bridge_return_expr_for_type(
 ) -> String {
   match find_bridge_enum_converter_for_type(converters, return_type) {
     Some((converter, is_optional)) =>
-      if is_optional {
+      return if is_optional {
         "\{converter.from_js_optional_name}(\{call_expr})"
       } else {
         "\{converter.from_js_name}(\{call_expr})"
       }
-    None => call_expr
+    None => ()
   }
+  // Nested enum inside a generic argument (`NormalizeAction[NormalizeForm?]`):
+  // the raw extern returns the type with the enum collapsed to its primitive
+  // (`NormalizeAction[String?]`) and MoonBit's structural type checker
+  // rejects the assignment. Both representations share an identical runtime
+  // layout — `NormalizeAction` is opaque and the inner enum was already
+  // bridged to a primitive at the JS boundary — so an `unsafeCast` is
+  // layout-safe. Public consumers that need to read the enum back must use a
+  // dedicated converter helper; this only restores parity for round-tripping.
+  if bridge_return_type_contains_nested_enum(converters, return_type) {
+    return "unsafeCast(\{call_expr})"
+  }
+  call_expr
+}
+
+///|
+fn bridge_return_type_contains_nested_enum(
+  converters : Array[BridgeEnumConverter],
+  return_type : String,
+) -> Bool {
+  if !return_type.contains("[") {
+    return false
+  }
+  for converter in converters {
+    let needle = converter.type_name
+    if return_type.contains("[" + needle) ||
+      return_type.contains(", " + needle) ||
+      return_type.contains(" " + needle) {
+      return true
+    }
+  }
+  false
 }
 
 ///|

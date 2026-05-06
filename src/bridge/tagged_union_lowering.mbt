@@ -515,15 +515,41 @@ pub fn tagged_union_from_js_expression(
 /// payload. Cases are restricted to primitive / `Named` / array-of-either,
 /// which keeps the inner type text stateless.
 pub fn tagged_union_inner_moonbit_text(t : @ast.TsType) -> String? {
+  tagged_union_inner_moonbit_text_with_arity(t, {})
+}
+
+///|
+/// State-aware variant: when `generic_type_params_by_name` says a `Named`
+/// payload type was registered with arity > 0, fill the slots with
+/// `JSValue` so the emitted enum case stays MoonBit-legal (e.g. preact's
+/// generic `VNode<T>` becomes `VNode[JSValue]`). Callers that have no
+/// arity registry can pass `{}` and keep the previous bare-name shape.
+pub fn tagged_union_inner_moonbit_text_with_arity(
+  t : @ast.TsType,
+  generic_type_params_by_name : Map[String, Array[String]],
+) -> String? {
   match t {
     @ast.TsType::Number => Some("Double")
     @ast.TsType::Int => Some("Int")
     @ast.TsType::String_ => Some("String")
     @ast.TsType::Boolean => Some("Bool")
     @ast.TsType::BigInt => Some("Int64")
-    @ast.TsType::Named(name) => Some(name)
+    @ast.TsType::Named(name) =>
+      match generic_type_params_by_name.get(name) {
+        Some(type_params) if type_params.length() > 0 => {
+          let widened : Array[String] = []
+          for _ in 0..<type_params.length() {
+            widened.push("JSValue")
+          }
+          Some(name + "[" + widened.join(", ") + "]")
+        }
+        _ => Some(name)
+      }
     @ast.TsType::Array(inner) =>
-      match tagged_union_inner_moonbit_text(inner) {
+      match
+        tagged_union_inner_moonbit_text_with_arity(
+          inner, generic_type_params_by_name,
+        ) {
         Some(text) => Some("Array[" + text + "]")
         None => None
       }
@@ -536,13 +562,24 @@ pub fn tagged_union_inner_moonbit_text(t : @ast.TsType) -> String? {
 pub fn tagged_union_decl_to_moonbit_section(
   decl : BridgeTaggedUnionDecl,
 ) -> String? {
+  tagged_union_decl_to_moonbit_section_with_arity(decl, {})
+}
+
+///|
+pub fn tagged_union_decl_to_moonbit_section_with_arity(
+  decl : BridgeTaggedUnionDecl,
+  generic_type_params_by_name : Map[String, Array[String]],
+) -> String? {
   let mut body = "///|\npub(all) enum " + decl.name + " {\n"
   for entry in decl.cases {
     let (case_name, inner) = entry
     if tagged_union_case_is_no_payload(inner) {
       body = body + "  " + case_name + "\n"
     } else {
-      let inner_text = match tagged_union_inner_moonbit_text(inner) {
+      let inner_text = match
+        tagged_union_inner_moonbit_text_with_arity(
+          inner, generic_type_params_by_name,
+        ) {
         Some(text) => text
         None => return None
       }

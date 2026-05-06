@@ -349,7 +349,11 @@ fn ffi_type_param_suffix(type_params : Array[String]) -> String {
   if type_params.length() == 0 {
     ""
   } else {
-    "[" + type_params.join(", ") + "]"
+    let sanitized : Array[String] = []
+    for name in type_params {
+      sanitized.push(@parser.moonbit_sanitize_type_param_name(name))
+    }
+    "[" + sanitized.join(", ") + "]"
   }
 }
 
@@ -865,8 +869,10 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       state.needs_promise = true
       "Promise[" + ffi_type_name(state, inner) + "]"
     }
-    Named(name) if ffi_is_local_type_param(state, name) => name
-    Applied(name, _) if ffi_is_local_type_param(state, name) => name
+    Named(name) if ffi_is_local_type_param(state, name) =>
+      @parser.moonbit_sanitize_type_param_name(name)
+    Applied(name, _) if ffi_is_local_type_param(state, name) =>
+      @parser.moonbit_sanitize_type_param_name(name)
     Named(name) if ffi_should_widen_unresolved_type_param(state, name) => {
       state.needs_js_any = true
       "JSValue"
@@ -1008,7 +1014,11 @@ fn ffi_synthesize_inline_union(
     // No-payload literal cases need no MoonBit-side payload type — only
     // payload-bearing cases gate on `tagged_union_inner_moonbit_text`.
     if !tagged_union_case_is_no_payload(inner) {
-      match tagged_union_inner_moonbit_text(inner) {
+      match
+        tagged_union_inner_moonbit_text_with_arity(
+          inner,
+          state.generic_type_params_by_name,
+        ) {
         Some(_) => ()
         None => return None
       }
@@ -2207,8 +2217,32 @@ fn ffi_type_alias_constructor_param_type(
         }
       }
     }
-    Struct(name, _) | Named(name) | Applied(name, _) =>
-      Some(ffi_mark_external_type(state, name))
+    Struct(name, _) | Named(name) | Applied(name, _) => {
+      let base = ffi_mark_external_type(state, name)
+      // Generic-preserved alias param types must include matching arity:
+      // `_ZodIssueInvalidType` was registered with arity 1, so the param
+      // type needs to read `_ZodIssueInvalidType[JSValue]` (or whatever
+      // applied args are present). Fall through to the bare base name if
+      // the registry doesn't know about it.
+      let resolved_name = match base {
+        _ =>
+          match state.generic_type_params_by_name.get(base) {
+            Some(type_params) =>
+              if type_params.length() == 0 {
+                base
+              } else {
+                let widened : Array[String] = []
+                for _ in 0..<type_params.length() {
+                  widened.push("JSValue")
+                }
+                state.needs_js_any = true
+                base + "[" + widened.join(", ") + "]"
+              }
+            None => base
+          }
+      }
+      Some(resolved_name)
+    }
     Array(inner) =>
       match ffi_type_alias_constructor_param_type(state, inner) {
         Some(inner_type) => Some("Array[\{inner_type}]")
@@ -2333,10 +2367,31 @@ fn ffi_type_alias_constructors(
 
 ///|
 fn ffi_alias_constructor_decl(
+  state : MoonBitJsFfiState,
   alias_type_name : String,
   ctor : FfiAliasConstructor,
 ) -> String {
-  "pub extern \"js\" fn \{ctor.fn_name}(\{ctor.params_src}) -> \{alias_type_name} = \"\{ctor.binding_name}\""
+  // Generic-preserved alias types (e.g. `_ZodIssueInvalidType[I]`) must
+  // receive a matching arity suffix at the constructor's declared return
+  // type. Without this the bare `_ZodIssueInvalidType` reference fails
+  // `[4040]` (arity mismatch). Widen each slot to `JSValue` since the
+  // raw constructor body has no type args to forward.
+  let return_type = match
+    state.generic_type_params_by_name.get(alias_type_name) {
+    Some(type_params) =>
+      if type_params.length() == 0 {
+        alias_type_name
+      } else {
+        let widened : Array[String] = []
+        for _ in 0..<type_params.length() {
+          widened.push("JSValue")
+        }
+        state.needs_js_any = true
+        alias_type_name + "[" + widened.join(", ") + "]"
+      }
+    None => alias_type_name
+  }
+  "pub extern \"js\" fn \{ctor.fn_name}(\{ctor.params_src}) -> \{return_type} = \"\{ctor.binding_name}\""
 }
 
 ///|
@@ -4452,7 +4507,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         }
       }
       emitted_type_names.push(type_name)
-      match tagged_union_decl_to_moonbit_section(tagged.decl) {
+      match
+        tagged_union_decl_to_moonbit_section_with_arity(
+          tagged.decl,
+          state.generic_type_params_by_name,
+        ) {
         Some(section) => ffi_sections.push(section)
         None => ()
       }
@@ -5388,7 +5447,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         let ctors = ffi_type_alias_constructors(state, type_alias)
         for ctor in ctors {
           alias_constructor_sections.push(
-            ffi_alias_constructor_decl(type_name, ctor),
+            ffi_alias_constructor_decl(state, type_name, ctor),
           )
           push_unique_bridge_binding(
             seen_bridge_binding_names,
@@ -5430,7 +5489,11 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
           None => ()
         }
       }
-      match tagged_union_decl_to_moonbit_section(decl) {
+      match
+        tagged_union_decl_to_moonbit_section_with_arity(
+          decl,
+          state.generic_type_params_by_name,
+        ) {
         Some(section) => ffi_sections.push(section)
         None => ()
       }

@@ -265,8 +265,44 @@ fn moonbit_type_param_suffix(type_params : Array[String]) -> String {
   if type_params.length() == 0 {
     ""
   } else {
-    "[" + type_params.join(", ") + "]"
+    let sanitized : Array[String] = []
+    for name in type_params {
+      sanitized.push(moonbit_sanitize_type_param_name(name))
+    }
+    "[" + sanitized.join(", ") + "]"
   }
+}
+
+///|
+/// MoonBit identifiers do not allow `$`, but TypeScript declarations
+/// produced by tools like `tsc` can mint synthetic type parameter names
+/// such as `TInput$1` to disambiguate scope-shadowed generics. Replace
+/// `$` with `_` so both the declaration site and any reference (which
+/// goes through this helper or `moonbit_type_name` below) end up with
+/// the same MoonBit-legal identifier.
+pub fn moonbit_sanitize_type_param_name(name : String) -> String {
+  if name == "" {
+    return name
+  }
+  let mut needs = false
+  for c in name {
+    if c == '$' {
+      needs = true
+      break
+    }
+  }
+  if !needs {
+    return name
+  }
+  let mut out = ""
+  for c in name {
+    if c == '$' {
+      out += "_"
+    } else {
+      out += c.to_string()
+    }
+  }
+  out
 }
 
 ///|
@@ -404,8 +440,10 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       state.needs_promise = true
       "Promise[" + moonbit_type_name(state, inner) + "]"
     }
-    Named(name) if is_local_type_param(state, name) => name
-    Applied(name, _) if is_local_type_param(state, name) => name
+    Named(name) if is_local_type_param(state, name) =>
+      moonbit_sanitize_type_param_name(name)
+    Applied(name, _) if is_local_type_param(state, name) =>
+      moonbit_sanitize_type_param_name(name)
     Named(name) if should_widen_unresolved_type_param(state, name) => {
       state.needs_jsvalue = true
       "JSValue"

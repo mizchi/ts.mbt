@@ -7569,8 +7569,27 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let tagged_union_sections : Array[String] = []
   let tagged_union_declared_names : Array[String] = []
   let tagged_union_referenced_inner_names : Array[String] = []
+  // Generic-preserved class / interface arities so a tagged-union case
+  // payload like `VNodeValue(VNode)` can be widened to `VNode[JSValue]`
+  // when `VNode` itself was emitted as `pub type VNode[T]`.
+  let tagged_union_arity_registry : Map[String, Array[String]] = {}
+  for class_ in exported_classes {
+    if class_.class_.type_params.length() > 0 {
+      tagged_union_arity_registry[class_.class_.name] = class_.class_.type_params
+    }
+  }
+  for iface in exported_interfaces {
+    if iface.iface.type_params.length() > 0 &&
+      !tagged_union_arity_registry.contains(iface.iface.name) {
+      tagged_union_arity_registry[iface.iface.name] = iface.iface.type_params
+    }
+  }
   for tagged in exported_tagged_unions {
-    match tagged_union_decl_to_moonbit_section(tagged.decl) {
+    match
+      tagged_union_decl_to_moonbit_section_with_arity(
+        tagged.decl,
+        tagged_union_arity_registry,
+      ) {
       Some(section) => {
         tagged_union_sections.push(section)
         tagged_union_declared_names.push(tagged.decl.name)

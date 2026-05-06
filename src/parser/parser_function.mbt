@@ -499,6 +499,36 @@ fn Parser::parse_type_param_names_and_bounds(
     if self.check(Const) {
       let _ = self.advance()
     }
+    // Variance modifiers `in` / `out` (TypeScript 4.7+):
+    // `<out T extends ..., in U, in out V>`. Both keywords are
+    // context-sensitive and only act as modifiers when followed by an
+    // identifier; they don't affect the erased generic shape, so consume
+    // and discard. `in` lexes as the `In` keyword, `out` lexes as a plain
+    // identifier.
+    let mut consumed_variance = true
+    while consumed_variance {
+      consumed_variance = false
+      if self.check(In) {
+        match self.peek_at(1).kind {
+          Ident(_) => {
+            let _ = self.advance()
+            consumed_variance = true
+          }
+          _ => ()
+        }
+      }
+      match self.peek().kind {
+        Ident("out") =>
+          match self.peek_at(1).kind {
+            Ident(_) => {
+              let _ = self.advance()
+              consumed_variance = true
+            }
+            _ => ()
+          }
+        _ => ()
+      }
+    }
     let mut name = ""
     if self.is_qualified_type_name_part(0) {
       name = self.parse_binding_ident() catch { _ => "_" }
