@@ -293,6 +293,91 @@ pub(all) struct BridgeTaggedUnionDecl {
 /// the decl through bridge emission.
 
 ///|
+/// Diagnose why a tagged-union-shaped alias would be widened to `JSValue`.
+/// Returns `Some(reason)` for unions of at least two members where every
+/// member is a literal but `tagged_union_cases` rejects (e.g. literal
+/// primitive overlaps a non-literal sibling, or a named member is not
+/// runtime-discriminable). Returns `None` when the alias is not even
+/// union-shaped, when it is accepted, or when it is a pure-literal union
+/// (those defer silently to `enum_lowering`).
+pub fn tagged_union_widen_reason_for_alias(
+  type_alias : @ast.TsTypeAlias,
+) -> String? {
+  if type_alias.type_params.length() != 0 {
+    return None
+  }
+  let members = match type_alias.type_ {
+    @ast.TsType::Union(items) => items
+    _ => return None
+  }
+  if members.length() < 2 {
+    return None
+  }
+  // Already accepted? No reason to widen.
+  match tagged_union_cases(members) {
+    Some(_) => return None
+    None => ()
+  }
+  // Pure-literal unions defer to `enum_lowering`; no rejection diagnostic.
+  let mut all_literal = true
+  for m in members {
+    if !tagged_union_member_is_literal_like(m) {
+      all_literal = false
+      break
+    }
+  }
+  if all_literal {
+    return None
+  }
+  // Filter out the optional-ish marker members. `Null` / `Undefined`
+  // appear in many TypeScript declarations as nullability markers
+  // (`Foo | null | undefined`); they aren't tagged-union shape failures,
+  // they are simply optional widening that the existing optional-pass
+  // already records elsewhere.
+  let load_bearing : Array[@ast.TsType] = []
+  for m in members {
+    match m {
+      @ast.TsType::Null | @ast.TsType::Undefined => ()
+      _ => load_bearing.push(m)
+    }
+  }
+  if load_bearing.length() < 2 {
+    return None
+  }
+  // Primitive overlap: a literal of type T sits next to a non-literal T.
+  if tagged_union_has_primitive_overlap(load_bearing) {
+    return Some(
+      "heterogeneous union has overlapping primitive discriminators (a literal collides with a non-literal sibling).",
+    )
+  }
+  // Member with no constructor name: non-PascalCase Named, function type,
+  // or another shape not representable as a tagged-union case.
+  for m in load_bearing {
+    if tagged_union_member_constructor_name(m) is None {
+      return Some(
+        "heterogeneous union member is not runtime-discriminable (non-PascalCase named, function, or unsupported shape).",
+      )
+    }
+  }
+  // Duplicate constructor name after PascalCase normalisation.
+  let seen : Array[String] = []
+  for m in load_bearing {
+    match tagged_union_member_constructor_name(m) {
+      Some(name) =>
+        if seen.contains(name) {
+          return Some(
+            "heterogeneous union has duplicate constructor names after PascalCase normalisation.",
+          )
+        } else {
+          seen.push(name)
+        }
+      None => ()
+    }
+  }
+  None
+}
+
+///|
 /// Discrimination strategy for one heterogeneous-union case at the JS
 /// boundary. The detector restricts inner types to runtime-discriminable
 /// shapes; this enum names the JS predicate the converter should use.

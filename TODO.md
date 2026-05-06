@@ -870,10 +870,22 @@ valibot.
   (e.g. `ServerType = Server | Http2Server | Http2SecureServer` from
   `node:net` / `node:http2`) are skipped because the named classes aren't
   reachable from `bridge.js`.
-- [ ] Emit diagnostics and stay on JSValue when discrimination is ambiguous
+- [x] Emit diagnostics and stay on JSValue when discrimination is ambiguous
   (e.g. two struct members with overlapping shapes).
-- [ ] Add real-world budgets: jose, magic-string, immer, and zod / valibot
+  - `tagged_union_widen_reason_for_alias` reports the rejection cause
+    (overlapping primitive discriminator, non-PascalCase / non-discriminable
+    member, or duplicate constructor name) and the resolution chain in
+    `moonbit_decl.mbt` surfaces it as a `Unsupported export <Name>: ...`
+    comment in the generated `bridge.mbti`. Pure-literal unions still
+    defer silently to `enum_lowering`, and `null` / `undefined` markers
+    are filtered out before evaluating discrimination so plain optional
+    widening doesn't get diagnosed.
+- [x] Add real-world budgets: jose, magic-string, immer, and zod / valibot
   schema leaves where applicable.
+  - `just verify-realworld-typescript` is back to a green baseline across
+    all 24 corpus entries; per-package `JSValue` cause budgets, function
+    counts, and unsupported-export budgets now reflect the actual
+    generated output, including the new heterogeneous-union diagnostics.
 
 ### 2. Method-level generics preserved through bridge
 

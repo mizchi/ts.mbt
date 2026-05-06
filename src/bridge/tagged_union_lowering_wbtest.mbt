@@ -231,6 +231,86 @@ test "tagged union alias: non-union body is rejected" {
 }
 
 ///|
+test "tagged union diagnostic: primitive overlap with literal" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "Bad",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([@ast.TsType::String_, @ast.TsType::Literal("x")]),
+  }
+  match tagged_union_widen_reason_for_alias(type_alias) {
+    Some(reason) => assert_true(reason.contains("overlap"))
+    None => fail("expected diagnostic for primitive-overlap rejection")
+  }
+}
+
+///|
+test "tagged union diagnostic: duplicate constructor names" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "DupNames",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([@ast.TsType::Number, @ast.TsType::Number]),
+  }
+  match tagged_union_widen_reason_for_alias(type_alias) {
+    Some(reason) => assert_true(reason.contains("duplicate"))
+    None => fail("expected diagnostic for duplicate-name rejection")
+  }
+}
+
+///|
+test "tagged union diagnostic: non-PascalCase member" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "Mixed",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([
+      @ast.TsType::Number,
+      @ast.TsType::Named("camelCaseType"),
+    ]),
+  }
+  match tagged_union_widen_reason_for_alias(type_alias) {
+    Some(reason) => assert_true(reason.contains("runtime-discriminable"))
+    None => fail("expected diagnostic for non-discriminable member")
+  }
+}
+
+///|
+test "tagged union diagnostic: pure literal returns no reason (handled by enum_lowering)" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "Pure",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([
+      @ast.TsType::Literal("a"),
+      @ast.TsType::Literal("b"),
+    ]),
+  }
+  match tagged_union_widen_reason_for_alias(type_alias) {
+    Some(_) => fail("pure-literal alias must defer silently to enum_lowering")
+    None => ()
+  }
+}
+
+///|
+test "tagged union diagnostic: accepted alias returns no reason" {
+  let type_alias : @ast.TsTypeAlias = {
+    name: "OK",
+    type_params: [],
+    type_param_bounds: [],
+    type_: @ast.TsType::Union([
+      @ast.TsType::Number,
+      @ast.TsType::String_,
+      @ast.TsType::Named("Date"),
+    ]),
+  }
+  match tagged_union_widen_reason_for_alias(type_alias) {
+    Some(_) => fail("accepted alias must not produce a widen reason")
+    None => ()
+  }
+}
+
+///|
 test "tagged union alias: literal-only union is rejected" {
   let type_alias : @ast.TsTypeAlias = {
     name: "Variant",

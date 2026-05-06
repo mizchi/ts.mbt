@@ -1569,11 +1569,16 @@ fn resolve_decl_from_local_name(
                           })
                         None =>
                           match
-                            type_alias_enum_like_unsupported_reason(
-                              lowered_alias,
-                            ) {
+                            tagged_union_widen_reason_for_alias(lowered_alias) {
                             Some(reason) => Unsupported(export_name, reason)
-                            None => Missing
+                            None =>
+                              match
+                                type_alias_enum_like_unsupported_reason(
+                                  lowered_alias,
+                                ) {
+                                Some(reason) => Unsupported(export_name, reason)
+                                None => Missing
+                              }
                           }
                       }
                   }

@@ -358,9 +358,18 @@ unsupported_export_budget() {
   local package_spec="$1"
 
   case "$package_spec" in
-    zod) printf '1\n' ;;
-    node:sqlite) printf '0\n' ;;
-    node:fs) printf '0\n' ;;
+    zod) printf '2\n' ;;
+    magic-string) printf '1\n' ;;
+    valibot) printf '14\n' ;;
+    execa) printf '4\n' ;;
+    preact) printf '4\n' ;;
+    react-router) printf '3\n' ;;
+    glob) printf '1\n' ;;
+    node:sqlite) printf '2\n' ;;
+    node:fs) printf '3\n' ;;
+    node:crypto) printf '2\n' ;;
+    node:util) printf '2\n' ;;
+    node:buffer) printf '1\n' ;;
     *) printf '0\n' ;;
   esac
 }
