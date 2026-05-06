@@ -1438,22 +1438,25 @@ pub fn Parser::parse_declare_function(
     // Handle optional parameter: name?
     let is_optional = self.match_(Question)
     // Type annotation is optional
-    if self.check(Colon) {
+    let computed_param_type = if self.check(Colon) {
       let _ = self.advance()
-      let param_type = self.parse_type()
-      let param_type = if is_optional {
-        wrap_optional_ts_type(param_type)
+      let parsed = self.parse_type()
+      if is_optional {
+        wrap_optional_ts_type(parsed)
       } else {
-        param_type
+        parsed
       }
-      params.push((param_name, param_type))
+    } else if is_optional {
+      wrap_optional_ts_type(@ast.TsType::Any)
     } else {
-      let param_type = if is_optional {
-        wrap_optional_ts_type(@ast.TsType::Any)
-      } else {
-        @ast.TsType::Any
-      }
-      params.push((param_name, param_type))
+      @ast.TsType::Any
+    }
+    // TypeScript's `this` parameter at index 0 (`afterAll(this: unknown,
+    // fn, timeout)`) types the receiver — there is no runtime arg for
+    // it. Drop it so the generated `bridge.js` body doesn't emit
+    // `function f(this, ...)`, which Node rejects as a syntax error.
+    if !(param_name == "this" && params.length() == 0) {
+      params.push((param_name, computed_param_type))
     }
     if self.check(Comma) {
       let _ = self.advance()
@@ -1590,7 +1593,14 @@ fn Parser::parse_declare_signature_params(
     } else {
       base_param_type
     }
-    params.push((param_name, param_type))
+    // TypeScript's `this` parameter (`fn(this: T, x: number): void`) types
+    // the receiver and is dropped at the JS boundary — there's no runtime
+    // arg for it. Skipping it here keeps the generated `bridge.js` from
+    // emitting `function f(this, ...)`, which `node` rejects with a
+    // `SyntaxError: Unexpected token 'this'`.
+    if !(param_name == "this" && params.length() == 0) {
+      params.push((param_name, param_type))
+    }
     if self.check(Comma) {
       let _ = self.advance()
     }

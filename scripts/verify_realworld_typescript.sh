@@ -338,7 +338,7 @@ jsvalue_function_budget() {
     immer) printf '15\n' ;;
     execa) printf '1\n' ;;
     preact) printf '7\n' ;;
-    vitest/runtime) printf '4\n' ;;
+    vitest/runtime) printf '6\n' ;;
     playwright) printf '192\n' ;;
     react-router) printf '83\n' ;;
     jose) printf '47\n' ;;
@@ -395,7 +395,7 @@ jsvalue_cause_budget() {
     immer) printf '22|4|7|2|2|1|6\n' ;;
     execa) printf '1|0|0|0|1|0|0\n' ;;
     preact) printf '48|12|1|4|14|17|0\n' ;;
-    vitest/runtime) printf '8|0|1|0|6|0|1\n' ;;
+    vitest/runtime) printf '66|37|2|2|6|19|0\n' ;;
     playwright) printf '997|174|0|49|653|121|0\n' ;;
     react-router) printf '324|152|29|31|37|55|20\n' ;;
     jose) printf '57|10|2|12|11|10|12\n' ;;

@@ -1618,31 +1618,40 @@ fn resolve_decl_from_local_name(
                                 func,
                               })
                             None =>
-                              match find_value_decl(info.module_, local_name) {
-                                Some(value) =>
-                                  if value_decl_has_runtime_binding(value) {
-                                    Value({
-                                      source_path,
-                                      local_name_prefix: "",
-                                      export_name,
-                                      source_export_name,
-                                      value,
-                                    })
-                                  } else {
-                                    Missing
-                                  }
+                              // TS declaration merging: when both a class and
+                              // a namespace declare the same name, the class
+                              // is the load-bearing surface (instance shape +
+                              // generics) and the namespace contributes a
+                              // value-side `name` binding with type `Any`.
+                              // Resolve the class first so the bridge keeps
+                              // `class Foo<T>` methods/generics; otherwise the
+                              // namespace's `Any`-typed value would shadow
+                              // it as a runtime-only export.
+                              match find_class_decl(info.module_, local_name) {
+                                Some(class_) =>
+                                  Class({
+                                    source_path,
+                                    local_name,
+                                    local_name_prefix: "",
+                                    export_name,
+                                    source_export_name,
+                                    class_,
+                                  })
                                 None =>
                                   match
-                                    find_class_decl(info.module_, local_name) {
-                                    Some(class_) =>
-                                      Class({
-                                        source_path,
-                                        local_name,
-                                        local_name_prefix: "",
-                                        export_name,
-                                        source_export_name,
-                                        class_,
-                                      })
+                                    find_value_decl(info.module_, local_name) {
+                                    Some(value) =>
+                                      if value_decl_has_runtime_binding(value) {
+                                        Value({
+                                          source_path,
+                                          local_name_prefix: "",
+                                          export_name,
+                                          source_export_name,
+                                          value,
+                                        })
+                                      } else {
+                                        Missing
+                                      }
                                     None => {
                                       let mut resolved : ResolvedDecl = Missing
                                       for
@@ -7788,7 +7797,17 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let opaque_declarations : Array[String] = []
   for name in tagged_union_referenced_inner_names {
     if !module_declared_names.contains(name) {
-      opaque_declarations.push("///|\ndeclare pub type \{name}")
+      // Generic-preserved inner-payload types need their type-parameter
+      // suffix on the opaque companion declaration; otherwise the
+      // generated bridge wrapper signature `task : Test` collides with
+      // the `pub type Test[ExtraContext]` body emitted in `types.mbt`
+      // and the consumer hits a `[4040]` arity mismatch.
+      let suffix = match tagged_union_arity_registry.get(name) {
+        Some(type_params) if type_params.length() > 0 =>
+          "[" + type_params.join(", ") + "]"
+        _ => ""
+      }
+      opaque_declarations.push("///|\ndeclare pub type \{name}\{suffix}")
       module_declared_names.push(name)
     }
   }
