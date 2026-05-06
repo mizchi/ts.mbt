@@ -495,6 +495,57 @@ fn parse_bridge_implemented_type_name_line(line : String) -> String? {
 }
 
 ///|
+/// Probe `bridge_mbt` for a top-level type declaration of `name` and
+/// return its type-parameter arity. Inspects `pub(all) struct` /
+/// `pub type` / `pub enum` style decls (with or without `#external`).
+/// Returns `0` when no decl is found or the name appears bare.
+fn bridge_struct_decl_arity(bridge_mbt : String, name : String) -> Int {
+  let prefixes = [
+    "pub(all) struct ", "pub struct ", "pub(all) enum ", "pub enum ", "pub type ",
+  ]
+  for line_view in bridge_mbt.split("\n") {
+    let line = line_view.to_string().trim().to_string()
+    for prefix in prefixes {
+      if !line.has_prefix(prefix) {
+        continue
+      }
+      let rest = line[prefix.length():].to_string().trim().to_string()
+      if !rest.has_prefix(name) {
+        continue
+      }
+      let after = rest[name.length():].to_string()
+      if after == "" ||
+        after[0].to_int() == ' '.to_int() ||
+        after[0].to_int() == '{'.to_int() ||
+        after[0].to_int() == '='.to_int() {
+        return 0
+      }
+      if after[0].to_int() != '['.to_int() {
+        continue
+      }
+      // Count commas at depth 1 inside the bracket pair to derive arity.
+      let mut depth = 0
+      let mut count = 1
+      for i in 0..<after.length() {
+        let ch = after[i].unsafe_to_char()
+        if ch == '[' {
+          depth += 1
+        } else if ch == ']' {
+          depth -= 1
+          if depth == 0 {
+            return count
+          }
+        } else if ch == ',' && depth == 1 {
+          count += 1
+        }
+      }
+      return count
+    }
+  }
+  0
+}
+
+///|
 fn collect_bridge_implemented_type_names(bridge_mbt : String) -> Array[String] {
   let names : Array[String] = []
   for line_view in bridge_mbt.split("\n") {
@@ -1086,8 +1137,25 @@ fn add_bridge_public_wrappers(
     "pub fn[A, B] unsafeCast(value : A) -> B = \"%identity\"",
   ]
   for helper in collect_bridge_type_guard_helpers(bridge_mbti, next_bridge_mbt) {
+    // Widen `Token` to `Token[JSValue]` etc. when the target type was
+    // emitted with generic parameters so the guard's `unsafeCast` lands
+    // on a valid arity.
+    let target_arity = bridge_struct_decl_arity(
+      next_bridge_mbt,
+      helper.target_type,
+    )
+    let target_with_args = if target_arity > 0 {
+      let args : Array[String] = []
+      for _ in 0..<target_arity {
+        args.push("JSValue")
+      }
+      let joined = args.join(", ")
+      "\{helper.target_type}[\{joined}]"
+    } else {
+      helper.target_type
+    }
     helpers.push(
-      "pub fn \{helper.source_type}::\{helper.helper_name}(self : \{helper.source_type}) -> \{helper.target_type}? {\n  if \{helper.guard_name}(self) {\n    Some(unsafeCast(self))\n  } else {\n    None\n  }\n}",
+      "pub fn \{helper.source_type}::\{helper.helper_name}(self : \{helper.source_type}) -> \{target_with_args}? {\n  if \{helper.guard_name}(self) {\n    Some(unsafeCast(self))\n  } else {\n    None\n  }\n}",
     )
   }
   let sections : Array[String] = []

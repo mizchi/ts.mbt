@@ -993,10 +993,4 @@ verify_typescript_to_moonbit_result_example
 verify_typescript_to_moonbit_reducer_example
 verify_typescript_to_moonbit_default_class_example
 verify_typescript_to_moonbit_const_table_example
-# typescript_ast: typescript.d.ts ships >256 interfaces, which trips
-# the FFI's `normalize_interfaces_for_ffi` 256-iface bail. The decl
-# side still registers all interfaces' generic arity, so call sites
-# emit `Foo[JSValue]` against an FFI-side bare `pub type Foo`. Until
-# the FFI registers arity from the full module graph (not just
-# `exported_interfaces`), this verify path is a known regression.
-# verify_typescript_to_moonbit_typescript_ast_example
+verify_typescript_to_moonbit_typescript_ast_example

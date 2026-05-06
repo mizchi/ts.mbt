@@ -393,6 +393,124 @@ fn ffi_is_likely_discarded_type_param_name(name : String) -> Bool {
 }
 
 ///|
+/// Walk every loaded module's interfaces — including those nested
+/// inside namespaces — and register their generic-parameter arity into
+/// `generic_type_params_by_name`. Names already present in the map (or
+/// in `class_type_names`, where a class drives runtime emission) are
+/// left alone. Used to backfill arity for interfaces the FFI's
+/// `normalize_interfaces_for_ffi` bailed on (>256 interfaces) so call
+/// sites can still resolve `Foo[T, U]` against the decl-side
+/// `declare pub type Foo[T, U]`.
+///
+/// Mirrors the decl-side namespace flattening from
+/// `namespace_type_export_name`: for an entry module like
+/// `declare namespace ts { namespace server { interface Foo<T> } }`,
+/// the bridge name is `ServerFoo` (the outermost namespace gets
+/// stripped as if export-equals'd; nested namespaces accumulate
+/// PascalCase prefixes).
+fn ffi_register_module_iface_arities(
+  modules : Map[String, DeclModuleInfo],
+  generic_type_params_by_name : Map[String, Array[String]],
+  class_type_names : Array[String],
+) -> Unit {
+  for entry in modules {
+    let (_, info) = entry
+    ffi_register_module_iface_arities_in_ts_module(
+      info.module_,
+      "",
+      true,
+      generic_type_params_by_name,
+      class_type_names,
+    )
+  }
+}
+
+///|
+fn ffi_register_module_iface_arities_in_ts_module(
+  ts_module : @ast.TsModule,
+  prefix : String,
+  is_outermost : Bool,
+  generic_type_params_by_name : Map[String, Array[String]],
+  class_type_names : Array[String],
+) -> Unit {
+  for iface in ts_module.interfaces {
+    if iface.type_params.length() == 0 {
+      continue
+    }
+    // Register both the raw name and the prefixed flattened form so
+    // call sites referencing either style resolve.
+    ffi_register_iface_arity(
+      iface.name,
+      iface.type_params,
+      generic_type_params_by_name,
+      class_type_names,
+    )
+    if prefix != "" {
+      let flattened = prefix + ffi_pascal_case(iface.name)
+      ffi_register_iface_arity(
+        flattened,
+        iface.type_params,
+        generic_type_params_by_name,
+        class_type_names,
+      )
+    }
+  }
+  for namespace_ in ts_module.namespaces {
+    let next_prefix = if is_outermost {
+      // Treat the entry's first namespace as `export = ns` and drop
+      // its name from the prefix chain, matching how the decl side
+      // emits `ts.NodeArray` as bare `NodeArray`.
+      prefix
+    } else if prefix == "" {
+      ffi_pascal_case(namespace_.name)
+    } else {
+      prefix + ffi_pascal_case(namespace_.name)
+    }
+    ffi_register_module_iface_arities_in_ts_module(
+      namespace_.module_,
+      next_prefix,
+      false,
+      generic_type_params_by_name,
+      class_type_names,
+    )
+  }
+}
+
+///|
+fn ffi_register_iface_arity(
+  iface_name : String,
+  type_params : Array[String],
+  generic_type_params_by_name : Map[String, Array[String]],
+  class_type_names : Array[String],
+) -> Unit {
+  let type_name = ffi_type_identifier(iface_name, "OpaqueType")
+  if class_type_names.contains(type_name) {
+    return
+  }
+  match generic_type_params_by_name.get(type_name) {
+    Some(_) => ()
+    None => generic_type_params_by_name[type_name] = type_params
+  }
+}
+
+///|
+/// Uppercase the first ASCII letter of `name` to mirror the decl-side
+/// `decl_to_pascal_case` namespace-prefix accumulation. Non-ASCII /
+/// already-uppercase / leading-non-letter inputs pass through unchanged.
+fn ffi_pascal_case(name : String) -> String {
+  if name == "" {
+    return name
+  }
+  let first = name[0].to_int().unsafe_to_char()
+  if first >= 'a' && first <= 'z' {
+    let upper = (first.to_int() - 32).unsafe_to_char()
+    upper.to_string() + name[1:].to_string()
+  } else {
+    name
+  }
+}
+
+///|
 fn ffi_should_widen_unresolved_type_param(
   state : MoonBitJsFfiState,
   name : String,
@@ -772,6 +890,10 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       match state.generic_type_params_by_name.get(type_name) {
         Some(type_params) if type_params.length() > 0 => {
           state.needs_js_any = true
+          // Mark the type so the trailing opaque-external loop emits
+          // a matching `#external pub type Foo[T, U]` decl when no
+          // struct decl was generated.
+          let _ = ffi_mark_external_type(state, name)
           let rendered_args : Array[String] = []
           for _ in 0..<type_params.length() {
             rendered_args.push("JSValue")
@@ -786,6 +908,7 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
       match state.generic_type_params_by_name.get(type_name) {
         Some(type_params) =>
           if type_params.length() == args.length() {
+            let _ = ffi_mark_external_type(state, name)
             let rendered_args : Array[String] = []
             for arg in args {
               rendered_args.push(ffi_type_name(state, arg))
@@ -796,6 +919,7 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
             // still emit a syntactically valid `T[JSValue, ...]` form
             // matching the struct declaration.
             state.needs_js_any = true
+            let _ = ffi_mark_external_type(state, name)
             let rendered_args : Array[String] = []
             for _ in 0..<type_params.length() {
               rendered_args.push("JSValue")
@@ -3847,6 +3971,16 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
       struct_type_names.push(type_name)
     }
   }
+  // For modules with so many interfaces that `normalize_interfaces_for_ffi`
+  // bails on the 256 ceiling, the FFI's `interfaces` only contains
+  // transitively reachable types — the rest never get their generic
+  // arity registered. Walk all modules' interface lists (recursively
+  // through nested namespaces) and fill in any missing arity entries so
+  // call-site references like `Applied("ServerNormalizedPathMap", [...])`
+  // match the decl-side `declare pub type ServerNormalizedPathMap[T]`.
+  ffi_register_module_iface_arities(
+    modules, generic_type_params_by_name, class_type_names,
+  )
   for enum_ in enums {
     declared_type_names.push(ffi_type_identifier(enum_.name, "GeneratedEnum"))
   }
