@@ -11,7 +11,7 @@
 // the listen callback to keep the smoke single-shot.
 
 extern "js" fn make_serve_options(
-  app : @sut.Hono,
+  app : @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue],
   port : Int,
 ) -> @sut_node_server.Options =
   #| (app, port) => ({ fetch: app.fetch.bind(app), port })
@@ -20,7 +20,9 @@ extern "js" fn smoke_exit_ok() -> Unit =
   #| () => { console.log("ok"); process.exit(0); }
 
 fn main {
-  let app = @sut.new_hono(None)
+  let app : @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue] = @sut.new_hono(
+    None,
+  )
   let _ = app.get("/", fn(c) { c.text("hello", None, None) })
   let opts = make_serve_options(app, 0)
   let _ = @sut_node_server.serve(opts, fn(_info) { smoke_exit_ok() })

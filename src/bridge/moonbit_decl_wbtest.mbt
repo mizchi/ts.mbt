@@ -2290,15 +2290,15 @@ async test "bridge: emit MoonBit declarations from imported object type alias me
   assert_true(actual.contains("declare pub type HonoOptions[E]"))
   assert_true(actual.contains("/// strict : Bool?"))
   assert_true(actual.contains("/// bindings : E?"))
-  assert_true(actual.contains("declare pub type Hono"))
+  assert_true(actual.contains("declare pub type Hono[E]"))
   assert_true(
     actual.contains(
-      "declare pub fn new_hono(options : HonoOptions[JSValue]?) -> Hono",
+      "declare pub fn[E] new_hono(options : HonoOptions[E]?) -> Hono[E]",
     ),
   )
   assert_true(
     actual.contains(
-      "declare pub fn createApp(options : HonoOptions[JSValue]) -> Hono",
+      "declare pub fn createApp(options : HonoOptions[JSValue]) -> Hono[JSValue]",
     ),
   )
 }

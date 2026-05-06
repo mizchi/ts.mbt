@@ -423,6 +423,7 @@ pub(all) struct TsClassMethodDecl {
 // / class declaration
 pub(all) struct TsClassDecl {
   name : String
+  type_params : Array[String]
   base_names : Array[String]
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]

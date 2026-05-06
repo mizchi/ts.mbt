@@ -828,6 +828,15 @@ fn to_snake_case(name : String) -> String {
 }
 
 ///|
+/// Whether to keep a class's TypeScript type parameters when emitting MoonBit
+/// declarations. Mirrors `ffi_should_preserve_class_type_params` in
+/// `src/bridge/moonbit_js_ffi.mbt` so the FFI and decl sides agree on which
+/// classes emit `Foo[T, U]` vs bare `Foo`.
+fn moonbit_should_preserve_class_type_params(class_ : @ast.TsClassDecl) -> Bool {
+  class_.type_params.length() > 0
+}
+
+///|
 fn class_decl_to_moonbit_sections(
   state : MoonBitDeclState,
   class_ : @ast.TsClassDecl,
@@ -835,8 +844,19 @@ fn class_decl_to_moonbit_sections(
   let sections : Array[String] = []
   let seen_binding_names : Array[String] = []
   let type_name = moonbit_type_identifier(class_.name, "OpaqueType")
+  let active_type_params = if moonbit_should_preserve_class_type_params(class_) {
+    class_.type_params
+  } else {
+    []
+  }
+  let local_type_param_len = push_local_type_params(state, active_type_params)
+  let type_param_suffix = moonbit_type_param_suffix(active_type_params)
+  let receiver_type = type_name + type_param_suffix
+  let fn_type_param_prefix = moonbit_function_type_param_prefix(
+    active_type_params,
+  )
   sections.push(
-    "///|\n/// TS class \{class_.name}\ndeclare pub type \{type_name}",
+    "///|\n/// TS class \{class_.name}\ndeclare pub type \{type_name}\{type_param_suffix}",
   )
   if class_.is_constructible {
     let params : Array[String] = []
@@ -856,17 +876,26 @@ fn class_decl_to_moonbit_sections(
       seen_binding_names,
       sections,
       "new_\{ctor_name}",
-      "///|\ndeclare pub fn new_\{ctor_name}(\{ctor_params}) -> \{type_name}",
+      "///|\ndeclare pub \{fn_type_param_prefix} new_\{ctor_name}(\{ctor_params}) -> \{receiver_type}",
     )
   }
   for class_property in class_.properties {
+    // Static getters/setters belong to the class itself, not an
+    // instance, so they don't capture the class's instance-level type
+    // parameters. Mirrors the FFI side's same gating in
+    // `ffi_class_property_getter_decl_to_moonbit`.
+    let property_fn_prefix = if class_property.is_static {
+      "fn"
+    } else {
+      fn_type_param_prefix
+    }
     let getter_name = "get_" +
       to_snake_case(class_.name) +
       "_" +
       to_snake_case(class_property.name)
     let getter_params : Array[String] = []
     if !class_property.is_static {
-      getter_params.push("self : \{type_name}")
+      getter_params.push("self : \{receiver_type}")
     }
     let getter_params_str = getter_params.join(", ")
     let getter_type = moonbit_type_name(state, class_property.type_)
@@ -874,7 +903,7 @@ fn class_decl_to_moonbit_sections(
       seen_binding_names,
       sections,
       getter_name,
-      "///|\ndeclare pub fn \{getter_name}(\{getter_params_str}) -> \{getter_type}",
+      "///|\ndeclare pub \{property_fn_prefix} \{getter_name}(\{getter_params_str}) -> \{getter_type}",
     )
     if !class_property.is_readonly {
       let setter_name = "set_" +
@@ -883,7 +912,7 @@ fn class_decl_to_moonbit_sections(
         to_snake_case(class_property.name)
       let setter_params : Array[String] = []
       if !class_property.is_static {
-        setter_params.push("self : \{type_name}")
+        setter_params.push("self : \{receiver_type}")
       }
       setter_params.push("value : \{getter_type}")
       let setter_params_str = setter_params.join(", ")
@@ -891,15 +920,25 @@ fn class_decl_to_moonbit_sections(
         seen_binding_names,
         sections,
         setter_name,
-        "///|\ndeclare pub fn \{setter_name}(\{setter_params_str}) -> Unit",
+        "///|\ndeclare pub \{property_fn_prefix} \{setter_name}(\{setter_params_str}) -> Unit",
       )
     }
   }
   for class_method in class_.methods {
     let params : Array[String] = []
     if !class_method.is_static {
-      params.push("self : \{type_name}")
+      params.push("self : \{receiver_type}")
     }
+    let method_extra_type_params : Array[String] = []
+    for tp in class_method.type_params {
+      if !active_type_params.contains(tp) &&
+        !method_extra_type_params.contains(tp) {
+        method_extra_type_params.push(tp)
+      }
+    }
+    let method_local_len = push_local_type_params(
+      state, method_extra_type_params,
+    )
     for param in class_method.params {
       let (param_name, param_type) = param
       let safe_name = sanitize_value_identifier(param_name, "arg")
@@ -908,8 +947,8 @@ fn class_decl_to_moonbit_sections(
     }
     let raw_return = moonbit_type_name(state, class_method.return_type)
     let return_type = match raw_return {
-      "This" => class_.name
-      "This?" => class_.name + "?"
+      "This" => receiver_type
+      "This?" => receiver_type + "?"
       _ => raw_return
     }
     let fn_name = if class_method.is_static {
@@ -918,13 +957,30 @@ fn class_decl_to_moonbit_sections(
       "\{to_snake_case(class_.name)}_\{to_snake_case(class_method.name)}"
     }
     let method_params = params.join(", ")
+    // Static methods skip the class-level type-params (they don't have
+    // a `self`, so the class generics aren't in scope for the body).
+    // Mirrors the FFI side's gating in `ffi_class_method_decl_to_moonbit`.
+    let combined_type_params : Array[String] = []
+    if !class_method.is_static {
+      for tp in active_type_params {
+        combined_type_params.push(tp)
+      }
+    }
+    for tp in method_extra_type_params {
+      combined_type_params.push(tp)
+    }
+    let method_type_param_prefix = moonbit_function_type_param_prefix(
+      combined_type_params,
+    )
     push_unique_decl_section(
       seen_binding_names,
       sections,
       fn_name,
-      "///|\ndeclare pub fn \{fn_name}(\{method_params}) -> \{return_type}",
+      "///|\ndeclare pub \{method_type_param_prefix} \{fn_name}(\{method_params}) -> \{return_type}",
     )
+    restore_local_type_params(state, method_local_len)
   }
+  restore_local_type_params(state, local_type_param_len)
   sections
 }
 
@@ -980,20 +1036,35 @@ pub fn emit_moonbit_decl_with_sections_and_types(
   let declared_type_names : Array[String] = []
   let generic_preserved_type_names : Array[String] = []
   let generic_preserved_type_arity_by_name : Map[String, Int] = {}
-  // Pre-collect class names so interfaces that share a name with a class
-  // (TS lets you declare both to merge them) don't register a
-  // type-param arity. The class decl emits a bare `declare pub type
-  // ClassName`, so call sites referencing the merged name need to keep
-  // matching that bare arity.
+  // When a class and an interface share a name (TS declaration merging) the
+  // class drives the emitted shape: `class_decl_to_moonbit_sections` emits
+  // `declare pub type ClassName[T, U]` with the class's type-params, and the
+  // interface emission is skipped below. Pre-collect class names + their
+  // arities so interface registration aligns with the class.
   let class_decl_names : Array[String] = []
+  let class_arity_by_name : Map[String, Int] = {}
   for class_ in module_.classes {
     class_decl_names.push(class_.name)
+    if moonbit_should_preserve_class_type_params(class_) {
+      class_arity_by_name[class_.name] = class_.type_params.length()
+    }
   }
   for iface in module_.interfaces {
     declared_type_names.push(iface.name)
-    if moonbit_should_preserve_interface_type_params(iface) &&
-      iface.type_params.length() > 0 &&
-      !class_decl_names.contains(iface.name) {
+    if class_decl_names.contains(iface.name) {
+      // The class drives the shape. If the class itself preserves type
+      // params, register that arity under the shared name.
+      match class_arity_by_name.get(iface.name) {
+        Some(arity) => {
+          if !generic_preserved_type_names.contains(iface.name) {
+            generic_preserved_type_names.push(iface.name)
+          }
+          generic_preserved_type_arity_by_name[iface.name] = arity
+        }
+        None => ()
+      }
+    } else if moonbit_should_preserve_interface_type_params(iface) &&
+      iface.type_params.length() > 0 {
       // `interface_decl_to_moonbit` emits `declare pub type Foo[T, U]`
       // with the full type-param list, so call sites must propagate the
       // matching arity instead of widening to bare `Foo`.
@@ -1003,6 +1074,11 @@ pub fn emit_moonbit_decl_with_sections_and_types(
   }
   for class_ in module_.classes {
     declared_type_names.push(class_.name)
+    if moonbit_should_preserve_class_type_params(class_) &&
+      !generic_preserved_type_names.contains(class_.name) {
+      generic_preserved_type_names.push(class_.name)
+      generic_preserved_type_arity_by_name[class_.name] = class_.type_params.length()
+    }
   }
   for enum_ in module_.enums {
     declared_type_names.push(enum_.name)

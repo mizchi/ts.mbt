@@ -38,6 +38,7 @@ fn runtime_class_param_name(param : @ast.TsParam, index : Int) -> String {
 ///|
 fn build_runtime_class_decl(
   name : String,
+  type_params : Array[String],
   ctor_opt : @ast.TsFunc?,
   elements : Array[ClassElement],
   is_abstract : Bool,
@@ -111,6 +112,7 @@ fn build_runtime_class_decl(
   }
   {
     name,
+    type_params,
     base_names: [],
     constructor_params,
     properties,
@@ -621,8 +623,14 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     }
     _ => { kind: Eof, pos: 0, has_newline_before: false }
   }
+  let mut class_type_params : Array[String] = []
+  let mut class_type_param_bound_len = self.local_type_param_bounds.length()
   if self.check(Lt) {
-    self.skip_type_params()
+    let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
+    class_type_params = names
+    class_type_param_bound_len = self.push_local_type_param_bounds(
+      type_param_bounds,
+    )
   }
   let mut base : String? = None
   if self.match_(Extends) {
@@ -644,6 +652,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   self.current_class_brand = Some(brand)
   let (ctor_opt, elements) = self.parse_class_body()
   self.current_class_brand = prev_brand
+  self.restore_local_type_param_bounds(class_type_param_bound_len)
   match base {
     Some(base_name) =>
       if class_name.length() > 0 && base_name == class_name {
@@ -671,6 +680,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       } else {
         class_name
       },
+      class_type_params,
       ctor_opt,
       elements,
       false,
@@ -1072,8 +1082,14 @@ fn Parser::parse_class_decl_with_abstract(
     Ident(n) => n
     _ => "<class>"
   }
+  let mut class_type_params : Array[String] = []
+  let mut class_type_param_bound_len = self.local_type_param_bounds.length()
   if self.check(Lt) {
-    self.skip_type_params()
+    let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
+    class_type_params = names
+    class_type_param_bound_len = self.push_local_type_param_bounds(
+      type_param_bounds,
+    )
   }
   let mut base : String? = None
   if self.match_(Extends) {
@@ -1095,8 +1111,11 @@ fn Parser::parse_class_decl_with_abstract(
   self.current_class_brand = Some(brand)
   let (ctor_opt, elements) = self.parse_class_body()
   self.current_class_brand = prev_brand
+  self.restore_local_type_param_bounds(class_type_param_bound_len)
   self.last_runtime_class_decl = Some(
-    build_runtime_class_decl(name, ctor_opt, elements, is_abstract),
+    build_runtime_class_decl(
+      name, class_type_params, ctor_opt, elements, is_abstract,
+    ),
   )
   let instance_assigns : Array[@ast.TsStmt] = []
   let has_instance_private = has_instance_private_elements(elements)

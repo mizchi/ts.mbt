@@ -1,18 +1,25 @@
-fn test_hono_handler(c : @sut.Context) -> @sut.Response {
+fn test_hono_handler(
+  c : @sut.Context[@sut.JSValue, @sut.JSValue, @sut.JSValue],
+) -> @sut.Response {
   c.text("hi", None, None)
 }
 
 extern "js" fn test_undefined() -> @sut.JSValue =
   #| () => undefined
 
-extern "js" fn test_hono_route_response(app : @sut.Hono, res : @sut.JSValue) -> String =
+extern "js" fn test_hono_route_response(
+  app : @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue],
+  res : @sut.JSValue,
+) -> String =
   #| (app, res) => {
   #|   const route = app.routes[0];
   #|   return `${res.status}:${route.method}:${route.path}:${res.headers.get("content-type")}`;
   #| }
 
 fn main {
-  let app = @sut.new_hono(None)
+  let app : @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue] = @sut.new_hono(
+    None,
+  )
   let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
   let res = app.request(

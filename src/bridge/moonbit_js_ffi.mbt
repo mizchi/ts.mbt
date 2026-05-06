@@ -381,6 +381,16 @@ fn ffi_should_preserve_interface_type_params(iface : @ast.TsInterface) -> Bool {
 }
 
 ///|
+/// Whether to keep a class's TypeScript type parameters when emitting
+/// MoonBit FFI declarations. Mirrors
+/// `moonbit_should_preserve_class_type_params` in `parser_moonbit.mbt`
+/// so the FFI and decl sides agree on which classes emit `Foo[T, U]`
+/// vs bare `Foo`.
+fn ffi_should_preserve_class_type_params(class_ : @ast.TsClassDecl) -> Bool {
+  class_.type_params.length() > 0
+}
+
+///|
 fn ffi_is_likely_discarded_type_param_name(name : String) -> Bool {
   if name == "SS" {
     return true
@@ -3027,8 +3037,15 @@ fn ffi_class_type_name(class_name : String) -> String {
 }
 
 ///|
-fn ffi_class_type_decl(class_name : String) -> String {
-  "#warnings(\"-3\")\n#external\npub type " + ffi_class_type_name(class_name)
+fn ffi_class_type_decl(class_ : @ast.TsClassDecl) -> String {
+  let suffix = if ffi_should_preserve_class_type_params(class_) {
+    ffi_type_param_suffix(class_.type_params)
+  } else {
+    ""
+  }
+  "#warnings(\"-3\")\n#external\npub type " +
+  ffi_class_type_name(class_.name) +
+  suffix
 }
 
 ///|
@@ -3039,7 +3056,13 @@ fn ffi_class_constructor_decl_to_moonbit(
   if !class_.is_constructible {
     return None
   }
+  let preserve = ffi_should_preserve_class_type_params(class_)
+  let active_type_params = if preserve { class_.type_params } else { [] }
+  let local_type_param_len = ffi_push_local_type_params(
+    state, active_type_params,
+  )
   let params : Array[String] = []
+  let arg_names : Array[String] = []
   match class_.constructor_params {
     Some(constructor_params) =>
       for param in constructor_params {
@@ -3047,6 +3070,7 @@ fn ffi_class_constructor_decl_to_moonbit(
         let safe_name = ffi_sanitize_identifier(name, "arg")
         let safe_type = ffi_type_name(state, type_)
         params.push("\{safe_name} : \{safe_type}")
+        arg_names.push(safe_name)
       }
     None => ()
   }
@@ -3054,9 +3078,29 @@ fn ffi_class_constructor_decl_to_moonbit(
   let ctor_name = ffi_to_snake_case(class_.name)
   let class_type_name = ffi_class_type_name(class_.name)
   let binding_name = ffi_class_ctor_binding_name(class_.name)
-  Some(
-    "pub extern \"js\" fn new_\{ctor_name}(\{ctor_params}) -> \{class_type_name} = \"\{binding_name}\"",
-  )
+  let result = if preserve {
+    let type_param_suffix = ffi_type_param_suffix(active_type_params)
+    let fn_prefix = ffi_function_type_param_prefix(active_type_params)
+    let extern_params : Array[String] = []
+    for arg in arg_names {
+      extern_params.push("\{arg} : JSValue")
+    }
+    let extern_params_src = extern_params.join(", ")
+    let extern_name = "_new_\{ctor_name}_extern_js"
+    let cast_args : Array[String] = []
+    for arg in arg_names {
+      cast_args.push("unsafeCast(\{arg})")
+    }
+    let cast_args_src = cast_args.join(", ")
+    state.needs_js_any = true
+    let extern_decl = "extern \"js\" fn \{extern_name}(\{extern_params_src}) -> JSValue = \"\{binding_name}\""
+    let wrapper_decl = "pub \{fn_prefix} new_\{ctor_name}(\{ctor_params}) -> \{class_type_name}\{type_param_suffix} {\n  unsafeCast(\{extern_name}(\{cast_args_src}))\n}"
+    "\{extern_decl}\n\n\{wrapper_decl}"
+  } else {
+    "pub extern \"js\" fn new_\{ctor_name}(\{ctor_params}) -> \{class_type_name} = \"\{binding_name}\""
+  }
+  ffi_restore_local_type_params(state, local_type_param_len)
+  Some(result)
 }
 
 ///|
@@ -3065,11 +3109,26 @@ fn ffi_class_method_decl_to_moonbit(
   class_ : @ast.TsClassDecl,
   class_method : @ast.TsClassMethodDecl,
 ) -> String {
+  // Static methods don't take a `self`, so they shouldn't capture the
+  // class's instance-level type parameters either — emitting `[E, S, B]`
+  // on a static method that only references class-level state would
+  // trip MoonBit's `unused_type_parameter` warning ([4027]) without
+  // actually adding value at the call site.
+  let preserve = ffi_should_preserve_class_type_params(class_) &&
+    !class_method.is_static
+  let class_type_params = if preserve { class_.type_params } else { [] }
+  let class_local_len = ffi_push_local_type_params(state, class_type_params)
+  let class_type_name = ffi_class_type_name(class_.name)
+  let class_self_type_with_params = if preserve {
+    class_type_name + ffi_type_param_suffix(class_type_params)
+  } else {
+    class_type_name
+  }
   let params : Array[String] = []
   let arg_names : Array[String] = []
   let js_args : Array[String] = []
   if !class_method.is_static {
-    params.push("self : \{ffi_class_type_name(class_.name)}")
+    params.push("self : \{class_self_type_with_params}")
   }
   for param in class_method.params {
     let (name, type_) = param
@@ -3082,10 +3141,9 @@ fn ffi_class_method_decl_to_moonbit(
     params.push("\{safe_name} : \{safe_type}")
   }
   let raw_return_type = ffi_type_name(state, class_method.return_type)
-  let class_self_type = ffi_class_type_name(class_.name)
   let return_type = match raw_return_type {
-    "This" => class_self_type
-    "This?" => class_self_type + "?"
+    "This" => class_self_type_with_params
+    "This?" => class_self_type_with_params + "?"
     _ => raw_return_type
   }
   let fn_name = ffi_to_snake_case(class_.name) +
@@ -3096,7 +3154,55 @@ fn ffi_class_method_decl_to_moonbit(
     class_.name,
     class_method.name,
   )
-  if class_method.is_static {
+  let result = if preserve {
+    state.needs_js_any = true
+    let fn_prefix = ffi_function_type_param_prefix(class_type_params)
+    let extern_params : Array[String] = []
+    if !class_method.is_static {
+      // Avoid naming the first param `self` — MoonBit's parser treats
+      // `extern "js" fn foo(self : T, ...)` as a deprecated method-on-T
+      // declaration, which breaks the wrapper's reference to this fn.
+      extern_params.push("this_ : JSValue")
+    }
+    for arg in arg_names {
+      extern_params.push("\{arg} : JSValue")
+    }
+    let extern_params_src = extern_params.join(", ")
+    let cast_args : Array[String] = []
+    if !class_method.is_static {
+      cast_args.push("unsafeCast(self)")
+    }
+    for arg in arg_names {
+      cast_args.push("unsafeCast(\{arg})")
+    }
+    let cast_args_src = cast_args.join(", ")
+    let method_name = ffi_value_fn_name(class_method.name)
+    if class_method.is_static {
+      let extern_name = "_\{fn_name}_extern_js"
+      let extern_decl = "extern \"js\" fn \{extern_name}(\{extern_params_src}) -> JSValue = \"\{binding_name}\""
+      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{method_params}) -> \{return_type} {\n  unsafeCast(\{extern_name}(\{cast_args_src}))\n}"
+      "\{extern_decl}\n\n\{wrapper_decl}"
+    } else {
+      let js_params : Array[String] = ["self"]
+      for arg in arg_names {
+        js_params.push(arg)
+      }
+      let js_param_list = js_params.join(", ")
+      let js_call = ffi_js_access("self", class_method.name) +
+        "(" +
+        js_args.join(", ") +
+        ")"
+      let extern_name = "_\{fn_name}_extern_js"
+      let extern_decl = "extern \"js\" fn \{extern_name}(\{extern_params_src}) -> JSValue =\n  #| (\{js_param_list}) => \{js_call}"
+      let instance_params = if method_params == "" {
+        "self : \{class_self_type_with_params}"
+      } else {
+        method_params
+      }
+      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{method_name}(\{instance_params}) -> \{return_type} {\n  unsafeCast(\{extern_name}(\{cast_args_src}))\n}"
+      "\{extern_decl}\n\n\{wrapper_decl}"
+    }
+  } else if class_method.is_static {
     "pub extern \"js\" fn \{fn_name}(\{method_params}) -> \{return_type} = \"\{binding_name}\""
   } else {
     let js_params : Array[String] = ["self"]
@@ -3109,7 +3215,7 @@ fn ffi_class_method_decl_to_moonbit(
       js_args.join(", ") +
       ")"
     let instance_params = if method_params == "" {
-      "self : \{ffi_class_type_name(class_.name)}"
+      "self : \{class_type_name}"
     } else {
       method_params
     }
@@ -3119,8 +3225,10 @@ fn ffi_class_method_decl_to_moonbit(
     // Reserved-word sanitization in `ffi_value_fn_name` keeps the
     // identifier safe (e.g. `match` -> `match_`).
     let method_name = ffi_value_fn_name(class_method.name)
-    "pub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{method_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
+    "pub extern \"js\" fn \{class_type_name}::\{method_name}(\{instance_params}) -> \{return_type} =\n  #| (\{js_param_list}) => \{js_call}"
   }
+  ffi_restore_local_type_params(state, class_local_len)
+  result
 }
 
 ///|
@@ -3129,9 +3237,23 @@ fn ffi_class_property_getter_decl_to_moonbit(
   class_ : @ast.TsClassDecl,
   class_property : @ast.TsClassPropertyDecl,
 ) -> String {
+  // Static getters belong to the class itself, not an instance, so they
+  // don't capture the class's instance-level type parameters. Emitting
+  // `[E, S, B]` on a static getter that only returns a class-level
+  // constant trips `unused_type_parameter` ([4027]).
+  let preserve = ffi_should_preserve_class_type_params(class_) &&
+    !class_property.is_static
+  let class_type_params = if preserve { class_.type_params } else { [] }
+  let class_local_len = ffi_push_local_type_params(state, class_type_params)
+  let class_type_name = ffi_class_type_name(class_.name)
+  let class_self_type_with_params = if preserve {
+    class_type_name + ffi_type_param_suffix(class_type_params)
+  } else {
+    class_type_name
+  }
   let params : Array[String] = []
   if !class_property.is_static {
-    params.push("self : \{ffi_class_type_name(class_.name)}")
+    params.push("self : \{class_self_type_with_params}")
   }
   let fn_name = "get_" +
     ffi_to_snake_case(class_.name) +
@@ -3143,12 +3265,30 @@ fn ffi_class_property_getter_decl_to_moonbit(
   )
   let return_type = ffi_type_name(state, class_property.type_)
   let getter_params = params.join(", ")
-  if class_property.is_static {
+  let result = if preserve {
+    state.needs_js_any = true
+    let fn_prefix = ffi_function_type_param_prefix(class_type_params)
+    let extern_name = "_\{fn_name}_extern_js"
+    if class_property.is_static {
+      let extern_decl = "extern \"js\" fn \{extern_name}() -> JSValue = \"\{binding_name}\""
+      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{getter_params}) -> \{return_type} {\n  unsafeCast(\{extern_name}())\n}"
+      "\{extern_decl}\n\n\{wrapper_decl}"
+    } else {
+      let js_get = ffi_js_access("self", class_property.name)
+      // First param can't be named `self` — MoonBit parses
+      // `extern "js" fn foo(self : T, ...)` as a deprecated method.
+      let extern_decl = "extern \"js\" fn \{extern_name}(this_ : JSValue) -> JSValue =\n  #| (self) => \{js_get}"
+      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{fn_name}(\{getter_params}) -> \{return_type} {\n  unsafeCast(\{extern_name}(unsafeCast(self)))\n}"
+      "\{extern_decl}\n\n\{wrapper_decl}"
+    }
+  } else if class_property.is_static {
     "pub extern \"js\" fn \{fn_name}(\{getter_params}) -> \{return_type} = \"\{binding_name}\""
   } else {
     let js_get = ffi_js_access("self", class_property.name)
-    "pub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{fn_name}(\{getter_params}) -> \{return_type} =\n  #| (self) => \{js_get}"
+    "pub extern \"js\" fn \{class_type_name}::\{fn_name}(\{getter_params}) -> \{return_type} =\n  #| (self) => \{js_get}"
   }
+  ffi_restore_local_type_params(state, class_local_len)
+  result
 }
 
 ///|
@@ -3160,9 +3300,20 @@ fn ffi_class_property_setter_decl_to_moonbit(
   if class_property.is_readonly {
     return None
   }
+  // Static setters: see static-getter rationale above.
+  let preserve = ffi_should_preserve_class_type_params(class_) &&
+    !class_property.is_static
+  let class_type_params = if preserve { class_.type_params } else { [] }
+  let class_local_len = ffi_push_local_type_params(state, class_type_params)
+  let class_type_name = ffi_class_type_name(class_.name)
+  let class_self_type_with_params = if preserve {
+    class_type_name + ffi_type_param_suffix(class_type_params)
+  } else {
+    class_type_name
+  }
   let params : Array[String] = []
   if !class_property.is_static {
-    params.push("self : \{ffi_class_type_name(class_.name)}")
+    params.push("self : \{class_self_type_with_params}")
   }
   let value_type = ffi_type_name(state, class_property.type_)
   params.push("value : \{value_type}")
@@ -3175,16 +3326,34 @@ fn ffi_class_property_setter_decl_to_moonbit(
     class_property.name,
   )
   let setter_params = params.join(", ")
-  if class_property.is_static {
+  let result : String? = if preserve {
+    state.needs_js_any = true
+    let fn_prefix = ffi_function_type_param_prefix(class_type_params)
+    let extern_name = "_\{fn_name}_extern_js"
+    if class_property.is_static {
+      let extern_decl = "extern \"js\" fn \{extern_name}(value : JSValue) -> Unit = \"\{binding_name}\""
+      let wrapper_decl = "pub \{fn_prefix} \{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(value))\n}"
+      Some("\{extern_decl}\n\n\{wrapper_decl}")
+    } else {
+      let js_set = ffi_js_access("self", class_property.name)
+      // First param can't be named `self` — MoonBit parses
+      // `extern "js" fn foo(self : T, ...)` as a deprecated method.
+      let extern_decl = "extern \"js\" fn \{extern_name}(this_ : JSValue, value : JSValue) -> Unit =\n  #| (self, value) => (\{js_set} = value)"
+      let wrapper_decl = "pub \{fn_prefix} \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit {\n  \{extern_name}(unsafeCast(self), unsafeCast(value))\n}"
+      Some("\{extern_decl}\n\n\{wrapper_decl}")
+    }
+  } else if class_property.is_static {
     Some(
       "pub extern \"js\" fn \{fn_name}(\{setter_params}) -> Unit = \"\{binding_name}\"",
     )
   } else {
     let js_set = ffi_js_access("self", class_property.name)
     Some(
-      "pub extern \"js\" fn \{ffi_class_type_name(class_.name)}::\{fn_name}(\{setter_params}) -> Unit =\n  #| (self, value) => (\{js_set} = value)",
+      "pub extern \"js\" fn \{class_type_name}::\{fn_name}(\{setter_params}) -> Unit =\n  #| (self, value) => (\{js_set} = value)",
     )
   }
+  ffi_restore_local_type_params(state, class_local_len)
+  result
 }
 
 ///|
@@ -3944,26 +4113,37 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
   let declared_type_names : Array[String] = []
   let struct_type_names : Array[String] = []
   let generic_type_params_by_name : Map[String, Array[String]] = {}
-  // Names that are emitted as bare `#external pub type ClassName` from a
-  // class decl (no type-parameter slots). When an interface shares the
-  // name (TS lets you declare an interface and class together to merge
-  // them), don't register the interface's type-parameter arity — the
-  // class-method emission would otherwise emit `Foo` (arity 0) against a
-  // registry that says `Foo` has arity N, breaking call sites.
+  // Pre-collect class names + their generic-preserved arities so the
+  // interface registration agrees with the class on shared names. When a
+  // class and an interface share a name (TS declaration merging) the
+  // class drives the emitted shape (`#external pub type ClassName[T]`)
+  // and the interface's own emission is skipped below.
   let class_type_names : Array[String] = []
+  let class_arity_by_type_name : Map[String, Array[String]] = {}
   for class_ in classes {
-    class_type_names.push(ffi_class_type_name(class_.name))
+    let class_type_name = ffi_class_type_name(class_.name)
+    class_type_names.push(class_type_name)
+    if ffi_should_preserve_class_type_params(class_) {
+      class_arity_by_type_name[class_type_name] = class_.type_params
+    }
   }
   for iface in interfaces {
     let type_name = ffi_type_identifier(iface.name, "OpaqueType")
     declared_type_names.push(type_name)
-    // Match the arity actually emitted on the struct / `#external pub
-    // type` declaration. Both `ffi_struct_decl_to_moonbit` and
-    // `ffi_interface_type_decl_to_moonbit` use the full
-    // `iface.type_params` list, so register the full arity here too.
-    if ffi_should_preserve_interface_type_params(iface) &&
-      iface.type_params.length() > 0 &&
-      !class_type_names.contains(type_name) {
+    if class_type_names.contains(type_name) {
+      // The class drives the shape. If the class itself preserves type
+      // params, register that arity under the shared name.
+      match class_arity_by_type_name.get(type_name) {
+        Some(type_params) =>
+          generic_type_params_by_name[type_name] = type_params
+        None => ()
+      }
+    } else if ffi_should_preserve_interface_type_params(iface) &&
+      iface.type_params.length() > 0 {
+      // Match the arity actually emitted on the struct / `#external pub
+      // type` declaration. Both `ffi_struct_decl_to_moonbit` and
+      // `ffi_interface_type_decl_to_moonbit` use the full
+      // `iface.type_params` list, so register the full arity here too.
       generic_type_params_by_name[type_name] = iface.type_params
     }
     if !ffi_is_react_callable_component_interface(iface.name) &&
@@ -3985,7 +4165,14 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     declared_type_names.push(ffi_type_identifier(enum_.name, "GeneratedEnum"))
   }
   for class_ in classes {
-    declared_type_names.push(ffi_class_type_name(class_.name))
+    let class_type_name = ffi_class_type_name(class_.name)
+    declared_type_names.push(class_type_name)
+    // Register the class's generic arity so call-site references like
+    // `Applied("Hono", [E, S, BasePath])` match the emitted
+    // `#external pub type Hono[E, S, BasePath]`.
+    if ffi_should_preserve_class_type_params(class_) {
+      generic_type_params_by_name[class_type_name] = class_.type_params
+    }
   }
   let tagged_union_decls_by_name : Map[String, BridgeTaggedUnionDecl] = {}
   for tagged in exported_tagged_unions {
@@ -4193,7 +4380,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     let class_type_name = ffi_class_type_name(class_.name)
     if !emitted_type_names.contains(class_type_name) {
       emitted_type_names.push(class_type_name)
-      ffi_sections.push(ffi_class_type_decl(class_.name))
+      ffi_sections.push(ffi_class_type_decl(class_))
     }
     let class_runtime_export_name = runtime_export_name_for(
       class_runtime_export_names,

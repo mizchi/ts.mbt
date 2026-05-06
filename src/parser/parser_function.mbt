@@ -1790,8 +1790,14 @@ fn Parser::parse_declare_class(
 ) -> @ast.TsClassDecl raise ParseError {
   let _ = self.expect(Class)
   let name = self.parse_binding_ident()
+  let mut class_type_params : Array[String] = []
+  let mut class_type_param_bound_len = self.local_type_param_bounds.length()
   if self.check(Lt) {
-    self.skip_type_params()
+    let (names, type_param_bounds) = self.parse_type_param_names_and_bounds()
+    class_type_params = names
+    class_type_param_bound_len = self.push_local_type_param_bounds(
+      type_param_bounds,
+    )
   }
   let base_names = self.parse_declare_class_base_names()
   let _ = self.expect(LBrace)
@@ -1947,8 +1953,10 @@ fn Parser::parse_declare_class(
   } else {
     !is_abstract
   }
+  self.restore_local_type_param_bounds(class_type_param_bound_len)
   {
     name,
+    type_params: class_type_params,
     base_names,
     constructor_params,
     properties,

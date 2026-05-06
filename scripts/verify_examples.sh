@@ -264,7 +264,7 @@ extern "js" fn test_hono_options() -> HonoOptions[JSValue] =
   #| () => ({ strict: true })
 
 test "generated Hono pattern" {
-  let _ = new_hono(None)
+  let _ : Hono[JSValue] = new_hono(None)
   let _ = createApp(test_hono_options())
 }
 EOF
@@ -273,8 +273,12 @@ EOF
   [ -f "$out/bridge.mbti" ]
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
-  grep_generated_mbt "$out" 'pub extern "js" fn new_hono(options : HonoOptions[JSValue]?) -> Hono'
-  grep_generated_mbt "$out" 'pub fn createApp(options : HonoOptions[JSValue]) -> Hono'
+  # `class Hono<E>` is now generic-preserved on the FFI side, so the
+  # constructor is emitted as a 2-decl shim (JSValue-erased extern + a
+  # generic public wrapper that `unsafeCast`s through it).
+  grep_generated_mbt "$out" 'extern "js" fn _new_hono_extern_js(options : JSValue) -> JSValue'
+  grep_generated_mbt "$out" 'pub fn[E] new_hono(options : HonoOptions[E]?) -> Hono[E]'
+  grep_generated_mbt "$out" 'pub fn createApp(options : HonoOptions[JSValue]) -> Hono[JSValue]'
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_hono" <<'EOF'
@@ -282,7 +286,7 @@ extern "js" fn test_hono_options() -> @sut.HonoOptions[@sut.JSValue] =
   #| () => ({ strict: true })
 
 fn main {
-  let _ = @sut.new_hono(None)
+  let _ : @sut.Hono[@sut.JSValue] = @sut.new_hono(None)
   let _ = @sut.createApp(test_hono_options())
 }
 EOF
@@ -315,21 +319,21 @@ verify_typescript_to_moonbit_hono_real_example() {
 EOF
 
   cat > "$out/bridge_test.mbt" <<'EOF'
-fn test_hono_handler(c : Context) -> Response {
+fn test_hono_handler(c : Context[JSValue, JSValue, JSValue]) -> Response {
   c.text("hi", None, None)
 }
 
 extern "js" fn test_undefined() -> JSValue =
   #| () => undefined
 
-extern "js" fn test_hono_route_response(app : Hono, res : JSValue) -> String =
+extern "js" fn test_hono_route_response(app : Hono[JSValue, JSValue, JSValue], res : JSValue) -> String =
   #| (app, res) => {
   #|   const route = app.routes[0];
   #|   return `${res.status}:${route.method}:${route.path}:${res.headers.get("content-type")}`;
   #| }
 
 test "generated real Hono bridge smoke" {
-  let app = new_hono(None)
+  let app : Hono[JSValue, JSValue, JSValue] = new_hono(None)
   let _ = app.get("/hello", test_hono_handler)
   let undefined_ = test_undefined()
   let res = app.request(
@@ -350,9 +354,12 @@ EOF
   [ -f "$out/bridge.mbt" ]
   [ -f "$out/bridge.js" ]
   [ -f "$out/SCAFFOLD_DIAGNOSTICS.md" ]
-  grep_generated_mbt "$out" 'pub extern "js" fn new_hono(options : HonoOptions[JSValue]?) -> Hono'
-  grep_generated_mbt "$out" 'pub extern "js" fn Hono::get(self : Hono'
-  grep_generated_mbt "$out" 'pub extern "js" fn Hono::request(self : Hono'
+  # `class Hono<E, S, BasePath>` is now generic-preserved on the FFI side:
+  # constructor + every method become 2-decl shims (JSValue-erased extern +
+  # generic public wrapper).
+  grep_generated_mbt "$out" 'pub fn[E, S, BasePath] new_hono(options : HonoOptions[Env]?) -> Hono[E, S, BasePath]'
+  grep_generated_mbt "$out" 'pub fn[E, S, BasePath] Hono::get(self : Hono[E, S, BasePath]'
+  grep_generated_mbt "$out" 'pub fn[E, S, BasePath] Hono::request(self : Hono[E, S, BasePath]'
   grep -F 'No structural unsupported exports were detected' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
@@ -955,7 +962,7 @@ import {
 }
 EOF
   cat > "$root/lib/lib.mbt" <<'EOF'
-pub fn make_hono() -> @sut.Hono {
+pub fn make_hono() -> @sut.Hono[@sut.JSValue, @sut.JSValue, @sut.JSValue] {
   @sut.new_hono(None)
 }
 EOF

@@ -4454,14 +4454,23 @@ async test "bridge: emit MoonBit JS FFI bundle from imported object type alias m
   assert_true(bundle.ffi_mbt.contains("pub(all) struct HonoOptions[E] {"))
   assert_true(bundle.ffi_mbt.contains("  strict : Bool?"))
   assert_true(bundle.ffi_mbt.contains("  bindings : E?"))
+  // `class Hono<E>` is now generic-preserved on the FFI side, so
+  // `new_hono` is emitted as a 2-decl shim: a JSValue-erased extern
+  // `_new_hono_extern_js` plus a generic public wrapper that
+  // `unsafeCast`s through it.
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn new_hono(options : HonoOptions[JSValue]?) -> Hono = \"__ts_mbt_new_hono\"",
+      "extern \"js\" fn _new_hono_extern_js(options : JSValue) -> JSValue = \"__ts_mbt_new_hono\"",
     ),
   )
   assert_true(
     bundle.ffi_mbt.contains(
-      "extern \"js\" fn create_app(options : HonoOptions[JSValue]) -> Hono = \"__ts_mbt_create_app\"",
+      "pub fn[E] new_hono(options : HonoOptions[E]?) -> Hono[E] {",
+    ),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains(
+      "extern \"js\" fn create_app(options : HonoOptions[JSValue]) -> Hono[JSValue] = \"__ts_mbt_create_app\"",
     ),
   )
 }
@@ -4943,6 +4952,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
   }
   let class_ : @ast.TsClassDecl = {
     name: "SignJWT",
+    type_params: [],
     base_names: [],
     constructor_params: None,
     properties: [],

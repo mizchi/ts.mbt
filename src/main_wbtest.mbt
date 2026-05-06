@@ -5490,7 +5490,12 @@ async test "emit_moonbit_scaffold_from_ts handles imported object type alias mem
   assert_true(bridge_mbt.contains("  bindings : E?"))
   assert_true(
     bridge_mbt.contains(
-      "pub extern \"js\" fn new_hono(options : HonoOptions[JSValue]?) -> Hono = \"__ts_mbt_new_hono\"",
+      "extern \"js\" fn _new_hono_extern_js(options : JSValue) -> JSValue = \"__ts_mbt_new_hono\"",
+    ),
+  )
+  assert_true(
+    bridge_mbt.contains(
+      "pub fn[E] new_hono(options : HonoOptions[E]?) -> Hono[E] {",
     ),
   )
 }
