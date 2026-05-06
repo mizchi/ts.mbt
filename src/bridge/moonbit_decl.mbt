@@ -2162,6 +2162,118 @@ fn component_props_with_ref_interface_name(base_name : String) -> String {
 // T is a concrete interface and K is a literal property name. Returns None
 // for any case the resolver cannot decide on (generic T, computed K, etc.),
 // letting the caller fall back to widening.
+
+///|
+/// Walk `type_` and replace any nested `IndexedAccess(target, key)` whose
+/// base resolves to the same interface as `cycle_base` and whose key
+/// matches `cycle_key` with `Any`. Used to break self-referential
+/// indexed-access cycles before recursing through the resolved field
+/// type — drizzle's `BuildRelationalQueryResult<TTable>['selection']`
+/// references its own `selection` field deep inside an `Array<Object>`
+/// so the recursion needs to short-circuit at every depth, not just at
+/// the immediate level.
+fn strip_self_indexed_access(
+  type_ : @ast.TsType,
+  cycle_base : @ast.TsType,
+  cycle_key : @ast.TsType,
+) -> @ast.TsType {
+  match type_ {
+    @ast.TsType::IndexedAccess(b, k) =>
+      if indexed_access_targets_match(cycle_base, b) && cycle_key == k {
+        @ast.TsType::Any
+      } else {
+        @ast.TsType::IndexedAccess(
+          strip_self_indexed_access(b, cycle_base, cycle_key),
+          strip_self_indexed_access(k, cycle_base, cycle_key),
+        )
+      }
+    @ast.TsType::Array(inner) =>
+      @ast.TsType::Array(
+        strip_self_indexed_access(inner, cycle_base, cycle_key),
+      )
+    @ast.TsType::Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(strip_self_indexed_access(it, cycle_base, cycle_key))
+      }
+      @ast.TsType::Tuple(out)
+    }
+    @ast.TsType::Object(fields) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for f in fields {
+        out.push(
+          (
+            strip_self_indexed_access(f.0, cycle_base, cycle_key),
+            strip_self_indexed_access(f.1, cycle_base, cycle_key),
+          ),
+        )
+      }
+      @ast.TsType::Object(out)
+    }
+    @ast.TsType::Func(params, ret) => {
+      let new_params : Array[@ast.TsType] = []
+      for p in params {
+        new_params.push(strip_self_indexed_access(p, cycle_base, cycle_key))
+      }
+      @ast.TsType::Func(
+        new_params,
+        strip_self_indexed_access(ret, cycle_base, cycle_key),
+      )
+    }
+    @ast.TsType::Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(strip_self_indexed_access(it, cycle_base, cycle_key))
+      }
+      @ast.TsType::Union(out)
+    }
+    @ast.TsType::Intersection(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(strip_self_indexed_access(it, cycle_base, cycle_key))
+      }
+      @ast.TsType::Intersection(out)
+    }
+    @ast.TsType::Applied(name, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(strip_self_indexed_access(a, cycle_base, cycle_key))
+      }
+      @ast.TsType::Applied(name, out)
+    }
+    @ast.TsType::Conditional(check, ext, t, f) =>
+      @ast.TsType::Conditional(
+        strip_self_indexed_access(check, cycle_base, cycle_key),
+        strip_self_indexed_access(ext, cycle_base, cycle_key),
+        strip_self_indexed_access(t, cycle_base, cycle_key),
+        strip_self_indexed_access(f, cycle_base, cycle_key),
+      )
+    _ => type_
+  }
+}
+
+///|
+/// Compare two `IndexedAccess` base targets ignoring the `Applied` type
+/// arguments — `Foo['selection']` and `Foo<T>['selection']` reference the
+/// same field on the same interface for cycle-detection purposes.
+fn indexed_access_targets_match(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  let name_a = match a {
+    @ast.TsType::Named(n) => Some(n)
+    @ast.TsType::Applied(n, _) => Some(n)
+    _ => None
+  }
+  let name_b = match b {
+    @ast.TsType::Named(n) => Some(n)
+    @ast.TsType::Applied(n, _) => Some(n)
+    _ => None
+  }
+  match (name_a, name_b) {
+    (Some(x), Some(y)) => x == y
+    _ => false
+  }
+}
+
+///|
 fn resolve_indexed_access(
   info : DeclModuleInfo,
   base : @ast.TsType,
@@ -3390,8 +3502,19 @@ fn lower_react_utility_type(
     Named(name) if @checker.is_ref_alias_name(name) => Named("Ref")
     IndexedAccess(base, key) =>
       match resolve_indexed_access(info, base, key, modules, canonical_types) {
-        Some(field_type) =>
-          lower_react_utility_type(info, field_type, modules, canonical_types)
+        Some(field_type) => {
+          // Self-referential field types like
+          // `interface Foo { selection: Foo['selection']; }`, or the
+          // deeper drizzle pattern where the field's element type
+          // re-references `Foo['selection']` from inside an `Array<{
+          // ... selection: Foo['selection'] }>`, resolve back to the
+          // same `IndexedAccess` shape we just consumed. Replace any
+          // nested self-pointing `IndexedAccess` with `Any` before
+          // recursing so `lower_react_utility_type` does not spin
+          // forever.
+          let pruned = strip_self_indexed_access(field_type, base, key)
+          lower_react_utility_type(info, pruned, modules, canonical_types)
+        }
         None => Any
       }
     Applied(name, [inner_type]) if @checker.is_props_passthrough_name(name) =>
