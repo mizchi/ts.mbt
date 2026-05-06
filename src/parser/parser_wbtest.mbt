@@ -595,6 +595,30 @@ test "parser: preserves generic infer conditional type aliases" {
 }
 
 ///|
+test "parser: preserves infer extends bound when conditional cannot resolve eagerly" {
+  // `T[]` doesn't structurally match `Promise<...>` so the conditional
+  // stays in the AST and the inner `infer X extends Date` marker reaches
+  // downstream consumers with its bound attached.
+  let module_ = Parser::from_source(
+    "export type Inner<T> = T[] extends Promise<infer X extends Date>[] ? X : never;",
+  ).parse_module() catch {
+    e => fail("expected infer-with-bound alias to parse: \{e}")
+  }
+  assert_eq(module_.type_aliases.length(), 1)
+  match module_.type_aliases[0].type_ {
+    Conditional(_, target, _, _) =>
+      // Walk the target until we find the infer marker.
+      match target {
+        Array(Applied("Promise", [Applied("__tsmbt_infer", marker_args)])) =>
+          assert_eq(marker_args.length(), 2)
+        _ =>
+          fail("expected target to wrap an infer marker with a bound argument")
+      }
+    _ => fail("expected conditional alias")
+  }
+}
+
+///|
 test "parser: preserves non-string literal type kinds" {
   let module_ = Parser::from_source(
     "export type LiteralCases = 1 | \"1\" | true | 0n;",

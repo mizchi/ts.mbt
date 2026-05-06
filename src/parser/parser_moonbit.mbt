@@ -392,6 +392,14 @@ fn moonbit_func_type_name(
 
 ///|
 fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
+  // Unresolved `infer X extends Bound` markers should collapse to the
+  // `Bound` type at the bridge boundary instead of leaking the synthetic
+  // `__tsmbt_infer` name as an opaque external type. Bare `infer X`
+  // markers (no bound captured) keep the existing JSValue widening.
+  match @checker.infer_marker_bound(type_) {
+    Some(bound) => return moonbit_type_name(state, bound)
+    None => ()
+  }
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       let rendered = moonbit_type_name(state, collapsed)

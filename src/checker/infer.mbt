@@ -14,6 +14,17 @@
 pub fn infer_marker_name(type_ : @ast.TsType) -> String? {
   match type_ {
     Applied("__tsmbt_infer", [Named(name)]) => Some(name)
+    Applied("__tsmbt_infer", [Named(name), _]) => Some(name)
+    _ => None
+  }
+}
+
+///|
+/// Return the `extends` bound captured on an `infer X extends Y` marker.
+/// Returns `None` for bare `infer X` markers that have no bound.
+pub fn infer_marker_bound(type_ : @ast.TsType) -> @ast.TsType? {
+  match type_ {
+    Applied("__tsmbt_infer", [_, bound]) => Some(bound)
     _ => None
   }
 }

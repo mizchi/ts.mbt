@@ -825,6 +825,13 @@ fn ffi_callable_value_should_emit_wrapper(
 
 ///|
 fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
+  // Unresolved `infer X extends Bound` markers collapse to the bound
+  // type at the FFI boundary. Bare `infer X` markers (no bound) fall
+  // through to the existing JSValue widening below.
+  match @checker.infer_marker_bound(type_) {
+    Some(bound) => return ffi_type_name(state, bound)
+    None => ()
+  }
   match @checker.classify_optional_like_union(type_) {
     Some((collapsed, is_optional)) => {
       let rendered = ffi_type_name(state, collapsed)

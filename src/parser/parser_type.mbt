@@ -574,12 +574,19 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     Ident("infer") => {
       let _ = self.advance()
       let name = if self.is_ident() { self.parse_binding_ident() } else { "_" }
-      // May have extends constraint.
+      // May have extends constraint. Capture the bound as a second
+      // marker argument so the renderer can fall back to it when the
+      // surrounding conditional fails to resolve at the bridge boundary
+      // (e.g. `infer DateType extends Date` -> `Date` instead of
+      // `JSValue`). When no bound is present the marker keeps the
+      // single-argument shape used elsewhere in the checker / parser.
       if self.check(Extends) {
         let _ = self.advance()
-        let _ = self.parse_primary_type()
+        let bound = self.parse_primary_type() catch { _ => @ast.TsType::Any }
+        Applied("__tsmbt_infer", [Named(name), bound])
+      } else {
+        Applied("__tsmbt_infer", [Named(name)])
       }
-      Applied("__tsmbt_infer", [Named(name)])
     }
     Ident("keyof") => {
       let _ = self.advance()
@@ -814,6 +821,7 @@ fn type_extends_simple(source : @ast.TsType, target : @ast.TsType) -> Bool? {
 fn infer_marker_name(type_ : @ast.TsType) -> String? {
   match type_ {
     Applied("__tsmbt_infer", [Named(name)]) => Some(name)
+    Applied("__tsmbt_infer", [Named(name), _]) => Some(name)
     _ => None
   }
 }
