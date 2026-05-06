@@ -1201,6 +1201,30 @@ pub fn emit_moonbit_decl_with_sections_and_types(
   extra_declared_type_names : Array[String],
   force_jsvalue : Bool,
 ) -> String {
+  emit_moonbit_decl_with_sections_types_and_arities(
+    module_,
+    extra_sections,
+    extra_declared_type_names,
+    {},
+    force_jsvalue,
+  )
+}
+
+///|
+/// Variant that also accepts an `extra_generic_arities` map so the
+/// caller can register arities for cross-module types — typically
+/// interfaces / classes declared in a different file but referenced
+/// from this module's exported function / value signatures. Without
+/// this, references like `(task : Test)` get rendered as bare
+/// `Test` even when the actual decl elsewhere is `pub type
+/// Test[ExtraContext]`, causing `[4040]` arity-mismatch on consumers.
+pub fn emit_moonbit_decl_with_sections_types_and_arities(
+  module_ : @ast.TsModule,
+  extra_sections : Array[String],
+  extra_declared_type_names : Array[String],
+  extra_generic_arities : Map[String, Int],
+  force_jsvalue : Bool,
+) -> String {
   let declared_type_names : Array[String] = []
   let generic_preserved_type_names : Array[String] = []
   let generic_preserved_type_arity_by_name : Map[String, Int] = {}
@@ -1254,6 +1278,16 @@ pub fn emit_moonbit_decl_with_sections_and_types(
   for name in extra_declared_type_names {
     if !declared_type_names.contains(name) {
       declared_type_names.push(name)
+    }
+  }
+  for entry in extra_generic_arities {
+    let (name, arity) = entry
+    if !generic_preserved_type_names.contains(name) {
+      generic_preserved_type_names.push(name)
+    }
+    match generic_preserved_type_arity_by_name.get(name) {
+      Some(_) => ()
+      None => generic_preserved_type_arity_by_name[name] = arity
     }
   }
   let state : MoonBitDeclState = {

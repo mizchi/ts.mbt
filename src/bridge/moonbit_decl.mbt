@@ -7953,7 +7953,54 @@ pub async fn emit_moonbit_decl_from_entry_path(
       combined_declared_names.push(name)
     }
   }
-  @parser.emit_moonbit_decl_with_sections_and_types(
-    emitted_module, combined_extra_sections, combined_declared_names, notes_need_jsvalue,
+  // Walk every loaded module so cross-file generic interfaces / classes
+  // (e.g. vitest's `Test` interface declared in `@vitest/runner`'s
+  // `tasks.d.ts` but referenced by exports of vitest's `index.d.ts`)
+  // contribute their arity to the renderer. Otherwise call sites like
+  // `recordArtifact(task : Test, ...)` widen to bare `Test` while the
+  // FFI side emits `pub type Test[ExtraContext]`, hitting `[4040]`
+  // arity-mismatch.
+  let cross_module_arities : Map[String, Int] = {}
+  collect_cross_module_iface_arities(modules, cross_module_arities)
+  for class_ in exported_classes {
+    if class_.class_.type_params.length() > 0 &&
+      !cross_module_arities.contains(class_.class_.name) {
+      cross_module_arities[class_.class_.name] = class_.class_.type_params.length()
+    }
+  }
+  @parser.emit_moonbit_decl_with_sections_types_and_arities(
+    emitted_module, combined_extra_sections, combined_declared_names, cross_module_arities,
+    notes_need_jsvalue,
   )
+}
+
+///|
+fn collect_cross_module_iface_arities(
+  modules : Map[String, DeclModuleInfo],
+  out : Map[String, Int],
+) -> Unit {
+  for entry in modules {
+    let (_, info) = entry
+    collect_arities_in_ts_module(info.module_, out)
+  }
+}
+
+///|
+fn collect_arities_in_ts_module(
+  module_ : @ast.TsModule,
+  out : Map[String, Int],
+) -> Unit {
+  for iface in module_.interfaces {
+    if iface.type_params.length() > 0 && !out.contains(iface.name) {
+      out[iface.name] = iface.type_params.length()
+    }
+  }
+  for class_ in module_.classes {
+    if class_.type_params.length() > 0 && !out.contains(class_.name) {
+      out[class_.name] = class_.type_params.length()
+    }
+  }
+  for namespace_ in module_.namespaces {
+    collect_arities_in_ts_module(namespace_.module_, out)
+  }
 }

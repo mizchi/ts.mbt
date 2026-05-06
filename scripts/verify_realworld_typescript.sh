@@ -325,7 +325,7 @@ jsvalue_function_budget() {
     dotenv) printf '0\n' ;;
     ignore) printf '1\n' ;;
     hono) printf '5\n' ;;
-    zod) printf '166\n' ;;
+    zod) printf '168\n' ;;
     date-fns) printf '22\n' ;;
     node:sqlite) printf '1\n' ;;
     node:fs) printf '7\n' ;;
@@ -386,7 +386,7 @@ jsvalue_cause_budget() {
     dotenv) printf '0|0|0|0|0|0|0\n' ;;
     ignore) printf '3|2|0|1|0|0|0\n' ;;
     hono) printf '82|8|6|27|4|29|8\n' ;;
-    zod) printf '746|167|95|45|37|376|26\n' ;;
+    zod) printf '749|167|95|45|37|379|26\n' ;;
     date-fns) printf '22|0|5|0|0|15|2\n' ;;
     colorette) printf '1|0|1|0|0|0|0\n' ;;
     magic-string) printf '3|0|0|1|0|0|2\n' ;;

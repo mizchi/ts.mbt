@@ -589,7 +589,12 @@ EOF
   grep_generated_mbt "$out" 'pub extern "js" fn get_assert() -> Chai_Assert'
   grep_generated_mbt "$out" 'pub extern "js" fn get_vi() -> VitestUtils'
   grep_generated_mbt "$out" 'pub extern "js" fn VitestUtils::isFakeTimers(self : VitestUtils) -> Bool'
-  grep -F 'No structural unsupported exports were detected' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  # vitest's `CancelReason` (string-literal alias) and `TestArtifact`
+  # (object alias) are heterogeneous unions whose members aren't
+  # runtime-discriminable. They're correctly diagnosed and widened to
+  # `JSValue`; the rest of the public surface stays untouched.
+  grep -F 'CancelReason (heterogeneous union member is not runtime-discriminable' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
+  grep -F 'TestArtifact (heterogeneous union member is not runtime-discriminable' "$out/SCAFFOLD_DIAGNOSTICS.md" >/dev/null
   moon -C "$out" check --target js
   moon -C "$out" test --target js
   run_typescript_to_moonbit_js_build_smoke "$out" "examples/typescript_to_moonbit_vitest" < \
