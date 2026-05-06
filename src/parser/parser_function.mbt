@@ -1856,6 +1856,20 @@ fn Parser::parse_declare_class(
           mod == "public" ||
           mod == "private" ||
           mod == "protected" => {
+          // A modifier-like keyword followed directly by `:` / `?:` / `(`
+          // / `;` is actually being used as a class member name (TS allows
+          // reserved words as property names). Stop consuming modifiers
+          // so the regular member-name path picks it up. Drizzle uses
+          // this for `protected: TValue` brand fields.
+          match self.peek_at(1).kind {
+            Colon | LParen | Semicolon | Comma | Eq => break
+            Question =>
+              match self.peek_at(2).kind {
+                Colon | LParen | Semicolon | Comma | Eq => break
+                _ => ()
+              }
+            _ => ()
+          }
           let _ = self.advance()
           if mod == "static" {
             is_static = true
