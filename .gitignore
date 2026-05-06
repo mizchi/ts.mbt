@@ -22,24 +22,22 @@ Thumbs.db
 node_modules/
 
 # Resolver package fixtures intentionally live under a fixture node_modules tree.
+# pkg-* gets a glob; named scopes / dotted dirs / symlinks need explicit lines.
 !fixtures/resolver/project/node_modules/
 fixtures/resolver/project/node_modules/*
-!fixtures/resolver/project/node_modules/react/
-!fixtures/resolver/project/node_modules/react/**
-!fixtures/resolver/project/node_modules/hono/
-!fixtures/resolver/project/node_modules/hono/**
-!fixtures/resolver/project/node_modules/pkg-untyped/
-!fixtures/resolver/project/node_modules/pkg-untyped/**
+!fixtures/resolver/project/node_modules/.pnpm/
+!fixtures/resolver/project/node_modules/.pnpm/**
 !fixtures/resolver/project/node_modules/@scope/
 !fixtures/resolver/project/node_modules/@scope/**
 !fixtures/resolver/project/node_modules/@types/
 !fixtures/resolver/project/node_modules/@types/**
-!fixtures/resolver/project/node_modules/pkg-class-property/
-!fixtures/resolver/project/node_modules/pkg-class-property/**
-!fixtures/resolver/project/node_modules/pkg-class-subpath/
-!fixtures/resolver/project/node_modules/pkg-class-subpath/**
-!fixtures/resolver/project/node_modules/pkg-default-class/
-!fixtures/resolver/project/node_modules/pkg-default-class/**
+!fixtures/resolver/project/node_modules/hono/
+!fixtures/resolver/project/node_modules/hono/**
+!fixtures/resolver/project/node_modules/neverthrow-like
+!fixtures/resolver/project/node_modules/pkg-*
+!fixtures/resolver/project/node_modules/pkg-*/**
+!fixtures/resolver/project/node_modules/react/
+!fixtures/resolver/project/node_modules/react/**
 
 # Example generated outputs
 examples/**/dist/
