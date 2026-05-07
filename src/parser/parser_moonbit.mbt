@@ -75,7 +75,8 @@ fn is_all_underscores(name : String) -> Bool {
 ///|
 fn value_identifier_needs_suffix(name : String) -> Bool {
   match name {
-    "as"
+    "alias"
+    | "as"
     | "break"
     | "catch"
     | "const"
@@ -141,7 +142,8 @@ fn sanitize_value_identifier(name : String, fallback : String) -> String {
 fn sanitize_identifier(name : String, fallback : String) -> String {
   let result = sanitize_identifier_chars(name, fallback)
   match result {
-    "as"
+    "alias"
+    | "as"
     | "break"
     | "catch"
     | "const"

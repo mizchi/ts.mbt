@@ -112,7 +112,8 @@ fn ffi_is_all_underscores(name : String) -> Bool {
 ///|
 fn ffi_value_identifier_needs_suffix(name : String) -> Bool {
   match name {
-    "and"
+    "alias"
+    | "and"
     | "as"
     | "assert"
     | "async"

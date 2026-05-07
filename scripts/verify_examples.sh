@@ -993,6 +993,103 @@ EOF
   fi
 }
 
+verify_typescript_to_moonbit_drizzle_example() {
+  local root="_build/examples/typescript-to-moonbit-drizzle"
+
+  rm -rf "$root"
+  mkdir -p "$root/cmd/main"
+
+  cat > "$root/moon.mod.json" <<'EOF'
+{
+  "name": "examples/typescript_to_moonbit_drizzle",
+  "version": "0.1.0",
+  "source": ".",
+  "preferred-target": "js"
+}
+EOF
+
+  # `@drizzle-smoke/helpers` is a smoke-local ESM helper that wraps
+  # the class constructors (`QueryBuilder`, `DatabaseSync`) MoonBit's
+  # bare `extern "js" fn ... = "X"` form can't `new`. Wire it up via
+  # `package.json#imports` so `import * as ... from
+  # "@drizzle-smoke/helpers"` (emitted by `#module(...)`) resolves
+  # against `./cmd/main/helpers.mjs` at runtime.
+  cat > "$root/package.json" <<'EOF'
+{
+  "name": "tsmbt-drizzle-smoke",
+  "type": "module",
+  "private": true,
+  "imports": {
+    "#drizzle-smoke/helpers": "./cmd/main/helpers.mjs"
+  },
+  "dependencies": {
+    "drizzle-orm": "*",
+    "@tsmbt-bridge/drizzle_orm": "file:./internal/generated/drizzle_orm"
+  }
+}
+EOF
+
+  moon run src/cmd/ts2mbt -- \
+    generate --package-json "$root/package.json" \
+    --out "$root/internal/generated" >/dev/null
+
+  cat > "$root/cmd/main/moon.pkg" <<'EOF'
+import {
+  "examples/typescript_to_moonbit_drizzle/internal/generated/drizzle_orm" @sut,
+}
+
+options(
+  "is-main": true,
+)
+EOF
+
+  cp examples/typescript-to-moonbit/drizzle/smoke/main.mbt \
+    "$root/cmd/main/main.mbt"
+  cp examples/typescript-to-moonbit/drizzle/smoke/helpers.mjs \
+    "$root/cmd/main/helpers.mjs"
+
+  [ -f "$root/internal/generated/drizzle_orm/bridge.mbt" ]
+  [ -f "$root/internal/generated/drizzle_orm/bridge.js" ]
+
+  moon -C "$root" check --target js
+  moon -C "$root" build --target js cmd/main
+
+  local built_js
+  built_js="$(find "$root/_build/js/debug/build/cmd/main" -type f -name '*.js' | head -n 1)"
+  if [ -z "$built_js" ]; then
+    echo "moon build did not emit cmd/main JS for drizzle" >&2
+    exit 1
+  fi
+
+  # Place the helper module + a sibling package.json with the
+  # `imports` map next to the built JS. Node's `imports` resolution
+  # uses the closest package.json (relative paths in `imports` must
+  # also stay inside that package), so we mirror the helper here.
+  local built_dir
+  built_dir="$(dirname "$built_js")"
+  cp examples/typescript-to-moonbit/drizzle/smoke/helpers.mjs \
+    "$built_dir/helpers.mjs"
+  cat > "$built_dir/package.json" <<'EOF'
+{
+  "type": "module",
+  "imports": {
+    "#drizzle-smoke/helpers": "./helpers.mjs"
+  }
+}
+EOF
+
+  local output
+  # `node:sqlite` is built-in on Node 24+ and emits an experimental
+  # warning. Bypass the script's `node()` wrapper (which treats
+  # warnings as fatal) with `command node`, and route stderr to
+  # /dev/null so the captured stdout stays equal to "ok".
+  output="$(command node --experimental-sqlite "$built_js" 2>/dev/null)"
+  if [ "$output" != "ok" ]; then
+    echo "expected drizzle smoke to print 'ok', got: $output" >&2
+    exit 1
+  fi
+}
+
 verify_moonbit_to_typescript_example
 verify_typescript_to_moonbit_example
 verify_typescript_to_moonbit_hono_example
@@ -1006,3 +1103,4 @@ verify_typescript_to_moonbit_reducer_example
 verify_typescript_to_moonbit_default_class_example
 verify_typescript_to_moonbit_const_table_example
 verify_typescript_to_moonbit_typescript_ast_example
+verify_typescript_to_moonbit_drizzle_example
