@@ -159,10 +159,7 @@ test "simplify_type: keyof Struct -> Union of literal field names" {
 
 ///|
 test "simplify_type: keyof Object with literal keys -> Union of literals" {
-  let o : @ast.TsType = Object([
-    (Literal("x"), Number),
-    (Literal("y"), String_),
-  ])
+  let o : @ast.TsType = Object([(Literal("x"), Number), (Literal("y"), String_)])
   assert_eq(simplify_type(Keyof(o)), Union([Literal("x"), Literal("y")]))
 }
 
@@ -190,7 +187,10 @@ test "simplify_type: keyof empty struct -> Never" {
 test "simplify_type: mapped over literal union substitutes binder" {
   // `{ [K in 'a' | 'b']: K }` ⇒ `{ a: 'a', b: 'b' }`
   let t : @ast.TsType = MappedType(
-    "K", Union([Literal("a"), Literal("b")]), Named("K"), false,
+    "K",
+    Union([Literal("a"), Literal("b")]),
+    Named("K"),
+    false,
   )
   assert_eq(
     simplify_type(t),
@@ -239,9 +239,7 @@ test "simplify_type: mapped preserved when source is opaque" {
 ///|
 test "simplify_type: template literal substitutes single literal" {
   // `` `prefix-${'foo'}` `` ⇒ `'prefix-foo'`
-  let t : @ast.TsType = TemplateLiteralType(
-    ["prefix-", ""], [Literal("foo")],
-  )
+  let t : @ast.TsType = TemplateLiteralType(["prefix-", ""], [Literal("foo")])
   assert_eq(simplify_type(t), Literal("prefix-foo"))
 }
 
@@ -249,27 +247,22 @@ test "simplify_type: template literal substitutes single literal" {
 test "simplify_type: template literal cartesian over a literal union" {
   // `` `${'a' | 'b'}-${'1' | '2'}` `` ⇒
   //   `'a-1' | 'a-2' | 'b-1' | 'b-2'`
-  let t : @ast.TsType = TemplateLiteralType(
-    ["", "-", ""],
-    [Union([Literal("a"), Literal("b")]), Union([Literal("1"), Literal("2")])],
-  )
+  let t : @ast.TsType = TemplateLiteralType(["", "-", ""], [
+    Union([Literal("a"), Literal("b")]),
+    Union([Literal("1"), Literal("2")]),
+  ])
   assert_eq(
     simplify_type(t),
-    Union([
-      Literal("a-1"),
-      Literal("a-2"),
-      Literal("b-1"),
-      Literal("b-2"),
-    ]),
+    Union([Literal("a-1"), Literal("a-2"), Literal("b-1"), Literal("b-2")]),
   )
 }
 
 ///|
 test "simplify_type: template literal applies Capitalize intrinsic" {
   // `` `bg${Capitalize<'red'>}` `` ⇒ `'bgRed'`
-  let t : @ast.TsType = TemplateLiteralType(
-    ["bg", ""], [Applied("Capitalize", [Literal("red")])],
-  )
+  let t : @ast.TsType = TemplateLiteralType(["bg", ""], [
+    Applied("Capitalize", [Literal("red")]),
+  ])
   assert_eq(simplify_type(t), Literal("bgRed"))
 }
 
@@ -277,8 +270,6 @@ test "simplify_type: template literal applies Capitalize intrinsic" {
 test "simplify_type: template literal preserved when arg is opaque" {
   // `` `prefix-${T}` `` for opaque `T` — keep the template so later
   // substitution can resolve it.
-  let t : @ast.TsType = TemplateLiteralType(
-    ["prefix-", ""], [Named("T")],
-  )
+  let t : @ast.TsType = TemplateLiteralType(["prefix-", ""], [Named("T")])
   assert_eq(simplify_type(t), t)
 }
