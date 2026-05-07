@@ -43,7 +43,7 @@ pub fn cli_bail(message : String) -> Unit {
 /// `mizchi/ts` package version reported by `--version` / `-V` from each
 /// cmd binary. Sourced from `moon.mod.json` and bumped together with it
 /// at release time.
-pub const CLI_VERSION : String = "0.2.10"
+pub const CLI_VERSION : String = "0.2.14"
 
 ///|
 /// Print the version banner for the given binary name and exit with
