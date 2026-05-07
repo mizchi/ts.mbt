@@ -143,3 +143,142 @@ test "simplify_type: leaves conditional unresolved when decision is undecidable"
   )
   assert_eq(simplify_type(t), t)
 }
+
+///|
+test "simplify_type: keyof Struct -> Union of literal field names" {
+  let s : @ast.TsType = Struct("Foo", [
+    ("a", Number),
+    ("b", String_),
+    ("c", Boolean),
+  ])
+  assert_eq(
+    simplify_type(Keyof(s)),
+    Union([Literal("a"), Literal("b"), Literal("c")]),
+  )
+}
+
+///|
+test "simplify_type: keyof Object with literal keys -> Union of literals" {
+  let o : @ast.TsType = Object([
+    (Literal("x"), Number),
+    (Literal("y"), String_),
+  ])
+  assert_eq(simplify_type(Keyof(o)), Union([Literal("x"), Literal("y")]))
+}
+
+///|
+test "simplify_type: keyof single-field Struct collapses to the literal" {
+  let s : @ast.TsType = Struct("Foo", [("only", Number)])
+  assert_eq(simplify_type(Keyof(s)), Literal("only"))
+}
+
+///|
+test "simplify_type: keyof preserved when operand is opaque Named" {
+  // Without a resolver we can't see through `Foo`; the keyof must stay so
+  // a later pass with substitution can retry.
+  let t : @ast.TsType = Keyof(Named("Foo"))
+  assert_eq(simplify_type(t), t)
+}
+
+///|
+test "simplify_type: keyof empty struct -> Never" {
+  let s : @ast.TsType = Struct("Empty", [])
+  assert_eq(simplify_type(Keyof(s)), Never)
+}
+
+///|
+test "simplify_type: mapped over literal union substitutes binder" {
+  // `{ [K in 'a' | 'b']: K }` ⇒ `{ a: 'a', b: 'b' }`
+  let t : @ast.TsType = MappedType(
+    "K", Union([Literal("a"), Literal("b")]), Named("K"), false,
+  )
+  assert_eq(
+    simplify_type(t),
+    Object([(Literal("a"), Literal("a")), (Literal("b"), Literal("b"))]),
+  )
+}
+
+///|
+test "simplify_type: mapped over keyof Struct produces full Object" {
+  // `{ [K in keyof Foo]: number }` for `Foo = { a, b, c }` ⇒ object with
+  // those three literal keys, all numeric.
+  let foo : @ast.TsType = Struct("Foo", [
+    ("a", Number),
+    ("b", String_),
+    ("c", Boolean),
+  ])
+  let t : @ast.TsType = MappedType("K", Keyof(foo), Number, false)
+  assert_eq(
+    simplify_type(t),
+    Object([
+      (Literal("a"), Number),
+      (Literal("b"), Number),
+      (Literal("c"), Number),
+    ]),
+  )
+}
+
+///|
+test "simplify_type: mapped optional wraps each value with undefined" {
+  // `{ [K in 'x']?: number }` ⇒ `{ x: number | undefined }`
+  let t : @ast.TsType = MappedType("K", Literal("x"), Number, true)
+  assert_eq(
+    simplify_type(t),
+    Object([(Literal("x"), Union([Number, Undefined]))]),
+  )
+}
+
+///|
+test "simplify_type: mapped preserved when source is opaque" {
+  // `{ [K in keyof T]: K }` with `T` opaque — keep the mapped shape so a
+  // later substitution can resolve `T`.
+  let t : @ast.TsType = MappedType("K", Keyof(Named("T")), Named("K"), false)
+  assert_eq(simplify_type(t), t)
+}
+
+///|
+test "simplify_type: template literal substitutes single literal" {
+  // `` `prefix-${'foo'}` `` ⇒ `'prefix-foo'`
+  let t : @ast.TsType = TemplateLiteralType(
+    ["prefix-", ""], [Literal("foo")],
+  )
+  assert_eq(simplify_type(t), Literal("prefix-foo"))
+}
+
+///|
+test "simplify_type: template literal cartesian over a literal union" {
+  // `` `${'a' | 'b'}-${'1' | '2'}` `` ⇒
+  //   `'a-1' | 'a-2' | 'b-1' | 'b-2'`
+  let t : @ast.TsType = TemplateLiteralType(
+    ["", "-", ""],
+    [Union([Literal("a"), Literal("b")]), Union([Literal("1"), Literal("2")])],
+  )
+  assert_eq(
+    simplify_type(t),
+    Union([
+      Literal("a-1"),
+      Literal("a-2"),
+      Literal("b-1"),
+      Literal("b-2"),
+    ]),
+  )
+}
+
+///|
+test "simplify_type: template literal applies Capitalize intrinsic" {
+  // `` `bg${Capitalize<'red'>}` `` ⇒ `'bgRed'`
+  let t : @ast.TsType = TemplateLiteralType(
+    ["bg", ""], [Applied("Capitalize", [Literal("red")])],
+  )
+  assert_eq(simplify_type(t), Literal("bgRed"))
+}
+
+///|
+test "simplify_type: template literal preserved when arg is opaque" {
+  // `` `prefix-${T}` `` for opaque `T` — keep the template so later
+  // substitution can resolve it.
+  let t : @ast.TsType = TemplateLiteralType(
+    ["prefix-", ""], [Named("T")],
+  )
+  assert_eq(simplify_type(t), t)
+}

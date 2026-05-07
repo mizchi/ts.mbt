@@ -120,12 +120,365 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
     }
     IndexedAccess(base, key) =>
       IndexedAccess(simplify_type(base), simplify_type(key))
+    Keyof(inner) => Keyof(simplify_type(inner))
+    MappedType(key_param, source, value, optional) =>
+      MappedType(key_param, simplify_type(source), value, optional)
+    TemplateLiteralType(parts, args) => {
+      let inner : Array[@ast.TsType] = []
+      for a in args {
+        inner.push(simplify_type(a))
+      }
+      TemplateLiteralType(parts, inner)
+    }
     _ => type_
   }
-  // Resolve IndexedAccess locally if the recursed base now permits it.
+  // Resolve IndexedAccess / Keyof / MappedType / TemplateLiteralType
+  // locally if the recursed base now permits it.
   match recursed {
     IndexedAccess(_, _) => simplify_indexed_access(recursed)
+    Keyof(_) => simplify_keyof(recursed)
+    MappedType(_, _, _, _) => simplify_mapped_type(recursed)
+    TemplateLiteralType(_, _) => simplify_template_literal(recursed)
     _ => recursed
+  }
+}
+
+///|
+/// `keyof T` evaluator. Resolves to a union of `Literal(name)` keys when
+/// the operand is a struct or an object literal whose keys are themselves
+/// string literals; preserved otherwise so later passes can retry after
+/// substitution.
+fn simplify_keyof(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Keyof(inner) =>
+      match inner {
+        Struct(_, fields) => {
+          let keys : Array[@ast.TsType] = []
+          for f in fields {
+            keys.push(Literal(f.0))
+          }
+          if keys.length() == 0 {
+            Never
+          } else if keys.length() == 1 {
+            keys[0]
+          } else {
+            Union(keys)
+          }
+        }
+        Object(fields) => {
+          let keys : Array[@ast.TsType] = []
+          let mut all_literal = true
+          for f in fields {
+            match f.0 {
+              Literal(_) => keys.push(f.0)
+              _ => {
+                all_literal = false
+                break
+              }
+            }
+          }
+          if !all_literal {
+            return t
+          }
+          if keys.length() == 0 {
+            Never
+          } else if keys.length() == 1 {
+            keys[0]
+          } else {
+            Union(keys)
+          }
+        }
+        _ => t
+      }
+    _ => t
+  }
+}
+
+///|
+/// `{ [K in U]: V }` evaluator. Substitutes `K` with each literal in `U`
+/// when the source resolves to a finite literal union (or single literal,
+/// or `Keyof Struct(...)`), producing an `Object(fields)`. Preserved
+/// otherwise so later passes can retry after substitution.
+fn simplify_mapped_type(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    MappedType(key_param, source, value, optional) => {
+      let keys : Array[String] = match collect_mapped_source_keys(source) {
+        Some(ks) => ks
+        None => return t
+      }
+      let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      for k in keys {
+        let substituted = substitute_named(value, key_param, Literal(k))
+        let field_type = simplify_type(substituted)
+        let final_type = if optional {
+          @ast.TsType::Union([field_type, Undefined])
+        } else {
+          field_type
+        }
+        fields.push((Literal(k), final_type))
+      }
+      Object(fields)
+    }
+    _ => t
+  }
+}
+
+///|
+/// Try to read a finite list of literal key names out of a mapped-type
+/// source. Recognizes `Literal(name)`, `Union([Literal(...), ...])`, and
+/// `Keyof Struct(_, fields)` shapes; returns `None` for anything that
+/// would require runtime-unbounded enumeration (`String_`, `Number`,
+/// opaque `Named`, etc.).
+fn collect_mapped_source_keys(source : @ast.TsType) -> Array[String]? {
+  match source {
+    Literal(name) => Some([name])
+    Union(items) => {
+      let out : Array[String] = []
+      for it in items {
+        match it {
+          Literal(name) => out.push(name)
+          _ => return None
+        }
+      }
+      Some(out)
+    }
+    Keyof(inner) =>
+      match inner {
+        Struct(_, fields) => {
+          let out : Array[String] = []
+          for f in fields {
+            out.push(f.0)
+          }
+          Some(out)
+        }
+        Object(fields) => {
+          let out : Array[String] = []
+          for f in fields {
+            match f.0 {
+              Literal(name) => out.push(name)
+              _ => return None
+            }
+          }
+          Some(out)
+        }
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Replace every `Named(name)` reference inside `t` with `replacement`.
+/// Used by the mapped-type evaluator to bind the key parameter to each
+/// concrete key, and by tests; the substitution does not look through
+/// alias bodies.
+fn substitute_named(
+  t : @ast.TsType,
+  name : String,
+  replacement : @ast.TsType,
+) -> @ast.TsType {
+  match t {
+    Named(n) if n == name => replacement
+    Array(inner) => Array(substitute_named(inner, name, replacement))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(substitute_named(it, name, replacement))
+      }
+      Tuple(out)
+    }
+    Object(fields) => {
+      let out : Array[(@ast.TsType, @ast.TsType)] = []
+      for f in fields {
+        out.push(
+          (
+            substitute_named(f.0, name, replacement),
+            substitute_named(f.1, name, replacement),
+          ),
+        )
+      }
+      Object(out)
+    }
+    Func(params, ret) => {
+      let out : Array[@ast.TsType] = []
+      for p in params {
+        out.push(substitute_named(p, name, replacement))
+      }
+      Func(out, substitute_named(ret, name, replacement))
+    }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(substitute_named(it, name, replacement))
+      }
+      Union(out)
+    }
+    Intersection(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(substitute_named(it, name, replacement))
+      }
+      Intersection(out)
+    }
+    Conditional(check, ext, t_branch, f_branch) =>
+      Conditional(
+        substitute_named(check, name, replacement),
+        substitute_named(ext, name, replacement),
+        substitute_named(t_branch, name, replacement),
+        substitute_named(f_branch, name, replacement),
+      )
+    Applied(n, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(substitute_named(a, name, replacement))
+      }
+      Applied(n, out)
+    }
+    IndexedAccess(base, key) =>
+      IndexedAccess(
+        substitute_named(base, name, replacement),
+        substitute_named(key, name, replacement),
+      )
+    Keyof(inner) => Keyof(substitute_named(inner, name, replacement))
+    MappedType(inner_key, _, _, _) if inner_key == name => t
+    MappedType(inner_key, source, value, optional) =>
+      MappedType(
+        inner_key,
+        substitute_named(source, name, replacement),
+        substitute_named(value, name, replacement),
+        optional,
+      )
+    TemplateLiteralType(parts, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(substitute_named(a, name, replacement))
+      }
+      TemplateLiteralType(parts, out)
+    }
+    _ => t
+  }
+}
+
+///|
+/// `Capitalize` / `Uncapitalize` / `Uppercase` / `Lowercase` intrinsic
+/// applied to a single string value. Returns `None` for any other name
+/// so callers can keep the original `Applied(...)` shape.
+fn apply_string_intrinsic(intrinsic : String, value : String) -> String? {
+  if value.length() == 0 {
+    return Some(value)
+  }
+  let head = value[0].unsafe_to_char()
+  let rest = value[1:].to_string()
+  match intrinsic {
+    "Capitalize" =>
+      if head >= 'a' && head <= 'z' {
+        Some((head.to_int() - 32).unsafe_to_char().to_string() + rest)
+      } else {
+        Some(value)
+      }
+    "Uncapitalize" =>
+      if head >= 'A' && head <= 'Z' {
+        Some((head.to_int() + 32).unsafe_to_char().to_string() + rest)
+      } else {
+        Some(value)
+      }
+    "Uppercase" => Some(value.to_upper())
+    "Lowercase" => Some(value.to_lower())
+    _ => None
+  }
+}
+
+///|
+/// Resolve a type to its enumerated string-literal value set when it is a
+/// literal, a finite union of literals, or an intrinsic string mapping
+/// (`Capitalize<...>` etc.) applied to one of those shapes. Used by the
+/// template-literal simplifier; returns `None` for anything that would
+/// require unbounded enumeration.
+fn resolve_literal_value_set(type_ : @ast.TsType) -> Array[String]? {
+  match type_ {
+    Literal(value) => Some([value])
+    Union(items) => {
+      let out : Array[String] = []
+      for it in items {
+        match it {
+          Literal(v) => out.push(v)
+          _ => return None
+        }
+      }
+      Some(out)
+    }
+    Applied(name, [inner]) =>
+      match resolve_literal_value_set(inner) {
+        Some(values) => {
+          let mapped : Array[String] = []
+          for v in values {
+            match apply_string_intrinsic(name, v) {
+              Some(new_v) => mapped.push(new_v)
+              None => return None
+            }
+          }
+          Some(mapped)
+        }
+        None => None
+      }
+    TemplateLiteralType(_, _) =>
+      match simplify_template_literal(type_) {
+        Union(items) => {
+          let out : Array[String] = []
+          for it in items {
+            match it {
+              Literal(v) => out.push(v)
+              _ => return None
+            }
+          }
+          Some(out)
+        }
+        Literal(v) => Some([v])
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Cartesian-product expansion of a `TemplateLiteralType(parts, args)` to
+/// a finite union of `Literal(...)` values. When every interpolation
+/// resolves to a finite literal value set, materialize the cross product;
+/// otherwise preserve the template so a later pass can retry after
+/// substitution.
+fn simplify_template_literal(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    TemplateLiteralType(parts, args) => {
+      let arg_value_sets : Array[Array[String]] = []
+      for a in args {
+        match resolve_literal_value_set(a) {
+          Some(values) => arg_value_sets.push(values)
+          None => return t
+        }
+      }
+      let mut accumulators : Array[String] = [parts[0]]
+      for i in 0..<arg_value_sets.length() {
+        let next_accumulators : Array[String] = []
+        for prefix in accumulators {
+          for value in arg_value_sets[i] {
+            next_accumulators.push(prefix + value + parts[i + 1])
+          }
+        }
+        accumulators = next_accumulators
+      }
+      let result : Array[@ast.TsType] = []
+      for s in accumulators {
+        result.push(Literal(s))
+      }
+      if result.length() == 0 {
+        Never
+      } else if result.length() == 1 {
+        result[0]
+      } else {
+        Union(result)
+      }
+    }
+    _ => t
   }
 }
 

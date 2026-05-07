@@ -119,7 +119,6 @@ fn mapped_object_key_names(type_ : @ast.TsType) -> Array[String]? {
   }
 }
 
-///|
 fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
   self : Parser,
 ) -> @ast.TsType? {
@@ -127,11 +126,15 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
   try {
     let _ = self.match_ident("readonly")
     let _ = self.expect(LBracket)
-    if self.is_ident() {
-      let _ = self.advance()
-    } else {
-      self.pos = saved_pos
-      return None
+    let key_param = match self.peek().kind {
+      Ident(name) => {
+        let _ = self.advance()
+        name
+      }
+      _ => {
+        self.pos = saved_pos
+        return None
+      }
     }
     if !(self.match_(In) || self.match_ident("in")) {
       self.pos = saved_pos
@@ -155,28 +158,109 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
     let value_type = self.parse_type()
     let _ = self.match_(Semicolon) || self.match_(Comma)
     let _ = self.expect(RBrace)
-    let keys = match mapped_object_key_names(keys_type) {
-      Some(keys) => keys
-      None => {
-        self.pos = saved_pos
-        return None
+    // Fast path: when the key source is already a finite literal union
+    // and the value never references the binder, just materialize an
+    // object so legacy passes that don't know about `MappedType` keep
+    // working. Otherwise preserve the binder shape so simplification can
+    // resolve it later (e.g. when `Source` is `Keyof T` for an opaque
+    // `T` that becomes concrete after substitution).
+    match mapped_object_key_names(keys_type) {
+      Some(keys) if !mapped_value_references_binder(value_type, key_param) => {
+        let fields : Array[(@ast.TsType, @ast.TsType)] = []
+        let field_type = if optional {
+          wrap_optional_ts_type(value_type)
+        } else {
+          value_type
+        }
+        for key in keys {
+          fields.push((Literal(key), field_type))
+        }
+        Some(Object(fields))
       }
+      _ => Some(MappedType(key_param, keys_type, value_type, optional))
     }
-    let fields : Array[(@ast.TsType, @ast.TsType)] = []
-    let field_type = if optional {
-      wrap_optional_ts_type(value_type)
-    } else {
-      value_type
-    }
-    for key in keys {
-      fields.push((Literal(key), field_type))
-    }
-    Some(Object(fields))
   } catch {
     _ => {
       self.pos = saved_pos
       None
     }
+  }
+}
+
+///|
+/// Walk a value position of a mapped type (`{ [K in U]: V }`) and report
+/// whether `V` references the binder `K` (as `Named(key_param)`). This
+/// determines whether the parser materializes an Object eagerly or keeps
+/// the `MappedType` so the simplifier can substitute per key.
+fn mapped_value_references_binder(
+  value : @ast.TsType,
+  key_param : String,
+) -> Bool {
+  match value {
+    Named(name) => name == key_param
+    Applied(_, args) => {
+      for a in args {
+        if mapped_value_references_binder(a, key_param) {
+          return true
+        }
+      }
+      false
+    }
+    Array(inner) => mapped_value_references_binder(inner, key_param)
+    Tuple(items) => {
+      for it in items {
+        if mapped_value_references_binder(it, key_param) {
+          return true
+        }
+      }
+      false
+    }
+    Object(fields) => {
+      for f in fields {
+        if mapped_value_references_binder(f.1, key_param) {
+          return true
+        }
+      }
+      false
+    }
+    Func(params, ret) => {
+      for p in params {
+        if mapped_value_references_binder(p, key_param) {
+          return true
+        }
+      }
+      mapped_value_references_binder(ret, key_param)
+    }
+    Union(items) | Intersection(items) => {
+      for it in items {
+        if mapped_value_references_binder(it, key_param) {
+          return true
+        }
+      }
+      false
+    }
+    Conditional(check, ext, t, f) =>
+      mapped_value_references_binder(check, key_param) ||
+      mapped_value_references_binder(ext, key_param) ||
+      mapped_value_references_binder(t, key_param) ||
+      mapped_value_references_binder(f, key_param)
+    IndexedAccess(base, k) =>
+      mapped_value_references_binder(base, key_param) ||
+      mapped_value_references_binder(k, key_param)
+    Keyof(inner) => mapped_value_references_binder(inner, key_param)
+    MappedType(inner_key, _, _, _) if inner_key == key_param => false
+    MappedType(_, src, val, _) =>
+      mapped_value_references_binder(src, key_param) ||
+      mapped_value_references_binder(val, key_param)
+    TemplateLiteralType(_, args) => {
+      for a in args {
+        if mapped_value_references_binder(a, key_param) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
   }
 }
 
@@ -590,8 +674,8 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     }
     Ident("keyof") => {
       let _ = self.advance()
-      let _ = self.parse_primary_type()
-      String_
+      let operand = self.parse_primary_type() catch { _ => @ast.TsType::Any }
+      Keyof(operand)
     }
     Ident("readonly") => {
       let _ = self.advance()

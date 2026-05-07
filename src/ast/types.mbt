@@ -43,6 +43,16 @@ pub(all) enum TsType {
   // the rendered string is parts[0] + type_args[0] + parts[1] + ... +
   // parts[N]. Used by patterns like `bg${ForegroundColorName}`.
   TemplateLiteralType(Array[String], Array[TsType])
+  // `keyof T`. Resolved to `Union[Literal(name), ...]` for struct/object
+  // bases by `simplify_type`; preserved otherwise so later passes can
+  // retry after substitution.
+  Keyof(TsType)
+  // Mapped type `{ [K in Source]: Value }` (with optional `?` on the
+  // value position). `key_param` is the binder name (e.g. `K`); inside
+  // `value` it appears as `Named(key_param)` and is substituted per key
+  // when the source resolves to a union of literals. `optional` reflects
+  // the literal `?` after `]`; the parser already handles `+?` / `-?`.
+  MappedType(String, TsType, TsType, Bool)
 } derive(Eq, Debug)
 
 ///|

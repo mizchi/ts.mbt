@@ -547,10 +547,23 @@ test "parser: parse intersection type" {
 }
 
 ///|
-test "parser: parse keyof object surface as string-like key" {
+test "parser: parse keyof preserves operand as Keyof(...)" {
+  // keyof previously dropped its operand and returned `String_`; it now
+  // keeps the operand so the simplifier can resolve it once the base
+  // becomes a concrete struct.
   let parser = Parser::from_source("keyof JSX.IntrinsicElements")
   let t = parser.parse_type()
-  assert_eq(t, String_)
+  assert_eq(t, Keyof(Named("JSX.IntrinsicElements")))
+}
+
+///|
+test "parser: keyof of inline object literal" {
+  let parser = Parser::from_source("keyof { a: string; b: number }")
+  let t = parser.parse_type()
+  assert_eq(
+    t,
+    Keyof(Object([(Literal("a"), String_), (Literal("b"), Number)])),
+  )
 }
 
 ///|
@@ -1711,7 +1724,10 @@ test "parser: substitute declare class method generic bounds" {
   }
   assert_eq(module_.classes.length(), 1)
   let method_ = module_.classes[0].methods[0]
-  assert_eq(method_.params[0].1, String_)
+  // `E extends keyof Events` substitutes `E` with the bound; the simplifier
+  // (run later, with module-level resolution) reduces it to a literal-key
+  // union once `Events` is known.
+  assert_eq(method_.params[0].1, Keyof(Named("Events")))
 }
 
 ///|

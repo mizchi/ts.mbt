@@ -675,6 +675,46 @@ fn find_interface_decl(
 }
 
 ///|
+/// Look up `name` in the current module's interfaces / type aliases and
+/// surface a `Struct(name, fields)` whose field types are good enough for
+/// the simplifier to read keys off (`keyof Foo`, `{ [K in keyof Foo]: V }`,
+/// etc.). Returns `None` for opaque module-level identifiers so callers
+/// keep the original `Named(...)` and the bridge can fall back to `String`.
+fn resolve_named_to_struct(
+  info : DeclModuleInfo,
+  name : String,
+) -> @ast.TsType? {
+  match find_interface_decl_recursive(info.module_, name) {
+    Some(iface) => {
+      let fields : Array[(String, @ast.TsType)] = []
+      for f in iface.fields {
+        fields.push(f)
+      }
+      Some(Struct(iface.name, fields))
+    }
+    None =>
+      match find_type_alias_decl(info.module_, name) {
+        Some(ta) =>
+          match ta.type_ {
+            Object(obj_fields) => {
+              let fields : Array[(String, @ast.TsType)] = []
+              for f in obj_fields {
+                match f.0 {
+                  Literal(k) => fields.push((k, f.1))
+                  _ => return None
+                }
+              }
+              Some(Struct(ta.name, fields))
+            }
+            Struct(_, _) => Some(ta.type_)
+            _ => None
+          }
+        None => None
+      }
+  }
+}
+
+///|
 fn find_interface_decl_recursive(
   module_ : @ast.TsModule,
   name : String,
@@ -2995,6 +3035,9 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     IndexedAccess(base, key) =>
       utility_record_type_suffix(base) + "At" + utility_record_type_suffix(key)
     TemplateLiteralType(_, _) => "String"
+    Keyof(inner) => "KeyOf" + utility_record_type_suffix(inner)
+    MappedType(_, _, value, _) =>
+      "MappedTo" + utility_record_type_suffix(value)
   }
 }
 
@@ -3517,6 +3560,31 @@ fn lower_react_utility_type(
         }
         None => Any
       }
+    Keyof(inner) => {
+      // Lower the operand first so any Named base resolves to its struct
+      // shape; `simplify_type` then turns `keyof Struct(...)` into a
+      // literal-key union. When the operand still names an opaque module
+      // type, look it up through the bridge resolver so we can see its
+      // field shape. If even that fails we fall back to `String_` —
+      // bridge consumers historically saw `keyof T` as a string-shaped
+      // opaque key, and most call sites only use it as an index lookup
+      // we already widen to `String`.
+      let lowered_inner = lower_react_utility_type(
+        info, inner, modules, canonical_types,
+      )
+      let resolved_inner = match lowered_inner {
+        Named(name) =>
+          match resolve_named_to_struct(info, name) {
+            Some(s) => s
+            None => lowered_inner
+          }
+        _ => lowered_inner
+      }
+      match @checker.simplify_type(Keyof(resolved_inner)) {
+        Keyof(_) => String_
+        other => other
+      }
+    }
     Applied(name, [inner_type]) if @checker.is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
     Applied(name, [source_type]) if @checker.is_mapped_interface_utility_name(
