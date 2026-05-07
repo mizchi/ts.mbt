@@ -693,6 +693,37 @@ async test "bridge: emit MoonBit TS bridge package bundle partial-evaluates keyo
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle expands alias-indirected template literal" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/banner-alias-templit-entry.d.ts",
+    "./runtime/banner.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Channel / Variant remain available as enums.
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum Channel"))
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum Variant"))
+  // Banner = `${Channel}-${Variant}` should land as a four-member string
+  // enum after alias indirections are inlined and the cartesian product
+  // expanded.
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum Banner"))
+  assert_true(bundle.bridge_mbti.contains("Info_small"))
+  assert_true(bundle.bridge_mbti.contains("Info_large"))
+  assert_true(bundle.bridge_mbti.contains("Warn_small"))
+  assert_true(bundle.bridge_mbti.contains("Warn_large"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type Banner"))
+  // No "Unresolved type reference Banner" diagnostic should leak into
+  // the generated mbti as a comment.
+  assert_false(bundle.bridge_mbti.contains("Unresolved type reference Banner"))
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle lowers boolean literal aliases to bool" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/boolean-literal-union-entry.d.ts", "./runtime/boolean-literal-union.js",
