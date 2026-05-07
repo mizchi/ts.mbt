@@ -773,6 +773,40 @@ async test "bridge: emit MoonBit TS bridge package bundle resolves cross-file qu
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle expands consumer keyof + prefixed templit" {
+  // Consumer-style: concrete `Schema` interface drives `keyof Schema`
+  // and `\`prefix_\${SchemaKeys}\``. Both should partial-evaluate to
+  // string enums end-to-end without alias indirection blocking the
+  // chain.
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/consumer-instantiation-entry.d.ts",
+    "./runtime/consumer-instantiation.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `keyof Schema` reaches the alias surface as a 3-member enum.
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum SchemaKeys"))
+  assert_true(bundle.bridge_mbti.contains("Id"))
+  assert_true(bundle.bridge_mbti.contains("Name"))
+  assert_true(bundle.bridge_mbti.contains("Age"))
+  // `\`prefix_\${SchemaKeys}\`` chains through the simplifier and lands
+  // as a 3-member enum (`Prefix_id`, `Prefix_name`, `Prefix_age`).
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum SchemaPrefixed"))
+  assert_true(bundle.bridge_mbti.contains("Prefix_id"))
+  assert_true(bundle.bridge_mbti.contains("Prefix_name"))
+  assert_true(bundle.bridge_mbti.contains("Prefix_age"))
+  assert_false(
+    bundle.bridge_mbti.contains("declare pub type SchemaPrefixed"),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle lowers boolean literal aliases to bool" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/boolean-literal-union-entry.d.ts", "./runtime/boolean-literal-union.js",

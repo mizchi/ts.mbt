@@ -4067,17 +4067,20 @@ fn lower_react_utility_type(
       }
     }
     TemplateLiteralType(parts, type_args) => {
-      // Lower each interpolated arg, then inline same-module alias bodies
-      // (`type Channel = "info" | "warn"` becomes the union itself), so
-      // the simplifier can read finite value sets out of the args. When
-      // everything resolves we get a literal-key `Union`; otherwise the
-      // template is preserved for downstream enum-likes / passthrough.
+      // Lower each interpolated arg, inline same-module alias bodies
+      // (`type Channel = "info" | "warn"` becomes the union itself),
+      // resolve any `Named(InterfaceName)` reachable inside to a struct
+      // shape, then simplify so chained keyof / mapped reductions
+      // (e.g. `type SchemaKeys = keyof Schema` → `'id' | 'name' | ...`)
+      // happen before the cartesian expansion runs.
       let lowered_args : Array[@ast.TsType] = []
       for arg in type_args {
         let lowered = lower_react_utility_type(
           info, arg, modules, canonical_types,
         )
-        lowered_args.push(inline_named_aliases(info, modules, lowered, []))
+        let inlined = inline_named_aliases(info, modules, lowered, [])
+        let with_struct = resolve_named_inside_type(info, inlined)
+        lowered_args.push(@checker.simplify_type(with_struct))
       }
       let resolved_template = @ast.TsType::TemplateLiteralType(
         parts, lowered_args,
