@@ -724,6 +724,28 @@ async test "bridge: emit MoonBit TS bridge package bundle expands alias-indirect
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle expands real-world zod HashFormat alias" {
+  // Verbatim from zod/v4/core/util.d.ts. 5 algorithms × 3 encodings ⇒
+  // a 15-member string enum.
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/zod-hash-format-entry.d.ts",
+    "./runtime/zod-hash-format.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum HashFormat"))
+  assert_true(bundle.bridge_mbti.contains("Md5_hex"))
+  assert_true(bundle.bridge_mbti.contains("Sha512_base64url"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type HashFormat"))
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle lowers boolean literal aliases to bool" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/boolean-literal-union-entry.d.ts", "./runtime/boolean-literal-union.js",
