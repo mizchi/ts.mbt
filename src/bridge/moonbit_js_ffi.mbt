@@ -2522,6 +2522,29 @@ fn ffi_type_js_converter_expr(
         "Array.isArray(\{expr}) ? \{expr}.map((item) => \{item_expr}) : \{expr}"
       }
     }
+    // Anonymous heterogeneous union encountered directly on a parameter
+    // type (e.g. `string | string[]` on `new StringChunk(value)`). The
+    // synthesised union alias was already registered when the type
+    // signature was rendered; route through its to-JS converter so the
+    // MoonBit `{$tag, _0}` shape gets unwrapped to the raw JS value
+    // before reaching the call.
+    Union(parts) =>
+      match tagged_union_cases(parts) {
+        Some(cases) => {
+          let synth_name = ffi_inline_union_synthesized_name(cases)
+          match state.tagged_union_decls_by_name.get(synth_name) {
+            Some(decl) =>
+              tagged_union_to_js_expression_with_nested(
+                decl,
+                expr,
+                state.tagged_union_decls_by_name,
+                struct_converter_names=state.struct_type_names,
+              )
+            None => expr
+          }
+        }
+        None => expr
+      }
     _ => expr
   }
 }
@@ -2669,11 +2692,53 @@ fn ffi_import_needs_js_arg_conversion(
 }
 
 ///|
+/// Like `ffi_import_needs_js_arg_conversion` but evaluated against the
+/// string-subset wrapper's effective param types (`string | string[]`
+/// narrowed to plain `String`). Used to decide whether the subset
+/// wrapper can compile to a direct `extern "js" fn ... = "<runtime>"`
+/// even when the original signature had a tagged-enum converter that
+/// would otherwise force the wrapper through bridge.js.
+fn ffi_import_subset_needs_js_arg_conversion(
+  state : MoonBitJsFfiState,
+  import_ : @ast.TsImport,
+) -> Bool {
+  for item in import_.params {
+    let (_, type_) = item
+    if ffi_type_is_string_or_string_array_union(type_) {
+      // The subset replaces this slot with plain `String`; no JS
+      // conversion needed regardless of how the union would render.
+      continue
+    }
+    if ffi_type_needs_js_arg_conversion(state, type_) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn ffi_func_needs_js_arg_conversion(
   state : MoonBitJsFfiState,
   func : @ast.TsFunc,
 ) -> Bool {
   for param in func.params {
+    if ffi_type_needs_js_arg_conversion(state, param.type_) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Subset variant: see `ffi_import_subset_needs_js_arg_conversion`.
+fn ffi_func_subset_needs_js_arg_conversion(
+  state : MoonBitJsFfiState,
+  func : @ast.TsFunc,
+) -> Bool {
+  for param in func.params {
+    if ffi_type_is_string_or_string_array_union(param.type_) {
+      continue
+    }
     if ffi_type_needs_js_arg_conversion(state, param.type_) {
       return true
     }
@@ -4880,7 +4945,13 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         }
     }
     if ffi_import_string_subset_should_emit_wrapper(state, import_) {
-      let subset_needs_js_arg_conversion = ffi_import_needs_js_arg_conversion(
+      // The subset wrapper exposes the same runtime export with each
+      // `string | string[]` param narrowed to plain `String`. Compute
+      // whether THE SUBSET — not the original union-typed import —
+      // needs JS-side arg conversion: a plain `String` slot is always
+      // direct-able, even after the FFI started routing the original
+      // union through a tagged-enum converter.
+      let subset_needs_js_arg_conversion = ffi_import_subset_needs_js_arg_conversion(
         state, import_,
       )
       let subset_needs_js_return_conversion = ffi_import_needs_js_return_conversion(
@@ -5090,7 +5161,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
         }
     }
     if ffi_func_string_subset_should_emit_wrapper(state, func) {
-      let subset_needs_js_arg_conversion = ffi_func_needs_js_arg_conversion(
+      let subset_needs_js_arg_conversion = ffi_func_subset_needs_js_arg_conversion(
         state, func,
       )
       let subset_needs_js_return_conversion = ffi_func_needs_js_return_conversion(

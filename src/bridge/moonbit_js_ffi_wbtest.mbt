@@ -1136,10 +1136,18 @@ async test "bridge: emit callable wrappers for natural function-valued const exp
       "pub extern \"js\" fn has_magic(arg0 : String, arg1 : GlobOptions) -> Bool = \"__ts_mbt_has_magic\"",
     ),
   )
+  // The full `hasMagic` wrapper now routes the `string | string[]`
+  // first arg through the synthesised tagged-union to-JS converter so
+  // MoonBit-side `StringValue("foo")` / `StringArrayValue(["..."])`
+  // values arrive at drizzle's runtime as raw strings / arrays. The
+  // string-subset variant (asserted below as `has_magic(arg0 : String,
+  // ...)`) keeps the direct-extern path because plain `String` doesn't
+  // need any conversion.
+  assert_true(bundle.bridge_js.contains("export function __ts_mbt_has_magic("))
   assert_true(
-    bundle.bridge_js.contains(
-      "export function __ts_mbt_has_magic(arg0, arg1) { return __ts_mbt_module.hasMagic(arg0, __ts_mbt_to_js_glob_options(arg1)); }",
-    ),
+    bundle.bridge_js.contains("__ts_mbt_module.hasMagic(") &&
+    bundle.bridge_js.contains("\"$tag\" in arg0") &&
+    bundle.bridge_js.contains("__ts_mbt_to_js_glob_options(arg1)"),
   )
   assert_true(
     bundle.ffi_mbt.contains(
