@@ -36,6 +36,13 @@ priv struct ExportedTaggedUnionDecl {
 }
 
 ///|
+priv struct ExportedTypeAliasDecl {
+  source_path : String
+  export_name : String
+  type_alias : @ast.TsTypeAlias
+}
+
+///|
 priv struct ExportedImportDecl {
   source_path : String
   local_name_prefix : String
@@ -223,6 +230,7 @@ priv enum ResolvedDecl {
   Interface(ExportedInterfaceDecl)
   Enum(ExportedEnumDecl)
   TaggedUnion(ExportedTaggedUnionDecl)
+  TypeAlias(ExportedTypeAliasDecl)
   Import(ExportedImportDecl)
   Function(ExportedFuncDecl)
   Value(ExportedValueDecl)
@@ -806,7 +814,7 @@ fn resolve_namespace_alias_module(
 ) -> DeclModuleInfo? {
   for imp in info.record.module_block.imports {
     match imp.namespace_binding {
-      Some(binding) if binding == local_alias => {
+      Some(binding) if binding == local_alias =>
         for edge in info.record.imports {
           if edge.specifier == imp.module_spec {
             match modules.get(edge.resolved_path) {
@@ -815,7 +823,6 @@ fn resolve_namespace_alias_module(
             }
           }
         }
-      }
       _ => ()
     }
   }
@@ -873,8 +880,7 @@ fn inline_named_aliases(
       }
       Applied(name, out)
     }
-    Keyof(inner) =>
-      Keyof(inline_named_aliases(info, modules, inner, visited))
+    Keyof(inner) => Keyof(inline_named_aliases(info, modules, inner, visited))
     TemplateLiteralType(parts, args) => {
       let out : Array[@ast.TsType] = []
       for a in args {
@@ -1856,10 +1862,7 @@ fn resolve_decl_from_local_name(
                                     None =>
                                       match
                                         type_alias_utility_to_interface(
-                                          info,
-                                          type_alias,
-                                          modules,
-                                          canonical_types_for_lower,
+                                          info, type_alias, modules, canonical_types_for_lower,
                                         ) {
                                         Some(iface) =>
                                           Interface({
@@ -1868,7 +1871,18 @@ fn resolve_decl_from_local_name(
                                             export_name,
                                             iface,
                                           })
-                                        None => Missing
+                                        None =>
+                                          if type_alias_passthrough_supported(
+                                              lowered_alias,
+                                            ) {
+                                            TypeAlias({
+                                              source_path,
+                                              export_name,
+                                              type_alias: lowered_alias,
+                                            })
+                                          } else {
+                                            Missing
+                                          }
                                       }
                                   }
                               }
@@ -2042,6 +2056,7 @@ fn collect_exported_decls(
   Array[ExportedInterfaceDecl],
   Array[ExportedEnumDecl],
   Array[ExportedTaggedUnionDecl],
+  Array[ExportedTypeAliasDecl],
   Array[ExportedImportDecl],
   Array[ExportedFuncDecl],
   Array[ExportedValueDecl],
@@ -2051,6 +2066,7 @@ fn collect_exported_decls(
   let interfaces : Array[ExportedInterfaceDecl] = []
   let enums : Array[ExportedEnumDecl] = []
   let tagged_unions : Array[ExportedTaggedUnionDecl] = []
+  let type_aliases : Array[ExportedTypeAliasDecl] = []
   let imports : Array[ExportedImportDecl] = []
   let funcs : Array[ExportedFuncDecl] = []
   let values : Array[ExportedValueDecl] = []
@@ -2174,6 +2190,7 @@ fn collect_exported_decls(
       Interface(exported) => interfaces.push(exported)
       Enum(exported) => enums.push(exported)
       TaggedUnion(exported) => tagged_unions.push(exported)
+      TypeAlias(exported) => type_aliases.push(exported)
       Import(exported) => imports.push(exported)
       Function(exported) => funcs.push(exported)
       Value(exported) => values.push(exported)
@@ -2209,7 +2226,10 @@ fn collect_exported_decls(
       Missing => ()
     }
   }
-  (interfaces, enums, tagged_unions, imports, funcs, values, classes, notes)
+  (
+    interfaces, enums, tagged_unions, type_aliases, imports, funcs, values, classes,
+    notes,
+  )
 }
 
 ///|
@@ -3285,12 +3305,12 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
         prefix + "Of" + parts.join("And")
       }
     }
+    TypeOf(query) => "TypeOf" + decl_to_pascal_case(query)
     IndexedAccess(base, key) =>
       utility_record_type_suffix(base) + "At" + utility_record_type_suffix(key)
     TemplateLiteralType(_, _) => "String"
     Keyof(inner) => "KeyOf" + utility_record_type_suffix(inner)
-    MappedType(_, _, value, _) =>
-      "MappedTo" + utility_record_type_suffix(value)
+    MappedType(_, _, value, _) => "MappedTo" + utility_record_type_suffix(value)
   }
 }
 
@@ -3350,6 +3370,349 @@ fn utility_awaited_type(type_ : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+fn typeof_query_simple_name(query : String) -> String? {
+  if query.has_prefix("import(") || query.contains(".") {
+    None
+  } else {
+    Some(query)
+  }
+}
+
+///|
+fn resolve_typeof_class_origin(
+  info : DeclModuleInfo,
+  query : String,
+  modules : Map[String, DeclModuleInfo],
+) -> (DeclModuleInfo, @ast.TsClassDecl)? {
+  let name = match typeof_query_simple_name(query) {
+    Some(name) => name
+    None => return None
+  }
+  match find_class_decl_recursive(info.module_, name) {
+    Some(class_) => Some((info, class_))
+    None =>
+      match resolve_imported_type_origin(info, name) {
+        Some((source_path, imported_name)) =>
+          match modules.get(source_path) {
+            Some(source_info) =>
+              match
+                find_class_decl_recursive(source_info.module_, imported_name) {
+                Some(class_) => Some((source_info, class_))
+                None => None
+              }
+            None => None
+          }
+        None => None
+      }
+  }
+}
+
+///|
+fn typeof_class_instance_type(
+  info : DeclModuleInfo,
+  query : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType? {
+  match resolve_typeof_class_origin(info, query, modules) {
+    Some((origin_info, class_)) =>
+      Some(
+        Named(
+          match
+            resolve_exported_type_name(
+              origin_info,
+              class_.name,
+              canonical_types,
+            ) {
+            Some(export_name) => export_name
+            None => class_.name
+          },
+        ),
+      )
+    None => None
+  }
+}
+
+///|
+fn typeof_class_constructor_params_type(
+  info : DeclModuleInfo,
+  query : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType? {
+  match resolve_typeof_class_origin(info, query, modules) {
+    Some((origin_info, class_)) => {
+      let items : Array[@ast.TsType] = []
+      match class_.constructor_params {
+        Some(params) =>
+          for param in params {
+            items.push(
+              lower_react_utility_type(
+                origin_info,
+                param.1,
+                modules,
+                canonical_types,
+              ),
+            )
+          }
+        None => ()
+      }
+      Some(Tuple(items))
+    }
+    None => None
+  }
+}
+
+///|
+fn typeof_value_query_type(
+  info : DeclModuleInfo,
+  query : String,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType? {
+  let name = match typeof_query_simple_name(query) {
+    Some(name) => name
+    None => return None
+  }
+  match find_import_decl(info.module_, name) {
+    Some(import_) => {
+      let type_ = typeof_import_decl_to_func_type(
+        info, import_, modules, canonical_types,
+      )
+      if typeof_value_type_is_stable(info, type_) {
+        Some(type_)
+      } else {
+        None
+      }
+    }
+    None =>
+      match find_func_decl(info.module_, name) {
+        Some(func) => {
+          let type_ = typeof_func_decl_to_func_type(
+            info, func, modules, canonical_types,
+          )
+          if typeof_value_type_is_stable(info, type_) {
+            Some(type_)
+          } else {
+            None
+          }
+        }
+        None =>
+          match find_value_decl(info.module_, name) {
+            Some(value) =>
+              match value.type_ {
+                TypeOf(inner) if inner == query => None
+                other => {
+                  let type_ = lower_react_utility_type(
+                    info, other, modules, canonical_types,
+                  )
+                  if typeof_value_type_is_stable(info, type_) {
+                    Some(type_)
+                  } else {
+                    None
+                  }
+                }
+              }
+            None => None
+          }
+      }
+  }
+}
+
+///|
+fn typeof_import_decl_to_func_type(
+  info : DeclModuleInfo,
+  import_ : @ast.TsImport,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType {
+  let params : Array[@ast.TsType] = []
+  for param in import_.params {
+    params.push(
+      lower_react_utility_type(info, param.1, modules, canonical_types),
+    )
+  }
+  Func(
+    params,
+    lower_react_utility_type(
+      info,
+      import_.return_type,
+      modules,
+      canonical_types,
+    ),
+  )
+}
+
+///|
+fn typeof_func_decl_to_func_type(
+  info : DeclModuleInfo,
+  func : @ast.TsFunc,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsType {
+  let params : Array[@ast.TsType] = []
+  for param in func.params {
+    params.push(
+      lower_react_utility_type(info, param.type_, modules, canonical_types),
+    )
+  }
+  Func(
+    params,
+    lower_react_utility_type(info, func.return_type, modules, canonical_types),
+  )
+}
+
+///|
+fn typeof_value_type_is_stable(
+  info : DeclModuleInfo,
+  type_ : @ast.TsType,
+) -> Bool {
+  match @checker.classify_optional_like_union(type_) {
+    Some((collapsed, _)) => return typeof_value_type_is_stable(info, collapsed)
+    None => ()
+  }
+  match @checker.classify_transparent_intersection(type_) {
+    Some(inner) => return typeof_value_type_is_stable(info, inner)
+    None => ()
+  }
+  match type_ {
+    Any | Never | Null | Undefined | TypeOf(_) => false
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
+    Number | Int | BigInt | Boolean | String_ | Void => true
+    Named(name) => typeof_named_type_is_stable(info, name)
+    Array(inner) => typeof_value_type_is_stable(info, inner)
+    Tuple(items) => {
+      for item in items {
+        if !typeof_value_type_is_stable(info, item) {
+          return false
+        }
+      }
+      true
+    }
+    Func(params, return_type) => {
+      for param in params {
+        if !typeof_value_type_is_stable(info, param) {
+          return false
+        }
+      }
+      typeof_value_type_is_stable(info, return_type)
+    }
+    Applied(name, args) => {
+      if !typeof_named_type_is_stable(info, name) {
+        return false
+      }
+      for arg in args {
+        if !typeof_value_type_is_stable(info, arg) {
+          return false
+        }
+      }
+      true
+    }
+    Union(items) | Intersection(items) => {
+      for item in items {
+        if !typeof_value_type_is_stable(info, item) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn typeof_named_type_is_stable(info : DeclModuleInfo, name : String) -> Bool {
+  if name == "Array" ||
+    name == "ReadonlyArray" ||
+    name == "Promise" ||
+    name == "PromiseLike" {
+    return true
+  }
+  if name == "any" ||
+    name == "unknown" ||
+    name == "Function" ||
+    name.contains(".") {
+    return false
+  }
+  match find_interface_decl_recursive(info.module_, name) {
+    Some(_) => return true
+    None => ()
+  }
+  match find_class_decl_recursive(info.module_, name) {
+    Some(_) => return true
+    None => ()
+  }
+  match find_enum_decl(info.module_, name) {
+    Some(_) => return true
+    None => ()
+  }
+  match find_type_alias_decl(info.module_, name) {
+    Some(_) => true
+    None => false
+  }
+}
+
+///|
+fn type_alias_passthrough_supported(type_alias : @ast.TsTypeAlias) -> Bool {
+  type_alias.type_params.length() == 0 &&
+  type_alias_target_passthrough_supported(type_alias.type_)
+}
+
+///|
+fn type_alias_target_passthrough_supported(type_ : @ast.TsType) -> Bool {
+  match @checker.classify_optional_like_union(type_) {
+    Some((collapsed, _)) =>
+      return type_alias_target_passthrough_supported(collapsed)
+    None => ()
+  }
+  match @checker.classify_transparent_intersection(type_) {
+    Some(inner) => return type_alias_target_passthrough_supported(inner)
+    None => ()
+  }
+  match type_ {
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
+    Number | Int | BigInt | Boolean | String_ | Void => true
+    Named(_) => true
+    Array(inner) => type_alias_target_passthrough_supported(inner)
+    Tuple(items) => {
+      if items.length() == 0 {
+        return true
+      }
+      for item in items {
+        if item != items[0] || !type_alias_target_passthrough_supported(item) {
+          return false
+        }
+      }
+      true
+    }
+    Func(params, return_type) => {
+      for param in params {
+        if !type_alias_target_passthrough_supported(param) {
+          return false
+        }
+      }
+      type_alias_target_passthrough_supported(return_type)
+    }
+    Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
+      type_alias_target_passthrough_supported(inner)
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
+      type_alias_target_passthrough_supported(inner)
+    Applied(name, args) => {
+      if name == "any" || name == "Function" {
+        return false
+      }
+      for arg in args {
+        if !type_alias_target_passthrough_supported(arg) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
 /// Synthesize a `TsInterface` from a type alias whose body is a direct
 /// utility-type instantiation (`Pick<Foo, K>` / `Omit<Foo, K>` /
 /// `Partial<Foo>` / `Required<Foo>` / `Readonly<Foo>`). Reuses the
@@ -3369,11 +3732,17 @@ fn type_alias_utility_to_interface(
     Applied(name, args) =>
       if name == "Record" && args.length() == 2 {
         type_alias_record_to_interface_fields(
-          info, modules, canonical_types, args[0], args[1],
+          info,
+          modules,
+          canonical_types,
+          args[0],
+          args[1],
         )
       } else if (name == "Pick" || name == "Omit") && args.length() == 2 {
         let (resolved_info, resolved_source) = redirect_qualified_named(
-          info, modules, args[0],
+          info,
+          modules,
+          args[0],
         )
         match
           utility_projection_interface_spec(
@@ -3392,31 +3761,36 @@ fn type_alias_utility_to_interface(
             // interface and re-run the projection over its fields.
             match
               resolve_alias_chain_to_interface(
-                resolved_info, modules, canonical_types, resolved_source, [],
+                resolved_info,
+                modules,
+                canonical_types,
+                resolved_source,
+                [],
               ) {
-              Some((_, synth)) =>
-                project_interface_fields(name, synth, args[1])
+              Some((_, synth)) => project_interface_fields(name, synth, args[1])
               None => None
             }
         }
       } else if @checker.is_mapped_interface_utility_name(name) &&
         args.length() == 1 {
         let (resolved_info, resolved_source) = redirect_qualified_named(
-          info, modules, args[0],
+          info,
+          modules,
+          args[0],
         )
         match
           utility_mapped_interface_spec(
-            resolved_info,
-            name,
-            resolved_source,
-            modules,
-            canonical_types,
+            resolved_info, name, resolved_source, modules, canonical_types,
           ) {
           Some(iface) => Some(iface)
           None =>
             match
               resolve_alias_chain_to_interface(
-                resolved_info, modules, canonical_types, resolved_source, [],
+                resolved_info,
+                modules,
+                canonical_types,
+                resolved_source,
+                [],
               ) {
               Some((_, synth)) => map_interface_fields(name, synth)
               None => None
@@ -3546,12 +3920,12 @@ fn project_interface_fields(
   let fields : Array[(String, @ast.TsType)] = []
   for f in iface.fields {
     let (field_name, field_type) = f
-    let include = match op_name {
+    let should_include = match op_name {
       "Pick" => keys.contains(field_name)
       "Omit" => !keys.contains(field_name)
       _ => false
     }
-    if include {
+    if should_include {
       fields.push((field_name, field_type))
     }
   }
@@ -4167,9 +4541,7 @@ fn lower_react_utility_type(
             lowered.push(
               (
                 f.0,
-                lower_react_utility_type(
-                  info, f.1, modules, canonical_types,
-                ),
+                lower_react_utility_type(info, f.1, modules, canonical_types),
               ),
             )
           }
@@ -4180,8 +4552,7 @@ fn lower_react_utility_type(
         // route through `JSValue` rather than carrying an unresolved
         // `MappedType` into emit.
         MappedType(_, _, _, _) => Any
-        other =>
-          lower_react_utility_type(info, other, modules, canonical_types)
+        other => lower_react_utility_type(info, other, modules, canonical_types)
       }
     }
     Applied(name, [inner_type]) if @checker.is_props_passthrough_name(name) =>
@@ -4276,6 +4647,24 @@ fn lower_react_utility_type(
       }
       Tuple(lowered_params)
     }
+    Applied("InstanceType", [TypeOf(query)]) =>
+      match typeof_class_instance_type(info, query, modules, canonical_types) {
+        Some(type_) => type_
+        None => Applied("InstanceType", [TypeOf(query)])
+      }
+    Applied("ConstructorParameters", [TypeOf(query)]) =>
+      match
+        typeof_class_constructor_params_type(
+          info, query, modules, canonical_types,
+        ) {
+        Some(type_) => type_
+        None => Applied("ConstructorParameters", [TypeOf(query)])
+      }
+    TypeOf(query) =>
+      match typeof_value_query_type(info, query, modules, canonical_types) {
+        Some(type_) => type_
+        None => type_
+      }
     Applied("Record", [key_type, value_type]) => {
       let lowered_key = lower_react_utility_type(
         info, key_type, modules, canonical_types,
@@ -5832,6 +6221,31 @@ fn clone_exported_interface(
 ///|
 fn clone_exported_enum(exported : ExportedEnumDecl) -> @ast.TsEnumDecl {
   { ..exported.enum_, name: exported.export_name }
+}
+
+///|
+fn clone_exported_type_alias(
+  exported : ExportedTypeAliasDecl,
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsTypeAlias {
+  {
+    name: exported.export_name,
+    type_params: [],
+    type_param_bounds: [],
+    type_: lower_react_utility_type(
+      info,
+      rewrite_type_refs_in_scope(
+        info,
+        "",
+        exported.type_alias.type_,
+        canonical_types,
+      ),
+      modules,
+      canonical_types,
+    ),
+  }
 }
 
 ///|
@@ -8368,6 +8782,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     exported_interfaces,
     exported_enums,
     exported_tagged_unions,
+    exported_type_aliases,
     exported_imports,
     exported_funcs,
     exported_values,
@@ -8521,6 +8936,16 @@ pub async fn emit_moonbit_decl_from_entry_path(
       None => ()
     }
   }
+  let type_aliases : Array[@ast.TsTypeAlias] = []
+  for exported in exported_type_aliases {
+    match modules.get(exported.source_path) {
+      Some(info) =>
+        type_aliases.push(
+          clone_exported_type_alias(exported, info, modules, canonical_types),
+        )
+      None => ()
+    }
+  }
   enum_lowering_rewrite_anonymous_enum_surfaces(
     enums, interfaces, imports, funcs, values, classes,
   )
@@ -8537,7 +8962,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
   let emitted_module : @ast.TsModule = {
     funcs,
     interfaces,
-    type_aliases: [],
+    type_aliases,
     imports,
     values,
     classes,

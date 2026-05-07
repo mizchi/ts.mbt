@@ -34,6 +34,11 @@ pub(all) enum TsType {
   // Type reference
   Named(String)
   Applied(String, Array[TsType])
+  // Type query: `typeof Foo`, `typeof ns.Foo`, or
+  // `typeof import("./mod").Foo`. The operand is stored as a stable textual
+  // entity query so bridge passes can resolve class constructor-side utility
+  // types without widening to `Any` in the parser.
+  TypeOf(String)
   // Indexed access: T[K]. The parser previously dropped this to Any; the
   // variant lets later passes resolve it when T is a concrete interface or
   // object literal and K is a string literal.

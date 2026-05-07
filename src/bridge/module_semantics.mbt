@@ -654,7 +654,7 @@ pub async fn collect_moonbit_ts_scaffold_unsupported_exports(
     }
   }
   let modules = build_decl_module_map(graph)
-  let (_, _, _, _, _, _, _, notes) = collect_exported_decls(
+  let (_, _, _, _, _, _, _, _, notes) = collect_exported_decls(
     graph, export_surface, modules,
   )
   for note in notes {

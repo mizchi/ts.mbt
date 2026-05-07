@@ -1111,6 +1111,28 @@ fn inject_bridge_public_type_aliases(
     !next_bridge_mbt.contains("#external\npub type JSValue") {
     next_bridge_mbt = "#external\npub type JSValue\n\n" + next_bridge_mbt
   }
+  let type_aliases : Array[String] = []
+  let implemented_type_names = collect_bridge_implemented_type_names(
+    next_bridge_mbt,
+  )
+  for line_view in bridge_mbti.split("\n") {
+    let line = line_view.to_string().trim().to_string()
+    if line.has_prefix("pub type ") && line.contains(" = ") {
+      match parse_bridge_implemented_type_name_line(line) {
+        Some(type_name) =>
+          if !implemented_type_names.contains(type_name) &&
+            !next_bridge_mbt.contains(line) &&
+            !type_aliases.contains(line) {
+            implemented_type_names.push(type_name)
+            type_aliases.push(line)
+          }
+        None => ()
+      }
+    }
+  }
+  if type_aliases.length() > 0 {
+    next_bridge_mbt = type_aliases.join("\n") + "\n\n" + next_bridge_mbt
+  }
   next_bridge_mbt
 }
 

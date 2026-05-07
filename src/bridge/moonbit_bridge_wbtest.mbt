@@ -161,6 +161,44 @@ async test "bridge: emit MoonBit TS bridge package bundle exposes object type al
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle mirrors simple typealiases" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/utility-alias-passthrough-entry.d.ts", "./runtime/utility-alias.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub type NonNullName = String"))
+  assert_true(bundle.bridge_mbt.contains("pub type NonNullName = String"))
+  assert_true(bundle.bridge_mbti.contains("pub type WidgetInstance = Widget"))
+  assert_true(bundle.bridge_mbt.contains("pub type WidgetInstance = Widget"))
+}
+
+///|
+async test "bridge: emit MoonBit TS bridge package bundle mirrors aliases to lowered enums once" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/enum-alias-passthrough-entry.d.ts", "./runtime/enum-alias.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum ModifierName"))
+  assert_true(bundle.bridge_mbti.contains("pub type Modifiers = ModifierName"))
+  assert_true(bundle.bridge_mbt.contains("pub type Modifiers = ModifierName"))
+  assert_false(bundle.bridge_mbt.contains("pub type Modifiers = String"))
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle preserves real-world literal option fields" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/bridge_smoke/realworld-literal-options-entry.d.ts", "./runtime/realworld-literal-options.js",
@@ -659,8 +697,7 @@ async test "bridge: emit MoonBit TS bridge package bundle names anonymous numeri
 ///|
 async test "bridge: emit MoonBit TS bridge package bundle partial-evaluates keyof / mapped / template literal" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
-    "fixtures/resolver/project/types/keyof-mapped-templit-entry.d.ts",
-    "./runtime/keyof-mapped-templit.js",
+    "fixtures/resolver/project/types/keyof-mapped-templit-entry.d.ts", "./runtime/keyof-mapped-templit.js",
   ) catch {
     e => {
       match e {
@@ -695,8 +732,7 @@ async test "bridge: emit MoonBit TS bridge package bundle partial-evaluates keyo
 ///|
 async test "bridge: emit MoonBit TS bridge package bundle expands alias-indirected template literal" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
-    "fixtures/resolver/project/types/banner-alias-templit-entry.d.ts",
-    "./runtime/banner.js",
+    "fixtures/resolver/project/types/banner-alias-templit-entry.d.ts", "./runtime/banner.js",
   ) catch {
     e => {
       match e {
@@ -728,8 +764,7 @@ async test "bridge: emit MoonBit TS bridge package bundle expands real-world zod
   // Verbatim from zod/v4/core/util.d.ts. 5 algorithms × 3 encodings ⇒
   // a 15-member string enum.
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
-    "fixtures/resolver/project/types/zod-hash-format-entry.d.ts",
-    "./runtime/zod-hash-format.js",
+    "fixtures/resolver/project/types/zod-hash-format-entry.d.ts", "./runtime/zod-hash-format.js",
   ) catch {
     e => {
       match e {
@@ -752,8 +787,7 @@ async test "bridge: emit MoonBit TS bridge package bundle resolves cross-file qu
   // must walk that namespace edge to inline the literal-union aliases
   // declared in the imported module before the cartesian expansion.
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
-    "fixtures/resolver/project/types/qualified-templit-entry.d.ts",
-    "./runtime/qualified-templit.js",
+    "fixtures/resolver/project/types/qualified-templit-entry.d.ts", "./runtime/qualified-templit.js",
   ) catch {
     e => {
       match e {
@@ -767,9 +801,7 @@ async test "bridge: emit MoonBit TS bridge package bundle resolves cross-file qu
   assert_true(bundle.bridge_mbti.contains("Md5_hex"))
   assert_true(bundle.bridge_mbti.contains("Sha256_base64"))
   assert_false(bundle.bridge_mbti.contains("declare pub type HashFormat"))
-  assert_false(
-    bundle.bridge_mbti.contains("Unresolved type reference util."),
-  )
+  assert_false(bundle.bridge_mbti.contains("Unresolved type reference util."))
 }
 
 ///|
@@ -779,8 +811,7 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer keyof
   // string enums end-to-end without alias indirection blocking the
   // chain.
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
-    "fixtures/resolver/project/types/consumer-instantiation-entry.d.ts",
-    "./runtime/consumer-instantiation.js",
+    "fixtures/resolver/project/types/consumer-instantiation-entry.d.ts", "./runtime/consumer-instantiation.js",
   ) catch {
     e => {
       match e {
@@ -801,9 +832,7 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer keyof
   assert_true(bundle.bridge_mbti.contains("Prefix_id"))
   assert_true(bundle.bridge_mbti.contains("Prefix_name"))
   assert_true(bundle.bridge_mbti.contains("Prefix_age"))
-  assert_false(
-    bundle.bridge_mbti.contains("declare pub type SchemaPrefixed"),
-  )
+  assert_false(bundle.bridge_mbti.contains("declare pub type SchemaPrefixed"))
   // `{ [K in keyof Schema]: boolean }` partial-evaluates to a concrete
   // object literal, which the bridge then surfaces as a synthetic
   // interface emitted as `pub(all) struct SchemaFlags`.
@@ -817,8 +846,7 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer keyof
 ///|
 async test "bridge: emit MoonBit TS bridge package bundle expands consumer Pick / Omit / Partial / Readonly aliases" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
-    "fixtures/resolver/project/types/utility-instantiation-entry.d.ts",
-    "./runtime/utility-instantiation.js",
+    "fixtures/resolver/project/types/utility-instantiation-entry.d.ts", "./runtime/utility-instantiation.js",
   ) catch {
     e => {
       match e {
@@ -835,7 +863,9 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer Pick 
   // `Omit<Schema, "age">` → struct without `age`.
   assert_true(bundle.bridge_mbti.contains("pub(all) struct WithoutAge"))
   assert_false(
-    bundle.bridge_mbti.contains("struct WithoutAge {\n  id : Double\n  name : String\n  age"),
+    bundle.bridge_mbti.contains(
+      "struct WithoutAge {\n  id : Double\n  name : String\n  age",
+    ),
   )
   // `Partial<Schema>` → every field becomes optional.
   assert_true(bundle.bridge_mbti.contains("pub(all) struct SchemaPartial"))
@@ -854,9 +884,7 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer Pick 
   // alias chain to `Partial<Schema>` → `Schema`, then strips the
   // optional, recovering the original required fields.
   assert_true(bundle.bridge_mbti.contains("pub(all) struct SchemaRequired"))
-  assert_false(
-    bundle.bridge_mbti.contains("declare pub type SchemaRequired"),
-  )
+  assert_false(bundle.bridge_mbti.contains("declare pub type SchemaRequired"))
   // Re-projecting an already-projected alias.
   assert_true(bundle.bridge_mbti.contains("pub(all) struct IdRePick"))
   assert_false(bundle.bridge_mbti.contains("declare pub type IdRePick"))
@@ -875,8 +903,7 @@ async test "bridge: emit MoonBit TS bridge package bundle expands cross-file Omi
   //   type CallFunctionOptions = Omit<bidi.CallFunctionParameters, ...>;
   // Bridge must walk the namespace alias before the `Omit` projection.
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
-    "fixtures/resolver/project/types/cross-file-utility-entry.d.ts",
-    "./runtime/cross-file-utility.js",
+    "fixtures/resolver/project/types/cross-file-utility-entry.d.ts", "./runtime/cross-file-utility.js",
   ) catch {
     e => {
       match e {
@@ -892,9 +919,7 @@ async test "bridge: emit MoonBit TS bridge package bundle expands cross-file Omi
   assert_true(bundle.bridge_mbti.contains("arguments : Array[String]"))
   assert_true(bundle.bridge_mbti.contains("thisArgument : String"))
   // Excluded keys must be gone from the projected struct.
-  assert_false(
-    bundle.bridge_mbti.contains("functionDeclaration : String"),
-  )
+  assert_false(bundle.bridge_mbti.contains("functionDeclaration : String"))
   assert_false(bundle.bridge_mbti.contains("awaitPromise : Bool"))
   assert_false(
     bundle.bridge_mbti.contains("declare pub type CallFunctionOptions"),

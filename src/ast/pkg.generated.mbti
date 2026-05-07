@@ -72,6 +72,7 @@ pub impl Show for TsBlock
 
 pub(all) struct TsClassDecl {
   name : String
+  type_params : Array[String]
   base_names : Array[String]
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]
@@ -359,8 +360,11 @@ pub(all) enum TsType {
   Conditional(TsType, TsType, TsType, TsType)
   Named(String)
   Applied(String, Array[TsType])
+  TypeOf(String)
   IndexedAccess(TsType, TsType)
   TemplateLiteralType(Array[String], Array[TsType])
+  Keyof(TsType)
+  MappedType(String, TsType, TsType, Bool)
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
 

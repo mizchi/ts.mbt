@@ -266,6 +266,9 @@ Implemented in the current real-world TypeScript probe order:
   - [x] `Extract` over directly comparable union members.
   - [x] `NonNullable` over optional-like unions.
   - [x] simple `ReturnType` / `Parameters` for direct function types.
+  - [x] simple alias-position passthrough for resolved concrete utility aliases.
+  - [x] local `typeof Class` capture for `InstanceType` /
+    `ConstructorParameters` bridge lowering.
 - [x] Support the common mapped-type subset needed by real declaration files.
   - [x] Lower `Partial<T>`, `Required<T>`, and `Readonly<T>` over resolvable
     interfaces into named MoonBit option-bag structs.

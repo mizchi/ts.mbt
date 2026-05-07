@@ -7,7 +7,7 @@
 - drizzle-orm のスキーマを Node 24 の `node:sqlite` に流して INSERT + SELECT が走るところまで動く
 - TS の `infer` + 条件型 + mapped 型の深い推論は再現できない。これは設計上の限界
 - 実用ターゲットは vite-plugin-moonbit。npm の型を MoonBit から消費するため
-- 現在 `mizchi/ts@0.2.17` (mooncakes)
+- 現在 `mizchi/ts@0.2.17` (mooncakes)。main では次の bridge 改善も入れている
 
 ## なぜ書いてるか
 
@@ -96,9 +96,11 @@ fn main {
 
 正直に書く。
 
-### 1. TS の `typeof users.$inferSelect` は再現できない
+### 1. TS の `typeof users.$inferSelect` の深い推論は再現できない
 
-drizzle の type-level inference (`infer` + 条件型 + mapped 型 + indexed access の連鎖) は TS 型システム固有の計算で、MoonBit の型システムでは対応する機構がない。
+`typeof Foo` そのものは type query として AST に残すようにした。なので `InstanceType<typeof Foo>` / `ConstructorParameters<typeof Foo>` みたいな「クラス値から instance / constructor args を取る」浅い utility は bridge 側で下げられる。
+
+ただし drizzle の `typeof users.$inferSelect` は別物。`infer` + 条件型 + mapped 型 + indexed access の連鎖で、TS 型システム固有の計算結果を取り出している。MoonBit の型システムでは対応する機構がない。
 
 なので MoonBit 側で `users` は `Table[JSValue]` として持つしかなくて、column の型は失われる。runtime API は完全に動くから SQL の生成と実行は問題なくできる。けど「`row.id` が `Int` で `row.name` が `String`」みたいな結果型の inference は無理。
 
@@ -126,7 +128,9 @@ interface BuildRelationalQueryResult {
 
 - `src/parser` — TS / JS パーサー + module resolver。npm `exports`、`typesVersions`、`node:*`、`@types/*` ぜんぶ
 - `src/checker` — declaration-level の型システム。`is_assignable_to` / `extends_decision` / `infer` pattern matching / distributive conditional / `Pick` / `Omit` / `Record` / `Exclude` / `Extract` / `NonNullable` / `Awaited` / `ReturnType` / `Parameters`
-- `src/bridge` — bridge code generation。class + namespace declaration merging、heterogeneous union → enum lowering、cross-file generic arity propagation、self-referential indexed access の cycle break など
+- `src/bridge` — bridge code generation。class + namespace declaration merging、heterogeneous union → enum lowering、cross-file generic arity propagation、self-referential indexed access の cycle break、単純 typealias passthrough、`typeof Class` 由来の `InstanceType` / `ConstructorParameters` など
+
+0.2.17 時点の確認は native tests 1112 / 1112、examples 11 / 11、24-package real-world corpus byte-identical。main ではその上に、`pub type Foo = Double` のような単純 alias と alias-position の `NonNullable` / `Awaited` / `ReturnType` / `Parameters`、それから `typeof Class` の constructor utility を追加している。
 
 CLI 触り方:
 
@@ -151,6 +155,7 @@ real-world corpus (現在 24 package) を `just verify-realworld-typescript` で
 
 - zod / valibot の `output<T>` とか mapped 型の partial evaluation。今は generic 引数を `JSValue` で widening している
 - template literal types (`` `bg${Capitalize<T>}` ``) の expansion。alias 位置は対応してるけど param / field 位置は `String` に倒している
+- `typeof ns.Foo` や `typeof import("./mod").Foo` のような qualified/import type query の bridge 解決。AST には残すが、constructor utility の解決対象はまずローカル class / import binding の浅いケースに絞っている
 - JSX / component layer。React / Preact の bridge は generic 構造としては動くが component 化はしてない
 
 drizzle 例は `just verify-examples` の rail に乗せたので回帰しなくなった。これを足場にして、もう少し real-world でガサつくところを潰したい。自分の用途的には vite-plugin-moonbit + Hono / drizzle / zod が普通に書けるラインに乗せきるのが当面のゴールだと思っている。

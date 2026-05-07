@@ -450,6 +450,10 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       state.needs_promise = true
       "Promise[" + moonbit_type_name(state, inner) + "]"
     }
+    TypeOf(_) => {
+      state.needs_jsvalue = true
+      "JSValue"
+    }
     Named(name) if is_local_type_param(state, name) =>
       moonbit_sanitize_type_param_name(name)
     Applied(name, _) if is_local_type_param(state, name) =>
@@ -525,6 +529,78 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
       state.needs_jsvalue = true
       "JSValue"
     }
+  }
+}
+
+///|
+fn moonbit_type_alias_target_is_simple(type_ : @ast.TsType) -> Bool {
+  match @checker.classify_optional_like_union(type_) {
+    Some((collapsed, _)) =>
+      return moonbit_type_alias_target_is_simple(collapsed)
+    None => ()
+  }
+  match @checker.classify_transparent_intersection(type_) {
+    Some(inner) => return moonbit_type_alias_target_is_simple(inner)
+    None => ()
+  }
+  match type_ {
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
+    Number | Int | BigInt | Boolean | String_ | Void => true
+    Named(_) => true
+    Array(inner) => moonbit_type_alias_target_is_simple(inner)
+    Tuple(items) => {
+      if items.length() == 0 {
+        return true
+      }
+      for item in items {
+        if item != items[0] || !moonbit_type_alias_target_is_simple(item) {
+          return false
+        }
+      }
+      true
+    }
+    Func(params, return_type) => {
+      for param in params {
+        if !moonbit_type_alias_target_is_simple(param) {
+          return false
+        }
+      }
+      moonbit_type_alias_target_is_simple(return_type)
+    }
+    Applied("Array", [inner]) | Applied("ReadonlyArray", [inner]) =>
+      moonbit_type_alias_target_is_simple(inner)
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
+      moonbit_type_alias_target_is_simple(inner)
+    Applied(name, args) => {
+      if name == "any" || name == "Function" {
+        return false
+      }
+      for arg in args {
+        if !moonbit_type_alias_target_is_simple(arg) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+fn type_alias_decl_to_moonbit(
+  state : MoonBitDeclState,
+  type_alias : @ast.TsTypeAlias,
+) -> String? {
+  if type_alias.type_params.length() > 0 ||
+    !moonbit_type_alias_target_is_simple(type_alias.type_) {
+    return None
+  }
+  let type_name = moonbit_type_identifier(type_alias.name, "AliasType")
+  let target_type = moonbit_type_name(state, type_alias.type_)
+  if target_type.contains("JSValue") {
+    None
+  } else {
+    Some("///|\npub type \{type_name} = \{target_type}")
   }
 }
 
@@ -1277,6 +1353,13 @@ pub fn emit_moonbit_decl_with_sections_types_and_arities(
   for enum_ in module_.enums {
     declared_type_names.push(enum_.name)
   }
+  let emitted_type_aliases : Array[@ast.TsTypeAlias] = []
+  for type_alias in module_.type_aliases {
+    if type_alias.type_params.length() == 0 &&
+      moonbit_type_alias_target_is_simple(type_alias.type_) {
+      emitted_type_aliases.push(type_alias)
+    }
+  }
   for name in extra_declared_type_names {
     if !declared_type_names.contains(name) {
       declared_type_names.push(name)
@@ -1329,6 +1412,19 @@ pub fn emit_moonbit_decl_with_sections_types_and_arities(
         seen_type_decl_names.push(type_name)
       }
       class_sections.push(section)
+    }
+  }
+  let type_alias_sections : Array[String] = []
+  for type_alias in emitted_type_aliases {
+    let type_name = moonbit_type_identifier(type_alias.name, "AliasType")
+    if !seen_type_decl_names.contains(type_name) {
+      match type_alias_decl_to_moonbit(state, type_alias) {
+        Some(section) => {
+          seen_type_decl_names.push(type_name)
+          type_alias_sections.push(section)
+        }
+        None => ()
+      }
     }
   }
   let import_sections : Array[String] = []
@@ -1392,6 +1488,9 @@ pub fn emit_moonbit_decl_with_sections_types_and_arities(
     sections.push(section)
   }
   for section in class_sections {
+    sections.push(section)
+  }
+  for section in type_alias_sections {
     sections.push(section)
   }
   for name in referenced {

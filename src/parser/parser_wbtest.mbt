@@ -560,10 +560,7 @@ test "parser: parse keyof preserves operand as Keyof(...)" {
 test "parser: keyof of inline object literal" {
   let parser = Parser::from_source("keyof { a: string; b: number }")
   let t = parser.parse_type()
-  assert_eq(
-    t,
-    Keyof(Object([(Literal("a"), String_), (Literal("b"), Number)])),
-  )
+  assert_eq(t, Keyof(Object([(Literal("a"), String_), (Literal("b"), Number)])))
 }
 
 ///|
@@ -2275,6 +2272,25 @@ test "parser: parse typeof import qualified type annotation" {
     Let(@ast.TsBinding::Ident("registerPreActionHooks"), _, _) => ()
     _ => fail("expected let declaration with typeof import qualified type")
   }
+}
+
+///|
+test "parser: preserve type-position typeof queries in type aliases" {
+  let src =
+    #|type Middleware = typeof middleware;
+    #|type Imported = typeof import("./dispatch.js").dispatch;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.type_aliases.length(), 2)
+  assert_eq(module_.type_aliases[0].type_, @ast.TsType::TypeOf("middleware"))
+  assert_eq(
+    module_.type_aliases[1].type_,
+    @ast.TsType::TypeOf("import(\"./dispatch.js\").dispatch"),
+  )
 }
 
 ///|
@@ -6136,9 +6152,9 @@ test "parser: emit MoonBit declarations uppercases lowercase type names" {
     e => fail("expected lowercase type alias surface to parse: \{e}")
   }
   let actual = emit_moonbit_decl(module_)
-  assert_true(actual.contains("declare pub type P"))
+  assert_true(actual.contains("pub type P = String"))
   assert_true(actual.contains("pattern : P"))
-  assert_false(actual.contains("declare pub type p"))
+  assert_false(actual.contains("pub type p ="))
   assert_false(actual.contains("pattern : p"))
 }
 
@@ -6272,10 +6288,7 @@ test "parser: literal-union and template-literal aliases land in type_aliases" {
   }
   assert_eq(m.type_aliases.length(), 2)
   assert_eq(m.type_aliases[0].name, "Channel")
-  assert_eq(
-    m.type_aliases[0].type_,
-    Union([Literal("info"), Literal("warn")]),
-  )
+  assert_eq(m.type_aliases[0].type_, Union([Literal("info"), Literal("warn")]))
   assert_eq(m.type_aliases[1].name, "Banner")
   assert_eq(
     m.type_aliases[1].type_,

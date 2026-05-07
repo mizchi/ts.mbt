@@ -119,6 +119,7 @@ fn mapped_object_key_names(type_ : @ast.TsType) -> Array[String]? {
   }
 }
 
+///|
 fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
   self : Parser,
 ) -> @ast.TsType? {
@@ -587,8 +588,14 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // typeof T
     Typeof => {
       let _ = self.advance()
-      self.skip_typeof_operand()
-      Any
+      let saved_pos = self.pos
+      self.parse_typeof_type_query() catch {
+        _ => {
+          self.pos = saved_pos
+          self.skip_typeof_operand()
+          Any
+        }
+      }
     }
     // import("...").Type
     Import => {
@@ -1374,6 +1381,43 @@ fn Parser::skip_type_until_arrow(self : Parser) -> Unit {
       }
     }
   }
+}
+
+///|
+fn Parser::parse_typeof_type_query(
+  self : Parser,
+) -> @ast.TsType raise ParseError {
+  if self.check(Import) {
+    let _ = self.advance()
+    let _ = self.expect(LParen)
+    let module_spec = match self.advance().kind {
+      Str(s) => s
+      other => raise ParseError("Expected typeof import string, got \{other}")
+    }
+    let _ = self.expect(RParen)
+    let mut query = "import(\"" + module_spec + "\")"
+    while self.match_(Dot) {
+      query += "." + self.parse_typeof_query_segment()
+    }
+    if self.check(Lt) {
+      self.skip_type_args()
+    }
+    return @ast.TsType::TypeOf(query)
+  }
+  let first = self.parse_typeof_query_segment()
+  let mut query = first
+  while self.match_(Dot) {
+    query += "." + self.parse_typeof_query_segment()
+  }
+  if self.check(Lt) {
+    self.skip_type_args()
+  }
+  @ast.TsType::TypeOf(query)
+}
+
+///|
+fn Parser::parse_typeof_query_segment(self : Parser) -> String raise ParseError {
+  self.parse_binding_ident()
 }
 
 ///|

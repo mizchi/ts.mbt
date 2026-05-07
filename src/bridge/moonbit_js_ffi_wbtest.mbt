@@ -1281,7 +1281,13 @@ async test "bridge: emit React Router params helpers for generatePath" {
       return
     }
   }
-  assert_true(bundle.ffi_mbt.contains("#external\npub type Params"))
+  assert_true(
+    bundle.ffi_mbt.contains("pub type Params = StringRecordOfStringOptional"),
+  )
+  assert_true(
+    bundle.ffi_mbt.contains("#external\npub type StringRecordOfStringOptional"),
+  )
+  assert_false(bundle.ffi_mbt.contains("#external\npub type Params"))
   assert_true(
     bundle.ffi_mbt.contains(
       "pub extern \"js\" fn params_from_pairs(keys : Array[String], values : Array[String]) -> Params = \"__ts_mbt_params_from_pairs\"",

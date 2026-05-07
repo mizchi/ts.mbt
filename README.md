@@ -381,8 +381,11 @@ Supported surface:
   object option bags, and representable readonly fields.
 - Common utility types including concrete `Pick` / `Omit` projections,
   `NonNullable`, direct-union `Exclude` / `Extract`, direct function
-  `ReturnType` / `Parameters`, and `Record<K, V>` as named opaque JS object
-  boundary types such as `StringRecordOfFoo`.
+  `ReturnType` / `Parameters`, alias-position passthrough for simple resolved
+  utility aliases, `InstanceType<typeof Class>` /
+  `ConstructorParameters<typeof Class>` for local class values, and
+  `Record<K, V>` as named opaque JS object boundary types such as
+  `StringRecordOfFoo`.
 - Non-empty homogeneous rest tuples such as `[T, ...T[]]` are lowered to
   `Array[T]` for class properties, constructors, functions, and imports.
 - Common real-world package shapes covered by the probe corpus, including

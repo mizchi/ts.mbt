@@ -2063,6 +2063,94 @@ async test "bridge: emit MoonBit declarations lowers Pick and Omit utility types
 }
 
 ///|
+async test "bridge: emit simple typealias passthrough and typeof constructor utilities" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/utility-alias-passthrough-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("pub type DirectDouble = Double"))
+  assert_true(actual.contains("pub type NonNullName = String"))
+  assert_true(actual.contains("pub type AwaitedName = String"))
+  assert_true(actual.contains("pub type ReturnNumber = Double"))
+  assert_true(actual.contains("pub type WidgetArgs = Array[String]"))
+  assert_true(actual.contains("pub type WidgetInstance = Widget"))
+  assert_true(actual.contains("pub type WidgetConstructorArgs = Array[String]"))
+  assert_true(
+    actual.contains(
+      "declare pub fn makeWidget(name : NonNullName) -> WidgetInstance",
+    ),
+  )
+}
+
+///|
+async test "bridge: preserve unresolved typeof constructor utilities as opaque utility types" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/typeof-unresolved-utility-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type InstanceType"))
+  assert_true(
+    actual.contains(
+      "declare pub fn instanceOf(cls : JSValue) -> ZodCustom[InstanceType, InstanceType]",
+    ),
+  )
+  assert_false(actual.contains("ZodCustom[JSValue, JSValue]"))
+}
+
+///|
+async test "bridge: skip typealias passthrough when target would expose JSValue" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/alias-jsvalue-target-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(actual.contains("declare pub type BoxedT"))
+  assert_true(actual.contains("declare pub fn getBoxed() -> BoxedT"))
+  assert_false(actual.contains("pub type BoxedT = Box[JSValue]"))
+}
+
+///|
+async test "bridge: resolve typeof value aliases to callable value types" {
+  let actual = emit_moonbit_decl_from_entry_path(
+    "fixtures/resolver/project/types/typeof-value-alias-entry.d.ts",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    actual.contains(
+      "declare pub fn get_decode() -> (String, String?, String?, ParseOptions?) -> ParsedUrlQuery",
+    ),
+  )
+  assert_false(actual.contains("declare pub fn get_decode() -> JSValue"))
+}
+
+///|
 async test "bridge: emit MoonBit declarations from export-as-namespace ComponentPropsWithoutRef members" {
   let actual = emit_moonbit_decl_from_entry_path(
     "fixtures/resolver/project/types/export-as-namespace-component-props-without-ref-entry.d.ts",
