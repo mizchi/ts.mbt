@@ -1836,7 +1836,12 @@ fn resolve_decl_from_local_name(
                                   // literal keys. Surface it as a synthetic
                                   // interface so emit produces a `pub(all)
                                   // struct` rather than dropping the alias as
-                                  // `Missing` / `declare pub type X`.
+                                  // `Missing` / `declare pub type X`. Also try
+                                  // the original (pre-lowering) body for
+                                  // utility instantiations like `Pick<Foo, K>`
+                                  // since those reduce to a `Named(...)` whose
+                                  // synthetic interface isn't reachable from
+                                  // the lowered alias body alone.
                                   match
                                     type_alias_object_to_interface(
                                       lowered_alias,
@@ -1848,7 +1853,23 @@ fn resolve_decl_from_local_name(
                                         export_name,
                                         iface,
                                       })
-                                    None => Missing
+                                    None =>
+                                      match
+                                        type_alias_utility_to_interface(
+                                          info,
+                                          type_alias,
+                                          modules,
+                                          canonical_types_for_lower,
+                                        ) {
+                                        Some(iface) =>
+                                          Interface({
+                                            source_path,
+                                            local_name,
+                                            export_name,
+                                            iface,
+                                          })
+                                        None => Missing
+                                      }
                                   }
                               }
                           }
@@ -3325,6 +3346,87 @@ fn utility_awaited_type(type_ : @ast.TsType) -> @ast.TsType {
     Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
       utility_awaited_type(inner)
     _ => type_
+  }
+}
+
+///|
+/// Synthesize a `TsInterface` from a type alias whose body is a direct
+/// utility-type instantiation (`Pick<Foo, K>` / `Omit<Foo, K>` /
+/// `Partial<Foo>` / `Required<Foo>` / `Readonly<Foo>`). Reuses the
+/// existing utility-projection / mapped-interface specs but renames the
+/// result to the alias name so consumers see `pub(all) struct IdOnly`
+/// instead of an opaque `declare pub type IdOnly`.
+fn type_alias_utility_to_interface(
+  info : DeclModuleInfo,
+  type_alias : @ast.TsTypeAlias,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+) -> @ast.TsInterface? {
+  if type_alias.type_params.length() > 0 {
+    return None
+  }
+  let spec : @ast.TsInterface? = match type_alias.type_ {
+    Applied(name, args) =>
+      if (name == "Pick" || name == "Omit") && args.length() == 2 {
+        let (resolved_info, resolved_source) = redirect_qualified_named(
+          info, modules, args[0],
+        )
+        utility_projection_interface_spec(
+          resolved_info,
+          name,
+          resolved_source,
+          args[1],
+          modules,
+          canonical_types,
+        )
+      } else if @checker.is_mapped_interface_utility_name(name) &&
+        args.length() == 1 {
+        let (resolved_info, resolved_source) = redirect_qualified_named(
+          info, modules, args[0],
+        )
+        utility_mapped_interface_spec(
+          resolved_info,
+          name,
+          resolved_source,
+          modules,
+          canonical_types,
+        )
+      } else {
+        None
+      }
+    _ => None
+  }
+  match spec {
+    Some(iface) => Some({ ..iface, name: type_alias.name })
+    None => None
+  }
+}
+
+///|
+/// Rewrite a qualified `Named("util.Foo")` source to `Named("Foo")` and
+/// return the `DeclModuleInfo` of the namespace target so utility-spec
+/// resolvers (which only look at `info.module_`) can find the actual
+/// interface. Falls back to the unchanged input when the operand isn't
+/// qualified or the namespace can't be matched.
+fn redirect_qualified_named(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  source : @ast.TsType,
+) -> (DeclModuleInfo, @ast.TsType) {
+  match source {
+    Named(name) =>
+      match name.find(".") {
+        Some(pos) => {
+          let head = name[0:pos].to_string()
+          let tail = name[pos + 1:].to_string()
+          match resolve_namespace_alias_module(info, modules, head) {
+            Some(target_info) => (target_info, Named(tail))
+            None => (info, source)
+          }
+        }
+        None => (info, source)
+      }
+    _ => (info, source)
   }
 }
 

@@ -815,6 +815,77 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer keyof
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle expands consumer Pick / Omit / Partial / Readonly aliases" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/utility-instantiation-entry.d.ts",
+    "./runtime/utility-instantiation.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // `Pick<Schema, "id">` → struct with just `id`.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct IdOnly"))
+  // `Pick<Schema, "id" | "name">` → struct with both.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct IdAndName"))
+  // `Omit<Schema, "age">` → struct without `age`.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct WithoutAge"))
+  assert_false(
+    bundle.bridge_mbti.contains("struct WithoutAge {\n  id : Double\n  name : String\n  age"),
+  )
+  // `Partial<Schema>` → every field becomes optional.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct SchemaPartial"))
+  assert_true(bundle.bridge_mbti.contains("id : Double?"))
+  assert_true(bundle.bridge_mbti.contains("name : String?"))
+  // `Readonly<Schema>` → struct (the readonly marker is dropped at the
+  // MoonBit-side surface).
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct SchemaReadonly"))
+  // None of the aliases should leak as `declare pub type X`.
+  assert_false(bundle.bridge_mbti.contains("declare pub type IdOnly"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type IdAndName"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type WithoutAge"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type SchemaPartial"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type SchemaReadonly"))
+}
+
+///|
+async test "bridge: emit MoonBit TS bridge package bundle expands cross-file Omit utility" {
+  // Mirrors the puppeteer pattern:
+  //   import * as bidi from "./...";
+  //   type CallFunctionOptions = Omit<bidi.CallFunctionParameters, ...>;
+  // Bridge must walk the namespace alias before the `Omit` projection.
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/cross-file-utility-entry.d.ts",
+    "./runtime/cross-file-utility.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(
+    bundle.bridge_mbti.contains("pub(all) struct CallFunctionOptions"),
+  )
+  assert_true(bundle.bridge_mbti.contains("arguments : Array[String]"))
+  assert_true(bundle.bridge_mbti.contains("thisArgument : String"))
+  // Excluded keys must be gone from the projected struct.
+  assert_false(
+    bundle.bridge_mbti.contains("functionDeclaration : String"),
+  )
+  assert_false(bundle.bridge_mbti.contains("awaitPromise : Bool"))
+  assert_false(
+    bundle.bridge_mbti.contains("declare pub type CallFunctionOptions"),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle lowers boolean literal aliases to bool" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/boolean-literal-union-entry.d.ts", "./runtime/boolean-literal-union.js",
