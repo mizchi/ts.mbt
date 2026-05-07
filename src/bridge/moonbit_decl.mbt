@@ -3371,26 +3371,53 @@ fn type_alias_utility_to_interface(
         let (resolved_info, resolved_source) = redirect_qualified_named(
           info, modules, args[0],
         )
-        utility_projection_interface_spec(
-          resolved_info,
-          name,
-          resolved_source,
-          args[1],
-          modules,
-          canonical_types,
-        )
+        match
+          utility_projection_interface_spec(
+            resolved_info,
+            name,
+            resolved_source,
+            args[1],
+            modules,
+            canonical_types,
+          ) {
+          Some(iface) => Some(iface)
+          None =>
+            // Source might itself be a utility-instantiation alias
+            // (e.g. `Pick<SchemaPartial, ...>` where `SchemaPartial =
+            // Partial<Schema>`); resolve the chain to a synthetic
+            // interface and re-run the projection over its fields.
+            match
+              resolve_alias_chain_to_interface(
+                resolved_info, modules, canonical_types, resolved_source, [],
+              ) {
+              Some((_, synth)) =>
+                project_interface_fields(name, synth, args[1])
+              None => None
+            }
+        }
       } else if @checker.is_mapped_interface_utility_name(name) &&
         args.length() == 1 {
         let (resolved_info, resolved_source) = redirect_qualified_named(
           info, modules, args[0],
         )
-        utility_mapped_interface_spec(
-          resolved_info,
-          name,
-          resolved_source,
-          modules,
-          canonical_types,
-        )
+        match
+          utility_mapped_interface_spec(
+            resolved_info,
+            name,
+            resolved_source,
+            modules,
+            canonical_types,
+          ) {
+          Some(iface) => Some(iface)
+          None =>
+            match
+              resolve_alias_chain_to_interface(
+                resolved_info, modules, canonical_types, resolved_source, [],
+              ) {
+              Some((_, synth)) => map_interface_fields(name, synth)
+              None => None
+            }
+        }
       } else {
         None
       }
@@ -3400,6 +3427,122 @@ fn type_alias_utility_to_interface(
     Some(iface) => Some({ ..iface, name: type_alias.name })
     None => None
   }
+}
+
+///|
+/// Walk a chain of `Named(alias)` references whose bodies are themselves
+/// utility instantiations (`type SchemaPartial = Partial<Schema>` →
+/// `type FullSchema = Required<SchemaPartial>`) until a synthetic
+/// interface can be produced. Tracks visited names to avoid cycles.
+fn resolve_alias_chain_to_interface(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  source : @ast.TsType,
+  visited : Array[String],
+) -> (DeclModuleInfo, @ast.TsInterface)? {
+  let (info1, source1) = redirect_qualified_named(info, modules, source)
+  match source1 {
+    Named(name) => {
+      if visited.contains(name) {
+        return None
+      }
+      // Reached a real interface — base of the chain.
+      match find_interface_decl_recursive(info1.module_, name) {
+        Some(iface) => return Some((info1, iface))
+        None => ()
+      }
+      // Otherwise the chain continues through a type alias whose body is
+      // itself a utility instantiation. Re-enter
+      // `type_alias_utility_to_interface` on a synthetic alias view.
+      match find_type_alias_decl(info1.module_, name) {
+        Some(ta) => {
+          let next_visited : Array[String] = []
+          for v in visited {
+            next_visited.push(v)
+          }
+          next_visited.push(name)
+          match ta.type_ {
+            Applied(_, _) =>
+              match
+                type_alias_utility_to_interface(
+                  info1, ta, modules, canonical_types,
+                ) {
+                Some(iface) => Some((info1, iface))
+                None => None
+              }
+            _ => None
+          }
+        }
+        None => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Apply `Pick<_, keys>` / `Omit<_, keys>` to an already-synthesized
+/// interface's fields, returning a fresh interface with the projected
+/// fields. Uses the same name as the input interface so callers (which
+/// rename to the surrounding alias) keep working.
+fn project_interface_fields(
+  op_name : String,
+  iface : @ast.TsInterface,
+  keys_type : @ast.TsType,
+) -> @ast.TsInterface? {
+  let keys = match utility_literal_key_names(keys_type) {
+    Some(ks) => ks
+    None => return None
+  }
+  let fields : Array[(String, @ast.TsType)] = []
+  for f in iface.fields {
+    let (field_name, field_type) = f
+    let include = match op_name {
+      "Pick" => keys.contains(field_name)
+      "Omit" => !keys.contains(field_name)
+      _ => false
+    }
+    if include {
+      fields.push((field_name, field_type))
+    }
+  }
+  Some({
+    name: iface.name,
+    type_params: [],
+    extends_names: [],
+    fields,
+    readonly_fields: readonly_fields_for_fields(iface.readonly_fields, fields),
+    index_signatures: [],
+  })
+}
+
+///|
+/// Apply `Partial` / `Required` / `Readonly` to the fields of an
+/// already-synthesized interface, mirroring
+/// `utility_mapped_interface_spec` but consuming a ready interface
+/// instead of resolving a `Named(...)` source.
+fn map_interface_fields(
+  op_name : String,
+  iface : @ast.TsInterface,
+) -> @ast.TsInterface? {
+  let fields : Array[(String, @ast.TsType)] = []
+  for f in iface.fields {
+    let (field_name, field_type) = f
+    fields.push((field_name, utility_mapped_field_type(op_name, field_type)))
+  }
+  Some({
+    name: iface.name,
+    type_params: [],
+    extends_names: [],
+    fields,
+    readonly_fields: if op_name == "Readonly" {
+      all_field_names(fields)
+    } else {
+      readonly_fields_for_fields(iface.readonly_fields, fields)
+    },
+    index_signatures: iface.index_signatures,
+  })
 }
 
 ///|

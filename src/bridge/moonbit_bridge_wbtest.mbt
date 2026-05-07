@@ -850,6 +850,16 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer Pick 
   assert_false(bundle.bridge_mbti.contains("declare pub type WithoutAge"))
   assert_false(bundle.bridge_mbti.contains("declare pub type SchemaPartial"))
   assert_false(bundle.bridge_mbti.contains("declare pub type SchemaReadonly"))
+  // Chained utility instantiation: `Required<SchemaPartial>` walks the
+  // alias chain to `Partial<Schema>` → `Schema`, then strips the
+  // optional, recovering the original required fields.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct SchemaRequired"))
+  assert_false(
+    bundle.bridge_mbti.contains("declare pub type SchemaRequired"),
+  )
+  // Re-projecting an already-projected alias.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct IdRePick"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type IdRePick"))
 }
 
 ///|
