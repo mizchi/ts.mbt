@@ -3367,7 +3367,11 @@ fn type_alias_utility_to_interface(
   }
   let spec : @ast.TsInterface? = match type_alias.type_ {
     Applied(name, args) =>
-      if (name == "Pick" || name == "Omit") && args.length() == 2 {
+      if name == "Record" && args.length() == 2 {
+        type_alias_record_to_interface_fields(
+          info, modules, canonical_types, args[0], args[1],
+        )
+      } else if (name == "Pick" || name == "Omit") && args.length() == 2 {
         let (resolved_info, resolved_source) = redirect_qualified_named(
           info, modules, args[0],
         )
@@ -3427,6 +3431,50 @@ fn type_alias_utility_to_interface(
     Some(iface) => Some({ ..iface, name: type_alias.name })
     None => None
   }
+}
+
+///|
+/// Lower a `Record<K, V>` whose keys are a finite literal union into an
+/// interface body. Each literal key becomes a field; alias-indirected
+/// literal-union sources resolve through the chain helpers so
+/// `Record<MyKeys, number>` works whenever `MyKeys` reduces to literal
+/// names. Returns `None` for non-finite key sources (`string`, opaque
+/// `Named`, etc.) so callers fall back to the default `Record` lowering.
+fn type_alias_record_to_interface_fields(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  canonical_types : Map[String, String],
+  key_type : @ast.TsType,
+  value_type : @ast.TsType,
+) -> @ast.TsInterface? {
+  // Walk through alias indirections so `Record<MyKeys, number>` resolves.
+  let lowered_key = lower_react_utility_type(
+    info, key_type, modules, canonical_types,
+  )
+  let inlined_key = inline_named_aliases(info, modules, lowered_key, [])
+  let resolved_key = @checker.simplify_type(inlined_key)
+  let keys = match utility_literal_key_names(resolved_key) {
+    Some(ks) => ks
+    None => return None
+  }
+  if keys.length() == 0 {
+    return None
+  }
+  let lowered_value = lower_react_utility_type(
+    info, value_type, modules, canonical_types,
+  )
+  let fields : Array[(String, @ast.TsType)] = []
+  for k in keys {
+    fields.push((k, lowered_value))
+  }
+  Some({
+    name: "RecordSynthetic",
+    type_params: [],
+    extends_names: [],
+    fields,
+    readonly_fields: [],
+    index_signatures: [],
+  })
 }
 
 ///|

@@ -860,6 +860,12 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer Pick 
   // Re-projecting an already-projected alias.
   assert_true(bundle.bridge_mbti.contains("pub(all) struct IdRePick"))
   assert_false(bundle.bridge_mbti.contains("declare pub type IdRePick"))
+  // `Record<"ok" | "error", number>` lands as a struct with literal-key
+  // fields.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct StatusMap"))
+  assert_true(bundle.bridge_mbti.contains("ok : Double"))
+  assert_true(bundle.bridge_mbti.contains("error : Double"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type StatusMap"))
 }
 
 ///|

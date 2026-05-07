@@ -25,6 +25,10 @@ export type SchemaRequired = Required<SchemaPartial>;
 // | "name">`; picking `"id"` again should leave a struct with just `id`.
 export type IdRePick = Pick<IdAndName, "id">;
 
+// `Record<K, V>` with a finite literal-union key set lands as a struct
+// whose field names are the literal keys.
+export type StatusMap = Record<"ok" | "error", number>;
+
 export declare function getId(): IdOnly;
 export declare function getIdName(): IdAndName;
 export declare function getWithoutAge(): WithoutAge;
@@ -32,3 +36,4 @@ export declare function getPartial(): SchemaPartial;
 export declare function getReadonly(): SchemaReadonly;
 export declare function getRequired(): SchemaRequired;
 export declare function getRePick(): IdRePick;
+export declare function getStatusMap(): StatusMap;

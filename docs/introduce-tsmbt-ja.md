@@ -7,7 +7,7 @@
 - drizzle-orm のスキーマを Node 24 の `node:sqlite` に流して INSERT + SELECT が走るところまで動く
 - TS の `infer` + 条件型 + mapped 型の深い推論は再現できない。これは設計上の限界
 - 実用ターゲットは vite-plugin-moonbit。npm の型を MoonBit から消費するため
-- 現在 `mizchi/ts@0.2.16` (mooncakes)
+- 現在 `mizchi/ts@0.2.17` (mooncakes)
 
 ## なぜ書いてるか
 
@@ -122,7 +122,7 @@ interface BuildRelationalQueryResult {
 
 ## どこまで動くか
 
-実装してる sub-package (現在 0.2.16)。
+実装してる sub-package (現在 0.2.17)。
 
 - `src/parser` — TS / JS パーサー + module resolver。npm `exports`、`typesVersions`、`node:*`、`@types/*` ぜんぶ
 - `src/checker` — declaration-level の型システム。`is_assignable_to` / `extends_decision` / `infer` pattern matching / distributive conditional / `Pick` / `Omit` / `Record` / `Exclude` / `Extract` / `NonNullable` / `Awaited` / `ReturnType` / `Parameters`
@@ -170,7 +170,7 @@ mooncakes 経由なら:
 // moon.mod.json
 {
   "deps": {
-    "mizchi/ts": "0.2.16"
+    "mizchi/ts": "0.2.17"
   }
 }
 ```
