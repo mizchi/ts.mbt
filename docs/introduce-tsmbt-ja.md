@@ -7,7 +7,7 @@
 - drizzle-orm のスキーマを Node 24 の `node:sqlite` に流して INSERT + SELECT が走るところまで動く
 - TS の `infer` + 条件型 + mapped 型の深い推論は再現できない。これは設計上の限界
 - 実用ターゲットは vite-plugin-moonbit。npm の型を MoonBit から消費するため
-- 現在 `mizchi/ts@0.2.17` (mooncakes)。main では次の bridge 改善も入れている
+- 現在 `mizchi/ts@0.3.0` (mooncakes)。
 
 ## なぜ書いてるか
 
@@ -124,13 +124,13 @@ interface BuildRelationalQueryResult {
 
 ## どこまで動くか
 
-実装してる sub-package (現在 0.2.17)。
+実装してる sub-package (現在 0.3.0)。
 
 - `src/parser` — TS / JS パーサー + module resolver。npm `exports`、`typesVersions`、`node:*`、`@types/*` ぜんぶ
 - `src/checker` — declaration-level の型システム。`is_assignable_to` / `extends_decision` / `infer` pattern matching / distributive conditional / `Pick` / `Omit` / `Record` / `Exclude` / `Extract` / `NonNullable` / `Awaited` / `ReturnType` / `Parameters`
 - `src/bridge` — bridge code generation。class + namespace declaration merging、heterogeneous union → enum lowering、cross-file generic arity propagation、self-referential indexed access の cycle break、単純 typealias passthrough、`typeof Class` 由来の `InstanceType` / `ConstructorParameters` など
 
-0.2.17 時点の確認は native tests 1112 / 1112、examples 11 / 11、24-package real-world corpus byte-identical。main ではその上に、`pub type Foo = Double` のような単純 alias と alias-position の `NonNullable` / `Awaited` / `ReturnType` / `Parameters`、それから `typeof Class` の constructor utility を追加している。
+0.3.0 時点の確認は native tests 1119 / 1119、examples 11 / 11、24-package real-world corpus byte-identical。`pub type Foo = Double` のような単純 alias と alias-position の `NonNullable` / `Awaited` / `ReturnType` / `Parameters`、それから `typeof Class` の constructor utility まで入っている。
 
 CLI 触り方:
 
@@ -175,7 +175,7 @@ mooncakes 経由なら:
 // moon.mod.json
 {
   "deps": {
-    "mizchi/ts": "0.2.17"
+    "mizchi/ts": "0.3.0"
   }
 }
 ```

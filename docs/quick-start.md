@@ -22,7 +22,7 @@ Verify:
 
 ```bash
 ts2mbt --version
-# ts2mbt 0.2.10 (mizchi/ts)
+# ts2mbt 0.3.0 (mizchi/ts)
 ```
 
 `~/.moon/bin` must be on `$PATH`.
