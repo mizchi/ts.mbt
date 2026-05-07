@@ -6255,3 +6255,30 @@ test "parser: parse exported dts function declarations without declare keyword" 
   assert_eq(module_.funcs.length(), 2)
   assert_eq(module_.values.length(), 1)
 }
+
+///|
+test "parser: literal-union and template-literal aliases land in type_aliases" {
+  // Confirms the parser keeps the underlying alias node so bridge passes
+  // can re-evaluate the body, even when the alias itself looks like an
+  // enum candidate (`type Channel = "info" | "warn"`).
+  let src =
+    #|export type Channel = "info" | "warn";
+    #|export type Banner = `${Channel}-x`;
+  let m = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(m.type_aliases.length(), 2)
+  assert_eq(m.type_aliases[0].name, "Channel")
+  assert_eq(
+    m.type_aliases[0].type_,
+    Union([Literal("info"), Literal("warn")]),
+  )
+  assert_eq(m.type_aliases[1].name, "Banner")
+  assert_eq(
+    m.type_aliases[1].type_,
+    TemplateLiteralType(["", "-x"], [Named("Channel")]),
+  )
+}

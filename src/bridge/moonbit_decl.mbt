@@ -675,6 +675,145 @@ fn find_interface_decl(
 }
 
 ///|
+/// Replace any `Named(name)` reachable inside `t` with the resolved
+/// `Struct(...)` shape from the current module. Used to seed mapped /
+/// keyof simplification with field-aware sources (`{ [K in keyof Foo]:
+/// ... }` becomes `{ [K in keyof Struct(Foo, fields)]: ... }` so the
+/// simplifier can iterate keys).
+fn resolve_named_inside_type(
+  info : DeclModuleInfo,
+  t : @ast.TsType,
+) -> @ast.TsType {
+  match t {
+    Named(name) =>
+      match resolve_named_to_struct(info, name) {
+        Some(s) => s
+        None => t
+      }
+    Keyof(inner) => Keyof(resolve_named_inside_type(info, inner))
+    Array(inner) => Array(resolve_named_inside_type(info, inner))
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(resolve_named_inside_type(info, it))
+      }
+      Union(out)
+    }
+    Intersection(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(resolve_named_inside_type(info, it))
+      }
+      Intersection(out)
+    }
+    _ => t
+  }
+}
+
+///|
+/// Inline a `Named(name)` reference to the body of its in-module type
+/// alias (`type Foo = ...`). Recursively resolves the body so chained
+/// aliases (`type A = B`, `type B = "x" | "y"`) reach a concrete shape;
+/// stops when an alias has type parameters or recurses through itself,
+/// returning the most-resolved form found. Used by template-literal /
+/// keyof / mapped lowering so concrete-source patterns like
+/// `` `${Channel}-${Variant}` `` see literal unions instead of Named.
+fn resolve_named_to_alias_body(
+  info : DeclModuleInfo,
+  name : String,
+  visited : Array[String],
+) -> @ast.TsType? {
+  if visited.contains(name) {
+    return None
+  }
+  match find_type_alias_decl(info.module_, name) {
+    Some(ta) => {
+      if ta.type_params.length() > 0 {
+        return None
+      }
+      let next_visited : Array[String] = []
+      for v in visited {
+        next_visited.push(v)
+      }
+      next_visited.push(name)
+      let body = inline_named_aliases(info, ta.type_, next_visited)
+      Some(body)
+    }
+    None =>
+      // Parser already lifts string-literal-union aliases (`type Channel
+      // = "info" | "warn"`) into enums, so the alias may not appear in
+      // `type_aliases`. Reconstruct the union from the enum's string
+      // members so template-literal / mapped passes can still see a
+      // finite literal source.
+      match find_enum_decl(info.module_, name) {
+        Some(e) => {
+          let items : Array[@ast.TsType] = []
+          for m in e.members {
+            match m.value {
+              Some(@ast.TsEnumMemberValue::String(s)) => items.push(Literal(s))
+              _ => return None
+            }
+          }
+          if items.length() == 0 {
+            None
+          } else if items.length() == 1 {
+            Some(items[0])
+          } else {
+            Some(Union(items))
+          }
+        }
+        None => None
+      }
+  }
+}
+
+///|
+fn inline_named_aliases(
+  info : DeclModuleInfo,
+  t : @ast.TsType,
+  visited : Array[String],
+) -> @ast.TsType {
+  match t {
+    Named(name) =>
+      match resolve_named_to_alias_body(info, name, visited) {
+        Some(body) => body
+        None => t
+      }
+    Union(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(inline_named_aliases(info, it, visited))
+      }
+      Union(out)
+    }
+    Array(inner) => Array(inline_named_aliases(info, inner, visited))
+    Tuple(items) => {
+      let out : Array[@ast.TsType] = []
+      for it in items {
+        out.push(inline_named_aliases(info, it, visited))
+      }
+      Tuple(out)
+    }
+    Applied(name, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(inline_named_aliases(info, a, visited))
+      }
+      Applied(name, out)
+    }
+    Keyof(inner) => Keyof(inline_named_aliases(info, inner, visited))
+    TemplateLiteralType(parts, args) => {
+      let out : Array[@ast.TsType] = []
+      for a in args {
+        out.push(inline_named_aliases(info, a, visited))
+      }
+      TemplateLiteralType(parts, out)
+    }
+    _ => t
+  }
+}
+
+///|
 /// Look up `name` in the current module's interfaces / type aliases and
 /// surface a `Struct(name, fields)` whose field types are good enough for
 /// the simplifier to read keys off (`keyof Foo`, `{ [K in keyof Foo]: V }`,
@@ -3585,6 +3724,43 @@ fn lower_react_utility_type(
         other => other
       }
     }
+    MappedType(key_param, source, value, optional) => {
+      // Resolve `Named(...)` operands inside the source so `keyof Foo`
+      // sees `Struct(Foo, fields)` and `simplify_type` can iterate keys.
+      let lowered_source = lower_react_utility_type(
+        info, source, modules, canonical_types,
+      )
+      let resolved_source = resolve_named_inside_type(info, lowered_source)
+      match
+        @checker.simplify_type(
+          MappedType(key_param, resolved_source, value, optional),
+        ) {
+        Object(fields) => {
+          // Recurse into the materialized field types so each substituted
+          // `Literal` flows through the rest of the bridge pipeline (utility
+          // type lowering, JSX flattening, etc.).
+          let lowered : Array[(@ast.TsType, @ast.TsType)] = []
+          for f in fields {
+            lowered.push(
+              (
+                f.0,
+                lower_react_utility_type(
+                  info, f.1, modules, canonical_types,
+                ),
+              ),
+            )
+          }
+          Object(lowered)
+        }
+        // Source remained opaque (e.g. `{ [K in keyof T]: V }` for an
+        // unbound generic `T`); widen to `Any` so downstream consumers
+        // route through `JSValue` rather than carrying an unresolved
+        // `MappedType` into emit.
+        MappedType(_, _, _, _) => Any
+        other =>
+          lower_react_utility_type(info, other, modules, canonical_types)
+      }
+    }
     Applied(name, [inner_type]) if @checker.is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
     Applied(name, [source_type]) if @checker.is_mapped_interface_utility_name(
@@ -3818,16 +3994,17 @@ fn lower_react_utility_type(
       }
     }
     TemplateLiteralType(parts, type_args) => {
-      // Lower each interpolated arg first so Named alias references and
-      // intrinsic strings resolve before expansion runs. If every arg
-      // resolves to a finite literal union, materialize the cartesian
-      // product as a `Union(Literal(...))` so downstream enum lowering
-      // picks it up like any other string-literal alias.
+      // Lower each interpolated arg, then inline same-module alias bodies
+      // (`type Channel = "info" | "warn"` becomes the union itself), so
+      // the simplifier can read finite value sets out of the args. When
+      // everything resolves we get a literal-key `Union`; otherwise the
+      // template is preserved for downstream enum-likes / passthrough.
       let lowered_args : Array[@ast.TsType] = []
       for arg in type_args {
-        lowered_args.push(
-          lower_react_utility_type(info, arg, modules, canonical_types),
+        let lowered = lower_react_utility_type(
+          info, arg, modules, canonical_types,
         )
+        lowered_args.push(inline_named_aliases(info, lowered, []))
       }
       let resolved_template = @ast.TsType::TemplateLiteralType(
         parts, lowered_args,

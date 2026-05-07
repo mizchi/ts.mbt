@@ -657,6 +657,42 @@ async test "bridge: emit MoonBit TS bridge package bundle names anonymous numeri
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle partial-evaluates keyof / mapped / template literal" {
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/keyof-mapped-templit-entry.d.ts",
+    "./runtime/keyof-mapped-templit.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  // Template-literal cartesian over inline literal unions lands as a
+  // four-member string enum.
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum DirectBanner"))
+  assert_true(bundle.bridge_mbti.contains("Info_small"))
+  assert_true(bundle.bridge_mbti.contains("Info_large"))
+  assert_true(bundle.bridge_mbti.contains("Warn_small"))
+  assert_true(bundle.bridge_mbti.contains("Warn_large"))
+  // `Capitalize<"world">` reduces to a single literal at the alias
+  // surface.
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum Greeting"))
+  // Mapped type over a finite literal-union source materializes a struct
+  // with concrete keys.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct FooFlags"))
+  assert_true(bundle.bridge_mbti.contains("a : Bool"))
+  assert_true(bundle.bridge_mbti.contains("b : Bool"))
+  assert_true(bundle.bridge_mbti.contains("c : Bool"))
+  // `keyof Foo` at a parameter position widens to `String` rather than
+  // leaking a `Keyof(...)` shape into the bridge surface.
+  assert_true(bundle.bridge_mbti.contains("pickFooKey"))
+  assert_false(bundle.bridge_mbti.contains("Keyof("))
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle lowers boolean literal aliases to bool" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/boolean-literal-union-entry.d.ts", "./runtime/boolean-literal-union.js",
