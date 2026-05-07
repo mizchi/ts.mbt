@@ -1,6 +1,6 @@
 import {
-  "moonbitlang/async/fs",
-  "moonbitlang/async/process" @process,
+  "mizchi/x/fs",
+  "mizchi/x/process" @process,
   "moonbitlang/core/json" @json,
   "moonbitlang/core/string",
   "mizchi/ts/parser" @parser,

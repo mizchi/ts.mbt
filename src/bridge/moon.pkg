@@ -1,5 +1,5 @@
 import {
-  "moonbitlang/async/fs" @fs,
+  "mizchi/x/fs" @fs,
   "moonbitlang/core/debug",
   "moonbitlang/core/env" @env,
   "moonbitlang/core/json" @json,
