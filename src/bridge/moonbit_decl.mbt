@@ -711,20 +711,47 @@ fn resolve_named_inside_type(
 }
 
 ///|
-/// Inline a `Named(name)` reference to the body of its in-module type
-/// alias (`type Foo = ...`). Recursively resolves the body so chained
-/// aliases (`type A = B`, `type B = "x" | "y"`) reach a concrete shape;
-/// stops when an alias has type parameters or recurses through itself,
-/// returning the most-resolved form found. Used by template-literal /
-/// keyof / mapped lowering so concrete-source patterns like
-/// `` `${Channel}-${Variant}` `` see literal unions instead of Named.
+/// Inline a `Named(name)` reference to the body of its type alias.
+/// `name` may be qualified (`util.HashAlgorithm`), in which case the
+/// leading segment is matched against the current module's
+/// `namespace_binding` imports to locate the source module before
+/// looking up the unqualified tail. Recursively resolves chained
+/// aliases (`type A = B`, `type B = "x" | "y"`) until reaching a
+/// concrete shape; stops on parameterized aliases or cycles.
 fn resolve_named_to_alias_body(
   info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
   name : String,
   visited : Array[String],
 ) -> @ast.TsType? {
   if visited.contains(name) {
     return None
+  }
+  // Qualified path: `util.HashAlgorithm` first walks the namespace
+  // import in the current module, then resolves the tail in the imported
+  // module's surface (its own type aliases / enums, plus its re-exports
+  // from sub-modules — essential for split packages like zod where the
+  // entry only re-exports through `import * as util`).
+  let dot_pos = name.find(".")
+  match dot_pos {
+    Some(pos) => {
+      let head = name[0:pos].to_string()
+      let tail = name[pos + 1:].to_string()
+      match resolve_namespace_alias_module(info, modules, head) {
+        Some(target_info) => {
+          let next_visited : Array[String] = []
+          for v in visited {
+            next_visited.push(v)
+          }
+          next_visited.push(name)
+          return resolve_named_to_alias_body(
+            target_info, modules, tail, next_visited,
+          )
+        }
+        None => ()
+      }
+    }
+    None => ()
   }
   match find_type_alias_decl(info.module_, name) {
     Some(ta) => {
@@ -736,7 +763,7 @@ fn resolve_named_to_alias_body(
         next_visited.push(v)
       }
       next_visited.push(name)
-      let body = inline_named_aliases(info, ta.type_, next_visited)
+      let body = inline_named_aliases(info, modules, ta.type_, next_visited)
       Some(body)
     }
     None =>
@@ -768,44 +795,90 @@ fn resolve_named_to_alias_body(
 }
 
 ///|
+/// Look up the module behind `import * as <local> from "<spec>"` (or
+/// the matching re-export). Returns `None` when no namespace binding
+/// matches `local` or when the spec doesn't resolve through the import
+/// edges (e.g. a package whose graph wasn't fully loaded).
+fn resolve_namespace_alias_module(
+  info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
+  local_alias : String,
+) -> DeclModuleInfo? {
+  for imp in info.record.module_block.imports {
+    match imp.namespace_binding {
+      Some(binding) if binding == local_alias => {
+        for edge in info.record.imports {
+          if edge.specifier == imp.module_spec {
+            match modules.get(edge.resolved_path) {
+              Some(target) => return Some(target)
+              None => ()
+            }
+          }
+        }
+      }
+      _ => ()
+    }
+  }
+  // Some packages re-export entire sub-modules with `export * as util
+  // from './util'`. Check the namespace re-exports too.
+  for re in info.record.module_block.reexports {
+    match re.kind {
+      Namespace(name) if name == local_alias =>
+        for edge in info.record.imports {
+          if edge.specifier == re.module_spec {
+            match modules.get(edge.resolved_path) {
+              Some(target) => return Some(target)
+              None => ()
+            }
+          }
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
 fn inline_named_aliases(
   info : DeclModuleInfo,
+  modules : Map[String, DeclModuleInfo],
   t : @ast.TsType,
   visited : Array[String],
 ) -> @ast.TsType {
   match t {
     Named(name) =>
-      match resolve_named_to_alias_body(info, name, visited) {
+      match resolve_named_to_alias_body(info, modules, name, visited) {
         Some(body) => body
         None => t
       }
     Union(items) => {
       let out : Array[@ast.TsType] = []
       for it in items {
-        out.push(inline_named_aliases(info, it, visited))
+        out.push(inline_named_aliases(info, modules, it, visited))
       }
       Union(out)
     }
-    Array(inner) => Array(inline_named_aliases(info, inner, visited))
+    Array(inner) => Array(inline_named_aliases(info, modules, inner, visited))
     Tuple(items) => {
       let out : Array[@ast.TsType] = []
       for it in items {
-        out.push(inline_named_aliases(info, it, visited))
+        out.push(inline_named_aliases(info, modules, it, visited))
       }
       Tuple(out)
     }
     Applied(name, args) => {
       let out : Array[@ast.TsType] = []
       for a in args {
-        out.push(inline_named_aliases(info, a, visited))
+        out.push(inline_named_aliases(info, modules, a, visited))
       }
       Applied(name, out)
     }
-    Keyof(inner) => Keyof(inline_named_aliases(info, inner, visited))
+    Keyof(inner) =>
+      Keyof(inline_named_aliases(info, modules, inner, visited))
     TemplateLiteralType(parts, args) => {
       let out : Array[@ast.TsType] = []
       for a in args {
-        out.push(inline_named_aliases(info, a, visited))
+        out.push(inline_named_aliases(info, modules, a, visited))
       }
       TemplateLiteralType(parts, out)
     }
@@ -4004,7 +4077,7 @@ fn lower_react_utility_type(
         let lowered = lower_react_utility_type(
           info, arg, modules, canonical_types,
         )
-        lowered_args.push(inline_named_aliases(info, lowered, []))
+        lowered_args.push(inline_named_aliases(info, modules, lowered, []))
       }
       let resolved_template = @ast.TsType::TemplateLiteralType(
         parts, lowered_args,

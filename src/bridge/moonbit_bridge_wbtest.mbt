@@ -746,6 +746,33 @@ async test "bridge: emit MoonBit TS bridge package bundle expands real-world zod
 }
 
 ///|
+async test "bridge: emit MoonBit TS bridge package bundle resolves cross-file qualified template literal" {
+  // `import * as util from "./..."` exposes the sub-module under a
+  // namespace alias; the template literal `${util.HashAlgorithm}_${util.HashEncoding}`
+  // must walk that namespace edge to inline the literal-union aliases
+  // declared in the imported module before the cartesian expansion.
+  let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
+    "fixtures/resolver/project/types/qualified-templit-entry.d.ts",
+    "./runtime/qualified-templit.js",
+  ) catch {
+    e => {
+      match e {
+        ReadError(msg) | ParseError(msg) | ResolveError(msg) =>
+          fail("Emit error: \{msg}")
+      }
+      return
+    }
+  }
+  assert_true(bundle.bridge_mbti.contains("pub(all) enum HashFormat"))
+  assert_true(bundle.bridge_mbti.contains("Md5_hex"))
+  assert_true(bundle.bridge_mbti.contains("Sha256_base64"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type HashFormat"))
+  assert_false(
+    bundle.bridge_mbti.contains("Unresolved type reference util."),
+  )
+}
+
+///|
 async test "bridge: emit MoonBit TS bridge package bundle lowers boolean literal aliases to bool" {
   let bundle = emit_moonbit_ts_bridge_package_bundle_from_entry_path(
     "fixtures/resolver/project/types/boolean-literal-union-entry.d.ts", "./runtime/boolean-literal-union.js",
