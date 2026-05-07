@@ -17,5 +17,12 @@ export type SchemaKeys = keyof Schema;
 // `${prefix}${keyof Schema}` through the simplifier.
 export type SchemaPrefixed = `prefix_${SchemaKeys}`;
 
+// Mapped type whose source is `keyof Schema`. After mapped-type partial
+// evaluation the body collapses to a concrete object with literal keys;
+// the bridge surfaces that as a synthetic interface, so consumers see
+// a real `pub(all) struct SchemaFlags { id : Bool, ... }`.
+export type SchemaFlags = { [K in keyof Schema]: boolean };
+
 export declare function getKey(): SchemaKeys;
 export declare function tag(value: SchemaPrefixed): void;
+export declare function flag(): SchemaFlags;

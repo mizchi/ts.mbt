@@ -1829,7 +1829,27 @@ fn resolve_decl_from_local_name(
                                   lowered_alias,
                                 ) {
                                 Some(reason) => Unsupported(export_name, reason)
-                                None => Missing
+                                None =>
+                                  // After lowering (`{ [K in keyof Foo]: V }`
+                                  // and similar partial-evaluations), an alias
+                                  // body may collapse to a concrete object with
+                                  // literal keys. Surface it as a synthetic
+                                  // interface so emit produces a `pub(all)
+                                  // struct` rather than dropping the alias as
+                                  // `Missing` / `declare pub type X`.
+                                  match
+                                    type_alias_object_to_interface(
+                                      lowered_alias,
+                                    ) {
+                                    Some(iface) =>
+                                      Interface({
+                                        source_path,
+                                        local_name,
+                                        export_name,
+                                        iface,
+                                      })
+                                    None => Missing
+                                  }
                               }
                           }
                       }
@@ -3305,6 +3325,43 @@ fn utility_awaited_type(type_ : @ast.TsType) -> @ast.TsType {
     Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
       utility_awaited_type(inner)
     _ => type_
+  }
+}
+
+///|
+/// Synthesize a `TsInterface` from a type alias whose body has been
+/// reduced to an `Object(fields)` shape with literal keys (e.g. through
+/// mapped-type partial-evaluation). Returns `None` for parameterized
+/// aliases or non-literal keys so callers can fall back to the standard
+/// "Missing" / opaque-type emit path.
+fn type_alias_object_to_interface(
+  type_alias : @ast.TsTypeAlias,
+) -> @ast.TsInterface? {
+  if type_alias.type_params.length() > 0 {
+    return None
+  }
+  match type_alias.type_ {
+    Object(fields) => {
+      let iface_fields : Array[(String, @ast.TsType)] = []
+      for f in fields {
+        match f.0 {
+          Literal(key) => iface_fields.push((key, f.1))
+          _ => return None
+        }
+      }
+      if iface_fields.length() == 0 {
+        return None
+      }
+      Some({
+        name: type_alias.name,
+        type_params: [],
+        extends_names: [],
+        fields: iface_fields,
+        readonly_fields: [],
+        index_signatures: [],
+      })
+    }
+    _ => None
   }
 }
 

@@ -804,6 +804,14 @@ async test "bridge: emit MoonBit TS bridge package bundle expands consumer keyof
   assert_false(
     bundle.bridge_mbti.contains("declare pub type SchemaPrefixed"),
   )
+  // `{ [K in keyof Schema]: boolean }` partial-evaluates to a concrete
+  // object literal, which the bridge then surfaces as a synthetic
+  // interface emitted as `pub(all) struct SchemaFlags`.
+  assert_true(bundle.bridge_mbti.contains("pub(all) struct SchemaFlags"))
+  assert_true(bundle.bridge_mbti.contains("id : Bool"))
+  assert_true(bundle.bridge_mbti.contains("name : Bool"))
+  assert_true(bundle.bridge_mbti.contains("age : Bool"))
+  assert_false(bundle.bridge_mbti.contains("declare pub type SchemaFlags"))
 }
 
 ///|
