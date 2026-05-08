@@ -12,6 +12,30 @@ The earlier JS interpreter / wasm codegen / AOT compiler lived in this repo
 during exploration but has been removed. The supported surface is now the
 bridge generator only.
 
+## Quick start
+
+TypeScript -> MoonBit (vendor every npm dep in `./package.json` as MoonBit
+bridges):
+
+```bash
+$ moon install mizchi/ts/cmd/ts2mbt
+$ ts2mbt generate
+$ ls src/internal/generated/
+hono/  zod/  types__react/  ...
+```
+
+MoonBit -> TypeScript (emit a build-backed `.d.ts` package from a MoonBit
+package):
+
+```bash
+$ moon install mizchi/ts/cmd/mbt2ts
+$ mbt2ts --input mizchi/foo --out dist
+$ ls dist/
+index.js  package.json  AUTOLINK_DIAGNOSTICS.md  ...
+```
+
+End-to-end Hono walkthrough: [docs/quick-start.md](./docs/quick-start.md).
+
 ## Supported directions
 
 - **TypeScript -> MoonBit**: read a `.d.ts` (or `.ts`) entry plus a runtime
