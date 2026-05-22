@@ -2674,8 +2674,25 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     const_values[entry.0] = entry.1
   }
   while !self.check(Eof) {
+    // Consume any top-level decorators (`@foo`, `@foo()`). Decorators are
+    // erased from the bridge AST; we just skip them and parse the declaration
+    // that follows (`class`, `export class`, `async function`, etc.).
+    while self.check(At) {
+      self.skip_decorator()
+    }
     if self.check(Function) {
       funcs.push(self.parse_function())
+    } else if (match self.peek().kind {
+        Ident("async") => self.peek_at(1).kind == Function
+        _ => false
+      }) {
+      // Top-level `async function f() { ... }` declaration.
+      let _ = self.advance() // consume `async`
+      let prev_async = self.in_async
+      self.in_async = true
+      let func = self.parse_function()
+      self.in_async = prev_async
+      funcs.push(func)
     } else if self.check(Interface) {
       interfaces.push(self.parse_interface())
     } else if (match self.peek().kind {
