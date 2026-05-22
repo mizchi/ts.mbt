@@ -1620,3 +1620,106 @@ test "expr_check: type predicate with non-matching arg name does not crash" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 9: generic function inference.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: identity function call instantiates T to arg type" {
+  // `id<T>(x: T): T` called with a `number` should return `number`.
+  let src =
+    #|function id<T>(x: T): T { return x; }
+    #|function user(): number {
+    #|  return id(42);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: identity function returns the inferred type" {
+  // Same as above but verifying the call result mismatches a wrong
+  // declared return type.
+  let src =
+    #|function id<T>(x: T): T { return x; }
+    #|function user(): string {
+    #|  return id(42);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic over an array elem type" {
+  let src =
+    #|function head<T>(xs: T[]): T { return xs[0]; }
+    #|function user(): string {
+    #|  return head([1, 2, 3]);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // `head(number[])` returns `number`, declared return is `string` →
+  // mismatch.
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic over an array elem passes when type matches" {
+  let src =
+    #|function head<T>(xs: T[]): T { return xs[0]; }
+    #|function user(): number {
+    #|  return head([1, 2, 3]);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic call argument type-checks after substitution" {
+  // Force `T = number` via the array arg; the second arg `"abc": string`
+  // should then fail against `T = number`.
+  let src =
+    #|function indexOf<T>(xs: T[], item: T): number { return 0; }
+    #|function user(arr: number[]): number {
+    #|  return indexOf(arr, "abc");
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: two-param generic inference" {
+  // `pair<A,B>(a: A, b: B): A` returns A. We use a real top-level (not
+  // declare) function so the resolver captures the type parameters.
+  let src =
+    #|function pair<A, B>(a: A, b: B): A { return a; }
+    #|function user(): number {
+    #|  return pair(1, "x");
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

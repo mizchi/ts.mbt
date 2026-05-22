@@ -383,6 +383,7 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
   assert_true(
     decl_func_should_skip_broad_node_wrapper({
       name: "generatePrimeSync_number_generate_prime_options",
+      type_params: [],
       params: [],
       return_type: @ast.TsType::Any,
       body: { stmts: [] },

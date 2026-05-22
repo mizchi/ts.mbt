@@ -442,6 +442,7 @@ fn Parser::inject_instance_field_assigns(
   }
   {
     name: func.name,
+    type_params: func.type_params,
     params: func.params,
     return_type: func.return_type,
     body: { stmts: new_stmts },
@@ -578,6 +579,7 @@ fn Parser::parse_class_body(
       self.restore_local_type_param_bounds(local_type_param_bound_len)
       let func : @ast.TsFunc = {
         name: method_name,
+        type_params: [],
         params,
         return_type,
         body,
@@ -664,6 +666,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         let throw_body : @ast.TsBlock = { stmts: [Throw(throw_expr)] }
         return CallExpr(
           @ast.TsExpr::FuncExpr(@ast.TsFunc::{
+            type_params: [],
             name: "<class>",
             params: [],
             return_type: @ast.TsType::Any,
@@ -788,6 +791,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
           {
             name: tmp_name,
+            type_params: [],
             params: [rest_param],
             return_type: Any,
             body: empty_body,
@@ -799,6 +803,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           let empty_body : @ast.TsBlock = { stmts: [] }
           {
             name: tmp_name,
+            type_params: [],
             params: [],
             return_type: Any,
             body: empty_body,
@@ -1046,6 +1051,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         // Static initialization blocks run during class definition with `this` bound to the class
         // Generate: (function() { ...block... }).call(ClassName)
         let static_block_func = @ast.TsExpr::FuncExpr(@ast.TsFunc::{
+            type_params: [],
           name: "",
           params: [],
           return_type: @ast.TsType::Any,
@@ -1064,6 +1070,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   stmts.push(Return(Some(@ast.TsExpr::Var(tmp_name))))
   CallExpr(
     @ast.TsExpr::FuncExpr(@ast.TsFunc::{
+            type_params: [],
       name: "<class>",
       params: [],
       return_type: @ast.TsType::Any,
@@ -1226,6 +1233,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
           {
             name,
+            type_params: [],
             params: [rest_param],
             return_type: Any,
             body: empty_body,
@@ -1237,6 +1245,7 @@ fn Parser::parse_class_decl_with_abstract(
           let empty_body : @ast.TsBlock = { stmts: [] }
           {
             name,
+            type_params: [],
             params: [],
             return_type: Any,
             body: empty_body,
@@ -1475,6 +1484,7 @@ fn Parser::parse_class_decl_with_abstract(
         // Static initialization blocks run during class definition with `this` bound to the class
         // Generate: (function() { ...block... }).call(ClassName)
         let static_block_func = @ast.TsExpr::FuncExpr(@ast.TsFunc::{
+            type_params: [],
           name: "",
           params: [],
           return_type: @ast.TsType::Any,
@@ -1503,6 +1513,7 @@ fn Parser::parse_class_decl_with_abstract(
     internal_stmts.push(Return(Some(@ast.TsExpr::Var(name))))
     let iife = @ast.TsExpr::CallExpr(
       @ast.TsExpr::FuncExpr(@ast.TsFunc::{
+            type_params: [],
         name: "<class>",
         params: [],
         return_type: @ast.TsType::Any,

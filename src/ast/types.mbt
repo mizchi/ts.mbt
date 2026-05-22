@@ -380,6 +380,9 @@ pub(all) struct TsObjectBinding {
 // / functiondefine
 pub(all) struct TsFunc {
   name : String
+  // Generic type parameters declared on this function (e.g. `T`, `R` in
+  // `function map<T, R>(...)`). Empty for non-generic functions.
+  type_params : Array[String]
   params : Array[TsParam]
   return_type : TsType
   body : TsBlock

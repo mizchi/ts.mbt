@@ -195,7 +195,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = self.parse_binding_ident()
-  let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
@@ -214,6 +214,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     let _ = self.advance()
     return {
       name,
+      type_params,
       params,
       return_type,
       body: { stmts: [] },
@@ -224,6 +225,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   if !self.check(LBrace) {
     return {
       name,
+      type_params,
       params,
       return_type,
       body: { stmts: [] },
@@ -266,7 +268,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, params, return_type, body, is_generator, is_async }
+  { name, type_params, params, return_type, body, is_generator, is_async }
 }
 
 ///|
@@ -298,7 +300,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     | In => self.parse_binding_ident()
     _ => "<anon>"
   }
-  self.skip_type_params()
+  let (type_params, _) = self.parse_type_param_names_and_bounds()
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
@@ -343,7 +345,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, params, return_type, body, is_generator, is_async }
+  { name, type_params, params, return_type, body, is_generator, is_async }
 }
 
 ///|

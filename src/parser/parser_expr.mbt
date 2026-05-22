@@ -531,6 +531,7 @@ fn Parser::parse_object_method_value(
   self.in_async = prev_async
   @ast.TsExpr::FuncExpr({
     name,
+    type_params: [],
     params,
     return_type,
     body,
@@ -2708,6 +2709,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             self.in_function = prev_function
             @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
+              type_params: [],
               params,
               return_type,
               body,
@@ -3060,6 +3062,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             self.in_function = prev_function
             @ast.TsExpr::FuncExpr(@ast.TsFunc::{
               name: func_name,
+              type_params: [],
               params,
               return_type,
               body,

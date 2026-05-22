@@ -33,11 +33,21 @@ priv struct Resolver {
   // Rich call signatures for top-level functions — carries optional / default
   // / rest information lost when funcs are collapsed into `Func(...)`.
   signatures : Map[String, Array[@ast.TsParam]]
+  // Generic type-parameter names declared on top-level functions, keyed by
+  // function name. Empty array for non-generic functions.
+  func_type_params : Map[String, Array[String]]
 }
 
 ///|
 fn Resolver::empty() -> Resolver {
-  { interfaces: {}, classes: {}, type_aliases: {}, globals: {}, signatures: {} }
+  {
+    interfaces: {},
+    classes: {},
+    type_aliases: {},
+    globals: {},
+    signatures: {},
+    func_type_params: {},
+  }
 }
 
 ///|
@@ -72,6 +82,7 @@ fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
     let ret = wrap_async_return(f.is_async, f.return_type)
     r.globals[f.name] = @ast.TsType::Func(param_types, ret)
     r.signatures[f.name] = f.params
+    r.func_type_params[f.name] = f.type_params
   }
   r
 }
@@ -483,6 +494,27 @@ fn infer_expr(
             None => @ast.TsType::Any
           }
       }
+      // Generic call: when the callee has declared type parameters,
+      // unify them with the argument types and substitute into the
+      // return type so callers see the instantiated form.
+      let type_params = match resolver.func_type_params.get(name) {
+        Some(tps) => tps
+        None => []
+      }
+      if type_params.length() > 0 {
+        match callee_ty {
+          Func(params, ret) => {
+            let bindings = solve_generic_bindings(
+              env, resolver, type_params, params, args,
+            )
+            for a in args {
+              let _ = infer_expr(env, resolver, a)
+            }
+            return substitute_params(ret, bindings)
+          }
+          _ => ()
+        }
+      }
       infer_call(env, resolver, callee_ty, args)
     }
     CallExpr(callee, args) => {
@@ -604,6 +636,133 @@ fn infer_expr(
       narrow_union(inner_ty, @ast.TsType::Undefined)
     }
   }
+}
+
+///|
+/// Recursive unification step: when `formal` mentions a type parameter
+/// from `type_params`, bind it to `actual`. Compound shapes (Array,
+/// Tuple, Func, Applied, Union…) are walked structurally so type
+/// parameters embedded inside them get bound from the matching position
+/// in `actual`. First binding wins; later occurrences are only honored
+/// if the existing binding was `Any`.
+fn infer_param_bindings(
+  type_params : Array[String],
+  formal : @ast.TsType,
+  actual : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> Unit {
+  // Direct hit: formal is exactly a type parameter we're solving for.
+  match formal {
+    Named(name) =>
+      if type_params.contains(name) {
+        match bindings.get(name) {
+          Some(Any) | None => bindings[name] = actual
+          Some(_) => () // first concrete binding wins
+        }
+        return
+      }
+    _ => ()
+  }
+  // Structural matching — peel matching outer shapes.
+  match (formal, actual) {
+    (Array(f_elem), Array(a_elem)) =>
+      infer_param_bindings(type_params, f_elem, a_elem, bindings)
+    (Array(f_elem), Applied("Array", a_args)) if a_args.length() == 1 =>
+      infer_param_bindings(type_params, f_elem, a_args[0], bindings)
+    (Applied("Array", f_args), Array(a_elem)) if f_args.length() == 1 =>
+      infer_param_bindings(type_params, f_args[0], a_elem, bindings)
+    (Applied(f_name, f_args), Applied(a_name, a_args)) =>
+      if f_name == a_name && f_args.length() == a_args.length() {
+        let mut i = 0
+        while i < f_args.length() {
+          infer_param_bindings(type_params, f_args[i], a_args[i], bindings)
+          i = i + 1
+        }
+      }
+    (Tuple(f_items), Tuple(a_items)) => {
+      let n = if f_items.length() < a_items.length() {
+        f_items.length()
+      } else {
+        a_items.length()
+      }
+      let mut i = 0
+      while i < n {
+        infer_param_bindings(type_params, f_items[i], a_items[i], bindings)
+        i = i + 1
+      }
+    }
+    (Func(f_params, f_ret), Func(a_params, a_ret)) => {
+      let n = if f_params.length() < a_params.length() {
+        f_params.length()
+      } else {
+        a_params.length()
+      }
+      let mut i = 0
+      while i < n {
+        infer_param_bindings(type_params, f_params[i], a_params[i], bindings)
+        i = i + 1
+      }
+      infer_param_bindings(type_params, f_ret, a_ret, bindings)
+    }
+    (Union(f_parts), _) =>
+      // Best-effort: try the first part that isn't a bare type parameter
+      // (matching a concrete shape generally yields more information). If
+      // none matches concretely, fall back to the first part.
+      for part in f_parts {
+        match part {
+          Named(n) if type_params.contains(n) => continue
+          _ => {
+            infer_param_bindings(type_params, part, actual, bindings)
+            return
+          }
+        }
+      }
+    _ => ()
+  }
+}
+
+///|
+/// Compute type-parameter bindings at a call site by unifying each
+/// argument's inferred type against the corresponding formal parameter.
+/// Type parameters that remain unbound fall back to `Any`.
+fn solve_generic_bindings(
+  env : ExprEnv,
+  resolver : Resolver,
+  type_params : Array[String],
+  params : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+) -> Map[String, @ast.TsType] {
+  let bindings : Map[String, @ast.TsType] = {}
+  for tp in type_params {
+    bindings[tp] = @ast.TsType::Any
+  }
+  let n = if args.length() < params.length() {
+    args.length()
+  } else {
+    params.length()
+  }
+  let mut i = 0
+  while i < n {
+    let actual = infer_expr(env, resolver, args[i])
+    infer_param_bindings(type_params, params[i], actual, bindings)
+    i = i + 1
+  }
+  bindings
+}
+
+///|
+/// Substitute type-parameter bindings into each formal parameter so the
+/// downstream argument check / return-type inference sees concrete types
+/// where possible.
+fn substitute_params_array(
+  params : Array[@ast.TsType],
+  bindings : Map[String, @ast.TsType],
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  for p in params {
+    out.push(substitute_params(p, bindings))
+  }
+  out
 }
 
 ///|
@@ -2195,9 +2354,25 @@ fn check_call_args_in_expr(
       match callee_ty {
         Func(params, _) => {
           let sig = ctx.resolver.signatures.get(name)
+          // Substitute type-parameter bindings into the formal params
+          // before checking, so generic calls like `map([1,2,3], x => x)`
+          // see `params = [number[], (number) => R]` instead of
+          // `[T[], (T) => R]`.
+          let type_params = match ctx.resolver.func_type_params.get(name) {
+            Some(tps) => tps
+            None => []
+          }
+          let substituted_params = if type_params.length() > 0 {
+            let bindings = solve_generic_bindings(
+              env, ctx.resolver, type_params, params, args,
+            )
+            substitute_params_array(params, bindings)
+          } else {
+            params
+          }
           check_arguments_with_sig(
             env,
-            params,
+            substituted_params,
             sig,
             args,
             ctx,
