@@ -1908,6 +1908,10 @@ fn Parser::parse_declare_class(
     }
     let member_name = self.parse_declare_class_member_name()
     let _ = self.match_(Question)
+    // Definite-assignment assertion (`foo!: T`) on a class field. Also
+    // tolerate a stray `!` after a method name even though that is not
+    // standard syntax, mirroring how the runtime class parser handles it.
+    let _ = self.match_(Bang)
     let mut local_type_param_bound_len = self.local_type_param_bounds.length()
     let mut method_type_params : Array[String] = []
     let mut method_type_param_bounds : Array[(String, @ast.TsType)] = []

@@ -6362,3 +6362,71 @@ test "parser: parse member-access decorator on class method" {
   }
   assert_eq(module_.classes.length(), 1)
 }
+
+
+///|
+test "parser: export abstract class with definite-assignment field" {
+  let src =
+    #|export abstract class T implements I {
+    #|    protected installer!: P;
+    #|    private projectService!: S;
+    #|    private isReady = false;
+    #|    foo(): number { return 1; }
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  assert_eq(module_.classes[0].name, "T")
+}
+
+///|
+test "parser: top-level if/expression/assignment/block statements" {
+  let cases = [
+    "if (cond()) { setup(); }",
+    "setObjectAllocator(getDefault());",
+    "container.field = computeValue();",
+    "{ type X<T> = T; }",
+  ]
+  for src in cases {
+    let _ = Parser::from_source(src).parse_module() catch {
+      e => {
+        fail("Expected to parse top-level statement, got: \{e} for \{src}")
+        return
+      }
+    }
+
+  }
+}
+
+///|
+test "parser: export namespace with runtime class body" {
+  let src =
+    #|export namespace ScriptSnapshot {
+    #|    class StringScriptSnapshot {
+    #|        constructor(private text: string) {}
+    #|        public getText(start: number, end: number): string {
+    #|            return start === 0 && end === this.text.length
+    #|                ? this.text
+    #|                : this.text.substring(start, end);
+    #|        }
+    #|    }
+    #|    export function fromString(text: string): StringScriptSnapshot {
+    #|        return new StringScriptSnapshot(text);
+    #|    }
+    #|}
+    #|export interface PreProcessed {}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.namespaces.length(), 1)
+  assert_eq(module_.namespaces[0].name, "ScriptSnapshot")
+  assert_eq(module_.interfaces.length(), 1)
+  assert_eq(module_.interfaces[0].name, "PreProcessed")
+}
