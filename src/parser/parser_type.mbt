@@ -35,11 +35,13 @@ fn Parser::parse_paren_or_function_type(
       }
     }
     let _ = self.match_(Question)
-    if !self.match_(Colon) {
-      can_be_function_type = false
-      break
+    // Type annotation on a function-type parameter is optional —
+    // `(item) => T` is a valid TS arrow function type.
+    if self.match_(Colon) {
+      param_types.push(self.parse_type())
+    } else {
+      param_types.push(@ast.TsType::Any)
     }
-    param_types.push(self.parse_type())
     if self.match_(Comma) {
       if self.check(RParen) {
         break

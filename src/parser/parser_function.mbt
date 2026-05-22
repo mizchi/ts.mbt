@@ -1466,9 +1466,15 @@ pub fn Parser::parse_declare_function(
   }
   let _ = self.expect(RParen)
 
-  // return valuetype
-  let _ = self.expect(Colon)
-  let return_type = self.parse_type()
+  // return valuetype — annotation is optional (TS treats a missing one as
+  // `void` for `declare function`, but we use `Any` so the checker matches
+  // the convention used elsewhere for un-annotated functions).
+  let return_type = if self.check(Colon) {
+    let _ = self.advance()
+    self.parse_type()
+  } else {
+    @ast.TsType::Any
+  }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
   self.consume_semicolon()
   { name, module_: "env", params, return_type }

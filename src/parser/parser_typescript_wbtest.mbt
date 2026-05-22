@@ -612,8 +612,13 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
       let content = @fs.read_file(path).text() catch {
         _ => continue
       }
+      // `.ts` (non-`.tsx`) files do not allow JSX, so the legacy
+      // `<T>expr` type-assertion syntax is valid. Configure the parser
+      // accordingly — using `from_source` would default `allow_jsx = true`
+      // and reject the cast.
+      let allow_jsx = path.has_suffix(".tsx")
       let module_ = match
-        (try? Parser::from_source(content).parse_module()) {
+        (try? Parser::from_source_with_jsx(content, allow_jsx).parse_module()) {
         Ok(m) => {
           parsed += 1
           m

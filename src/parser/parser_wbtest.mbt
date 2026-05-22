@@ -1935,6 +1935,56 @@ test "parser: parse local interface declaration inside function block" {
 }
 
 ///|
+test "parser: parse interface call-signature with type predicate return" {
+  let src = "interface I1 { (p1: A): p1 is C; }"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: declare function tolerates missing return type" {
+  // `declare function f();` — TS treats the missing return type as
+  // implicit `void`; we parse it as `Any` so the checker can fall
+  // through gracefully.
+  let src = "declare function acceptingBoolean(a: boolean);"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: arrow function type with untyped parameter" {
+  // `(item) => item is A` — function-type parameter without annotation.
+  // The parser previously chose the parenthesized-type fallback, leaving
+  // the trailing `=>` dangling. Now it treats the missing colon as `Any`.
+  let src = "declare function f(g: (item) => item is A);"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: ASI before `else` keyword" {
+  // `if (cond) return -1\nelse ...` — `else` isn't a statement-starting
+  // token, but the line terminator after `-1` should still trigger ASI.
+  let src =
+    #|function g(): number {
+    #|  if (!true)
+    #|    return -1
+    #|  else
+    #|    return 0
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
 test "parser: parse class type predicate methods as type predicates" {
   let src =
     #|declare class Ok<T, E> {
