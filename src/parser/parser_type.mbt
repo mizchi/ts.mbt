@@ -838,15 +838,17 @@ fn Parser::parse_type_operand(self : Parser) -> @ast.TsType raise ParseError {
 fn Parser::parse_intersection_type(
   self : Parser,
 ) -> @ast.TsType raise ParseError {
-  let items : Array[@ast.TsType] = [self.parse_type_operand()]
+  let first = self.parse_type_operand()
+  // Fast path: most types are not intersections — avoid allocating the
+  // operand `Array` until we actually see a `&`.
+  if !self.check(Amp) {
+    return first
+  }
+  let items : Array[@ast.TsType] = [first]
   while self.match_(Amp) {
     items.push(self.parse_type_operand())
   }
-  if items.length() == 1 {
-    items[0]
-  } else {
-    Intersection(items)
-  }
+  Intersection(items)
 }
 
 ///|
@@ -1127,6 +1129,12 @@ fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
     return Intersection(items)
   }
   let base = self.parse_intersection_type()
+  // Fast path: the common case is a non-union, non-conditional type
+  // (`number`, `Foo<T>`, `T[]`, ...). Avoid the union-`Array` allocation
+  // and the `saved_pos` snapshot until we see `extends` or `|`.
+  if !self.check(Extends) && !self.check(Pipe) {
+    return base
+  }
   if self.check(Extends) {
     let saved_pos = self.pos
     try {
@@ -1140,26 +1148,23 @@ fn Parser::parse_type(self : Parser) -> @ast.TsType raise ParseError {
     }
   }
   // Union type: T | U
-  if self.check(Pipe) {
-    let items : Array[@ast.TsType] = [base]
-    while self.match_(Pipe) {
-      items.push(self.parse_intersection_type())
-    }
-    if self.check(Extends) {
-      let saved_pos = self.pos
-      try {
-        return self.parse_conditional_type_tail(Union(items))
-      } catch {
-        _ => {
-          self.pos = saved_pos
-          self.skip_conditional_type_tail()
-          return Any
-        }
+  let items : Array[@ast.TsType] = [base]
+  while self.match_(Pipe) {
+    items.push(self.parse_intersection_type())
+  }
+  if self.check(Extends) {
+    let saved_pos = self.pos
+    try {
+      return self.parse_conditional_type_tail(Union(items))
+    } catch {
+      _ => {
+        self.pos = saved_pos
+        self.skip_conditional_type_tail()
+        return Any
       }
     }
-    return Union(items)
   }
-  base
+  Union(items)
 }
 
 ///|
