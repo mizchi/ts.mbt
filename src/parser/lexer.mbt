@@ -979,7 +979,28 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
 
 ///|
 fn Lexer::scan_private_ident(self : Lexer) -> TokenKind {
+  // Fast path: walk ASCII identifier bytes after the leading `#` and slice
+  // the name out of the source. Matches the optimization applied to
+  // `scan_ident`.
+  let start = self.pos
+  let len = self.src.length()
+  while self.pos < len {
+    let b = self.src[self.pos].to_int()
+    if (b >= 'a'.to_int() && b <= 'z'.to_int()) ||
+      (b >= 'A'.to_int() && b <= 'Z'.to_int()) ||
+      (b >= '0'.to_int() && b <= '9'.to_int()) ||
+      b == '_'.to_int() ||
+      b == '$'.to_int() {
+      self.pos += 1
+    } else {
+      break
+    }
+  }
+  if self.pos >= len || self.src[self.pos].to_int() != '\\'.to_int() {
+    return PrivateIdent(self.src[start:self.pos].to_string())
+  }
   let buf = StringBuilder::new()
+  buf.write_string(self.src[start:self.pos].to_string())
   while true {
     match self.peek() {
       Some(c) =>
@@ -1058,7 +1079,28 @@ fn Lexer::scan_private_ident(self : Lexer) -> TokenKind {
 ///|
 // / stringliteral
 fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
+  // Fast path: most string literals in real-world `.ts` / `.d.ts` files
+  // contain no escapes and no line continuations, so just walk the bytes
+  // looking for the closing quote and slice. Bail to the full escape-aware
+  // path the moment we hit a backslash, raw line break, or non-ASCII byte.
+  let start = self.pos
+  let len = self.src.length()
+  let quote_int = quote.to_int()
+  while self.pos < len {
+    let b = self.src[self.pos].to_int()
+    if b == quote_int {
+      let value = self.src[start:self.pos].to_string()
+      self.pos += 1
+      return Str(value)
+    }
+    if b == '\\'.to_int() || b == '\n'.to_int() || b == '\r'.to_int() || b >=
+      0x80 {
+      break
+    }
+    self.pos += 1
+  }
   let buf = StringBuilder::new()
+  buf.write_string(self.src[start:self.pos].to_string())
   while true {
     match self.peek() {
       None => break // (errorsimplehandle)

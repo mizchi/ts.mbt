@@ -292,19 +292,21 @@ fn Parser::has_line_terminator_after(self : Parser) -> Bool {
   if next >= self.tokens.length() {
     return false
   }
-  let start_pos = self.tokens[self.pos].pos
-  let end_pos = self.tokens[next].pos
-  self.has_line_terminator_between_positions(start_pos, end_pos)
+  // O(1) replacement: the next token's `has_newline_before` flag covers
+  // exactly the whitespace between the current and next tokens.
+  self.tokens[next].has_newline_before
 }
 
 ///|
 /// Check if there's a line terminator between the previous token and current token
 fn Parser::has_line_terminator_before(self : Parser) -> Bool {
-  if self.pos == 0 {
+  if self.pos == 0 || self.pos >= self.tokens.length() {
     return false
   }
-  let prev = self.pos - 1
-  let start_pos = self.tokens[prev].pos
-  let end_pos = self.tokens[self.pos].pos
-  self.has_line_terminator_between_positions(start_pos, end_pos)
+  // The lexer already records whether any whitespace before this token
+  // contained a line terminator (LF / CR / LS / PS). Use that flag instead
+  // of rescanning the source buffer — this function is on the hot path
+  // for every `[` (array vs index access), every contextual `as` /
+  // `satisfies`, and every ASI-relevant statement boundary.
+  self.tokens[self.pos].has_newline_before
 }
