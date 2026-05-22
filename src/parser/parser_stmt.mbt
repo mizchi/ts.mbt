@@ -638,7 +638,8 @@ fn Parser::parse_for_rest(
     let expr = self.parse_expr_until_top_level(RParen)
     if self.match_(Eq) {
       let value = self.parse_expr()
-      match expr {
+      let lvalue = strip_lvalue_wrappers(expr)
+      match lvalue {
         Var(name) => Some(Assign(name, value))
         IndexAccess(arr, index) => Some(IndexAssign(arr, index, value))
         PropAccess(obj, prop) => Some(PropAssign(obj, prop, value))
@@ -739,7 +740,11 @@ fn Parser::parse_assign_or_expr(self : Parser) -> @ast.TsStmt raise ParseError {
   if self.match_(Eq) {
     let value = self.parse_expr()
     self.consume_semicolon()
-    match expr {
+    // Type-only wrappers (`as T`, `satisfies T`, `!`) are transparent for
+    // assignment-target purposes — peel them off so the underlying lvalue
+    // pattern matches.
+    let lvalue = strip_lvalue_wrappers(expr)
+    match lvalue {
       Var(name) => Assign(name, value)
       IndexAccess(arr, index) => IndexAssign(arr, index, value)
       PropAccess(obj, prop) => PropAssign(obj, prop, value)
@@ -1014,5 +1019,18 @@ fn Parser::parse_var_decl_item(
     Var => @ast.TsStmt::Var(binding, type_, init)
     Let => @ast.TsStmt::Let(binding, type_, init)
     Const => @ast.TsStmt::Const(binding, type_, init)
+  }
+}
+
+///|
+/// Peel `As(...)` / `Satisfies(...)` / `NonNull(...)` wrappers off an
+/// expression that is being used as an assignment target. TS treats these
+/// as transparent for lvalue purposes (`(x as T) = v`, `x! = v`).
+fn strip_lvalue_wrappers(expr : @ast.TsExpr) -> @ast.TsExpr {
+  match expr {
+    @ast.TsExpr::As(inner, _)
+    | @ast.TsExpr::Satisfies(inner, _)
+    | @ast.TsExpr::NonNull(inner) => strip_lvalue_wrappers(inner)
+    _ => expr
   }
 }

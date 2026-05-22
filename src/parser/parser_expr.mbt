@@ -23,6 +23,9 @@ fn Parser::parse_asserted_exponent(
 
 ///|
 fn Parser::consume_trailing_assertions(self : Parser) -> Bool raise ParseError {
+  // Consume `as` / `satisfies` chain without wrapping. Returns true when at
+  // least one assertion was consumed. Prefer `consume_trailing_assertions_wrap`
+  // for the parsed expression form so the assertion survives into the AST.
   let mut had_assertion = false
   while self.match_(As) ||
         self.match_ident("as") ||
@@ -31,6 +34,50 @@ fn Parser::consume_trailing_assertions(self : Parser) -> Bool raise ParseError {
     let _ = self.parse_type()
   }
   had_assertion
+}
+
+///|
+/// Consume trailing `as T` / `satisfies T` assertions and return the
+/// wrapped expression (`As(...)` / `Satisfies(...)`). The boolean indicates
+/// whether anything was consumed so callers can chain further `as`-aware
+/// parsing if needed.
+fn Parser::consume_trailing_assertions_wrap(
+  self : Parser,
+  left : @ast.TsExpr,
+) -> (Bool, @ast.TsExpr) raise ParseError {
+  let mut wrapped = left
+  let mut had = false
+  while true {
+    let is_as = if self.match_(As) || self.match_ident("as") {
+      Some(true)
+    } else if self.match_ident("satisfies") {
+      Some(false)
+    } else {
+      None
+    }
+    match is_as {
+      Some(true) => {
+        had = true
+        // `as const` is a const assertion — it freezes the operand's
+        // inferred type but leaves the runtime value untouched. Downstream
+        // passes (const-value collection, value lowering) expect the raw
+        // expression, so do not wrap with `As(...)` in this case.
+        if self.check(Const) {
+          let _ = self.advance()
+        } else {
+          let ty = self.parse_type()
+          wrapped = @ast.TsExpr::As(wrapped, ty)
+        }
+      }
+      Some(false) => {
+        had = true
+        let ty = self.parse_type()
+        wrapped = @ast.TsExpr::Satisfies(wrapped, ty)
+      }
+      None => break
+    }
+  }
+  (had, wrapped)
 }
 
 ///|
@@ -217,16 +264,14 @@ fn Parser::parse_asserted_or(
   let mut left = self.parse_asserted_and(left)
   while self.check(PipePipe) || self.check(QuestionQuestion) {
     if self.match_(PipePipe) {
-      let mut right = self.parse_and()
-      if self.consume_trailing_assertions() {
-        right = self.parse_asserted_and(right)
-      }
+      let right = self.parse_and()
+      let (had, wrapped) = self.consume_trailing_assertions_wrap(right)
+      let right = if had { self.parse_asserted_and(wrapped) } else { wrapped }
       left = BinOp(Or, left, right)
     } else if self.match_(QuestionQuestion) {
-      let mut right = self.parse_and()
-      if self.consume_trailing_assertions() {
-        right = self.parse_asserted_and(right)
-      }
+      let right = self.parse_and()
+      let (had, wrapped) = self.consume_trailing_assertions_wrap(right)
+      let right = if had { self.parse_asserted_and(wrapped) } else { wrapped }
       left = BinOp(Coalesce, left, right)
     }
   }
@@ -270,16 +315,12 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
     let right = self.parse_assignment()
     return AssignPattern(pattern, right)
   }
-  let mut left = self.parse_ternary()
-  let mut had_assertion = false
-  while self.match_(As) ||
-        self.match_ident("as") ||
-        self.match_ident("satisfies") {
-    had_assertion = true
-    let _ = self.parse_type()
-  }
-  if had_assertion {
-    left = self.parse_asserted_ternary(left)
+  let left0 = self.parse_ternary()
+  let (had_assertion, wrapped) = self.consume_trailing_assertions_wrap(left0)
+  let left = if had_assertion {
+    self.parse_asserted_ternary(wrapped)
+  } else {
+    wrapped
   }
   if self.check(Eq) {
     match left {
@@ -1518,10 +1559,18 @@ fn Parser::skip_jsx_element(self : Parser) -> Unit {
 // / function, array, property, method
 fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_primary()
+  // Track whether this chain saw any `?.` so we can wrap the outermost
+  // result in `OptionalChain(...)` for the checker to widen with
+  // `undefined`. The exact position of `?` is lost; what matters for
+  // narrowing is that the chain may short-circuit.
+  let mut saw_optional_chain = false
 
   // operatorcheck
   while true {
     if self.match_(Bang) {
+      // `x!` — non-null assertion. Wrap so the checker can strip
+      // null / undefined at the use site.
+      expr = @ast.TsExpr::NonNull(expr)
       continue
     }
     if self.try_skip_call_type_args(expr) {
@@ -1530,6 +1579,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
     if self.check(Question) && self.peek_at(1).kind == Dot {
       let _ = self.advance()
       let _ = self.advance()
+      saw_optional_chain = true
       if self.try_skip_call_type_args(expr) {
         continue
       }
@@ -1602,7 +1652,11 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       }
     }
   }
-  expr
+  if saw_optional_chain {
+    @ast.TsExpr::OptionalChain(expr)
+  } else {
+    expr
+  }
 }
 
 ///|

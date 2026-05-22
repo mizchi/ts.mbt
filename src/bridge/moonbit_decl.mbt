@@ -3311,6 +3311,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     TemplateLiteralType(_, _) => "String"
     Keyof(inner) => "KeyOf" + utility_record_type_suffix(inner)
     MappedType(_, _, value, _) => "MappedTo" + utility_record_type_suffix(value)
+    TypePredicate(_, _) => "Bool"
   }
 }
 

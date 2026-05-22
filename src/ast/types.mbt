@@ -58,6 +58,10 @@ pub(all) enum TsType {
   // when the source resolves to a union of literals. `optional` reflects
   // the literal `?` after `]`; the parser already handles `+?` / `-?`.
   MappedType(String, TsType, TsType, Bool)
+  // Type predicate: `paramName is T`. Used as a function return type to
+  // mark a user-defined type guard. Outside of the return-type position
+  // it behaves like `Boolean`.
+  TypePredicate(String, TsType)
 } derive(Eq, Debug)
 
 ///|
@@ -159,6 +163,23 @@ pub(all) enum TsExpr {
   // untagged template literal: `string ${expr} string`
   // strings (cooked), expressions
   TemplateLiteral(Array[String], Array[TsExpr])
+
+  // `x as T` — type assertion cast. Result type is `T`.
+  As(TsExpr, TsType)
+
+  // `x satisfies T` — structural check, result type is left unchanged
+  // (kept as `typeof x`). Used to verify shapes without narrowing.
+  Satisfies(TsExpr, TsType)
+
+  // `x!` — non-null assertion. Strips `null` / `undefined` from the
+  // operand's type at use sites.
+  NonNull(TsExpr)
+
+  // `a?.b…` — wraps a chain expression that contains at least one
+  // optional `?.` link. The wrapped expression has its conventional
+  // shape (`PropAccess` / `MethodCall` / `IndexAccess` / `CallExpr`),
+  // and at use sites the result type is widened with `undefined`.
+  OptionalChain(TsExpr)
 } derive(Debug)
 
 ///|

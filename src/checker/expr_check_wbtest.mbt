@@ -1403,3 +1403,149 @@ test "expr_check: contextual typing respects explicit param annotation" {
   // just verify no spurious issue.
   let _ = issues
 }
+
+// ---------------------------------------------------------------------------
+// Round 7: AST extension — `as` cast, `satisfies`, `!` (non-null), `?.`
+// (optional chain). Tests exercise both parser preservation and checker
+// behavior on the new variants.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: `x as T` narrows expression to T" {
+  // `obj.unknown as number` overrides the access result (which would
+  // otherwise be `Any`) — making the return-type check fail because we
+  // also pass through `infer_expr` on the cast result.
+  let src =
+    #|interface Bag { value: string }
+    #|function f(b: Bag): number {
+    #|  return b.value as number;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // `As(_, Number)` matches declared `number` → no issue.
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: `x as T` mismatches declared return type" {
+  let src =
+    #|function f(x: unknown): number {
+    #|  return x as string;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: `x!` strips null/undefined" {
+  // Without `!`, the optional `name?` field forces the return type to be
+  // `string | undefined`. With `!`, the checker treats it as `string`.
+  let src =
+    #|interface Bag { name?: string }
+    #|function f(b: Bag): string {
+    #|  return b.name!;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: `a?.b` widens result with undefined" {
+  // The optional chain bubbles `undefined`, so the return type becomes
+  // `string | undefined`, not assignable to bare `string`.
+  let src =
+    #|interface Bag { name: string }
+    #|function f(b: Bag): string {
+    #|  return b?.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("undefined") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: `a?.b ?? \"default\"` strips undefined via coalesce" {
+  let src =
+    #|interface Bag { name: string }
+    #|function f(b: Bag): string {
+    #|  return b?.name ?? "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: `x satisfies T` preserves inferred type" {
+  // `x satisfies T` doesn't change the result type, so the actual literal
+  // type bubbles through. Here `42 satisfies number` keeps `number` → ok.
+  let src =
+    #|function f(): number {
+    #|  return 42 satisfies number;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: `x satisfies T` flags structural mismatch" {
+  let src =
+    #|function f(): number {
+    #|  return "abc" satisfies number;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.path.contains("satisfies") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: call-site arg check fires inside `(call(bad) as T)`" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|function caller(): number {
+    #|  return (takesString(42) as number);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // The inner takesString(42) should be flagged for string vs number arg.
+  let mut saw_arg = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      saw_arg = true
+    }
+  }
+  assert_true(saw_arg)
+}

@@ -3431,7 +3431,9 @@ test "parser: parse non-null assertion postfix" {
 test "parser: parse non-null assertion before property access" {
   let stmt = parse_stmt_from("link = stack!.value;")
   match stmt {
-    Expr(AssignExpr("link", PropAccess(Var("stack"), "value"))) => ()
+    Expr(
+      AssignExpr("link", PropAccess(@ast.TsExpr::NonNull(Var("stack")), "value"))
+    ) => ()
     _ => fail("expected property access after non-null assertion")
   }
 }
@@ -3444,7 +3446,7 @@ test "parser: parse non-null assertion after call before compound assign" {
   match stmt {
     Expr(
       CompoundAssignExpr(
-        PropAccess(Call("getActiveSub", _), "flags"),
+        PropAccess(@ast.TsExpr::NonNull(Call("getActiveSub", _)), "flags"),
         BitAndAssign,
         _
       )
@@ -5358,10 +5360,12 @@ test "parser: parse tuple angle bracket type assertion inside parens when jsx di
 
 ///|
 test "parser: parse asserted equality expression" {
+  // `x as T === y` — the `as` survives as an `As(...)` wrapper on the LHS
+  // of the equality.
   match parse_expr_from("this._state as AutorunState === AutorunState.stale") {
     BinOp(
       BinEq,
-      PropAccess(Var("this"), "_state"),
+      @ast.TsExpr::As(PropAccess(Var("this"), "_state"), _),
       PropAccess(Var("AutorunState"), "stale")
     ) => ()
     expr => fail("expected asserted equality, got \{expr}")
@@ -5703,8 +5707,12 @@ test "parser: parse optional chaining generic call" {
   ).parse_expr() catch {
     e => fail("expected optional chaining generic call to parse: \{e}")
   }
+  // The whole chain is wrapped in `OptionalChain(...)` since at least one
+  // `?.` link was present; the inner shape is the conventional
+  // `CallExpr` / `MethodCall`.
   match expr {
-    CallExpr(_, _) | MethodCall(_, _, _) => ()
+    @ast.TsExpr::OptionalChain(CallExpr(_, _))
+    | @ast.TsExpr::OptionalChain(MethodCall(_, _, _)) => ()
     expr => fail("expected optional chaining generic call, got \{expr}")
   }
 }

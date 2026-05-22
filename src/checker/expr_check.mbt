@@ -587,6 +587,22 @@ fn infer_expr(
       )
     }
     TaggedTemplate(_, _, _, _) | TemplateLiteral(_, _) => @ast.TsType::String_
+    // `x as T` — forced cast; result type is `T`. We still walk `inner` so
+    // any nested call sites are validated.
+    As(inner, ty) => {
+      let _ = infer_expr(env, resolver, inner)
+      ty
+    }
+    // `x satisfies T` — structural check; result type is `typeof x`. The
+    // check happens elsewhere (`check_call_args_in_expr`).
+    Satisfies(inner, _) => infer_expr(env, resolver, inner)
+    // `x!` — strip null / undefined from the operand's type.
+    NonNull(inner) => non_nullable(infer_expr(env, resolver, inner))
+    // `a?.b…` — widen the result with `undefined` to reflect short-circuit.
+    OptionalChain(inner) => {
+      let inner_ty = infer_expr(env, resolver, inner)
+      narrow_union(inner_ty, @ast.TsType::Undefined)
+    }
   }
 }
 
@@ -2191,6 +2207,16 @@ fn check_call_args_in_expr(
       for e in exprs {
         check_call_args_in_expr(env, e, ctx)
       }
+    }
+    // New AST wrappers: recurse into the inner expression so call-site
+    // checks inside `(call(badArg) as T)` / `call(badArg)!` / `obj?.m()`
+    // still fire.
+    As(inner, _) | NonNull(inner) | OptionalChain(inner) =>
+      check_call_args_in_expr(env, inner, ctx)
+    Satisfies(inner, ty) => {
+      check_call_args_in_expr(env, inner, ctx)
+      // `x satisfies T` — verify the operand is assignable to `T`.
+      check_expr_against(env, inner, ty, ctx, "satisfies")
     }
     _ => ()
   }
