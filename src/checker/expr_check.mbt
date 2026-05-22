@@ -382,7 +382,9 @@ fn infer_expr(
     NumberLit(_) | IntLit(_) => @ast.TsType::Number
     BigIntLit(_) => @ast.TsType::BigInt
     BoolLit(_) => @ast.TsType::Boolean
-    StringLit(_) => @ast.TsType::String_
+    // String literals carry their literal type so callers can narrow on
+    // them; assignability lets `Literal(s)` flow into `string`.
+    StringLit(s) => @ast.TsType::Literal(s)
     NullLit => @ast.TsType::Null
     ArrayHole => @ast.TsType::Undefined
     Var(name) =>
@@ -609,9 +611,12 @@ fn infer_binop(
   match op {
     Add =>
       match (l, r) {
-        (String_, _) | (_, String_) => @ast.TsType::String_
+        // String concat — either side is a string-shaped type.
+        (String_, _) | (_, String_) | (Literal(_), _) | (_, Literal(_)) =>
+          @ast.TsType::String_
         (Number, Number) | (Number, Int) | (Int, Number) | (Int, Int) =>
           @ast.TsType::Number
+        (NumberLiteral(_), _) | (_, NumberLiteral(_)) => @ast.TsType::Number
         (Any, _) | (_, Any) => @ast.TsType::Any
         _ => @ast.TsType::Number
       }
@@ -723,7 +728,9 @@ fn type_display(ty : @ast.TsType) -> String {
     Undefined => "undefined"
     Any => "any"
     Never => "never"
-    Literal(s) => "\"\{s}\""
+    // Show literal types as `"s" (string)` so messages remain searchable
+    // for both the literal form and the underlying primitive.
+    Literal(s) => "\"\{s}\" (string)"
     NumberLiteral(s) => s
     BigIntLiteral(s) => s + "n"
     BooleanLiteral(b) => if b { "true" } else { "false" }
@@ -763,8 +770,141 @@ fn type_display(ty : @ast.TsType) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Narrowing — currently handles `typeof x === "string"` (and variants) in
-// `if` conditions. The narrowed type is bound for the duration of the
+// Destructuring binding helpers.
+// ---------------------------------------------------------------------------
+
+///|
+fn bind_array_pattern(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  ab : @ast.TsArrayBinding,
+  source : @ast.TsType,
+) -> Unit {
+  let unwrapped = ctx.resolver.unwrap(source)
+  let mut i = 0
+  while i < ab.items.length() {
+    match ab.items[i] {
+      Some(elem) => {
+        let elem_ty = match unwrapped {
+          Tuple(items) =>
+            if i < items.length() {
+              items[i]
+            } else {
+              @ast.TsType::Any
+            }
+          Array(t) => t
+          _ => @ast.TsType::Any
+        }
+        bind_pattern(env, ctx, elem.binding, elem_ty)
+      }
+      None => ()
+    }
+    i = i + 1
+  }
+  match ab.rest {
+    Some(rest_binding) => {
+      let rest_ty = match unwrapped {
+        Tuple(items) => {
+          // Rest captures the remaining tuple elements as a tuple.
+          let remaining : Array[@ast.TsType] = []
+          let mut j = ab.items.length()
+          while j < items.length() {
+            remaining.push(items[j])
+            j = j + 1
+          }
+          @ast.TsType::Tuple(remaining)
+        }
+        Array(t) => @ast.TsType::Array(t)
+        _ => @ast.TsType::Any
+      }
+      bind_pattern(env, ctx, rest_binding, rest_ty)
+    }
+    None => ()
+  }
+}
+
+///|
+fn bind_object_pattern(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  ob : @ast.TsObjectBinding,
+  source : @ast.TsType,
+) -> Unit {
+  for prop in ob.props {
+    let field_ty = match ctx.resolver.lookup_field(source, prop.key) {
+      Some(t) => t
+      None => @ast.TsType::Any
+    }
+    bind_pattern(env, ctx, prop.binding, field_ty)
+  }
+}
+
+///|
+fn bind_pattern(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  binding : @ast.TsBinding,
+  ty : @ast.TsType,
+) -> Unit {
+  match binding {
+    Ident(name) => env.bind(name, ty)
+    Array(ab) => bind_array_pattern(env, ctx, ab, ty)
+    Object(ob) => bind_object_pattern(env, ctx, ob, ty)
+    Target(_) => ()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Compound assignment validation.
+// ---------------------------------------------------------------------------
+
+///|
+fn check_compound_assign(
+  env : ExprEnv,
+  target : @ast.TsType,
+  op : @ast.TsCompoundOp,
+  rhs : @ast.TsExpr,
+  ctx : CheckCtx,
+  name : String,
+) -> Unit {
+  // For arithmetic / bitwise compound ops, the target must be numeric and
+  // the rhs must be assignable to `number`. `+=` is special-cased: if the
+  // target is `string`, then concat semantics apply and any value is allowed.
+  let needs_numeric = match op {
+    AddAssign =>
+      match target {
+        String_ => false
+        _ => true
+      }
+    SubAssign | MulAssign | DivAssign | ModAssign | PowAssign | BitAndAssign
+    | BitOrAssign | BitXorAssign | ShlAssign | ShrAssign | UShrAssign => true
+    _ => false
+  }
+  if !needs_numeric {
+    return
+  }
+  // Verify target is numeric — otherwise we have an immediate error.
+  if is_checkable(target) && !is_assignable_to(target, @ast.TsType::Number) {
+    record(
+      ctx,
+      "compound-assign `\{name}`",
+      "compound arithmetic op requires a number target, got `\{type_display(target)}`",
+    )
+    return
+  }
+  check_expr_against(
+    env,
+    rhs,
+    @ast.TsType::Number,
+    ctx,
+    "compound-assign `\{name}`",
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Narrowing — `typeof x === "T"`, `x === null/undefined`, `x != null`,
+// `x instanceof C`, literal comparison, discriminated unions, and `&&`
+// compound conditions. The narrowed type is bound for the duration of the
 // then/else block and restored on exit.
 // ---------------------------------------------------------------------------
 
@@ -792,55 +932,369 @@ fn typeof_string_to_type(s : String) -> @ast.TsType? {
 }
 
 ///|
-fn analyze_narrowing(cond : @ast.TsExpr) -> NarrowEffect {
+/// Split `ty` into its union components (single-element list if it isn't a
+/// union).
+fn union_components(ty : @ast.TsType) -> Array[@ast.TsType] {
+  match ty {
+    Union(items) => items
+    _ => [ty]
+  }
+}
+
+///|
+/// Re-assemble a list of variants into a `TsType` — collapses to the single
+/// variant when only one remains, or `Never` when the list is empty.
+fn union_of(items : Array[@ast.TsType]) -> @ast.TsType {
+  if items.length() == 0 {
+    return @ast.TsType::Never
+  }
+  if items.length() == 1 {
+    return items[0]
+  }
+  @ast.TsType::Union(items)
+}
+
+///|
+/// Strip `Null` and `Undefined` from `ty`.
+fn non_nullable(ty : @ast.TsType) -> @ast.TsType {
+  let variants = union_components(ty)
+  let kept : Array[@ast.TsType] = []
+  for v in variants {
+    match v {
+      Null | Undefined => ()
+      _ => kept.push(v)
+    }
+  }
+  union_of(kept)
+}
+
+///|
+/// Remove variants from `ty` that match `pred`.
+fn narrow_remove(
+  ty : @ast.TsType,
+  pred : (@ast.TsType) -> Bool,
+) -> @ast.TsType {
+  let variants = union_components(ty)
+  let kept : Array[@ast.TsType] = []
+  for v in variants {
+    if !pred(v) {
+      kept.push(v)
+    }
+  }
+  union_of(kept)
+}
+
+///|
+/// Keep only variants that match `pred`.
+fn narrow_keep(
+  ty : @ast.TsType,
+  pred : (@ast.TsType) -> Bool,
+) -> @ast.TsType {
+  let variants = union_components(ty)
+  let kept : Array[@ast.TsType] = []
+  for v in variants {
+    if pred(v) {
+      kept.push(v)
+    }
+  }
+  union_of(kept)
+}
+
+///|
+fn is_null_or_undefined(t : @ast.TsType) -> Bool {
+  match t {
+    Null | Undefined => true
+    _ => false
+  }
+}
+
+///|
+fn type_eq(a : @ast.TsType, b : @ast.TsType) -> Bool {
+  a == b
+}
+
+///|
+/// Inspect a discriminator field on each variant and keep only those whose
+/// field is the matching literal. Returns `None` when the receiver isn't a
+/// union of structurally-known variants (so the caller can skip narrowing).
+fn narrow_by_discriminant(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  field : String,
+  literal : String,
+  keep : Bool,
+) -> @ast.TsType? {
+  let variants = union_components(recv)
+  if variants.length() < 2 {
+    return None
+  }
+  let kept : Array[@ast.TsType] = []
+  let mut any_resolved = false
+  for v in variants {
+    match resolver.lookup_field(v, field) {
+      Some(field_ty) => {
+        any_resolved = true
+        let matches = match field_ty {
+          Literal(s) => s == literal
+          // String/Number primitives aren't a discriminator — be conservative.
+          _ => false
+        }
+        if matches == keep {
+          kept.push(v)
+        }
+      }
+      None => ()
+    }
+  }
+  if !any_resolved {
+    return None
+  }
+  Some(union_of(kept))
+}
+
+///|
+fn analyze_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  cond : @ast.TsExpr,
+) -> NarrowEffect {
   let then_binds : Array[(String, @ast.TsType)] = []
   let else_binds : Array[(String, @ast.TsType)] = []
-  match cond {
-    BinOp(op, left, right) => {
-      let (var_name, type_string, equal_sense) = extract_typeof_eq(
-        op, left, right,
-      )
-      match (var_name, type_string) {
-        (Some(name), Some(ts)) =>
-          match typeof_string_to_type(ts) {
-            Some(narrowed) =>
-              if equal_sense {
-                then_binds.push((name, narrowed))
-              } else {
-                else_binds.push((name, narrowed))
-              }
-            None => ()
-          }
-        _ => ()
-      }
-    }
-    _ => ()
-  }
+  collect_narrowing(env, resolver, cond, then_binds, else_binds, true)
   { then_binds, else_binds }
 }
 
 ///|
-/// Match a `typeof <var> === "<tag>"` (or variant) and return
-/// `(var_name, type_string, is_equal)`. Order-independent across operands.
-fn extract_typeof_eq(
-  op : @ast.TsBinOp,
-  left : @ast.TsExpr,
-  right : @ast.TsExpr,
-) -> (String?, String?, Bool) {
-  let equal_sense = match op {
-    BinEq | AbstractEq => true
-    BinNe | AbstractNe => false
-    _ => return (None, None, true)
-  }
-  // Case 1: `typeof x === "string"`
-  match (left, right) {
-    (UnaryOp(Typeof, Var(name)), StringLit(s)) =>
-      return (Some(name), Some(s), equal_sense)
-    (StringLit(s), UnaryOp(Typeof, Var(name))) =>
-      return (Some(name), Some(s), equal_sense)
+/// Walk `cond` looking for narrowing-shaped sub-expressions, appending the
+/// effect into `then_binds` / `else_binds`. `then_sense` flips when we
+/// descend through a logical `!` so the same primitive can be matched in
+/// either polarity.
+fn collect_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  cond : @ast.TsExpr,
+  then_binds : Array[(String, @ast.TsType)],
+  else_binds : Array[(String, @ast.TsType)],
+  then_sense : Bool,
+) -> Unit {
+  match cond {
+    BinOp(And, l, r) =>
+      if then_sense {
+        // Both sub-conditions must hold in the then-branch.
+        collect_narrowing(env, resolver, l, then_binds, else_binds, true)
+        collect_narrowing(env, resolver, r, then_binds, else_binds, true)
+      }
+    BinOp(Or, l, r) =>
+      if !then_sense {
+        // Both must be false in the else-branch.
+        collect_narrowing(env, resolver, l, then_binds, else_binds, true)
+        collect_narrowing(env, resolver, r, then_binds, else_binds, true)
+      }
+    UnaryOp(Not, inner) =>
+      collect_narrowing(
+        env, resolver, inner, then_binds, else_binds, !then_sense,
+      )
+    BinOp(op, left, right) => {
+      let pair_pos = if then_sense { then_binds } else { else_binds }
+      let pair_neg = if then_sense { else_binds } else { then_binds }
+      // Equality narrowing.
+      let equal_sense = match op {
+        BinEq | AbstractEq => Some(true)
+        BinNe | AbstractNe => Some(false)
+        _ => None
+      }
+      match equal_sense {
+        Some(eq) => {
+          let true_side = if eq { pair_pos } else { pair_neg }
+          let false_side = if eq { pair_neg } else { pair_pos }
+          analyze_equality(
+            env, resolver, left, right, true_side, false_side,
+          )
+        }
+        None => ()
+      }
+      // `x instanceof C` narrows on equality only.
+      match op {
+        Instanceof =>
+          match (left, right) {
+            (Var(name), Var(class_name)) => {
+              let cur = env_lookup_full(env, resolver, name)
+              let class_ty = @ast.TsType::Named(class_name)
+              let then_ty = narrow_keep(cur, fn(v) {
+                match v {
+                  Named(n) => n == class_name
+                  _ => false
+                }
+              })
+              // If keep yielded Never, but the original is opaque (Any) we
+              // should still narrow to the class type.
+              let then_resolved = match then_ty {
+                Never => class_ty
+                _ => then_ty
+              }
+              pair_pos.push((name, then_resolved))
+              let else_ty = narrow_remove(cur, fn(v) {
+                match v {
+                  Named(n) => n == class_name
+                  _ => false
+                }
+              })
+              pair_neg.push((name, else_ty))
+            }
+            _ => ()
+          }
+        _ => ()
+      }
+    }
+    // `if (x)` — truthy narrowing strips null/undefined in then-branch.
+    Var(name) =>
+      if then_sense {
+        let cur = env_lookup_full(env, resolver, name)
+        then_binds.push((name, non_nullable(cur)))
+      }
     _ => ()
   }
-  (None, None, equal_sense)
+}
+
+///|
+/// Look up `name`'s current type via env first, then resolver globals,
+/// defaulting to `Any`.
+fn env_lookup_full(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+) -> @ast.TsType {
+  match env.lookup(name) {
+    Some(t) => t
+    None =>
+      match resolver.globals.get(name) {
+        Some(t) => t
+        None => @ast.TsType::Any
+      }
+  }
+}
+
+///|
+/// Analyze an `=== / !==` (`true_side` collects "equality holds" effects,
+/// `false_side` collects "equality fails"). Handles:
+///   - typeof x === "tag"
+///   - x === null / x === undefined
+///   - x == null (loose) → both null and undefined
+///   - x === "literal"  (literal narrowing on unions)
+///   - obj.prop === "literal" (discriminated union)
+fn analyze_equality(
+  env : ExprEnv,
+  resolver : Resolver,
+  left : @ast.TsExpr,
+  right : @ast.TsExpr,
+  true_side : Array[(String, @ast.TsType)],
+  false_side : Array[(String, @ast.TsType)],
+) -> Unit {
+  // `typeof x === "string"` — canonical form.
+  let typeof_match = match (left, right) {
+    (UnaryOp(Typeof, Var(name)), StringLit(s)) => Some((name, s))
+    (StringLit(s), UnaryOp(Typeof, Var(name))) => Some((name, s))
+    _ => None
+  }
+  match typeof_match {
+    Some((name, ts)) =>
+      match typeof_string_to_type(ts) {
+        Some(narrowed) => {
+          true_side.push((name, narrowed))
+          // Else side: remove variants matching that primitive.
+          let cur = env_lookup_full(env, resolver, name)
+          let stripped = narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
+          false_side.push((name, stripped))
+        }
+        None => ()
+      }
+    None => ()
+  }
+
+  // `x === null` / `x === undefined`. `undefined` parses as either
+  // `Var("undefined")` or `UnaryOp(Void, ...)` (the spec-mandated form).
+  let null_match = match (left, right) {
+    (Var(name), NullLit) => Some((name, @ast.TsType::Null))
+    (NullLit, Var(name)) => Some((name, @ast.TsType::Null))
+    (Var(name), UnaryOp(Void, _)) => Some((name, @ast.TsType::Undefined))
+    (UnaryOp(Void, _), Var(name)) => Some((name, @ast.TsType::Undefined))
+    (Var(name), Var("undefined")) if name != "undefined" =>
+      Some((name, @ast.TsType::Undefined))
+    (Var("undefined"), Var(name)) if name != "undefined" =>
+      Some((name, @ast.TsType::Undefined))
+    _ => None
+  }
+  match null_match {
+    Some((name, tag)) => {
+      let cur = env_lookup_full(env, resolver, name)
+      true_side.push((name, tag))
+      let stripped = narrow_remove(cur, fn(v) { type_eq(v, tag) })
+      false_side.push((name, stripped))
+    }
+    None => ()
+  }
+
+  // `obj.prop === "literal"` — discriminated union.
+  let disc_match = match (left, right) {
+    (PropAccess(Var(name), prop), StringLit(lit)) =>
+      Some((name, prop, lit))
+    (StringLit(lit), PropAccess(Var(name), prop)) =>
+      Some((name, prop, lit))
+    _ => None
+  }
+  match disc_match {
+    Some((name, prop, lit)) => {
+      let cur = env_lookup_full(env, resolver, name)
+      match narrow_by_discriminant(resolver, cur, prop, lit, true) {
+        Some(then_ty) => {
+          true_side.push((name, then_ty))
+          match narrow_by_discriminant(resolver, cur, prop, lit, false) {
+            Some(else_ty) => false_side.push((name, else_ty))
+            None => ()
+          }
+        }
+        None => ()
+      }
+    }
+    None => ()
+  }
+
+  // `x === "literal"` — literal union narrowing.
+  let lit_match = match (left, right) {
+    (Var(name), StringLit(lit)) => Some((name, lit))
+    (StringLit(lit), Var(name)) => Some((name, lit))
+    _ => None
+  }
+  match lit_match {
+    Some((name, lit)) => {
+      let cur = env_lookup_full(env, resolver, name)
+      match cur {
+        Union(_) => {
+          let kept = narrow_keep(cur, fn(v) {
+            match v {
+              Literal(s) => s == lit
+              _ => false
+            }
+          })
+          match kept {
+            Never => ()
+            _ => {
+              true_side.push((name, kept))
+              let dropped = narrow_remove(cur, fn(v) {
+                match v {
+                  Literal(s) => s == lit
+                  _ => false
+                }
+              })
+              false_side.push((name, dropped))
+            }
+          }
+        }
+        _ => ()
+      }
+    }
+    None => ()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -887,16 +1341,84 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       env.bind(name, bound_type)
       check_expr_against(env, init, declared, ctx, "binding `\{name}` init")
     }
-    Var(_, _, init) | Let(_, _, init) | Const(_, _, init) => {
+    Var(@ast.TsBinding::Array(ab), declared, init)
+    | Let(@ast.TsBinding::Array(ab), declared, init)
+    | Const(@ast.TsBinding::Array(ab), declared, init) => {
+      check_call_args_in_expr(env, init, ctx)
+      let source_ty = if is_checkable(declared) {
+        declared
+      } else {
+        infer_expr(env, ctx.resolver, init)
+      }
+      bind_array_pattern(env, ctx, ab, source_ty)
+    }
+    Var(@ast.TsBinding::Object(ob), declared, init)
+    | Let(@ast.TsBinding::Object(ob), declared, init)
+    | Const(@ast.TsBinding::Object(ob), declared, init) => {
+      check_call_args_in_expr(env, init, ctx)
+      let source_ty = if is_checkable(declared) {
+        declared
+      } else {
+        infer_expr(env, ctx.resolver, init)
+      }
+      bind_object_pattern(env, ctx, ob, source_ty)
+    }
+    Var(@ast.TsBinding::Target(_), _, init)
+    | Let(@ast.TsBinding::Target(_), _, init)
+    | Const(@ast.TsBinding::Target(_), _, init) => {
       let _ = infer_expr(env, ctx.resolver, init)
     }
-    Expr(e) =>
+    Expr(e) => check_call_args_in_expr(env, e, ctx)
+    Assign(name, e) => {
       check_call_args_in_expr(env, e, ctx)
-    Assign(_, e)
-    | CompoundAssign(_, _, e)
-    | IndexAssign(_, _, e)
-    | PropAssign(_, _, e) => {
+      match env.lookup(name) {
+        Some(target_ty) =>
+          check_expr_against(env, e, target_ty, ctx, "assign `\{name}`")
+        None => ()
+      }
+    }
+    CompoundAssign(name, op, e) => {
       check_call_args_in_expr(env, e, ctx)
+      // For arithmetic compound ops, the right-hand operand must be numeric
+      // if the variable is numeric. We delegate to `infer_binop` to derive
+      // the equivalent simple assignment's required type.
+      match env.lookup(name) {
+        Some(target_ty) => check_compound_assign(env, target_ty, op, e, ctx, name)
+        None => ()
+      }
+    }
+    PropAssign(recv, prop, value) => {
+      check_call_args_in_expr(env, recv, ctx)
+      check_call_args_in_expr(env, value, ctx)
+      let recv_ty = infer_expr(env, ctx.resolver, recv)
+      match ctx.resolver.lookup_field(recv_ty, prop) {
+        Some(target_ty) =>
+          check_expr_against(env, value, target_ty, ctx, "assign `.\{prop}`")
+        None => ()
+      }
+    }
+    IndexAssign(recv, idx, value) => {
+      check_call_args_in_expr(env, recv, ctx)
+      check_call_args_in_expr(env, idx, ctx)
+      check_call_args_in_expr(env, value, ctx)
+      let recv_ty = infer_expr(env, ctx.resolver, recv)
+      match recv_ty {
+        Array(elem) =>
+          check_expr_against(env, value, elem, ctx, "assign array element")
+        Tuple(items) =>
+          match idx {
+            IntLit(i) if i >= 0 && i < items.length() =>
+              check_expr_against(
+                env,
+                value,
+                items[i],
+                ctx,
+                "assign tuple[\{i}]",
+              )
+            _ => ()
+          }
+        _ => ()
+      }
     }
     Return(opt) =>
       match opt {
@@ -915,11 +1437,28 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     Throw(e) => check_call_args_in_expr(env, e, ctx)
     If(cond, then_block, else_block) => {
       check_call_args_in_expr(env, cond, ctx)
-      let effect = analyze_narrowing(cond)
+      let effect = analyze_narrowing(env, ctx.resolver, cond)
       check_block_with_narrowing(env, then_block, ctx, effect.then_binds)
-      match else_block {
-        Some(b) => check_block_with_narrowing(env, b, ctx, effect.else_binds)
-        None => ()
+      let then_exits = block_always_exits(then_block)
+      let else_exits = match else_block {
+        Some(b) => {
+          check_block_with_narrowing(env, b, ctx, effect.else_binds)
+          block_always_exits(b)
+        }
+        None => false
+      }
+      // Narrowing after early return: when one branch unconditionally exits,
+      // the surrounding scope continues with the opposite branch's effect
+      // applied — so `if (x === null) return; ... /* x is non-null */`
+      // works out of the box.
+      if then_exits && !else_exits {
+        for b in effect.else_binds {
+          env.bind(b.0, b.1)
+        }
+      } else if else_exits && !then_exits {
+        for b in effect.then_binds {
+          env.bind(b.0, b.1)
+        }
       }
     }
     While(cond, body) | DoWhile(cond, body) => {
@@ -1079,19 +1618,61 @@ fn check_call_args_in_expr(
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
     }
-    AssignExpr(_, v)
-    | CompoundAssignExpr(_, _, v)
-    | AssignPattern(_, v)
-    | Spread(v)
-    | Await(v) => check_call_args_in_expr(env, v, ctx)
-    PropAssignExpr(recv, _, v) => {
+    AssignExpr(name, v) => {
+      check_call_args_in_expr(env, v, ctx)
+      match env.lookup(name) {
+        Some(target_ty) =>
+          check_expr_against(env, v, target_ty, ctx, "assign `\{name}`")
+        None => ()
+      }
+    }
+    CompoundAssignExpr(target, op, v) => {
+      check_call_args_in_expr(env, target, ctx)
+      check_call_args_in_expr(env, v, ctx)
+      match target {
+        Var(name) =>
+          match env.lookup(name) {
+            Some(target_ty) =>
+              check_compound_assign(env, target_ty, op, v, ctx, name)
+            None => ()
+          }
+        _ => ()
+      }
+    }
+    AssignPattern(_, v) | Spread(v) | Await(v) =>
+      check_call_args_in_expr(env, v, ctx)
+    PropAssignExpr(recv, prop, v) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, v, ctx)
+      let recv_ty = infer_expr(env, ctx.resolver, recv)
+      match ctx.resolver.lookup_field(recv_ty, prop) {
+        Some(target_ty) =>
+          check_expr_against(env, v, target_ty, ctx, "assign `.\{prop}`")
+        None => ()
+      }
     }
     IndexAssignExpr(recv, idx, v) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
       check_call_args_in_expr(env, v, ctx)
+      let recv_ty = infer_expr(env, ctx.resolver, recv)
+      match recv_ty {
+        Array(elem) =>
+          check_expr_against(env, v, elem, ctx, "assign array element")
+        Tuple(items) =>
+          match idx {
+            IntLit(i) if i >= 0 && i < items.length() =>
+              check_expr_against(
+                env,
+                v,
+                items[i],
+                ctx,
+                "assign tuple[\{i}]",
+              )
+            _ => ()
+          }
+        _ => ()
+      }
     }
     Seq(a, b) => {
       check_call_args_in_expr(env, a, ctx)
@@ -1108,6 +1689,43 @@ fn check_call_args_in_expr(
       }
     }
     _ => ()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reachability — "does this statement / block always exit (return / throw)?"
+// Used to flag non-void functions whose body may fall through without
+// returning. Intentionally conservative: complex switch / loop flow is
+// treated as "may fall through".
+// ---------------------------------------------------------------------------
+
+///|
+fn block_always_exits(block : @ast.TsBlock) -> Bool {
+  for stmt in block.stmts {
+    if stmt_always_exits(stmt) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Return(_) | Throw(_) => true
+    If(_, then_b, Some(else_b)) =>
+      block_always_exits(then_b) && block_always_exits(else_b)
+    Block(b) => block_always_exits(b)
+    Try(try_b, _, catch_b_opt, _) => {
+      let try_exits = block_always_exits(try_b)
+      let catch_exits = match catch_b_opt {
+        Some(cb) => block_always_exits(cb)
+        None => false
+      }
+      try_exits && catch_exits
+    }
+    Label(_, inner) => stmt_always_exits(inner)
+    _ => false
   }
 }
 
@@ -1148,6 +1766,18 @@ fn check_function_body_with(
   }
   for stmt in func.body.stmts {
     check_stmt(env, stmt, ctx)
+  }
+  // Missing-return analysis: when the declared (body-level) return type is
+  // concrete and doesn't accept `undefined` / `void`, every path through the
+  // body must end in `return` or `throw`.
+  if is_checkable(body_return) &&
+    !is_assignable_to(@ast.TsType::Undefined, body_return) &&
+    !is_assignable_to(@ast.TsType::Void, body_return) &&
+    !block_always_exits(func.body) {
+    issues.push({
+      path: "function " + func.name,
+      message: "not all paths return a `\{type_display(body_return)}`",
+    })
   }
   issues
 }

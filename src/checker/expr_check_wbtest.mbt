@@ -572,3 +572,318 @@ test "expr_check: interface extends chain resolves field" {
   }
   assert_true(found)
 }
+
+///|
+test "expr_check: assignment to local var checks rhs type" {
+  let src =
+    #|function f(): void {
+    #|  let x: number = 1;
+    #|  x = "oops";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains("assign `x`") &&
+       i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: property assignment checks rhs against field type" {
+  let src =
+    #|interface Point { x: number; y: number; }
+    #|function f(p: Point): void {
+    #|  p.x = "oops";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains("assign `.x`") &&
+       i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: index assignment on number[] rejects string" {
+  let src =
+    #|function f(xs: number[]): void {
+    #|  xs[0] = "oops";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: compound assignment += on number rejects string rhs" {
+  let src =
+    #|function f(): void {
+    #|  let x: number = 0;
+    #|  x += "oops";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains("compound-assign") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: compound += on string allows any rhs (concat)" {
+  let src =
+    #|function f(): void {
+    #|  let s: string = "";
+    #|  s += "more";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: null narrowing — x !== null lets x be returned as non-null" {
+  let src =
+    #|function f(x: string | null): string {
+    #|  if (x !== null) {
+    #|    return x;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: null narrowing — without check, x | null is not returnable" {
+  let src =
+    #|function f(x: string | null): string {
+    #|  return x;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains("return") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: undefined narrowing via x !== undefined" {
+  let src =
+    #|function f(x: number | undefined): number {
+    #|  if (x !== undefined) {
+    #|    return x;
+    #|  }
+    #|  return 0;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: truthy narrowing strips null/undefined in then branch" {
+  let src =
+    #|function f(x: string | null | undefined): string {
+    #|  if (x) {
+    #|    return x;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: instanceof narrowing keeps the asserted class type" {
+  let src =
+    #|class Foo { bar(): number { return 1; } }
+    #|function use(x: unknown): number {
+    #|  if (x instanceof Foo) {
+    #|    return x.bar();
+    #|  }
+    #|  return 0;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: literal narrowing on string union" {
+  let src =
+    #|function f(s: "a" | "b" | "c"): "a" {
+    #|  if (s === "a") {
+    #|    return s;
+    #|  }
+    #|  return "a";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: literal narrowing — else branch excludes matched literal" {
+  let src =
+    #|function f(s: "a" | "b"): "b" {
+    #|  if (s === "a") {
+    #|    return "b";
+    #|  }
+    #|  return s;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: && compound narrowing applies both effects" {
+  let src =
+    #|function f(x: string | null, y: number | null): string {
+    #|  if (x !== null && y !== null) {
+    #|    return x;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: missing return path on number function" {
+  let src =
+    #|function f(): number {
+    #|  if (true) {
+    #|    return 1;
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("not all paths return") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: complete return path on number function passes" {
+  let src =
+    #|function f(b: boolean): number {
+    #|  if (b) { return 1; } else { return 2; }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: throw counts as exit for return-path analysis" {
+  let src =
+    #|function f(b: boolean): number {
+    #|  if (b) { return 1; } else { throw new Error("nope"); }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut path_err_found = false
+  for i in issues {
+    if i.message.contains("not all paths return") {
+      path_err_found = true
+    }
+  }
+  assert_false(path_err_found)
+}
+
+///|
+test "expr_check: void return type does not trigger missing-return" {
+  let src =
+    #|function f(): void {
+    #|  const x: number = 1;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: array destructuring binding types each element" {
+  let src =
+    #|function f(t: [number, string]): string {
+    #|  const [a, b] = t;
+    #|  return a;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // `a` is number, declared return string → mismatch.
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: array destructuring on number[] yields number elements" {
+  let src =
+    #|function f(xs: number[]): string {
+    #|  const [a, b] = xs;
+    #|  return a;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: object destructuring binding pulls field types" {
+  let src =
+    #|interface Point { x: number; y: number; }
+    #|function f(p: Point): string {
+    #|  const { x, y } = p;
+    #|  return x;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
