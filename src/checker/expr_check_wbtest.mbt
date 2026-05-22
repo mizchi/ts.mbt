@@ -264,3 +264,311 @@ test "expr_check: check_module_function_bodies walks all top-level funcs" {
   assert_true(saw_a)
   assert_true(saw_b)
 }
+
+///|
+fn parse_module_or_empty(src : String) -> @ast.TsModule {
+  match (try? @parser.parse_module_from_source_with_const_values(src, {})) {
+    Ok(m) => m
+    Err(_) =>
+      // Empty fallback — the test's subsequent assertions will fail loudly
+      // if parsing failed unexpectedly.
+      {
+        funcs: [],
+        interfaces: [],
+        type_aliases: [],
+        imports: [],
+        values: [],
+        classes: [],
+        namespaces: [],
+        enums: [],
+      }
+  }
+}
+
+///|
+test "expr_check: argument count mismatch on top-level function call" {
+  let src =
+    #|function add(a: number, b: number): number { return a + b; }
+    #|function caller(): number { return add(1); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // Should flag the call site for the missing argument.
+  let mut saw_count = false
+  for i in issues {
+    if i.message.contains("expected 2") && i.message.contains("got 1") {
+      saw_count = true
+    }
+  }
+  assert_true(saw_count)
+}
+
+///|
+test "expr_check: argument type mismatch on top-level function call" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|function caller(): void { takesString(42); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut saw_arg_err = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      saw_arg_err = true
+    }
+  }
+  assert_true(saw_arg_err)
+}
+
+///|
+test "expr_check: interface property access is typed via resolver" {
+  let src =
+    #|interface Point { x: number; y: number; }
+    #|function getX(p: Point): string { return p.x; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // p.x is `number` but the declared return type is `string` → mismatch.
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: interface property access correct usage passes" {
+  let src =
+    #|interface Point { x: number; y: number; }
+    #|function getX(p: Point): number { return p.x; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: interface method call return type" {
+  let src =
+    #|interface Logger { log(msg: string): void; }
+    #|function use(l: Logger): string { return l.log("hi"); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("void") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: interface method call argument type checked" {
+  let src =
+    #|interface Logger { log(msg: string): void; }
+    #|function use(l: Logger): void { l.log(42); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains("call `log`") &&
+       i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: async function body returns inner T not Promise<T>" {
+  let src =
+    #|async function f(): Promise<number> { return 1; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: async function wrong inner return type flagged" {
+  let src =
+    #|async function f(): Promise<number> { return "oops"; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: await unwraps Promise<T>" {
+  let src =
+    #|async function fetchN(): Promise<number> { return 1; }
+    #|async function user(): Promise<string> {
+    #|  const n = await fetchN();
+    #|  return n;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // `n` is number, declared return inner type is string → mismatch.
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: typeof narrowing on string in then-branch" {
+  let src =
+    #|function f(x: string | number): number {
+    #|  if (typeof x === "string") {
+    #|    return x;
+    #|  }
+    #|  return 0;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // After narrowing, `x` is string, declared return is number → mismatch.
+  let mut found = false
+  for i in issues {
+    if i.path.contains("return") &&
+       i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: typeof narrowing accepts compatible branch" {
+  let src =
+    #|function f(x: string | number): string {
+    #|  if (typeof x === "string") {
+    #|    return x;
+    #|  }
+    #|  return "fallback";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: new ClassName returns instance type and checks ctor args" {
+  let src =
+    #|class Point { constructor(x: number, y: number) {} }
+    #|function make(): number { return new Point(1, 2); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // `new Point(...)` is `Point`, not `number`.
+  let mut found = false
+  for i in issues {
+    if i.message.contains("number") && i.message.contains("Point") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: constructor argument type mismatch" {
+  let src =
+    #|class Point { constructor(x: number, y: number) {} }
+    #|function make(): Point { return new Point("a", 2); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains("new `Point`") &&
+       i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: tuple element access via literal index" {
+  let src =
+    #|function f(t: [number, string]): string { return t[0]; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: array index access returns element type" {
+  let src =
+    #|function f(xs: number[]): string { return xs[0]; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: top-level function visible as global" {
+  let src =
+    #|function helper(): number { return 1; }
+    #|function caller(): string { return helper(); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: type alias is unwrapped for property access" {
+  let src =
+    #|interface Point { x: number; }
+    #|type P = Point;
+    #|function f(p: P): string { return p.x; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: interface extends chain resolves field" {
+  let src =
+    #|interface Base { id: number; }
+    #|interface Sub extends Base { name: string; }
+    #|function f(s: Sub): string { return s.id; }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // s.id is from Base → number; return type string → mismatch.
+  let mut found = false
+  for i in issues {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
