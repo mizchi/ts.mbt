@@ -1,4 +1,9 @@
 import {
   "moonbitlang/core/string",
+  "moonbitlang/core/strconv",
   "mizchi/ts/ast" @ast,
 }
+
+import {
+  "mizchi/ts/parser" @parser,
+} for "wbtest"
