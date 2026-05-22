@@ -64,6 +64,9 @@ moon check --deny-warn
 # Run tests
 moon test --target native
 
+# Run parser microbenchmarks
+moon bench --target native
+
 # Format code
 moon fmt
 
