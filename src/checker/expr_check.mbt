@@ -617,6 +617,10 @@ fn infer_call(
     let _ = infer_expr(env, resolver, a)
   }
   match callee {
+    // `paramName is T` is a boolean at the value level — calls to a type
+    // predicate function return `Boolean`. The predicate effect is applied
+    // via the narrowing path in `if (isFoo(v))`.
+    Func(_, TypePredicate(_, _)) => @ast.TsType::Boolean
     Func(_, ret) => ret
     _ => @ast.TsType::Any
   }
@@ -1598,6 +1602,133 @@ fn collect_narrowing(
         let cur = env_lookup_full(env, resolver, name)
         then_binds.push((name, non_nullable(cur)))
       }
+    // `if (isFoo(v))` — user-defined type guard. When the callee's
+    // declared return type is `paramName is T`, the corresponding
+    // positional argument is narrowed to `T` in the then-branch and the
+    // complement is kept in the else-branch.
+    Call(callee_name, args) => {
+      let pair_pos = if then_sense { then_binds } else { else_binds }
+      let pair_neg = if then_sense { else_binds } else { then_binds }
+      apply_type_predicate_narrowing(
+        env, resolver, callee_name, args, pair_pos, pair_neg,
+      )
+    }
+    MethodCall(receiver, method_name, args) => {
+      let pair_pos = if then_sense { then_binds } else { else_binds }
+      let pair_neg = if then_sense { else_binds } else { then_binds }
+      apply_method_type_predicate_narrowing(
+        env, resolver, receiver, method_name, args, pair_pos, pair_neg,
+      )
+    }
+    _ => ()
+  }
+}
+
+///|
+/// When `callee_name` is a global function whose declared return type is a
+/// `TypePredicate(paramName, T)`, narrow the argument bound to `paramName`
+/// to `T` (positive) / strip `T` from it (negative). The mapping uses the
+/// callee's parameter-name list to figure out which positional arg the
+/// predicate refers to.
+fn apply_type_predicate_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  callee_name : String,
+  args : Array[@ast.TsExpr],
+  pair_pos : Array[(String, @ast.TsType)],
+  pair_neg : Array[(String, @ast.TsType)],
+) -> Unit {
+  let predicate = match resolver.globals.get(callee_name) {
+    Some(Func(_, TypePredicate(param_name, target))) =>
+      Some((param_name, target))
+    _ => None
+  }
+  match predicate {
+    None => return
+    Some(_) => ()
+  }
+  let (param_name, target) = match predicate {
+    Some(p) => p
+    None => return
+  }
+  let sig = resolver.signatures.get(callee_name)
+  // Map predicate's parameter name to argument index.
+  let idx = match sig {
+    Some(params) => {
+      let mut found : Int = -1
+      let mut i = 0
+      while i < params.length() {
+        if params[i].name == param_name {
+          found = i
+          break
+        }
+        i = i + 1
+      }
+      found
+    }
+    None => 0
+  }
+  if idx < 0 || idx >= args.length() {
+    return
+  }
+  match args[idx] {
+    Var(arg_name) => {
+      let cur = env_lookup_full(env, resolver, arg_name)
+      // Positive: narrow to T. If `keep` produces Never (e.g. cur is Any),
+      // fall back to target.
+      let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+      let then_resolved = match then_ty {
+        Never => target
+        _ => then_ty
+      }
+      pair_pos.push((arg_name, then_resolved))
+      // Negative: strip members that fit T.
+      let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+      pair_neg.push((arg_name, else_ty))
+    }
+    _ => ()
+  }
+}
+
+///|
+/// Method form: `receiver.guardMethod(v)` where the method's declared
+/// return type is `paramName is T`. Resolves the method signature via the
+/// receiver shape and applies the same narrowing as the function form.
+fn apply_method_type_predicate_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  receiver : @ast.TsExpr,
+  method_name : String,
+  args : Array[@ast.TsExpr],
+  pair_pos : Array[(String, @ast.TsType)],
+  pair_neg : Array[(String, @ast.TsType)],
+) -> Unit {
+  let recv_ty = infer_expr(env, resolver, receiver)
+  let ret = match resolver.lookup_method_sig(recv_ty, method_name) {
+    Some((_, ret)) => ret
+    None => return
+  }
+  let (param_name, target) = match ret {
+    TypePredicate(p, t) => (p, t)
+    _ => return
+  }
+  // Without per-method TsParam metadata, fall back to first positional arg.
+  let _ = param_name
+  if args.length() == 0 {
+    return
+  }
+  match args[0] {
+    Var(arg_name) => {
+      let cur = env_lookup_full(env, resolver, arg_name)
+      let then_ty = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+      let then_resolved = match then_ty {
+        Never => target
+        _ => then_ty
+      }
+      pair_pos.push((arg_name, then_resolved))
+      let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
+      pair_neg.push((arg_name, else_ty))
+    }
     _ => ()
   }
 }
@@ -2310,7 +2441,15 @@ fn check_function_body_with(
   // Inside an async function body, `return x` returns the inner type — the
   // wrapping `Promise<T>` is what the *caller* sees. So we unwrap once for
   // the body-level return check.
-  let body_return = unwrap_async_return(func.is_async, func.return_type)
+  //
+  // For a type-predicate function (`x is T`), the body actually returns a
+  // boolean — the predicate-ness lives only at the call site. Lower it
+  // back to `Boolean` for the body-level return check.
+  let body_return = match
+    unwrap_async_return(func.is_async, func.return_type) {
+    TypePredicate(_, _) => @ast.TsType::Boolean
+    other => other
+  }
   let ctx : CheckCtx = {
     path_prefix: "function " + func.name,
     return_type: body_return,

@@ -1549,3 +1549,74 @@ test "expr_check: call-site arg check fires inside `(call(bad) as T)`" {
   }
   assert_true(saw_arg)
 }
+
+// ---------------------------------------------------------------------------
+// Round 8: type predicate narrowing (`x is T`).
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: type predicate narrows arg in then-branch" {
+  let src =
+    #|interface Cat { meow: string }
+    #|interface Dog { bark: string }
+    #|function isCat(a: Cat | Dog): a is Cat { return true; }
+    #|function f(a: Cat | Dog): string {
+    #|  if (isCat(a)) {
+    #|    return a.meow;
+    #|  }
+    #|  return a.bark;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: type predicate else-branch excludes the asserted type" {
+  let src =
+    #|interface Cat { meow: string }
+    #|interface Dog { bark: string }
+    #|function isCat(a: Cat | Dog): a is Cat { return true; }
+    #|function f(a: Cat | Dog): string {
+    #|  if (!isCat(a)) {
+    #|    return a.bark;
+    #|  }
+    #|  return a.meow;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: type predicate result type is Boolean for callers" {
+  // `isCat(a)` itself has type `boolean`, not `a is Cat` — so it can be
+  // stored in a Boolean variable without complaint.
+  let src =
+    #|interface Cat { meow: string }
+    #|interface Dog { bark: string }
+    #|function isCat(a: Cat | Dog): a is Cat { return true; }
+    #|function f(a: Cat | Dog): boolean {
+    #|  const r: boolean = isCat(a);
+    #|  return r;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: type predicate with non-matching arg name does not crash" {
+  // The predicate names a parameter (`x`) that doesn't exist on the call
+  // site (only one positional arg). The checker should fall back gracefully.
+  let src =
+    #|interface Cat { meow: string }
+    #|interface Dog { bark: string }
+    #|function isCat(value: Cat | Dog): value is Cat { return true; }
+    #|function f(animal: Cat | Dog): boolean {
+    #|  return isCat(animal);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

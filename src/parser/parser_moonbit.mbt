@@ -517,6 +517,9 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     // Template literal types resolve to a `string` subtype in TypeScript;
     // until enum lowering integrates them, fall back to plain `String`.
     TemplateLiteralType(_, _) => "String"
+    // `paramName is T` is a boolean at the bridge boundary; the predicate
+    // information survives in the AST for the type-guard helper collector.
+    TypePredicate(_, _) => "Bool"
     Union(parts) =>
       match inline_union_synthesized_name_from_parts(parts) {
         Some(name) => name

@@ -1935,7 +1935,7 @@ test "parser: parse local interface declaration inside function block" {
 }
 
 ///|
-test "parser: parse class type predicate methods as boolean returns" {
+test "parser: parse class type predicate methods as type predicates" {
   let src =
     #|declare class Ok<T, E> {
     #|  isOk(): this is Ok<T, E>;
@@ -1950,8 +1950,15 @@ test "parser: parse class type predicate methods as boolean returns" {
   assert_eq(module_.classes.length(), 1)
   let class_ = module_.classes[0]
   assert_eq(class_.methods.length(), 2)
-  assert_eq(class_.methods[0].return_type, Boolean)
-  assert_eq(class_.methods[1].return_type, Boolean)
+  // Type predicates `this is T` survive into `TypePredicate("this", T)`.
+  match class_.methods[0].return_type {
+    TypePredicate("this", Applied("Ok", _)) => ()
+    other => fail("expected isOk to return `this is Ok<T, E>`, got \{other}")
+  }
+  match class_.methods[1].return_type {
+    TypePredicate("this", Applied("Err", _)) => ()
+    other => fail("expected isErr to return `this is Err<T, E>`, got \{other}")
+  }
 }
 
 ///|

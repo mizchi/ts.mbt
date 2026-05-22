@@ -828,8 +828,14 @@ fn Parser::parse_postfix_type(
 fn Parser::parse_type_operand(self : Parser) -> @ast.TsType raise ParseError {
   let base = self.parse_primary_type()
   if !self.has_line_terminator_before() && self.match_ident("is") {
-    let _ = self.parse_type()
-    return Boolean
+    let ty = self.parse_type()
+    // `paramName is T` — record as `TypePredicate(name, T)` so the checker
+    // can narrow callers on `if (isFoo(v))`. When the LHS isn't a simple
+    // identifier (rare), fall back to `Boolean`.
+    return match base {
+      Named(name) => TypePredicate(name, ty)
+      _ => Boolean
+    }
   }
   base
 }

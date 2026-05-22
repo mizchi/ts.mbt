@@ -963,6 +963,9 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     // until step 4.3 lowers them to enum cases, fall back to plain String
     // rather than widening to JSValue.
     TemplateLiteralType(_, _) => "String"
+    // `paramName is T` is a boolean at the FFI boundary; the predicate
+    // information is consumed by the checker / bridge type-guard collector.
+    TypePredicate(_, _) => "Bool"
     Union(parts) =>
       match ffi_synthesize_inline_union(state, parts) {
         Some(synth_name) => synth_name
