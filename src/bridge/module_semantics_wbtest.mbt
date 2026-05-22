@@ -88,7 +88,7 @@ async test "bridge: collect MoonBit TS scaffold unsupported exports reports only
   inspect(
     ambiguous_unsupported,
     content=(
-      #|["Shared (ambiguous re-export: fixtures/resolver/project/types/ambiguous-a.d.ts, fixtures/resolver/project/types/ambiguous-b.d.ts)"]
+      #|[Shared (ambiguous re-export: fixtures/resolver/project/types/ambiguous-a.d.ts, fixtures/resolver/project/types/ambiguous-b.d.ts)]
     ),
   )
 }

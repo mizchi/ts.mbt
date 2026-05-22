@@ -6295,3 +6295,70 @@ test "parser: literal-union and template-literal aliases land in type_aliases" {
     TemplateLiteralType(["", "-x"], [Named("Channel")]),
   )
 }
+
+///|
+test "parser: parse top-level async function declaration" {
+  let src =
+    #|async function fetchData() {
+    #|  const r = await fetch("/api");
+    #|  return r;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+  assert_eq(module_.funcs[0].name, "fetchData")
+  assert_true(module_.funcs[0].is_async)
+}
+
+///|
+test "parser: parse top-level decorator on class declaration" {
+  let src =
+    #|@logged
+    #|class Service {
+    #|  greet() { return "hi"; }
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  assert_eq(module_.classes[0].name, "Service")
+}
+
+///|
+test "parser: parse top-level decorator with call args on exported class" {
+  // Single-line: decorator must not swallow the following declaration.
+  let src = "@inject('logger') export class App { constructor() {} }"
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  assert_eq(module_.classes[0].name, "App")
+}
+
+///|
+test "parser: parse member-access decorator on class method" {
+  let src =
+    #|class C {
+    #|  @ns.deco
+    #|  foo() {}
+    #|  @ns.deco()
+    #|  bar() {}
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+}

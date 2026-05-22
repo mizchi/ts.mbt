@@ -527,7 +527,7 @@ test "unified JSValue diagnostics ignore shared declarations" {
   inspect(
     out,
     content=(
-      #|["bridge.mbti:3: declare pub fn parse(input : String) -> JSValue", "bridge.mbt:3: pub extern \"js\" fn parse(input : String) -> JSValue = \"parse\""]
+      #|[bridge.mbti:3: declare pub fn parse(input : String) -> JSValue, bridge.mbt:3: pub extern "js" fn parse(input : String) -> JSValue = "parse"]
     ),
   )
 }

@@ -346,52 +346,56 @@ fn Parser::is_super_call_stmt(_self : Parser, stmt : @ast.TsStmt) -> Bool {
 }
 
 ///|
+// Skip a decorator (`@expr` or `@expr(args)`) precisely, matching only the
+// decorator expression itself and not anything that follows it on the same
+// line. The grammar we accept:
+//   Decorator ::= '@' DecoratorMemberExpression Arguments?
+//   DecoratorMemberExpression ::= '(' Expression ')'
+//                              | IdentifierReference ('.' IdentifierName)*
 fn Parser::skip_decorator(self : Parser) -> Unit {
   let _ = self.match_(At)
-  let mut paren_depth = 0
-  let mut bracket_depth = 0
-  let mut brace_depth = 0
-  while !self.check(Eof) {
-    if paren_depth == 0 &&
-      bracket_depth == 0 &&
-      brace_depth == 0 &&
-      self.peek().has_newline_before {
-      break
+  match self.peek().kind {
+    LParen => {
+      // Parenthesized expression form: `@(expr)`
+      let _ = self.advance()
+      let mut depth = 1
+      while depth > 0 && !self.check(Eof) {
+        match self.peek().kind {
+          LParen => depth += 1
+          RParen => depth -= 1
+          _ => ()
+        }
+        let _ = self.advance()
+      }
     }
-    match self.peek().kind {
-      LParen => {
-        paren_depth += 1
+    Ident(_) => {
+      let _ = self.advance()
+      // Member access chain `a.b.c`
+      while self.check(Dot) {
         let _ = self.advance()
-      }
-      RParen => {
-        if paren_depth > 0 {
-          paren_depth -= 1
+        match self.peek().kind {
+          Ident(_) => {
+            let _ = self.advance()
+          }
+          _ => break
         }
-        let _ = self.advance()
       }
-      LBracket => {
-        bracket_depth += 1
-        let _ = self.advance()
+    }
+    _ => return
+  }
+  // Optional call arguments. Decorators may take a single Arguments list
+  // (e.g. `@deco(arg1, arg2)`). No type arguments are valid here per TS
+  // grammar, so we only consume `(...)`.
+  if self.check(LParen) {
+    let _ = self.advance()
+    let mut paren_depth = 1
+    while paren_depth > 0 && !self.check(Eof) {
+      match self.peek().kind {
+        LParen => paren_depth += 1
+        RParen => paren_depth -= 1
+        _ => ()
       }
-      RBracket => {
-        if bracket_depth > 0 {
-          bracket_depth -= 1
-        }
-        let _ = self.advance()
-      }
-      LBrace => {
-        brace_depth += 1
-        let _ = self.advance()
-      }
-      RBrace => {
-        if brace_depth > 0 {
-          brace_depth -= 1
-        }
-        let _ = self.advance()
-      }
-      _ => {
-        let _ = self.advance()
-      }
+      let _ = self.advance()
     }
   }
 }
