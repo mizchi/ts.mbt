@@ -581,3 +581,79 @@ async test "parser: parse TypeScript compiler/services/server .ts sources" {
     fail("\{failures.length()} of \{total} TypeScript .ts files failed to parse")
   }
 }
+
+///|
+/// Run the expression / statement-level checker against every successfully
+/// parsed source file in `tests/cases/conformance/types/typeParameters` and
+/// `tests/cases/controlFlow/`. Acts as a smoke gate: the checker must not
+/// crash on real-world TypeScript and the parse-success rate must stay
+/// above the documented threshold below.
+///
+/// Tolerance: TS test cases intentionally include syntax-error programs to
+/// exercise the official compiler's error recovery. Our parser is stricter,
+/// so a small number of parse failures is expected. The threshold is
+/// generous; if it ever fails, broaden the parser instead of relaxing it.
+async test "checker: smoke-run against TypeScript conformance test corpus" {
+  let dirs = [
+    "typescript/tests/cases/conformance/types/typeParameters",
+    "typescript/tests/cases/conformance/controlFlow",
+    "typescript/tests/cases/conformance/expressions/typeGuards",
+    "typescript/tests/cases/conformance/types/typeGuards",
+  ]
+  let mut total = 0
+  let mut parsed = 0
+  let mut checked = 0
+  let parse_failures : Array[String] = []
+  let check_crashes : Array[String] = []
+  for dir in dirs {
+    let files = collect_ts_source_files(dir)
+    for path in files {
+      total += 1
+      let content = @fs.read_file(path).text() catch {
+        _ => continue
+      }
+      let module_ = match
+        (try? Parser::from_source(content).parse_module()) {
+        Ok(m) => {
+          parsed += 1
+          m
+        }
+        Err(err) => {
+          parse_failures.push(path + ": \{err}")
+          continue
+        }
+      }
+      // The checker must not panic on any well-parsed module. We don't
+      // care about the issue count — TS conformance programs often
+      // intentionally produce errors.
+      match (try? @checker.check_module_function_bodies(module_)) {
+        Ok(_) => checked += 1
+        Err(err) => check_crashes.push(path + ": \{err}")
+      }
+    }
+  }
+  if total == 0 {
+    println("skip: no .ts sources found in pinned conformance corpus")
+    return
+  }
+  // Print summary so the corpus size and pass-rate are visible to anyone
+  // diffing the wbtest output.
+  println(
+    "conformance corpus: total=\{total} parsed=\{parsed} checked=\{checked}",
+  )
+  // 70 % parse-success floor leaves room for parser-error-recovery test
+  // cases without masking real regressions.
+  if parsed * 100 < total * 70 {
+    for f in parse_failures {
+      println("PARSE FAIL " + f)
+    }
+    fail("parse-success rate below 70 %: \{parsed}/\{total}")
+  }
+  // Checker must not crash on any parsed module.
+  if check_crashes.length() > 0 {
+    for c in check_crashes {
+      println("CHECK CRASH " + c)
+    }
+    fail("\{check_crashes.length()} checker crashes on conformance corpus")
+  }
+}
