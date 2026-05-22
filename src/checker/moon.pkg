@@ -2,3 +2,7 @@ import {
   "moonbitlang/core/string",
   "mizchi/ts/ast" @ast,
 }
+
+import {
+  "mizchi/ts/parser" @parser,
+} for "wbtest"
