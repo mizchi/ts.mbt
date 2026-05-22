@@ -448,14 +448,15 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       self.in_iteration = true
       let body = self.parse_block_or_stmt_no_lexical()
       self.in_iteration = prev_iteration
-      // arrayelementtype ( Number)
+      // Preserve the explicit type annotation on the loop binding when
+      // present; `parse_var_decl_type` returns `Any` otherwise.
       if is_in {
-        return ForIn(kind, binding, Number, iterable, body)
+        return ForIn(kind, binding, var_type, iterable, body)
       }
       if is_await {
-        return ForAwaitOf(kind, binding, Number, iterable, body)
+        return ForAwaitOf(kind, binding, var_type, iterable, body)
       }
-      return ForOf(kind, binding, Number, iterable, body)
+      return ForOf(kind, binding, var_type, iterable, body)
     }
     let var_kind = match kind {
       @ast.TsForOfKind::Var => VarKind::Var
@@ -489,25 +490,22 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         self.in_iteration = true
         let body = self.parse_block_or_stmt_no_lexical()
         self.in_iteration = prev_iteration
+        // Assignment-form for-of/in has no declaration site — no type
+        // annotation possible; use `Any` so the checker infers from the
+        // iterable instead of falling for a placeholder.
         if is_in {
-          return ForIn(
-            @ast.TsForOfKind::Assign,
-            binding,
-            Number,
-            iterable,
-            body,
-          )
+          return ForIn(@ast.TsForOfKind::Assign, binding, Any, iterable, body)
         }
         if is_await {
           return ForAwaitOf(
             @ast.TsForOfKind::Assign,
             binding,
-            Number,
+            Any,
             iterable,
             body,
           )
         }
-        return ForOf(@ast.TsForOfKind::Assign, binding, Number, iterable, body)
+        return ForOf(@ast.TsForOfKind::Assign, binding, Any, iterable, body)
       }
     }
     let expr = self.parse_expr_until_top_level(Semicolon)

@@ -1063,7 +1063,7 @@ fn for_of_element_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
 
 ///|
 /// Narrow `name`'s type inside a `case <test>:` body. Handles literal cases
-/// against a union of string / number literals — same shape as the
+/// against a union of string / number / boolean literals — same shape as the
 /// `if (name === lit) ...` equality narrowing path.
 fn apply_switch_case_narrowing(
   env : ExprEnv,
@@ -1072,18 +1072,107 @@ fn apply_switch_case_narrowing(
   case_test : @ast.TsExpr,
 ) -> Unit {
   let cur = env_lookup_full(env, resolver, name)
-  // String literal case
-  match case_test {
-    StringLit(lit) => {
-      let kept = narrow_keep(cur, fn(v) {
+  let predicate : ((@ast.TsType) -> Bool)? = match case_test {
+    StringLit(lit) =>
+      Some(fn(v) {
         match v {
           Literal(s) => s == lit
           _ => false
         }
       })
+    IntLit(i) => {
+      let lit_str = "\{i}"
+      Some(fn(v) {
+        match v {
+          NumberLiteral(s) => s == lit_str
+          _ => false
+        }
+      })
+    }
+    NumberLit(d) => {
+      // Best-effort: match against the same Double rendered as text.
+      let lit_str = "\{d}"
+      Some(fn(v) {
+        match v {
+          NumberLiteral(s) => s == lit_str
+          _ => false
+        }
+      })
+    }
+    BoolLit(b) =>
+      Some(fn(v) {
+        match v {
+          BooleanLiteral(x) => x == b
+          _ => false
+        }
+      })
+    _ => None
+  }
+  match predicate {
+    Some(pred) => {
+      let kept = narrow_keep(cur, pred)
       match kept {
         Never => ()
         _ => env.bind(name, kept)
+      }
+    }
+    None => ()
+  }
+}
+
+///|
+/// Switch `default:` body narrowing — exclude every literal case test against
+/// the scrutinee's union. Best-effort: only string-literal cases are excluded.
+fn apply_switch_default_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  cases : Array[@ast.TsSwitchCase],
+) -> Unit {
+  let cur = env_lookup_full(env, resolver, name)
+  let str_lits : Array[String] = []
+  for c in cases {
+    match c.test_expr {
+      Some(StringLit(s)) => str_lits.push(s)
+      _ => ()
+    }
+  }
+  if str_lits.length() == 0 {
+    return
+  }
+  let stripped = narrow_remove(cur, fn(v) {
+    match v {
+      Literal(s) => {
+        let mut hit = false
+        for lit in str_lits {
+          if s == lit {
+            hit = true
+          }
+        }
+        hit
+      }
+      _ => false
+    }
+  })
+  env.bind(name, stripped)
+}
+
+///|
+/// Switch case narrowing for `switch (obj.kind) { case "tag": ... }` —
+/// rewrites the case as a discriminated union refinement on `obj`.
+fn apply_switch_disc_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  obj_name : String,
+  prop : String,
+  case_test : @ast.TsExpr,
+) -> Unit {
+  match case_test {
+    StringLit(lit) => {
+      let cur = env_lookup_full(env, resolver, obj_name)
+      match narrow_by_discriminant(resolver, cur, prop, lit, true) {
+        Some(narrowed) => env.bind(obj_name, narrowed)
+        None => ()
       }
     }
     _ => ()
@@ -1324,6 +1413,25 @@ fn collect_narrowing(
                   Named(n) => n == class_name
                   _ => false
                 }
+              })
+              pair_neg.push((name, else_ty))
+            }
+            _ => ()
+          }
+        // `"key" in obj` — narrow `obj`'s union to members that own `key`.
+        In =>
+          match (left, right) {
+            (StringLit(key), Var(name)) => {
+              let cur = env_lookup_full(env, resolver, name)
+              let then_ty = narrow_keep(cur, fn(v) {
+                resolver.lookup_field(v, key) is Some(_)
+              })
+              match then_ty {
+                Never => ()
+                _ => pair_pos.push((name, then_ty))
+              }
+              let else_ty = narrow_remove(cur, fn(v) {
+                resolver.lookup_field(v, key) is Some(_)
               })
               pair_neg.push((name, else_ty))
             }
@@ -1667,35 +1775,46 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
-    ForOf(_, binding, _, iter, body) => {
-      // NOTE: the parser stores a hardcoded `Number` as the var_type
-      // placeholder regardless of whether the source had a type annotation,
-      // so we always infer from the iterable.
+    ForOf(_, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
-      let iter_ty = infer_expr(env, ctx.resolver, iter)
-      let elem_ty = for_of_element_type(ctx.resolver, iter_ty)
+      let elem_ty = if is_checkable(declared) {
+        declared
+      } else {
+        let iter_ty = infer_expr(env, ctx.resolver, iter)
+        for_of_element_type(ctx.resolver, iter_ty)
+      }
       let pre = env.full_snapshot()
       bind_pattern(env, ctx, binding, elem_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
-    ForAwaitOf(_, binding, _, iter, body) => {
+    ForAwaitOf(_, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
-      let iter_ty = infer_expr(env, ctx.resolver, iter)
-      // `for await (const x of asyncIter)` — unwrap `Promise<T>` and treat
-      // the inner type as the iterable.
-      let unwrapped = unwrap_async_return(true, iter_ty)
-      let elem_ty = for_of_element_type(ctx.resolver, unwrapped)
+      let elem_ty = if is_checkable(declared) {
+        declared
+      } else {
+        let iter_ty = infer_expr(env, ctx.resolver, iter)
+        // `for await (const x of asyncIter)` — unwrap `Promise<T>` and treat
+        // the inner type as the iterable.
+        let unwrapped = unwrap_async_return(true, iter_ty)
+        for_of_element_type(ctx.resolver, unwrapped)
+      }
       let pre = env.full_snapshot()
       bind_pattern(env, ctx, binding, elem_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
-    ForIn(_, binding, _, iter, body) => {
-      // `for (key in obj)` — `key` is always `string` in TS.
+    ForIn(_, binding, declared, iter, body) => {
+      // `for (key in obj)` — `key` is always `string` in TS; honor an
+      // explicit annotation if the source pinned a narrower form.
       check_call_args_in_expr(env, iter, ctx)
+      let key_ty = if is_checkable(declared) {
+        declared
+      } else {
+        @ast.TsType::String_
+      }
       let pre = env.full_snapshot()
-      bind_pattern(env, ctx, binding, @ast.TsType::String_)
+      bind_pattern(env, ctx, binding, key_ty)
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
@@ -1703,9 +1822,15 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_call_args_in_expr(env, scrutinee, ctx)
       // If the scrutinee is a simple `Var(name)`, narrow inside each `case`
       // body with a literal `test_expr` — same shape as
-      // `if (name === lit) ...` for primitives + discriminants.
+      // `if (name === lit) ...` for primitives + discriminants. Also
+      // supports `switch (obj.kind) { case "tag": ... }` by narrowing the
+      // outer object via discriminant.
       let scrutinee_name = match scrutinee {
         Var(n) => Some(n)
+        _ => None
+      }
+      let scrutinee_disc = match scrutinee {
+        PropAccess(Var(name), prop) => Some((name, prop))
         _ => None
       }
       for case_ in cases {
@@ -1717,6 +1842,17 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         match (scrutinee_name, case_.test_expr) {
           (Some(name), Some(t)) =>
             apply_switch_case_narrowing(env, ctx.resolver, name, t)
+          _ => ()
+        }
+        match (scrutinee_disc, case_.test_expr) {
+          (Some((obj_name, prop)), Some(t)) =>
+            apply_switch_disc_narrowing(env, ctx.resolver, obj_name, prop, t)
+          _ => ()
+        }
+        // `default:` body — narrow against all literal cases.
+        match (scrutinee_name, case_.test_expr) {
+          (Some(name), None) =>
+            apply_switch_default_narrowing(env, ctx.resolver, name, cases)
           _ => ()
         }
         check_block(env, case_.body, ctx)
@@ -1957,6 +2093,29 @@ fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
       try_exits && catch_exits
     }
     Label(_, inner) => stmt_always_exits(inner)
+    // A `switch` always exits when (a) it has a `default:` case, and (b)
+    // every case body ends in `return` / `throw` (or an empty body that
+    // falls through to one that does). Conservative: ignore fall-through
+    // chaining, treating each case independently — so empty bodies fail
+    // the check.
+    Switch(_, cases) => {
+      let mut has_default = false
+      for c in cases {
+        match c.test_expr {
+          None => has_default = true
+          _ => ()
+        }
+      }
+      if !has_default {
+        return false
+      }
+      for c in cases {
+        if !block_always_exits(c.body) {
+          return false
+        }
+      }
+      true
+    }
     _ => false
   }
 }

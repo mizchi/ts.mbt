@@ -275,7 +275,7 @@ test "parser: parse for-of stmt" {
     ForOf(
       @ast.TsForOfKind::Let,
       @ast.TsBinding::Ident("x"),
-      Number,
+      Any,
       Var("arr"),
       body
     ) => assert_eq(body.stmts.length(), 1)
@@ -291,7 +291,7 @@ test "parser: parse for-await-of stmt" {
     ForAwaitOf(
       @ast.TsForOfKind::Var,
       @ast.TsBinding::Ident("x"),
-      Number,
+      Any,
       ArrayLit(_),
       body
     ) => assert_eq(body.stmts.length(), 1)
@@ -329,7 +329,7 @@ test "parser: parse for-in stmt" {
     ForIn(
       @ast.TsForOfKind::Let,
       @ast.TsBinding::Ident("k"),
-      Number,
+      Any,
       Var("obj"),
       body
     ) => assert_eq(body.stmts.length(), 1)
@@ -345,7 +345,7 @@ test "parser: parse for-in let identifier" {
     ForIn(
       @ast.TsForOfKind::Assign,
       @ast.TsBinding::Ident("let"),
-      Number,
+      Any,
       Var("obj"),
       body
     ) => assert_eq(body.stmts.length(), 0)
