@@ -240,43 +240,58 @@ fn Lexer::advance(self : Lexer) -> Char? {
 // /
 fn Lexer::skip_whitespace(self : Lexer) -> Unit {
   self.newline_before_next = false // Reset at start of whitespace skipping
-  while true {
-    match self.peek_byte(0) {
-      Some(0x0B) | Some(0x0C) => {
-        self.pos += 1
-        continue
-      }
-      Some(0xA0) => {
-        self.pos += 1
-        continue
-      }
-      Some(0x2028) | Some(0x2029) => {
-        // Line Separator and Paragraph Separator are line terminators
+  let len = self.src.length()
+  // Fast path: chomp ASCII whitespace (space, tab, newline, CR, VT, FF)
+  // and line-terminator-relevant bytes directly without going through the
+  // Option-returning helpers \u2014 this loop is called once per token and was
+  // visibly hot on real `.d.ts` inputs.
+  while self.pos < len {
+    let b = self.src[self.pos].to_int()
+    if b == 0x20 || b == 0x09 {
+      self.pos += 1
+      continue
+    }
+    if b == 0x0A || b == 0x0D {
+      self.newline_before_next = true
+      self.pos += 1
+      continue
+    }
+    if b == 0x0B || b == 0x0C || b == 0xA0 {
+      self.pos += 1
+      continue
+    }
+    if b == 0x2028 || b == 0x2029 {
+      self.newline_before_next = true
+      self.pos += 1
+      continue
+    }
+    // Multi-byte UTF-8 sequences for things like NBSP / LS / PS / BOM.
+    if b == 0xC2 && self.pos + 1 < len && self.src[self.pos + 1].to_int() ==
+      0xA0 {
+      self.pos += 2
+      continue
+    }
+    if b == 0xE2 &&
+      self.pos + 2 < len &&
+      self.src[self.pos + 1].to_int() == 0x80 {
+      let b2 = self.src[self.pos + 2].to_int()
+      if b2 == 0xA8 || b2 == 0xA9 {
         self.newline_before_next = true
-        self.pos += 1
-        continue
-      }
-      Some(0xC2) if self.peek_byte(1) == Some(0xA0) => {
-        self.pos += 2
-        continue
-      }
-      Some(0xE2) if self.peek_byte(1) == Some(0x80) =>
-        match self.peek_byte(2) {
-          Some(0xA8) | Some(0xA9) => {
-            // LS (U+2028) and PS (U+2029) in UTF-8
-            self.newline_before_next = true
-            self.pos += 3
-            continue
-          }
-          _ => ()
-        }
-      Some(0xEF) if self.peek_byte(1) == Some(0xBB) &&
-        self.peek_byte(2) == Some(0xBF) => {
         self.pos += 3
         continue
       }
-      _ => ()
     }
+    if b == 0xEF &&
+      self.pos + 2 < len &&
+      self.src[self.pos + 1].to_int() == 0xBB &&
+      self.src[self.pos + 2].to_int() == 0xBF {
+      self.pos += 3
+      continue
+    }
+    // Anything else is either a comment introducer or the next real token.
+    break
+  }
+  while true {
     match self.peek() {
       Some('#') if self.peek_next() == Some('!') => {
         let _ = self.advance()
@@ -696,7 +711,39 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
 ///|
 // / /
 fn Lexer::scan_ident(self : Lexer) -> TokenKind {
+  // Fast path: walk over ASCII identifier characters and slice the source
+  // once at the end. This avoids per-character `StringBuilder` work, which
+  // showed up at the top of the lexer's hot path on real `.d.ts` inputs.
+  let start = self.pos
+  let len = self.src.length()
+  while self.pos < len {
+    let b = self.src[self.pos].to_int()
+    if (b >= 'a'.to_int() && b <= 'z'.to_int()) ||
+      (b >= 'A'.to_int() && b <= 'Z'.to_int()) ||
+      (b >= '0'.to_int() && b <= '9'.to_int()) ||
+      b == '_'.to_int() ||
+      b == '$'.to_int() {
+      self.pos += 1
+    } else {
+      break
+    }
+  }
+  // Slow path: source contains a `\uXXXX` / `\u{XXXX}` escape inside the
+  // identifier. Fall back to building the unescaped name char by char.
+  if self.pos < len && self.src[self.pos].to_int() == '\\'.to_int() {
+    return self.scan_ident_with_escapes(start)
+  }
+  let s = self.src[start:self.pos].to_string()
+  classify_ident_or_keyword(s)
+}
+
+///|
+fn Lexer::scan_ident_with_escapes(
+  self : Lexer,
+  start : Int,
+) -> TokenKind {
   let buf = StringBuilder::new()
+  buf.write_string(self.src[start:self.pos].to_string())
   while true {
     match self.peek() {
       Some(c) =>
@@ -768,99 +815,165 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
       None => break
     }
   }
-  let s = buf.to_string()
-  if s == "function" {
-    Function
-  } else if s == "class" {
-    Class
-  } else if s == "extends" {
-    Extends
-  } else if s == "var" {
-    Var
-  } else if s == "let" {
-    Let
-  } else if s == "const" {
-    Const
-  } else if s == "return" {
-    Return
-  } else if s == "if" {
-    If
-  } else if s == "else" {
-    Else
-  } else if s == "switch" {
-    Switch
-  } else if s == "case" {
-    Case
-  } else if s == "default" {
-    Default
-  } else if s == "with" {
-    With
-  } else if s == "debugger" {
-    Debugger
-  } else if s == "import" {
-    Import
-  } else if s == "export" {
-    Export
-  } else if s == "from" {
-    From
-  } else if s == "as" {
-    As
-  } else if s == "while" {
-    While
-  } else if s == "do" {
-    Do
-  } else if s == "for" {
-    For
-  } else if s == "break" {
-    Break
-  } else if s == "continue" {
-    Continue
-  } else if s == "try" {
-    Try
-  } else if s == "catch" {
-    Catch
-  } else if s == "finally" {
-    Finally
-  } else if s == "throw" {
-    Throw
-  } else if s == "yield" {
-    Yield
-  } else if s == "true" {
-    Bool(true)
-  } else if s == "false" {
-    Bool(false)
-  } else if s == "typeof" {
-    Typeof
-  } else if s == "delete" {
-    Delete
-  } else if s == "null" {
-    Null
-  } else if s == "number" {
-    NumberType
-  } else if s == "boolean" {
-    BooleanType
-  } else if s == "void" {
-    VoidType
-  } else if s == "int" {
-    IntType
-  } else if s == "string" {
-    StringType
-  } else if s == "new" {
-    New
-  } else if s == "interface" {
-    Interface
-  } else if s == "type" {
-    Type
-  } else if s == "of" {
-    Of
-  } else if s == "in" {
-    In
-  } else if s == "declare" {
-    Declare
-  } else if s == "instanceof" {
-    Instanceof
-  } else {
-    Ident(s)
+  classify_ident_or_keyword(buf.to_string())
+}
+
+///|
+/// Map an identifier-looking source slice to the right keyword token (or
+/// fall back to a plain `Ident`). Dispatching on the length and first byte
+/// first keeps the common identifier case at one or two cheap comparisons
+/// instead of the long `if`-chain it used to be.
+fn classify_ident_or_keyword(s : String) -> TokenKind {
+  let n = s.length()
+  if n == 0 {
+    return Ident(s)
+  }
+  let c0 = s[0].to_int()
+  match n {
+    2 =>
+      match c0 {
+        c if c == 'a'.to_int() => if s == "as" { As } else { Ident(s) }
+        c if c == 'd'.to_int() => if s == "do" { Do } else { Ident(s) }
+        c if c == 'i'.to_int() =>
+          if s == "if" {
+            If
+          } else if s == "in" {
+            In
+          } else {
+            Ident(s)
+          }
+        c if c == 'o'.to_int() => if s == "of" { Of } else { Ident(s) }
+        _ => Ident(s)
+      }
+    3 =>
+      match c0 {
+        c if c == 'v'.to_int() => if s == "var" { Var } else { Ident(s) }
+        c if c == 'l'.to_int() => if s == "let" { Let } else { Ident(s) }
+        c if c == 'f'.to_int() => if s == "for" { For } else { Ident(s) }
+        c if c == 't'.to_int() => if s == "try" { Try } else { Ident(s) }
+        c if c == 'n'.to_int() =>
+          if s == "new" {
+            New
+          } else {
+            Ident(s)
+          }
+        c if c == 'i'.to_int() => if s == "int" { IntType } else { Ident(s) }
+        _ => Ident(s)
+      }
+    4 =>
+      match c0 {
+        c if c == 'c'
+          .to_int() => if s == "case" { Case } else { Ident(s) }
+        c if c == 'e'.to_int() => if s == "else" { Else } else { Ident(s) }
+        c if c == 'f'.to_int() =>
+          if s == "from" {
+            From
+          } else {
+            Ident(s)
+          }
+        c if c == 'n'.to_int() => if s == "null" { Null } else { Ident(s) }
+        c if c == 't'.to_int() =>
+          if s == "true" {
+            Bool(true)
+          } else if s == "type" {
+            Type
+          } else {
+            Ident(s)
+          }
+        c if c == 'v'.to_int() => if s == "void" { VoidType } else { Ident(s) }
+        c if c == 'w'.to_int() => if s == "with" { With } else { Ident(s) }
+        _ => Ident(s)
+      }
+    5 =>
+      match c0 {
+        c if c == 'b'.to_int() => if s == "break" { Break } else { Ident(s) }
+        c if c == 'c'.to_int() =>
+          if s == "class" {
+            Class
+          } else if s == "catch" {
+            Catch
+          } else if s == "const" {
+            Const
+          } else {
+            Ident(s)
+          }
+        c if c == 'f'.to_int() => if s == "false" { Bool(false) } else { Ident(s) }
+        c if c == 't'.to_int() => if s == "throw" { Throw } else { Ident(s) }
+        c if c == 'w'.to_int() => if s == "while" { While } else { Ident(s) }
+        c if c == 'y'.to_int() => if s == "yield" { Yield } else { Ident(s) }
+        _ => Ident(s)
+      }
+    6 =>
+      match c0 {
+        c if c == 'r'.to_int() => if s == "return" { Return } else { Ident(s) }
+        c if c == 'i'.to_int() => if s == "import" { Import } else { Ident(s) }
+        c if c == 'e'.to_int() =>
+          if s == "export" {
+            Export
+          } else {
+            Ident(s)
+          }
+        c if c == 's'.to_int() =>
+          if s == "switch" {
+            Switch
+          } else if s == "string" {
+            StringType
+          } else {
+            Ident(s)
+          }
+        c if c == 'd'.to_int() =>
+          if s == "delete" {
+            Delete
+          } else {
+            Ident(s)
+          }
+        c if c == 't'.to_int() => if s == "typeof" { Typeof } else { Ident(s) }
+        c if c == 'n'.to_int() =>
+          if s == "number" {
+            NumberType
+          } else {
+            Ident(s)
+          }
+        _ => Ident(s)
+      }
+    7 =>
+      match c0 {
+        c if c == 'd'.to_int() =>
+          if s == "default" {
+            Default
+          } else if s == "declare" {
+            Declare
+          } else {
+            Ident(s)
+          }
+        c if c == 'e'.to_int() => if s == "extends" { Extends } else { Ident(s) }
+        c if c == 'f'.to_int() => if s == "finally" { Finally } else { Ident(s) }
+        c if c == 'b'.to_int() =>
+          if s == "boolean" {
+            BooleanType
+          } else {
+            Ident(s)
+          }
+        _ => Ident(s)
+      }
+    8 =>
+      match c0 {
+        c if c == 'f'.to_int() => if s == "function" { Function } else { Ident(s) }
+        c if c == 'c'.to_int() => if s == "continue" { Continue } else { Ident(s) }
+        c if c == 'd'.to_int() => if s == "debugger" { Debugger } else { Ident(s) }
+        _ => Ident(s)
+      }
+    9 =>
+      match c0 {
+        c if c == 'i'.to_int() => if s == "interface" { Interface } else { Ident(s) }
+        _ => Ident(s)
+      }
+    10 =>
+      match c0 {
+        c if c == 'i'.to_int() => if s == "instanceof" { Instanceof } else { Ident(s) }
+        _ => Ident(s)
+      }
+    _ => Ident(s)
   }
 }
 
