@@ -679,7 +679,14 @@ fn infer_binop(
     | BinGe
     | In
     | Instanceof => @ast.TsType::Boolean
-    And | Or | Coalesce => narrow_union(l, r)
+    // `a && b` — when `a` is truthy the result is `b`; otherwise the falsy
+    // `a`. Conservative: union both sides.
+    And => narrow_union(l, r)
+    // `a || b` — when `a` is truthy the result is `a`; otherwise `b`.
+    Or => narrow_union(l, r)
+    // `a ?? b` — `b` is only evaluated when `a` is null/undefined, so the
+    // result strips nullish from `a` and unions with `b`'s type.
+    Coalesce => narrow_union(non_nullable(l), r)
   }
 }
 
@@ -719,6 +726,29 @@ fn check_expr_against(
   // expected type is `Any` (e.g. an unannotated return where we still want
   // bad calls inside the returned expression to be flagged).
   check_call_args_in_expr(env, expr, ctx)
+  // Contextual typing for arrow / function expressions: when the value being
+  // passed is a callable and the expected slot is `Func(formal_params,
+  // formal_ret)`, recheck the callable's body with the formal parameter
+  // types substituted in for any unannotated (`Any`) params — `arr.map(x =>
+  // x + 1)` flows the element type into `x` so the body's `x + 1` is
+  // properly typed instead of falling through to `Any`.
+  let expected_shape = ctx.resolver.unwrap(expected)
+  match (expr, expected_shape) {
+    (ArrowFunc(arrow_params, body, is_async), Func(formal_params, formal_ret)) => {
+      check_arrow_with_context(
+        env, arrow_params, body, is_async, formal_params, formal_ret, ctx,
+        sub_path,
+      )
+      return
+    }
+    (FuncExpr(f), Func(formal_params, formal_ret)) => {
+      check_funcexpr_with_context(
+        env, f, formal_params, formal_ret, ctx, sub_path,
+      )
+      return
+    }
+    _ => ()
+  }
   if !is_checkable(expected) {
     return
   }
@@ -729,6 +759,112 @@ fn check_expr_against(
   if !is_assignable_to(inferred, expected) {
     let detail = "expected `\{type_display(expected)}` but got `\{type_display(inferred)}`"
     record(ctx, sub_path, detail)
+  }
+}
+
+///|
+/// Recheck the body of an `ArrowFunc` passed where a `Func(...)` is
+/// expected, threading the formal parameter types through. Used to catch
+/// errors inside `arr.map(x => x.someProp)` where `x` would otherwise type
+/// as `Any`.
+fn check_arrow_with_context(
+  outer : ExprEnv,
+  arrow_params : Array[@ast.TsParam],
+  body : @ast.TsArrowBody,
+  is_async : Bool,
+  formal_params : Array[@ast.TsType],
+  formal_ret : @ast.TsType,
+  ctx : CheckCtx,
+  sub_path : String,
+) -> Unit {
+  let env = ExprEnv::new()
+  // Carry parent bindings into the inner scope. We don't snapshot/restore —
+  // `ExprEnv` is mutable, but binding inside this synthetic env doesn't
+  // touch the outer one.
+  for entry in outer.full_snapshot() {
+    env.bind(entry.0, entry.1)
+  }
+  let mut i = 0
+  while i < arrow_params.length() {
+    let p = arrow_params[i]
+    // Honor an explicit annotation on the arrow's param; otherwise fall
+    // back to the formal parameter type.
+    let ty = if is_checkable(p.type_) {
+      p.type_
+    } else if i < formal_params.length() {
+      formal_params[i]
+    } else {
+      p.type_
+    }
+    env.bind(p.name, ty)
+    i = i + 1
+  }
+  match body {
+    ArrowExpr(e) => {
+      let want = unwrap_async_return(is_async, formal_ret)
+      check_expr_against(env, e, want, ctx, "\{sub_path} arrow body")
+    }
+    ArrowBlock(block) => {
+      // Recheck the block with the new env and the formal_ret as the
+      // expected return type.
+      let inner_ctx : CheckCtx = {
+        path_prefix: ctx.path_prefix,
+        return_type: unwrap_async_return(is_async, formal_ret),
+        resolver: ctx.resolver,
+        issues: ctx.issues,
+      }
+      for stmt in block.stmts {
+        check_stmt(env, stmt, inner_ctx)
+      }
+    }
+  }
+}
+
+///|
+/// Same as `check_arrow_with_context` for `FuncExpr`. Function expressions
+/// already carry an explicit `return_type` slot; we only override unannotated
+/// (`Any`) params with the formal ones.
+fn check_funcexpr_with_context(
+  outer : ExprEnv,
+  f : @ast.TsFunc,
+  formal_params : Array[@ast.TsType],
+  formal_ret : @ast.TsType,
+  ctx : CheckCtx,
+  sub_path : String,
+) -> Unit {
+  let env = ExprEnv::new()
+  for entry in outer.full_snapshot() {
+    env.bind(entry.0, entry.1)
+  }
+  let mut i = 0
+  while i < f.params.length() {
+    let p = f.params[i]
+    let ty = if is_checkable(p.type_) {
+      p.type_
+    } else if i < formal_params.length() {
+      formal_params[i]
+    } else {
+      p.type_
+    }
+    env.bind(p.name, ty)
+    i = i + 1
+  }
+  // Prefer the function's own annotated return type when present; fall back
+  // to the formal slot otherwise.
+  let body_return = if is_checkable(f.return_type) {
+    unwrap_async_return(f.is_async, f.return_type)
+  } else {
+    unwrap_async_return(f.is_async, formal_ret)
+  }
+  let inner_ctx : CheckCtx = {
+    path_prefix: ctx.path_prefix,
+    return_type: body_return,
+    resolver: ctx.resolver,
+    issues: ctx.issues,
+  }
+  let _ = sub_path
+  for stmt in f.body.stmts {
+    check_stmt(env, stmt, inner_ctx)
   }
 }
 
