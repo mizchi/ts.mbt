@@ -519,3 +519,65 @@ async test "parser: validate interface structure against TypeScript" {
     }
   }
 }
+
+///|
+async fn collect_ts_source_files(dir : String) -> Array[String] {
+  let kind = @fs.kind(dir, follow_symlink=false) catch {
+    _ => @fs.FileKind::Unknown
+  }
+  if not(kind is @fs.FileKind::Directory) {
+    return []
+  }
+  let entries = @fs.readdir(
+    dir, include_hidden=false, include_special=false, sort=true,
+  ) catch {
+    _ => []
+  }
+  let files : Array[String] = []
+  for name in entries {
+    if name.has_suffix(".ts") && not(name.has_suffix(".d.ts")) {
+      files.push(dir + "/" + name)
+    }
+  }
+  files
+}
+
+///|
+/// Every `.ts` (non-declaration) source file shipped with the upstream
+/// TypeScript compiler/services/server in the pinned submodule must parse
+/// without errors. Acts as a broad regression gate against real-world
+/// runtime TypeScript syntax.
+async test "parser: parse TypeScript compiler/services/server .ts sources" {
+  let dirs = [
+    "typescript/src/compiler",
+    "typescript/src/server",
+    "typescript/src/services",
+    "typescript/src/typingsInstaller",
+    "typescript/src/jsTyping",
+  ]
+  let failures : Array[String] = []
+  let mut total = 0
+  for dir in dirs {
+    let files = collect_ts_source_files(dir)
+    for path in files {
+      total += 1
+      let content = @fs.read_file(path).text() catch {
+        _ => continue
+      }
+      match (try? Parser::from_source(content).parse_module()) {
+        Ok(_) => ()
+        Err(err) => failures.push(path + ": \{err}")
+      }
+    }
+  }
+  if total == 0 {
+    println("skip: no .ts sources found in pinned submodule")
+    return
+  }
+  if failures.length() > 0 {
+    for f in failures {
+      println("FAIL " + f)
+    }
+    fail("\{failures.length()} of \{total} TypeScript .ts files failed to parse")
+  }
+}

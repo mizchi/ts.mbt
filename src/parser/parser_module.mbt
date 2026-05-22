@@ -427,6 +427,30 @@ fn append_ambient_external_module_exports(
 fn Parser::parse_namespace_decl(
   self : Parser,
 ) -> (@ast.TsValueDecl?, @ast.TsNamespaceDecl?)? raise ParseError {
+  // Historical default: treat the body as ambient. Used by all
+  // declare-context callers (`declare namespace X { ... }` inside `.d.ts`
+  // files) so bodyless declarations like `const foo: T;` parse correctly.
+  self.parse_namespace_decl_with_mode(true)
+}
+
+///|
+fn Parser::parse_namespace_decl_runtime(
+  self : Parser,
+) -> (@ast.TsValueDecl?, @ast.TsNamespaceDecl?)? raise ParseError {
+  // Parse the namespace body as runtime (non-ambient) code. Used by
+  // `namespace X { ... }` / `export namespace X { ... }` at module scope
+  // in real `.ts` source files, whose bodies may contain runtime class
+  // method bodies, expression statements, and so on. Falls back to ambient
+  // parsing if the runtime grammar rejects the body (e.g. for a namespace
+  // whose members are all declare-style signatures).
+  self.parse_namespace_decl_with_mode(false)
+}
+
+///|
+fn Parser::parse_namespace_decl_with_mode(
+  self : Parser,
+  body_is_ambient : Bool,
+) -> (@ast.TsValueDecl?, @ast.TsNamespaceDecl?)? raise ParseError {
   let keyword = match self.peek().kind {
     Ident(name) if name == "namespace" || name == "module" || name == "global" =>
       name
@@ -461,9 +485,28 @@ fn Parser::parse_namespace_decl(
       let body_source = self.parse_declaration_block_source()
       let module_ = if body_source.trim() == "" {
         empty_ts_module()
-      } else {
+      } else if body_is_ambient {
         let parser = Parser::from_source(body_source)
         parser.parse_module_with_seeded_const_values_internal({}, true)
+      } else {
+        // Runtime first, ambient fallback. This lets us parse runtime
+        // namespaces in `.ts` files (with class method bodies) without
+        // breaking .d.ts files that route through here via `parse_export`
+        // helpers.
+        let runtime_parser = Parser::from_source(body_source)
+        match
+          (try?
+            runtime_parser.parse_module_with_seeded_const_values_internal(
+              {}, false,
+            )) {
+          Ok(module_) => module_
+          Err(_) => {
+            let ambient_parser = Parser::from_source(body_source)
+            ambient_parser.parse_module_with_seeded_const_values_internal(
+              {}, true,
+            )
+          }
+        }
       }
       let next_namespace : @ast.TsNamespaceDecl = { name, module_ }
       Some(next_namespace)
@@ -481,6 +524,16 @@ fn Parser::parse_namespace_decl_value(
   self : Parser,
 ) -> @ast.TsValueDecl? raise ParseError {
   match self.parse_namespace_decl() {
+    Some((value, _)) => value
+    None => None
+  }
+}
+
+///|
+fn Parser::parse_namespace_decl_value_runtime(
+  self : Parser,
+) -> @ast.TsValueDecl? raise ParseError {
+  match self.parse_namespace_decl_runtime() {
     Some((value, _)) => value
     None => None
   }
@@ -2195,7 +2248,9 @@ fn Parser::parse_export_decl_for_module(
   }
   match self.peek().kind {
     Ident(name) if name == "namespace" || name == "module" || name == "global" => {
-      match self.parse_namespace_decl_value() {
+      // Non-declare `export namespace X { ... }` — body may contain
+      // runtime class bodies and statements.
+      match self.parse_namespace_decl_value_runtime() {
         Some(value) =>
           exports.push({ local_name: value.name, export_name: value.name })
         None => self.skip_declaration_block()
@@ -2509,7 +2564,17 @@ fn Parser::parse_export_stmt(
   }
   match self.peek().kind {
     Ident(name) if name == "abstract" && self.peek_at(1).kind == Class => {
-      classes.push(self.parse_declare_class_with_optional_abstract())
+      // `export abstract class` at module scope is a runtime class
+      // declaration with a body (methods, definite-assignment fields,
+      // static init blocks, etc.). Route to the same runtime parser used
+      // by the non-export branch; it also tolerates bodyless method
+      // signatures so ambient cases still work.
+      let _ = self.advance() // consume `abstract`
+      let _ = self.parse_class_decl_with_abstract(true)
+      match self.take_last_runtime_class_decl() {
+        Some(class_) => classes.push(class_)
+        None => ()
+      }
       return
     }
     _ => ()
@@ -2605,7 +2670,8 @@ fn Parser::parse_export_stmt(
     _ => false
   }
   if is_namespace_like_export {
-    match self.parse_namespace_decl() {
+    // `export namespace X { ... }` — runtime context.
+    match self.parse_namespace_decl_runtime() {
       Some((value, namespace_)) => {
         match value {
           Some(value) => values.push(value)
@@ -2800,7 +2866,14 @@ fn Parser::parse_module_with_seeded_const_values_internal(
         None => ()
       }
     } else if self.is_namespace_decl_start() {
-      match self.parse_namespace_decl() {
+      // Inherit ambient/runtime mode from the enclosing parser so the body
+      // is parsed under the same context the caller selected.
+      let parse_result = if ambient_decls {
+        self.parse_namespace_decl()
+      } else {
+        self.parse_namespace_decl_runtime()
+      }
+      match parse_result {
         Some((value, namespace_)) => {
           match value {
             Some(value) => values.push(value)
@@ -2830,6 +2903,13 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       } else {
         let _ = self.parse_stmt()
       }
+    } else if !ambient_decls {
+      // Real TS / JS modules can contain ordinary top-level statements:
+      // `if (...) {}`, expression statements (`foo();`), bare blocks
+      // (`{ ... }` used for scoped local types), assignments, etc.
+      // Delegate to the statement parser; it raises a ParseError for
+      // anything genuinely malformed.
+      let _ = self.parse_stmt()
     } else {
       raise ParseError(
         "Expected function, interface, declare, import, or export declaration",
