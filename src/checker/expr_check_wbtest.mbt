@@ -241,8 +241,8 @@ test "expr_check: check_module_function_bodies walks all top-level funcs" {
     #|function a(): number { return "x"; }
     #|function b(): string { return 1; }
     #|function c(): number { return 1; }
-  let module_ = match (try?
-      @parser.parse_module_from_source_with_const_values(src, {})) {
+  let module_ = match
+    (try? @parser.parse_module_from_source_with_const_values(src, {})) {
     Ok(m) => m
     Err(e) => {
       fail("parse failed: \{e}")
@@ -371,7 +371,8 @@ test "expr_check: interface method call argument type checked" {
   let mut found = false
   for i in issues {
     if i.path.contains("call `log`") &&
-       i.message.contains("string") && i.message.contains("number") {
+      i.message.contains("string") &&
+      i.message.contains("number") {
       found = true
     }
   }
@@ -437,7 +438,8 @@ test "expr_check: typeof narrowing on string in then-branch" {
   let mut found = false
   for i in issues {
     if i.path.contains("return") &&
-       i.message.contains("number") && i.message.contains("string") {
+      i.message.contains("number") &&
+      i.message.contains("string") {
       found = true
     }
   }
@@ -485,7 +487,8 @@ test "expr_check: constructor argument type mismatch" {
   let mut found = false
   for i in issues {
     if i.path.contains("new `Point`") &&
-       i.message.contains("number") && i.message.contains("string") {
+      i.message.contains("number") &&
+      i.message.contains("string") {
       found = true
     }
   }
@@ -585,7 +588,8 @@ test "expr_check: assignment to local var checks rhs type" {
   let mut found = false
   for i in issues {
     if i.path.contains("assign `x`") &&
-       i.message.contains("number") && i.message.contains("string") {
+      i.message.contains("number") &&
+      i.message.contains("string") {
       found = true
     }
   }
@@ -604,7 +608,8 @@ test "expr_check: property assignment checks rhs against field type" {
   let mut found = false
   for i in issues {
     if i.path.contains("assign `.x`") &&
-       i.message.contains("number") && i.message.contains("string") {
+      i.message.contains("number") &&
+      i.message.contains("string") {
       found = true
     }
   }
@@ -886,4 +891,272 @@ test "expr_check: object destructuring binding pulls field types" {
     }
   }
   assert_true(found)
+}
+
+// ---------------------------------------------------------------------------
+// Round 4: for-of / for-in / switch narrowing / optional & default params /
+// catch binding semantics.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: for-of binds element type from Array<T>" {
+  // Use `n + 1` so the body relies on the element being a number.
+  let src =
+    #|function f(arr: number[]): string {
+    #|  for (const n of arr) {
+    #|    return n;
+    #|  }
+    #|  return "ok";
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      // `n: number` returned where `string` expected.
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: for-of element type matches return type passes" {
+  let src =
+    #|function f(arr: number[]): number {
+    #|  for (const n of arr) {
+    #|    return n;
+    #|  }
+    #|  return 0;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: for-of over tuple yields union of element types" {
+  let src =
+    #|function f(t: [string, number]): boolean {
+    #|  for (const x of t) {
+    #|    return x;
+    #|  }
+    #|  return false;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      // x: string | number, declared return: boolean → mismatch.
+      let mut found = false
+      for i in issues {
+        if i.message.contains("boolean") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: for-in binds key as string" {
+  let src =
+    #|function f(obj: { a: number }): number {
+    #|  for (const k in obj) {
+    #|    return k;
+    #|  }
+    #|  return 0;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: switch case literal narrows scrutinee in body" {
+  let src =
+    #|function f(s: "a" | "b"): number {
+    #|  switch (s) {
+    #|    case "a": return s;
+    #|    case "b": return 0;
+    #|  }
+    #|  return 0;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      // s narrowed to "a" inside the first case → returning a string literal
+      // where number is expected.
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: switch case body sees narrowed scrutinee passes" {
+  let src =
+    #|function f(s: "a" | "b"): string {
+    #|  switch (s) {
+    #|    case "a": return s;
+    #|    case "b": return s;
+    #|  }
+    #|  return "";
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: optional parameter allows omitted trailing arg" {
+  // `b?: number` → caller can pass one or two args.
+  let src =
+    #|function f(a: number, b?: number): number { return a; }
+    #|function caller(): number { return f(1); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // No arity-mismatch issues expected.
+  for i in issues {
+    assert_false(i.message.contains("expected"))
+  }
+}
+
+///|
+test "expr_check: default-valued parameter allows omitted trailing arg" {
+  let src =
+    #|function f(a: number, b: number = 1): number { return a + b; }
+    #|function caller(): number { return f(1); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  for i in issues {
+    assert_false(i.message.contains("expected"))
+  }
+}
+
+///|
+test "expr_check: too many args still flagged for non-rest signature" {
+  let src =
+    #|function f(a: number, b?: number): number { return a; }
+    #|function caller(): number { return f(1, 2, 3); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.message.contains("expected") && i.message.contains("got 3") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: rest parameter accepts any extra args" {
+  let src =
+    #|function f(a: number, ...rest: number[]): number { return a; }
+    #|function caller(): number { return f(1, 2, 3, 4); }
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  for i in issues {
+    assert_false(i.message.contains("expected"))
+  }
+}
+
+///|
+test "expr_check: default-parameter expression type-checked" {
+  // The default `"abc"` is a string, but the parameter is annotated number.
+  let src =
+    #|function f(a: number = "abc"): number { return a; }
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.path.contains("param `a` default") &&
+          i.message.contains("number") &&
+          i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: for-of over Set<T> yields T" {
+  let src =
+    #|function f(s: Set<number>): string {
+    #|  for (const n of s) {
+    #|    return n;
+    #|  }
+    #|  return "";
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: for-of over Map<K,V> yields [K, V] tuple" {
+  let src =
+    #|function f(m: Map<string, number>): boolean {
+    #|  for (const entry of m) {
+    #|    return entry;
+    #|  }
+    #|  return false;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("boolean") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
 }

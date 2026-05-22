@@ -30,11 +30,14 @@ priv struct Resolver {
   // Module-level identifier types: top-level functions, ambient values,
   // imports. Looked up when an identifier is unbound in the local env.
   globals : Map[String, @ast.TsType]
+  // Rich call signatures for top-level functions — carries optional / default
+  // / rest information lost when funcs are collapsed into `Func(...)`.
+  signatures : Map[String, Array[@ast.TsParam]]
 }
 
 ///|
 fn Resolver::empty() -> Resolver {
-  { interfaces: {}, classes: {}, type_aliases: {}, globals: {} }
+  { interfaces: {}, classes: {}, type_aliases: {}, globals: {}, signatures: {} }
 }
 
 ///|
@@ -68,8 +71,55 @@ fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
     // declared `return_type` is the un-wrapped `R`.
     let ret = wrap_async_return(f.is_async, f.return_type)
     r.globals[f.name] = @ast.TsType::Func(param_types, ret)
+    r.signatures[f.name] = f.params
   }
   r
+}
+
+///|
+/// Required-argument count for a parameter list: the index of the first
+/// trailing optional / default / rest param. Used to validate `Call(...)`
+/// arity when the rich signature is available.
+fn required_arity(params : Array[@ast.TsParam]) -> Int {
+  // Walk left-to-right; once we cross an optional we keep going to make sure
+  // the parameter list is well-formed (TS rejects required-after-optional
+  // already), then return the last required index + 1.
+  let mut last_required = 0
+  let mut i = 0
+  while i < params.length() {
+    let p = params[i]
+    if !param_is_optional(p) {
+      last_required = i + 1
+    }
+    i = i + 1
+  }
+  last_required
+}
+
+///|
+fn param_is_optional(p : @ast.TsParam) -> Bool {
+  if p.is_rest {
+    return true
+  }
+  match p.default {
+    Some(_) => return true
+    None => ()
+  }
+  // The parser widens `x?: T` to `T | undefined`, which we treat as optional
+  // both ways: callers can omit the trailing argument either form.
+  match p.type_ {
+    Union(parts) => {
+      for part in parts {
+        match part {
+          Undefined => return true
+          _ => ()
+        }
+      }
+      false
+    }
+    Undefined => true
+    _ => false
+  }
 }
 
 ///|
@@ -111,7 +161,7 @@ fn Resolver::lookup_field(
 ) -> @ast.TsType? {
   let unwrapped = self.unwrap(recv)
   match unwrapped {
-    Named(n) => {
+    Named(n) =>
       match self.interfaces.get(n) {
         Some(iface) => {
           for f in iface.fields {
@@ -135,7 +185,6 @@ fn Resolver::lookup_field(
             None => None
           }
       }
-    }
     Object(entries) => {
       for entry in entries {
         match entry.0 {
@@ -274,9 +323,7 @@ fn ExprEnv::lookup(self : ExprEnv, name : String) -> @ast.TsType? {
 /// Capture a snapshot of `(name, type)` pairs currently in the env so we can
 /// fully restore — including overwritten bindings — when a block exits. Used
 /// for both lexical scope and narrowing.
-fn ExprEnv::full_snapshot(
-  self : ExprEnv,
-) -> Array[(String, @ast.TsType)] {
+fn ExprEnv::full_snapshot(self : ExprEnv) -> Array[(String, @ast.TsType)] {
   let entries : Array[(String, @ast.TsType)] = []
   for entry in self.vars {
     entries.push((entry.0, entry.1))
@@ -622,8 +669,16 @@ fn infer_binop(
       }
     Sub | Mul | Div | Mod | Pow | Shl | Shr | UShr | BitAnd | BitOr | BitXor =>
       @ast.TsType::Number
-    BinEq | BinNe | AbstractEq | AbstractNe | BinLt | BinLe | BinGt | BinGe | In | Instanceof =>
-      @ast.TsType::Boolean
+    BinEq
+    | BinNe
+    | AbstractEq
+    | AbstractNe
+    | BinLt
+    | BinLe
+    | BinGt
+    | BinGe
+    | In
+    | Instanceof => @ast.TsType::Boolean
     And | Or | Coalesce => narrow_union(l, r)
   }
 }
@@ -688,6 +743,22 @@ fn check_arguments(
   ctx : CheckCtx,
   call_path : String,
 ) -> Unit {
+  check_arguments_with_sig(env, params, None, args, ctx, call_path)
+}
+
+///|
+/// Variant of `check_arguments` that takes the rich `TsParam` list when
+/// available, so optional / default / rest parameters are honored on arity
+/// checks. `param_types` is the simplified types array (already lifted out
+/// of `Func(...)`), and `sig` carries the full `TsParam` metadata.
+fn check_arguments_with_sig(
+  env : ExprEnv,
+  params : Array[@ast.TsType],
+  sig : Array[@ast.TsParam]?,
+  args : Array[@ast.TsExpr],
+  ctx : CheckCtx,
+  call_path : String,
+) -> Unit {
   // Spread arguments make positional matching unreliable — just type-check
   // each argument and skip count enforcement.
   let mut has_spread = false
@@ -697,19 +768,71 @@ fn check_arguments(
       _ => ()
     }
   }
-  if !has_spread && args.length() != params.length() {
-    let msg = "expected \{params.length()} argument(s), got \{args.length()}"
-    record(ctx, call_path, msg)
+  // Arity check: prefer the rich sig if present.
+  let (min_arity, max_arity) = match sig {
+    Some(ps) => {
+      let mut has_rest = false
+      for p in ps {
+        if p.is_rest {
+          has_rest = true
+        }
+      }
+      let min_ = required_arity(ps)
+      let max_ = if has_rest { -1 } else { ps.length() }
+      (min_, max_)
+    }
+    None => (params.length(), params.length())
   }
-  let n = if args.length() < params.length() {
-    args.length()
+  if !has_spread {
+    let n = args.length()
+    let too_few = n < min_arity
+    let too_many = max_arity >= 0 && n > max_arity
+    if too_few || too_many {
+      let expect_str = if min_arity == max_arity {
+        "\{min_arity}"
+      } else if max_arity < 0 {
+        "at least \{min_arity}"
+      } else {
+        "\{min_arity}-\{max_arity}"
+      }
+      record(ctx, call_path, "expected \{expect_str} argument(s), got \{n}")
+    }
+  }
+  // Per-position assignability check. Rest-position args (at and beyond the
+  // rest param's index) are checked against the rest param's *element* type.
+  let rest_index : Int = match sig {
+    Some(ps) => {
+      let mut idx : Int = -1
+      let mut i = 0
+      while i < ps.length() {
+        if ps[i].is_rest {
+          idx = i
+          break
+        }
+        i = i + 1
+      }
+      idx
+    }
+    None => -1
+  }
+  let rest_elem_type : @ast.TsType = if rest_index >= 0 &&
+    rest_index < params.length() {
+    match params[rest_index] {
+      Array(elem) => elem
+      Tuple(_) => @ast.TsType::Any
+      _ => @ast.TsType::Any
+    }
   } else {
-    params.length()
+    @ast.TsType::Any
   }
   let mut i = 0
-  while i < n {
+  while i < args.length() {
     let sub_path = "\{call_path} arg[\{i}]"
-    check_expr_against(env, args[i], params[i], ctx, sub_path)
+    if rest_index >= 0 && i >= rest_index {
+      check_expr_against(env, args[i], rest_elem_type, ctx, sub_path)
+    } else if i < params.length() {
+      check_expr_against(env, args[i], params[i], ctx, sub_path)
+    }
     i = i + 1
   }
 }
@@ -876,8 +999,17 @@ fn check_compound_assign(
         String_ => false
         _ => true
       }
-    SubAssign | MulAssign | DivAssign | ModAssign | PowAssign | BitAndAssign
-    | BitOrAssign | BitXorAssign | ShlAssign | ShrAssign | UShrAssign => true
+    SubAssign
+    | MulAssign
+    | DivAssign
+    | ModAssign
+    | PowAssign
+    | BitAndAssign
+    | BitOrAssign
+    | BitXorAssign
+    | ShlAssign
+    | ShrAssign
+    | UShrAssign => true
     _ => false
   }
   if !needs_numeric {
@@ -899,6 +1031,63 @@ fn check_compound_assign(
     ctx,
     "compound-assign `\{name}`",
   )
+}
+
+///|
+/// Element type of an iterable for `for ... of` binding. Supports the most
+/// common shapes — arrays, tuples (union of elements), strings, and a few
+/// well-known generics: `Set<T>`, `Iterable<T>`, `IterableIterator<T>`,
+/// `Generator<T, ...>`, `Map<K, V>` (yields `[K, V]`).
+fn for_of_element_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  let shape = resolver.unwrap(ty)
+  match shape {
+    Array(elem) => elem
+    Tuple(items) =>
+      if items.length() == 0 {
+        @ast.TsType::Any
+      } else {
+        union_of(items)
+      }
+    String_ | Literal(_) => @ast.TsType::String_
+    Applied(name, args) =>
+      match (name, args.length()) {
+        ("Set", 1) | ("Iterable", 1) | ("IterableIterator", 1) => args[0]
+        ("Generator", n) if n >= 1 => args[0]
+        ("Map", 2) => @ast.TsType::Tuple([args[0], args[1]])
+        ("ReadonlyArray", 1) | ("ReadonlySet", 1) => args[0]
+        _ => @ast.TsType::Any
+      }
+    _ => @ast.TsType::Any
+  }
+}
+
+///|
+/// Narrow `name`'s type inside a `case <test>:` body. Handles literal cases
+/// against a union of string / number literals — same shape as the
+/// `if (name === lit) ...` equality narrowing path.
+fn apply_switch_case_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  case_test : @ast.TsExpr,
+) -> Unit {
+  let cur = env_lookup_full(env, resolver, name)
+  // String literal case
+  match case_test {
+    StringLit(lit) => {
+      let kept = narrow_keep(cur, fn(v) {
+        match v {
+          Literal(s) => s == lit
+          _ => false
+        }
+      })
+      match kept {
+        Never => ()
+        _ => env.bind(name, kept)
+      }
+    }
+    _ => ()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -970,10 +1159,7 @@ fn non_nullable(ty : @ast.TsType) -> @ast.TsType {
 
 ///|
 /// Remove variants from `ty` that match `pred`.
-fn narrow_remove(
-  ty : @ast.TsType,
-  pred : (@ast.TsType) -> Bool,
-) -> @ast.TsType {
+fn narrow_remove(ty : @ast.TsType, pred : (@ast.TsType) -> Bool) -> @ast.TsType {
   let variants = union_components(ty)
   let kept : Array[@ast.TsType] = []
   for v in variants {
@@ -986,10 +1172,7 @@ fn narrow_remove(
 
 ///|
 /// Keep only variants that match `pred`.
-fn narrow_keep(
-  ty : @ast.TsType,
-  pred : (@ast.TsType) -> Bool,
-) -> @ast.TsType {
+fn narrow_keep(ty : @ast.TsType, pred : (@ast.TsType) -> Bool) -> @ast.TsType {
   let variants = union_components(ty)
   let kept : Array[@ast.TsType] = []
   for v in variants {
@@ -1092,7 +1275,12 @@ fn collect_narrowing(
       }
     UnaryOp(Not, inner) =>
       collect_narrowing(
-        env, resolver, inner, then_binds, else_binds, !then_sense,
+        env,
+        resolver,
+        inner,
+        then_binds,
+        else_binds,
+        !then_sense,
       )
     BinOp(op, left, right) => {
       let pair_pos = if then_sense { then_binds } else { else_binds }
@@ -1107,9 +1295,7 @@ fn collect_narrowing(
         Some(eq) => {
           let true_side = if eq { pair_pos } else { pair_neg }
           let false_side = if eq { pair_neg } else { pair_pos }
-          analyze_equality(
-            env, resolver, left, right, true_side, false_side,
-          )
+          analyze_equality(env, resolver, left, right, true_side, false_side)
         }
         None => ()
       }
@@ -1236,10 +1422,8 @@ fn analyze_equality(
 
   // `obj.prop === "literal"` — discriminated union.
   let disc_match = match (left, right) {
-    (PropAccess(Var(name), prop), StringLit(lit)) =>
-      Some((name, prop, lit))
-    (StringLit(lit), PropAccess(Var(name), prop)) =>
-      Some((name, prop, lit))
+    (PropAccess(Var(name), prop), StringLit(lit)) => Some((name, prop, lit))
+    (StringLit(lit), PropAccess(Var(name), prop)) => Some((name, prop, lit))
     _ => None
   }
   match disc_match {
@@ -1383,7 +1567,8 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       // if the variable is numeric. We delegate to `infer_binop` to derive
       // the equivalent simple assignment's required type.
       match env.lookup(name) {
-        Some(target_ty) => check_compound_assign(env, target_ty, op, e, ctx, name)
+        Some(target_ty) =>
+          check_compound_assign(env, target_ty, op, e, ctx, name)
         None => ()
       }
     }
@@ -1482,20 +1667,60 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       check_block(env, body, ctx)
       env.restore_from(pre)
     }
-    ForOf(_, _, _, iter, body)
-    | ForIn(_, _, _, iter, body)
-    | ForAwaitOf(_, _, _, iter, body) => {
+    ForOf(_, binding, _, iter, body) => {
+      // NOTE: the parser stores a hardcoded `Number` as the var_type
+      // placeholder regardless of whether the source had a type annotation,
+      // so we always infer from the iterable.
       check_call_args_in_expr(env, iter, ctx)
+      let iter_ty = infer_expr(env, ctx.resolver, iter)
+      let elem_ty = for_of_element_type(ctx.resolver, iter_ty)
+      let pre = env.full_snapshot()
+      bind_pattern(env, ctx, binding, elem_ty)
       check_block(env, body, ctx)
+      env.restore_from(pre)
+    }
+    ForAwaitOf(_, binding, _, iter, body) => {
+      check_call_args_in_expr(env, iter, ctx)
+      let iter_ty = infer_expr(env, ctx.resolver, iter)
+      // `for await (const x of asyncIter)` — unwrap `Promise<T>` and treat
+      // the inner type as the iterable.
+      let unwrapped = unwrap_async_return(true, iter_ty)
+      let elem_ty = for_of_element_type(ctx.resolver, unwrapped)
+      let pre = env.full_snapshot()
+      bind_pattern(env, ctx, binding, elem_ty)
+      check_block(env, body, ctx)
+      env.restore_from(pre)
+    }
+    ForIn(_, binding, _, iter, body) => {
+      // `for (key in obj)` — `key` is always `string` in TS.
+      check_call_args_in_expr(env, iter, ctx)
+      let pre = env.full_snapshot()
+      bind_pattern(env, ctx, binding, @ast.TsType::String_)
+      check_block(env, body, ctx)
+      env.restore_from(pre)
     }
     Switch(scrutinee, cases) => {
       check_call_args_in_expr(env, scrutinee, ctx)
+      // If the scrutinee is a simple `Var(name)`, narrow inside each `case`
+      // body with a literal `test_expr` — same shape as
+      // `if (name === lit) ...` for primitives + discriminants.
+      let scrutinee_name = match scrutinee {
+        Var(n) => Some(n)
+        _ => None
+      }
       for case_ in cases {
         match case_.test_expr {
           Some(e) => check_call_args_in_expr(env, e, ctx)
           None => ()
         }
+        let pre = env.full_snapshot()
+        match (scrutinee_name, case_.test_expr) {
+          (Some(name), Some(t)) =>
+            apply_switch_case_narrowing(env, ctx.resolver, name, t)
+          _ => ()
+        }
         check_block(env, case_.body, ctx)
+        env.restore_from(pre)
       }
     }
     With(_, body) => check_block(env, body, ctx)
@@ -1504,8 +1729,13 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
       match catch_block {
         Some(cb) => {
           let pre = env.full_snapshot()
+          // TS 4.0+ defaults catch bindings to `unknown`. We don't model
+          // `unknown` separately (it folds into `Any` here), but binding to
+          // `Any` matches the prior semantics — the caller still has to
+          // narrow before use.
           match catch_binding {
-            Some(@ast.TsBinding::Ident(name)) => env.bind(name, @ast.TsType::Any)
+            Some(@ast.TsBinding::Ident(name)) =>
+              env.bind(name, @ast.TsType::Any)
             _ => ()
           }
           check_block(env, cb, ctx)
@@ -1544,8 +1774,17 @@ fn check_call_args_in_expr(
           }
       }
       match callee_ty {
-        Func(params, _) =>
-          check_arguments(env, params, args, ctx, "call `\{name}`")
+        Func(params, _) => {
+          let sig = ctx.resolver.signatures.get(name)
+          check_arguments_with_sig(
+            env,
+            params,
+            sig,
+            args,
+            ctx,
+            "call `\{name}`",
+          )
+        }
         _ => ()
       }
       for a in args {
@@ -1555,8 +1794,7 @@ fn check_call_args_in_expr(
     CallExpr(callee, args) => {
       let callee_ty = infer_expr(env, ctx.resolver, callee)
       match callee_ty {
-        Func(params, _) =>
-          check_arguments(env, params, args, ctx, "call")
+        Func(params, _) => check_arguments(env, params, args, ctx, "call")
         _ => ()
       }
       check_call_args_in_expr(env, callee, ctx)
@@ -1662,13 +1900,7 @@ fn check_call_args_in_expr(
         Tuple(items) =>
           match idx {
             IntLit(i) if i >= 0 && i < items.length() =>
-              check_expr_against(
-                env,
-                v,
-                items[i],
-                ctx,
-                "assign tuple[\{i}]",
-              )
+              check_expr_against(env, v, items[i], ctx, "assign tuple[\{i}]")
             _ => ()
           }
         _ => ()
@@ -1763,6 +1995,15 @@ fn check_function_body_with(
     return_type: body_return,
     resolver,
     issues,
+  }
+  // Default-parameter expression must be assignable to the parameter's
+  // (possibly optional-widened) type.
+  for p in func.params {
+    match p.default {
+      Some(d) =>
+        check_expr_against(env, d, p.type_, ctx, "param `\{p.name}` default")
+      None => ()
+    }
   }
   for stmt in func.body.stmts {
     check_stmt(env, stmt, ctx)
