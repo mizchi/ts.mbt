@@ -3966,3 +3966,91 @@ test "expr_check: declare-class method has no body to check" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 38: minimal JSX support. `<Tag attr={expr}>{child}</Tag>` parses
+// into `JsxElement(embedded)` whose payload is the list of `{…}` sub-
+// expressions; the checker recurses into each so call-site mismatches
+// inside JSX braces surface as usual.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: bad call inside JSX brace surfaces" {
+  // `takesString(42)` is wrong; the call sits inside a JSX expression
+  // child but the embedded-expression walker should still flag it.
+  let src =
+    #|function takesString(s: string): void {}
+    #|function comp(): void {
+    #|  const _ = <div>{takesString(42)}</div>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: bad call inside JSX attribute surfaces" {
+  let src =
+    #|function takesNumber(n: number): void {}
+    #|function comp(): void {
+    #|  const _ = <div className={takesNumber("x")}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX with no embedded calls produces no issues" {
+  let src =
+    #|function comp(): void {
+    #|  const _ = <div className="x">hello</div>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX fragment with embedded expressions" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|function comp(): void {
+    #|  const _ = <>{takesString(99)}</>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: nested JSX surfaces inner-tag embedded calls" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|function comp(): void {
+    #|  const _ = <div><span>{takesString(7)}</span></div>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}

@@ -1050,10 +1050,10 @@ fn Parser::parse_parenthesized_expr(
   if self.peek_at(1).kind == Lt {
     let temp = { ..self, pos: self.pos + 1 }
     if temp.is_jsx_element_start() {
-      temp.skip_jsx_element()
+      let jsx_expr = temp.parse_jsx_element_expr()
       if temp.check(RParen) {
         self.pos = temp.pos + 1
-        return Var("__jsx__")
+        return jsx_expr
       }
     }
   }
@@ -1341,6 +1341,148 @@ fn Parser::scan_type_assertion_source_end(
 }
 
 ///|
+/// Walk a JSX element starting at source position `start` and return
+/// both its end position and the embedded `{expr}` sub-expressions
+/// (attribute values, child expressions, spread targets). The caller
+/// uses the end position to advance the lexer and wraps the embedded
+/// expressions in a `JsxElement(...)` AST node so the checker still
+/// validates calls / type mismatches inside braces.
+fn Parser::scan_jsx_source_end_with_embeds(
+  self : Parser,
+  start : Int,
+) -> (Int, Array[@ast.TsExpr]) {
+  let embeds : Array[@ast.TsExpr] = []
+  let mut i = start
+  let mut depth = 0
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == '{' {
+      let end = self.skip_jsx_braces_in_source(i)
+      // Capture the source between `{` and the matching `}` and try to
+      // parse it as a TS expression. Empty braces (`{}`) are ignored.
+      if end > i + 1 {
+        let inner = self.src[i + 1:end - 1].to_string()
+        let trimmed = inner.trim()
+        if trimmed.length() > 0 {
+          // Spread-attribute syntax `{...expr}` and child-spread
+          // `{...arr}` show up as a leading `...`; strip it before
+          // parsing.
+          let payload_str = if trimmed.has_prefix("...") {
+            trimmed[3:].to_string().trim().to_string()
+          } else {
+            trimmed.to_string()
+          }
+          let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+          match (try? sub.parse_expr()) {
+            Ok(e) => embeds.push(e)
+            Err(_) => ()
+          }
+        }
+      }
+      i = end
+      continue
+    }
+    if c != '<' {
+      i += 1
+      continue
+    }
+    if i + 2 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '/' &&
+      self.src[i + 2].to_int().unsafe_to_char() == '>' {
+      i += 3
+      if depth > 0 {
+        depth -= 1
+      }
+      if depth == 0 {
+        break
+      }
+      continue
+    }
+    if i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '>' {
+      depth += 1
+      i += 2
+      continue
+    }
+    if i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '/' {
+      i += 2
+      while i < self.src.length() &&
+            self.src[i].to_int().unsafe_to_char() != '>' {
+        i += 1
+      }
+      if i < self.src.length() {
+        i += 1
+      }
+      if depth > 0 {
+        depth -= 1
+      }
+      if depth == 0 {
+        break
+      }
+      continue
+    }
+    depth += 1
+    i += 1
+    let mut quote : Char? = None
+    while i < self.src.length() {
+      let inner = self.src[i].to_int().unsafe_to_char()
+      match quote {
+        Some(q) => {
+          if inner == '\\' {
+            i += 2
+            continue
+          }
+          if inner == q {
+            quote = None
+          }
+          i += 1
+        }
+        None =>
+          if inner == '"' || inner == '\'' || inner == '`' {
+            quote = Some(inner)
+            i += 1
+          } else if inner == '{' {
+            let end = self.skip_jsx_braces_in_source(i)
+            if end > i + 1 {
+              let inner_src = self.src[i + 1:end - 1].to_string()
+              let trimmed = inner_src.trim()
+              if trimmed.length() > 0 {
+                let payload_str = if trimmed.has_prefix("...") {
+                  trimmed[3:].to_string().trim().to_string()
+                } else {
+                  trimmed.to_string()
+                }
+                let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+                match (try? sub.parse_expr()) {
+                  Ok(e) => embeds.push(e)
+                  Err(_) => ()
+                }
+              }
+            }
+            i = end
+          } else if inner == '/' &&
+            i + 1 < self.src.length() &&
+            self.src[i + 1].to_int().unsafe_to_char() == '>' {
+            i += 2
+            depth -= 1
+            break
+          } else if inner == '>' {
+            i += 1
+            break
+          } else {
+            i += 1
+          }
+      }
+    }
+    if depth == 0 {
+      break
+    }
+  }
+  (i, embeds)
+}
+
+///|
 fn Parser::scan_jsx_source_end(self : Parser, start : Int) -> Int {
   let mut i = start
   let mut depth = 0
@@ -1436,8 +1578,19 @@ fn Parser::scan_jsx_source_end(self : Parser, start : Int) -> Int {
 
 ///|
 fn Parser::try_skip_parenthesized_jsx_expr(self : Parser) -> Bool {
+  let (ok, _) = self.try_parse_parenthesized_jsx_expr()
+  ok
+}
+
+///|
+/// Same as `try_skip_parenthesized_jsx_expr` but also returns the
+/// embedded `{expr}` sub-expressions extracted from the JSX block.
+/// Caller wraps them in `JsxElement(...)`.
+fn Parser::try_parse_parenthesized_jsx_expr(
+  self : Parser,
+) -> (Bool, Array[@ast.TsExpr]) {
   if self.src.length() == 0 || !self.check(LParen) {
-    return false
+    return (false, [])
   }
   let mut i = self.peek().pos + 1
   while i < self.src.length() {
@@ -1449,9 +1602,9 @@ fn Parser::try_skip_parenthesized_jsx_expr(self : Parser) -> Bool {
     }
   }
   if i >= self.src.length() || self.src[i].to_int().unsafe_to_char() != '<' {
-    return false
+    return (false, [])
   }
-  let jsx_end = self.scan_jsx_source_end(i)
+  let (jsx_end, embeds) = self.scan_jsx_source_end_with_embeds(i)
   let mut j = jsx_end
   while j < self.src.length() {
     let c = self.src[j].to_int().unsafe_to_char()
@@ -1463,9 +1616,9 @@ fn Parser::try_skip_parenthesized_jsx_expr(self : Parser) -> Bool {
   }
   if j < self.src.length() && self.src[j].to_int().unsafe_to_char() == ')' {
     self.advance_to_source_pos(j + 1)
-    return true
+    return (true, embeds)
   }
-  false
+  (false, [])
 }
 
 ///|
@@ -1566,6 +1719,23 @@ fn Parser::skip_jsx_element(self : Parser) -> Unit {
   }
   let i = self.scan_jsx_source_end(self.peek().pos)
   self.advance_to_source_pos(i)
+}
+
+///|
+/// Same as `skip_jsx_element` but returns the embedded `{expr}` sub-
+/// expressions so callers can wrap them in a `JsxElement(...)` AST
+/// node. Call sites that want a real AST should prefer this over
+/// `skip_jsx_element + Var("__jsx__")`.
+fn Parser::parse_jsx_element_expr(
+  self : Parser,
+) -> @ast.TsExpr raise ParseError {
+  if self.src.length() == 0 {
+    self.skip_jsx_element_tokens()
+    return @ast.TsExpr::JsxElement([])
+  }
+  let (end, embeds) = self.scan_jsx_source_end_with_embeds(self.peek().pos)
+  self.advance_to_source_pos(end)
+  @ast.TsExpr::JsxElement(embeds)
 }
 
 ///|
@@ -1829,8 +1999,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       } else if !self.allow_jsx {
         self.parse_angle_bracket_type_assertion()
       } else if self.is_jsx_element_start() {
-        self.skip_jsx_element()
-        Var("__jsx__")
+        self.parse_jsx_element_expr()
       } else {
         raise ParseError("Unexpected token: Lt")
       }
@@ -2064,17 +2233,18 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       }
       Var(mangled)
     }
-    LParen =>
-      if self.try_skip_parenthesized_jsx_expr() {
-        Var("__jsx__")
+    LParen => {
+      let (paren_jsx, paren_embeds) = self.try_parse_parenthesized_jsx_expr()
+      if paren_jsx {
+        @ast.TsExpr::JsxElement(paren_embeds)
         // functioncheck
       } else if self.peek_at(1).kind == Lt {
         let temp = { ..self, pos: self.pos + 1 }
         if temp.is_jsx_element_start() {
-          temp.skip_jsx_element()
+          let jsx_expr = temp.parse_jsx_element_expr()
           if temp.check(RParen) {
             self.pos = temp.pos + 1
-            Var("__jsx__")
+            jsx_expr
           } else if self.is_arrow_function() {
             // function: (params) => body
             let _ = self.advance() // (
@@ -2223,6 +2393,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         // regularexpression
         self.parse_parenthesized_expr()
       }
+    }
     LBracket => {
       // arrayliteral: [1, 2, 3]
       let _ = self.advance()

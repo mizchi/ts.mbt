@@ -1720,6 +1720,11 @@ fn infer_expr(
       let inner_ty = infer_expr(env, resolver, inner)
       narrow_union(inner_ty, @ast.TsType::Undefined)
     }
+    // JSX element / fragment. The value itself is opaque at the type
+    // level (we don't model React's `ReactNode` / `JSX.Element`), so
+    // return `Any`. The embedded `{expr}` sub-expressions are walked
+    // by `check_call_args_in_expr` for diagnostic recursion.
+    JsxElement(_) => @ast.TsType::Any
   }
 }
 
@@ -4343,6 +4348,12 @@ fn check_call_args_in_expr(
       // `x satisfies T` — verify the operand is assignable to `T`.
       check_expr_against(env, inner, ty, ctx, "satisfies")
     }
+    // JSX element / fragment: recurse into each embedded `{expr}`
+    // child so call-site mismatches inside JSX braces are reported.
+    JsxElement(embeds) =>
+      for e in embeds {
+        check_call_args_in_expr(env, e, ctx)
+      }
     _ => ()
   }
 }

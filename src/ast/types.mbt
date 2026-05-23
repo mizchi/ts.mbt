@@ -182,6 +182,15 @@ pub(all) enum TsExpr {
   // shape (`PropAccess` / `MethodCall` / `IndexAccess` / `CallExpr`),
   // and at use sites the result type is widened with `undefined`.
   OptionalChain(TsExpr)
+
+  // JSX element / fragment. Stores only the embedded `{expr}` children
+  // parsed from the JSX source. The checker recurses into each child
+  // (`check_call_args_in_expr`) so bad calls / type mismatches inside
+  // JSX braces still surface. The outer element's structural shape
+  // (tag name / attribute names) isn't carried — it'd require a
+  // full JSX-AST design that the current scanner / bridge codegen
+  // doesn't need.
+  JsxElement(Array[TsExpr])
 } derive(Debug)
 
 ///|
