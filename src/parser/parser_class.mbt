@@ -212,11 +212,16 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
       k => raise ParseError("Expected base class name, got \{k}")
     }
   }
-  let mut is_expr_base = self.check(LParen) || self.check(LBracket)
+  // `class C extends A?.B { ... }` — optional-chain in the heritage clause.
+  // Fall through to expression-based parsing.
+  let has_optional_chain = self.check(Question) && self.peek_at(1).kind == Dot
+  let mut is_expr_base = self.check(LParen) || self.check(LBracket) ||
+    has_optional_chain
   if !is_expr_base && self.check(Lt) {
     let saved = self.pos
     self.skip_type_args()
-    is_expr_base = self.check(LParen) || self.check(LBracket)
+    is_expr_base = self.check(LParen) || self.check(LBracket) ||
+      (self.check(Question) && self.peek_at(1).kind == Dot)
     self.pos = saved
   }
   if is_expr_base {

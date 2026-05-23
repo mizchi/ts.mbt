@@ -1995,6 +1995,49 @@ test "parser: `for (using x of arr)` parses as a for-of loop" {
 }
 
 ///|
+test "parser: nested anonymous class expression as base" {
+  // `let C = class extends class extends class { a = 1 } { b = 2 } { c = 3 };`
+  let src = "let C = class extends class extends class { a = 1 } { b = 2 } { c = 3 };"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: class extends with optional chain in base name" {
+  // `class C extends A?.B { ... }` — the heritage clause uses optional
+  // chaining; `parse_class_base_name` falls through to the expression-
+  // based parser when it sees `?.`.
+  let src =
+    #|namespace A { export class B {} }
+    #|class C extends A?.B {}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: super assignment / super.method() inside static initializer" {
+  let src =
+    #|class B {
+    #|  static a: any;
+    #|}
+    #|class C extends B {
+    #|  static y1 = this.x;
+    #|  static z1 = super.a;
+    #|  static z3 = super.f();
+    #|  static z5 = super.a = 0;
+    #|  static z6 = super.a += 1;
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
 test "parser: `using` followed by newline is still a reference" {
   // ES2023 ASI rule: a line terminator between `using` and the binding
   // makes this NOT a using declaration — `using` is a free reference.
