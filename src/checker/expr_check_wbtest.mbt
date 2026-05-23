@@ -4054,3 +4054,119 @@ test "expr_check: nested JSX surfaces inner-tag embedded calls" {
   }
   assert_true(found)
 }
+
+// ---------------------------------------------------------------------------
+// Round 39: JSX component prop validation. `<Comp foo={42}>` where
+// `Comp` is declared as `function Comp(props: Props): … {…}` now
+// type-checks attribute values against the corresponding prop types
+// and flags missing required / excess props.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX attribute well-typed passes" {
+  let src =
+    #|interface Props { name: string }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX attribute wrong type is flagged" {
+  let src =
+    #|interface Props { name: string }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name={42}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Greet> attr `name`") &&
+      i.message.contains("string") &&
+      i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX missing required prop is flagged" {
+  let src =
+    #|interface Props { name: string; age: number }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("missing prop `age`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX optional prop can be omitted" {
+  let src =
+    #|interface Props { name: string; age?: number }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX excess prop is flagged" {
+  let src =
+    #|interface Props { name: string }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi" bogus="x"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Greet> attr `bogus`") &&
+      i.message.contains("does not exist") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX HTML tag skips prop validation" {
+  // Lower-case tags are HTML intrinsics; we don't have a JSX
+  // intrinsic-element table, so attribute names aren't validated.
+  let src =
+    #|function comp(): void {
+    #|  const _ = <div className="x" anyAttr={42}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX boolean attribute satisfies a boolean prop" {
+  let src =
+    #|interface Props { disabled?: boolean }
+    #|function Button(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Button disabled/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

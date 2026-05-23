@@ -183,14 +183,19 @@ pub(all) enum TsExpr {
   // and at use sites the result type is widened with `undefined`.
   OptionalChain(TsExpr)
 
-  // JSX element / fragment. Stores only the embedded `{expr}` children
-  // parsed from the JSX source. The checker recurses into each child
-  // (`check_call_args_in_expr`) so bad calls / type mismatches inside
-  // JSX braces still surface. The outer element's structural shape
-  // (tag name / attribute names) isn't carried — it'd require a
-  // full JSX-AST design that the current scanner / bridge codegen
-  // doesn't need.
-  JsxElement(Array[TsExpr])
+  // JSX element / fragment. Carries:
+  //   - the tag name (`""` for fragments `<>…</>`; dotted for member
+  //     refs like `<Foo.Bar/>`);
+  //   - the attribute list as `(name, value?)` pairs — `value` is
+  //     `None` for boolean attrs (`<Foo bar />`) and string-literal
+  //     attrs are wrapped as `StringLit(...)`;
+  //   - the leftover embedded `{expr}` sub-expressions that don't
+  //     belong to a specific attribute (children + spread targets).
+  //
+  // The checker recurses into every embedded expression and (when the
+  // tag resolves to a known component or HTML element) validates the
+  // attribute values against the receiving prop / element type.
+  JsxElement(String, Array[(String, TsExpr?)], Array[TsExpr])
 } derive(Debug)
 
 ///|

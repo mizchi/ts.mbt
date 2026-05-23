@@ -1724,7 +1724,7 @@ fn infer_expr(
     // level (we don't model React's `ReactNode` / `JSX.Element`), so
     // return `Any`. The embedded `{expr}` sub-expressions are walked
     // by `check_call_args_in_expr` for diagnostic recursion.
-    JsxElement(_) => @ast.TsType::Any
+    JsxElement(_, _, _) => @ast.TsType::Any
   }
 }
 
@@ -2149,6 +2149,109 @@ fn check_array_lit_against_tuple(
 /// Excess literal fields (not declared on the target) and missing required
 /// fields are reported individually so the diagnostic points at the
 /// specific divergence rather than the whole literal.
+///|
+/// Validate a JSX element's attributes against the receiving component's
+/// props. Recognised receiver shapes:
+///
+///   - lower-case HTML tags (`<div>` etc.) — skipped; we don't model
+///     the global JSX intrinsic table.
+///   - empty tag (fragment `<>…</>`) — skipped.
+///   - dotted tag (`<Foo.Bar/>`) — skipped (member access not modelled).
+///   - a known top-level function whose single parameter is a Props
+///     interface / object type — each attribute is validated against
+///     the corresponding prop's declared type, missing required props
+///     are flagged, and excess props surface as "does not exist on
+///     target type".
+fn check_jsx_attrs(
+  env : ExprEnv,
+  tag : String,
+  attrs : Array[(String, @ast.TsExpr?)],
+  ctx : CheckCtx,
+) -> Unit {
+  if tag == "" {
+    return
+  }
+  // Lower-case HTML element tags — out of scope for now.
+  if tag.length() > 0 {
+    let first = tag[0].to_int().unsafe_to_char()
+    if first >= 'a' && first <= 'z' {
+      return
+    }
+  }
+  if tag.contains(".") {
+    return
+  }
+  // Resolve the component as a top-level function and pull out its
+  // single parameter's type. Component signatures we recognise:
+  //
+  //   function Comp(props: { foo: number }): JSX.Element
+  //   function Comp(props: Props): JSX.Element
+  let props_ty : @ast.TsType? = match ctx.resolver.signatures.get(tag) {
+    Some(params) if params.length() == 1 => Some(params[0].type_)
+    _ => None
+  }
+  let props = match props_ty {
+    Some(t) => t
+    None => return
+  }
+  // Per-attribute type check.
+  for entry in attrs {
+    let name = entry.0
+    match entry.1 {
+      Some(value) =>
+        match ctx.resolver.lookup_field(props, name) {
+          Some(declared) =>
+            check_expr_against(
+              env,
+              value,
+              declared,
+              ctx,
+              "<\{tag}> attr `\{name}`",
+            )
+          None =>
+            record(
+              ctx,
+              "<\{tag}> attr `\{name}`",
+              "property `\{name}` does not exist on target type",
+            )
+        }
+      None =>
+        // Boolean attribute (`<Foo bar />`) implies `bar = true`.
+        match ctx.resolver.lookup_field(props, name) {
+          Some(_) => ()
+          None =>
+            record(
+              ctx,
+              "<\{tag}> attr `\{name}`",
+              "property `\{name}` does not exist on target type",
+            )
+        }
+    }
+  }
+  // Missing-required check.
+  let provided : Map[String, Bool] = {}
+  for entry in attrs {
+    provided[entry.0] = true
+  }
+  let declared_fields = collect_declared_fields(props, ctx.resolver)
+  for d in declared_fields {
+    let n = d.0
+    let ty = d.1
+    if provided.contains(n) {
+      continue
+    }
+    if is_assignable_to(@ast.TsType::Undefined, ty) {
+      continue
+    }
+    record(
+      ctx,
+      "<\{tag}> missing prop `\{n}`",
+      "property `\{n}` is required by `\{type_display(props)}`",
+    )
+  }
+}
+
+///|
 fn check_object_lit_against_target(
   env : ExprEnv,
   entries : Array[(String, @ast.TsExpr)],
@@ -4348,12 +4451,24 @@ fn check_call_args_in_expr(
       // `x satisfies T` — verify the operand is assignable to `T`.
       check_expr_against(env, inner, ty, ctx, "satisfies")
     }
-    // JSX element / fragment: recurse into each embedded `{expr}`
-    // child so call-site mismatches inside JSX braces are reported.
-    JsxElement(embeds) =>
+    // JSX element / fragment: recurse into every attribute value and
+    // child sub-expression so call-site mismatches inside JSX braces
+    // are reported. When the tag resolves to a known component (a
+    // top-level function whose only parameter is a Props interface or
+    // object type), also run per-attribute type checks against the
+    // declared prop types.
+    JsxElement(tag, attrs, embeds) => {
+      check_jsx_attrs(env, tag, attrs, ctx)
+      for entry in attrs {
+        match entry.1 {
+          Some(value) => check_call_args_in_expr(env, value, ctx)
+          None => ()
+        }
+      }
       for e in embeds {
         check_call_args_in_expr(env, e, ctx)
       }
+    }
     _ => ()
   }
 }
