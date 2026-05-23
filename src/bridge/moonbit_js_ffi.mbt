@@ -863,6 +863,8 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     Tuple(items) => ffi_tuple_type_name(state, items)
     // Outside a Tuple element, a bare `Rest(T)` behaves like `Array(T)`.
     Rest(inner) => "Array[" + ffi_type_name(state, inner) + "]"
+    Constructor(params, return_type, _) =>
+      ffi_func_type_name(state, params, return_type)
     Func(params, return_type) => ffi_func_type_name(state, params, return_type)
     Struct(name, _) => ffi_type_identifier(name, "OpaqueType")
     Named("any") | Named("Function") => {

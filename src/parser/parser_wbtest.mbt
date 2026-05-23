@@ -661,6 +661,24 @@ test "parser: parse literal-key mapped object type as fields" {
 }
 
 ///|
+test "parser: parse constructor type `new (...) => T`" {
+  let parser = Parser::from_source("new (x: string) => Foo")
+  assert_eq(
+    parser.parse_type(),
+    Constructor([String_], Named("Foo"), false),
+  )
+}
+
+///|
+test "parser: parse abstract constructor type" {
+  let parser = Parser::from_source("abstract new (x: string) => Foo")
+  assert_eq(
+    parser.parse_type(),
+    Constructor([String_], Named("Foo"), true),
+  )
+}
+
+///|
 test "parser: parse variadic tuple type with rest element" {
   let parser = Parser::from_source("[string, ...number[]]")
   assert_eq(

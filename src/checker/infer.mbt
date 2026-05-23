@@ -102,6 +102,38 @@ pub fn match_infer_pattern(
         }
         true
       }
+    (Constructor(s_params, s_ret, _), Constructor(p_params, p_ret, _)) => {
+      // Reuse the Func rest-tuple pattern for `new (...args: infer P) => any`.
+      if p_params.length() == 1 {
+        match p_params[0] {
+          Array(rest_inner) =>
+            match infer_marker_name(rest_inner) {
+              Some(rest_name) =>
+                return bind_inferred_type(bindings, rest_name, Tuple(s_params)) &&
+                  match_infer_pattern(s_ret, p_ret, bindings)
+              None => {
+                for sp in s_params {
+                  if !match_infer_pattern(sp, rest_inner, bindings) {
+                    return false
+                  }
+                }
+                return match_infer_pattern(s_ret, p_ret, bindings)
+              }
+            }
+          _ => ()
+        }
+      }
+      if s_params.length() != p_params.length() {
+        false
+      } else {
+        for i in 0..<s_params.length() {
+          if !match_infer_pattern(s_params[i], p_params[i], bindings) {
+            return false
+          }
+        }
+        match_infer_pattern(s_ret, p_ret, bindings)
+      }
+    }
     (Func(s_params, s_ret), Func(p_params, p_ret)) => {
       // Rest-parameter pattern: the pattern has a single parameter of the form
       // `Array(X)` representing `...args: X[]`. It matches any source arity.
@@ -246,6 +278,13 @@ pub fn substitute_inferred_type(
         out.push(substitute_inferred_type(param, bindings))
       }
       Func(out, substitute_inferred_type(ret, bindings))
+    }
+    Constructor(params, ret, is_abstract) => {
+      let out : Array[@ast.TsType] = []
+      for param in params {
+        out.push(substitute_inferred_type(param, bindings))
+      }
+      Constructor(out, substitute_inferred_type(ret, bindings), is_abstract)
     }
     Union(items) => {
       let out : Array[@ast.TsType] = []

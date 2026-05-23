@@ -62,6 +62,62 @@ fn Parser::parse_paren_or_function_type(
 }
 
 ///|
+/// Parse the tail of a constructor type after the `new` keyword has been
+/// consumed: optional `<...>` type params, `(...)` parameter list, then
+/// `=> T`. Falls back to `Any` when any part fails so the existing
+/// permissive behavior is preserved on malformed sources.
+fn Parser::parse_constructor_tail(
+  self : Parser,
+  is_abstract : Bool,
+) -> @ast.TsType raise ParseError {
+  if self.check(Lt) {
+    self.skip_type_args()
+  }
+  if !self.check(LParen) {
+    return Any
+  }
+  let saved = self.pos
+  let _ = self.expect(LParen)
+  let param_types : Array[@ast.TsType] = []
+  if !self.match_(RParen) {
+    let mut ok = true
+    while true {
+      let _ = self.match_ellipsis()
+      let _ = self.parse_declare_param_name() catch {
+        _ => {
+          ok = false
+          break
+        }
+      }
+      let _ = self.match_(Question)
+      if self.match_(Colon) {
+        param_types.push(self.parse_type())
+      } else {
+        param_types.push(@ast.TsType::Any)
+      }
+      if self.match_(Comma) {
+        if self.check(RParen) {
+          break
+        }
+        continue
+      }
+      break
+    }
+    if !ok {
+      self.pos = saved
+      self.skip_paren_type()
+      return Any
+    }
+    let _ = self.expect(RParen)
+  }
+  if !self.match_(Arrow) {
+    return Any
+  }
+  let ret = self.parse_type()
+  Constructor(param_types, ret, is_abstract)
+}
+
+///|
 fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
   let _ = self.expect(LBracket)
   let items : Array[@ast.TsType] = []
@@ -132,7 +188,14 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
 ) -> @ast.TsType? {
   let saved_pos = self.pos
   try {
-    let _ = self.match_ident("readonly")
+    // Leading `readonly` / `+readonly` / `-readonly` modifier. We don't
+    // track readonly at the type level, so the modifier is consumed but
+    // not retained.
+    if self.match_(Plus) || self.match_(Minus) {
+      let _ = self.match_ident("readonly")
+    } else {
+      let _ = self.match_ident("readonly")
+    }
     let _ = self.expect(LBracket)
     let key_param = match self.peek().kind {
       Ident(name) => {
@@ -155,16 +218,33 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
       None
     }
     let _ = self.expect(RBracket)
+    // Trailing optional modifier:
+    //   `?`  / `+?` — widen value to `T | undefined`
+    //   `-?`        — strip `undefined` from `T` (post-substitution)
+    //   none        — use `T` as-is
     let optional = if self.match_(Question) {
       true
-    } else if self.match_(Minus) {
-      let _ = self.match_(Question)
+    } else if self.match_(Plus) {
+      self.match_(Question)
+    } else {
       false
+    }
+    let strip_undef = if !optional && self.match_(Minus) {
+      self.match_(Question)
     } else {
       false
     }
     let _ = self.expect(Colon)
-    let value_type = self.parse_type()
+    let raw_value = self.parse_type()
+    // Encode the `-?` modifier by wrapping the value in a marker the
+    // simplifier strips after per-key substitution. Stays inert when
+    // the source remains opaque, so legacy passes still see a normal
+    // `MappedType`.
+    let value_type : @ast.TsType = if strip_undef {
+      Applied("__tsmbt_strip_undef", [raw_value])
+    } else {
+      raw_value
+    }
     let _ = self.match_(Semicolon) || self.match_(Comma)
     let _ = self.expect(RBrace)
     // With `as Remap`: preserve the remap binder shape so the simplifier
@@ -661,29 +741,13 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // Constructor type: new (...args: T) => U
     New => {
       let _ = self.advance()
-      // Skip type parameters if present
-      if self.check(Lt) {
-        self.skip_type_args()
-      }
-      // Skip parameter list
-      if self.check(LParen) {
-        self.skip_paren_type()
-      }
-      Any
+      self.parse_constructor_tail(false)
     }
     // abstract new (...) => T
-    Ident("abstract") => {
+    Ident("abstract") if self.peek_at(1).kind == New => {
       let _ = self.advance()
-      if self.check(New) {
-        let _ = self.advance()
-        if self.check(Lt) {
-          self.skip_type_args()
-        }
-        if self.check(LParen) {
-          self.skip_paren_type()
-        }
-      }
-      Any
+      let _ = self.advance()
+      self.parse_constructor_tail(true)
     }
     // Special identifier-like keywords
     Ident("infer") => {

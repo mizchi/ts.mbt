@@ -69,5 +69,67 @@ pub fn standard_utility_types() -> Map[String, AliasBinding] {
       Named("T"),
     ),
   }
+
+  // type NoInfer<T> = T — added in TS 5.4 as an inference-blocking marker.
+  // We don't model contextual inference, so structurally `NoInfer<T>` is
+  // the identity. Recording it as an alias keeps `is_assignable_to`
+  // transparent and lets bridge passes unwrap it directly.
+  table["NoInfer"] = { type_params: ["T"], body: Named("T") }
+
+  // type ThisParameterType<F> = F extends (this: infer U, ...args: any[]) => any
+  //   ? U : unknown
+  // MoonBit doesn't model `this` parameters explicitly; we recognize the
+  // shape so the alias still resolves, but real-world `this` capture
+  // requires a follow-up at the parser level.
+  table["ThisParameterType"] = {
+    type_params: ["F"],
+    body: Conditional(
+      Named("F"),
+      Func([Array(Any)], Any),
+      Any,
+      Any,
+    ),
+  }
+
+  // type OmitThisParameter<F> = F extends (this: any, ...args: infer A) => infer R
+  //   ? (...args: A) => R : F
+  // Without an explicit `this`-parameter model the structural pattern
+  // collapses to the function shape unchanged, which is what callers
+  // observe at runtime anyway.
+  table["OmitThisParameter"] = {
+    type_params: ["F"],
+    body: Conditional(
+      Named("F"),
+      Func(
+        [Array(Applied("__tsmbt_infer", [Named("A")]))],
+        Applied("__tsmbt_infer", [Named("R")]),
+      ),
+      Func([Array(Applied("__tsmbt_infer", [Named("A")]))], Named("R")),
+      Named("F"),
+    ),
+  }
+
+  // type ConstructorParameters<C> = C extends new (...args: infer P) => any
+  //   ? P : never
+  table["ConstructorParameters"] = {
+    type_params: ["C"],
+    body: Conditional(
+      Named("C"),
+      Constructor([Array(Applied("__tsmbt_infer", [Named("P")]))], Any, false),
+      Named("P"),
+      Never,
+    ),
+  }
+
+  // type InstanceType<C> = C extends new (...args: any[]) => infer R ? R : any
+  table["InstanceType"] = {
+    type_params: ["C"],
+    body: Conditional(
+      Named("C"),
+      Constructor([Array(Any)], Applied("__tsmbt_infer", [Named("R")]), false),
+      Named("R"),
+      Any,
+    ),
+  }
   table
 }

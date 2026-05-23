@@ -432,6 +432,11 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     Tuple(items) => moonbit_tuple_type_name(state, items)
     Func(params, return_type) =>
       moonbit_func_type_name(state, params, return_type)
+    // Constructor types fall back to the same callable shape. There is
+    // no `new` keyword on MoonBit's side, so the resulting type is the
+    // params-to-instance arrow.
+    Constructor(params, return_type, _) =>
+      moonbit_func_type_name(state, params, return_type)
     Struct(name, _) => {
       mark_referenced_type(state, name)
       moonbit_type_identifier(name, "OpaqueType")

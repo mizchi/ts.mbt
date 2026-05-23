@@ -237,6 +237,22 @@ test "simplify_type: mapped preserved when source is opaque" {
 }
 
 ///|
+test "simplify_type: mapped `-?` strips undefined from value" {
+  // `{ [K in 'a' | 'b']-?: number | undefined }` ⇒
+  //   `{ a: number, b: number }`.
+  let t : @ast.TsType = MappedType(
+    "K",
+    Union([Literal("a"), Literal("b")]),
+    Applied("__tsmbt_strip_undef", [Union([Number, Undefined])]),
+    false,
+  )
+  assert_eq(
+    simplify_type(t),
+    Object([(Literal("a"), Number), (Literal("b"), Number)]),
+  )
+}
+
+///|
 test "simplify_type: mapped remap via Capitalize prefixes each key" {
   // `{ [K in 'a' | 'b' as `get${Capitalize<K>}`]: number }`
   //   ⇒ `{ getA: number, getB: number }`

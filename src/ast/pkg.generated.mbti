@@ -365,6 +365,7 @@ pub(all) enum TsType {
   Object(Array[(TsType, TsType)])
   Struct(String, Array[(String, TsType)])
   Func(Array[TsType], TsType)
+  Constructor(Array[TsType], TsType, Bool)
   Union(Array[TsType])
   Intersection(Array[TsType])
   Conditional(TsType, TsType, TsType, TsType)

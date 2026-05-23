@@ -32,6 +32,12 @@ pub(all) enum TsType {
   Object(Array[(TsType, TsType)]) // { key: value } - key is Literal for property names
   Struct(String, Array[(String, TsType)]) // name, fields (for codegen)
   Func(Array[TsType], TsType) // params, return
+  // Constructor type: `new (...args) => T` or `abstract new (...) => T`.
+  // Stored separately from `Func` so utility passes (`ConstructorParameters`,
+  // `InstanceType`) can pattern-match on the call form, and so a bridge
+  // emitter can decide between a class wrapper and a plain callable.
+  // The last field is `is_abstract`.
+  Constructor(Array[TsType], TsType, Bool)
   // Type operators
   Union(Array[TsType]) // A | B
   Intersection(Array[TsType]) // A & B

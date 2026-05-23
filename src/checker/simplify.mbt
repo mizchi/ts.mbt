@@ -40,6 +40,13 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
       }
       Func(out, simplify_type(ret))
     }
+    Constructor(params, ret, is_abstract) => {
+      let out : Array[@ast.TsType] = []
+      for p in params {
+        out.push(simplify_type(p))
+      }
+      Constructor(out, simplify_type(ret), is_abstract)
+    }
     Applied(name, args) => {
       let out : Array[@ast.TsType] = []
       for a in args {
@@ -78,6 +85,24 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
       let s_extends = simplify_type(extends_)
       let s_t = simplify_type(t_branch)
       let s_f = simplify_type(f_branch)
+      // Non-distributive conditional pattern `[T] extends [U] ? X : Y`:
+      // both sides are length-1 tuples, which TypeScript uses to opt
+      // out of distribution. Unwrap and check the inner pair directly.
+      match (s_check, s_extends) {
+        (Tuple([inner_check]), Tuple([inner_extends])) =>
+          return match extends_decision(inner_check, inner_extends) {
+            Some(true) => s_t
+            Some(false) => s_f
+            None =>
+              Conditional(
+                Tuple([inner_check]),
+                Tuple([inner_extends]),
+                s_t,
+                s_f,
+              )
+          }
+        _ => ()
+      }
       // Distributive conditional: `(A | B) extends T ? X : Y`
       // -> `(A extends T ? X : Y) | (B extends T ? X : Y)`. Each leaf is
       // resolved through `extends_decision`; only commit the distribution
@@ -199,6 +224,44 @@ fn simplify_keyof(t : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// Strip `Undefined` from a type produced by a mapped-type `-?` modifier.
+/// Walks `Applied("__tsmbt_strip_undef", [t])` and removes the optional
+/// branch; transparent on anything else.
+fn unwrap_strip_undef(t : @ast.TsType) -> (@ast.TsType, Bool) {
+  match t {
+    Applied("__tsmbt_strip_undef", [inner]) => (inner, true)
+    _ => (t, false)
+  }
+}
+
+///|
+/// Remove `Undefined` / `Null` (only undefined for `-?`) from a value
+/// type. Used after per-key substitution when the mapped type carries
+/// a `-?` strip marker.
+fn strip_undefined_from(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Union(items) => {
+      let kept : Array[@ast.TsType] = []
+      for it in items {
+        match it {
+          Undefined => continue
+          _ => kept.push(it)
+        }
+      }
+      if kept.length() == 0 {
+        Never
+      } else if kept.length() == 1 {
+        kept[0]
+      } else {
+        Union(kept)
+      }
+    }
+    Undefined => Never
+    _ => t
+  }
+}
+
+///|
 /// `{ [K in U]: V }` evaluator. Substitutes `K` with each literal in `U`
 /// when the source resolves to a finite literal union (or single literal,
 /// or `Keyof Struct(...)`), producing an `Object(fields)`. Preserved
@@ -210,14 +273,20 @@ fn simplify_mapped_type(t : @ast.TsType) -> @ast.TsType {
         Some(ks) => ks
         None => return t
       }
+      let (raw_value, strip) = unwrap_strip_undef(value)
       let fields : Array[(@ast.TsType, @ast.TsType)] = []
       for k in keys {
-        let substituted = substitute_named(value, key_param, Literal(k))
+        let substituted = substitute_named(raw_value, key_param, Literal(k))
         let field_type = simplify_type(substituted)
-        let final_type = if optional {
-          @ast.TsType::Union([field_type, Undefined])
+        let stripped = if strip {
+          strip_undefined_from(field_type)
         } else {
           field_type
+        }
+        let final_type = if optional {
+          @ast.TsType::Union([stripped, Undefined])
+        } else {
+          stripped
         }
         fields.push((Literal(k), final_type))
       }
@@ -355,6 +424,13 @@ fn substitute_named(
         out.push(substitute_named(p, name, replacement))
       }
       Func(out, substitute_named(ret, name, replacement))
+    }
+    Constructor(params, ret, is_abstract) => {
+      let out : Array[@ast.TsType] = []
+      for p in params {
+        out.push(substitute_named(p, name, replacement))
+      }
+      Constructor(out, substitute_named(ret, name, replacement), is_abstract)
     }
     Union(items) => {
       let out : Array[@ast.TsType] = []

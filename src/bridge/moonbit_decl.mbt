@@ -3326,6 +3326,8 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     // purposes of suffix naming; inside a Tuple it's handled by the
     // tuple-walker.
     Rest(inner) => "RestOf" + utility_record_type_suffix(inner)
+    Constructor(_, ret, _) =>
+      "CtorOf" + utility_record_type_suffix(ret)
   }
 }
 
@@ -4704,6 +4706,19 @@ fn lower_react_utility_type(
       }
       Tuple(lowered_params)
     }
+    Applied("ConstructorParameters", [Constructor(params, _, _)]) => {
+      // Standalone `new (...args) => T` typedef: extract the param
+      // tuple directly.
+      let lowered_params : Array[@ast.TsType] = []
+      for param in params {
+        lowered_params.push(
+          lower_react_utility_type(info, param, modules, canonical_types),
+        )
+      }
+      Tuple(lowered_params)
+    }
+    Applied("InstanceType", [Constructor(_, ret, _)]) =>
+      lower_react_utility_type(info, ret, modules, canonical_types)
     Applied("InstanceType", [TypeOf(query)]) =>
       match typeof_class_instance_type(info, query, modules, canonical_types) {
         Some(type_) => type_
