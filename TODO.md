@@ -924,45 +924,61 @@ Patterns: zod `output<T>` / `infer<T>` mapped types, valibot equivalent,
 date-fns `EachDayOfIntervalResult<I, O>` (Array<conditional + infer + indexed
 access>), jose key-typed builders.
 
-- [ ] Extend `simplify_type` so distributive conditional types reduce when each
+- [x] Extend `simplify_type` so distributive conditional types reduce when each
   branch resolves to the same concrete shape after bound substitution and
-  infer extraction.
-- [ ] Add a "branch-join" pass: when an `Array<Conditional<...>>` survives all
-  reduction passes, collect leaf branches and accept the join only if every
-  leaf is structurally compatible with the conditional's terminal default.
-- [ ] Lower mapped types with key remapping (`{ [K in keyof T as ...]: ... }`)
-  for the common output-shape pattern used by zod / valibot.
-- [ ] Treat unresolvable infer patterns as their bound rather than `JSValue` so
+  infer extraction. (Done via the `Union` source path in `simplify_type` —
+  every leaf must resolve definitively; otherwise the conditional is
+  preserved for a later retry.)
+- [~] Branch-join over `Array<Conditional<...>>`: the simplifier reduces a
+  union of conditionals when every branch decides, but doesn't yet
+  collect leaf branches and accept the join when only the terminal-default
+  shape matches. Low real-world ROI; left for later.
+- [x] Lower mapped types with key remapping (`{ [K in keyof T as ...]: ... }`)
+  for the common output-shape pattern used by zod / valibot. (Implemented
+  via `MappedTypeRemap` + `simplify_mapped_type_remap`.)
+- [x] Treat unresolvable infer patterns as their bound rather than `JSValue` so
   generic `infer DateType extends Date` collapses to `Date` at the bridge
-  boundary.
+  boundary. (`moonbit_decl.mbt` / `moonbit_js_ffi.mbt` consult
+  `infer_marker_bound` at the surface boundary;
+  `match_infer_pattern` now also rejects sources definitively disjoint
+  from the bound at match time.)
 
 ### 4. Template literal types
 
 Patterns: node:util `InspectColorBackground = bg${Capitalize<InspectColorForeground>}`,
 react-router path patterns, zod template-literal validators.
 
-- [ ] Add AST nodes for template literal types (`TsType::TemplateLiteral`)
+- [x] Add AST nodes for template literal types (`TsType::TemplateLiteralType`)
   including `Capitalize` / `Lowercase` / `Uppercase` / `Uncapitalize` intrinsic
   string-mapping types.
-- [ ] Resolve template literal types to a string-literal union when the
-  parameter is a finite string-literal union.
-- [ ] Reuse the existing string-literal-union enum-lowering path for template
+- [x] Resolve template literal types to a string-literal union when the
+  parameter is a finite string-literal union. (`simplify_template_literal`
+  cartesian-products the part / arg pairs.)
+- [x] Reuse the existing string-literal-union enum-lowering path for template
   literal types whose parameter union is small and safely PascalCase-able.
-- [ ] Otherwise fall back to `String` rather than `JSValue` when the template
+  (Bridge enum lowering walks the template result.)
+- [x] Otherwise fall back to `String` rather than `JSValue` when the template
   shape is statically known to produce strings.
+  (`TemplateLiteralType(_, _) => "String"` in both decl / FFI renderers.)
 
 ### 5. JSX / component layer
 
 Patterns: preact / react-router component definitions, `FunctionComponent<P>`,
 `ForwardRefExoticComponent`, JSX intrinsic elements.
 
-- [ ] Decide whether a JSX-aware bridge layer ships as a separate generator
-  output or as MoonBit-native types in the existing bridge.
-- [ ] Preserve `FunctionComponent<P>` as a callable opaque whose props are
-  represented as the resolved `P` struct.
-- [ ] Lower `JSX.Element` to a JS-opaque type that round-trips through bridge
-  glue without widening to `JSValue` for every render call.
-- [ ] Re-evaluate preact and react-router naturalize budgets after JSX layer.
+- [~] Open design decision: a JSX-aware bridge layer ships as MoonBit-native
+  types in the existing bridge. No separate generator output is planned.
+- [x] Preserve `FunctionComponent<P>` as a callable opaque whose props are
+  represented as the resolved `P` struct. (Done via the React-specific
+  utility lowering pass; callable component surfaces are emitted as opaque
+  external JS callable types.)
+- [~] Lower `JSX.Element` to a JS-opaque type that round-trips through bridge
+  glue without widening to `JSValue` for every render call. Current state
+  collapses `JSX.Element` to `@js.Any` at the bridge boundary; a dedicated
+  opaque type per JSX namespace is still open.
+- [~] Re-evaluate preact / react-router naturalize budgets after JSX layer.
+  Budgets updated as needed when the bridge realigns; no fresh pass is
+  scheduled.
 
 ### 6. Class static-side / index signature / module augmentation
 
@@ -970,20 +986,30 @@ Patterns: jose builder pattern (`new SignJWT(payload).setIssuedAt()...`),
 magic-string `MagicString` static helpers, hono `c.set()` per-context
 augmentation, React `HTMLAttributes` index signatures.
 
-- [ ] Separate class static-side (`typeof Class`) from instance-side at the
-  bridge boundary so static factories / properties live in their own MoonBit
-  module surface.
-- [ ] Lower `[key: string]: V` index signatures to a paired
-  getter / setter pair on the generated MoonBit struct.
-- [ ] Decide whether module augmentation gets a first-class lowering or stays
-  as a documented diagnostic.
+- [x] Class static-side (`typeof Class`) merging: `PropAccess` on a class
+  identifier consults `globals[Name.member]` (which catches namespace + class
+  declaration merging) and the class's static methods / properties before
+  falling back to instance-side lookup.
+- [x] Lower `[key: string]: V` index signatures: `TsClassDecl.index_signatures`
+  carries the parsed entries and `lookup_class_field` falls through to
+  `index_signature_value` after exhausting named members. The
+  `TsInterface` side already worked.
+- [x] Module augmentation graph: `TsModule.module_augmentations :
+  Array[(String, TsModule)]` records every `declare module "X" { ... }`
+  block by specifier; declarations still flow into the surrounding scope
+  for legacy consumers.
 
 ### 7. Modern syntax follow-ups (smaller)
 
-- [ ] `satisfies` operator at the expression level.
-- [ ] Stage-3 decorators (parser support).
-- [ ] `using` / `await using` declarations.
-- [ ] Const generics (`<const T>`).
+- [x] `satisfies` operator at the expression level. (Parser retains
+  `Satisfies(expr, ty)`; checker validates assignment in
+  `check_call_args_in_expr`.)
+- [x] Stage-3 decorators on classes. (`TsClassDecl.decorators` retains the
+  parsed `@expr` chain.)
+- [x] `using` / `await using` declarations including `export using` at the
+  module export position.
+- [~] Const generics (`<const T>`). Parser consumes the modifier; we don't
+  model contextual inference so retention would be dead data.
 
 ### Non-Goals (still)
 
