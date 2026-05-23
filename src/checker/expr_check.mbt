@@ -342,6 +342,34 @@ fn Resolver::lookup_field(
           Some(t) => return Some(t)
           None => ()
         }
+      } else {
+        match typed_array_element_type(n) {
+          Some(elem) =>
+            match typed_array_extra_member(field) {
+              Some(t) => return Some(t)
+              None =>
+                match array_prototype_member(elem, field) {
+                  Some(t) => return Some(t)
+                  None => ()
+                }
+            }
+          None => ()
+        }
+        match (n, field) {
+          // ArrayBuffer / DataView shape.
+          ("ArrayBuffer", "byteLength")
+          | ("SharedArrayBuffer", "byteLength")
+          | ("DataView", "byteLength")
+          | ("DataView", "byteOffset") => return Some(@ast.TsType::Number)
+          ("ArrayBuffer", "slice") | ("SharedArrayBuffer", "slice") =>
+            return Some(
+              @ast.TsType::Func(
+                [@ast.TsType::Number, @ast.TsType::Number],
+                @ast.TsType::Named(n),
+              ),
+            )
+          _ => ()
+        }
       }
     _ => ()
   }
@@ -862,6 +890,38 @@ fn error_prototype_member(field : String) -> @ast.TsType? {
 }
 
 ///|
+/// Element type of a typed-array class. Returns `None` for non-typed-array
+/// class names so callers know to fall through.
+fn typed_array_element_type(name : String) -> @ast.TsType? {
+  match name {
+    "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array"
+    | "Uint16Array" | "Int32Array" | "Uint32Array" | "Float32Array"
+    | "Float64Array" => Some(@ast.TsType::Number)
+    "BigInt64Array" | "BigUint64Array" => Some(@ast.TsType::BigInt)
+    _ => None
+  }
+}
+
+///|
+/// Extra members declared on the typed-array shape that don't appear on
+/// the regular `Array.prototype` (`buffer`, `byteLength`, `byteOffset`,
+/// `BYTES_PER_ELEMENT`, `subarray`, `set`, `copyWithin`).
+fn typed_array_extra_member(field : String) -> @ast.TsType? {
+  let n = @ast.TsType::Number
+  match field {
+    "buffer" => Some(@ast.TsType::Named("ArrayBuffer"))
+    "byteLength" | "byteOffset" | "BYTES_PER_ELEMENT" => Some(n)
+    "subarray" =>
+      Some(@ast.TsType::Func([n, n], @ast.TsType::Named("Uint8Array")))
+    "set" =>
+      Some(@ast.TsType::Func([@ast.TsType::Array(n), n], @ast.TsType::Void))
+    "copyWithin" =>
+      Some(@ast.TsType::Func([n, n], @ast.TsType::Named("Uint8Array")))
+    _ => None
+  }
+}
+
+///|
 /// Well-known global namespace static methods (`Object.keys`, `Math.max`,
 /// `Number.isNaN`, etc.). Returns the conventional `Func(...)` shape so
 /// `check_call_args_in_expr` validates argument types; the result type
@@ -957,6 +1017,18 @@ fn global_namespace_method(
           @ast.TsType::Applied("Promise", [@ast.TsType::Array(any)]),
         ),
       )
+    // console.* — every method accepts any arg list and returns void.
+    // Modelled with a single-arg `Func` so the universally common
+    // `console.log("msg")` call validates; multi-arg calls fall through
+    // to the contextual-typing fallback.
+    ("console", "log") | ("console", "info") | ("console", "warn")
+    | ("console", "error") | ("console", "debug") | ("console", "trace")
+    | ("console", "dir") | ("console", "table") | ("console", "group")
+    | ("console", "groupCollapsed") | ("console", "groupEnd")
+    | ("console", "clear") | ("console", "count") | ("console", "countReset")
+    | ("console", "time") | ("console", "timeEnd") | ("console", "timeLog")
+    | ("console", "assert") | ("console", "dirxml") =>
+      Some(@ast.TsType::Func([any], @ast.TsType::Void))
     _ => None
   }
 }

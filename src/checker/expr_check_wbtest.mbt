@@ -3148,3 +3148,118 @@ test "expr_check: for-of over IterableIterator yields T" {
     None => fail("function f not found")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Round 29: console.* static dispatch and the typed-array family
+// (Int8Array, Uint8Array, ..., Float64Array, BigInt64Array, ArrayBuffer,
+// SharedArrayBuffer, DataView).
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: console.log accepts an arg and returns void" {
+  let src =
+    #|function f(): void {
+    #|  console.log("hello");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: console.error accepts an arg" {
+  let src =
+    #|function f(msg: string): void {
+    #|  console.error(msg);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Uint8Array.length is number" {
+  let src =
+    #|function f(a: Uint8Array): number {
+    #|  return a.length;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Uint8Array element is number" {
+  // `indexOf` from Array.prototype accepts the element type — `number`
+  // for Uint8Array. Passing a string should flag.
+  let src =
+    #|function f(a: Uint8Array): number {
+    #|  return a.indexOf("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Float64Array.byteLength is number" {
+  let src =
+    #|function f(a: Float64Array): number {
+    #|  return a.byteLength;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: BigInt64Array element is bigint" {
+  let src =
+    #|function f(a: BigInt64Array): bigint {
+    #|  return a[0];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: ArrayBuffer.byteLength is number" {
+  let src =
+    #|function f(b: ArrayBuffer): number {
+    #|  return b.byteLength;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: typed-array.map flows through Array.prototype.map" {
+  // The typed-array shape inherits Array.prototype, so `map<U>` runs
+  // through the same callback-driven inference as `number[].map`.
+  let src =
+    #|function f(a: Uint8Array): string[] {
+    #|  return a.map(x => x.toString());
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
