@@ -336,6 +336,13 @@ fn Resolver::lookup_field(
         Some(t) => return Some(t)
         None => ()
       }
+    Named(n) =>
+      if is_error_class_name(n) {
+        match error_prototype_member(field) {
+          Some(t) => return Some(t)
+          None => ()
+        }
+      }
     _ => ()
   }
   match unwrapped {
@@ -390,6 +397,20 @@ fn Resolver::lookup_field(
       map_prototype_member(k, v, field)
     Applied("Set", [t]) | Applied("ReadonlySet", [t]) =>
       set_prototype_member(t, field)
+    Applied("WeakMap", [k, v]) => weakmap_prototype_member(k, v, field)
+    Applied("WeakSet", [t]) => weakset_prototype_member(t, field)
+    Applied("Iterable", [t])
+    | Applied("IterableIterator", [t])
+    | Applied("Iterator", [t]) => iterator_prototype_member(t, field)
+    // `Generator<T, TReturn, TNext>` — only `T` matters at our resolution.
+    Applied("Generator", args) if args.length() >= 1 =>
+      iterator_prototype_member(args[0], field)
+    Applied("AsyncIterable", [t])
+    | Applied("AsyncIterableIterator", [t])
+    | Applied("AsyncIterator", [t]) =>
+      async_iterator_prototype_member(t, field)
+    Applied("AsyncGenerator", args) if args.length() >= 1 =>
+      async_iterator_prototype_member(args[0], field)
     // supplied args before returning the field type so `b.value` on
     // `b: Box<number>` resolves to `number` rather than the raw `T`.
     Applied(n, args) =>
@@ -506,6 +527,7 @@ fn Resolver::lookup_field(
     Array(elem) => array_prototype_member(elem, field)
     Number | NumberLiteral(_) | Int => number_prototype_member(field)
     Boolean | BooleanLiteral(_) => boolean_prototype_member(field)
+    Func(params, ret) => func_prototype_member(params, ret, field)
     Tuple(items) =>
       // Numeric field on a tuple → that element type.
       match (try? @strconv.parse_int(field)) {
@@ -698,6 +720,143 @@ fn regexp_prototype_member(field : String) -> @ast.TsType? {
     "global" | "ignoreCase" | "multiline" | "sticky" | "unicode"
     | "dotAll" | "unicodeSets" | "hasIndices" => Some(b)
     "lastIndex" => Some(n)
+    _ => None
+  }
+}
+
+///|
+/// `IteratorResult<T>` synthesis: `{ value: T; done: boolean }`. Used by
+/// the iterator prototypes' `next()` / `return()` / `throw()` results.
+fn iterator_result_type(t : @ast.TsType) -> @ast.TsType {
+  @ast.TsType::Object([
+    (@ast.TsType::Literal("value"), t),
+    (@ast.TsType::Literal("done"), @ast.TsType::Boolean),
+  ])
+}
+
+///|
+/// `Iterator<T>` / `IterableIterator<T>` / `Generator<T>` members. The
+/// `next` / `return` / `throw` methods all surface `IteratorResult<T>`;
+/// the `[Symbol.iterator]` / `[Symbol.asyncIterator]` methods aren't
+/// expressible via a string key here so they fall through to `None`.
+fn iterator_prototype_member(
+  t : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let res = iterator_result_type(t)
+  match field {
+    "next" => Some(@ast.TsType::Func([], res))
+    "return" => Some(@ast.TsType::Func([t], res))
+    "throw" => Some(@ast.TsType::Func([@ast.TsType::Any], res))
+    _ => None
+  }
+}
+
+///|
+/// Async-variant iterator: `next/return/throw` resolve to
+/// `Promise<IteratorResult<T>>`.
+fn async_iterator_prototype_member(
+  t : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let res = @ast.TsType::Applied("Promise", [iterator_result_type(t)])
+  match field {
+    "next" => Some(@ast.TsType::Func([], res))
+    "return" => Some(@ast.TsType::Func([t], res))
+    "throw" => Some(@ast.TsType::Func([@ast.TsType::Any], res))
+    _ => None
+  }
+}
+
+///|
+/// `WeakMap<K, V>` instance members. Subset of `Map` — no `size` /
+/// iteration since the entries are weakly held.
+fn weakmap_prototype_member(
+  k : @ast.TsType,
+  v : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let map_t = @ast.TsType::Applied("WeakMap", [k, v])
+  let bool_ = @ast.TsType::Boolean
+  let nullable_v = narrow_union(v, @ast.TsType::Undefined)
+  match field {
+    "get" => Some(@ast.TsType::Func([k], nullable_v))
+    "set" => Some(@ast.TsType::Func([k, v], map_t))
+    "has" => Some(@ast.TsType::Func([k], bool_))
+    "delete" => Some(@ast.TsType::Func([k], bool_))
+    _ => None
+  }
+}
+
+///|
+/// `WeakSet<T>` instance members. Subset of `Set`.
+fn weakset_prototype_member(
+  t : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let set_t = @ast.TsType::Applied("WeakSet", [t])
+  let bool_ = @ast.TsType::Boolean
+  match field {
+    "add" => Some(@ast.TsType::Func([t], set_t))
+    "has" => Some(@ast.TsType::Func([t], bool_))
+    "delete" => Some(@ast.TsType::Func([t], bool_))
+    _ => None
+  }
+}
+
+///|
+/// `Function.prototype.{call, apply, bind, length, name}` members.
+/// `call` / `apply` return the inner function's return type; `bind`
+/// returns the same `Func(...)` shape (we don't model partial
+/// application of arguments here).
+fn func_prototype_member(
+  params : Array[@ast.TsType],
+  ret : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  let n = @ast.TsType::Number
+  let any = @ast.TsType::Any
+  match field {
+    // `call(thisArg, ...args)` — thisArg comes first, followed by the
+    // function's own parameter list. Returns the function's `ret`.
+    "call" => {
+      let call_params : Array[@ast.TsType] = [any]
+      for p in params {
+        call_params.push(p)
+      }
+      Some(@ast.TsType::Func(call_params, ret))
+    }
+    "apply" =>
+      Some(@ast.TsType::Func([any, @ast.TsType::Array(any)], ret))
+    "bind" =>
+      Some(@ast.TsType::Func([any], @ast.TsType::Func(params, ret)))
+    "name" => Some(s)
+    "length" => Some(n)
+    "toString" => Some(@ast.TsType::Func([], s))
+    _ => None
+  }
+}
+
+///|
+/// Recognise built-in error-class names — `Error` and its subclasses
+/// inherit a stable instance shape (`message`, `name`, `stack`,
+/// `toString`).
+fn is_error_class_name(name : String) -> Bool {
+  match name {
+    "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+    | "EvalError" | "URIError" | "AggregateError" => true
+    _ => false
+  }
+}
+
+///|
+fn error_prototype_member(field : String) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  match field {
+    "message" | "name" => Some(s)
+    "stack" => Some(narrow_union(s, @ast.TsType::Undefined))
+    "toString" => Some(@ast.TsType::Func([], s))
     _ => None
   }
 }

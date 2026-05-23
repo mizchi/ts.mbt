@@ -2989,3 +2989,162 @@ test "expr_check: RegExp.global returns boolean" {
     None => fail("function f not found")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Round 28: Iterator / AsyncIterator / Generator, WeakMap / WeakSet,
+// Function.prototype.{call, apply, bind, name, length},
+// Error / TypeError instance shape.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: iterator.next returns IteratorResult<T>" {
+  let src =
+    #|function f(it: Iterator<number>): {value: number; done: boolean} {
+    #|  return it.next();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: generator.next inherits Iterator shape" {
+  let src =
+    #|function f(g: Generator<number>): boolean {
+    #|  return g.next().done;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: WeakMap.get returns V | undefined" {
+  let src =
+    #|function f(m: WeakMap<object, number>): number {
+    #|  return m.get({});
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: WeakSet.add returns the set" {
+  let src =
+    #|function f(s: WeakSet<object>): WeakSet<object> {
+    #|  return s.add({});
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: function.call returns the inner return type" {
+  let src =
+    #|function f(cb: (n: number) => string): string {
+    #|  return cb.call(null, 1);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: function.bind returns the same Func shape" {
+  let src =
+    #|function f(cb: (n: number) => string): (n: number) => string {
+    #|  return cb.bind(null);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: function.name returns string" {
+  let src =
+    #|function f(cb: () => void): string {
+    #|  return cb.name;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Error.message is string" {
+  let src =
+    #|function f(e: Error): string {
+    #|  return e.message;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: TypeError inherits Error shape" {
+  let src =
+    #|function f(e: TypeError): string {
+    #|  return e.message;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Error.stack is string | undefined" {
+  let src =
+    #|function f(e: Error): string {
+    #|  return e.stack;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: for-of over IterableIterator yields T" {
+  let src =
+    #|function f(it: IterableIterator<number>): number {
+    #|  for (const x of it) {
+    #|    return x;
+    #|  }
+    #|  return 0;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
