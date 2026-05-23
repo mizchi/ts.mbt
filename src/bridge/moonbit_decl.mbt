@@ -1234,6 +1234,7 @@ fn synthesize_func_from_expr(
     @ast.TsExpr::FuncExpr(func) =>
       Some({
         name: local_name,
+        type_params: func.type_params,
         params: merge_func_param_types(func.params, declared_type),
         return_type: infer_func_return_type(func, declared_type),
         body: func.body,
@@ -1259,6 +1260,7 @@ fn synthesize_func_from_expr(
       }
       Some({
         name: local_name,
+        type_params: [],
         params: normalized_params,
         return_type,
         body: normalized_body,
@@ -3311,6 +3313,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     TemplateLiteralType(_, _) => "String"
     Keyof(inner) => "KeyOf" + utility_record_type_suffix(inner)
     MappedType(_, _, value, _) => "MappedTo" + utility_record_type_suffix(value)
+    TypePredicate(_, _) => "Bool"
   }
 }
 
@@ -6315,6 +6318,7 @@ fn clone_exported_import(
   {
     name: exported.export_name,
     module_: exported.import_.module_,
+    type_params: exported.import_.type_params,
     params,
     return_type: rewrite_inline_result_return_type(
       exported.export_name,
@@ -8132,6 +8136,7 @@ fn clone_exported_func(
   )
   {
     name: exported.export_name,
+    type_params: exported.func.type_params,
     params,
     return_type: rewrite_inline_result_return_type(
       exported.export_name,

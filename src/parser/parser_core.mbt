@@ -257,6 +257,13 @@ fn Parser::consume_semicolon(self : Parser) -> Unit raise ParseError {
     | Regex(_, _) => return
     _ => ()
   }
+  // ASI fallback: a line terminator separates the current statement from
+  // the next token. This catches cases like `if (...) return -1 \n else
+  // ...` where `else` isn't a statement-starting token in the table above
+  // but is still a valid continuation of the surrounding construct.
+  if self.has_line_terminator_before() {
+    return
+  }
   raise ParseError("Expected Semicolon, got \{self.peek().kind}")
 }
 

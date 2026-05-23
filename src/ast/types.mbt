@@ -58,6 +58,10 @@ pub(all) enum TsType {
   // when the source resolves to a union of literals. `optional` reflects
   // the literal `?` after `]`; the parser already handles `+?` / `-?`.
   MappedType(String, TsType, TsType, Bool)
+  // Type predicate: `paramName is T`. Used as a function return type to
+  // mark a user-defined type guard. Outside of the return-type position
+  // it behaves like `Boolean`.
+  TypePredicate(String, TsType)
 } derive(Eq, Debug)
 
 ///|
@@ -159,6 +163,23 @@ pub(all) enum TsExpr {
   // untagged template literal: `string ${expr} string`
   // strings (cooked), expressions
   TemplateLiteral(Array[String], Array[TsExpr])
+
+  // `x as T` — type assertion cast. Result type is `T`.
+  As(TsExpr, TsType)
+
+  // `x satisfies T` — structural check, result type is left unchanged
+  // (kept as `typeof x`). Used to verify shapes without narrowing.
+  Satisfies(TsExpr, TsType)
+
+  // `x!` — non-null assertion. Strips `null` / `undefined` from the
+  // operand's type at use sites.
+  NonNull(TsExpr)
+
+  // `a?.b…` — wraps a chain expression that contains at least one
+  // optional `?.` link. The wrapped expression has its conventional
+  // shape (`PropAccess` / `MethodCall` / `IndexAccess` / `CallExpr`),
+  // and at use sites the result type is widened with `undefined`.
+  OptionalChain(TsExpr)
 } derive(Debug)
 
 ///|
@@ -359,6 +380,9 @@ pub(all) struct TsObjectBinding {
 // / functiondefine
 pub(all) struct TsFunc {
   name : String
+  // Generic type parameters declared on this function (e.g. `T`, `R` in
+  // `function map<T, R>(...)`). Empty for non-generic functions.
+  type_params : Array[String]
   params : Array[TsParam]
   return_type : TsType
   body : TsBlock
@@ -399,6 +423,10 @@ pub(all) struct TsTypeAlias {
 pub(all) struct TsImport {
   name : String // function
   module_ : String // import (: "env")
+  // Generic type-parameter names declared on this `declare function`
+  // (e.g. `T`, `R` in `declare function map<T, R>(...)`). Empty for non-
+  // generic ambient declarations.
+  type_params : Array[String]
   params : Array[(String, TsType)] // parameter (name, type)
   return_type : TsType // return valuetype
 } derive(Debug)

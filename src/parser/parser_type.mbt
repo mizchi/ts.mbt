@@ -35,11 +35,13 @@ fn Parser::parse_paren_or_function_type(
       }
     }
     let _ = self.match_(Question)
-    if !self.match_(Colon) {
-      can_be_function_type = false
-      break
+    // Type annotation on a function-type parameter is optional —
+    // `(item) => T` is a valid TS arrow function type.
+    if self.match_(Colon) {
+      param_types.push(self.parse_type())
+    } else {
+      param_types.push(@ast.TsType::Any)
     }
-    param_types.push(self.parse_type())
     if self.match_(Comma) {
       if self.check(RParen) {
         break
@@ -828,8 +830,14 @@ fn Parser::parse_postfix_type(
 fn Parser::parse_type_operand(self : Parser) -> @ast.TsType raise ParseError {
   let base = self.parse_primary_type()
   if !self.has_line_terminator_before() && self.match_ident("is") {
-    let _ = self.parse_type()
-    return Boolean
+    let ty = self.parse_type()
+    // `paramName is T` — record as `TypePredicate(name, T)` so the checker
+    // can narrow callers on `if (isFoo(v))`. When the LHS isn't a simple
+    // identifier (rare), fall back to `Boolean`.
+    return match base {
+      Named(name) => TypePredicate(name, ty)
+      _ => Boolean
+    }
   }
   base
 }

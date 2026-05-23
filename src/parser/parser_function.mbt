@@ -195,7 +195,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = self.parse_binding_ident()
-  let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
@@ -214,6 +214,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     let _ = self.advance()
     return {
       name,
+      type_params,
       params,
       return_type,
       body: { stmts: [] },
@@ -224,6 +225,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   if !self.check(LBrace) {
     return {
       name,
+      type_params,
       params,
       return_type,
       body: { stmts: [] },
@@ -266,7 +268,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, params, return_type, body, is_generator, is_async }
+  { name, type_params, params, return_type, body, is_generator, is_async }
 }
 
 ///|
@@ -298,7 +300,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     | In => self.parse_binding_ident()
     _ => "<anon>"
   }
-  self.skip_type_params()
+  let (type_params, _) = self.parse_type_param_names_and_bounds()
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
@@ -343,7 +345,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, params, return_type, body, is_generator, is_async }
+  { name, type_params, params, return_type, body, is_generator, is_async }
 }
 
 ///|
@@ -840,10 +842,16 @@ pub fn Parser::parse_interface(
         let _ = self.advance()
         s
       }
-      // Number literal as field name: 0, 1, etc.
+      // Number literal as field name: 0, 1, etc. Both `Int` (integers that
+      // fit in i32) and `Number` (anything else: `1.0`, `1e9`, etc.) are
+      // valid TS property keys.
       Int(n) => {
         let _ = self.advance()
         n.to_string()
+      }
+      Number(d) => {
+        let _ = self.advance()
+        d.to_string()
       }
       // Keywords as field names (TypeScript allows this)
       Finally => {
@@ -1005,6 +1013,19 @@ pub fn Parser::parse_interface(
       Declare => {
         let _ = self.advance()
         "declare"
+      }
+      // Literal-keyword identifiers also stand in as property names.
+      Bool(true) => {
+        let _ = self.advance()
+        "true"
+      }
+      Bool(false) => {
+        let _ = self.advance()
+        "false"
+      }
+      Null => {
+        let _ = self.advance()
+        "null"
       }
       k =>
         raise ParseError("Expected field name at \{self.peek().pos}, got \{k}")
@@ -1424,7 +1445,7 @@ pub fn Parser::parse_declare_function(
   // function
   let name = self.parse_binding_ident()
 
-  let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
@@ -1464,12 +1485,18 @@ pub fn Parser::parse_declare_function(
   }
   let _ = self.expect(RParen)
 
-  // return valuetype
-  let _ = self.expect(Colon)
-  let return_type = self.parse_type()
+  // return valuetype — annotation is optional (TS treats a missing one as
+  // `void` for `declare function`, but we use `Any` so the checker matches
+  // the convention used elsewhere for un-annotated functions).
+  let return_type = if self.check(Colon) {
+    let _ = self.advance()
+    self.parse_type()
+  } else {
+    @ast.TsType::Any
+  }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
   self.consume_semicolon()
-  { name, module_: "env", params, return_type }
+  { name, module_: "env", type_params, params, return_type }
 }
 
 ///|

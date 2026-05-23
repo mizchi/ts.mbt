@@ -43,6 +43,19 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       } else {
         self.parse_let()
       }
+    // `using x = expr;` and `await using x = expr;` (ES2023). Treat as a
+    // `let` declaration for parsing — the auto-disposal semantics don't
+    // affect the type-level shape.
+    Ident("using") if self.is_using_declaration_start() => {
+      let _ = self.advance()
+      self.parse_var_like(VarKind::Let)
+    }
+    Ident("await") if self.peek_at(1).kind is Ident("using") &&
+      self.is_await_using_declaration_start() => {
+      let _ = self.advance() // `await`
+      let _ = self.advance() // `using`
+      self.parse_var_like(VarKind::Let)
+    }
     Const =>
       match self.peek_at(1).kind {
         Ident(name) if name == "enum" => {
@@ -423,15 +436,34 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   }
   let _ = self.expect(LParen)
 
+  // `for (using x of ...)` — ES2023 disposable binding. Same shape as
+  // `for (let x of ...)` for parsing purposes; we tag the binding with
+  // `TsForOfKind::Let` since the auto-disposal semantics don't affect the
+  // type-level shape the checker cares about.
+  let using_declaration = if self.is_using_declaration_start() {
+    let _ = self.advance()
+    true
+  } else if self.is_await_using_declaration_start() {
+    let _ = self.advance() // `await`
+    let _ = self.advance() // `using`
+    true
+  } else {
+    false
+  }
   // for...of check: for (var/let/const x of arr)
-  if (self.check(Let) && !self.is_let_for_in_head_ident()) ||
+  if using_declaration ||
+    (self.check(Let) && !self.is_let_for_in_head_ident()) ||
     self.check(Const) ||
     self.check(Var) {
-    let kind = match self.advance().kind {
-      Let => @ast.TsForOfKind::Let
-      Const => @ast.TsForOfKind::Const
-      Var => @ast.TsForOfKind::Var
-      _ => @ast.TsForOfKind::Var
+    let kind = if using_declaration {
+      @ast.TsForOfKind::Let
+    } else {
+      match self.advance().kind {
+        Let => @ast.TsForOfKind::Let
+        Const => @ast.TsForOfKind::Const
+        Var => @ast.TsForOfKind::Var
+        _ => @ast.TsForOfKind::Var
+      }
     }
     let binding = self.parse_binding_pattern()
     let var_type = self.parse_var_decl_type()
@@ -448,14 +480,15 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
       self.in_iteration = true
       let body = self.parse_block_or_stmt_no_lexical()
       self.in_iteration = prev_iteration
-      // arrayelementtype ( Number)
+      // Preserve the explicit type annotation on the loop binding when
+      // present; `parse_var_decl_type` returns `Any` otherwise.
       if is_in {
-        return ForIn(kind, binding, Number, iterable, body)
+        return ForIn(kind, binding, var_type, iterable, body)
       }
       if is_await {
-        return ForAwaitOf(kind, binding, Number, iterable, body)
+        return ForAwaitOf(kind, binding, var_type, iterable, body)
       }
-      return ForOf(kind, binding, Number, iterable, body)
+      return ForOf(kind, binding, var_type, iterable, body)
     }
     let var_kind = match kind {
       @ast.TsForOfKind::Var => VarKind::Var
@@ -489,25 +522,22 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         self.in_iteration = true
         let body = self.parse_block_or_stmt_no_lexical()
         self.in_iteration = prev_iteration
+        // Assignment-form for-of/in has no declaration site — no type
+        // annotation possible; use `Any` so the checker infers from the
+        // iterable instead of falling for a placeholder.
         if is_in {
-          return ForIn(
-            @ast.TsForOfKind::Assign,
-            binding,
-            Number,
-            iterable,
-            body,
-          )
+          return ForIn(@ast.TsForOfKind::Assign, binding, Any, iterable, body)
         }
         if is_await {
           return ForAwaitOf(
             @ast.TsForOfKind::Assign,
             binding,
-            Number,
+            Any,
             iterable,
             body,
           )
         }
-        return ForOf(@ast.TsForOfKind::Assign, binding, Number, iterable, body)
+        return ForOf(@ast.TsForOfKind::Assign, binding, Any, iterable, body)
       }
     }
     let expr = self.parse_expr_until_top_level(Semicolon)
@@ -640,7 +670,8 @@ fn Parser::parse_for_rest(
     let expr = self.parse_expr_until_top_level(RParen)
     if self.match_(Eq) {
       let value = self.parse_expr()
-      match expr {
+      let lvalue = strip_lvalue_wrappers(expr)
+      match lvalue {
         Var(name) => Some(Assign(name, value))
         IndexAccess(arr, index) => Some(IndexAssign(arr, index, value))
         PropAccess(obj, prop) => Some(PropAssign(obj, prop, value))
@@ -741,7 +772,11 @@ fn Parser::parse_assign_or_expr(self : Parser) -> @ast.TsStmt raise ParseError {
   if self.match_(Eq) {
     let value = self.parse_expr()
     self.consume_semicolon()
-    match expr {
+    // Type-only wrappers (`as T`, `satisfies T`, `!`) are transparent for
+    // assignment-target purposes — peel them off so the underlying lvalue
+    // pattern matches.
+    let lvalue = strip_lvalue_wrappers(expr)
+    match lvalue {
       Var(name) => Assign(name, value)
       IndexAccess(arr, index) => IndexAssign(arr, index, value)
       PropAccess(obj, prop) => PropAssign(obj, prop, value)
@@ -899,6 +934,50 @@ fn Parser::is_let_identifier_expr_start(self : Parser) -> Bool {
 }
 
 ///|
+/// True when the current token is `using` AND the upcoming pattern
+/// (`Ident`, `{`, `[`) makes this an ES2023 `using` declaration rather
+/// than a free identifier reference. The spec mandates no line
+/// terminator between `using` and the binding pattern.
+fn Parser::is_using_declaration_start(self : Parser) -> Bool {
+  match self.peek().kind {
+    Ident("using") => ()
+    _ => return false
+  }
+  // ASI: a newline between `using` and the next token makes this NOT a
+  // `using` declaration — the parser must treat `using` as a reference.
+  if self.peek_at(1).has_newline_before {
+    return false
+  }
+  match self.peek_at(1).kind {
+    Ident(_) | LBrace | LBracket => true
+    _ => false
+  }
+}
+
+///|
+/// True when the current two tokens form `await using` and the binding
+/// pattern follows on the same line. Same ASI rule as
+/// `is_using_declaration_start`.
+fn Parser::is_await_using_declaration_start(self : Parser) -> Bool {
+  match self.peek().kind {
+    Ident("await") => ()
+    _ => return false
+  }
+  match self.peek_at(1).kind {
+    Ident("using") => ()
+    _ => return false
+  }
+  if self.peek_at(1).has_newline_before ||
+    self.peek_at(2).has_newline_before {
+    return false
+  }
+  match self.peek_at(2).kind {
+    Ident(_) | LBrace | LBracket => true
+    _ => false
+  }
+}
+
+///|
 fn Parser::is_let_for_in_head_ident(self : Parser) -> Bool {
   if self.in_strict {
     return false
@@ -1016,5 +1095,18 @@ fn Parser::parse_var_decl_item(
     Var => @ast.TsStmt::Var(binding, type_, init)
     Let => @ast.TsStmt::Let(binding, type_, init)
     Const => @ast.TsStmt::Const(binding, type_, init)
+  }
+}
+
+///|
+/// Peel `As(...)` / `Satisfies(...)` / `NonNull(...)` wrappers off an
+/// expression that is being used as an assignment target. TS treats these
+/// as transparent for lvalue purposes (`(x as T) = v`, `x! = v`).
+fn strip_lvalue_wrappers(expr : @ast.TsExpr) -> @ast.TsExpr {
+  match expr {
+    @ast.TsExpr::As(inner, _)
+    | @ast.TsExpr::Satisfies(inner, _)
+    | @ast.TsExpr::NonNull(inner) => strip_lvalue_wrappers(inner)
+    _ => expr
   }
 }

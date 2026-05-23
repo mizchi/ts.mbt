@@ -275,7 +275,7 @@ test "parser: parse for-of stmt" {
     ForOf(
       @ast.TsForOfKind::Let,
       @ast.TsBinding::Ident("x"),
-      Number,
+      Any,
       Var("arr"),
       body
     ) => assert_eq(body.stmts.length(), 1)
@@ -291,7 +291,7 @@ test "parser: parse for-await-of stmt" {
     ForAwaitOf(
       @ast.TsForOfKind::Var,
       @ast.TsBinding::Ident("x"),
-      Number,
+      Any,
       ArrayLit(_),
       body
     ) => assert_eq(body.stmts.length(), 1)
@@ -329,7 +329,7 @@ test "parser: parse for-in stmt" {
     ForIn(
       @ast.TsForOfKind::Let,
       @ast.TsBinding::Ident("k"),
-      Number,
+      Any,
       Var("obj"),
       body
     ) => assert_eq(body.stmts.length(), 1)
@@ -345,7 +345,7 @@ test "parser: parse for-in let identifier" {
     ForIn(
       @ast.TsForOfKind::Assign,
       @ast.TsBinding::Ident("let"),
-      Number,
+      Any,
       Var("obj"),
       body
     ) => assert_eq(body.stmts.length(), 0)
@@ -1935,7 +1935,175 @@ test "parser: parse local interface declaration inside function block" {
 }
 
 ///|
-test "parser: parse class type predicate methods as boolean returns" {
+test "parser: interface field name can be a fractional number" {
+  // `interface I { 1.0: T; }` — the lexer emits `Number(1.0)` for the key.
+  // Previously only `Int(n)` was accepted, raising "Expected field name".
+  let src = "interface I { 1.0: number; 2: string; }"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: class can `extends null`" {
+  let src = "class C extends null { x = 1; }"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: `using` declaration parses as a let binding" {
+  // ES2023 `using x = expr;` — auto-disposal binding. Treated as `let`
+  // for parser / checker purposes; the runtime semantics don't change
+  // the type-level shape.
+  let src =
+    #|function f() {
+    #|  using d1 = { [Symbol.dispose]() {} };
+    #|  using d2 = null;
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: `await using` declaration parses as a let binding" {
+  let src =
+    #|async function f() {
+    #|  await using d1 = { [Symbol.asyncDispose]() {} };
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: `for (using x of arr)` parses as a for-of loop" {
+  let src =
+    #|function f() {
+    #|  for (using d of [null, undefined]) { /* body */ }
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: nested anonymous class expression as base" {
+  // `let C = class extends class extends class { a = 1 } { b = 2 } { c = 3 };`
+  let src = "let C = class extends class extends class { a = 1 } { b = 2 } { c = 3 };"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: class extends with optional chain in base name" {
+  // `class C extends A?.B { ... }` — the heritage clause uses optional
+  // chaining; `parse_class_base_name` falls through to the expression-
+  // based parser when it sees `?.`.
+  let src =
+    #|namespace A { export class B {} }
+    #|class C extends A?.B {}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: super assignment / super.method() inside static initializer" {
+  let src =
+    #|class B {
+    #|  static a: any;
+    #|}
+    #|class C extends B {
+    #|  static y1 = this.x;
+    #|  static z1 = super.a;
+    #|  static z3 = super.f();
+    #|  static z5 = super.a = 0;
+    #|  static z6 = super.a += 1;
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: `using` followed by newline is still a reference" {
+  // ES2023 ASI rule: a line terminator between `using` and the binding
+  // makes this NOT a using declaration — `using` is a free reference.
+  let src =
+    #|function f() {
+    #|  using
+    #|  x;
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: parse interface call-signature with type predicate return" {
+  let src = "interface I1 { (p1: A): p1 is C; }"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: declare function tolerates missing return type" {
+  // `declare function f();` — TS treats the missing return type as
+  // implicit `void`; we parse it as `Any` so the checker can fall
+  // through gracefully.
+  let src = "declare function acceptingBoolean(a: boolean);"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: arrow function type with untyped parameter" {
+  // `(item) => item is A` — function-type parameter without annotation.
+  // The parser previously chose the parenthesized-type fallback, leaving
+  // the trailing `=>` dangling. Now it treats the missing colon as `Any`.
+  let src = "declare function f(g: (item) => item is A);"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: ASI before `else` keyword" {
+  // `if (cond) return -1\nelse ...` — `else` isn't a statement-starting
+  // token, but the line terminator after `-1` should still trigger ASI.
+  let src =
+    #|function g(): number {
+    #|  if (!true)
+    #|    return -1
+    #|  else
+    #|    return 0
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: parse class type predicate methods as type predicates" {
   let src =
     #|declare class Ok<T, E> {
     #|  isOk(): this is Ok<T, E>;
@@ -1950,8 +2118,15 @@ test "parser: parse class type predicate methods as boolean returns" {
   assert_eq(module_.classes.length(), 1)
   let class_ = module_.classes[0]
   assert_eq(class_.methods.length(), 2)
-  assert_eq(class_.methods[0].return_type, Boolean)
-  assert_eq(class_.methods[1].return_type, Boolean)
+  // Type predicates `this is T` survive into `TypePredicate("this", T)`.
+  match class_.methods[0].return_type {
+    TypePredicate("this", Applied("Ok", _)) => ()
+    other => fail("expected isOk to return `this is Ok<T, E>`, got \{other}")
+  }
+  match class_.methods[1].return_type {
+    TypePredicate("this", Applied("Err", _)) => ()
+    other => fail("expected isErr to return `this is Err<T, E>`, got \{other}")
+  }
 }
 
 ///|
@@ -3431,7 +3606,9 @@ test "parser: parse non-null assertion postfix" {
 test "parser: parse non-null assertion before property access" {
   let stmt = parse_stmt_from("link = stack!.value;")
   match stmt {
-    Expr(AssignExpr("link", PropAccess(Var("stack"), "value"))) => ()
+    Expr(
+      AssignExpr("link", PropAccess(@ast.TsExpr::NonNull(Var("stack")), "value"))
+    ) => ()
     _ => fail("expected property access after non-null assertion")
   }
 }
@@ -3444,7 +3621,7 @@ test "parser: parse non-null assertion after call before compound assign" {
   match stmt {
     Expr(
       CompoundAssignExpr(
-        PropAccess(Call("getActiveSub", _), "flags"),
+        PropAccess(@ast.TsExpr::NonNull(Call("getActiveSub", _)), "flags"),
         BitAndAssign,
         _
       )
@@ -5358,10 +5535,12 @@ test "parser: parse tuple angle bracket type assertion inside parens when jsx di
 
 ///|
 test "parser: parse asserted equality expression" {
+  // `x as T === y` — the `as` survives as an `As(...)` wrapper on the LHS
+  // of the equality.
   match parse_expr_from("this._state as AutorunState === AutorunState.stale") {
     BinOp(
       BinEq,
-      PropAccess(Var("this"), "_state"),
+      @ast.TsExpr::As(PropAccess(Var("this"), "_state"), _),
       PropAccess(Var("AutorunState"), "stale")
     ) => ()
     expr => fail("expected asserted equality, got \{expr}")
@@ -5703,8 +5882,12 @@ test "parser: parse optional chaining generic call" {
   ).parse_expr() catch {
     e => fail("expected optional chaining generic call to parse: \{e}")
   }
+  // The whole chain is wrapped in `OptionalChain(...)` since at least one
+  // `?.` link was present; the inner shape is the conventional
+  // `CallExpr` / `MethodCall`.
   match expr {
-    CallExpr(_, _) | MethodCall(_, _, _) => ()
+    @ast.TsExpr::OptionalChain(CallExpr(_, _))
+    | @ast.TsExpr::OptionalChain(MethodCall(_, _, _)) => ()
     expr => fail("expected optional chaining generic call, got \{expr}")
   }
 }
