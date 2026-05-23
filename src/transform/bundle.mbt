@@ -695,7 +695,20 @@ fn mangle_bundle(
       None => ()
     }
   }
-  let mangled = mangle_blocks_together(blocks, cfg)
+  // Layer in the auto-reserved property names from the dynamic /
+  // reflective sink scan. These cover patterns the static walker
+  // can't see: `obj[runtimeKey]`, `for…in`, `JSON.stringify`,
+  // `Object.keys / assign / fromEntries`, etc. Without this layer
+  // a property accessed via a runtime string would get its source
+  // mangled but the lookup string stays as written, and the lookup
+  // misses at execution time.
+  let sink_reservations = collect_dynamic_property_reservations(blocks)
+  let augmented_cfg = if sink_reservations.length() > 0 {
+    cfg.with_reserved_properties(sink_reservations)
+  } else {
+    cfg
+  }
+  let mangled = mangle_blocks_together(blocks, augmented_cfg)
   for i, p in paths {
     match modules.get(p) {
       Some(n) => n.block = mangled[i]

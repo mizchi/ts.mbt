@@ -806,7 +806,17 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_expr(e, inner, 2)
           }
           _ => {
-            e.write(entry.0)
+            // Object keys that aren't valid identifiers (have
+            // hyphens, spaces, digits as first char, etc.) must be
+            // emitted as quoted string literals. Numeric-looking
+            // keys are fine bare. The shorthand `{ foo }` form is
+            // already lowered to `{ foo: foo }` upstream.
+            let stripped = strip_internal_prop_marker(entry.0)
+            if is_valid_js_identifier_or_number(stripped) {
+              e.write(stripped)
+            } else {
+              emit_string_literal(e, stripped)
+            }
             e.write(":")
             e.space()
             emit_expr(e, entry.1, 2)
@@ -900,11 +910,19 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         e.write("async ")
       }
       e.write("(")
-      for i, p in params {
-        if i > 0 {
+      let mut emitted = 0
+      for _i, p in params {
+        // TS `this`-parameter is a pure type annotation — JS rejects
+        // `this` as a parameter name. Skip the slot but preserve the
+        // emit counter so the comma logic doesn't get a phantom lead.
+        if p.name == "this" && (p.binding is None || p.binding is Some(@ast.TsBinding::Ident("this"))) {
+          continue
+        }
+        if emitted > 0 {
           e.write(",")
           e.space()
         }
+        emitted = emitted + 1
         if p.is_rest {
           e.write("...")
         }
@@ -1095,6 +1113,27 @@ fn emit_jsx_child(e : Emitter, child : @ast.TsExpr) -> Unit {
 
 ///|
 ///|
+/// `true` when `name` can be emitted bare as an object-literal key —
+/// either a valid JS identifier or a plain numeric literal (e.g.
+/// `0`, `42`, `100`). Everything else (`Content-Type`, `data-id`,
+/// strings with spaces, etc.) must be quoted at emit time.
+fn is_valid_js_identifier_or_number(name : String) -> Bool {
+  if name.length() == 0 {
+    return false
+  }
+  if is_valid_js_identifier(name) {
+    return true
+  }
+  // Plain integer literal: all chars are digits.
+  for c in name {
+    if c < '0' || c > '9' {
+      return false
+    }
+  }
+  true
+}
+
+///|
 /// Conservative JS-identifier check: first char must be a letter,
 /// `_`, or `$`; the rest may also be digits. Rejects anything with
 /// punctuation, whitespace, or angle brackets — covers the parser's
@@ -1140,11 +1179,16 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
     e.write(f.name)
   }
   e.write("(")
-  for i, p in f.params {
-    if i > 0 {
+  let mut emitted = 0
+  for _i, p in f.params {
+    if p.name == "this" && (p.binding is None || p.binding is Some(@ast.TsBinding::Ident("this"))) {
+      continue
+    }
+    if emitted > 0 {
       e.write(",")
       e.space()
     }
+    emitted = emitted + 1
     if p.is_rest {
       e.write("...")
     }

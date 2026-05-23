@@ -264,6 +264,39 @@ let mangler_builtin_reserved_properties : Array[String] = [
   // Object.fromEntries, etc.). The earlier blocks cover instance
   // methods; these are the corresponding class statics.
   "from", "of", "fromCharCode", "fromCodePoint",
+  // URLSearchParams / Headers / FormData — `append` / `getAll` /
+  // `delete` are commonly chained.
+  "append", "getAll",
+  // URL — most members are read at runtime.
+  "href", "origin", "protocol", "host", "hostname", "port", "pathname",
+  "searchParams", "hash", "username", "password",
+  // RequestInit / fetch options that the runtime reads. Some
+  // overlap with existing instance-property entries above, but
+  // these spell out the option-bag form for completeness.
+  "mode", "credentials", "cache", "signal",
+  "redirect", "referrer", "referrerPolicy", "integrity", "keepalive",
+  "priority", "window",
+  // Browser globals that are commonly assigned via `globalThis.X`
+  // or accessed off `globalThis` — they look like properties to
+  // the mangler even though they're identifiers in the source.
+  "fetch", "Request", "Response", "Headers", "FormData",
+  "WebSocket", "AbortController", "AbortSignal",
+  "performance", "crypto", "location", "history", "navigator",
+  "document", "window", "globalThis", "self", "process",
+  // Math members — read off `Math` as properties so they're
+  // candidates for mangling otherwise.
+  "random", "floor", "ceil", "round", "trunc", "sign", "abs", "min", "max",
+  "pow", "sqrt", "cbrt", "exp", "log", "log2", "log10", "log1p", "expm1",
+  "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+  "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+  "PI", "E", "LN2", "LN10", "LOG2E", "LOG10E", "SQRT2", "SQRT1_2",
+  "hypot", "clz32", "imul", "fround",
+  // EventListener options + Event/Observer config keys
+  "passive", "once", "capture",
+  "threshold", "rootMargin", "root",
+  // setState / setError / dispatch — Redux-y action shapes that
+  // commonly cross boundary code.
+  "dispatch", "subscribe", "unsubscribe",
   // Common reserved
   "default",
 ]
@@ -557,6 +590,15 @@ fn build_property_rename_map(
     if reserved.contains(n) {
       continue
     }
+    // Keys that aren't valid JS identifiers (`Content-Type`,
+    // `data-id`, `some key with spaces`, etc.) are always quoted
+    // in the source and the runtime treats them as string data.
+    // Renaming them is almost always wrong — they typically name
+    // wire-protocol fields (HTTP headers, CSS properties, data
+    // attributes, JSON columns from a server).
+    if !is_property_key_renameable(n) {
+      continue
+    }
     candidates.push(n)
   }
   candidates.sort()
@@ -572,6 +614,35 @@ fn build_property_rename_map(
     map[n] = candidate
   }
   map
+}
+
+///|
+/// `true` when `key` is structurally safe to rename. Excludes any
+/// string that wouldn't be a valid JS identifier without quoting
+/// (hyphens, slashes, spaces, numeric-only) — those almost always
+/// carry data-shape semantics the runtime depends on. The check
+/// stays simple on purpose: ASCII letters / digits / `_` / `$` only.
+fn is_property_key_renameable(key : String) -> Bool {
+  if key.length() == 0 {
+    return false
+  }
+  let mut i = 0
+  for c in key {
+    let ok = if i == 0 {
+      (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '$'
+    } else {
+      (c >= 'A' && c <= 'Z') ||
+      (c >= 'a' && c <= 'z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' ||
+      c == '$'
+    }
+    if !ok {
+      return false
+    }
+    i = i + 1
+  }
+  true
 }
 
 // ---------------------------------------------------------------------------
@@ -794,6 +865,9 @@ pub fn mangle_blocks_together(
   for entry in all_props {
     let n = entry.0
     if prop_reserved.contains(n) {
+      continue
+    }
+    if !is_property_key_renameable(n) {
       continue
     }
     candidates.push(n)
