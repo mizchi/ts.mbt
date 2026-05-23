@@ -495,15 +495,16 @@ fn Parser::parse_namespace_decl_with_mode(
         // helpers.
         let runtime_parser = Parser::from_source(body_source)
         match
-          (try?
-            runtime_parser.parse_module_with_seeded_const_values_internal(
-              {}, false,
-            )) {
+          (try? runtime_parser.parse_module_with_seeded_const_values_internal(
+            {},
+            false,
+          )) {
           Ok(module_) => module_
           Err(_) => {
             let ambient_parser = Parser::from_source(body_source)
             ambient_parser.parse_module_with_seeded_const_values_internal(
-              {}, true,
+              {},
+              true,
             )
           }
         }

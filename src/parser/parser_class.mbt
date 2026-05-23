@@ -220,12 +220,14 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   // `class C extends A?.B { ... }` — optional-chain in the heritage clause.
   // Fall through to expression-based parsing.
   let has_optional_chain = self.check(Question) && self.peek_at(1).kind == Dot
-  let mut is_expr_base = self.check(LParen) || self.check(LBracket) ||
+  let mut is_expr_base = self.check(LParen) ||
+    self.check(LBracket) ||
     has_optional_chain
   if !is_expr_base && self.check(Lt) {
     let saved = self.pos
     self.skip_type_args()
-    is_expr_base = self.check(LParen) || self.check(LBracket) ||
+    is_expr_base = self.check(LParen) ||
+      self.check(LBracket) ||
       (self.check(Question) && self.peek_at(1).kind == Dot)
     self.pos = saved
   }
@@ -1077,7 +1079,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         // Static initialization blocks run during class definition with `this` bound to the class
         // Generate: (function() { ...block... }).call(ClassName)
         let static_block_func = @ast.TsExpr::FuncExpr(@ast.TsFunc::{
-            type_params: [],
+          type_params: [],
           name: "",
           params: [],
           return_type: @ast.TsType::Any,
@@ -1096,7 +1098,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   stmts.push(Return(Some(@ast.TsExpr::Var(tmp_name))))
   CallExpr(
     @ast.TsExpr::FuncExpr(@ast.TsFunc::{
-            type_params: [],
+      type_params: [],
       name: "<class>",
       params: [],
       return_type: @ast.TsType::Any,
@@ -1510,7 +1512,7 @@ fn Parser::parse_class_decl_with_abstract(
         // Static initialization blocks run during class definition with `this` bound to the class
         // Generate: (function() { ...block... }).call(ClassName)
         let static_block_func = @ast.TsExpr::FuncExpr(@ast.TsFunc::{
-            type_params: [],
+          type_params: [],
           name: "",
           params: [],
           return_type: @ast.TsType::Any,
@@ -1539,7 +1541,7 @@ fn Parser::parse_class_decl_with_abstract(
     internal_stmts.push(Return(Some(@ast.TsExpr::Var(name))))
     let iife = @ast.TsExpr::CallExpr(
       @ast.TsExpr::FuncExpr(@ast.TsFunc::{
-            type_params: [],
+        type_params: [],
         name: "<class>",
         params: [],
         return_type: @ast.TsType::Any,

@@ -84,7 +84,10 @@ fn Resolver::ingest_module(
     for p in imp.params {
       param_types.push(p.1)
     }
-    r.globals[prefix + imp.name] = @ast.TsType::Func(param_types, imp.return_type)
+    r.globals[prefix + imp.name] = @ast.TsType::Func(
+      param_types,
+      imp.return_type,
+    )
     // Also expose type parameters so generic-call inference picks up
     // `declare function f<T>(...)` imports — without this the inference
     // path skipped imports entirely.
@@ -199,6 +202,7 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
 /// Look up a property on a value of type `recv` named `field`. Walks
 /// interfaces / classes / objects / arrays. Returns `None` when the property
 /// cannot be resolved structurally; callers fall back to `Any`.
+
 ///|
 /// Well-known `Array.prototype.*` members specialised at the array's
 /// element type `elem`. Returns `None` for unrecognised members so the
@@ -209,10 +213,7 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
 /// instantiation; this function only returns the non-generic prototype
 /// shape for those entries so call-site checks still see a sensible
 /// formal-parameter type for the argument.
-fn array_prototype_member(
-  elem : @ast.TsType,
-  field : String,
-) -> @ast.TsType? {
+fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
   let arr_t = @ast.TsType::Array(elem)
   let nullable_elem = narrow_union(elem, @ast.TsType::Undefined)
   // Helper for `(value: T, index: number, array: T[]) => R` callback shapes.
@@ -242,12 +243,7 @@ fn array_prototype_member(
     // Non-mutating producers
     "concat" => Some(@ast.TsType::Func([arr_t], arr_t))
     "slice" =>
-      Some(
-        @ast.TsType::Func(
-          [@ast.TsType::Number, @ast.TsType::Number],
-          arr_t,
-        ),
-      )
+      Some(@ast.TsType::Func([@ast.TsType::Number, @ast.TsType::Number], arr_t))
     "flat" => Some(@ast.TsType::Func([], arr_t))
     "join" =>
       Some(@ast.TsType::Func([@ast.TsType::String_], @ast.TsType::String_))
@@ -257,19 +253,17 @@ fn array_prototype_member(
       Some(@ast.TsType::Func([elem, @ast.TsType::Number], @ast.TsType::Number))
     "lastIndexOf" =>
       Some(@ast.TsType::Func([elem, @ast.TsType::Number], @ast.TsType::Number))
-    "includes" =>
-      Some(@ast.TsType::Func([elem], @ast.TsType::Boolean))
+    "includes" => Some(@ast.TsType::Func([elem], @ast.TsType::Boolean))
     "every" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
     "some" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
     "find" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
-    "findIndex" =>
-      Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
+    "findIndex" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
     "findLast" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
-    "findLastIndex" =>
-      Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
+    "findLastIndex" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
     // Iteration with element-type-preserving result
     "filter" => Some(@ast.TsType::Func([cb_bool], arr_t))
-    "forEach" => Some(@ast.TsType::Func([cb(@ast.TsType::Void)], @ast.TsType::Void))
+    "forEach" =>
+      Some(@ast.TsType::Func([cb(@ast.TsType::Void)], @ast.TsType::Void))
     // Generic methods — the formal `U` shape is exposed here for the
     // call-site contextual typing path to thread through, but the call
     // site's `MethodCall` handler in `infer_expr` substitutes the real
@@ -296,12 +290,7 @@ fn array_prototype_member(
         @ast.TsType::Func(
           [
             @ast.TsType::Func(
-              [
-                @ast.TsType::Any,
-                elem,
-                @ast.TsType::Number,
-                arr_t,
-              ],
+              [@ast.TsType::Any, elem, @ast.TsType::Number, arr_t],
               @ast.TsType::Any,
             ),
             @ast.TsType::Any,
@@ -314,12 +303,7 @@ fn array_prototype_member(
         @ast.TsType::Func(
           [
             @ast.TsType::Func(
-              [
-                @ast.TsType::Any,
-                elem,
-                @ast.TsType::Number,
-                arr_t,
-              ],
+              [@ast.TsType::Any, elem, @ast.TsType::Number, arr_t],
               @ast.TsType::Any,
             ),
             @ast.TsType::Any,
@@ -455,8 +439,7 @@ fn Resolver::lookup_field(
       iterator_prototype_member(args[0], field)
     Applied("AsyncIterable", [t])
     | Applied("AsyncIterableIterator", [t])
-    | Applied("AsyncIterator", [t]) =>
-      async_iterator_prototype_member(t, field)
+    | Applied("AsyncIterator", [t]) => async_iterator_prototype_member(t, field)
     Applied("AsyncGenerator", args) if args.length() >= 1 =>
       async_iterator_prototype_member(args[0], field)
     // TypeScript utility types — handled at the lookup layer so we don't
@@ -652,7 +635,9 @@ fn promise_prototype_member(
         ),
       )
     "finally" =>
-      Some(@ast.TsType::Func([@ast.TsType::Func([], @ast.TsType::Void)], promise_t))
+      Some(
+        @ast.TsType::Func([@ast.TsType::Func([], @ast.TsType::Void)], promise_t),
+      )
     _ => None
   }
 }
@@ -697,10 +682,7 @@ fn map_prototype_member(
 ///|
 /// Well-known `Set<T>` instance members. Mirrors `map_prototype_member`
 /// for the simpler single-type-parameter shape.
-fn set_prototype_member(
-  t : @ast.TsType,
-  field : String,
-) -> @ast.TsType? {
+fn set_prototype_member(t : @ast.TsType, field : String) -> @ast.TsType? {
   let set_t = @ast.TsType::Applied("Set", [t])
   let bool_ = @ast.TsType::Boolean
   let num = @ast.TsType::Number
@@ -731,20 +713,49 @@ fn date_prototype_member(field : String) -> @ast.TsType? {
   let n = @ast.TsType::Number
   let s = @ast.TsType::String_
   match field {
-    "getTime" | "getFullYear" | "getMonth" | "getDate" | "getHours"
-    | "getMinutes" | "getSeconds" | "getMilliseconds" | "getDay"
-    | "getTimezoneOffset" | "getUTCFullYear" | "getUTCMonth" | "getUTCDate"
-    | "getUTCHours" | "getUTCMinutes" | "getUTCSeconds"
-    | "getUTCMilliseconds" | "getUTCDay" | "valueOf" =>
-      Some(@ast.TsType::Func([], n))
-    "setTime" | "setFullYear" | "setMonth" | "setDate" | "setHours"
-    | "setMinutes" | "setSeconds" | "setMilliseconds" | "setUTCFullYear"
-    | "setUTCMonth" | "setUTCDate" | "setUTCHours" | "setUTCMinutes"
-    | "setUTCSeconds" | "setUTCMilliseconds" =>
-      Some(@ast.TsType::Func([n], n))
-    "toString" | "toDateString" | "toTimeString" | "toLocaleString"
-    | "toLocaleDateString" | "toLocaleTimeString" | "toISOString"
-    | "toJSON" | "toUTCString" => Some(@ast.TsType::Func([], s))
+    "getTime"
+    | "getFullYear"
+    | "getMonth"
+    | "getDate"
+    | "getHours"
+    | "getMinutes"
+    | "getSeconds"
+    | "getMilliseconds"
+    | "getDay"
+    | "getTimezoneOffset"
+    | "getUTCFullYear"
+    | "getUTCMonth"
+    | "getUTCDate"
+    | "getUTCHours"
+    | "getUTCMinutes"
+    | "getUTCSeconds"
+    | "getUTCMilliseconds"
+    | "getUTCDay"
+    | "valueOf" => Some(@ast.TsType::Func([], n))
+    "setTime"
+    | "setFullYear"
+    | "setMonth"
+    | "setDate"
+    | "setHours"
+    | "setMinutes"
+    | "setSeconds"
+    | "setMilliseconds"
+    | "setUTCFullYear"
+    | "setUTCMonth"
+    | "setUTCDate"
+    | "setUTCHours"
+    | "setUTCMinutes"
+    | "setUTCSeconds"
+    | "setUTCMilliseconds" => Some(@ast.TsType::Func([n], n))
+    "toString"
+    | "toDateString"
+    | "toTimeString"
+    | "toLocaleString"
+    | "toLocaleDateString"
+    | "toLocaleTimeString"
+    | "toISOString"
+    | "toJSON"
+    | "toUTCString" => Some(@ast.TsType::Func([], s))
     _ => None
   }
 }
@@ -797,8 +808,14 @@ fn regexp_prototype_member(field : String) -> @ast.TsType? {
     "toString" => Some(@ast.TsType::Func([], s))
     // Properties
     "source" | "flags" => Some(s)
-    "global" | "ignoreCase" | "multiline" | "sticky" | "unicode"
-    | "dotAll" | "unicodeSets" | "hasIndices" => Some(b)
+    "global"
+    | "ignoreCase"
+    | "multiline"
+    | "sticky"
+    | "unicode"
+    | "dotAll"
+    | "unicodeSets"
+    | "hasIndices" => Some(b)
     "lastIndex" => Some(n)
     _ => None
   }
@@ -819,10 +836,7 @@ fn iterator_result_type(t : @ast.TsType) -> @ast.TsType {
 /// `next` / `return` / `throw` methods all surface `IteratorResult<T>`;
 /// the `[Symbol.iterator]` / `[Symbol.asyncIterator]` methods aren't
 /// expressible via a string key here so they fall through to `None`.
-fn iterator_prototype_member(
-  t : @ast.TsType,
-  field : String,
-) -> @ast.TsType? {
+fn iterator_prototype_member(t : @ast.TsType, field : String) -> @ast.TsType? {
   let res = iterator_result_type(t)
   match field {
     "next" => Some(@ast.TsType::Func([], res))
@@ -870,10 +884,7 @@ fn weakmap_prototype_member(
 
 ///|
 /// `WeakSet<T>` instance members. Subset of `Set`.
-fn weakset_prototype_member(
-  t : @ast.TsType,
-  field : String,
-) -> @ast.TsType? {
+fn weakset_prototype_member(t : @ast.TsType, field : String) -> @ast.TsType? {
   let set_t = @ast.TsType::Applied("WeakSet", [t])
   let bool_ = @ast.TsType::Boolean
   match field {
@@ -907,10 +918,8 @@ fn func_prototype_member(
       }
       Some(@ast.TsType::Func(call_params, ret))
     }
-    "apply" =>
-      Some(@ast.TsType::Func([any, @ast.TsType::Array(any)], ret))
-    "bind" =>
-      Some(@ast.TsType::Func([any], @ast.TsType::Func(params, ret)))
+    "apply" => Some(@ast.TsType::Func([any, @ast.TsType::Array(any)], ret))
+    "bind" => Some(@ast.TsType::Func([any], @ast.TsType::Func(params, ret)))
     "name" => Some(s)
     "length" => Some(n)
     "toString" => Some(@ast.TsType::Func([], s))
@@ -924,8 +933,14 @@ fn func_prototype_member(
 /// `toString`).
 fn is_error_class_name(name : String) -> Bool {
   match name {
-    "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
-    | "EvalError" | "URIError" | "AggregateError" => true
+    "Error"
+    | "TypeError"
+    | "RangeError"
+    | "SyntaxError"
+    | "ReferenceError"
+    | "EvalError"
+    | "URIError"
+    | "AggregateError" => true
     _ => false
   }
 }
@@ -946,8 +961,14 @@ fn error_prototype_member(field : String) -> @ast.TsType? {
 /// class names so callers know to fall through.
 fn typed_array_element_type(name : String) -> @ast.TsType? {
   match name {
-    "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array"
-    | "Uint16Array" | "Int32Array" | "Uint32Array" | "Float32Array"
+    "Int8Array"
+    | "Uint8Array"
+    | "Uint8ClampedArray"
+    | "Int16Array"
+    | "Uint16Array"
+    | "Int32Array"
+    | "Uint32Array"
+    | "Float32Array"
     | "Float64Array" => Some(@ast.TsType::Number)
     "BigInt64Array" | "BigUint64Array" => Some(@ast.TsType::BigInt)
     _ => None
@@ -979,10 +1000,7 @@ fn typed_array_extra_member(field : String) -> @ast.TsType? {
 /// `check_call_args_in_expr` validates argument types; the result type
 /// of generic-shaped statics (e.g. `Object.entries<T>`) is handled by
 /// `global_static_method_special` at the call site.
-fn global_namespace_method(
-  namespace : String,
-  method : String,
-) -> @ast.TsType? {
+fn global_namespace_method(namespace : String, method : String) -> @ast.TsType? {
   let s = @ast.TsType::String_
   let n = @ast.TsType::Number
   let b = @ast.TsType::Boolean
@@ -991,9 +1009,15 @@ fn global_namespace_method(
   match (namespace, method) {
     // Object.*
     ("Object", "keys") => Some(@ast.TsType::Func([any], str_arr))
-    ("Object", "values") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    ("Object", "values") =>
+      Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
     ("Object", "entries") =>
-      Some(@ast.TsType::Func([any], @ast.TsType::Array(@ast.TsType::Tuple([s, any]))))
+      Some(
+        @ast.TsType::Func(
+          [any],
+          @ast.TsType::Array(@ast.TsType::Tuple([s, any])),
+        ),
+      )
     ("Object", "assign") => Some(@ast.TsType::Func([any, any], any))
     ("Object", "freeze") => Some(@ast.TsType::Func([any], any))
     ("Object", "isFrozen") => Some(@ast.TsType::Func([any], b))
@@ -1004,14 +1028,31 @@ fn global_namespace_method(
     ("Object", "getOwnPropertyNames") => Some(@ast.TsType::Func([any], str_arr))
     ("Object", "hasOwn") => Some(@ast.TsType::Func([any, s], b))
     // Math.*
-    ("Math", "abs") | ("Math", "ceil") | ("Math", "floor") | ("Math", "round")
-    | ("Math", "trunc") | ("Math", "sign") | ("Math", "sqrt")
-    | ("Math", "cbrt") | ("Math", "exp") | ("Math", "log")
-    | ("Math", "log2") | ("Math", "log10") | ("Math", "log1p")
-    | ("Math", "expm1") | ("Math", "sin") | ("Math", "cos")
-    | ("Math", "tan") | ("Math", "asin") | ("Math", "acos")
-    | ("Math", "atan") | ("Math", "sinh") | ("Math", "cosh")
-    | ("Math", "tanh") | ("Math", "asinh") | ("Math", "acosh")
+    ("Math", "abs")
+    | ("Math", "ceil")
+    | ("Math", "floor")
+    | ("Math", "round")
+    | ("Math", "trunc")
+    | ("Math", "sign")
+    | ("Math", "sqrt")
+    | ("Math", "cbrt")
+    | ("Math", "exp")
+    | ("Math", "log")
+    | ("Math", "log2")
+    | ("Math", "log10")
+    | ("Math", "log1p")
+    | ("Math", "expm1")
+    | ("Math", "sin")
+    | ("Math", "cos")
+    | ("Math", "tan")
+    | ("Math", "asin")
+    | ("Math", "acos")
+    | ("Math", "atan")
+    | ("Math", "sinh")
+    | ("Math", "cosh")
+    | ("Math", "tanh")
+    | ("Math", "asinh")
+    | ("Math", "acosh")
     | ("Math", "atanh") => Some(@ast.TsType::Func([n], n))
     ("Math", "pow") | ("Math", "atan2") | ("Math", "hypot") =>
       Some(@ast.TsType::Func([n, n], n))
@@ -1048,13 +1089,9 @@ fn global_namespace_method(
     ("Date", "UTC") => Some(@ast.TsType::Func([n], n))
     // Promise.*
     ("Promise", "resolve") =>
-      Some(
-        @ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])),
-      )
+      Some(@ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])))
     ("Promise", "reject") =>
-      Some(
-        @ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])),
-      )
+      Some(@ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])))
     ("Promise", "all") | ("Promise", "race") | ("Promise", "any") =>
       Some(
         @ast.TsType::Func(
@@ -1073,14 +1110,25 @@ fn global_namespace_method(
     // Modelled with a single-arg `Func` so the universally common
     // `console.log("msg")` call validates; multi-arg calls fall through
     // to the contextual-typing fallback.
-    ("console", "log") | ("console", "info") | ("console", "warn")
-    | ("console", "error") | ("console", "debug") | ("console", "trace")
-    | ("console", "dir") | ("console", "table") | ("console", "group")
-    | ("console", "groupCollapsed") | ("console", "groupEnd")
-    | ("console", "clear") | ("console", "count") | ("console", "countReset")
-    | ("console", "time") | ("console", "timeEnd") | ("console", "timeLog")
-    | ("console", "assert") | ("console", "dirxml") =>
-      Some(@ast.TsType::Func([any], @ast.TsType::Void))
+    ("console", "log")
+    | ("console", "info")
+    | ("console", "warn")
+    | ("console", "error")
+    | ("console", "debug")
+    | ("console", "trace")
+    | ("console", "dir")
+    | ("console", "table")
+    | ("console", "group")
+    | ("console", "groupCollapsed")
+    | ("console", "groupEnd")
+    | ("console", "clear")
+    | ("console", "count")
+    | ("console", "countReset")
+    | ("console", "time")
+    | ("console", "timeEnd")
+    | ("console", "timeLog")
+    | ("console", "assert")
+    | ("console", "dirxml") => Some(@ast.TsType::Func([any], @ast.TsType::Void))
     _ => None
   }
 }
@@ -1123,9 +1171,7 @@ fn global_static_method_special(
         Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
         other => other
       }
-      Some(
-        @ast.TsType::Applied("Promise", [@ast.TsType::Array(unwrapped)]),
-      )
+      Some(@ast.TsType::Applied("Promise", [@ast.TsType::Array(unwrapped)]))
     }
     ("Promise", "race", [arr]) | ("Promise", "any", [arr]) => {
       let arr_ty = infer_expr(env, resolver, arr)
@@ -1161,7 +1207,8 @@ fn string_prototype_member(field : String) -> @ast.TsType? {
     "charAt" => Some(@ast.TsType::Func([n], s))
     "charCodeAt" => Some(@ast.TsType::Func([n], n))
     "codePointAt" => Some(@ast.TsType::Func([n], n))
-    "at" => Some(@ast.TsType::Func([n], narrow_union(s, @ast.TsType::Undefined)))
+    "at" =>
+      Some(@ast.TsType::Func([n], narrow_union(s, @ast.TsType::Undefined)))
     // Search
     "indexOf" => Some(@ast.TsType::Func([s, n], n))
     "lastIndexOf" => Some(@ast.TsType::Func([s, n], n))
@@ -1169,7 +1216,8 @@ fn string_prototype_member(field : String) -> @ast.TsType? {
     "startsWith" => Some(@ast.TsType::Func([s], b))
     "endsWith" => Some(@ast.TsType::Func([s], b))
     "search" => Some(@ast.TsType::Func([s], n))
-    "match" => Some(@ast.TsType::Func([s], narrow_union(str_arr, @ast.TsType::Null)))
+    "match" =>
+      Some(@ast.TsType::Func([s], narrow_union(str_arr, @ast.TsType::Null)))
     "matchAll" => Some(@ast.TsType::Func([s], str_arr))
     // Transformation (returns string)
     "slice" => Some(@ast.TsType::Func([n, n], s))
@@ -1515,13 +1563,12 @@ fn infer_expr(
       match receiver {
         Var(name) =>
           match global_namespace_method(name, method) {
-            Some(sig) => {
+            Some(sig) =>
               // Apply per-method generic-style inference for the chosen
               // static method, falling back to the conventional `Func`
               // shape when no special path applies.
-              match global_static_method_special(
-                env, resolver, name, method, args,
-              ) {
+              match
+                global_static_method_special(env, resolver, name, method, args) {
                 Some(special_ret) => {
                   // Walk args for nested call-site checks.
                   for a in args {
@@ -1540,7 +1587,6 @@ fn infer_expr(
                     _ => ()
                   }
               }
-            }
             None => ()
           }
         _ => ()
@@ -1553,15 +1599,19 @@ fn infer_expr(
       let elem_opt = array_element_type(resolver, recv_ty)
       match (elem_opt, method, args) {
         (Some(elem), "map", [cb]) => {
-          let cb_ret = infer_arrow_body_with_params(
-            env, resolver, cb, [elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
-          )
+          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [
+            elem,
+            @ast.TsType::Number,
+            @ast.TsType::Array(elem),
+          ])
           return @ast.TsType::Array(cb_ret)
         }
         (Some(elem), "flatMap", [cb]) => {
-          let cb_ret = infer_arrow_body_with_params(
-            env, resolver, cb, [elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
-          )
+          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [
+            elem,
+            @ast.TsType::Number,
+            @ast.TsType::Array(elem),
+          ])
           // `flatMap` flattens one level: `T[] | T` → `T[]`.
           let flattened = match cb_ret {
             Array(inner) => inner
@@ -1569,14 +1619,15 @@ fn infer_expr(
           }
           return @ast.TsType::Array(flattened)
         }
-        (Some(elem), "reduce", [cb, init]) | (Some(elem), "reduceRight", [cb, init]) => {
+        (Some(elem), "reduce", [cb, init])
+        | (Some(elem), "reduceRight", [cb, init]) => {
           let init_ty = infer_expr(env, resolver, init)
-          let cb_ret = infer_arrow_body_with_params(
-            env,
-            resolver,
-            cb,
-            [init_ty, elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
-          )
+          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [
+            init_ty,
+            elem,
+            @ast.TsType::Number,
+            @ast.TsType::Array(elem),
+          ])
           // The accumulator type unions the initial value with each
           // callback return — keep both in case the callback widens.
           return narrow_union(init_ty, cb_ret)
@@ -1584,7 +1635,7 @@ fn infer_expr(
         // `arr.filter((x): x is Foo => …)` — when the callback is
         // declared as a type predicate, narrow the result array's
         // element to the predicate's asserted type.
-        (Some(elem), "filter", [cb]) => {
+        (Some(elem), "filter", [cb]) =>
           match arrow_type_predicate_target(cb) {
             Some(target) => return @ast.TsType::Array(target)
             None => {
@@ -1592,7 +1643,6 @@ fn infer_expr(
               ()
             }
           }
-        }
         _ => ()
       }
       // `promise.then(cb)` — flow the callback's body return into the
@@ -1668,9 +1718,8 @@ fn infer_expr(
     IndexAccess(receiver, index_expr) => {
       // Index-access narrowing: if the access has a stable narrowing
       // key (`arr[0]` / `m["k"]`) and an env binding exists, honour it.
-      match narrowing_key_for_expr(
-        @ast.TsExpr::IndexAccess(receiver, index_expr),
-      ) {
+      match
+        narrowing_key_for_expr(@ast.TsExpr::IndexAccess(receiver, index_expr)) {
         Some(key) =>
           match env.lookup(key) {
             Some(narrowed) => return narrowed
@@ -2037,10 +2086,12 @@ fn check_expr_against(
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
   match (expr, expected_shape) {
-    (ArrowFunc(arrow_params, _declared_ret, body, is_async), Func(formal_params, formal_ret)) => {
+    (
+      ArrowFunc(arrow_params, _declared_ret, body, is_async),
+      Func(formal_params, formal_ret),
+    ) => {
       check_arrow_with_context(
-        env, arrow_params, body, is_async, formal_params, formal_ret, ctx,
-        sub_path,
+        env, arrow_params, body, is_async, formal_params, formal_ret, ctx, sub_path,
       )
       return
     }
@@ -2068,10 +2119,14 @@ fn check_expr_against(
   // class targets fall through to assignability because their private /
   // constructed members aren't expressible in a literal.
   match (expr, expected_shape) {
-    (ObjectLit(entries), Object(_))
-    | (ObjectLit(entries), Struct(_, _)) => {
+    (ObjectLit(entries), Object(_)) | (ObjectLit(entries), Struct(_, _)) => {
       check_object_lit_against_target(
-        env, entries, expected_shape, ctx.resolver, ctx, sub_path,
+        env,
+        entries,
+        expected_shape,
+        ctx.resolver,
+        ctx,
+        sub_path,
       )
       return
     }
@@ -2079,7 +2134,12 @@ fn check_expr_against(
       match ctx.resolver.interfaces.get(name) {
         Some(_) => {
           check_object_lit_against_target(
-            env, entries, expected_shape, ctx.resolver, ctx, sub_path,
+            env,
+            entries,
+            expected_shape,
+            ctx.resolver,
+            ctx,
+            sub_path,
           )
           return
         }
@@ -2099,7 +2159,12 @@ fn check_expr_against(
       }
       if is_utility || ctx.resolver.interfaces.get(name) is Some(_) {
         check_object_lit_against_target(
-          env, entries, expected_shape, ctx.resolver, ctx, sub_path,
+          env,
+          entries,
+          expected_shape,
+          ctx.resolver,
+          ctx,
+          sub_path,
         )
         return
       }
@@ -2165,6 +2230,7 @@ fn check_array_lit_against_tuple(
 /// Excess literal fields (not declared on the target) and missing required
 /// fields are reported individually so the diagnostic points at the
 /// specific divergence rather than the whole literal.
+
 ///|
 /// Validate a JSX element's attributes against the receiving component's
 /// props. Recognised receiver shapes:
@@ -2178,6 +2244,7 @@ fn check_array_lit_against_tuple(
 ///     the corresponding prop's declared type, missing required props
 ///     are flagged, and excess props surface as "does not exist on
 ///     target type".
+
 ///|
 /// Synthesise a TS type for a JSX element's children list. Used by
 /// `check_jsx_attrs` to validate the synthesised value against the
@@ -2192,6 +2259,7 @@ fn check_array_lit_against_tuple(
 /// element-shape narrowing yet — but the assignability check still
 /// surfaces obvious mismatches like `children: string` vs a numeric
 /// child.
+
 ///|
 /// Widen a value's literal type to its base — `"hi"` → `string`,
 /// `1` → `number`, `true` → `boolean`. Used by JSX generic inference
@@ -2315,7 +2383,10 @@ fn check_jsx_attrs(
               match ctx.resolver.lookup_field(raw_props_ty, sf.0) {
                 Some(formal) =>
                   infer_param_bindings(
-                    type_params, formal, widen_literal(sf.1), bindings,
+                    type_params,
+                    formal,
+                    widen_literal(sf.1),
+                    bindings,
                   )
                 None => ()
               }
@@ -2328,7 +2399,12 @@ fn check_jsx_attrs(
                 // `1` → `number`) so a single attribute doesn't lock T
                 // to a narrow literal value the user clearly didn't
                 // intend. Matches TS's contextual widening rule.
-                infer_param_bindings(type_params, formal, widen_literal(actual), bindings)
+                infer_param_bindings(
+                  type_params,
+                  formal,
+                  widen_literal(actual),
+                  bindings,
+                )
               }
               None => ()
             }
@@ -2441,7 +2517,9 @@ fn check_jsx_attrs(
         // supplied some. Mirror TS's "Property 'children' does not
         // exist" diagnostic.
         let declared_fields = collect_declared_fields(props, ctx.resolver)
-        let has_children = declared_fields.iter().any(fn(d) { d.0 == "children" })
+        let has_children = declared_fields
+          .iter()
+          .any(fn(d) { d.0 == "children" })
         if !has_children && declared_fields.length() > 0 {
           record(
             ctx,
@@ -2484,9 +2562,7 @@ fn check_object_lit_against_target(
     let value = entry.1
     match resolver.lookup_field(target, key) {
       Some(declared) =>
-        check_expr_against(
-          env, value, declared, ctx, "\{sub_path}.\{key}",
-        )
+        check_expr_against(env, value, declared, ctx, "\{sub_path}.\{key}")
       None =>
         // Unknown key on the target — TS calls this an excess-property
         // error. Skip class/struct opaque shapes by relying on lookup_field
@@ -2656,14 +2732,13 @@ fn collect_declared_fields(
 /// expected, threading the formal parameter types through. Used to catch
 /// errors inside `arr.map(x => x.someProp)` where `x` would otherwise type
 /// as `Any`.
+
 ///|
 /// If `callback` is an `ArrowFunc` / `FuncExpr` whose declared return
 /// type is a `TypePredicate(name, target)`, return `target`. Used to
 /// narrow `arr.filter(predicate)` result element type when the
 /// predicate is a user-defined type guard.
-fn arrow_type_predicate_target(
-  callback : @ast.TsExpr,
-) -> @ast.TsType? {
+fn arrow_type_predicate_target(callback : @ast.TsExpr) -> @ast.TsType? {
   let ret_opt = match callback {
     ArrowFunc(_, declared_ret, _, _) => Some(declared_ret)
     FuncExpr(f) => Some(f.return_type)
@@ -2680,10 +2755,7 @@ fn arrow_type_predicate_target(
 /// `Applied("Array", [T])` / `Applied("ReadonlyArray", [T])` aliases),
 /// return its element type. Falls back to `None` otherwise so callers
 /// can skip the array-specific dispatch path.
-fn array_element_type(
-  resolver : Resolver,
-  ty : @ast.TsType,
-) -> @ast.TsType? {
+fn array_element_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? {
   match resolver.unwrap(ty) {
     Array(elem) => Some(elem)
     Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) => Some(elem)
@@ -2793,7 +2865,11 @@ fn infer_block_return(
       _ => ()
     }
   }
-  if first { @ast.TsType::Undefined } else { acc }
+  if first {
+    @ast.TsType::Undefined
+  } else {
+    acc
+  }
 }
 
 ///|
@@ -3760,6 +3836,7 @@ fn apply_method_type_predicate_narrowing(
 ///|
 /// Look up `name`'s current type via env first, then resolver globals,
 /// defaulting to `Any`.
+
 ///|
 /// Resolve the current type of a `name.prop` access — first via any
 /// narrowing binding under the synthetic `name.prop` env key, then via
@@ -3880,6 +3957,7 @@ fn narrowing_current_type(
 /// Read an element type from an indexable shape. `inner` is the raw
 /// bracket contents — `0`, `"k"`, etc. Used by both narrowing key
 /// resolution and the structural `IndexAccess` lookup path.
+
 ///|
 /// Resolve a field name against an interface's index signatures. Returns
 /// `Some(value_type)` when the field name's lexical category (numeric vs
@@ -3938,9 +4016,7 @@ fn index_into_type(
   let shape = resolver.unwrap(recv)
   // Quoted string key — strip the surrounding quotes and run a field
   // lookup so `m["k"]` resolves through the object / interface shape.
-  if inner.length() >= 2 &&
-    inner[0] == '"' &&
-    inner[inner.length() - 1] == '"' {
+  if inner.length() >= 2 && inner[0] == '"' && inner[inner.length() - 1] == '"' {
     let key = inner[1:inner.length() - 1].to_string()
     return match resolver.lookup_field(shape, key) {
       Some(t) => t
@@ -3952,8 +4028,7 @@ fn index_into_type(
   if idx {
     match shape {
       Array(elem) => return elem
-      Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
-        return elem
+      Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) => return elem
       Tuple(items) =>
         match (try? @strconv.parse_int(inner)) {
           Ok(i) if i >= 0 && i < items.length() => return items[i]
@@ -4493,7 +4568,11 @@ fn check_call_args_in_expr(
           }
           let substituted_params = if type_params.length() > 0 {
             let bindings = solve_generic_bindings(
-              env, ctx.resolver, type_params, params, args,
+              env,
+              ctx.resolver,
+              type_params,
+              params,
+              args,
             )
             substitute_params_array(params, bindings)
           } else {
@@ -4856,8 +4935,7 @@ fn check_function_body_with(
   // For a type-predicate function (`x is T`), the body actually returns a
   // boolean — the predicate-ness lives only at the call site. Lower it
   // back to `Boolean` for the body-level return check.
-  let body_return = match
-    unwrap_async_return(func.is_async, func.return_type) {
+  let body_return = match unwrap_async_return(func.is_async, func.return_type) {
     TypePredicate(_, _) => @ast.TsType::Boolean
     other => other
   }

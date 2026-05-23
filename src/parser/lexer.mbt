@@ -266,8 +266,9 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
       continue
     }
     // Multi-byte UTF-8 sequences for things like NBSP / LS / PS / BOM.
-    if b == 0xC2 && self.pos + 1 < len && self.src[self.pos + 1].to_int() ==
-      0xA0 {
+    if b == 0xC2 &&
+      self.pos + 1 < len &&
+      self.src[self.pos + 1].to_int() == 0xA0 {
       self.pos += 2
       continue
     }
@@ -738,10 +739,7 @@ fn Lexer::scan_ident(self : Lexer) -> TokenKind {
 }
 
 ///|
-fn Lexer::scan_ident_with_escapes(
-  self : Lexer,
-  start : Int,
-) -> TokenKind {
+fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int) -> TokenKind {
   let buf = StringBuilder::new()
   buf.write_string(self.src[start:self.pos].to_string())
   while true {
@@ -851,26 +849,15 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
         c if c == 'l'.to_int() => if s == "let" { Let } else { Ident(s) }
         c if c == 'f'.to_int() => if s == "for" { For } else { Ident(s) }
         c if c == 't'.to_int() => if s == "try" { Try } else { Ident(s) }
-        c if c == 'n'.to_int() =>
-          if s == "new" {
-            New
-          } else {
-            Ident(s)
-          }
+        c if c == 'n'.to_int() => if s == "new" { New } else { Ident(s) }
         c if c == 'i'.to_int() => if s == "int" { IntType } else { Ident(s) }
         _ => Ident(s)
       }
     4 =>
       match c0 {
-        c if c == 'c'
-          .to_int() => if s == "case" { Case } else { Ident(s) }
+        c if c == 'c'.to_int() => if s == "case" { Case } else { Ident(s) }
         c if c == 'e'.to_int() => if s == "else" { Else } else { Ident(s) }
-        c if c == 'f'.to_int() =>
-          if s == "from" {
-            From
-          } else {
-            Ident(s)
-          }
+        c if c == 'f'.to_int() => if s == "from" { From } else { Ident(s) }
         c if c == 'n'.to_int() => if s == "null" { Null } else { Ident(s) }
         c if c == 't'.to_int() =>
           if s == "true" {
@@ -897,7 +884,12 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
           } else {
             Ident(s)
           }
-        c if c == 'f'.to_int() => if s == "false" { Bool(false) } else { Ident(s) }
+        c if c == 'f'.to_int() =>
+          if s == "false" {
+            Bool(false)
+          } else {
+            Ident(s)
+          }
         c if c == 't'.to_int() => if s == "throw" { Throw } else { Ident(s) }
         c if c == 'w'.to_int() => if s == "while" { While } else { Ident(s) }
         c if c == 'y'.to_int() => if s == "yield" { Yield } else { Ident(s) }
@@ -907,12 +899,7 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
       match c0 {
         c if c == 'r'.to_int() => if s == "return" { Return } else { Ident(s) }
         c if c == 'i'.to_int() => if s == "import" { Import } else { Ident(s) }
-        c if c == 'e'.to_int() =>
-          if s == "export" {
-            Export
-          } else {
-            Ident(s)
-          }
+        c if c == 'e'.to_int() => if s == "export" { Export } else { Ident(s) }
         c if c == 's'.to_int() =>
           if s == "switch" {
             Switch
@@ -921,12 +908,7 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
           } else {
             Ident(s)
           }
-        c if c == 'd'.to_int() =>
-          if s == "delete" {
-            Delete
-          } else {
-            Ident(s)
-          }
+        c if c == 'd'.to_int() => if s == "delete" { Delete } else { Ident(s) }
         c if c == 't'.to_int() => if s == "typeof" { Typeof } else { Ident(s) }
         c if c == 'n'.to_int() =>
           if s == "number" {
@@ -946,8 +928,18 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
           } else {
             Ident(s)
           }
-        c if c == 'e'.to_int() => if s == "extends" { Extends } else { Ident(s) }
-        c if c == 'f'.to_int() => if s == "finally" { Finally } else { Ident(s) }
+        c if c == 'e'.to_int() =>
+          if s == "extends" {
+            Extends
+          } else {
+            Ident(s)
+          }
+        c if c == 'f'.to_int() =>
+          if s == "finally" {
+            Finally
+          } else {
+            Ident(s)
+          }
         c if c == 'b'.to_int() =>
           if s == "boolean" {
             BooleanType
@@ -958,19 +950,44 @@ fn classify_ident_or_keyword(s : String) -> TokenKind {
       }
     8 =>
       match c0 {
-        c if c == 'f'.to_int() => if s == "function" { Function } else { Ident(s) }
-        c if c == 'c'.to_int() => if s == "continue" { Continue } else { Ident(s) }
-        c if c == 'd'.to_int() => if s == "debugger" { Debugger } else { Ident(s) }
+        c if c == 'f'.to_int() =>
+          if s == "function" {
+            Function
+          } else {
+            Ident(s)
+          }
+        c if c == 'c'.to_int() =>
+          if s == "continue" {
+            Continue
+          } else {
+            Ident(s)
+          }
+        c if c == 'd'.to_int() =>
+          if s == "debugger" {
+            Debugger
+          } else {
+            Ident(s)
+          }
         _ => Ident(s)
       }
     9 =>
       match c0 {
-        c if c == 'i'.to_int() => if s == "interface" { Interface } else { Ident(s) }
+        c if c == 'i'.to_int() =>
+          if s == "interface" {
+            Interface
+          } else {
+            Ident(s)
+          }
         _ => Ident(s)
       }
     10 =>
       match c0 {
-        c if c == 'i'.to_int() => if s == "instanceof" { Instanceof } else { Ident(s) }
+        c if c == 'i'.to_int() =>
+          if s == "instanceof" {
+            Instanceof
+          } else {
+            Ident(s)
+          }
         _ => Ident(s)
       }
     _ => Ident(s)
@@ -1093,8 +1110,10 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
       self.pos += 1
       return Str(value)
     }
-    if b == '\\'.to_int() || b == '\n'.to_int() || b == '\r'.to_int() || b >=
-      0x80 {
+    if b == '\\'.to_int() ||
+      b == '\n'.to_int() ||
+      b == '\r'.to_int() ||
+      b >= 0x80 {
       break
     }
     self.pos += 1

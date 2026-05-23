@@ -969,8 +969,7 @@ fn Parser::is_await_using_declaration_start(self : Parser) -> Bool {
     Ident("using") => ()
     _ => return false
   }
-  if self.peek_at(1).has_newline_before ||
-    self.peek_at(2).has_newline_before {
+  if self.peek_at(1).has_newline_before || self.peek_at(2).has_newline_before {
     return false
   }
   match self.peek_at(2).kind {
