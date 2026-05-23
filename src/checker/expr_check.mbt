@@ -1614,6 +1614,18 @@ fn infer_expr(
       }
     }
     IndexAccess(receiver, index_expr) => {
+      // Index-access narrowing: if the access has a stable narrowing
+      // key (`arr[0]` / `m["k"]`) and an env binding exists, honour it.
+      match narrowing_key_for_expr(
+        @ast.TsExpr::IndexAccess(receiver, index_expr),
+      ) {
+        Some(key) =>
+          match env.lookup(key) {
+            Some(narrowed) => return narrowed
+            None => ()
+          }
+        None => ()
+      }
       let recv_ty = infer_expr(env, resolver, receiver)
       let idx_ty = infer_expr(env, resolver, index_expr)
       infer_index(resolver, recv_ty, idx_ty, index_expr)
@@ -3359,21 +3371,41 @@ fn prop_access_current_type(
 }
 
 ///|
-/// Flatten a `Var(...)` / `PropAccess(...)` chain into a dotted key for
-/// the narrowing env. Returns `None` when the chain bottoms out at
-/// anything other than `Var(name)` (e.g. a `Call(...)` receiver, a
-/// computed `IndexAccess`, etc.).
+/// Flatten a `Var(...)` / `PropAccess(...)` / literal-`IndexAccess(...)`
+/// chain into a dotted key for the narrowing env. Returns `None` when
+/// the chain bottoms out at anything other than `Var(name)`.
 ///
 /// Examples:
 ///   `Var("c")`                                       → Some("c")
 ///   `PropAccess(Var("c"), "name")`                   → Some("c.name")
 ///   `PropAccess(PropAccess(Var("c"), "a"), "b")`     → Some("c.a.b")
+///   `IndexAccess(Var("arr"), IntLit(0))`             → Some("arr[0]")
+///   `IndexAccess(Var("m"), StringLit("k"))`          → Some("m[\"k\"]")
 fn narrowing_key_for_expr(expr : @ast.TsExpr) -> String? {
   match expr {
     Var(name) => Some(name)
     PropAccess(inner, prop) =>
       match narrowing_key_for_expr(inner) {
         Some(prefix) => Some(prefix + "." + prop)
+        None => None
+      }
+    IndexAccess(inner, idx) =>
+      match narrowing_key_for_expr(inner) {
+        Some(prefix) => {
+          // Only literal indices give a stable narrowing key; computed
+          // indices (e.g. `arr[i]` with a Var index) can't be tracked
+          // statically.
+          let idx_key = match idx {
+            IntLit(i) => Some("[\{i}]")
+            NumberLit(d) => Some("[\{d}]")
+            StringLit(s) => Some("[\"\{s}\"]")
+            _ => None
+          }
+          match idx_key {
+            Some(k) => Some(prefix + k)
+            None => None
+          }
+        }
         None => None
       }
     _ => None
@@ -3400,6 +3432,21 @@ fn narrowing_current_type(
     Some(t) => return t
     None => ()
   }
+  // Index-access key like `arr[0]` / `m["k"]`. Split off the trailing
+  // bracket segment and resolve the prefix, then descend by element
+  // type / tuple slot.
+  if key.length() > 0 && key[key.length() - 1] == ']' {
+    match key.rev_find("[") {
+      Some(open_idx) => {
+        let prefix = key[:open_idx].to_string()
+        let inner = key[open_idx + 1:key.length() - 1].to_string()
+        let prefix_ty = narrowing_current_type(env, resolver, prefix)
+        let elem = index_into_type(resolver, prefix_ty, inner)
+        return elem
+      }
+      None => ()
+    }
+  }
   match key.rev_find(".") {
     Some(idx) => {
       let prefix = key[:idx].to_string()
@@ -3415,6 +3462,45 @@ fn narrowing_current_type(
     }
     None => env_lookup_full(env, resolver, key)
   }
+}
+
+///|
+/// Read an element type from an indexable shape. `inner` is the raw
+/// bracket contents — `0`, `"k"`, etc. Used by both narrowing key
+/// resolution and the structural `IndexAccess` lookup path.
+fn index_into_type(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  inner : String,
+) -> @ast.TsType {
+  let shape = resolver.unwrap(recv)
+  // Quoted string key — strip the surrounding quotes and run a field
+  // lookup so `m["k"]` resolves through the object / interface shape.
+  if inner.length() >= 2 &&
+    inner[0] == '"' &&
+    inner[inner.length() - 1] == '"' {
+    let key = inner[1:inner.length() - 1].to_string()
+    return match resolver.lookup_field(shape, key) {
+      Some(t) => t
+      None => @ast.TsType::Any
+    }
+  }
+  // Numeric index — read tuple slot or array element.
+  let idx = (try? @strconv.parse_int(inner)) is Ok(_)
+  if idx {
+    match shape {
+      Array(elem) => return elem
+      Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
+        return elem
+      Tuple(items) =>
+        match (try? @strconv.parse_int(inner)) {
+          Ok(i) if i >= 0 && i < items.length() => return items[i]
+          _ => return @ast.TsType::Any
+        }
+      _ => return @ast.TsType::Any
+    }
+  }
+  @ast.TsType::Any
 }
 
 ///|

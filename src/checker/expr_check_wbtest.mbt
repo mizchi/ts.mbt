@@ -3587,3 +3587,85 @@ test "expr_check: early-return narrowing on nested prop access" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 34: index-access narrowing — `arr[0] !== undefined` / `m["k"] !==
+// undefined` / `typeof arr[0] === "string"` narrow the indexed access.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: arr[0] !== undefined narrows the indexed access" {
+  let src =
+    #|function f(arr: string[]): string {
+    #|  if (arr[0] !== undefined) {
+    #|    return arr[0];
+    #|  }
+    #|  return "x";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // Arrays' element type is `string` in our model (no implicit
+  // `T | undefined`), so the unguarded path also passes. Either way,
+  // no spurious issue should fire.
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: tuple slot narrowing — `t[0] !== null`" {
+  // `[string | null, number]` — `t[0]` initially is `string | null`,
+  // and the guard narrows it to `string`.
+  let src =
+    #|function f(t: [string | null, number]): string {
+    #|  if (t[0] !== null) {
+    #|    return t[0];
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof arr[0] === \"string\" narrows" {
+  let src =
+    #|function f(arr: (string | number)[]): string {
+    #|  if (typeof arr[0] === "string") {
+    #|    return arr[0];
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: truthy `if (arr[0])` narrowing" {
+  // `arr[0]` is `string | null` here; truthy narrows it to `string`.
+  let src =
+    #|function f(arr: (string | null)[]): string {
+    #|  if (arr[0]) {
+    #|    return arr[0];
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: nested `obj.arr[0]` narrowing" {
+  let src =
+    #|interface Holder { arr: (string | null)[] }
+    #|function f(h: Holder): string {
+    #|  if (h.arr[0] !== null) {
+    #|    return h.arr[0];
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
