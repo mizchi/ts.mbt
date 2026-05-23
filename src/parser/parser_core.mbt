@@ -34,6 +34,14 @@ pub struct Parser {
   // attached to the next class declaration. The class parsers drain
   // this list when they begin and clear it on exit.
   pending_decorators : Array[@ast.TsExpr]
+  // Per-parameter modifier flags collected by the most recent
+  // `parse_params` call: index `i` is `true` when that parameter
+  // had a `public` / `private` / `protected` / `readonly` /
+  // `override` modifier — i.e. a "parameter property" in a
+  // constructor. Class-body parsing reads this back after parsing
+  // a constructor signature so it can synthesize the
+  // `this.X = X` assignment that TS implicitly does.
+  mut last_param_property_flags : Array[Bool]
 } derive(Debug)
 
 ///|
@@ -77,6 +85,7 @@ pub fn Parser::new_with_strict_and_jsx(
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
     pending_decorators: [],
+    last_param_property_flags: [],
   }
 }
 
@@ -114,6 +123,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
     pending_decorators: [],
+    last_param_property_flags: [],
   }
 }
 

@@ -58,6 +58,17 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
 
 ///|
 fn Parser::skip_param_modifiers(self : Parser) -> Unit {
+  let _ = self.consume_param_modifiers()
+}
+
+///|
+/// Like `skip_param_modifiers` but returns `true` when at least one
+/// modifier was consumed — used by constructor-param parsing to
+/// detect TS "parameter property" shorthand
+/// (`constructor(public foo: T)`) so the class desugar can
+/// synthesize the corresponding `this.foo = foo` assignment.
+fn Parser::consume_param_modifiers(self : Parser) -> Bool {
+  let mut had_any = false
   let mut has_modifier = true
   while has_modifier {
     has_modifier = false
@@ -83,12 +94,14 @@ fn Parser::skip_param_modifiers(self : Parser) -> Unit {
           | In => {
             let _ = self.advance()
             has_modifier = true
+            had_any = true
           }
           _ => ()
         }
       _ => ()
     }
   }
+  had_any
 }
 
 ///|
@@ -113,7 +126,11 @@ fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   self.skip_param_decorators()
-  self.skip_param_modifiers()
+  let had_modifier = self.consume_param_modifiers()
+  // Record the modifier flag for the most-recent `parse_params` call
+  // so the class-body parser can synthesize parameter-property
+  // assignments. The class-body parser is the only consumer.
+  self.last_param_property_flags.push(had_modifier)
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
@@ -142,6 +159,10 @@ fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
 ///|
 // / parameter
 fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
+  // Reset the parameter-property flag buffer at the start of every
+  // parse_params call. Class-body parsing reads the snapshot back
+  // before the next call clears it.
+  self.last_param_property_flags = []
   let params : Array[@ast.TsParam] = []
   if !self.check(RParen) {
     params.push(self.parse_param())

@@ -115,15 +115,13 @@ async test "adversarial: object passed to external default-imported function" {
 
 ///|
 async test "adversarial: object passed to external constructor" {
-  // Avoids TS parameter-property shorthand (`constructor(public X)`)
-  // which the parser doesn't desugar — explicit `this.config = …`
-  // is the equivalent that round-trips through emit cleanly.
+  // Uses TS parameter-property shorthand (`constructor(public X)`)
+  // which the parser now desugars into `this.config = config;` at
+  // the top of the constructor body.
   let files : Map[String, String] = {}
   files["external.ts"] =
     #|export class External {
-    #|  config: any;
-    #|  constructor(config: any) {
-    #|    this.config = config;
+    #|  constructor(public config: any) {
     #|    console.log("ctor-name=" + config.name);
     #|    console.log("ctor-version=" + config.version);
     #|  }
@@ -139,9 +137,6 @@ async test "adversarial: object passed to external constructor" {
     "adv-external-ctor",
     files,
     "entry.ts",
-    // `config` is read inside the class body and from the external
-    // import boundary — pre-reserve it manually since we don't yet
-    // detect "passed to external import" auto-reservation.
     extra_reserved_props=["config", "name", "version"],
   )
 }

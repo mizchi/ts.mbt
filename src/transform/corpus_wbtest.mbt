@@ -608,20 +608,30 @@ async test "corpus: spread in calls + array merging" {
   run_differential("corpus-spread", files, "entry.ts")
 }
 
-// NOTE: class inheritance with `super()` calls is intentionally
-// NOT a differential test yet. The parser's class desugar emits a
-// bare `super()` inside a regular function expression, which node
-// rejects as `SyntaxError: 'super' keyword unexpected here`. We
-// can't differential-test an optimizer against a baseline that
-// doesn't itself execute — track in TODO as a parser-desugar fix
-// (the call needs to become `Shape.call(this)` or similar). Once
-// fixed, the test below is ready to enable:
-//
-//   class Square extends Shape {
-//     side: number;
-//     constructor(side: number) { super(); this.side = side; }
-//     area(): number { return this.side * this.side; }
-//   }
+///|
+async test "corpus: class inheritance with super calls" {
+  let files : Map[String, String] = {}
+  files["entry.ts"] =
+    #|class Shape {
+    #|  area(): number { return 0; }
+    #|  describe(): string { return "shape area=" + this.area(); }
+    #|}
+    #|class Square extends Shape {
+    #|  side: number;
+    #|  constructor(side: number) { super(); this.side = side; }
+    #|  area(): number { return this.side * this.side; }
+    #|}
+    #|const s = new Square(5);
+    #|console.log(s.area());
+    #|console.log(s.describe());
+    #|
+  run_differential(
+    "corpus-inheritance",
+    files,
+    "entry.ts",
+    extra_reserved_props=["side"],
+  )
+}
 
 ///|
 async test "corpus: switch / case with fall-through and default" {

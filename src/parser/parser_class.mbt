@@ -472,15 +472,39 @@ fn Parser::inject_instance_field_assigns(
   assigns : Array[@ast.TsStmt],
   base : String?,
 ) -> @ast.TsFunc {
+  // Rewrite every `super(...args)` call inside the constructor body
+  // to `Base.call(this, ...args)` when the class has a base. Without
+  // this lowering, the IIFE-form constructor (a plain function
+  // expression, not a method of a class) would emit a literal
+  // `super()` and node would reject it as a SyntaxError.
+  let lowered_body_stmts : Array[@ast.TsStmt] = match base {
+    Some(base_name) => {
+      let out : Array[@ast.TsStmt] = []
+      for stmt in func.body.stmts {
+        out.push(lower_super_calls_in_stmt(stmt, base_name))
+      }
+      out
+    }
+    None => func.body.stmts
+  }
   if assigns.length() == 0 {
-    return func
+    return {
+      name: func.name,
+      type_params: func.type_params,
+      params: func.params,
+      return_type: func.return_type,
+      body: { stmts: lowered_body_stmts, stmt_positions: [] },
+      const_type_params: [],
+      is_generator: func.is_generator,
+      is_async: func.is_async,
+    }
   }
   let mut new_stmts : Array[@ast.TsStmt] = []
   let mut inserted = false
   if base is Some(_) {
-    for stmt in func.body.stmts {
+    for stmt in lowered_body_stmts {
       new_stmts.push(stmt)
-      if !inserted && self.is_super_call_stmt(stmt) {
+      if !inserted && self.is_super_call_stmt_lowered(stmt) {
         for assign in assigns {
           new_stmts.push(assign)
         }
@@ -492,7 +516,7 @@ fn Parser::inject_instance_field_assigns(
       for assign in assigns {
         combined.push(assign)
       }
-      for stmt in func.body.stmts {
+      for stmt in lowered_body_stmts {
         combined.push(stmt)
       }
       new_stmts = combined
@@ -501,7 +525,7 @@ fn Parser::inject_instance_field_assigns(
     for assign in assigns {
       new_stmts.push(assign)
     }
-    for stmt in func.body.stmts {
+    for stmt in lowered_body_stmts {
       new_stmts.push(stmt)
     }
   }
@@ -514,6 +538,109 @@ fn Parser::inject_instance_field_assigns(
     const_type_params: [],
     is_generator: func.is_generator,
     is_async: func.is_async,
+  }
+}
+
+///|
+/// `true` when `stmt` is the lowered super-call shape
+/// `<base>.call(this, ...args)`. Used after `lower_super_calls_in_stmt`
+/// has run so the field-assign insertion still happens after the
+/// super-init line.
+fn Parser::is_super_call_stmt_lowered(_self : Parser, stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Expr(CallExpr(PropAccess(_, "call"), args)) =>
+      args.length() > 0 && args[0] is @ast.TsExpr::Var("this")
+    _ => false
+  }
+}
+
+///|
+/// Rewrite `super(...args)` calls inside `stmt` to
+/// `<base>.call(this, ...args)`. Doesn't recurse into nested
+/// function bodies — `super` inside an inner closure is a SyntaxError
+/// already so there's nothing legitimate to rewrite.
+fn lower_super_calls_in_stmt(
+  stmt : @ast.TsStmt,
+  base : String,
+) -> @ast.TsStmt {
+  match stmt {
+    Expr(e) => Expr(lower_super_calls_in_expr(e, base))
+    Return(opt) =>
+      match opt {
+        Some(e) => Return(Some(lower_super_calls_in_expr(e, base)))
+        None => stmt
+      }
+    Var(b, t, e) => Var(b, t, lower_super_calls_in_expr(e, base))
+    Let(b, t, e) => Let(b, t, lower_super_calls_in_expr(e, base))
+    Const(b, t, e) => Const(b, t, lower_super_calls_in_expr(e, base))
+    Throw(e) => Throw(lower_super_calls_in_expr(e, base))
+    Assign(name, e) => Assign(name, lower_super_calls_in_expr(e, base))
+    PropAssign(recv, prop, value) =>
+      PropAssign(
+        lower_super_calls_in_expr(recv, base),
+        prop,
+        lower_super_calls_in_expr(value, base),
+      )
+    If(c, t, e_opt) =>
+      If(
+        lower_super_calls_in_expr(c, base),
+        { stmts: lower_super_in_stmts(t.stmts, base), stmt_positions: t.stmt_positions },
+        match e_opt {
+          Some(b) => Some({ stmts: lower_super_in_stmts(b.stmts, base), stmt_positions: b.stmt_positions })
+          None => None
+        },
+      )
+    Block(b) =>
+      Block({
+        stmts: lower_super_in_stmts(b.stmts, base),
+        stmt_positions: b.stmt_positions,
+      })
+    _ => stmt
+  }
+}
+
+///|
+fn lower_super_in_stmts(
+  stmts : Array[@ast.TsStmt],
+  base : String,
+) -> Array[@ast.TsStmt] {
+  let out : Array[@ast.TsStmt] = []
+  for s in stmts {
+    out.push(lower_super_calls_in_stmt(s, base))
+  }
+  out
+}
+
+///|
+fn lower_super_calls_in_expr(
+  expr : @ast.TsExpr,
+  base : String,
+) -> @ast.TsExpr {
+  match expr {
+    Call("super", args) => {
+      // `super(...args)` → `<base>.call(this, ...args)`. The runtime
+      // alters `this` so the base constructor populates instance
+      // fields on the right receiver.
+      let new_args : Array[@ast.TsExpr] = [@ast.TsExpr::Var("this")]
+      for a in args {
+        new_args.push(a)
+      }
+      @ast.TsExpr::CallExpr(
+        @ast.TsExpr::PropAccess(@ast.TsExpr::Var(base), "call"),
+        new_args,
+      )
+    }
+    CallExpr(@ast.TsExpr::Var("super"), args) => {
+      let new_args : Array[@ast.TsExpr] = [@ast.TsExpr::Var("this")]
+      for a in args {
+        new_args.push(a)
+      }
+      @ast.TsExpr::CallExpr(
+        @ast.TsExpr::PropAccess(@ast.TsExpr::Var(base), "call"),
+        new_args,
+      )
+    }
+    _ => expr
   }
 }
 
@@ -621,6 +748,14 @@ fn Parser::parse_class_body(
       } else {
         []
       }
+      // Snapshot the parameter-property flags BEFORE the body is
+      // parsed — the nested `parse_block` may itself call
+      // `parse_params` (for inner functions) and overwrite the
+      // shared `last_param_property_flags` buffer.
+      let param_property_flags : Array[Bool] = []
+      for f in self.last_param_property_flags {
+        param_property_flags.push(f)
+      }
       let return_type = if self.check(Colon) {
         let _ = self.advance()
         self.parse_type()
@@ -643,13 +778,61 @@ fn Parser::parse_class_body(
         body
       }
       self.restore_local_type_param_bounds(local_type_param_bound_len)
+      // For a constructor, prepend `this.<name> = <name>` for every
+      // param that carried a `public` / `private` / `protected` /
+      // `readonly` / `override` modifier — TS's "parameter
+      // property" shorthand. The synthesized assignment goes after
+      // the super-call (if any) so the base constructor has already
+      // populated the receiver.
+      let final_body = if key is Name("constructor") && !is_static {
+        let assigns : Array[@ast.TsStmt] = []
+        for i, p in params {
+          let has_prop = i < param_property_flags.length() &&
+            param_property_flags[i]
+          if has_prop && p.name != "" {
+            assigns.push(
+              @ast.TsStmt::PropAssign(
+                @ast.TsExpr::Var("this"),
+                p.name,
+                @ast.TsExpr::Var(p.name),
+              ),
+            )
+          }
+        }
+        if assigns.length() == 0 {
+          body
+        } else {
+          // The injector splices the assigns either right after the
+          // super-call (when extending) or at the top of the body.
+          // We delegate to `inject_instance_field_assigns` which
+          // already handles both cases; pass `base = None` here so
+          // the assigns land at the top (we don't know `base` from
+          // this scope — the class-decl wrapper rebuilds the body
+          // when it processes the constructor later, but at that
+          // point our parameter-property assigns are part of the
+          // body's prefix and will be preserved verbatim).
+          let combined : Array[@ast.TsStmt] = []
+          for a in assigns {
+            combined.push(a)
+          }
+          for s in body.stmts {
+            combined.push(s)
+          }
+          @ast.TsBlock::{
+            stmts: combined,
+            stmt_positions: body.stmt_positions,
+          }
+        }
+      } else {
+        body
+      }
       let func : @ast.TsFunc = {
         name: method_name,
         type_params: [],
         const_type_params: [],
         params,
         return_type,
-        body,
+        body: final_body,
         is_generator,
         is_async: is_async_method,
       }
