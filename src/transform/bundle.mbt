@@ -260,6 +260,13 @@ pub fn bundle_modules(
     Err(e) => return Err(e)
   }
   let order = topological_order(modules, entry)
+  // Synthesize import-alias decls (`const local = __export_default__N;`
+  // and similar) as the first stmts of each module's block. Without
+  // this the aliases would only exist at emit-time, invisible to
+  // tree-shake / inline / orphan-cleanup, and any side that depends
+  // on tracking the alias's reference would silently drop the
+  // backing binding.
+  synthesize_import_aliases(modules, order)
   // Resolve top-level identifier collisions across modules. When
   // two modules each declare `function helper(...)` at top level,
   // concatenating their stmts into one global scope produces
@@ -344,93 +351,10 @@ pub fn bundle_modules(
         None => ()
       }
     }
-    // Wire up internal-module imports: each module's `import { x } from
-    // "./y"` brings a local name `x` into scope, but after concatenation
-    // the dep's `x` is already declared at module-top — we just need an
-    // alias when the importer renamed it. For default imports
-    // (`import foo from "./y"`), the dep's default export lives as
-    // `__export_default__N`, so emit `const foo = __export_default__N;`.
-    for imp in m.import_decls {
-      if imp.type_only {
-        continue
-      }
-      let dep_path = match m.resolved_imports.get(imp.module_spec) {
-        Some(p) => p
-        None => continue
-      }
-      let dep = match modules.get(dep_path) {
-        Some(d) => d
-        None => continue
-      }
-      // Default import: `import foo from "./y"` → `const foo =
-      // <dep's default local>;`.
-      match imp.default_binding {
-        Some(local) => {
-          let mut dep_default_local : String? = None
-          for spec in dep.exports {
-            if spec.export_name == "default" {
-              dep_default_local = Some(spec.local_name)
-              break
-            }
-          }
-          match dep_default_local {
-            Some(dep_name) =>
-              if dep_name != local {
-                e.write("const ")
-                e.write(local)
-                e.write(" = ")
-                e.write(dep_name)
-                e.write(";")
-                e.nl()
-              }
-            None => ()
-          }
-        }
-        None => ()
-      }
-      // Named imports: `import { x as y } from "./y"` → `const y = x;`
-      // when the names differ. When they match, the binding is already
-      // in scope after the dep's stmts ran, so no alias is needed.
-      for nb in imp.named_bindings {
-        let imported = nb.0
-        let local = nb.1
-        if imported != local {
-          e.write("const ")
-          e.write(local)
-          e.write(" = ")
-          e.write(imported)
-          e.write(";")
-          e.nl()
-        }
-      }
-      // Namespace import: `import * as ns from "./y"` builds an
-      // object literal of every export. Emit as a synthesized
-      // `const ns = { x, y, … };` so subsequent `ns.x` accesses
-      // resolve correctly.
-      match imp.namespace_binding {
-        Some(local) => {
-          e.write("const ")
-          e.write(local)
-          e.write(" = {")
-          for j, spec in dep.exports {
-            if j > 0 {
-              e.write(",")
-              e.space()
-            }
-            if spec.local_name == spec.export_name {
-              e.write(spec.local_name)
-            } else {
-              e.write(spec.export_name)
-              e.write(": ")
-              e.write(spec.local_name)
-            }
-          }
-          e.write("};")
-          e.nl()
-        }
-        None => ()
-      }
-    }
+    // Import aliases are now synthesized into the module's block
+    // as the first stmts (see `synthesize_import_aliases`), so the
+    // emit loop just walks `m.block.stmts` and the aliases come
+    // out in the right order.
     for j, stmt in m.block.stmts {
       if opts.with_sourcemap && j < m.block.stmt_positions.length() {
         let src_pos = e.line_index.position(m.block.stmt_positions[j])
@@ -781,6 +705,323 @@ fn bundle_block_size(
     }
   }
   total
+}
+
+///|
+/// Resolve an exported name on a module to the local binding name
+/// in whichever module *actually* declares it. Walks re-export
+/// chains (`export { x as y } from "./z"`) through as many hops
+/// as needed. Returns `None` if the name isn't exported at all or
+/// the chain dead-ends at an unresolved external dep.
+fn resolve_exported_local(
+  modules : Map[String, ModuleNode],
+  module_path : String,
+  exported : String,
+) -> String? {
+  // Cycle guard — symmetric to the load-graph visiting set; a
+  // self-referencing re-export chain shouldn't recurse forever.
+  let visiting : Map[String, Bool] = {}
+  resolve_exported_local_with_visit(modules, module_path, exported, visiting)
+}
+
+///|
+fn resolve_exported_local_with_visit(
+  modules : Map[String, ModuleNode],
+  module_path : String,
+  exported : String,
+  visiting : Map[String, Bool],
+) -> String? {
+  if visiting.contains(module_path) {
+    return None
+  }
+  visiting[module_path] = true
+  let node = match modules.get(module_path) {
+    Some(n) => n
+    None => return None
+  }
+  for spec in node.exports {
+    if spec.export_name == exported {
+      return Some(spec.local_name)
+    }
+  }
+  for re in node.reexports {
+    if re.type_only {
+      continue
+    }
+    let dep_path = match node.resolved_imports.get(re.module_spec) {
+      Some(p) => p
+      None => continue
+    }
+    match re.kind {
+      Named(specs) =>
+        for s in specs {
+          let imported = s.0
+          let renamed = s.1
+          if renamed == exported {
+            return resolve_exported_local_with_visit(
+              modules, dep_path, imported, visiting,
+            )
+          }
+        }
+      All =>
+        // `export * from "./x"` — every export of `./x` becomes
+        // visible. Look up `exported` on the source.
+        match
+          resolve_exported_local_with_visit(
+            modules, dep_path, exported, visiting,
+          ) {
+          Some(name) => return Some(name)
+          None => ()
+        }
+      Namespace(_) => ()
+    }
+  }
+  None
+}
+
+///|
+/// Populate `out` with the (export_name, source_local_name) pairs
+/// reachable from `module_path` — used by namespace imports
+/// (`import * as ns from "./y"`) to know what to stuff into the
+/// synthesized object literal. Resolves re-export chains.
+fn collect_visible_exports(
+  modules : Map[String, ModuleNode],
+  module_path : String,
+  out : Map[String, String],
+) -> Unit {
+  let visiting : Map[String, Bool] = {}
+  collect_visible_exports_with_visit(modules, module_path, out, visiting)
+}
+
+///|
+fn collect_visible_exports_with_visit(
+  modules : Map[String, ModuleNode],
+  module_path : String,
+  out : Map[String, String],
+  visiting : Map[String, Bool],
+) -> Unit {
+  if visiting.contains(module_path) {
+    return
+  }
+  visiting[module_path] = true
+  let node = match modules.get(module_path) {
+    Some(n) => n
+    None => return
+  }
+  for spec in node.exports {
+    if !out.contains(spec.export_name) {
+      out[spec.export_name] = spec.local_name
+    }
+  }
+  for re in node.reexports {
+    if re.type_only {
+      continue
+    }
+    let dep_path = match node.resolved_imports.get(re.module_spec) {
+      Some(p) => p
+      None => continue
+    }
+    match re.kind {
+      Named(specs) =>
+        for s in specs {
+          let imported = s.0
+          let renamed = s.1
+          match
+            resolve_exported_local_with_visit(
+              modules, dep_path, imported, {},
+            ) {
+            Some(source_local) =>
+              if !out.contains(renamed) {
+                out[renamed] = source_local
+              }
+            None => ()
+          }
+        }
+      All =>
+        collect_visible_exports_with_visit(modules, dep_path, out, visiting)
+      Namespace(_) => ()
+    }
+  }
+}
+
+///|
+/// Prepend each module's block with the alias decls that wire up
+/// the importer's local names to the dep's exported bindings:
+///
+///   `import foo from "./y"`        → `const foo = __export_default__N;`
+///   `import { x as y } from "./y"` → `const y = x;`
+///   `import * as ns from "./y"`    → `const ns = { x: x, y: y, … };`
+///
+/// Without these decls in the AST, downstream passes
+/// (tree-shake / inline-immutable / orphan-cleanup) can't see the
+/// reference from the importer to the dep's bindings and would
+/// silently drop them.
+fn synthesize_import_aliases(
+  modules : Map[String, ModuleNode],
+  order : Array[String],
+) -> Unit {
+  for path in order {
+    let m = match modules.get(path) {
+      Some(n) => n
+      None => continue
+    }
+    let aliases : Array[@ast.TsStmt] = []
+    for imp in m.import_decls {
+      if imp.type_only {
+        continue
+      }
+      let dep_path = match m.resolved_imports.get(imp.module_spec) {
+        Some(p) => p
+        None => continue
+      }
+      let dep = match modules.get(dep_path) {
+        Some(d) => d
+        None => continue
+      }
+      // Default import alias — `import foo from "./y"` →
+      // `const foo = <dep's default local>;`. The default export
+      // local name was either declared directly in the dep
+      // (`export default …` → `__export_default__N`) or re-exported
+      // through a chain that the resolver follows.
+      match imp.default_binding {
+        Some(local) => {
+          match resolve_exported_local(modules, dep_path, "default") {
+            Some(dep_name) =>
+              if dep_name != local {
+                aliases.push(
+                  @ast.TsStmt::Const(
+                    @ast.TsBinding::Ident(local),
+                    @ast.TsType::Any,
+                    @ast.TsExpr::Var(dep_name),
+                  ),
+                )
+              }
+            None => ()
+          }
+        }
+        None => ()
+      }
+      // Named import alias — `import { x as y } from "./y"` →
+      // `const y = <whatever ./y exports as 'x'>`. Resolve through
+      // re-export chains so a facade's rename re-export
+      // (`export { internalName as publicName } from "./a"`)
+      // ends up emitting `const publicName = internalName;`.
+      for nb in imp.named_bindings {
+        let imported = nb.0
+        let local = nb.1
+        // Special case: `export * as ns from "./a"` — the source
+        // module exports the *name* `ns` as a freshly-built object
+        // wrapping every export of `./a`. Detect by looking at
+        // the dep's reexports.
+        let mut namespace_target : String? = None
+        for re in dep.reexports {
+          if re.type_only {
+            continue
+          }
+          match re.kind {
+            Namespace(n) =>
+              if n == imported && namespace_target is None {
+                namespace_target = Some(re.module_spec)
+              }
+            _ => ()
+          }
+        }
+        match namespace_target {
+          Some(spec) => {
+            let inner_dep_path = match dep.resolved_imports.get(spec) {
+              Some(p) => p
+              None => continue
+            }
+            let names : Map[String, String] = {}
+            collect_visible_exports(modules, inner_dep_path, names)
+            let entries : Array[(String, @ast.TsExpr)] = []
+            for kv in names {
+              entries.push((kv.0, @ast.TsExpr::Var(kv.1)))
+            }
+            aliases.push(
+              @ast.TsStmt::Const(
+                @ast.TsBinding::Ident(local),
+                @ast.TsType::Any,
+                @ast.TsExpr::ObjectLit(entries),
+              ),
+            )
+          }
+          None =>
+            match resolve_exported_local(modules, dep_path, imported) {
+              Some(dep_name) =>
+                if dep_name != local {
+                  aliases.push(
+                    @ast.TsStmt::Const(
+                      @ast.TsBinding::Ident(local),
+                      @ast.TsType::Any,
+                      @ast.TsExpr::Var(dep_name),
+                    ),
+                  )
+                }
+              // Couldn't resolve through re-exports — assume the
+              // dep's local matches the imported name and only
+              // emit an alias on rename.
+              None =>
+                if imported != local {
+                  aliases.push(
+                    @ast.TsStmt::Const(
+                      @ast.TsBinding::Ident(local),
+                      @ast.TsType::Any,
+                      @ast.TsExpr::Var(imported),
+                    ),
+                  )
+                }
+            }
+        }
+      }
+      // Namespace import: `const ns = { x: x, y: y, … };`. Names
+      // include both the dep's direct exports AND anything reachable
+      // via re-exports (so `import * as ns from "./facade"` gets the
+      // members `./facade` re-exports too).
+      match imp.namespace_binding {
+        Some(local) => {
+          let names : Map[String, String] = {}
+          collect_visible_exports(modules, dep_path, names)
+          let entries : Array[(String, @ast.TsExpr)] = []
+          for kv in names {
+            let export_name = kv.0
+            let source_local = kv.1
+            entries.push((export_name, @ast.TsExpr::Var(source_local)))
+          }
+          aliases.push(
+            @ast.TsStmt::Const(
+              @ast.TsBinding::Ident(local),
+              @ast.TsType::Any,
+              @ast.TsExpr::ObjectLit(entries),
+            ),
+          )
+        }
+        None => ()
+      }
+    }
+    if aliases.length() == 0 {
+      continue
+    }
+    let new_stmts : Array[@ast.TsStmt] = []
+    for a in aliases {
+      new_stmts.push(a)
+    }
+    for s in m.block.stmts {
+      new_stmts.push(s)
+    }
+    // Position array can't be aligned for synthesized prefix stmts;
+    // emit those without source-map markers.
+    let new_positions : Array[Int] = []
+    if m.block.stmt_positions.length() == m.block.stmts.length() {
+      for _ in aliases {
+        new_positions.push(0)
+      }
+      for p in m.block.stmt_positions {
+        new_positions.push(p)
+      }
+    }
+    m.block = { stmts: new_stmts, stmt_positions: new_positions }
+  }
 }
 
 ///|

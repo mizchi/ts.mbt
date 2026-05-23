@@ -255,6 +255,14 @@ fn collect_refs_in_binding(
     }
     Object(ob) =>
       for p in ob.props {
+        // Computed keys (`{ [k]: local }`) reference `k` from the
+        // surrounding scope — the reference walker has to follow
+        // through `key_expr` or tree-shake silently drops the
+        // computed-key binding.
+        match p.key_expr {
+          Some(k) => collect_refs_in_expr(k, out)
+          None => ()
+        }
         collect_refs_in_binding(p.binding, out)
         match p.default {
           Some(d) => collect_refs_in_expr(d, out)

@@ -307,7 +307,18 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write(";")
     }
     Expr(expr) => {
-      emit_expr(e, expr, 0)
+      // Expressions that *start* with `function` / `{` (object
+      // literal) / `class` are ambiguous at statement position — JS
+      // would parse them as a function declaration / block / class
+      // declaration. Wrap the whole expression in `(...)` so the
+      // parser commits to the expression-statement interpretation.
+      if expression_starts_ambiguously(expr) {
+        e.write("(")
+        emit_expr(e, expr, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, expr, 0)
+      }
       e.write(";")
     }
     Empty => e.write(";")
@@ -1178,6 +1189,35 @@ fn emit_jsx_child(e : Emitter, child : @ast.TsExpr) -> Unit {
 }
 
 ///|
+///|
+/// `true` when the expression's left-most token would conflict with
+/// the statement-level grammar — `function`, `{` (object literal),
+/// `class`, or an `async` function expression. The caller wraps the
+/// expression in parens so the parser commits to expression-
+/// statement form. Walks down through call / property-access /
+/// argument chains so a `(function(){…}).call(this)` stmt also
+/// gets the leading `(`.
+fn expression_starts_ambiguously(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    FuncExpr(_) => true
+    ArrowFunc(_, _, _, _) => false
+    // ^ arrow fns at stmt-start are unambiguous since the `(` is
+    // already there from the param list.
+    ObjectLit(_) => true
+    CallExpr(callee, _) => expression_starts_ambiguously(callee)
+    NewExpr(callee, _) => expression_starts_ambiguously(callee)
+    MethodCall(recv, _, _) => expression_starts_ambiguously(recv)
+    PropAccess(recv, _) => expression_starts_ambiguously(recv)
+    IndexAccess(recv, _) => expression_starts_ambiguously(recv)
+    BinOp(_, l, _) | Seq(l, _) => expression_starts_ambiguously(l)
+    Cond(c, _, _) => expression_starts_ambiguously(c)
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
+      expression_starts_ambiguously(inner)
+    AssignExpr(_, _) | CompoundAssignExpr(_, _, _) => false
+    _ => false
+  }
+}
+
 ///|
 /// `true` when `name` can be emitted bare as an object-literal key —
 /// either a valid JS identifier or a plain numeric literal (e.g.
