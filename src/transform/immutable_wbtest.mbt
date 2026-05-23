@@ -219,6 +219,112 @@ test "immutable cleanup: const with surviving references is NOT dropped" {
 }
 
 ///|
+test "as-const: array literal under `as const` becomes immutable" {
+  // The parser strips `as const`, so the AST shape is just a plain
+  // `const TAGS = ArrayLit([...])` — same as the bare form. The
+  // analyzer picks both up.
+  let src =
+    #|const TAGS = ["alpha", "beta", "gamma"] as const;
+    #|console.log(TAGS[0], TAGS[2]);
+  match inline_one_src(src) {
+    Ok(js) => {
+      assert_true(js.contains("\"alpha\""))
+      assert_true(js.contains("\"gamma\""))
+      // The original index accesses must be gone.
+      assert_false(js.contains("TAGS[0]"))
+      assert_false(js.contains("TAGS[2]"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "as-const: array `.length` is foldable" {
+  // `length` was synthesized into the report at array length.
+  let src =
+    #|const TAGS = ["a", "b", "c", "d"];
+    #|console.log(TAGS.length);
+  match inline_one_src(src) {
+    Ok(js) => {
+      assert_true(js.contains("4"))
+      assert_false(js.contains("TAGS.length"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "as-const: out-of-bounds index leaves the access alone" {
+  // No entry for `"10"` in the report — fall back to original AST.
+  let src =
+    #|const TAGS = ["a"];
+    #|console.log(TAGS[10]);
+  match inline_one_src(src) {
+    Ok(js) => assert_true(js.contains("TAGS[10]"))
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "as-const: write through `TAGS[0] = …` disqualifies" {
+  let src =
+    #|const TAGS = ["a", "b"];
+    #|TAGS[0] = "z";
+    #|console.log(TAGS[0]);
+  let r = analyze_one_src(src)
+  assert_false(r.is_immutable("TAGS"))
+}
+
+///|
+test "as-const: array with non-literal elements is partially inlineable" {
+  // `TAGS[0]` is a function call, so it's not a simple-literal value
+  // → omitted from the inline table. `TAGS[1]` is "b" and gets inlined.
+  // The const itself stays alive because `TAGS[0]` still references it.
+  let src =
+    #|const TAGS = [load(), "b"];
+    #|console.log(TAGS[0], TAGS[1]);
+  match inline_one_src(src) {
+    Ok(js) => {
+      // "b" got inlined.
+      assert_true(js.contains("\"b\""))
+      // `TAGS[0]` survives because the value isn't a primitive.
+      assert_true(js.contains("TAGS[0]"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "as-const: full pipeline drops orphan array decl too" {
+  let src =
+    #|const ENV = ["production", "default"] as const;
+    #|if (ENV[0] === "development") {
+    #|  expensive();
+    #|}
+    #|console.log("done", ENV[1]);
+  let block = match (try? @parser.parse_block_from_source(src)) {
+    Ok(b) => b
+    Err(e) => fail("parse: \{e}")
+  }
+  let report = analyze_immutable_consts([block])
+  assert_true(report.is_immutable("ENV"))
+  let inlined = inline_immutable_property_reads([block], report)
+  let cleaned = drop_orphan_immutable_decls(inlined, report)
+  let folded = fold_constants_in_blocks(cleaned)
+  let e = Emitter::new()
+  for b in folded {
+    for s in b.stmts {
+      emit_stmt(e, s)
+      e.nl()
+    }
+  }
+  let js = e.to_string()
+  assert_false(js.contains("expensive"))
+  assert_false(js.contains("const ENV"))
+  assert_true(js.contains("\"default\""))
+}
+
+///|
 test "immutable inline: cross-block analysis ties modules together" {
   // The `cfg` binding lives in one block, the read in another. Both
   // blocks need to be in scope of `analyze_immutable_consts` for

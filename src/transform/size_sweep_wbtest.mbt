@@ -93,11 +93,12 @@ fn fixture_files() -> Map[String, String] {
     #|
   files["entry.ts"] =
     #|import { TypedEmitter } from "./emitter";
+    #|const KNOWN_EVENTS = ["tick", "tock", "boom"] as const;
     #|export const bus = new TypedEmitter<{ value: number }>({ maxListeners: 5 });
-    #|bus.on("tick", (payload) => {
-    #|  console.log("got tick", payload.value);
+    #|bus.on(KNOWN_EVENTS[0], (payload) => {
+    #|  console.log("got", KNOWN_EVENTS[0], payload.value);
     #|});
-    #|bus.emit("tick", { value: 42 });
+    #|bus.emit(KNOWN_EVENTS[0], { value: 42 });
     #|
   files
 }

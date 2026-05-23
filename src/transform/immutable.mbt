@@ -1,12 +1,20 @@
 // Immutability analysis + inline expansion.
 //
-// `analyze_immutable_consts(blocks)` finds top-level `const X = { … }`
-// bindings whose value is an object literal AND whose name `X` is
-// referenced *only* as the receiver of a property read in the whole
-// bundle — never reassigned, never passed as an argument, never the
-// target of `Object.assign` / `delete` / etc. Under those conditions
-// every `X.foo` read is provably equivalent to the literal value
-// the object was constructed with.
+// `analyze_immutable_consts(blocks)` finds top-level `const X = …`
+// bindings whose value is an object or array literal AND whose name
+// `X` is referenced *only* as the receiver of a property / index
+// read in the whole bundle — never reassigned, never passed as an
+// argument, never the target of `Object.assign` / `delete` / etc.
+// Under those conditions every `X.foo` (object) or `X[i]` (array)
+// read is provably equivalent to the literal value the object was
+// constructed with.
+//
+// Array literals naturally cover the `[1, 2, 3] as const` pattern:
+// the parser strips the `as const` annotation, so a `const TAGS =
+// [...] as const` decl lands here as a plain `Const(_, _,
+// ArrayLit(...))`. For arrays the report exposes one entry per
+// index (`"0"`, `"1"`, …) plus a synthetic `"length"` so the inline
+// pass can resolve `TAGS[0]` and `TAGS.length`.
 //
 // `inline_immutable_property_reads(blocks, report)` uses the report
 // to substitute `PropAccess(Var(X), foo)` with the property's
@@ -70,7 +78,10 @@ pub fn ImmutabilityReport::lookup(
 pub fn analyze_immutable_consts(
   blocks : Array[@ast.TsBlock],
 ) -> ImmutabilityReport {
-  // Pass 1: find every top-level `const X = ObjectLit(…)` candidate.
+  // Pass 1: find every top-level `const X = ObjectLit(…)` or
+  // `const X = ArrayLit(…)` candidate. Arrays land here because
+  // the parser strips the `as const` annotation; both shapes
+  // contribute the same disqualifier checks.
   let candidates : Map[String, Array[(String, @ast.TsExpr)]] = {}
   for b in blocks {
     for s in b.stmts {
@@ -79,9 +90,20 @@ pub fn analyze_immutable_consts(
           if !candidates.contains(name) {
             candidates[name] = entries
           } else {
-            // Duplicate top-level name (different modules using the
-            // same identifier) — give up on this name; we can't know
-            // which one wins after concat.
+            let _ = candidates.remove(name)
+          }
+        Const(@ast.TsBinding::Ident(name), _, ArrayLit(items)) =>
+          if !candidates.contains(name) {
+            // Synthesize ObjectLit-shaped entries: each index becomes
+            // a string key (`"0"`, `"1"`, …) plus a `"length"` slot
+            // so the inline pass can fold `X.length` too.
+            let entries : Array[(String, @ast.TsExpr)] = []
+            for i, it in items {
+              entries.push((i.to_string(), it))
+            }
+            entries.push(("length", IntLit(items.length())))
+            candidates[name] = entries
+          } else {
             let _ = candidates.remove(name)
           }
         _ => ()
@@ -482,7 +504,8 @@ pub fn drop_orphan_immutable_decls(
     let has_positions = b.stmt_positions.length() == b.stmts.length()
     for i, s in b.stmts {
       let drop = match s {
-        Const(@ast.TsBinding::Ident(name), _, ObjectLit(_)) =>
+        Const(@ast.TsBinding::Ident(name), _, ObjectLit(_))
+        | Const(@ast.TsBinding::Ident(name), _, ArrayLit(_)) =>
           report.is_immutable(name) && !referenced.contains(name)
         _ => false
       }
@@ -623,6 +646,15 @@ fn inline_expr(
       }
     IndexAccess(Var(name), StringLit(prop)) =>
       match report.lookup(name, prop) {
+        Some(value) => value
+        None => expr
+      }
+    // Numeric index into an immutable array — synthesized keys
+    // `"0"` / `"1"` / … on the report side. `IntLit(n)` is the
+    // common case, `NumberLit` shows up for floats which we just
+    // don't fold.
+    IndexAccess(Var(name), IntLit(n)) =>
+      match report.lookup(name, n.to_string()) {
         Some(value) => value
         None => expr
       }
