@@ -2706,6 +2706,16 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         let _ = self.advance()
         Var("debugger")
       }
+    // `declare` is a soft keyword — valid as a regular identifier in
+    // expression position (TS's own harness uses it that way).
+    Declare =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("declare")
+      } else {
+        let _ = self.advance()
+        Var("declare")
+      }
     Str(s) => {
       let _ = self.advance()
       StringLit(s)

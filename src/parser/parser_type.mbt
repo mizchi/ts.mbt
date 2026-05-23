@@ -128,21 +128,24 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
     let is_rest = self.match_ellipsis()
     // Labels like `[name: T]` strip the label tokens; `[name?: T]` is
     // additionally an optional element (equivalent to a trailing `?`
-    // on the type itself).
-    let label_optional = match self.peek().kind {
-      Ident(_) if self.peek_at(1).kind == Colon => {
-        let _ = self.advance()
-        let _ = self.expect(Colon)
-        false
-      }
-      Ident(_) if self.peek_at(1).kind == Question &&
-        self.peek_at(2).kind == Colon => {
-        let _ = self.advance()
-        let _ = self.advance()
-        let _ = self.expect(Colon)
-        true
-      }
-      _ => false
+    // on the type itself). TS allows reserved keywords as label
+    // names (e.g. `[declare: AmdModuleDeclaration]`), so accept any
+    // identifier-shaped token via `is_tuple_label_token` rather than
+    // a strict `Ident(_)` match.
+    let label_optional = if self.is_tuple_label_token(0) &&
+      self.peek_at(1).kind == Colon {
+      let _ = self.advance()
+      let _ = self.expect(Colon)
+      false
+    } else if self.is_tuple_label_token(0) &&
+      self.peek_at(1).kind == Question &&
+      self.peek_at(2).kind == Colon {
+      let _ = self.advance()
+      let _ = self.advance()
+      let _ = self.expect(Colon)
+      true
+    } else {
+      false
     }
     let item_type = self.parse_type()
     let trailing_optional = self.match_(Question)
@@ -464,6 +467,58 @@ fn Parser::try_parse_simple_type_args(self : Parser) -> Array[@ast.TsType]? {
       self.pending_gt = 0
       None
     }
+  }
+}
+
+///|
+/// True when the token at `offset` is an identifier or a reserved
+/// keyword that's still valid as a labeled-tuple element name. TS
+/// permits any `IdentifierName` here, which includes most keywords.
+fn Parser::is_tuple_label_token(self : Parser, offset : Int) -> Bool {
+  match self.peek_at(offset).kind {
+    Ident(_)
+    | Type
+    | Declare
+    | Function
+    | Class
+    | New
+    | Import
+    | Export
+    | From
+    | As
+    | In
+    | Of
+    | Extends
+    | Typeof
+    | Instanceof
+    | Let
+    | Const
+    | Var
+    | If
+    | Else
+    | Return
+    | Throw
+    | Try
+    | Catch
+    | Finally
+    | For
+    | While
+    | Do
+    | Switch
+    | Case
+    | Default
+    | Break
+    | Continue
+    | With
+    | Debugger
+    | StringType
+    | NumberType
+    | BooleanType
+    | IntType
+    | VoidType
+    | Interface
+    | Null => true
+    _ => false
   }
 }
 

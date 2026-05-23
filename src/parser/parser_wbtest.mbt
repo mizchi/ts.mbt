@@ -6945,3 +6945,32 @@ test "parser: parse `export await using` declaration at module level" {
     #|export await using x = null;
   let _ = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
 }
+
+///|
+test "parser: `declare` accepted as soft keyword in value positions" {
+  // TypeScript's own harness uses `declare` as a variable name,
+  // arrow-param, and labeled-tuple element. The parser accepts all
+  // those positions.
+  let cases = [
+    "const x = declare;",
+    "const f = (declare) => declare;",
+    "const [declare] = args;",
+    "type T = [declare: AmdModuleDeclaration];",
+    #|interface F { register(declare: SystemModuleRegisterCallback): void; }
+    ,
+  ]
+  for src in cases {
+    let _ = Parser::from_source(src).parse_module() catch {
+      e => fail("\{src} : \{e}")
+    }
+  }
+}
+
+///|
+test "parser: boolean-literal object destructure keys" {
+  // `const { true: a, false: b } = source` — `true` / `false` are
+  // valid object destructure keys (used in TS's own compiler).
+  let src =
+    #|const { true: metadata, false: decorators } = source;
+  let _ = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
+}

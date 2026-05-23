@@ -717,3 +717,178 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
     fail("\{check_crashes.length()} checker crashes on conformance corpus")
   }
 }
+
+///|
+async test "parser: smoke-run against the entire TypeScript repo source" {
+  // Broader sweep than `typescript/src/compiler` — walks the full
+  // `typescript/src` tree (compiler + services + server + harness +
+  // tsserver + jsTyping + ...). About 379k lines across ~250 files.
+  // Parser must not crash on any of them and we record per-directory
+  // parse-rate so regressions are visible.
+  let root = "typescript/src"
+  let kind = @fs.kind(root, follow_symlink=false) catch {
+    _ => @fs.FileKind::Unknown
+  }
+  if !(kind is @fs.FileKind::Directory) {
+    println("skip: \{root} not found")
+    return
+  }
+  let files = collect_ts_source_files_recursive(root)
+  let mut total = 0
+  let mut parsed = 0
+  let mut checked = 0
+  let per_dir : Map[String, (Int, Int)] = {}
+  let parse_failures : Array[String] = []
+  let check_crashes : Array[String] = []
+  for path in files {
+    if path.has_suffix(".d.ts") {
+      continue
+    }
+    total += 1
+    let content = @fs.read_file(path).text() catch { _ => continue }
+    let bucket = match path.find("/") {
+      Some(_) => {
+        // path looks like `typescript/src/<bucket>/...`. Pull the
+        // third path segment.
+        let parts = path.split("/")
+        let arr : Array[StringView] = []
+        for p in parts {
+          arr.push(p)
+        }
+        if arr.length() >= 3 {
+          arr[2].to_string()
+        } else {
+          "(other)"
+        }
+      }
+      None => "(root)"
+    }
+    let prev = per_dir.get(bucket).or((0, 0))
+    let module_ = match
+      (try? Parser::from_source_with_jsx(content, false).parse_module()) {
+      Ok(m) => {
+        parsed += 1
+        per_dir[bucket] = (prev.0 + 1, prev.1 + 1)
+        m
+      }
+      Err(err) => {
+        parse_failures.push(path + ": \{err}")
+        per_dir[bucket] = (prev.0 + 1, prev.1)
+        continue
+      }
+    }
+    match (try? @checker.check_module_function_bodies(module_)) {
+      Ok(_) => checked += 1
+      Err(err) => check_crashes.push(path + ": \{err}")
+    }
+  }
+  if total == 0 {
+    println("skip: no .ts sources found under \{root}")
+    return
+  }
+  println(
+    "TypeScript repo source: total=\{total} parsed=\{parsed} checked=\{checked}",
+  )
+  let buckets : Array[String] = []
+  for entry in per_dir {
+    let (k, _) = entry
+    buckets.push(k)
+  }
+  buckets.sort()
+  for bucket in buckets {
+    let (t, p) = per_dir.get(bucket).or((0, 0))
+    println("  \{bucket}: \{p}/\{t}")
+  }
+  if check_crashes.length() > 0 {
+    for c in check_crashes {
+      println("CHECK CRASH " + c)
+    }
+    fail("\{check_crashes.length()} checker crashes on repo source")
+  }
+  // 80 % is the floor — the TS source intentionally uses some
+  // very-recent syntax (decorators with metadata, some experimental
+  // grammar) that lags a TS minor we don't yet handle.
+  if parse_failures.length() <= 16 {
+    for f in parse_failures {
+      println("PARSE FAIL " + f)
+    }
+  }
+  if parsed * 100 < total * 80 {
+    fail("repo-source parse rate below 80 %: \{parsed}/\{total}")
+  }
+}
+
+///|
+async test "parser: smoke-run against the TypeScript compiler source" {
+  // The TypeScript compiler itself (`typescript/src/compiler/*.ts`)
+  // is a big single-file-per-module surface — ~145k lines total
+  // across 38 files. Running it through our parser is a higher-bar
+  // smoke than the conformance corpus, since the compiler source is
+  // intentionally exercising every TS feature.
+  //
+  // We also run the expression-level checker on every successfully
+  // parsed module so the smoke covers both the parser *and* the
+  // checker against the same real-world corpus. The checker must
+  // never crash — issue counts are not asserted.
+  let dir = "typescript/src/compiler"
+  let kind = @fs.kind(dir, follow_symlink=false) catch {
+    _ => @fs.FileKind::Unknown
+  }
+  if !(kind is @fs.FileKind::Directory) {
+    println("skip: \{dir} not found")
+    return
+  }
+  let entries = @fs.readdir(
+    dir,
+    include_hidden=false,
+    include_special=false,
+    sort=true,
+  ) catch {
+    _ => []
+  }
+  let mut total = 0
+  let mut parsed = 0
+  let mut checked = 0
+  let parse_failures : Array[String] = []
+  let check_crashes : Array[String] = []
+  for name in entries {
+    if !name.has_suffix(".ts") || name.has_suffix(".d.ts") {
+      continue
+    }
+    total += 1
+    let path = dir + "/" + name
+    let content = @fs.read_file(path).text() catch { _ => continue }
+    let module_ = match
+      (try? Parser::from_source_with_jsx(content, false).parse_module()) {
+      Ok(m) => {
+        parsed += 1
+        m
+      }
+      Err(err) => {
+        parse_failures.push(name + ": \{err}")
+        continue
+      }
+    }
+    match (try? @checker.check_module_function_bodies(module_)) {
+      Ok(_) => checked += 1
+      Err(err) => check_crashes.push(name + ": \{err}")
+    }
+  }
+  println(
+    "TypeScript compiler source: total=\{total} parsed=\{parsed} checked=\{checked}",
+  )
+  if parse_failures.length() > 0 && parse_failures.length() <= 8 {
+    for f in parse_failures {
+      println("PARSE FAIL " + f)
+    }
+  }
+  if check_crashes.length() > 0 {
+    for c in check_crashes {
+      println("CHECK CRASH " + c)
+    }
+    fail("\{check_crashes.length()} checker crashes on compiler source")
+  }
+  if total > 0 && parsed * 100 < total * 50 {
+    fail("compiler-source parse rate below 50 %: \{parsed}/\{total}")
+  }
+}
