@@ -234,7 +234,11 @@ pub fn bundle_modules(
   // of the bundle so the consumer's loader / browser handles them.
   let external_imports : Array[@ast.TsImportDecl] = []
   let external_seen : Map[String, Bool] = {}
-  let need_decls = opts.auto_reserve && opts.mangle is Some(_)
+  // `auto_reserve` and the type-aware `inline_immutable` relaxation
+  // (passing a const to a `ReadonlyArray<T>` / `Readonly<T>`
+  // parameter) both require the second parse for declaration tables.
+  let need_decls = (opts.auto_reserve && opts.mangle is Some(_)) ||
+    opts.inline_immutable
   match
     load_module_graph(
       files, entry, modules, external_imports, external_seen, need_decls,
@@ -246,11 +250,26 @@ pub fn bundle_modules(
   if opts.tree_shake {
     tree_shake_bundle(modules, entry)
   }
-  if opts.inline_immutable {
-    inline_immutable_bundle(modules, order)
-  }
-  if opts.fold_constants {
-    fold_constants_bundle(modules, order)
+  // Inline + fold form a natural fixed point: each fold round can
+  // create new constant subtrees that the next inline / fold can
+  // simplify further. Iterate until the size stops changing, with
+  // a cap so a pathological case can't loop forever.
+  if opts.inline_immutable || opts.fold_constants {
+    let max_rounds = 4
+    let mut prev_size = -1
+    for _ in 0..<max_rounds {
+      if opts.inline_immutable {
+        inline_immutable_bundle(modules, order)
+      }
+      if opts.fold_constants {
+        fold_constants_bundle(modules, order)
+      }
+      let size = bundle_block_size(modules, order)
+      if size == prev_size {
+        break
+      }
+      prev_size = size
+    }
   }
   if opts.drop_unused_methods {
     drop_unused_methods_bundle(modules, order, opts.mangle)
@@ -537,6 +556,26 @@ fn compute_auto_reserve(
 }
 
 ///|
+/// Total number of top-level stmts across every module's block —
+/// the cheap proxy the fixed-point loop uses to detect that
+/// inline / fold rounds have converged. Subtree depth and per-stmt
+/// shape don't matter; once the stmt count stops dropping there's
+/// no more dead branch to eliminate.
+fn bundle_block_size(
+  modules : Map[String, ModuleNode],
+  order : Array[String],
+) -> Int {
+  let mut total = 0
+  for path in order {
+    match modules.get(path) {
+      Some(n) => total = total + n.block.stmts.length()
+      None => ()
+    }
+  }
+  total
+}
+
+///|
 /// Run the immutability analysis across every loaded module, inline
 /// primitive property reads, then drop any source `const` decl
 /// whose remaining references are zero. The order matters: inlining
@@ -547,16 +586,28 @@ fn inline_immutable_bundle(
 ) -> Unit {
   let blocks : Array[@ast.TsBlock] = []
   let paths : Array[String] = []
+  let funcs : Array[@ast.TsFunc] = []
   for path in order {
     match modules.get(path) {
       Some(n) => {
         blocks.push(n.block)
         paths.push(path)
+        // Gather function signatures from each module's declaration
+        // tables (populated when `auto_reserve` is on). The analyzer
+        // uses them to relax disqualification when a candidate is
+        // passed to a `ReadonlyArray<T>` / `Readonly<T>` parameter.
+        match n.module_decls {
+          Some(m) =>
+            for f in m.funcs {
+              funcs.push(f)
+            }
+          None => ()
+        }
       }
       None => ()
     }
   }
-  let report = analyze_immutable_consts(blocks)
+  let report = analyze_immutable_consts_with_sigs(blocks, funcs)
   if report.immutable_objects.size() == 0 {
     return
   }

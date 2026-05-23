@@ -35,18 +35,21 @@ fn fixture_files() -> Map[String, String] {
     #|
   files["utils.ts"] =
     #|const limits = { minListeners: 1, maxListeners: 1000, defaultListeners: 10 };
-    #|const env = { mode: "production", verbose: false };
+    #|const env = { mode: "production", build: { verbose: false, version: "1.0.0" } };
     #|export function clampMaxListeners(requested: number): number {
     #|  if (requested < limits.minListeners) return limits.minListeners;
     #|  if (requested > limits.maxListeners) return limits.maxListeners;
     #|  return requested;
     #|}
+    #|export function logEvents(events: ReadonlyArray<string>): void {
+    #|  for (const e of events) console.log(e);
+    #|}
     #|export function defaultErrorHandler(error: Error): void {
     #|  if (env.mode === "development") {
     #|    console.error("[emitter:dev]", error.message, error.stack);
     #|  }
-    #|  if (env.verbose) {
-    #|    console.error("[emitter:verbose]", error);
+    #|  if (env.build.verbose) {
+    #|    console.error("[emitter:verbose:" + env.build.version + "]", error);
     #|  }
     #|  console.error("[emitter]", error.message);
     #|}

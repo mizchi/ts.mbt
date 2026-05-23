@@ -59,11 +59,15 @@ fn Parser::consume_trailing_assertions_wrap(
       Some(true) => {
         had = true
         // `as const` is a const assertion — it freezes the operand's
-        // inferred type but leaves the runtime value untouched. Downstream
-        // passes (const-value collection, value lowering) expect the raw
-        // expression, so do not wrap with `As(...)` in this case.
+        // inferred type but leaves the runtime value untouched. We
+        // wrap it with `As(operand, ConstAssertion)` so the transform
+        // layer's immutability analysis can read the user's intent.
+        // The checker treats `As(_, ConstAssertion)` as transparent
+        // (the operand's type flows through), and emit strips every
+        // `As(_, _)` shape, so the runtime emit is unchanged.
         if self.check(Const) {
           let _ = self.advance()
+          wrapped = @ast.TsExpr::As(wrapped, @ast.TsType::ConstAssertion)
         } else {
           let ty = self.parse_type()
           wrapped = @ast.TsExpr::As(wrapped, ty)

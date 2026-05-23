@@ -3338,6 +3338,8 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     Constructor(_, ret, _) =>
       "CtorOf" + utility_record_type_suffix(ret)
     UniqueSymbol(_) => "Symbol"
+    // `as const` marker — transparent for naming purposes.
+    ConstAssertion => "Const"
   }
 }
 

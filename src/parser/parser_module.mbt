@@ -1267,7 +1267,11 @@ fn collect_static_const_exprs_from_binding(
   const_values : Map[String, @ast.TsExpr],
 ) -> Unit {
   match binding {
-    @ast.TsBinding::Ident(name) => const_values[name] = init
+    @ast.TsBinding::Ident(name) =>
+      // Peel `As(inner, ConstAssertion)` so bridge / value-resolver
+      // passes that look at object / array literal shapes don't
+      // see a wrapping introduced purely as an immutability signal.
+      const_values[name] = @ast.peel_const_assertion(init)
     @ast.TsBinding::Array(arr_binding) => {
       for i, item in arr_binding.items {
         match item {

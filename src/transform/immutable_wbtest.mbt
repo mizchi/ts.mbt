@@ -72,16 +72,18 @@ test "immutable: `cfg.method()` call disqualifies (might mutate)" {
 }
 
 ///|
-test "immutable: nested-object property is omitted from the inline table" {
-  // The outer object can still be immutable, but `cfg.nested` won't
-  // be a candidate for inlining (the value isn't a primitive).
+test "immutable: nested-object property stays in the table for drilling" {
+  // The outer object is immutable. `cfg.nested` is now recorded
+  // on the report so multi-level access (`cfg.nested.foo`) can
+  // resolve through it; the inline pass guards on
+  // `is_simple_literal` when deciding whether to substitute.
   let src =
     #|const cfg = { mode: "prod", nested: { foo: 1 } };
     #|console.log(cfg.mode);
   let r = analyze_one_src(src)
   assert_true(r.is_immutable("cfg"))
   assert_true(r.lookup("cfg", "mode") is Some(_))
-  assert_true(r.lookup("cfg", "nested") is None)
+  assert_true(r.lookup("cfg", "nested") is Some(_))
 }
 
 ///|
@@ -291,6 +293,229 @@ test "as-const: array with non-literal elements is partially inlineable" {
       assert_true(js.contains("TAGS[0]"))
     }
     Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "function-local: const inside an arrow body gets analyzed and inlined" {
+  // `mode` is local to `pick`, never escapes, only read via property.
+  // The inline pass substitutes "prod" into the return expr.
+  let src =
+    #|const pick = () => {
+    #|  const cfg = { mode: "prod" };
+    #|  return cfg.mode;
+    #|};
+    #|console.log(pick());
+  match inline_one_src(src) {
+    Ok(js) => {
+      // `"prod"` appears in the inlined return — the const itself
+      // may stay because the orphan-cleanup only runs top-level.
+      assert_true(js.contains("\"prod\""))
+      assert_false(js.contains("cfg.mode"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "function-local: const inside a function declaration body" {
+  let src =
+    #|function compute() {
+    #|  const limits = { min: 1, max: 100 };
+    #|  if (limits.max > limits.min) {
+    #|    return limits.max;
+    #|  }
+    #|  return limits.min;
+    #|}
+    #|console.log(compute());
+  match inline_one_src(src) {
+    Ok(js) => {
+      // All three `limits.X` accesses substituted with their literal.
+      assert_false(js.contains("limits.max"))
+      assert_false(js.contains("limits.min"))
+      // The literal values appear in the body.
+      assert_true(js.contains("100"))
+      assert_true(js.contains("1"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "nested const inline: `cfg.db.host` resolves through two layers" {
+  let src =
+    #|const cfg = { db: { host: "localhost", port: 5432 } };
+    #|console.log(cfg.db.host, cfg.db.port);
+  match inline_one_src(src) {
+    Ok(js) => {
+      assert_true(js.contains("\"localhost\""))
+      assert_true(js.contains("5432"))
+      // Both nested accesses must be gone.
+      assert_false(js.contains("cfg.db.host"))
+      assert_false(js.contains("cfg.db.port"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "nested const inline: array inside object — `cfg.tags[1]`" {
+  let src =
+    #|const cfg = { tags: ["alpha", "beta", "gamma"] };
+    #|console.log(cfg.tags[1]);
+  match inline_one_src(src) {
+    Ok(js) => {
+      assert_true(js.contains("\"beta\""))
+      assert_false(js.contains("cfg.tags["))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "nested const inline: `cfg.tags.length` resolves" {
+  let src =
+    #|const cfg = { tags: ["a", "b", "c", "d"] };
+    #|console.log(cfg.tags.length);
+  match inline_one_src(src) {
+    Ok(js) => {
+      assert_true(js.contains("4"))
+      assert_false(js.contains("cfg.tags.length"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "fixpoint: nested const + branch elim resolves multi-step" {
+  // After one inline round, the comparison still has the runtime
+  // `cfg.mode === "dev"`. After fold, the if collapses. After a
+  // second inline round (now via the bundle fixed-point loop) the
+  // nested `outer.inner.value` resolves all the way to the literal,
+  // and a follow-up fold uses that literal in the branch test.
+  let files : Map[String, String] = {}
+  files["entry.ts"] =
+    #|const outer = { inner: { value: 42 } };
+    #|const cfg = { mode: "prod" };
+    #|if (cfg.mode === "dev") {
+    #|  console.log("dev");
+    #|} else {
+    #|  console.log(outer.inner.value);
+    #|}
+    #|
+  match
+    bundle_modules(files, "entry.ts", {
+      ..BundleOptions::default(),
+      tree_shake: true,
+      inline_immutable: true,
+      fold_constants: true,
+    }) {
+    Ok(out) => {
+      // `cfg.mode === "dev"` folded to `false` → if collapsed →
+      // else branch survives → `outer.inner.value` resolved to `42`.
+      assert_true(out.js.contains("42"))
+      // The dev branch is dropped entirely.
+      assert_false(out.js.contains("\"dev\""))
+      // Source consts are orphan-cleaned.
+      assert_false(out.js.contains("const cfg"))
+      assert_false(out.js.contains("const outer"))
+    }
+    Err(e) => fail("bundle: \{e}")
+  }
+}
+
+///|
+test "readonly: passing const to `ReadonlyArray<T>` param doesn't disqualify" {
+  // Without the signature, passing `TAGS` to `consume` would
+  // disqualify it (escape). With the `ReadonlyArray<T>` annotation
+  // the analyzer trusts the function's promise.
+  let src =
+    #|const TAGS = ["alpha", "beta"] as const;
+    #|function consume(items: ReadonlyArray<string>): number { return items.length; }
+    #|consume(TAGS);
+    #|console.log(TAGS[0]);
+  let parser = @parser.Parser::from_source(src)
+  let block = match (try? parser.parse_module_block()) {
+    Ok(mb) => mb.block
+    Err(e) => fail("parse block: \{e}")
+  }
+  let parser2 = @parser.Parser::from_source(src)
+  let module_ = match (try? parser2.parse_module()) {
+    Ok(m) => m
+    Err(e) => fail("parse module: \{e}")
+  }
+  // Without sigs: TAGS gets disqualified because of the `consume(TAGS)` call.
+  let r_no_sigs = analyze_immutable_consts([block])
+  assert_false(r_no_sigs.is_immutable("TAGS"))
+  // With sigs: the analyzer reads `consume`'s `ReadonlyArray<string>`
+  // annotation and trusts it.
+  let r_with_sigs = analyze_immutable_consts_with_sigs([block], module_.funcs)
+  assert_true(r_with_sigs.is_immutable("TAGS"))
+}
+
+///|
+test "readonly: `Readonly<T>` parameter type relaxes the disqualification too" {
+  let src =
+    #|const cfg = { mode: "prod" };
+    #|function readCfg(c: Readonly<{ mode: string }>): string { return c.mode; }
+    #|readCfg(cfg);
+  let parser = @parser.Parser::from_source(src)
+  let block = match (try? parser.parse_module_block()) {
+    Ok(mb) => mb.block
+    Err(e) => fail("parse: \{e}")
+  }
+  let parser2 = @parser.Parser::from_source(src)
+  let module_ = match (try? parser2.parse_module()) {
+    Ok(m) => m
+    Err(e) => fail("parse: \{e}")
+  }
+  let r = analyze_immutable_consts_with_sigs([block], module_.funcs)
+  assert_true(r.is_immutable("cfg"))
+}
+
+///|
+test "readonly: a non-readonly param still disqualifies" {
+  // Sanity: when the param has no readonly annotation, the const
+  // is still disqualified — we can't trust the function not to
+  // mutate.
+  let src =
+    #|const TAGS = ["a", "b"];
+    #|function consume(items: Array<string>): number { return items.length; }
+    #|consume(TAGS);
+  let parser = @parser.Parser::from_source(src)
+  let block = match (try? parser.parse_module_block()) {
+    Ok(mb) => mb.block
+    Err(e) => fail("parse: \{e}")
+  }
+  let parser2 = @parser.Parser::from_source(src)
+  let module_ = match (try? parser2.parse_module()) {
+    Ok(m) => m
+    Err(e) => fail("parse: \{e}")
+  }
+  let r = analyze_immutable_consts_with_sigs([block], module_.funcs)
+  assert_false(r.is_immutable("TAGS"))
+}
+
+///|
+test "as-const: marker survives parse round-trip" {
+  // Sanity check that the parser produces `As(_, ConstAssertion)`
+  // and the peel helper unwraps it.
+  let src = "const cfg = { mode: \"prod\" } as const;\n"
+  let block = match (try? @parser.parse_block_from_source(src)) {
+    Ok(b) => b
+    Err(e) => fail("parse: \{e}")
+  }
+  match block.stmts[0] {
+    Const(_, _, init) =>
+      match init {
+        As(inner, @ast.TsType::ConstAssertion) =>
+          match inner {
+            ObjectLit(_) => ()
+            _ => fail("expected ObjectLit inner")
+          }
+        _ => fail("expected As(..., ConstAssertion) wrapping")
+      }
+    _ => fail("expected Const stmt")
   }
 }
 

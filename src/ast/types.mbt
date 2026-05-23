@@ -100,7 +100,24 @@ pub(all) enum TsType {
   // the predicate is meaningful at call sites where the checker can
   // narrow the named binding for code that follows.
   AssertsPredicate(String, TsType?)
+  // `as const` assertion marker. Only appears as the type argument
+  // of `As(expr, ConstAssertion)`. Transparent for type inference
+  // (the operand's type flows through); meaningful to the transform
+  // layer's immutability analysis as an explicit user signal.
+  ConstAssertion
 } derive(Eq, Debug)
+
+///|
+/// Peel any `As(inner, ConstAssertion)` wrapping off an expression
+/// and return the inner. Useful for downstream passes that want to
+/// look at the underlying object / array literal regardless of
+/// whether the user wrote `... as const`.
+pub fn peel_const_assertion(expr : TsExpr) -> TsExpr {
+  match expr {
+    As(inner, ConstAssertion) => peel_const_assertion(inner)
+    _ => expr
+  }
+}
 
 ///|
 // / typedexpression
