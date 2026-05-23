@@ -992,3 +992,102 @@ augmentation, React `HTMLAttributes` index signatures.
   corpus.
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
+
+## TypeScript Compatibility Inventory (2026-05-23)
+
+Snapshot of remaining TypeScript-language compatibility surface, taken after
+the JSX round-up (PR #15) and the fmt normalization (PR #17). Conformance
+corpus baseline: `total=1936 parsed=1841 checked=1841` (checker crashes 0).
+
+Legend: `[x]` covered, `[~]` parsed but lossy / dropped to `Any`, `[ ]` not
+started.
+
+### Syntax (parser)
+
+- [~] `asserts x is T` predicate — parses but return type is widened to `Any`
+  in `parser_type.mbt:704`; `TsType::TypePredicate` is not retained on the
+  asserts branch.
+- [~] `new (...) => T` / `abstract new (...) => T` constructor types — parsed
+  and dropped to `Any` (`parser_type.mbt:640`, `:652`).
+- [~] Stage-3 decorators — `skip_decorator` only; no decorator AST.
+- [~] `<const T>` const type parameter — recognized at
+  `parser_function.mbt:499` but the modifier is ignored.
+- [~] Import attributes (`import x from "y" with { type: "json" }`) — read and
+  discarded by `skip_import_attributes` (`parser_module.mbt:1922`).
+- [~] Labeled tuple `[name: T, age: U]` — labels stripped during tuple parse.
+- [ ] Variadic tuple types (`[string, ...T, number]`) — no spread-element
+  representation on `TsType::Tuple`.
+- [ ] Mapped-type key remapping (`{ [K in U as F<K>]: V }`) — parser bails out
+  when `as` follows the key binding (`parser_type.mbt:147`).
+- [ ] `accessor` field (auto-accessor) — recognized at the class member level
+  but no dedicated AST node, so checker can't distinguish from a plain field.
+- [ ] `using` / `await using` runtime semantics (parse already done; no
+  disposable-tracking in the checker).
+- [ ] Dynamic `import("x", { with: ... })` attribute argument.
+- [ ] Inline per-specifier `import { type X, Y }` modifier.
+
+### Type system (checker)
+
+- [x] Union / Intersection / Conditional + distributive / Generics / infer.
+- [x] Utility table: `Pick / Omit / Record / Exclude / Extract / NonNullable /
+  ReturnType / Parameters / Awaited`.
+- [x] String-mapping intrinsics (`Capitalize / Lowercase / Uppercase /
+  Uncapitalize`) in `simplify.mbt`.
+- [~] `InstanceType<T>` / `ConstructorParameters<T>` — narrow handling in the
+  bridge (`moonbit_decl.mbt:4662`) only; no general evaluation path through
+  `simplify_type`.
+- [ ] `ThisParameterType<T>` / `OmitThisParameter<T>` / `ThisType<T>`.
+- [ ] `NoInfer<T>` (TS 5.4+).
+- [ ] Mapped-type key remapping (`as`) evaluation.
+- [ ] Mapped-type modifier semantics (`+?` / `-?` / `+readonly` / `-readonly`).
+- [ ] Conditional `infer T extends Bound` constraint propagation.
+- [ ] Variadic tuple inference.
+- [ ] Non-distributive conditional detection (`[T] extends [U] ? ...`).
+- [ ] `unique symbol` distinct identity (currently collapses to `Symbol`).
+- [ ] Class static-side (`typeof Cls`) vs instance-side separation in the
+  checker resolver.
+- [ ] Class index signature `[k: string]: V` get/set lowering at the type
+  level.
+- [ ] Module augmentation effect on the resolver.
+- [ ] Declaration merging (interface + interface, namespace + class) — parses
+  but the checker doesn't merge fields/members.
+- [ ] Tagged-template literal generic inference.
+- [ ] Generator / async-iterator yield-type / return-type checking.
+- [ ] `in` narrowing for record-shaped operands; tagged-union exhaustiveness
+  in `switch`.
+
+### JSX
+
+- [x] Component prop checking, spread attrs, `key` / `ref` reserved.
+- [x] Render props, recursive child checking.
+- [x] `.map(...)` child key warning.
+- [x] Member-expression tags `<Foo.Bar />`.
+- [ ] Generic component explicit type args `<Box<string> ... />`.
+- [ ] `defaultProps` reflection in required-prop checking.
+- [ ] Fragment (`<></>`) key on the iterating side.
+- [ ] `JSX.LibraryManagedAttributes` reflection.
+
+### Module resolver / surrounding
+
+- [x] `exports` / `typesVersions` / `node:*` / `@types/*` resolution.
+- [ ] Yarn PnP (`.pnp.cjs`) resolution.
+- [ ] Import-attribute driven type-only routing (e.g. JSON modules).
+- [ ] `tsconfig.json` `paths` mapping.
+
+### Conformance corpus follow-up
+
+- [ ] Triage the remaining ~95 parse failures (1841 / 1936) — split between
+  intentional `*Errors.ts` recovery fixtures and real parser bugs.
+- [ ] Measure issue-count precision (not just crash rate) on the corpus so
+  checker regressions surface before they reach real-world generation.
+
+### Priorities (by real-world ROI)
+
+- [ ] Mapped-type key remapping (`as`) — unblocks zod / valibot output shapes.
+- [ ] `asserts` predicate retention — node:assert, vitest, runtime guards.
+- [ ] Labeled + variadic tuple — node:fs callbacks, function `Parameters<...>`.
+- [ ] Declaration merging in the checker — every namespace + class TS package.
+- [ ] Conditional `infer ... extends Bound` propagation — date-fns / zod.
+
+Deferred (low corpus ROI): `unique symbol` identity, module augmentation,
+`ThisType`, generator type checking.
