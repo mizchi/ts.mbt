@@ -4326,3 +4326,78 @@ test "expr_check: JSX children any prop accepts anything" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 42: generic JSX components. `<List<T>/>` instantiates T from the
+// supplied attribute types, mirroring the generic-call inference path
+// used for top-level functions.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: generic component infers T from items attribute" {
+  // T resolves to `number` from `items={[1,2,3]}`, so the synthetic
+  // `select` callback's parameter is also `number`. The component
+  // body itself isn't checked here; we focus on the call site.
+  let src =
+    #|function List<T>(props: { items: T[]; select: (item: T) => void }): void {}
+    #|function comp(): void {
+    #|  const _ = <List items={[1, 2, 3]} select={(n: number) => {}}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic component flags inconsistent T usages" {
+  // T resolves to `number` from `left`; `right={\"x\"}` (string) then
+  // fails against the substituted `T = number` formal.
+  let src =
+    #|function Pair<T>(props: { left: T; right: T }): void {}
+    #|function comp(): void {
+    #|  const _ = <Pair left={1} right="x"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Pair> attr `right`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic component picks up T from required attribute" {
+  // T resolves to `string` from `value`; children also `string` after
+  // substitution so the text child is accepted.
+  let src =
+    #|function Wrap<T>(props: { value: T; children: T }): void {}
+    #|function comp(): void {
+    #|  const _ = <Wrap value="hi">other</Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic component children prop checked after substitution" {
+  // T resolves to `number` from `value`, so the `children` prop is
+  // `number` and the string child mismatches.
+  let src =
+    #|function Wrap<T>(props: { value: T; children: T }): void {}
+    #|function comp(): void {
+    #|  const _ = <Wrap value={1}>other</Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Wrap> children") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}

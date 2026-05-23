@@ -2176,6 +2176,30 @@ fn check_array_lit_against_tuple(
 /// element-shape narrowing yet — but the assignability check still
 /// surfaces obvious mismatches like `children: string` vs a numeric
 /// child.
+///|
+/// Widen a value's literal type to its base — `"hi"` → `string`,
+/// `1` → `number`, `true` → `boolean`. Used by JSX generic inference
+/// so type parameters don't collapse to a too-narrow literal type the
+/// user clearly didn't intend.
+fn widen_literal(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Literal(_) => @ast.TsType::String_
+    NumberLiteral(_) => @ast.TsType::Number
+    BigIntLiteral(_) => @ast.TsType::BigInt
+    BooleanLiteral(_) => @ast.TsType::Boolean
+    Array(elem) => @ast.TsType::Array(widen_literal(elem))
+    Tuple(items) => {
+      let widened : Array[@ast.TsType] = []
+      for it in items {
+        widened.push(widen_literal(it))
+      }
+      @ast.TsType::Tuple(widened)
+    }
+    _ => t
+  }
+}
+
+///|
 fn synthesize_children_type(
   env : ExprEnv,
   resolver : Resolver,
@@ -2240,13 +2264,49 @@ fn check_jsx_attrs(
   //
   //   function Comp(props: { foo: number }): JSX.Element
   //   function Comp(props: Props): JSX.Element
-  let props_ty : @ast.TsType? = match ctx.resolver.signatures.get(tag) {
+  let raw_props : @ast.TsType? = match ctx.resolver.signatures.get(tag) {
     Some(params) if params.length() == 1 => Some(params[0].type_)
     _ => None
   }
-  let props = match props_ty {
+  let raw_props_ty = match raw_props {
     Some(t) => t
     None => return
+  }
+  // Generic-component inference: when the component declares type
+  // parameters, unify each supplied attribute's value type against the
+  // declared prop's type before per-attribute checks, then substitute
+  // the bindings into the props shape so downstream lookups see the
+  // instantiated form.
+  let type_params = match ctx.resolver.func_type_params.get(tag) {
+    Some(tps) => tps
+    None => []
+  }
+  let props = if type_params.length() > 0 {
+    let bindings : Map[String, @ast.TsType] = {}
+    for tp in type_params {
+      bindings[tp] = @ast.TsType::Any
+    }
+    for entry in attrs {
+      let name = entry.0
+      match entry.1 {
+        Some(value) =>
+          match ctx.resolver.lookup_field(raw_props_ty, name) {
+            Some(formal) => {
+              let actual = infer_expr(env, ctx.resolver, value)
+              // JSX inference widens literal types (`"hi"` → `string`,
+              // `1` → `number`) so a single attribute doesn't lock T
+              // to a narrow literal value the user clearly didn't
+              // intend. Matches TS's contextual widening rule.
+              infer_param_bindings(type_params, formal, widen_literal(actual), bindings)
+            }
+            None => ()
+          }
+        None => ()
+      }
+    }
+    substitute_params(raw_props_ty, bindings)
+  } else {
+    raw_props_ty
   }
   // Per-attribute type check.
   for entry in attrs {
