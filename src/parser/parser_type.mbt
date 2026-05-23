@@ -777,12 +777,15 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       self.parse_primary_type()
     }
     Ident("unique") => {
-      // unique symbol
+      // `unique symbol`: each occurrence gets a per-Parser tag so two
+      // references that are reached from the same declaration share an
+      // identity and distinct declarations don't.
       let _ = self.advance()
       match self.peek().kind {
         Ident("symbol") => {
           let _ = self.advance()
-          Symbol
+          self.unique_symbol_index = self.unique_symbol_index + 1
+          UniqueSymbol("__tsmbt_us_" + self.unique_symbol_index.to_string())
         }
         _ => Any
       }

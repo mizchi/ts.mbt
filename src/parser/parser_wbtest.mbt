@@ -2315,6 +2315,31 @@ test "parser: retain class-level decorators in TsClassDecl" {
 }
 
 ///|
+test "parser: parse dynamic import with options retains the second arg" {
+  // `import("./data.json", { with: { type: "json" } })` should parse
+  // with both arguments captured.
+  let parser = Parser::from_source(
+    #|import("./data.json", { with: { type: "json" } })
+    ,
+  )
+  let expr = parser.parse_expr()
+  match expr {
+    DynamicImport(StringLit("./data.json"), Some(_)) => ()
+    other => fail("expected dynamic import with options, got \{other}")
+  }
+}
+
+///|
+test "parser: parse dynamic import without options keeps slot empty" {
+  let parser = Parser::from_source("import(\"./mod\")")
+  let expr = parser.parse_expr()
+  match expr {
+    DynamicImport(StringLit("./mod"), None) => ()
+    other => fail("expected bare dynamic import, got \{other}")
+  }
+}
+
+///|
 test "parser: parse import attributes (`with { type: \"json\" }`)" {
   let src =
     #|import data from "./data.json" with { type: "json" };

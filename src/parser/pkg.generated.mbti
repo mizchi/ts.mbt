@@ -65,6 +65,7 @@ pub struct Parser {
   mut in_generator : Bool
   mut in_async : Bool
   mut temp_index : Int
+  mut unique_symbol_index : Int
   mut in_strict : Bool
   mut in_function : Bool
   mut in_iteration : Bool

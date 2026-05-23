@@ -11,6 +11,12 @@ pub(all) enum TsType {
   Void
   BigInt // bigint
   Symbol // symbol
+  // `unique symbol`: TS treats each occurrence as a nominally distinct
+  // type. The string carries a stable per-occurrence tag the parser
+  // assigns so two `unique symbol` references that point to the same
+  // declaration are interchangeable while distinct declarations are
+  // not. Bridge emit still lowers the type to `Symbol` / `JSValue`.
+  UniqueSymbol(String)
   // Special types
   Any // unknown/any
   Never // bottom type (no value)
@@ -184,8 +190,11 @@ pub(all) enum TsExpr {
   // await expression (async)
   Await(TsExpr)
 
-  // dynamic import expression: import(specifier)
-  DynamicImport(TsExpr)
+  // dynamic import expression: `import(specifier)` or
+  // `import(specifier, options)`. The optional second argument is
+  // typically `{ with: { type: "json" } }` — retained as a plain
+  // expression so downstream code can read the attribute literal.
+  DynamicImport(TsExpr, TsExpr?)
 
   // import.meta expression
   ImportMeta

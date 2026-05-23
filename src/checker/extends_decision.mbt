@@ -19,6 +19,15 @@ pub fn extends_decision(source : @ast.TsType, target : @ast.TsType) -> Bool? {
   if source == target {
     return Some(true)
   }
+  // `unique symbol` identity: two markers with different tags are
+  // nominally disjoint; either side against bare `Symbol` widens.
+  match (source, target) {
+    (UniqueSymbol(a), UniqueSymbol(b)) =>
+      return if a == b { Some(true) } else { Some(false) }
+    (UniqueSymbol(_), Symbol) => return Some(true)
+    (Symbol, UniqueSymbol(_)) => return Some(false)
+    _ => ()
+  }
   match target {
     Any => return Some(true)
     Union(items) => {

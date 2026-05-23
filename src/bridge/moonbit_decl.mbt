@@ -1517,9 +1517,10 @@ fn namespace_has_non_type_members(namespace_ : @ast.TsNamespaceDecl) -> Bool {
 ///|
 fn value_decl_has_runtime_binding(value : @ast.TsValueDecl) -> Bool {
   match value.type_ {
-    // The parser emits Symbol for `unique symbol`, which .d.ts files use for
-    // type-level marker keys that often do not exist as runtime exports.
-    Symbol => false
+    // `.d.ts` files use `Symbol` / `unique symbol` for marker keys that
+    // often do not exist as runtime exports. Both variants are treated
+    // as non-runtime here.
+    Symbol | UniqueSymbol(_) => false
     _ => true
   }
 }
@@ -3330,6 +3331,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     Rest(inner) => "RestOf" + utility_record_type_suffix(inner)
     Constructor(_, ret, _) =>
       "CtorOf" + utility_record_type_suffix(ret)
+    UniqueSymbol(_) => "Symbol"
   }
 }
 

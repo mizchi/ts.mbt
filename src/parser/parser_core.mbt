@@ -16,6 +16,9 @@ pub struct Parser {
   mut in_generator : Bool
   mut in_async : Bool
   mut temp_index : Int
+  // Counter assigned to every `unique symbol` occurrence so the type
+  // gets a stable per-occurrence tag.
+  mut unique_symbol_index : Int
   mut in_strict : Bool
   mut in_function : Bool // for return validation
   mut in_iteration : Bool // for continue validation
@@ -61,6 +64,7 @@ pub fn Parser::new_with_strict_and_jsx(
     in_generator: false,
     in_async: false,
     temp_index: 0,
+    unique_symbol_index: 0,
     in_strict,
     in_function: false,
     in_iteration: false,
@@ -97,6 +101,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_generator: false,
     in_async: false,
     temp_index: 0,
+    unique_symbol_index: 0,
     in_strict,
     in_function: false,
     in_iteration: false,

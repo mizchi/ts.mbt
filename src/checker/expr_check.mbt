@@ -1803,7 +1803,7 @@ fn infer_expr(
         other => other
       }
     Yield(_) | YieldStar(_) => @ast.TsType::Any
-    DynamicImport(_) | ImportMeta => @ast.TsType::Any
+    DynamicImport(_, _) | ImportMeta => @ast.TsType::Any
     PropAccess(receiver, name) => {
       // Property-access narrowing: when the access is a `Var` /
       // `PropAccess`-chain that the narrowing path tracks, look up the

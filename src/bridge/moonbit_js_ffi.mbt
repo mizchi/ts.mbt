@@ -973,6 +973,12 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     // `asserts x [is T]` returns `void` at runtime — the predicate is
     // only used by the checker to narrow the calling scope.
     AssertsPredicate(_, _) => "Unit"
+    // `unique symbol` has no MoonBit equivalent that preserves the
+    // nominal identity. The runtime value is a JS `symbol`.
+    UniqueSymbol(_) => {
+      state.needs_js_any = true
+      "JSValue"
+    }
     Union(parts) =>
       match ffi_synthesize_inline_union(state, parts) {
         Some(synth_name) => synth_name

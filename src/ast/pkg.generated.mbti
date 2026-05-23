@@ -186,7 +186,7 @@ pub(all) enum TsExpr {
   Yield(TsExpr?)
   YieldStar(TsExpr)
   Await(TsExpr)
-  DynamicImport(TsExpr)
+  DynamicImport(TsExpr, TsExpr?)
   ImportMeta
   TaggedTemplate(TsExpr, Array[String], Array[String], Array[TsExpr])
   TemplateLiteral(Array[String], Array[TsExpr])
@@ -356,6 +356,7 @@ pub(all) enum TsType {
   Void
   BigInt
   Symbol
+  UniqueSymbol(String)
   Any
   Never
   Null

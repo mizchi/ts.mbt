@@ -3919,11 +3919,21 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           raise ParseError("Expected 'meta' after import., got '\{prop}'")
         }
       } else {
-        // dynamic import: import(specifier)
+        // dynamic import: `import(specifier)` or
+        // `import(specifier, options)`.
         let _ = self.expect(LParen)
         let specifier = self.parse_assignment()
+        let options : @ast.TsExpr? = if self.match_(Comma) {
+          if self.check(RParen) {
+            None
+          } else {
+            Some(self.parse_assignment())
+          }
+        } else {
+          None
+        }
         let _ = self.expect(RParen)
-        DynamicImport(specifier)
+        DynamicImport(specifier, options)
       }
     }
     _ => raise ParseError("Unexpected token: \{tok.kind}")
