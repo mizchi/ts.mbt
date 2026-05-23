@@ -209,6 +209,7 @@ pub impl Show for TsForOfKind
 pub(all) struct TsFunc {
   name : String
   type_params : Array[String]
+  const_type_params : Array[Bool]
   params : Array[TsParam]
   return_type : TsType
   body : TsBlock

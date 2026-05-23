@@ -443,6 +443,11 @@ pub(all) struct TsFunc {
   // Generic type parameters declared on this function (e.g. `T`, `R` in
   // `function map<T, R>(...)`). Empty for non-generic functions.
   type_params : Array[String]
+  // Parallel to `type_params`: `true` when the param was declared as
+  // `<const T>` (TypeScript 5.0+). Empty arrays are also acceptable
+  // — callers treat a missing flag as `false`. Generic inference uses
+  // this to skip literal widening for the matching parameter.
+  const_type_params : Array[Bool]
   params : Array[TsParam]
   return_type : TsType
   body : TsBlock

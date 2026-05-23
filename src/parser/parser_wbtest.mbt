@@ -6911,6 +6911,27 @@ test "parser: namespace body inherits non-JSX from outer parser" {
 }
 
 ///|
+test "parser: retain `<const T>` const modifier on function type params" {
+  // `function foo<const T>(x: T): T { return x; }` — the `const`
+  // modifier flips the matching entry on `func.const_type_params` to
+  // `true`. The other parameters stay `false`.
+  let src =
+    #|function foo<const T, U>(x: T, y: U): T {
+    #|  return x;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+  let f = module_.funcs[0]
+  assert_eq(f.type_params, ["T", "U"])
+  assert_eq(f.const_type_params, [true, false])
+}
+
+///|
 test "parser: parse `export using` declaration at module level" {
   // ES2023 `using` extends to the module-level export position.
   let src =

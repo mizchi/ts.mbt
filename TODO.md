@@ -1008,8 +1008,10 @@ augmentation, React `HTMLAttributes` index signatures.
   parsed `@expr` chain.)
 - [x] `using` / `await using` declarations including `export using` at the
   module export position.
-- [~] Const generics (`<const T>`). Parser consumes the modifier; we don't
-  model contextual inference so retention would be dead data.
+- [x] Const generics (`<const T>`). Retained on `TsFunc.const_type_params`
+  and consulted by the JSX generic-component inference path to skip
+  literal widening when any of the component's type parameters carries
+  the modifier.
 
 ### Non-Goals (still)
 
@@ -1040,11 +1042,13 @@ started.
 - [x] Stage-3 decorators — `TsClassDecl.decorators` carries the parsed
   `@expr` chain in source order via the new `parse_decorator_expr`
   helper that produces a faithful `TsExpr` (call, member access, etc.).
-- [~] `<const T>` const type parameter — recognized at
-  `parser_function.mbt:499` but the modifier is ignored. The flag only
-  affects TypeScript's contextual-inference engine (no widening at
-  call sites); we don't model that path, so retaining the flag would
-  be dead data.
+- [x] `<const T>` const type parameter — retained as
+  `TsFunc.const_type_params : Array[Bool]` (positionally aligned with
+  `type_params`). The checker's JSX generic-component inference path
+  consults the matching `Resolver.func_const_type_params` entry and
+  skips the literal-widening pass for the matching binding, so
+  `<Comp value="hello" />` against `function Comp<const T>(props :
+  Props<T>)` infers `T = "hello"` instead of `T = string`.
 - [x] Import attributes (`import x from "y" with { type: "json" }`) —
   retained as `TsImportDecl.attributes : Array[(String, String)]` via
   the new `parse_import_attributes` helper; the legacy `assert { ... }`
@@ -1232,9 +1236,6 @@ Final follow-on batches:
 Remaining intentionally-deferred items (per project policy, no
 runtime-bridge impact):
 
-- [ ] `<const T>` const type parameter inference — contextual
-  inference only; we don't model the surrounding inference engine, so
-  retaining the flag would be dead data.
 - [ ] Yarn PnP resolver — pnpm is the locked corpus default; PnP
   doesn't appear.
 - [ ] `JSX.LibraryManagedAttributes` / `defaultProps` — React 19

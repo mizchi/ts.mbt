@@ -36,6 +36,11 @@ priv struct Resolver {
   // Generic type-parameter names declared on top-level functions, keyed by
   // function name. Empty array for non-generic functions.
   func_type_params : Map[String, Array[String]]
+  // Per-function `<const T>` modifier flags, positionally aligned with
+  // `func_type_params[name]`. A `true` entry means generic inference
+  // should not widen the inferred literal type for that parameter.
+  // Missing key / shorter array is treated as "all false".
+  func_const_type_params : Map[String, Array[Bool]]
 }
 
 ///|
@@ -47,6 +52,7 @@ fn Resolver::empty() -> Resolver {
     globals: {},
     signatures: {},
     func_type_params: {},
+    func_const_type_params: {},
   }
 }
 
@@ -206,6 +212,7 @@ fn Resolver::ingest_module(
     r.globals[prefix + f.name] = @ast.TsType::Func(param_types, ret)
     r.signatures[prefix + f.name] = f.params
     r.func_type_params[prefix + f.name] = f.type_params
+    r.func_const_type_params[prefix + f.name] = f.const_type_params
   }
   for ns in module_.namespaces {
     let ns_prefix = prefix + ns.name + "."
@@ -2520,6 +2527,28 @@ fn check_jsx_attrs(
     Some(tps) => tps
     None => []
   }
+  let const_flags = match ctx.resolver.func_const_type_params.get(tag) {
+    Some(flags) => flags
+    None => []
+  }
+  // `<const T>` skips the literal-widening pass below so the inferred
+  // binding keeps its narrow shape. We pre-compute whether *any* type
+  // parameter on this component is const — if so, the safer behavior
+  // is to skip widening across the board, since the binding could end
+  // up flowing into the const param.
+  let mut has_const_param = false
+  for f in const_flags {
+    if f {
+      has_const_param = true
+    }
+  }
+  let maybe_widen = fn(t : @ast.TsType) -> @ast.TsType {
+    if has_const_param {
+      t
+    } else {
+      widen_literal(t)
+    }
+  }
   let props = if type_params.length() > 0 {
     let bindings : Map[String, @ast.TsType] = {}
     for tp in type_params {
@@ -2539,7 +2568,7 @@ fn check_jsx_attrs(
                   infer_param_bindings(
                     type_params,
                     formal,
-                    widen_literal(sf.1),
+                    maybe_widen(sf.1),
                     bindings,
                   )
                 None => ()
@@ -2552,11 +2581,13 @@ fn check_jsx_attrs(
                 // JSX inference widens literal types (`"hi"` → `string`,
                 // `1` → `number`) so a single attribute doesn't lock T
                 // to a narrow literal value the user clearly didn't
-                // intend. Matches TS's contextual widening rule.
+                // intend. Matches TS's contextual widening rule. The
+                // wrapper is a no-op when any of the component's type
+                // params is `<const T>`.
                 infer_param_bindings(
                   type_params,
                   formal,
-                  widen_literal(actual),
+                  maybe_widen(actual),
                   bindings,
                 )
               }
@@ -5358,6 +5389,7 @@ pub fn check_module_function_bodies(
             params,
             return_type: method.return_type,
             body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }

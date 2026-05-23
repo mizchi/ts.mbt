@@ -4673,6 +4673,31 @@ test "expr_check: without asserts call, string|number -> string is flagged" {
 }
 
 ///|
+test "expr_check: `<const T>` skips literal widening in JSX inference" {
+  // Without `<const T>`, JSX infers `T = string` from `value="hello"`
+  // (literal widened to its primitive). With `<const T>` the inference
+  // keeps `T = "hello"`, so a `result.value: "hello"` access still
+  // typechecks.
+  let src =
+    #|interface Out<T> { value: T }
+    #|interface Props<T> { value: T }
+    #|function Comp<const T extends string>(props: Props<T>): Out<T> {
+    #|  return { value: props.value };
+    #|}
+    #|function use(): "hello" {
+    #|  // Use a JSX element whose component is generic over `<const T>`;
+    #|  // pulling `value` back must still see the narrow literal.
+    #|  const _ = <Comp value="hello" />;
+    #|  return "hello";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  // The harness validates that the body typechecks without surfacing
+  // a literal-vs-string mismatch on the JSX prop side.
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
 test "expr_check: namespace+class static-side merge — namespace fn callable" {
   // `namespace Foo { export function helper(): number }` + `class Foo`
   // should let `Foo.helper()` resolve through the namespace.

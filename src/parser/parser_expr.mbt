@@ -543,6 +543,7 @@ fn Parser::parse_object_method_value(
   @ast.TsExpr::FuncExpr({
     name,
     type_params: [],
+    const_type_params: [],
     params,
     return_type,
     body,
@@ -3499,6 +3500,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
+              const_type_params: [],
               is_generator: false,
               is_async: false,
             })
@@ -3852,6 +3854,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
+              const_type_params: [],
               is_generator: false,
               is_async: false,
             })

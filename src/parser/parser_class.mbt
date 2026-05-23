@@ -511,6 +511,7 @@ fn Parser::inject_instance_field_assigns(
     params: func.params,
     return_type: func.return_type,
     body: { stmts: new_stmts },
+    const_type_params: [],
     is_generator: func.is_generator,
     is_async: func.is_async,
   }
@@ -645,6 +646,7 @@ fn Parser::parse_class_body(
       let func : @ast.TsFunc = {
         name: method_name,
         type_params: [],
+        const_type_params: [],
         params,
         return_type,
         body,
@@ -736,6 +738,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [],
             return_type: @ast.TsType::Any,
             body: throw_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }),
@@ -873,6 +876,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [rest_param],
             return_type: Any,
             body: empty_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }
@@ -885,6 +889,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [],
             return_type: Any,
             body: empty_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }
@@ -1134,6 +1139,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           params: [],
           return_type: @ast.TsType::Any,
           body: block,
+          const_type_params: [],
           is_generator: false,
           is_async: false,
         })
@@ -1153,6 +1159,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       params: [],
       return_type: @ast.TsType::Any,
       body: @ast.TsBlock::{ stmts, },
+      const_type_params: [],
       is_generator: false,
       is_async: false,
     }),
@@ -1315,6 +1322,7 @@ fn Parser::parse_class_decl_with_abstract(
             params: [rest_param],
             return_type: Any,
             body: empty_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }
@@ -1327,6 +1335,7 @@ fn Parser::parse_class_decl_with_abstract(
             params: [],
             return_type: Any,
             body: empty_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }
@@ -1567,6 +1576,7 @@ fn Parser::parse_class_decl_with_abstract(
           params: [],
           return_type: @ast.TsType::Any,
           body: block,
+          const_type_params: [],
           is_generator: false,
           is_async: false,
         })
@@ -1596,6 +1606,7 @@ fn Parser::parse_class_decl_with_abstract(
         params: [],
         return_type: @ast.TsType::Any,
         body: @ast.TsBlock::{ stmts: internal_stmts },
+        const_type_params: [],
         is_generator: false,
         is_async: false,
       }),

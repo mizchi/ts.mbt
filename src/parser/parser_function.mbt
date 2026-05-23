@@ -195,7 +195,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = self.parse_binding_ident()
-  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
@@ -215,6 +215,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     return {
       name,
       type_params,
+      const_type_params,
       params,
       return_type,
       body: { stmts: [] },
@@ -226,6 +227,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     return {
       name,
       type_params,
+      const_type_params,
       params,
       return_type,
       body: { stmts: [] },
@@ -268,7 +270,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, type_params, params, return_type, body, is_generator, is_async }
+  { name, type_params, const_type_params, params, return_type, body, is_generator, is_async }
 }
 
 ///|
@@ -300,7 +302,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     | In => self.parse_binding_ident()
     _ => "<anon>"
   }
-  let (type_params, _) = self.parse_type_param_names_and_bounds()
+  let (type_params, const_type_params, _) = self.parse_type_param_names_bounds_and_const_flags()
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
@@ -345,7 +347,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, type_params, params, return_type, body, is_generator, is_async }
+  { name, type_params, const_type_params, params, return_type, body, is_generator, is_async }
 }
 
 ///|
@@ -484,10 +486,24 @@ fn Parser::skip_type_param_tail_until_delim(self : Parser) -> Unit {
 fn Parser::parse_type_param_names_and_bounds(
   self : Parser,
 ) -> (Array[String], Array[(String, @ast.TsType)]) {
+  let (names, _, bounds) = self.parse_type_param_names_bounds_and_const_flags()
+  (names, bounds)
+}
+
+///|
+/// Like `parse_type_param_names_and_bounds` but also returns a
+/// parallel array of `const`-modifier flags (one per parameter).
+/// `<const T extends ...>` flips the matching `const_flags` entry to
+/// `true`; subsequent generic-inference passes consult this to skip
+/// literal widening on `T`.
+fn Parser::parse_type_param_names_bounds_and_const_flags(
+  self : Parser,
+) -> (Array[String], Array[Bool], Array[(String, @ast.TsType)]) {
   let names : Array[String] = []
+  let const_flags : Array[Bool] = []
   let bounds : Array[(String, @ast.TsType)] = []
   if !self.check(Lt) {
-    return (names, bounds)
+    return (names, const_flags, bounds)
   }
   let _ = self.advance()
   while !self.check(Eof) {
@@ -496,10 +512,13 @@ fn Parser::parse_type_param_names_and_bounds(
       break
     }
     // Optional `const` modifier introduced in TypeScript 5.0:
-    // `<const T extends ...>`. The const modifier has no impact on the
-    // erased generic shape we keep, so consume and discard it.
-    if self.check(Const) {
+    // `<const T extends ...>`. Captured per-parameter so the
+    // generic-inference pass can keep literal types narrow.
+    let is_const = if self.check(Const) {
       let _ = self.advance()
+      true
+    } else {
+      false
     }
     // Variance modifiers `in` / `out` (TypeScript 4.7+):
     // `<out T extends ..., in U, in out V>`. Both keywords are
@@ -546,6 +565,7 @@ fn Parser::parse_type_param_names_and_bounds(
       break
     }
     names.push(name)
+    const_flags.push(is_const)
     if self.match_(Extends) {
       let saved_pos = self.pos
       let saved_pending_gt = self.pending_gt
@@ -574,7 +594,7 @@ fn Parser::parse_type_param_names_and_bounds(
       break
     }
   }
-  (names, bounds)
+  (names, const_flags, bounds)
 }
 
 ///|
