@@ -2835,6 +2835,15 @@ fn Parser::parse_export_stmt(
     collect_value_decls_from_stmt(stmt, values, const_values)
     return
   }
+  // ES2023 `using` / `await using` declarations at the module export
+  // position. The body parses via the regular statement-level
+  // `using` path (which builds an effective `Let(...)` binding).
+  if self.is_using_declaration_start() || self.is_await_using_declaration_start() {
+    let stmt = self.parse_stmt()
+    collect_static_const_exprs_from_stmt(stmt, const_values)
+    collect_value_decls_from_stmt(stmt, values, const_values)
+    return
+  }
   raise ParseError("Unsupported export statement")
 }
 

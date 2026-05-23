@@ -6909,3 +6909,18 @@ test "parser: namespace body inherits non-JSX from outer parser" {
     e => fail("\{e}")
   }
 }
+
+///|
+test "parser: parse `export using` declaration at module level" {
+  // ES2023 `using` extends to the module-level export position.
+  let src =
+    #|export using x = null;
+  let _ = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
+}
+
+///|
+test "parser: parse `export await using` declaration at module level" {
+  let src =
+    #|export await using x = null;
+  let _ = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
+}
