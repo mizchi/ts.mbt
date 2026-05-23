@@ -53,28 +53,42 @@ fn Resolver::empty() -> Resolver {
 ///|
 fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
   let r = Resolver::empty()
+  Resolver::ingest_module(r, module_, "")
+  r
+}
+
+///|
+/// Register the declarations of `module_` into `r`, prefixing every
+/// name with `prefix` (e.g. `"Layout."`). Recurses into nested
+/// namespaces so `namespace Layout { export function Header(...) }` is
+/// reachable as `Layout.Header` for member-expression JSX tags.
+fn Resolver::ingest_module(
+  r : Resolver,
+  module_ : @ast.TsModule,
+  prefix : String,
+) -> Unit {
   for i in module_.interfaces {
-    r.interfaces[i.name] = i
+    r.interfaces[prefix + i.name] = i
   }
   for c in module_.classes {
-    r.classes[c.name] = c
+    r.classes[prefix + c.name] = c
   }
   for ta in module_.type_aliases {
-    r.type_aliases[ta.name] = ta
+    r.type_aliases[prefix + ta.name] = ta
   }
   for v in module_.values {
-    r.globals[v.name] = v.type_
+    r.globals[prefix + v.name] = v.type_
   }
   for imp in module_.imports {
     let param_types : Array[@ast.TsType] = []
     for p in imp.params {
       param_types.push(p.1)
     }
-    r.globals[imp.name] = @ast.TsType::Func(param_types, imp.return_type)
+    r.globals[prefix + imp.name] = @ast.TsType::Func(param_types, imp.return_type)
     // Also expose type parameters so generic-call inference picks up
     // `declare function f<T>(...)` imports — without this the inference
     // path skipped imports entirely.
-    r.func_type_params[imp.name] = imp.type_params
+    r.func_type_params[prefix + imp.name] = imp.type_params
     // Synthesize a minimal `TsParam` list (names only) so the rich-
     // signature path used by `apply_type_predicate_narrowing` can map
     // the predicate's parameter name to an argument index.
@@ -88,7 +102,7 @@ fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
         default: None,
       })
     }
-    r.signatures[imp.name] = synth_params
+    r.signatures[prefix + imp.name] = synth_params
   }
   for f in module_.funcs {
     let param_types : Array[@ast.TsType] = []
@@ -98,11 +112,13 @@ fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
     // Async functions expose `Promise<R>` to callers even when the body's
     // declared `return_type` is the un-wrapped `R`.
     let ret = wrap_async_return(f.is_async, f.return_type)
-    r.globals[f.name] = @ast.TsType::Func(param_types, ret)
-    r.signatures[f.name] = f.params
-    r.func_type_params[f.name] = f.type_params
+    r.globals[prefix + f.name] = @ast.TsType::Func(param_types, ret)
+    r.signatures[prefix + f.name] = f.params
+    r.func_type_params[prefix + f.name] = f.type_params
   }
-  r
+  for ns in module_.namespaces {
+    Resolver::ingest_module(r, ns.module_, prefix + ns.name + ".")
+  }
 }
 
 ///|
@@ -2256,9 +2272,10 @@ fn check_jsx_attrs(
       return
     }
   }
-  if tag.contains(".") {
-    return
-  }
+  // Dotted member-expression tags (`<Layout.Header/>`) are resolved
+  // against namespaces ingested with `prefix + name` keys; if the
+  // resolver doesn't have the dotted name registered we fall through
+  // to the standard "no signature" bail later.
   // Resolve the component as a top-level function and pull out its
   // single parameter's type. Component signatures we recognise:
   //

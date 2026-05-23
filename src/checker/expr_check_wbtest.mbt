@@ -4565,6 +4565,41 @@ test "expr_check: JSX in .map() without key flags warning" {
 }
 
 ///|
+test "expr_check: JSX member-expression component resolves via namespace" {
+  // `Layout.Header` is registered as a top-level signature so the JSX
+  // attribute check fires against the inner function's props shape.
+  let src =
+    #|namespace Layout {
+    #|  export function Header(props: { title: string }): void {}
+    #|}
+    #|function comp(): void {
+    #|  const _ = <Layout.Header title="hi"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX member-expression component flags wrong attr type" {
+  let src =
+    #|namespace Layout {
+    #|  export function Header(props: { title: string }): void {}
+    #|}
+    #|function comp(): void {
+    #|  const _ = <Layout.Header title={1}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Layout.Header> attr `title`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
 test "expr_check: JSX in .map() with key is silent" {
   let src =
     #|interface Props { value: number }
