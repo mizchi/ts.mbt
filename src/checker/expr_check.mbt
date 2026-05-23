@@ -443,6 +443,33 @@ fn Resolver::lookup_field(
       async_iterator_prototype_member(t, field)
     Applied("AsyncGenerator", args) if args.length() >= 1 =>
       async_iterator_prototype_member(args[0], field)
+    // TypeScript utility types — handled at the lookup layer so we don't
+    // need a structural rewrite of the whole type. The handler returns
+    // the field's specialised type or `None` to keep falling through.
+    Applied("Record", [_, v]) => Some(v)
+    Applied("Partial", [t]) =>
+      match self.lookup_field(t, field) {
+        Some(inner) => Some(narrow_union(inner, @ast.TsType::Undefined))
+        None => None
+      }
+    Applied("Required", [t]) =>
+      match self.lookup_field(t, field) {
+        Some(inner) => Some(non_nullable(inner))
+        None => None
+      }
+    Applied("Readonly", [t]) => self.lookup_field(t, field)
+    Applied("Pick", [t, keys]) =>
+      if utility_keys_include(keys, field) {
+        self.lookup_field(t, field)
+      } else {
+        None
+      }
+    Applied("Omit", [t, keys]) =>
+      if utility_keys_include(keys, field) {
+        None
+      } else {
+        self.lookup_field(t, field)
+      }
     // supplied args before returning the field type so `b.value` on
     // `b: Box<number>` resolves to `number` rather than the raw `T`.
     Applied(n, args) =>
@@ -2039,17 +2066,23 @@ fn check_expr_against(
       }
     // `Applied(N, [args])` — generic interface instance. Same shape
     // analysis as `Named`, with type-parameter substitution performed by
-    // `lookup_field` / `collect_declared_fields`.
-    (ObjectLit(entries), Applied(name, _)) =>
-      match ctx.resolver.interfaces.get(name) {
-        Some(_) => {
-          check_object_lit_against_target(
-            env, entries, expected_shape, ctx.resolver, ctx, sub_path,
-          )
-          return
-        }
-        None => ()
+    // `lookup_field` / `collect_declared_fields`. Utility types
+    // (Record / Partial / Required / Readonly / Pick / Omit) are also
+    // dispatched here even when they aren't backed by an interface
+    // declaration, since `lookup_field` / `collect_declared_fields`
+    // know how to project their field shapes.
+    (ObjectLit(entries), Applied(name, _)) => {
+      let is_utility = match name {
+        "Record" | "Partial" | "Required" | "Readonly" | "Pick" | "Omit" => true
+        _ => false
       }
+      if is_utility || ctx.resolver.interfaces.get(name) is Some(_) {
+        check_object_lit_against_target(
+          env, entries, expected_shape, ctx.resolver, ctx, sub_path,
+        )
+        return
+      }
+    }
     _ => ()
   }
   if !is_checkable(expected) {
@@ -2260,6 +2293,32 @@ fn collect_declared_fields(
           }
         }
         None => ()
+      }
+    // Utility-type field collection so object-literal contextual typing
+    // (missing-required / excess-property) honours the same rules.
+    Applied("Partial", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push((f.0, narrow_union(f.1, @ast.TsType::Undefined)))
+      }
+    Applied("Required", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push((f.0, non_nullable(f.1)))
+      }
+    Applied("Readonly", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push(f)
+      }
+    Applied("Pick", [t, keys]) =>
+      for f in collect_declared_fields(t, resolver) {
+        if utility_keys_include(keys, f.0) {
+          out.push(f)
+        }
+      }
+    Applied("Omit", [t, keys]) =>
+      for f in collect_declared_fields(t, resolver) {
+        if !utility_keys_include(keys, f.0) {
+          out.push(f)
+        }
       }
     _ => ()
   }
@@ -3522,6 +3581,26 @@ fn index_signature_value(
     }
   }
   string_value
+}
+
+///|
+/// Test whether a string-literal `field` is present in a `keys` type
+/// expressed as a string literal or a union of string literals. Used by
+/// the `Pick<T, K>` / `Omit<T, K>` utility-type field lookups.
+fn utility_keys_include(keys : @ast.TsType, field : String) -> Bool {
+  match keys {
+    Literal(s) => s == field
+    Union(parts) => {
+      for p in parts {
+        match p {
+          Literal(s) if s == field => return true
+          _ => ()
+        }
+      }
+      false
+    }
+    _ => false
+  }
 }
 
 ///|

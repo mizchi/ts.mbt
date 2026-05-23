@@ -3742,3 +3742,154 @@ test "expr_check: generic interface with index signature substitutes V" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 36: utility types — Record, Partial, Required, Readonly, Pick, Omit.
+// Handled at the field-lookup layer so callers see specialised shapes
+// without a structural rewrite.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: Record<string, number> resolves field as V" {
+  let src =
+    #|function f(r: Record<string, number>): number {
+    #|  return r.foo;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Record<string, V> rejects wrong return type" {
+  let src =
+    #|function f(r: Record<string, number>): string {
+    #|  return r.foo;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: Partial<T> makes fields optional" {
+  // `p.name` on `Partial<Config>` is `string | undefined`, not assignable
+  // to bare `string`.
+  let src =
+    #|interface Config { name: string; tag: string }
+    #|function f(p: Partial<Config>): string {
+    #|  return p.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("undefined") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: Partial<T> in object literal allows missing fields" {
+  let src =
+    #|interface Config { name: string; tag: string }
+    #|function take(p: Partial<Config>): void {}
+    #|function user(): void {
+    #|  take({ name: "x" });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Required<T> strips undefined" {
+  let src =
+    #|interface Cfg { name?: string }
+    #|function f(c: Required<Cfg>): string {
+    #|  return c.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Readonly<T> passes fields through" {
+  let src =
+    #|interface Cfg { name: string }
+    #|function f(c: Readonly<Cfg>): string {
+    #|  return c.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Pick<T, K> keeps only listed fields" {
+  let src =
+    #|interface Full { a: string; b: number; c: boolean }
+    #|function f(x: Pick<Full, "a" | "c">): string {
+    #|  return x.a;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Pick<T, K> drops unlisted fields (object literal)" {
+  let src =
+    #|interface Full { a: string; b: number; c: boolean }
+    #|function take(x: Pick<Full, "a">): void {}
+    #|function user(): void {
+    #|  take({ a: "x", b: 1 });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  // `b` should be flagged as excess-property (not in Pick<"a">).
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains(".b") && i.message.contains("does not exist") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: Omit<T, K> excludes listed fields" {
+  let src =
+    #|interface Full { a: string; b: number; c: boolean }
+    #|function take(x: Omit<Full, "b">): void {}
+    #|function user(): void {
+    #|  take({ a: "x", c: true });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Omit<T, K> flags excess listed-key field" {
+  let src =
+    #|interface Full { a: string; b: number }
+    #|function take(x: Omit<Full, "b">): void {}
+    #|function user(): void {
+    #|  take({ a: "x", b: 1 });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains(".b") && i.message.contains("does not exist") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
