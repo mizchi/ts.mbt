@@ -6,4 +6,7 @@ import {
 
 import {
   "mizchi/ts/parser",
+  "mizchi/x/fs",
+  "moonbitlang/async",
+  "moonbitlang/core/bench",
 } for "wbtest"
