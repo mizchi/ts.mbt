@@ -396,19 +396,22 @@ fn fold_binop(
       }
     _ => ()
   }
-  // Arithmetic / comparison on two literal arguments.
+  // Arithmetic / comparison on two literal arguments. We thread
+  // the `op` into every helper so the non-literal fallback can
+  // reconstruct the original BinOp shape — otherwise a `Sub` whose
+  // operands didn't both fold would silently become `Add`.
   match op {
     Add => fold_add(l, r)
-    Sub => fold_numeric(l, r, fn(a, b) { a - b })
-    Mul => fold_numeric(l, r, fn(a, b) { a * b })
+    Sub => fold_numeric(op, l, r, fn(a, b) { a - b })
+    Mul => fold_numeric(op, l, r, fn(a, b) { a * b })
     Div => fold_div(l, r)
     Mod => fold_mod(l, r)
     BinEq => fold_strict_eq(l, r, true)
     BinNe => fold_strict_eq(l, r, false)
-    BinLt => fold_compare(l, r, fn(a, b) { a < b })
-    BinLe => fold_compare(l, r, fn(a, b) { a <= b })
-    BinGt => fold_compare(l, r, fn(a, b) { a > b })
-    BinGe => fold_compare(l, r, fn(a, b) { a >= b })
+    BinLt => fold_compare(op, l, r, fn(a, b) { a < b })
+    BinLe => fold_compare(op, l, r, fn(a, b) { a <= b })
+    BinGt => fold_compare(op, l, r, fn(a, b) { a > b })
+    BinGe => fold_compare(op, l, r, fn(a, b) { a >= b })
     _ => BinOp(op, l, r)
   }
 }
@@ -521,19 +524,20 @@ fn fold_add(l : @ast.TsExpr, r : @ast.TsExpr) -> @ast.TsExpr {
         Some(a) => StringLit(a + b)
         None => BinOp(Add, l, r)
       }
-    _ => fold_numeric(l, r, fn(a, b) { a + b })
+    _ => fold_numeric(Add, l, r, fn(a, b) { a + b })
   }
 }
 
 ///|
 fn fold_numeric(
+  op : @ast.TsBinOp,
   l : @ast.TsExpr,
   r : @ast.TsExpr,
-  op : (Double, Double) -> Double,
+  fold : (Double, Double) -> Double,
 ) -> @ast.TsExpr {
   match (literal_to_number(l), literal_to_number(r)) {
     (Some(a), Some(b)) => {
-      let result = op(a, b)
+      let result = fold(a, b)
       // Prefer IntLit when the result is an integer-valued double
       // small enough to round-trip cleanly. Keeps the output tidy.
       let i = result.to_int().to_double()
@@ -543,9 +547,7 @@ fn fold_numeric(
         NumberLit(result)
       }
     }
-    _ =>
-      // Fallback — caller passes the BinOp's original op.
-      BinOp(Add, l, r)
+    _ => BinOp(op, l, r)
   }
 }
 
@@ -580,31 +582,17 @@ fn fold_mod(l : @ast.TsExpr, r : @ast.TsExpr) -> @ast.TsExpr {
 
 ///|
 fn fold_compare(
+  op : @ast.TsBinOp,
   l : @ast.TsExpr,
   r : @ast.TsExpr,
-  op : (Double, Double) -> Bool,
+  cmp : (Double, Double) -> Bool,
 ) -> @ast.TsExpr {
-  // String comparison too, but only when both are strings.
-  match (l, r) {
-    (StringLit(a), StringLit(b)) =>
-      // We need to map the numeric comparator semantics onto string
-      // order. Since the `op` argument captures the comparison
-      // shape, fall back to caller's BinOp for strings — char-level
-      // ordering isn't worth a deep helper right now.
-      if a == b {
-        // Equality cases handled in fold_strict_eq; reach here for
-        // lt/le/gt/ge only. `a <= a` and `a >= a` are true; `<`/`>`
-        // are false.
-        let _ = op
-        BinOp(BinLt, StringLit(a), StringLit(b)) // give up cleanly
-      } else {
-        BinOp(BinLt, StringLit(a), StringLit(b))
-      }
-    _ =>
-      match (literal_to_number(l), literal_to_number(r)) {
-        (Some(a), Some(b)) => BoolLit(op(a, b))
-        _ => BinOp(BinLt, l, r) // fallback — op shape is lost here
-      }
+  // String / cross-type comparisons fall back to the original
+  // BinOp shape so semantics aren't silently rewritten. Only the
+  // numeric-on-numeric case actually folds.
+  match (literal_to_number(l), literal_to_number(r)) {
+    (Some(a), Some(b)) => BoolLit(cmp(a, b))
+    _ => BinOp(op, l, r)
   }
 }
 

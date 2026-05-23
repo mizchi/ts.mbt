@@ -4,3 +4,9 @@ import {
   "mizchi/ts/ast",
   "mizchi/ts/parser",
 }
+
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+  "moonbitlang/async/process",
+} for "wbtest"

@@ -233,6 +233,33 @@ let mangler_builtin_reserved_properties : Array[String] = [
   "readFile", "writeFile", "readFileSync", "writeFileSync",
   "exists", "existsSync", "mkdir", "mkdirSync", "rmdir", "unlink",
   "stat", "statSync", "createReadStream", "createWriteStream",
+  // Console / logging — reachable from JS code, can't be renamed.
+  "log", "info", "warn", "error", "debug", "trace", "dir", "dirxml",
+  "table", "group", "groupCollapsed", "groupEnd", "count", "countReset",
+  "time", "timeEnd", "timeLog", "assert", "clear", "profile",
+  "profileEnd", "timeStamp",
+  // Error / Throwable members read by user code + stack traces.
+  "message", "stack", "cause", "fileName", "lineNumber", "columnNumber",
+  // RegExp members touched by JS code.
+  "source", "flags", "global", "ignoreCase", "multiline", "sticky",
+  "unicode", "unicodeSets", "dotAll", "hasIndices", "lastIndex", "exec",
+  "test", "input", "index", "indices", "groups",
+  // Date members
+  "getTime", "getFullYear", "getMonth", "getDate", "getDay", "getHours",
+  "getMinutes", "getSeconds", "getMilliseconds", "getTimezoneOffset",
+  "setTime", "setFullYear", "setMonth", "setDate", "setHours", "setMinutes",
+  "setSeconds", "setMilliseconds", "toISOString", "toDateString",
+  "toTimeString", "toUTCString", "now", "UTC",
+  // Number / Math statics
+  "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER", "MAX_VALUE", "MIN_VALUE",
+  "POSITIVE_INFINITY", "NEGATIVE_INFINITY", "EPSILON", "NaN",
+  "isInteger", "isSafeInteger", "isFinite", "isNaN", "isArray",
+  "fromEntries", "assign", "freeze", "isFrozen", "seal", "isSealed",
+  "create", "defineProperty", "defineProperties", "getOwnPropertyDescriptor",
+  "getOwnPropertyDescriptors", "getOwnPropertyNames", "getOwnPropertySymbols",
+  "getPrototypeOf", "setPrototypeOf", "is",
+  // Buffer / TypedArray (Node + Web)
+  "buffer", "byteLength", "byteOffset", "subarray", "BYTES_PER_ELEMENT",
   // Common reserved
   "default",
 ]
@@ -252,6 +279,26 @@ fn collect_property_names(block : @ast.TsBlock, out : Map[String, Bool]) -> Unit
 }
 
 ///|
+/// Strip the parser's internal `@@define:` / `@@get:` / `@@set:`
+/// markers from a property key so the mangler treats marker-prefixed
+/// install sites and their bare-name read counterparts as the *same*
+/// key. Without this, a class IIFE pairing — install on
+/// `@@define:inc` followed by `PropAccess(_, "inc")` back-references
+/// for the `__super_proto` setter — gets mangled inconsistently
+/// (different short names on each side) and the runtime breaks.
+fn strip_marker_prefix(name : String) -> String {
+  if name.has_prefix("@@define:") {
+    name.substring(start=9, end=name.length()).to_string()
+  } else if name.has_prefix("@@get:") {
+    name.substring(start=6, end=name.length()).to_string()
+  } else if name.has_prefix("@@set:") {
+    name.substring(start=6, end=name.length()).to_string()
+  } else {
+    name
+  }
+}
+
+///|
 fn collect_props_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
   match stmt {
     Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
@@ -267,7 +314,7 @@ fn collect_props_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
     Assign(_, e) | CompoundAssign(_, _, e) =>
       collect_props_in_expr(e, out)
     PropAssign(recv, prop, value) => {
-      out[prop] = true
+      out[strip_marker_prefix(prop)] = true
       collect_props_in_expr(recv, out)
       collect_props_in_expr(value, out)
     }
@@ -368,7 +415,7 @@ fn collect_props_in_binding(
     }
     Object(ob) => {
       for p in ob.props {
-        out[p.key] = true
+        out[strip_marker_prefix(p.key)] = true
         collect_props_in_binding(p.binding, out)
         match p.default {
           Some(d) => collect_props_in_expr(d, out)
@@ -384,11 +431,11 @@ fn collect_props_in_binding(
 fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
   match expr {
     PropAccess(recv, name) => {
-      out[name] = true
+      out[strip_marker_prefix(name)] = true
       collect_props_in_expr(recv, out)
     }
     MethodCall(recv, method, args) => {
-      out[method] = true
+      out[strip_marker_prefix(method)] = true
       collect_props_in_expr(recv, out)
       for a in args {
         collect_props_in_expr(a, out)
@@ -397,12 +444,12 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
     ObjectLit(entries) =>
       for ent in entries {
         if ent.0 != "..." {
-          out[ent.0] = true
+          out[strip_marker_prefix(ent.0)] = true
         }
         collect_props_in_expr(ent.1, out)
       }
     PropAssignExpr(recv, prop, value) => {
-      out[prop] = true
+      out[strip_marker_prefix(prop)] = true
       collect_props_in_expr(recv, out)
       collect_props_in_expr(value, out)
     }
@@ -1727,7 +1774,13 @@ fn rename_properties_in_binding(
 
 ///|
 fn rename_prop_key(name : String, prop_map : Map[String, String]) -> String {
-  match prop_map.get(name) {
+  // Marker-prefixed install keys (`@@define:foo` / `@@get:foo` /
+  // `@@set:foo`) and their bare-name read counterparts (`foo`) are
+  // the same property at runtime — the emitter strips the prefix.
+  // Both must look up under the same rename slot so the install and
+  // the back-references it generates stay paired.
+  let lookup_key = strip_marker_prefix(name)
+  match prop_map.get(lookup_key) {
     Some(renamed) => renamed
     None => name
   }

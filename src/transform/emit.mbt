@@ -1094,12 +1094,45 @@ fn emit_jsx_child(e : Emitter, child : @ast.TsExpr) -> Unit {
 }
 
 ///|
+///|
+/// Conservative JS-identifier check: first char must be a letter,
+/// `_`, or `$`; the rest may also be digits. Rejects anything with
+/// punctuation, whitespace, or angle brackets — covers the parser's
+/// synthetic placeholders like `<class>`.
+fn is_valid_js_identifier(name : String) -> Bool {
+  if name.length() == 0 {
+    return false
+  }
+  let mut i = 0
+  for c in name {
+    let ok = if i == 0 {
+      (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '$'
+    } else {
+      (c >= 'A' && c <= 'Z') ||
+      (c >= 'a' && c <= 'z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' ||
+      c == '$'
+    }
+    if !ok {
+      return false
+    }
+    i = i + 1
+  }
+  true
+}
+
+///|
 fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   e.write("function")
   if f.is_generator {
     e.write("*")
   }
-  if f.name != "" {
+  // The parser uses synthetic names like `<class>` for the IIFE that
+  // wraps a desugared class — those are NOT valid JS identifiers.
+  // Skip the name when it isn't a real identifier so the emitted
+  // JS round-trips through node.
+  if f.name != "" && is_valid_js_identifier(f.name) {
     e.write(" ")
     e.write(f.name)
   }

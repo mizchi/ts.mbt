@@ -107,7 +107,9 @@ test "transform: class declaration emits via the parser's class desugar" {
     ,
     [
       "let Counter",
-      "function <class>",
+      // The synthetic `<class>` placeholder is stripped at emit so
+      // the output is `function()` — the IIFE call site stays.
+      "function()",
       "function Counter()",
       "Counter.prototype.inc",
       "return Counter",
