@@ -1015,9 +1015,10 @@ started.
   `@expr` chain in source order via the new `parse_decorator_expr`
   helper that produces a faithful `TsExpr` (call, member access, etc.).
 - [~] `<const T>` const type parameter — recognized at
-  `parser_function.mbt:499` but the modifier is ignored.
-  No corpus consumer; the modifier only affects inference contexts we
-  don't model.
+  `parser_function.mbt:499` but the modifier is ignored. The flag only
+  affects TypeScript's contextual-inference engine (no widening at
+  call sites); we don't model that path, so retaining the flag would
+  be dead data.
 - [x] Import attributes (`import x from "y" with { type: "json" }`) —
   retained as `TsImportDecl.attributes : Array[(String, String)]` via
   the new `parse_import_attributes` helper; the legacy `assert { ... }`
@@ -1037,10 +1038,9 @@ started.
 - [~] `using` / `await using` runtime semantics (parser already accepts
   the binding form; disposable-tracking is intentionally out of scope —
   it has no effect on bridge generation).
-- [~] Dynamic `import("x", { with: ... })` attribute argument —
-  attribute object is consumed but not retained on the dynamic-import
-  expression. Static-import attributes are now retained on the
-  declaration.
+- [x] Dynamic `import(spec, options)`: `DynamicImport` carries the
+  optional second argument so the attribute payload survives. Bare
+  one-arg form keeps the `None` slot.
 - [x] Inline per-specifier `import { type X, Y }` modifier —
   `TsImportDecl.named_type_only : Array[Bool]` is positionally aligned
   with `named_bindings`; `true` indicates the `type` prefix was used.
@@ -1059,9 +1059,9 @@ started.
   utility-table entries that reduce through
   `is_assignable_to_with_generics` and pattern-match on the new
   `Constructor(...)` shape.
-- [x] `ThisParameterType<F>` / `OmitThisParameter<F>` — utility-table
-  entries with `infer`-based bodies. `ThisType<T>` remains deferred
-  (no `this`-parameter retention in the AST).
+- [x] `ThisParameterType<F>` / `OmitThisParameter<F>` / `ThisType<T>`
+  — all three are standard utility-table entries; `ThisType<T>` is
+  the identity because we don't model contextual-`this` inference.
 - [x] `NoInfer<T>` (TS 5.4+) — identity alias in the utility table.
 - [x] Mapped-type key remapping (`as`) evaluation in `simplify_type`
   including `Capitalize<K>` / template-literal prefixing and
@@ -1080,9 +1080,12 @@ started.
 - [x] Non-distributive conditional detection (`[T] extends [U] ? X :
   Y`) — both-side length-1 tuple shape is detected by `simplify_type`
   and reduced by unwrapping before `extends_decision`.
-- [ ] `unique symbol` distinct identity (currently collapses to
-  `Symbol`). Deferred — bridge collapses `Symbol` to `JSValue` anyway;
-  no corpus consumer relies on the per-occurrence nominal identity.
+- [x] `unique symbol` distinct identity: `UniqueSymbol(tag)` carries
+  a per-occurrence tag assigned by the parser; `extends_decision`
+  reports `Some(false)` for distinct tags and widens to plain
+  `Symbol`. Bridge surface still lowers to `Symbol` / `JSValue`, and
+  the existing non-runtime-binding filter treats both variants
+  uniformly.
 - [x] Class static-side (`typeof Cls`) vs instance-side separation —
   `typeof_class_constructor_params_type` /
   `typeof_class_instance_type` cover the
@@ -1093,11 +1096,12 @@ started.
 - [x] Class index signature `[k: string]: V` — `TsClassDecl` carries
   the parsed signatures and `lookup_class_field` falls through to
   `index_signature_value` after exhausting named members.
-- [~] Module augmentation effect on the resolver — `declare module
-  "foo" { ... }` is parsed; the contained declarations are appended to
-  the surrounding scope, which covers the common patterns. True
-  per-imported-module augmentation would require a separate
-  module-graph pass.
+- [x] Module augmentation graph — `TsModule.module_augmentations :
+  Array[(String, TsModule)]` records every top-level `declare module
+  "X" { ... }` block by specifier. The contained declarations also
+  flow into the surrounding scope for legacy consumers; downstream
+  tooling that wants the per-module view can read the new field
+  directly.
 - [x] Declaration merging (interface + interface) — `Resolver::ingest_module`
   now unions fields / readonly / extends / index signatures via
   `merge_interfaces`. Namespace + namespace was already implicit via
@@ -1111,10 +1115,11 @@ started.
   carries the declared element type and `yield e` / `yield* iter` are
   validated against it; the missing-return diagnostic is suppressed
   for generator bodies.
-- [ ] `in` narrowing for record-shaped operands; tagged-union exhaustiveness
-  in `switch`. The `In` operator narrowing already handles tagged
-  unions; tighter exhaustiveness checking on `switch` defaults to the
-  declared scrutinee type, which is sufficient for the bridge.
+- [x] `in` narrowing for record-shaped operands +
+  switch-discriminator exhaustiveness — `In` narrowing already handled
+  records, and `apply_switch_disc_default_narrowing` now strips every
+  tag-matched union member from the discriminator in the `default:`
+  body so the remainder is `Never` when the cases exhaust the union.
 
 ### JSX
 
@@ -1179,23 +1184,23 @@ Follow-on batches in the same branch:
   commit `e6d4d95`.
 - [x] Generator yield-type checking — commit `3a8dcf2`.
 
-Remaining intentionally-deferred items (low corpus ROI / no
+Final follow-on batches:
+
+- [x] `unique symbol` per-occurrence identity (commit `58b6ca5`).
+- [x] `ThisType<T>` utility-table identity (commit `58b6ca5`).
+- [x] Dynamic `import(spec, options)` attribute retention (commit
+  `58b6ca5`).
+- [x] Switch-discriminator default narrowing (commit `7cb2d43`).
+- [x] Module augmentation graph (commit `7cb2d43`).
+
+Remaining intentionally-deferred items (per project policy, no
 runtime-bridge impact):
 
-- [ ] `unique symbol` identity — bridge collapses `Symbol` to
-  `JSValue`; per-occurrence nominal identity doesn't survive the
-  boundary.
-- [ ] `ThisType<T>` — requires `this`-parameter AST retention; no
-  consumer.
-- [ ] `<const T>` const type parameter inference — affects contextual
-  inference only.
-- [ ] Yarn PnP resolver — pnpm corpus default.
+- [ ] `<const T>` const type parameter inference — contextual
+  inference only; we don't model the surrounding inference engine, so
+  retaining the flag would be dead data.
+- [ ] Yarn PnP resolver — pnpm is the locked corpus default; PnP
+  doesn't appear.
 - [ ] `JSX.LibraryManagedAttributes` / `defaultProps` — React 19
-  deprecates the underlying pattern.
-- [ ] Dynamic `import("x", { with: ... })` attribute retention on the
-  expression itself (static-import form is covered).
-- [ ] Per-statement module augmentation graph — declarations are
-  appended to the surrounding scope, which covers the common patterns
-  but not cross-package augmentation.
-- [ ] `in` narrowing for record-shaped operands; tagged-union switch
-  exhaustiveness analysis.
+  deprecates the underlying pattern; modern components use default
+  parameter values which we already cover.
