@@ -137,8 +137,10 @@ pub(all) enum TsExpr {
   // operator
   Seq(TsExpr, TsExpr)
 
-  // function (is_async)
-  ArrowFunc(Array[TsParam], TsArrowBody, Bool)
+  // function (params, return_type, body, is_async). `return_type` is the
+  // explicit `(x): T => …` annotation; `Any` when omitted. Carrying it on
+  // the AST lets the checker spot `(x): x is Foo => …` predicates.
+  ArrowFunc(Array[TsParam], TsType, TsArrowBody, Bool)
 
   // functionexpression (function() {})
   FuncExpr(TsFunc)

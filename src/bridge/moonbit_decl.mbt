@@ -1241,7 +1241,7 @@ fn synthesize_func_from_expr(
         is_generator: func.is_generator,
         is_async: func.is_async,
       })
-    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+    @ast.TsExpr::ArrowFunc(params, _declared_ret, body, is_async) => {
       let normalized_params = merge_func_param_types(params, declared_type)
       let normalized_body = match body {
         @ast.TsArrowBody::ArrowExpr(expr) =>

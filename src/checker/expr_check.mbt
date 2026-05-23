@@ -808,6 +808,18 @@ fn infer_expr(
           // callback return — keep both in case the callback widens.
           return narrow_union(init_ty, cb_ret)
         }
+        // `arr.filter((x): x is Foo => …)` — when the callback is
+        // declared as a type predicate, narrow the result array's
+        // element to the predicate's asserted type.
+        (Some(elem), "filter", [cb]) => {
+          match arrow_type_predicate_target(cb) {
+            Some(target) => return @ast.TsType::Array(target)
+            None => {
+              let _ = elem
+              ()
+            }
+          }
+        }
         _ => ()
       }
       match resolver.lookup_method_sig(recv_ty, method) {
@@ -860,14 +872,21 @@ fn infer_expr(
       @ast.TsType::Object(fields)
     }
     ComputedProp(_, _) => @ast.TsType::Any
-    ArrowFunc(params, body, is_async) => {
+    ArrowFunc(params, declared_ret, body, is_async) => {
       let param_types : Array[@ast.TsType] = []
       for p in params {
         param_types.push(p.type_)
       }
-      let ret = match body {
-        ArrowExpr(e) => infer_expr(env, resolver, e)
-        ArrowBlock(_) => @ast.TsType::Any
+      // Prefer the explicit return-type annotation when one was supplied;
+      // fall back to inferring from the body expression for the
+      // `(x) => expr` shorthand.
+      let ret = if is_checkable(declared_ret) {
+        declared_ret
+      } else {
+        match body {
+          ArrowExpr(e) => infer_expr(env, resolver, e)
+          ArrowBlock(_) => @ast.TsType::Any
+        }
       }
       @ast.TsType::Func(param_types, wrap_async_return(is_async, ret))
     }
@@ -1176,7 +1195,7 @@ fn check_expr_against(
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
   match (expr, expected_shape) {
-    (ArrowFunc(arrow_params, body, is_async), Func(formal_params, formal_ret)) => {
+    (ArrowFunc(arrow_params, _declared_ret, body, is_async), Func(formal_params, formal_ret)) => {
       check_arrow_with_context(
         env, arrow_params, body, is_async, formal_params, formal_ret, ctx,
         sub_path,
@@ -1429,6 +1448,25 @@ fn collect_declared_fields(
 /// errors inside `arr.map(x => x.someProp)` where `x` would otherwise type
 /// as `Any`.
 ///|
+/// If `callback` is an `ArrowFunc` / `FuncExpr` whose declared return
+/// type is a `TypePredicate(name, target)`, return `target`. Used to
+/// narrow `arr.filter(predicate)` result element type when the
+/// predicate is a user-defined type guard.
+fn arrow_type_predicate_target(
+  callback : @ast.TsExpr,
+) -> @ast.TsType? {
+  let ret_opt = match callback {
+    ArrowFunc(_, declared_ret, _, _) => Some(declared_ret)
+    FuncExpr(f) => Some(f.return_type)
+    _ => None
+  }
+  match ret_opt {
+    Some(TypePredicate(_, target)) => Some(target)
+    _ => None
+  }
+}
+
+///|
 /// If `ty` is one of the recognised array shapes (`Array(T)` or the
 /// `Applied("Array", [T])` / `Applied("ReadonlyArray", [T])` aliases),
 /// return its element type. Falls back to `None` otherwise so callers
@@ -1457,7 +1495,7 @@ fn infer_arrow_body_with_params(
   formal_param_types : Array[@ast.TsType],
 ) -> @ast.TsType {
   match callback {
-    ArrowFunc(arrow_params, body, is_async) => {
+    ArrowFunc(arrow_params, declared_ret, body, is_async) => {
       let env = ExprEnv::new()
       for entry in outer.full_snapshot() {
         env.bind(entry.0, entry.1)
@@ -1475,9 +1513,15 @@ fn infer_arrow_body_with_params(
         env.bind(p.name, ty)
         i = i + 1
       }
-      let inner = match body {
-        ArrowExpr(e) => infer_expr(env, resolver, e)
-        ArrowBlock(block) => infer_block_return(env, resolver, block)
+      // Prefer the explicit return-type annotation; fall back to body
+      // inference when omitted.
+      let inner = if is_checkable(declared_ret) {
+        declared_ret
+      } else {
+        match body {
+          ArrowExpr(e) => infer_expr(env, resolver, e)
+          ArrowBlock(block) => infer_block_return(env, resolver, block)
+        }
       }
       wrap_async_return(is_async, inner)
     }

@@ -2309,3 +2309,60 @@ test "expr_check: arr.forEach returns void" {
     None => fail("function f not found")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Round 21: `.filter(predicate)` narrows the result element to the
+// asserted type when the callback is a `(x): x is Foo => …` predicate.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: arr.filter with type predicate narrows result element" {
+  // Without the predicate, `arr.filter(...)` would yield `(string |
+  // null)[]`. The `(x): x is string => …` predicate refines it to
+  // `string[]`, which assigns cleanly to the declared return type.
+  let src =
+    #|function nonNull(arr: (string | null)[]): string[] {
+    #|  return arr.filter((x): x is string => x !== null);
+    #|}
+  match parse_function_named(src, "nonNull") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function nonNull not found")
+  }
+}
+
+///|
+test "expr_check: arr.filter without predicate keeps element type" {
+  let src =
+    #|function nonNull(arr: (string | null)[]): string[] {
+    #|  return arr.filter(x => x !== null);
+    #|}
+  match parse_function_named(src, "nonNull") {
+    Some(f) => {
+      // Without the predicate, the result is still `(string | null)[]`,
+      // not assignable to `string[]` — should flag.
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function nonNull not found")
+  }
+}
+
+///|
+test "expr_check: arrow return type annotation flows into Func result" {
+  // `(x): number => …` declares the return type explicitly; the checker
+  // honours that annotation when computing the arrow's `Func(...)` type.
+  let src =
+    #|function caller(cb: (n: number) => number): number { return cb(1); }
+    #|function user(): number {
+    #|  return caller((x): number => x);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
