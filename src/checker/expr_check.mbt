@@ -322,6 +322,22 @@ fn Resolver::lookup_field(
   field : String,
 ) -> @ast.TsType? {
   let unwrapped = self.unwrap(recv)
+  // Try the built-in prototype dispatchers first so a `Named("Date")` /
+  // `Named("RegExp")` receiver doesn't get masked by a missing-interface
+  // lookup in the generic `Named(n)` arm below.
+  match unwrapped {
+    Named("Date") =>
+      match date_prototype_member(field) {
+        Some(t) => return Some(t)
+        None => ()
+      }
+    Named("RegExp") =>
+      match regexp_prototype_member(field) {
+        Some(t) => return Some(t)
+        None => ()
+      }
+    _ => ()
+  }
   match unwrapped {
     Named(n) =>
       match self.interfaces.get(n) {
@@ -362,6 +378,18 @@ fn Resolver::lookup_field(
       }
     // `Applied(N, [A, B, …])` — the type instantiates a generic
     // interface (or class). Substitute type-parameter names with the
+    // Built-in generic prototypes need to fire before the generic
+    // `Applied(n, args)` interface-lookup arm — otherwise the resolver
+    // would search for an `interface Array { ... }` declaration that
+    // doesn't exist and return `None`.
+    Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
+      array_prototype_member(elem, field)
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
+      promise_prototype_member(inner, field)
+    Applied("Map", [k, v]) | Applied("ReadonlyMap", [k, v]) =>
+      map_prototype_member(k, v, field)
+    Applied("Set", [t]) | Applied("ReadonlySet", [t]) =>
+      set_prototype_member(t, field)
     // supplied args before returning the field type so `b.value` on
     // `b: Box<number>` resolves to `number` rather than the raw `T`.
     Applied(n, args) =>
@@ -476,10 +504,8 @@ fn Resolver::lookup_field(
       None
     }
     Array(elem) => array_prototype_member(elem, field)
-    Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
-      array_prototype_member(elem, field)
-    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
-      promise_prototype_member(inner, field)
+    Number | NumberLiteral(_) | Int => number_prototype_member(field)
+    Boolean | BooleanLiteral(_) => boolean_prototype_member(field)
     Tuple(items) =>
       // Numeric field on a tuple → that element type.
       match (try? @strconv.parse_int(field)) {
@@ -525,6 +551,153 @@ fn promise_prototype_member(
       )
     "finally" =>
       Some(@ast.TsType::Func([@ast.TsType::Func([], @ast.TsType::Void)], promise_t))
+    _ => None
+  }
+}
+
+///|
+/// Well-known `Map<K, V>` instance members specialised at the receiver's
+/// key / value types. Iterator-returning methods yield
+/// `Applied("IterableIterator", [...])` so downstream code paths can
+/// recognise them.
+fn map_prototype_member(
+  k : @ast.TsType,
+  v : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let map_t = @ast.TsType::Applied("Map", [k, v])
+  let bool_ = @ast.TsType::Boolean
+  let num = @ast.TsType::Number
+  let nullable_v = narrow_union(v, @ast.TsType::Undefined)
+  let entry_t = @ast.TsType::Tuple([k, v])
+  let iter_of = fn(t) { @ast.TsType::Applied("IterableIterator", [t]) }
+  match field {
+    "size" => Some(num)
+    "get" => Some(@ast.TsType::Func([k], nullable_v))
+    "set" => Some(@ast.TsType::Func([k, v], map_t))
+    "has" => Some(@ast.TsType::Func([k], bool_))
+    "delete" => Some(@ast.TsType::Func([k], bool_))
+    "clear" => Some(@ast.TsType::Func([], @ast.TsType::Void))
+    "keys" => Some(@ast.TsType::Func([], iter_of(k)))
+    "values" => Some(@ast.TsType::Func([], iter_of(v)))
+    "entries" => Some(@ast.TsType::Func([], iter_of(entry_t)))
+    "forEach" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([v, k, map_t], @ast.TsType::Void)],
+          @ast.TsType::Void,
+        ),
+      )
+    _ => None
+  }
+}
+
+///|
+/// Well-known `Set<T>` instance members. Mirrors `map_prototype_member`
+/// for the simpler single-type-parameter shape.
+fn set_prototype_member(
+  t : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let set_t = @ast.TsType::Applied("Set", [t])
+  let bool_ = @ast.TsType::Boolean
+  let num = @ast.TsType::Number
+  let iter_of = fn(x) { @ast.TsType::Applied("IterableIterator", [x]) }
+  match field {
+    "size" => Some(num)
+    "add" => Some(@ast.TsType::Func([t], set_t))
+    "has" => Some(@ast.TsType::Func([t], bool_))
+    "delete" => Some(@ast.TsType::Func([t], bool_))
+    "clear" => Some(@ast.TsType::Func([], @ast.TsType::Void))
+    "keys" | "values" => Some(@ast.TsType::Func([], iter_of(t)))
+    "entries" =>
+      Some(@ast.TsType::Func([], iter_of(@ast.TsType::Tuple([t, t]))))
+    "forEach" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([t, t, set_t], @ast.TsType::Void)],
+          @ast.TsType::Void,
+        ),
+      )
+    _ => None
+  }
+}
+
+///|
+/// `Date.prototype.*` members.
+fn date_prototype_member(field : String) -> @ast.TsType? {
+  let n = @ast.TsType::Number
+  let s = @ast.TsType::String_
+  match field {
+    "getTime" | "getFullYear" | "getMonth" | "getDate" | "getHours"
+    | "getMinutes" | "getSeconds" | "getMilliseconds" | "getDay"
+    | "getTimezoneOffset" | "getUTCFullYear" | "getUTCMonth" | "getUTCDate"
+    | "getUTCHours" | "getUTCMinutes" | "getUTCSeconds"
+    | "getUTCMilliseconds" | "getUTCDay" | "valueOf" =>
+      Some(@ast.TsType::Func([], n))
+    "setTime" | "setFullYear" | "setMonth" | "setDate" | "setHours"
+    | "setMinutes" | "setSeconds" | "setMilliseconds" | "setUTCFullYear"
+    | "setUTCMonth" | "setUTCDate" | "setUTCHours" | "setUTCMinutes"
+    | "setUTCSeconds" | "setUTCMilliseconds" =>
+      Some(@ast.TsType::Func([n], n))
+    "toString" | "toDateString" | "toTimeString" | "toLocaleString"
+    | "toLocaleDateString" | "toLocaleTimeString" | "toISOString"
+    | "toJSON" | "toUTCString" => Some(@ast.TsType::Func([], s))
+    _ => None
+  }
+}
+
+///|
+/// `Number.prototype.*` members. All numeric literal subtypes share the
+/// same prototype as the base `number` shape.
+fn number_prototype_member(field : String) -> @ast.TsType? {
+  let n = @ast.TsType::Number
+  let s = @ast.TsType::String_
+  match field {
+    "toFixed" | "toExponential" | "toPrecision" =>
+      Some(@ast.TsType::Func([n], s))
+    // `toString(radix?: number): string` — the radix argument is
+    // optional, so expose the zero-arg form so a bare `.toString()`
+    // call validates.
+    "toString" => Some(@ast.TsType::Func([], s))
+    "toLocaleString" => Some(@ast.TsType::Func([], s))
+    "valueOf" => Some(@ast.TsType::Func([], n))
+    _ => None
+  }
+}
+
+///|
+/// `Boolean.prototype.*` members.
+fn boolean_prototype_member(field : String) -> @ast.TsType? {
+  let b = @ast.TsType::Boolean
+  let s = @ast.TsType::String_
+  match field {
+    "toString" => Some(@ast.TsType::Func([], s))
+    "valueOf" => Some(@ast.TsType::Func([], b))
+    _ => None
+  }
+}
+
+///|
+/// `RegExp.prototype.*` members and the read-only flag accessors.
+fn regexp_prototype_member(field : String) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  let b = @ast.TsType::Boolean
+  let n = @ast.TsType::Number
+  let regex_t = @ast.TsType::Named("RegExp")
+  let exec_arr = @ast.TsType::Array(s)
+  match field {
+    // Methods
+    "test" => Some(@ast.TsType::Func([s], b))
+    "exec" =>
+      Some(@ast.TsType::Func([s], narrow_union(exec_arr, @ast.TsType::Null)))
+    "compile" => Some(@ast.TsType::Func([s, s], regex_t))
+    "toString" => Some(@ast.TsType::Func([], s))
+    // Properties
+    "source" | "flags" => Some(s)
+    "global" | "ignoreCase" | "multiline" | "sticky" | "unicode"
+    | "dotAll" | "unicodeSets" | "hasIndices" => Some(b)
+    "lastIndex" => Some(n)
     _ => None
   }
 }

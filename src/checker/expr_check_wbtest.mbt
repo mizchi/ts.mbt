@@ -2799,3 +2799,193 @@ test "expr_check: extends Box<number> as missing-field check works" {
   }
   assert_true(found)
 }
+
+// ---------------------------------------------------------------------------
+// Round 27: Map<K,V> / Set<T> / Date / Number / Boolean / RegExp prototype.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: Map.get returns V | undefined" {
+  let src =
+    #|function f(m: Map<string, number>): number {
+    #|  return m.get("k");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Map.set returns the map" {
+  let src =
+    #|function f(m: Map<string, number>): Map<string, number> {
+    #|  return m.set("k", 1);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Map.has returns boolean" {
+  let src =
+    #|function f(m: Map<string, number>): boolean {
+    #|  return m.has("k");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Map.size is number" {
+  let src =
+    #|function f(m: Map<string, number>): number {
+    #|  return m.size;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Set.add returns the set" {
+  let src =
+    #|function f(s: Set<number>): Set<number> {
+    #|  return s.add(1);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Set.has returns boolean, rejects wrong arg type" {
+  let src =
+    #|function f(s: Set<number>): boolean {
+    #|  return s.has("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Date.getTime returns number" {
+  let src =
+    #|function f(d: Date): number {
+    #|  return d.getTime();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Date.toISOString returns string" {
+  let src =
+    #|function f(d: Date): string {
+    #|  return d.toISOString();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: number.toFixed returns string" {
+  let src =
+    #|function f(n: number): string {
+    #|  return n.toFixed(2);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: number.toString returns string" {
+  let src =
+    #|function f(n: number): string {
+    #|  return n.toString();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: boolean.valueOf returns boolean" {
+  let src =
+    #|function f(b: boolean): boolean {
+    #|  return b.valueOf();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: RegExp.test returns boolean" {
+  let src =
+    #|function f(re: RegExp, s: string): boolean {
+    #|  return re.test(s);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: RegExp.source returns string" {
+  let src =
+    #|function f(re: RegExp): string {
+    #|  return re.source;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: RegExp.global returns boolean" {
+  let src =
+    #|function f(re: RegExp): boolean {
+    #|  return re.global;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
