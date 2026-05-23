@@ -806,20 +806,44 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_expr(e, inner, 2)
           }
           _ => {
-            // Object keys that aren't valid identifiers (have
-            // hyphens, spaces, digits as first char, etc.) must be
-            // emitted as quoted string literals. Numeric-looking
-            // keys are fine bare. The shorthand `{ foo }` form is
-            // already lowered to `{ foo: foo }` upstream.
-            let stripped = strip_internal_prop_marker(entry.0)
-            if is_valid_js_identifier_or_number(stripped) {
-              e.write(stripped)
+            // The parser flags computed-key entries with an
+            // `@@computed:N` placeholder string and stores the real
+            // shape as a `ComputedProp(key_expr, value)` on the
+            // value side. Recognize that and emit `[key]: value`.
+            if entry.0.has_prefix("@@computed:") {
+              match entry.1 {
+                ComputedProp(key_expr, value_expr) => {
+                  e.write("[")
+                  emit_expr(e, key_expr, 0)
+                  e.write("]:")
+                  e.space()
+                  emit_expr(e, value_expr, 2)
+                }
+                _ => {
+                  // Malformed pairing — bail to a safe shape so we
+                  // at least produce parseable JS.
+                  emit_string_literal(e, entry.0)
+                  e.write(":")
+                  e.space()
+                  emit_expr(e, entry.1, 2)
+                }
+              }
             } else {
-              emit_string_literal(e, stripped)
+              // Object keys that aren't valid identifiers (have
+              // hyphens, spaces, digits as first char, etc.) must
+              // be emitted as quoted string literals. Numeric-
+              // looking keys are fine bare. The shorthand `{ foo }`
+              // form is already lowered to `{ foo: foo }` upstream.
+              let stripped = strip_internal_prop_marker(entry.0)
+              if is_valid_js_identifier_or_number(stripped) {
+                e.write(stripped)
+              } else {
+                emit_string_literal(e, stripped)
+              }
+              e.write(":")
+              e.space()
+              emit_expr(e, entry.1, 2)
             }
-            e.write(":")
-            e.space()
-            emit_expr(e, entry.1, 2)
           }
         }
       }
@@ -989,16 +1013,58 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
       emit_expr_body(e, inner)
     OptionalChain(inner) => {
-      // The wrapped inner expression already encodes `.b` / `[k]` /
-      // `(args)` via its conventional AST shape; for now emit the
-      // inner faithfully and trust the parser to have produced the
-      // right chain. The lossy `?.` marker is retained via the
-      // OptionalChain wrapper; in a follow-up the emitter will walk
-      // the chain and reintroduce the `?.` tokens.
-      emit_expr_body(e, inner)
+      // The parser stores the whole chain expression inside
+      // `OptionalChain(...)` without preserving WHICH link carried
+      // the `?.` token. We approximate by re-emitting the chain
+      // with the OUTERMOST link as `?.` — that's the form a
+      // hand-written `a.b.c?.d` lands on and the most common
+      // pattern in real code (an optional tail). For interior `?.`
+      // (e.g. `a?.b.c`) this loses fidelity but at least preserves
+      // the short-circuit somewhere in the chain so the runtime
+      // doesn't throw on a null receiver. A future parser change
+      // can attach a per-link flag and let us emit exactly.
+      emit_optional_chain(e, inner)
     }
     JsxElement(tag, attrs, children) =>
       emit_jsx_element(e, tag, attrs, children)
+  }
+}
+
+///|
+/// Emit an optional-chain expression by inserting `?.` at the
+/// outermost link. The inner shape is one of:
+///   - `PropAccess(recv, name)` → emit `recv ?. name`
+///   - `IndexAccess(recv, idx)` → emit `recv ?. [idx]`
+///   - `MethodCall(recv, name, args)` → emit `recv ?. name(args)`
+///   - `CallExpr(callee, args)` → emit `callee ?. (args)`
+/// Anything else falls back to plain `emit_expr_body` — the chain
+/// shape is unrecognized and stripping `?.` is the safer default
+/// than emitting a malformed expression.
+fn emit_optional_chain(e : Emitter, inner : @ast.TsExpr) -> Unit {
+  match inner {
+    PropAccess(recv, name) => {
+      emit_expr(e, recv, 18)
+      e.write("?.")
+      e.write(strip_internal_prop_marker(name))
+    }
+    IndexAccess(recv, idx) => {
+      emit_expr(e, recv, 18)
+      e.write("?.[")
+      emit_expr(e, idx, 0)
+      e.write("]")
+    }
+    MethodCall(recv, name, args) => {
+      emit_expr(e, recv, 18)
+      e.write("?.")
+      e.write(strip_internal_prop_marker(name))
+      emit_args(e, args)
+    }
+    CallExpr(callee, args) => {
+      emit_expr(e, callee, 18)
+      e.write("?.")
+      emit_args(e, args)
+    }
+    _ => emit_expr_body(e, inner)
   }
 }
 

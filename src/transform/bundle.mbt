@@ -119,8 +119,10 @@ priv struct ModuleNode {
   import_decls : Array[@ast.TsImportDecl]
   // Top-level export specs (`export { x, y as z }`, `export const x = …`).
   // Drives tree shaking: every `local_name` here is a root for the
-  // module's own pass.
-  exports : Array[@ast.TsExportSpec]
+  // module's own pass. The collision-resolver may rewrite the
+  // `local_name` side when a top-level binding gets renamed to
+  // avoid colliding with a same-named binding in another module.
+  mut exports : Array[@ast.TsExportSpec]
   // Re-exports of bindings from other modules. Each entry carries
   // the source module specifier and the names bridged through.
   // Drives tree shaking on the source module: `export { foo }
@@ -239,6 +241,12 @@ pub fn bundle_modules(
   // of the bundle so the consumer's loader / browser handles them.
   let external_imports : Array[@ast.TsImportDecl] = []
   let external_seen : Map[String, Bool] = {}
+  // Mid-load marker so circular imports don't recurse forever.
+  // `modules[path] = …` only happens at the very end of
+  // `load_module_graph`, so the standard "already in modules"
+  // guard fires too late when `a → b → a` loops back into `a`
+  // before `a`'s own load finishes.
+  let visiting : Map[String, Bool] = {}
   // `auto_reserve` and the type-aware `inline_immutable` relaxation
   // (passing a const to a `ReadonlyArray<T>` / `Readonly<T>`
   // parameter) both require the second parse for declaration tables.
@@ -246,12 +254,20 @@ pub fn bundle_modules(
     opts.inline_immutable
   match
     load_module_graph(
-      files, entry, modules, external_imports, external_seen, need_decls,
+      files, entry, modules, external_imports, external_seen, visiting, need_decls,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
   let order = topological_order(modules, entry)
+  // Resolve top-level identifier collisions across modules. When
+  // two modules each declare `function helper(...)` at top level,
+  // concatenating their stmts into one global scope produces
+  // `Identifier 'helper' has already been declared`. Rename the
+  // later occurrence to `helper$1` (etc.) and rewrite every
+  // reference within that module. Each module's `exports` table is
+  // updated in lockstep so the import-alias emit stays correct.
+  resolve_bundle_collisions(modules, order)
   if opts.tree_shake {
     tree_shake_bundle(modules, entry)
   }
@@ -439,11 +455,13 @@ fn load_module_graph(
   modules : Map[String, ModuleNode],
   external_imports : Array[@ast.TsImportDecl],
   external_seen : Map[String, Bool],
+  visiting : Map[String, Bool],
   need_decls : Bool,
 ) -> Result[Unit, String] {
-  if modules.contains(path) {
+  if modules.contains(path) || visiting.contains(path) {
     return Ok(())
   }
+  visiting[path] = true
   let source = match files.get(path) {
     Some(s) => s
     None => return Err("module not in vfs: \{path}")
@@ -492,6 +510,7 @@ fn load_module_graph(
             modules,
             external_imports,
             external_seen,
+            visiting,
             need_decls,
           ) {
           Ok(_) => ()
@@ -532,6 +551,7 @@ fn load_module_graph(
             modules,
             external_imports,
             external_seen,
+            visiting,
             need_decls,
           ) {
           Ok(_) => ()
@@ -761,6 +781,81 @@ fn bundle_block_size(
     }
   }
   total
+}
+
+///|
+/// Walk modules in topological order and rename any top-level
+/// binding whose name was already claimed by an earlier module.
+/// The block-level rename is shared with `collision.mbt`'s pass;
+/// here we also mirror the rename into each module's `exports`
+/// table so the bundle's import-alias emit lines up with the
+/// renamed binding's new name.
+fn resolve_bundle_collisions(
+  modules : Map[String, ModuleNode],
+  order : Array[String],
+) -> Unit {
+  let claimed : Map[String, Bool] = {}
+  for path in order {
+    let node = match modules.get(path) {
+      Some(n) => n
+      None => continue
+    }
+    let local_names : Array[String] = []
+    for n in collect_top_level_names_in_block(node.block) {
+      local_names.push(n)
+    }
+    let rename_map : Map[String, String] = {}
+    for name in local_names {
+      if claimed.contains(name) {
+        let mut n = 1
+        let mut candidate = name + "$" + n.to_string()
+        while claimed.contains(candidate) || rename_map.contains(candidate) {
+          n = n + 1
+          candidate = name + "$" + n.to_string()
+        }
+        rename_map[name] = candidate
+        claimed[candidate] = true
+      } else {
+        claimed[name] = true
+      }
+    }
+    if rename_map.size() == 0 {
+      continue
+    }
+    // Apply the rename to the module's stmt block.
+    node.block = rename_block_with(node.block, rename_map)
+    // Mirror onto `exports.local_name` — that's what `mangle_bundle`
+    // and the import-alias emit read. `export_name` stays untouched
+    // (the public name the consumer sees doesn't change).
+    let new_exports : Array[@ast.TsExportSpec] = []
+    for spec in node.exports {
+      let new_local = match rename_map.get(spec.local_name) {
+        Some(n) => n
+        None => spec.local_name
+      }
+      new_exports.push({ local_name: new_local, export_name: spec.export_name })
+    }
+    node.exports = new_exports
+  }
+}
+
+///|
+/// Public wrapper around the in-module renamer for `collision.mbt`'s
+/// existing API. Local helper alias so the bundler can call the
+/// rename pass without re-implementing the walker.
+fn rename_block_with(
+  block : @ast.TsBlock,
+  rename : Map[String, String],
+) -> @ast.TsBlock {
+  rename_block_top(block, rename)
+}
+
+///|
+/// Same as the unexported helper in `collision.mbt` — we re-export
+/// the name collection here so the bundle layer doesn't reach into
+/// another module's internals.
+fn collect_top_level_names_in_block(block : @ast.TsBlock) -> Array[String] {
+  collect_top_level_names(block)
 }
 
 ///|
