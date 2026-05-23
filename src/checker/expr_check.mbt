@@ -183,12 +183,196 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
 /// Look up a property on a value of type `recv` named `field`. Walks
 /// interfaces / classes / objects / arrays. Returns `None` when the property
 /// cannot be resolved structurally; callers fall back to `Any`.
+///|
+/// Well-known `Array.prototype.*` members specialised at the array's
+/// element type `elem`. Returns `None` for unrecognised members so the
+/// caller can fall back to its default behaviour (typically `Any`).
+/// Methods whose return / parameter types involve a callback-local
+/// generic (`map<U>`, `reduce<U>`, …) are handled separately in
+/// `infer_expr.MethodCall` so the callback's body can supply the
+/// instantiation; this function only returns the non-generic prototype
+/// shape for those entries so call-site checks still see a sensible
+/// formal-parameter type for the argument.
+fn array_prototype_member(
+  elem : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let arr_t = @ast.TsType::Array(elem)
+  let nullable_elem = narrow_union(elem, @ast.TsType::Undefined)
+  // Helper for `(value: T, index: number, array: T[]) => R` callback shapes.
+  let cb = fn(ret) {
+    @ast.TsType::Func([elem, @ast.TsType::Number, arr_t], ret)
+  }
+  let cb_bool = cb(@ast.TsType::Boolean)
+  match field {
+    // Properties
+    "length" => Some(@ast.TsType::Number)
+    // Numeric index access falls through to the element type.
+    "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => Some(elem)
+    // Mutating methods
+    "push" => Some(@ast.TsType::Func([elem], @ast.TsType::Number))
+    "pop" => Some(@ast.TsType::Func([], nullable_elem))
+    "shift" => Some(@ast.TsType::Func([], nullable_elem))
+    "unshift" => Some(@ast.TsType::Func([elem], @ast.TsType::Number))
+    "reverse" => Some(@ast.TsType::Func([], arr_t))
+    "sort" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([elem, elem], @ast.TsType::Number)],
+          arr_t,
+        ),
+      )
+    "fill" => Some(@ast.TsType::Func([elem], arr_t))
+    // Non-mutating producers
+    "concat" => Some(@ast.TsType::Func([arr_t], arr_t))
+    "slice" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Number, @ast.TsType::Number],
+          arr_t,
+        ),
+      )
+    "flat" => Some(@ast.TsType::Func([], arr_t))
+    "join" =>
+      Some(@ast.TsType::Func([@ast.TsType::String_], @ast.TsType::String_))
+    "toString" => Some(@ast.TsType::Func([], @ast.TsType::String_))
+    // Search / predicate
+    "indexOf" =>
+      Some(@ast.TsType::Func([elem, @ast.TsType::Number], @ast.TsType::Number))
+    "lastIndexOf" =>
+      Some(@ast.TsType::Func([elem, @ast.TsType::Number], @ast.TsType::Number))
+    "includes" =>
+      Some(@ast.TsType::Func([elem], @ast.TsType::Boolean))
+    "every" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
+    "some" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
+    "find" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
+    "findIndex" =>
+      Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
+    "findLast" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
+    "findLastIndex" =>
+      Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
+    // Iteration with element-type-preserving result
+    "filter" => Some(@ast.TsType::Func([cb_bool], arr_t))
+    "forEach" => Some(@ast.TsType::Func([cb(@ast.TsType::Void)], @ast.TsType::Void))
+    // Generic methods — the formal `U` shape is exposed here for the
+    // call-site contextual typing path to thread through, but the call
+    // site's `MethodCall` handler in `infer_expr` substitutes the real
+    // inferred return type. We use `Any` for the callback's return slot
+    // so the contextual-typing dispatch doesn't reject arrow bodies that
+    // legitimately produce any `U`.
+    "map" =>
+      Some(
+        @ast.TsType::Func(
+          [cb(@ast.TsType::Any)],
+          @ast.TsType::Array(@ast.TsType::Any),
+        ),
+      )
+    "flatMap" =>
+      Some(
+        @ast.TsType::Func(
+          [cb(@ast.TsType::Any)],
+          @ast.TsType::Array(@ast.TsType::Any),
+        ),
+      )
+    "reduce" =>
+      // (acc: U, cur: T, idx: number, arr: T[]) => U + initial U
+      Some(
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Func(
+              [
+                @ast.TsType::Any,
+                elem,
+                @ast.TsType::Number,
+                arr_t,
+              ],
+              @ast.TsType::Any,
+            ),
+            @ast.TsType::Any,
+          ],
+          @ast.TsType::Any,
+        ),
+      )
+    "reduceRight" =>
+      Some(
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Func(
+              [
+                @ast.TsType::Any,
+                elem,
+                @ast.TsType::Number,
+                arr_t,
+              ],
+              @ast.TsType::Any,
+            ),
+            @ast.TsType::Any,
+          ],
+          @ast.TsType::Any,
+        ),
+      )
+    _ => None
+  }
+}
+
+///|
 fn Resolver::lookup_field(
   self : Resolver,
   recv : @ast.TsType,
   field : String,
 ) -> @ast.TsType? {
   let unwrapped = self.unwrap(recv)
+  // Try the built-in prototype dispatchers first so a `Named("Date")` /
+  // `Named("RegExp")` receiver doesn't get masked by a missing-interface
+  // lookup in the generic `Named(n)` arm below.
+  match unwrapped {
+    Named("Date") =>
+      match date_prototype_member(field) {
+        Some(t) => return Some(t)
+        None => ()
+      }
+    Named("RegExp") =>
+      match regexp_prototype_member(field) {
+        Some(t) => return Some(t)
+        None => ()
+      }
+    Named(n) =>
+      if is_error_class_name(n) {
+        match error_prototype_member(field) {
+          Some(t) => return Some(t)
+          None => ()
+        }
+      } else {
+        match typed_array_element_type(n) {
+          Some(elem) =>
+            match typed_array_extra_member(field) {
+              Some(t) => return Some(t)
+              None =>
+                match array_prototype_member(elem, field) {
+                  Some(t) => return Some(t)
+                  None => ()
+                }
+            }
+          None => ()
+        }
+        match (n, field) {
+          // ArrayBuffer / DataView shape.
+          ("ArrayBuffer", "byteLength")
+          | ("SharedArrayBuffer", "byteLength")
+          | ("DataView", "byteLength")
+          | ("DataView", "byteOffset") => return Some(@ast.TsType::Number)
+          ("ArrayBuffer", "slice") | ("SharedArrayBuffer", "slice") =>
+            return Some(
+              @ast.TsType::Func(
+                [@ast.TsType::Number, @ast.TsType::Number],
+                @ast.TsType::Named(n),
+              ),
+            )
+          _ => ()
+        }
+      }
+    _ => ()
+  }
   match unwrapped {
     Named(n) =>
       match self.interfaces.get(n) {
@@ -200,13 +384,30 @@ fn Resolver::lookup_field(
           }
           // Walk `extends` chain one level (no cycle protection — the
           // checker's `check_module` already validates these).
-          for base in iface.extends_names {
-            match self.lookup_field(@ast.TsType::Named(base), field) {
+          let mut i = 0
+          while i < iface.extends_names.length() {
+            let base_name = iface.extends_names[i]
+            let base_args = if i < iface.extends_args.length() {
+              iface.extends_args[i]
+            } else {
+              []
+            }
+            let base_ty : @ast.TsType = if base_args.length() > 0 {
+              @ast.TsType::Applied(base_name, base_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            match self.lookup_field(base_ty, field) {
               Some(t) => return Some(t)
               None => ()
             }
+            i = i + 1
           }
-          None
+          // Index-signature fallback: when no named field / extends
+          // chain entry matched, consult the interface's index
+          // signatures so `d.foo` on `{ [k: string]: V }` resolves to
+          // `V` (and likewise for numeric keys).
+          index_signature_value(iface.index_signatures, field)
         }
         None =>
           match self.classes.get(n) {
@@ -216,6 +417,59 @@ fn Resolver::lookup_field(
       }
     // `Applied(N, [A, B, …])` — the type instantiates a generic
     // interface (or class). Substitute type-parameter names with the
+    // Built-in generic prototypes need to fire before the generic
+    // `Applied(n, args)` interface-lookup arm — otherwise the resolver
+    // would search for an `interface Array { ... }` declaration that
+    // doesn't exist and return `None`.
+    Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
+      array_prototype_member(elem, field)
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
+      promise_prototype_member(inner, field)
+    Applied("Map", [k, v]) | Applied("ReadonlyMap", [k, v]) =>
+      map_prototype_member(k, v, field)
+    Applied("Set", [t]) | Applied("ReadonlySet", [t]) =>
+      set_prototype_member(t, field)
+    Applied("WeakMap", [k, v]) => weakmap_prototype_member(k, v, field)
+    Applied("WeakSet", [t]) => weakset_prototype_member(t, field)
+    Applied("Iterable", [t])
+    | Applied("IterableIterator", [t])
+    | Applied("Iterator", [t]) => iterator_prototype_member(t, field)
+    // `Generator<T, TReturn, TNext>` — only `T` matters at our resolution.
+    Applied("Generator", args) if args.length() >= 1 =>
+      iterator_prototype_member(args[0], field)
+    Applied("AsyncIterable", [t])
+    | Applied("AsyncIterableIterator", [t])
+    | Applied("AsyncIterator", [t]) =>
+      async_iterator_prototype_member(t, field)
+    Applied("AsyncGenerator", args) if args.length() >= 1 =>
+      async_iterator_prototype_member(args[0], field)
+    // TypeScript utility types — handled at the lookup layer so we don't
+    // need a structural rewrite of the whole type. The handler returns
+    // the field's specialised type or `None` to keep falling through.
+    Applied("Record", [_, v]) => Some(v)
+    Applied("Partial", [t]) =>
+      match self.lookup_field(t, field) {
+        Some(inner) => Some(narrow_union(inner, @ast.TsType::Undefined))
+        None => None
+      }
+    Applied("Required", [t]) =>
+      match self.lookup_field(t, field) {
+        Some(inner) => Some(non_nullable(inner))
+        None => None
+      }
+    Applied("Readonly", [t]) => self.lookup_field(t, field)
+    Applied("Pick", [t, keys]) =>
+      if utility_keys_include(keys, field) {
+        self.lookup_field(t, field)
+      } else {
+        None
+      }
+    Applied("Omit", [t, keys]) =>
+      if utility_keys_include(keys, field) {
+        None
+      } else {
+        self.lookup_field(t, field)
+      }
     // supplied args before returning the field type so `b.value` on
     // `b: Box<number>` resolves to `number` rather than the raw `T`.
     Applied(n, args) =>
@@ -237,15 +491,85 @@ fn Resolver::lookup_field(
               return Some(substitute_params(f.1, bindings))
             }
           }
-          for base in iface.extends_names {
-            match self.lookup_field(@ast.TsType::Named(base), field) {
+          let mut j = 0
+          while j < iface.extends_names.length() {
+            let base_name = iface.extends_names[j]
+            let base_args = if j < iface.extends_args.length() {
+              iface.extends_args[j]
+            } else {
+              []
+            }
+            // Substitute the outer interface's bindings into the base's
+            // type args before recursing — `Sub<number> extends Box<T>`
+            // becomes a lookup against `Box<number>`, not `Box<T>`.
+            let substituted_args : Array[@ast.TsType] = []
+            for a in base_args {
+              substituted_args.push(substitute_params(a, bindings))
+            }
+            let base_ty : @ast.TsType = if substituted_args.length() > 0 {
+              @ast.TsType::Applied(base_name, substituted_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            match self.lookup_field(base_ty, field) {
               Some(t) => return Some(substitute_params(t, bindings))
               None => ()
             }
+            j = j + 1
           }
-          None
+          // Index-signature fallback with the outer-interface bindings
+          // applied to the signature's value type.
+          match index_signature_value(iface.index_signatures, field) {
+            Some(t) => Some(substitute_params(t, bindings))
+            None => None
+          }
         }
-        None => None
+        None =>
+          match self.classes.get(n) {
+            Some(cls) => {
+              // Same shape as the interface arm, walking class members
+              // (instance only — static members aren't reachable via
+              // `recv.field` on an instance).
+              let bindings : Map[String, @ast.TsType] = {}
+              let limit = if args.length() < cls.type_params.length() {
+                args.length()
+              } else {
+                cls.type_params.length()
+              }
+              let mut i = 0
+              while i < limit {
+                bindings[cls.type_params[i]] = args[i]
+                i = i + 1
+              }
+              for p in cls.properties {
+                if p.name == field && !p.is_static {
+                  return Some(substitute_params(p.type_, bindings))
+                }
+              }
+              for m in cls.methods {
+                if m.name == field && !m.is_static {
+                  let param_types : Array[@ast.TsType] = []
+                  for mp in m.params {
+                    param_types.push(substitute_params(mp.1, bindings))
+                  }
+                  return Some(
+                    @ast.TsType::Func(
+                      param_types,
+                      substitute_params(m.return_type, bindings),
+                    ),
+                  )
+                }
+              }
+              for base in cls.base_names {
+                match self.lookup_field(@ast.TsType::Named(base), field) {
+                  Some(t) => return Some(substitute_params(t, bindings))
+                  None => ()
+                }
+              }
+              None
+            }
+            None => None
+          }
       }
     Object(entries) => {
       for entry in entries {
@@ -264,12 +588,10 @@ fn Resolver::lookup_field(
       }
       None
     }
-    Array(elem) =>
-      match field {
-        "length" => Some(@ast.TsType::Number)
-        "0" | "1" | "2" | "3" => Some(elem)
-        _ => None
-      }
+    Array(elem) => array_prototype_member(elem, field)
+    Number | NumberLiteral(_) | Int => number_prototype_member(field)
+    Boolean | BooleanLiteral(_) => boolean_prototype_member(field)
+    Func(params, ret) => func_prototype_member(params, ret, field)
     Tuple(items) =>
       // Numeric field on a tuple → that element type.
       match (try? @strconv.parse_int(field)) {
@@ -280,11 +602,584 @@ fn Resolver::lookup_field(
             _ => None
           }
       }
-    String_ | Literal(_) =>
-      match field {
-        "length" => Some(@ast.TsType::Number)
-        _ => None
+    String_ | Literal(_) => string_prototype_member(field)
+    _ => None
+  }
+}
+
+///|
+/// Well-known `Promise.prototype.*` members. `inner` is the resolved-value
+/// type (the `T` in `Promise<T>`). The chainable `then` / `catch` /
+/// `finally` methods need callback-driven inference for the result type;
+/// they're handled in `infer_expr.MethodCall` so the result `Promise<U>`
+/// reflects the callback's body, similar to `Array.prototype.map`.
+fn promise_prototype_member(
+  inner : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let promise_t = @ast.TsType::Applied("Promise", [inner])
+  match field {
+    // Chain methods — return promise-typed; the call-site path
+    // substitutes the callback's return.
+    "then" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([inner], @ast.TsType::Any)],
+          promise_t,
+        ),
+      )
+    "catch" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Any)],
+          promise_t,
+        ),
+      )
+    "finally" =>
+      Some(@ast.TsType::Func([@ast.TsType::Func([], @ast.TsType::Void)], promise_t))
+    _ => None
+  }
+}
+
+///|
+/// Well-known `Map<K, V>` instance members specialised at the receiver's
+/// key / value types. Iterator-returning methods yield
+/// `Applied("IterableIterator", [...])` so downstream code paths can
+/// recognise them.
+fn map_prototype_member(
+  k : @ast.TsType,
+  v : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let map_t = @ast.TsType::Applied("Map", [k, v])
+  let bool_ = @ast.TsType::Boolean
+  let num = @ast.TsType::Number
+  let nullable_v = narrow_union(v, @ast.TsType::Undefined)
+  let entry_t = @ast.TsType::Tuple([k, v])
+  let iter_of = fn(t) { @ast.TsType::Applied("IterableIterator", [t]) }
+  match field {
+    "size" => Some(num)
+    "get" => Some(@ast.TsType::Func([k], nullable_v))
+    "set" => Some(@ast.TsType::Func([k, v], map_t))
+    "has" => Some(@ast.TsType::Func([k], bool_))
+    "delete" => Some(@ast.TsType::Func([k], bool_))
+    "clear" => Some(@ast.TsType::Func([], @ast.TsType::Void))
+    "keys" => Some(@ast.TsType::Func([], iter_of(k)))
+    "values" => Some(@ast.TsType::Func([], iter_of(v)))
+    "entries" => Some(@ast.TsType::Func([], iter_of(entry_t)))
+    "forEach" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([v, k, map_t], @ast.TsType::Void)],
+          @ast.TsType::Void,
+        ),
+      )
+    _ => None
+  }
+}
+
+///|
+/// Well-known `Set<T>` instance members. Mirrors `map_prototype_member`
+/// for the simpler single-type-parameter shape.
+fn set_prototype_member(
+  t : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let set_t = @ast.TsType::Applied("Set", [t])
+  let bool_ = @ast.TsType::Boolean
+  let num = @ast.TsType::Number
+  let iter_of = fn(x) { @ast.TsType::Applied("IterableIterator", [x]) }
+  match field {
+    "size" => Some(num)
+    "add" => Some(@ast.TsType::Func([t], set_t))
+    "has" => Some(@ast.TsType::Func([t], bool_))
+    "delete" => Some(@ast.TsType::Func([t], bool_))
+    "clear" => Some(@ast.TsType::Func([], @ast.TsType::Void))
+    "keys" | "values" => Some(@ast.TsType::Func([], iter_of(t)))
+    "entries" =>
+      Some(@ast.TsType::Func([], iter_of(@ast.TsType::Tuple([t, t]))))
+    "forEach" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([t, t, set_t], @ast.TsType::Void)],
+          @ast.TsType::Void,
+        ),
+      )
+    _ => None
+  }
+}
+
+///|
+/// `Date.prototype.*` members.
+fn date_prototype_member(field : String) -> @ast.TsType? {
+  let n = @ast.TsType::Number
+  let s = @ast.TsType::String_
+  match field {
+    "getTime" | "getFullYear" | "getMonth" | "getDate" | "getHours"
+    | "getMinutes" | "getSeconds" | "getMilliseconds" | "getDay"
+    | "getTimezoneOffset" | "getUTCFullYear" | "getUTCMonth" | "getUTCDate"
+    | "getUTCHours" | "getUTCMinutes" | "getUTCSeconds"
+    | "getUTCMilliseconds" | "getUTCDay" | "valueOf" =>
+      Some(@ast.TsType::Func([], n))
+    "setTime" | "setFullYear" | "setMonth" | "setDate" | "setHours"
+    | "setMinutes" | "setSeconds" | "setMilliseconds" | "setUTCFullYear"
+    | "setUTCMonth" | "setUTCDate" | "setUTCHours" | "setUTCMinutes"
+    | "setUTCSeconds" | "setUTCMilliseconds" =>
+      Some(@ast.TsType::Func([n], n))
+    "toString" | "toDateString" | "toTimeString" | "toLocaleString"
+    | "toLocaleDateString" | "toLocaleTimeString" | "toISOString"
+    | "toJSON" | "toUTCString" => Some(@ast.TsType::Func([], s))
+    _ => None
+  }
+}
+
+///|
+/// `Number.prototype.*` members. All numeric literal subtypes share the
+/// same prototype as the base `number` shape.
+fn number_prototype_member(field : String) -> @ast.TsType? {
+  let n = @ast.TsType::Number
+  let s = @ast.TsType::String_
+  match field {
+    "toFixed" | "toExponential" | "toPrecision" =>
+      Some(@ast.TsType::Func([n], s))
+    // `toString(radix?: number): string` — the radix argument is
+    // optional, so expose the zero-arg form so a bare `.toString()`
+    // call validates.
+    "toString" => Some(@ast.TsType::Func([], s))
+    "toLocaleString" => Some(@ast.TsType::Func([], s))
+    "valueOf" => Some(@ast.TsType::Func([], n))
+    _ => None
+  }
+}
+
+///|
+/// `Boolean.prototype.*` members.
+fn boolean_prototype_member(field : String) -> @ast.TsType? {
+  let b = @ast.TsType::Boolean
+  let s = @ast.TsType::String_
+  match field {
+    "toString" => Some(@ast.TsType::Func([], s))
+    "valueOf" => Some(@ast.TsType::Func([], b))
+    _ => None
+  }
+}
+
+///|
+/// `RegExp.prototype.*` members and the read-only flag accessors.
+fn regexp_prototype_member(field : String) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  let b = @ast.TsType::Boolean
+  let n = @ast.TsType::Number
+  let regex_t = @ast.TsType::Named("RegExp")
+  let exec_arr = @ast.TsType::Array(s)
+  match field {
+    // Methods
+    "test" => Some(@ast.TsType::Func([s], b))
+    "exec" =>
+      Some(@ast.TsType::Func([s], narrow_union(exec_arr, @ast.TsType::Null)))
+    "compile" => Some(@ast.TsType::Func([s, s], regex_t))
+    "toString" => Some(@ast.TsType::Func([], s))
+    // Properties
+    "source" | "flags" => Some(s)
+    "global" | "ignoreCase" | "multiline" | "sticky" | "unicode"
+    | "dotAll" | "unicodeSets" | "hasIndices" => Some(b)
+    "lastIndex" => Some(n)
+    _ => None
+  }
+}
+
+///|
+/// `IteratorResult<T>` synthesis: `{ value: T; done: boolean }`. Used by
+/// the iterator prototypes' `next()` / `return()` / `throw()` results.
+fn iterator_result_type(t : @ast.TsType) -> @ast.TsType {
+  @ast.TsType::Object([
+    (@ast.TsType::Literal("value"), t),
+    (@ast.TsType::Literal("done"), @ast.TsType::Boolean),
+  ])
+}
+
+///|
+/// `Iterator<T>` / `IterableIterator<T>` / `Generator<T>` members. The
+/// `next` / `return` / `throw` methods all surface `IteratorResult<T>`;
+/// the `[Symbol.iterator]` / `[Symbol.asyncIterator]` methods aren't
+/// expressible via a string key here so they fall through to `None`.
+fn iterator_prototype_member(
+  t : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let res = iterator_result_type(t)
+  match field {
+    "next" => Some(@ast.TsType::Func([], res))
+    "return" => Some(@ast.TsType::Func([t], res))
+    "throw" => Some(@ast.TsType::Func([@ast.TsType::Any], res))
+    _ => None
+  }
+}
+
+///|
+/// Async-variant iterator: `next/return/throw` resolve to
+/// `Promise<IteratorResult<T>>`.
+fn async_iterator_prototype_member(
+  t : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let res = @ast.TsType::Applied("Promise", [iterator_result_type(t)])
+  match field {
+    "next" => Some(@ast.TsType::Func([], res))
+    "return" => Some(@ast.TsType::Func([t], res))
+    "throw" => Some(@ast.TsType::Func([@ast.TsType::Any], res))
+    _ => None
+  }
+}
+
+///|
+/// `WeakMap<K, V>` instance members. Subset of `Map` — no `size` /
+/// iteration since the entries are weakly held.
+fn weakmap_prototype_member(
+  k : @ast.TsType,
+  v : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let map_t = @ast.TsType::Applied("WeakMap", [k, v])
+  let bool_ = @ast.TsType::Boolean
+  let nullable_v = narrow_union(v, @ast.TsType::Undefined)
+  match field {
+    "get" => Some(@ast.TsType::Func([k], nullable_v))
+    "set" => Some(@ast.TsType::Func([k, v], map_t))
+    "has" => Some(@ast.TsType::Func([k], bool_))
+    "delete" => Some(@ast.TsType::Func([k], bool_))
+    _ => None
+  }
+}
+
+///|
+/// `WeakSet<T>` instance members. Subset of `Set`.
+fn weakset_prototype_member(
+  t : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let set_t = @ast.TsType::Applied("WeakSet", [t])
+  let bool_ = @ast.TsType::Boolean
+  match field {
+    "add" => Some(@ast.TsType::Func([t], set_t))
+    "has" => Some(@ast.TsType::Func([t], bool_))
+    "delete" => Some(@ast.TsType::Func([t], bool_))
+    _ => None
+  }
+}
+
+///|
+/// `Function.prototype.{call, apply, bind, length, name}` members.
+/// `call` / `apply` return the inner function's return type; `bind`
+/// returns the same `Func(...)` shape (we don't model partial
+/// application of arguments here).
+fn func_prototype_member(
+  params : Array[@ast.TsType],
+  ret : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  let n = @ast.TsType::Number
+  let any = @ast.TsType::Any
+  match field {
+    // `call(thisArg, ...args)` — thisArg comes first, followed by the
+    // function's own parameter list. Returns the function's `ret`.
+    "call" => {
+      let call_params : Array[@ast.TsType] = [any]
+      for p in params {
+        call_params.push(p)
       }
+      Some(@ast.TsType::Func(call_params, ret))
+    }
+    "apply" =>
+      Some(@ast.TsType::Func([any, @ast.TsType::Array(any)], ret))
+    "bind" =>
+      Some(@ast.TsType::Func([any], @ast.TsType::Func(params, ret)))
+    "name" => Some(s)
+    "length" => Some(n)
+    "toString" => Some(@ast.TsType::Func([], s))
+    _ => None
+  }
+}
+
+///|
+/// Recognise built-in error-class names — `Error` and its subclasses
+/// inherit a stable instance shape (`message`, `name`, `stack`,
+/// `toString`).
+fn is_error_class_name(name : String) -> Bool {
+  match name {
+    "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+    | "EvalError" | "URIError" | "AggregateError" => true
+    _ => false
+  }
+}
+
+///|
+fn error_prototype_member(field : String) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  match field {
+    "message" | "name" => Some(s)
+    "stack" => Some(narrow_union(s, @ast.TsType::Undefined))
+    "toString" => Some(@ast.TsType::Func([], s))
+    _ => None
+  }
+}
+
+///|
+/// Element type of a typed-array class. Returns `None` for non-typed-array
+/// class names so callers know to fall through.
+fn typed_array_element_type(name : String) -> @ast.TsType? {
+  match name {
+    "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array"
+    | "Uint16Array" | "Int32Array" | "Uint32Array" | "Float32Array"
+    | "Float64Array" => Some(@ast.TsType::Number)
+    "BigInt64Array" | "BigUint64Array" => Some(@ast.TsType::BigInt)
+    _ => None
+  }
+}
+
+///|
+/// Extra members declared on the typed-array shape that don't appear on
+/// the regular `Array.prototype` (`buffer`, `byteLength`, `byteOffset`,
+/// `BYTES_PER_ELEMENT`, `subarray`, `set`, `copyWithin`).
+fn typed_array_extra_member(field : String) -> @ast.TsType? {
+  let n = @ast.TsType::Number
+  match field {
+    "buffer" => Some(@ast.TsType::Named("ArrayBuffer"))
+    "byteLength" | "byteOffset" | "BYTES_PER_ELEMENT" => Some(n)
+    "subarray" =>
+      Some(@ast.TsType::Func([n, n], @ast.TsType::Named("Uint8Array")))
+    "set" =>
+      Some(@ast.TsType::Func([@ast.TsType::Array(n), n], @ast.TsType::Void))
+    "copyWithin" =>
+      Some(@ast.TsType::Func([n, n], @ast.TsType::Named("Uint8Array")))
+    _ => None
+  }
+}
+
+///|
+/// Well-known global namespace static methods (`Object.keys`, `Math.max`,
+/// `Number.isNaN`, etc.). Returns the conventional `Func(...)` shape so
+/// `check_call_args_in_expr` validates argument types; the result type
+/// of generic-shaped statics (e.g. `Object.entries<T>`) is handled by
+/// `global_static_method_special` at the call site.
+fn global_namespace_method(
+  namespace : String,
+  method : String,
+) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  let n = @ast.TsType::Number
+  let b = @ast.TsType::Boolean
+  let any = @ast.TsType::Any
+  let str_arr = @ast.TsType::Array(s)
+  match (namespace, method) {
+    // Object.*
+    ("Object", "keys") => Some(@ast.TsType::Func([any], str_arr))
+    ("Object", "values") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    ("Object", "entries") =>
+      Some(@ast.TsType::Func([any], @ast.TsType::Array(@ast.TsType::Tuple([s, any]))))
+    ("Object", "assign") => Some(@ast.TsType::Func([any, any], any))
+    ("Object", "freeze") => Some(@ast.TsType::Func([any], any))
+    ("Object", "isFrozen") => Some(@ast.TsType::Func([any], b))
+    ("Object", "create") => Some(@ast.TsType::Func([any], any))
+    ("Object", "fromEntries") => Some(@ast.TsType::Func([any], any))
+    ("Object", "getPrototypeOf") => Some(@ast.TsType::Func([any], any))
+    ("Object", "setPrototypeOf") => Some(@ast.TsType::Func([any, any], any))
+    ("Object", "getOwnPropertyNames") => Some(@ast.TsType::Func([any], str_arr))
+    ("Object", "hasOwn") => Some(@ast.TsType::Func([any, s], b))
+    // Math.*
+    ("Math", "abs") | ("Math", "ceil") | ("Math", "floor") | ("Math", "round")
+    | ("Math", "trunc") | ("Math", "sign") | ("Math", "sqrt")
+    | ("Math", "cbrt") | ("Math", "exp") | ("Math", "log")
+    | ("Math", "log2") | ("Math", "log10") | ("Math", "log1p")
+    | ("Math", "expm1") | ("Math", "sin") | ("Math", "cos")
+    | ("Math", "tan") | ("Math", "asin") | ("Math", "acos")
+    | ("Math", "atan") | ("Math", "sinh") | ("Math", "cosh")
+    | ("Math", "tanh") | ("Math", "asinh") | ("Math", "acosh")
+    | ("Math", "atanh") => Some(@ast.TsType::Func([n], n))
+    ("Math", "pow") | ("Math", "atan2") | ("Math", "hypot") =>
+      Some(@ast.TsType::Func([n, n], n))
+    ("Math", "max") | ("Math", "min") => Some(@ast.TsType::Func([n], n))
+    ("Math", "random") => Some(@ast.TsType::Func([], n))
+    ("Math", "fround") | ("Math", "clz32") | ("Math", "imul") =>
+      Some(@ast.TsType::Func([n], n))
+    // Number.*
+    ("Number", "isInteger")
+    | ("Number", "isSafeInteger")
+    | ("Number", "isFinite")
+    | ("Number", "isNaN") => Some(@ast.TsType::Func([any], b))
+    ("Number", "parseFloat") => Some(@ast.TsType::Func([s], n))
+    ("Number", "parseInt") => Some(@ast.TsType::Func([s, n], n))
+    // String.* (constructor namespace, not prototype)
+    ("String", "fromCharCode") => Some(@ast.TsType::Func([n], s))
+    ("String", "fromCodePoint") => Some(@ast.TsType::Func([n], s))
+    ("String", "raw") => Some(@ast.TsType::Func([any], s))
+    // JSON.*
+    ("JSON", "parse") => Some(@ast.TsType::Func([s], any))
+    ("JSON", "stringify") => Some(@ast.TsType::Func([any], s))
+    // Array.*
+    ("Array", "isArray") => Some(@ast.TsType::Func([any], b))
+    ("Array", "of") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    ("Array", "from") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    // Boolean
+    ("Boolean", "constructor") => Some(@ast.TsType::Func([any], b))
+    // Symbol.*
+    ("Symbol", "for") => Some(@ast.TsType::Func([s], @ast.TsType::Symbol))
+    ("Symbol", "keyFor") => Some(@ast.TsType::Func([@ast.TsType::Symbol], s))
+    // Date.*
+    ("Date", "now") => Some(@ast.TsType::Func([], n))
+    ("Date", "parse") => Some(@ast.TsType::Func([s], n))
+    ("Date", "UTC") => Some(@ast.TsType::Func([n], n))
+    // Promise.*
+    ("Promise", "resolve") =>
+      Some(
+        @ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])),
+      )
+    ("Promise", "reject") =>
+      Some(
+        @ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])),
+      )
+    ("Promise", "all") | ("Promise", "race") | ("Promise", "any") =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Array(any)],
+          @ast.TsType::Applied("Promise", [any]),
+        ),
+      )
+    ("Promise", "allSettled") =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Array(any)],
+          @ast.TsType::Applied("Promise", [@ast.TsType::Array(any)]),
+        ),
+      )
+    // console.* — every method accepts any arg list and returns void.
+    // Modelled with a single-arg `Func` so the universally common
+    // `console.log("msg")` call validates; multi-arg calls fall through
+    // to the contextual-typing fallback.
+    ("console", "log") | ("console", "info") | ("console", "warn")
+    | ("console", "error") | ("console", "debug") | ("console", "trace")
+    | ("console", "dir") | ("console", "table") | ("console", "group")
+    | ("console", "groupCollapsed") | ("console", "groupEnd")
+    | ("console", "clear") | ("console", "count") | ("console", "countReset")
+    | ("console", "time") | ("console", "timeEnd") | ("console", "timeLog")
+    | ("console", "assert") | ("console", "dirxml") =>
+      Some(@ast.TsType::Func([any], @ast.TsType::Void))
+    _ => None
+  }
+}
+
+///|
+/// Generic-shaped static methods that need callback / argument-driven
+/// inference for their result type. Returns the specialised result type
+/// when the static call matches a recognised pattern; otherwise `None`,
+/// letting the caller use the conventional `Func` shape.
+fn global_static_method_special(
+  env : ExprEnv,
+  resolver : Resolver,
+  namespace : String,
+  method : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsType? {
+  match (namespace, method, args) {
+    // `Promise.resolve(value)` — yields `Promise<typeof value>`. If
+    // the value is itself a promise, flatten one level.
+    ("Promise", "resolve", [v]) => {
+      let inner = infer_expr(env, resolver, v)
+      let flat = match inner {
+        Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+        other => other
+      }
+      Some(@ast.TsType::Applied("Promise", [flat]))
+    }
+    // `Promise.all(arr)` — when `arr` infers to `Array(T)` (or a tuple
+    // shape), yield `Promise<Array(unwrap(T))>` so awaited values
+    // surface with the promise-unwrapped element type.
+    ("Promise", "all", [arr]) => {
+      let arr_ty = infer_expr(env, resolver, arr)
+      let elem = match array_element_type(resolver, arr_ty) {
+        Some(e) => e
+        None => @ast.TsType::Any
+      }
+      // Unwrap each element if it's `Promise<T>` so we end up with the
+      // resolved-value array.
+      let unwrapped = match elem {
+        Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+        other => other
+      }
+      Some(
+        @ast.TsType::Applied("Promise", [@ast.TsType::Array(unwrapped)]),
+      )
+    }
+    ("Promise", "race", [arr]) | ("Promise", "any", [arr]) => {
+      let arr_ty = infer_expr(env, resolver, arr)
+      let elem = match array_element_type(resolver, arr_ty) {
+        Some(e) => e
+        None => @ast.TsType::Any
+      }
+      let unwrapped = match elem {
+        Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+        other => other
+      }
+      Some(@ast.TsType::Applied("Promise", [unwrapped]))
+    }
+    // `JSON.parse(...)` returns `any` already by convention.
+    _ => None
+  }
+}
+
+///|
+/// Well-known `String.prototype.*` members. Strings are immutable in JS so
+/// every "mutating-looking" method returns a new string rather than
+/// modifying the receiver. We expose the most commonly used ones with
+/// concrete `Func(...)` signatures.
+fn string_prototype_member(field : String) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  let n = @ast.TsType::Number
+  let b = @ast.TsType::Boolean
+  let str_arr = @ast.TsType::Array(s)
+  match field {
+    // Properties
+    "length" => Some(n)
+    // Char access
+    "charAt" => Some(@ast.TsType::Func([n], s))
+    "charCodeAt" => Some(@ast.TsType::Func([n], n))
+    "codePointAt" => Some(@ast.TsType::Func([n], n))
+    "at" => Some(@ast.TsType::Func([n], narrow_union(s, @ast.TsType::Undefined)))
+    // Search
+    "indexOf" => Some(@ast.TsType::Func([s, n], n))
+    "lastIndexOf" => Some(@ast.TsType::Func([s, n], n))
+    "includes" => Some(@ast.TsType::Func([s], b))
+    "startsWith" => Some(@ast.TsType::Func([s], b))
+    "endsWith" => Some(@ast.TsType::Func([s], b))
+    "search" => Some(@ast.TsType::Func([s], n))
+    "match" => Some(@ast.TsType::Func([s], narrow_union(str_arr, @ast.TsType::Null)))
+    "matchAll" => Some(@ast.TsType::Func([s], str_arr))
+    // Transformation (returns string)
+    "slice" => Some(@ast.TsType::Func([n, n], s))
+    "substring" => Some(@ast.TsType::Func([n, n], s))
+    "substr" => Some(@ast.TsType::Func([n, n], s))
+    "replace" => Some(@ast.TsType::Func([s, s], s))
+    "replaceAll" => Some(@ast.TsType::Func([s, s], s))
+    "toLowerCase" => Some(@ast.TsType::Func([], s))
+    "toUpperCase" => Some(@ast.TsType::Func([], s))
+    "toLocaleLowerCase" => Some(@ast.TsType::Func([], s))
+    "toLocaleUpperCase" => Some(@ast.TsType::Func([], s))
+    "trim" => Some(@ast.TsType::Func([], s))
+    "trimStart" => Some(@ast.TsType::Func([], s))
+    "trimEnd" => Some(@ast.TsType::Func([], s))
+    "padStart" => Some(@ast.TsType::Func([n, s], s))
+    "padEnd" => Some(@ast.TsType::Func([n, s], s))
+    "repeat" => Some(@ast.TsType::Func([n], s))
+    "normalize" => Some(@ast.TsType::Func([s], s))
+    "concat" => Some(@ast.TsType::Func([s], s))
+    // Splitting
+    "split" => Some(@ast.TsType::Func([s], str_arr))
+    // Conversion
+    "toString" => Some(@ast.TsType::Func([], s))
+    "valueOf" => Some(@ast.TsType::Func([], s))
+    // Comparison
+    "localeCompare" => Some(@ast.TsType::Func([s], n))
     _ => None
   }
 }
@@ -597,7 +1492,115 @@ fn infer_expr(
       @ast.TsType::Any
     }
     MethodCall(receiver, method, args) => {
+      // Static namespace dispatch: `Object.keys(...)`, `Math.max(...)`,
+      // `Promise.resolve(...)` etc. — recognise the receiver by its bare
+      // identifier rather than its inferred type so we don't depend on
+      // ambient globals being declared.
+      match receiver {
+        Var(name) =>
+          match global_namespace_method(name, method) {
+            Some(sig) => {
+              // Apply per-method generic-style inference for the chosen
+              // static method, falling back to the conventional `Func`
+              // shape when no special path applies.
+              match global_static_method_special(
+                env, resolver, name, method, args,
+              ) {
+                Some(special_ret) => {
+                  // Walk args for nested call-site checks.
+                  for a in args {
+                    let _ = infer_expr(env, resolver, a)
+                  }
+                  return special_ret
+                }
+                None =>
+                  match sig {
+                    Func(_, ret) => {
+                      for a in args {
+                        let _ = infer_expr(env, resolver, a)
+                      }
+                      return ret
+                    }
+                    _ => ()
+                  }
+              }
+            }
+            None => ()
+          }
+        _ => ()
+      }
       let recv_ty = infer_expr(env, resolver, receiver)
+      // Special-case generic `Array.prototype.{map, flatMap, reduce}` so
+      // the callback's body / initial-value type flows into the result
+      // type instead of the synthetic `Any` slot returned by
+      // `array_prototype_member`.
+      let elem_opt = array_element_type(resolver, recv_ty)
+      match (elem_opt, method, args) {
+        (Some(elem), "map", [cb]) => {
+          let cb_ret = infer_arrow_body_with_params(
+            env, resolver, cb, [elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
+          )
+          return @ast.TsType::Array(cb_ret)
+        }
+        (Some(elem), "flatMap", [cb]) => {
+          let cb_ret = infer_arrow_body_with_params(
+            env, resolver, cb, [elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
+          )
+          // `flatMap` flattens one level: `T[] | T` → `T[]`.
+          let flattened = match cb_ret {
+            Array(inner) => inner
+            other => other
+          }
+          return @ast.TsType::Array(flattened)
+        }
+        (Some(elem), "reduce", [cb, init]) | (Some(elem), "reduceRight", [cb, init]) => {
+          let init_ty = infer_expr(env, resolver, init)
+          let cb_ret = infer_arrow_body_with_params(
+            env,
+            resolver,
+            cb,
+            [init_ty, elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
+          )
+          // The accumulator type unions the initial value with each
+          // callback return — keep both in case the callback widens.
+          return narrow_union(init_ty, cb_ret)
+        }
+        // `arr.filter((x): x is Foo => …)` — when the callback is
+        // declared as a type predicate, narrow the result array's
+        // element to the predicate's asserted type.
+        (Some(elem), "filter", [cb]) => {
+          match arrow_type_predicate_target(cb) {
+            Some(target) => return @ast.TsType::Array(target)
+            None => {
+              let _ = elem
+              ()
+            }
+          }
+        }
+        _ => ()
+      }
+      // `promise.then(cb)` — flow the callback's body return into the
+      // result `Promise<U>`. If the callback returns a `Promise<V>`,
+      // flatten it (chaining): the chain produces `Promise<V>`.
+      let promise_inner_opt = match resolver.unwrap(recv_ty) {
+        Applied("Promise", [t]) | Applied("PromiseLike", [t]) => Some(t)
+        _ => None
+      }
+      match (promise_inner_opt, method, args) {
+        (Some(inner), "then", [cb]) => {
+          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [inner])
+          let flattened = match cb_ret {
+            Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+            other => other
+          }
+          return @ast.TsType::Applied("Promise", [flattened])
+        }
+        (Some(inner), "catch", [_]) =>
+          return @ast.TsType::Applied("Promise", [inner])
+        (Some(inner), "finally", [_]) =>
+          return @ast.TsType::Applied("Promise", [inner])
+        _ => ()
+      }
       match resolver.lookup_method_sig(recv_ty, method) {
         Some((_params, ret)) => {
           for a in args {
@@ -628,6 +1631,18 @@ fn infer_expr(
     Yield(_) | YieldStar(_) => @ast.TsType::Any
     DynamicImport(_) | ImportMeta => @ast.TsType::Any
     PropAccess(receiver, name) => {
+      // Property-access narrowing: when the access is a `Var` /
+      // `PropAccess`-chain that the narrowing path tracks, look up the
+      // synthesised dotted env key first. Falls through to the
+      // structural resolver lookup when no narrowing binding exists.
+      match narrowing_key_for_expr(@ast.TsExpr::PropAccess(receiver, name)) {
+        Some(key) =>
+          match env.lookup(key) {
+            Some(narrowed) => return narrowed
+            None => ()
+          }
+        None => ()
+      }
       let recv_ty = infer_expr(env, resolver, receiver)
       match resolver.lookup_field(recv_ty, name) {
         Some(t) => t
@@ -635,6 +1650,18 @@ fn infer_expr(
       }
     }
     IndexAccess(receiver, index_expr) => {
+      // Index-access narrowing: if the access has a stable narrowing
+      // key (`arr[0]` / `m["k"]`) and an env binding exists, honour it.
+      match narrowing_key_for_expr(
+        @ast.TsExpr::IndexAccess(receiver, index_expr),
+      ) {
+        Some(key) =>
+          match env.lookup(key) {
+            Some(narrowed) => return narrowed
+            None => ()
+          }
+        None => ()
+      }
       let recv_ty = infer_expr(env, resolver, receiver)
       let idx_ty = infer_expr(env, resolver, index_expr)
       infer_index(resolver, recv_ty, idx_ty, index_expr)
@@ -648,14 +1675,21 @@ fn infer_expr(
       @ast.TsType::Object(fields)
     }
     ComputedProp(_, _) => @ast.TsType::Any
-    ArrowFunc(params, body, is_async) => {
+    ArrowFunc(params, declared_ret, body, is_async) => {
       let param_types : Array[@ast.TsType] = []
       for p in params {
         param_types.push(p.type_)
       }
-      let ret = match body {
-        ArrowExpr(e) => infer_expr(env, resolver, e)
-        ArrowBlock(_) => @ast.TsType::Any
+      // Prefer the explicit return-type annotation when one was supplied;
+      // fall back to inferring from the body expression for the
+      // `(x) => expr` shorthand.
+      let ret = if is_checkable(declared_ret) {
+        declared_ret
+      } else {
+        match body {
+          ArrowExpr(e) => infer_expr(env, resolver, e)
+          ArrowBlock(_) => @ast.TsType::Any
+        }
       }
       @ast.TsType::Func(param_types, wrap_async_return(is_async, ret))
     }
@@ -838,7 +1872,7 @@ fn infer_call(
 
 ///|
 fn infer_index(
-  _resolver : Resolver,
+  resolver : Resolver,
   recv : @ast.TsType,
   idx : @ast.TsType,
   idx_expr : @ast.TsExpr,
@@ -873,6 +1907,24 @@ fn infer_index(
     String_ | Literal(_) =>
       match idx {
         Number | Int | NumberLiteral(_) => @ast.TsType::String_
+        _ => @ast.TsType::Any
+      }
+    // Interface receivers — `obj[key]` runs through `lookup_field` so
+    // string-literal indices match named fields and (failing that) the
+    // index signature. Non-literal indices on an interface fall through
+    // to the catch-all `Any` since we can't narrow the lookup.
+    Named(_) | Applied(_, _) =>
+      match idx_expr {
+        StringLit(key) =>
+          match resolver.lookup_field(recv, key) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
+        IntLit(i) =>
+          match resolver.lookup_field(recv, i.to_string()) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
         _ => @ast.TsType::Any
       }
     _ => @ast.TsType::Any
@@ -964,7 +2016,7 @@ fn check_expr_against(
   // properly typed instead of falling through to `Any`.
   let expected_shape = ctx.resolver.unwrap(expected)
   match (expr, expected_shape) {
-    (ArrowFunc(arrow_params, body, is_async), Func(formal_params, formal_ret)) => {
+    (ArrowFunc(arrow_params, _declared_ret, body, is_async), Func(formal_params, formal_ret)) => {
       check_arrow_with_context(
         env, arrow_params, body, is_async, formal_params, formal_ret, ctx,
         sub_path,
@@ -1014,17 +2066,23 @@ fn check_expr_against(
       }
     // `Applied(N, [args])` — generic interface instance. Same shape
     // analysis as `Named`, with type-parameter substitution performed by
-    // `lookup_field` / `collect_declared_fields`.
-    (ObjectLit(entries), Applied(name, _)) =>
-      match ctx.resolver.interfaces.get(name) {
-        Some(_) => {
-          check_object_lit_against_target(
-            env, entries, expected_shape, ctx.resolver, ctx, sub_path,
-          )
-          return
-        }
-        None => ()
+    // `lookup_field` / `collect_declared_fields`. Utility types
+    // (Record / Partial / Required / Readonly / Pick / Omit) are also
+    // dispatched here even when they aren't backed by an interface
+    // declaration, since `lookup_field` / `collect_declared_fields`
+    // know how to project their field shapes.
+    (ObjectLit(entries), Applied(name, _)) => {
+      let is_utility = match name {
+        "Record" | "Partial" | "Required" | "Readonly" | "Pick" | "Omit" => true
+        _ => false
       }
+      if is_utility || ctx.resolver.interfaces.get(name) is Some(_) {
+        check_object_lit_against_target(
+          env, entries, expected_shape, ctx.resolver, ctx, sub_path,
+        )
+        return
+      }
+    }
     _ => ()
   }
   if !is_checkable(expected) {
@@ -1170,10 +2228,23 @@ fn collect_declared_fields(
           for f in iface.fields {
             out.push((f.0, f.1))
           }
-          for base in iface.extends_names {
-            for f in collect_declared_fields(@ast.TsType::Named(base), resolver) {
+          let mut i = 0
+          while i < iface.extends_names.length() {
+            let base_name = iface.extends_names[i]
+            let base_args = if i < iface.extends_args.length() {
+              iface.extends_args[i]
+            } else {
+              []
+            }
+            let base_ty : @ast.TsType = if base_args.length() > 0 {
+              @ast.TsType::Applied(base_name, base_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            for f in collect_declared_fields(base_ty, resolver) {
               out.push(f)
             }
+            i = i + 1
           }
         }
         None => ()
@@ -1198,13 +2269,56 @@ fn collect_declared_fields(
           for f in iface.fields {
             out.push((f.0, substitute_params(f.1, bindings)))
           }
-          for base in iface.extends_names {
-            for f in collect_declared_fields(@ast.TsType::Named(base), resolver) {
+          let mut j = 0
+          while j < iface.extends_names.length() {
+            let base_name = iface.extends_names[j]
+            let base_args = if j < iface.extends_args.length() {
+              iface.extends_args[j]
+            } else {
+              []
+            }
+            let substituted_args : Array[@ast.TsType] = []
+            for a in base_args {
+              substituted_args.push(substitute_params(a, bindings))
+            }
+            let base_ty : @ast.TsType = if substituted_args.length() > 0 {
+              @ast.TsType::Applied(base_name, substituted_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            for f in collect_declared_fields(base_ty, resolver) {
               out.push((f.0, substitute_params(f.1, bindings)))
             }
+            j = j + 1
           }
         }
         None => ()
+      }
+    // Utility-type field collection so object-literal contextual typing
+    // (missing-required / excess-property) honours the same rules.
+    Applied("Partial", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push((f.0, narrow_union(f.1, @ast.TsType::Undefined)))
+      }
+    Applied("Required", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push((f.0, non_nullable(f.1)))
+      }
+    Applied("Readonly", [t]) =>
+      for f in collect_declared_fields(t, resolver) {
+        out.push(f)
+      }
+    Applied("Pick", [t, keys]) =>
+      for f in collect_declared_fields(t, resolver) {
+        if utility_keys_include(keys, f.0) {
+          out.push(f)
+        }
+      }
+    Applied("Omit", [t, keys]) =>
+      for f in collect_declared_fields(t, resolver) {
+        if !utility_keys_include(keys, f.0) {
+          out.push(f)
+        }
       }
     _ => ()
   }
@@ -1216,6 +2330,147 @@ fn collect_declared_fields(
 /// expected, threading the formal parameter types through. Used to catch
 /// errors inside `arr.map(x => x.someProp)` where `x` would otherwise type
 /// as `Any`.
+///|
+/// If `callback` is an `ArrowFunc` / `FuncExpr` whose declared return
+/// type is a `TypePredicate(name, target)`, return `target`. Used to
+/// narrow `arr.filter(predicate)` result element type when the
+/// predicate is a user-defined type guard.
+fn arrow_type_predicate_target(
+  callback : @ast.TsExpr,
+) -> @ast.TsType? {
+  let ret_opt = match callback {
+    ArrowFunc(_, declared_ret, _, _) => Some(declared_ret)
+    FuncExpr(f) => Some(f.return_type)
+    _ => None
+  }
+  match ret_opt {
+    Some(TypePredicate(_, target)) => Some(target)
+    _ => None
+  }
+}
+
+///|
+/// If `ty` is one of the recognised array shapes (`Array(T)` or the
+/// `Applied("Array", [T])` / `Applied("ReadonlyArray", [T])` aliases),
+/// return its element type. Falls back to `None` otherwise so callers
+/// can skip the array-specific dispatch path.
+fn array_element_type(
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType? {
+  match resolver.unwrap(ty) {
+    Array(elem) => Some(elem)
+    Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) => Some(elem)
+    _ => None
+  }
+}
+
+///|
+/// Infer the return type of a callback expression when it's invoked with
+/// `formal_param_types`. Handles `ArrowFunc` (both expression and block
+/// bodies) and `FuncExpr` shapes; falls back to the existing
+/// `infer_expr` result for anything else (so opaque callbacks degrade to
+/// `Any` cleanly).
+fn infer_arrow_body_with_params(
+  outer : ExprEnv,
+  resolver : Resolver,
+  callback : @ast.TsExpr,
+  formal_param_types : Array[@ast.TsType],
+) -> @ast.TsType {
+  match callback {
+    ArrowFunc(arrow_params, declared_ret, body, is_async) => {
+      let env = ExprEnv::new()
+      for entry in outer.full_snapshot() {
+        env.bind(entry.0, entry.1)
+      }
+      let mut i = 0
+      while i < arrow_params.length() {
+        let p = arrow_params[i]
+        let ty = if is_checkable(p.type_) {
+          p.type_
+        } else if i < formal_param_types.length() {
+          formal_param_types[i]
+        } else {
+          p.type_
+        }
+        env.bind(p.name, ty)
+        i = i + 1
+      }
+      // Prefer the explicit return-type annotation; fall back to body
+      // inference when omitted.
+      let inner = if is_checkable(declared_ret) {
+        declared_ret
+      } else {
+        match body {
+          ArrowExpr(e) => infer_expr(env, resolver, e)
+          ArrowBlock(block) => infer_block_return(env, resolver, block)
+        }
+      }
+      wrap_async_return(is_async, inner)
+    }
+    FuncExpr(f) => {
+      let env = ExprEnv::new()
+      for entry in outer.full_snapshot() {
+        env.bind(entry.0, entry.1)
+      }
+      let mut i = 0
+      while i < f.params.length() {
+        let p = f.params[i]
+        let ty = if is_checkable(p.type_) {
+          p.type_
+        } else if i < formal_param_types.length() {
+          formal_param_types[i]
+        } else {
+          p.type_
+        }
+        env.bind(p.name, ty)
+        i = i + 1
+      }
+      if is_checkable(f.return_type) {
+        wrap_async_return(f.is_async, f.return_type)
+      } else {
+        let inner = infer_block_return(env, resolver, f.body)
+        wrap_async_return(f.is_async, inner)
+      }
+    }
+    _ => infer_expr(outer, resolver, callback)
+  }
+}
+
+///|
+/// Walk a block looking for `Return(Some(expr))` statements and union
+/// their inferred types. Used by callback-body inference where we need
+/// the result type of a block-bodied arrow / function expression.
+fn infer_block_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  block : @ast.TsBlock,
+) -> @ast.TsType {
+  let mut acc : @ast.TsType = @ast.TsType::Undefined
+  let mut first = true
+  for stmt in block.stmts {
+    match stmt {
+      Return(Some(e)) => {
+        let t = infer_expr(env, resolver, e)
+        if first {
+          acc = t
+          first = false
+        } else {
+          acc = narrow_union(acc, t)
+        }
+      }
+      Return(None) =>
+        if first {
+          acc = @ast.TsType::Undefined
+          first = false
+        }
+      _ => ()
+    }
+  }
+  if first { @ast.TsType::Undefined } else { acc }
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
@@ -1973,12 +3228,19 @@ fn collect_narrowing(
         }
         None => ()
       }
-      // `x instanceof C` narrows on equality only.
+      // `x instanceof C` narrows on equality only. Accept any
+      // Var / PropAccess-chain on the left so nested access like
+      // `obj.payload.err instanceof TypeError` narrows.
       match op {
-        Instanceof =>
-          match (left, right) {
-            (Var(name), Var(class_name)) => {
-              let cur = env_lookup_full(env, resolver, name)
+        Instanceof => {
+          let lhs_key = narrowing_key_for_expr(left)
+          let class_name_opt = match right {
+            Var(c) => Some(c)
+            _ => None
+          }
+          match (lhs_key, class_name_opt) {
+            (Some(key), Some(class_name)) => {
+              let cur = narrowing_current_type(env, resolver, key)
               let class_ty = @ast.TsType::Named(class_name)
               let then_ty = narrow_keep(cur, fn(v) {
                 match v {
@@ -1986,23 +3248,22 @@ fn collect_narrowing(
                   _ => false
                 }
               })
-              // If keep yielded Never, but the original is opaque (Any) we
-              // should still narrow to the class type.
               let then_resolved = match then_ty {
                 Never => class_ty
                 _ => then_ty
               }
-              pair_pos.push((name, then_resolved))
+              pair_pos.push((key, then_resolved))
               let else_ty = narrow_remove(cur, fn(v) {
                 match v {
                   Named(n) => n == class_name
                   _ => false
                 }
               })
-              pair_neg.push((name, else_ty))
+              pair_neg.push((key, else_ty))
             }
             _ => ()
           }
+        }
         // `"key" in obj` — narrow `obj`'s union to members that own `key`.
         In =>
           match (left, right) {
@@ -2025,12 +3286,6 @@ fn collect_narrowing(
         _ => ()
       }
     }
-    // `if (x)` — truthy narrowing strips null/undefined in then-branch.
-    Var(name) =>
-      if then_sense {
-        let cur = env_lookup_full(env, resolver, name)
-        then_binds.push((name, non_nullable(cur)))
-      }
     // `if (isFoo(v))` — user-defined type guard. When the callee's
     // declared return type is `paramName is T`, the corresponding
     // positional argument is narrowed to `T` in the then-branch and the
@@ -2049,6 +3304,20 @@ fn collect_narrowing(
         env, resolver, receiver, method_name, args, pair_pos, pair_neg,
       )
     }
+    // `if (x)` / `if (obj.prop)` / `if (obj.a.b)` — truthy narrowing
+    // strips null / undefined under the synthesised key. Bare `Var(_)`
+    // and arbitrary-depth `PropAccess(...)` chains share the same path
+    // via `narrowing_key_for_expr`. Must come after the `Call` /
+    // `MethodCall` arms so type-predicate narrowing isn't shadowed by
+    // this catch-all guard.
+    _ if then_sense =>
+      match narrowing_key_for_expr(cond) {
+        Some(key) => {
+          let cur = narrowing_current_type(env, resolver, key)
+          then_binds.push((key, non_nullable(cur)))
+        }
+        None => ()
+      }
     _ => ()
   }
 }
@@ -2165,6 +3434,212 @@ fn apply_method_type_predicate_narrowing(
 ///|
 /// Look up `name`'s current type via env first, then resolver globals,
 /// defaulting to `Any`.
+///|
+/// Resolve the current type of a `name.prop` access — first via any
+/// narrowing binding under the synthetic `name.prop` env key, then via
+/// the receiver's structural shape.
+fn prop_access_current_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  prop : String,
+) -> @ast.TsType {
+  match env.lookup(name + "." + prop) {
+    Some(t) => t
+    None => {
+      let recv_ty = env_lookup_full(env, resolver, name)
+      match resolver.lookup_field(recv_ty, prop) {
+        Some(t) => t
+        None => @ast.TsType::Any
+      }
+    }
+  }
+}
+
+///|
+/// Flatten a `Var(...)` / `PropAccess(...)` / literal-`IndexAccess(...)`
+/// chain into a dotted key for the narrowing env. Returns `None` when
+/// the chain bottoms out at anything other than `Var(name)`.
+///
+/// Examples:
+///   `Var("c")`                                       → Some("c")
+///   `PropAccess(Var("c"), "name")`                   → Some("c.name")
+///   `PropAccess(PropAccess(Var("c"), "a"), "b")`     → Some("c.a.b")
+///   `IndexAccess(Var("arr"), IntLit(0))`             → Some("arr[0]")
+///   `IndexAccess(Var("m"), StringLit("k"))`          → Some("m[\"k\"]")
+fn narrowing_key_for_expr(expr : @ast.TsExpr) -> String? {
+  match expr {
+    Var(name) => Some(name)
+    PropAccess(inner, prop) =>
+      match narrowing_key_for_expr(inner) {
+        Some(prefix) => Some(prefix + "." + prop)
+        None => None
+      }
+    IndexAccess(inner, idx) =>
+      match narrowing_key_for_expr(inner) {
+        Some(prefix) => {
+          // Only literal indices give a stable narrowing key; computed
+          // indices (e.g. `arr[i]` with a Var index) can't be tracked
+          // statically.
+          let idx_key = match idx {
+            IntLit(i) => Some("[\{i}]")
+            NumberLit(d) => Some("[\{d}]")
+            StringLit(s) => Some("[\"\{s}\"]")
+            _ => None
+          }
+          match idx_key {
+            Some(k) => Some(prefix + k)
+            None => None
+          }
+        }
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Resolve the "current" type for an arbitrary narrowing key — either a
+/// plain identifier or the synthesised `name.prop` form. Splitting on
+/// the first `.` lets the property-access narrowing path reuse
+/// `prop_access_current_type` so the starting type for `typeof
+/// obj.prop === "string"` is the structural shape of `obj.prop` rather
+/// than the catch-all `Any`.
+fn narrowing_current_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  key : String,
+) -> @ast.TsType {
+  // First-pass: a previously-set narrowing binding under the same key
+  // wins — that's how nested chains like `c.a.b` recover the refined
+  // type even though `lookup_field` on the receiver would re-derive
+  // the original.
+  match env.lookup(key) {
+    Some(t) => return t
+    None => ()
+  }
+  // Index-access key like `arr[0]` / `m["k"]`. Split off the trailing
+  // bracket segment and resolve the prefix, then descend by element
+  // type / tuple slot.
+  if key.length() > 0 && key[key.length() - 1] == ']' {
+    match key.rev_find("[") {
+      Some(open_idx) => {
+        let prefix = key[:open_idx].to_string()
+        let inner = key[open_idx + 1:key.length() - 1].to_string()
+        let prefix_ty = narrowing_current_type(env, resolver, prefix)
+        let elem = index_into_type(resolver, prefix_ty, inner)
+        return elem
+      }
+      None => ()
+    }
+  }
+  match key.rev_find(".") {
+    Some(idx) => {
+      let prefix = key[:idx].to_string()
+      let leaf = key[idx + 1:].to_string()
+      // Recursively resolve the prefix's current type, then read the
+      // leaf field from the resolver. This lets `c.a.b` go through
+      // `narrowing_current_type("c.a") -> field "b"`.
+      let prefix_ty = narrowing_current_type(env, resolver, prefix)
+      match resolver.lookup_field(prefix_ty, leaf) {
+        Some(t) => t
+        None => @ast.TsType::Any
+      }
+    }
+    None => env_lookup_full(env, resolver, key)
+  }
+}
+
+///|
+/// Read an element type from an indexable shape. `inner` is the raw
+/// bracket contents — `0`, `"k"`, etc. Used by both narrowing key
+/// resolution and the structural `IndexAccess` lookup path.
+///|
+/// Resolve a field name against an interface's index signatures. Returns
+/// `Some(value_type)` when the field name's lexical category (numeric vs
+/// other) matches one of the declared signatures. Numeric keys (parseable
+/// as an integer) prefer the `[k: number]` signature when available;
+/// otherwise the `[k: string]` signature is the catch-all.
+fn index_signature_value(
+  signatures : Array[(@ast.TsType, @ast.TsType)],
+  field : String,
+) -> @ast.TsType? {
+  let is_numeric = (try? @strconv.parse_int(field)) is Ok(_)
+  let mut numeric_value : @ast.TsType? = None
+  let mut string_value : @ast.TsType? = None
+  for sig in signatures {
+    match sig.0 {
+      Number | Int => numeric_value = Some(sig.1)
+      String_ | Literal(_) => string_value = Some(sig.1)
+      _ => ()
+    }
+  }
+  if is_numeric {
+    match numeric_value {
+      Some(t) => return Some(t)
+      None => ()
+    }
+  }
+  string_value
+}
+
+///|
+/// Test whether a string-literal `field` is present in a `keys` type
+/// expressed as a string literal or a union of string literals. Used by
+/// the `Pick<T, K>` / `Omit<T, K>` utility-type field lookups.
+fn utility_keys_include(keys : @ast.TsType, field : String) -> Bool {
+  match keys {
+    Literal(s) => s == field
+    Union(parts) => {
+      for p in parts {
+        match p {
+          Literal(s) if s == field => return true
+          _ => ()
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+fn index_into_type(
+  resolver : Resolver,
+  recv : @ast.TsType,
+  inner : String,
+) -> @ast.TsType {
+  let shape = resolver.unwrap(recv)
+  // Quoted string key — strip the surrounding quotes and run a field
+  // lookup so `m["k"]` resolves through the object / interface shape.
+  if inner.length() >= 2 &&
+    inner[0] == '"' &&
+    inner[inner.length() - 1] == '"' {
+    let key = inner[1:inner.length() - 1].to_string()
+    return match resolver.lookup_field(shape, key) {
+      Some(t) => t
+      None => @ast.TsType::Any
+    }
+  }
+  // Numeric index — read tuple slot or array element.
+  let idx = (try? @strconv.parse_int(inner)) is Ok(_)
+  if idx {
+    match shape {
+      Array(elem) => return elem
+      Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
+        return elem
+      Tuple(items) =>
+        match (try? @strconv.parse_int(inner)) {
+          Ok(i) if i >= 0 && i < items.length() => return items[i]
+          _ => return @ast.TsType::Any
+        }
+      _ => return @ast.TsType::Any
+    }
+  }
+  @ast.TsType::Any
+}
+
+///|
 fn env_lookup_full(
   env : ExprEnv,
   resolver : Resolver,
@@ -2197,9 +3672,20 @@ fn analyze_equality(
   false_side : Array[(String, @ast.TsType)],
 ) -> Unit {
   // `typeof x === "string"` — canonical form.
+  // `typeof <expr> === "string"` — accept any Var / PropAccess chain on
+  // the operand position so `typeof c.a.b === "string"` narrows the
+  // nested access.
   let typeof_match = match (left, right) {
-    (UnaryOp(Typeof, Var(name)), StringLit(s)) => Some((name, s))
-    (StringLit(s), UnaryOp(Typeof, Var(name))) => Some((name, s))
+    (UnaryOp(Typeof, operand), StringLit(s)) =>
+      match narrowing_key_for_expr(operand) {
+        Some(k) => Some((k, s))
+        None => None
+      }
+    (StringLit(s), UnaryOp(Typeof, operand)) =>
+      match narrowing_key_for_expr(operand) {
+        Some(k) => Some((k, s))
+        None => None
+      }
     _ => None
   }
   match typeof_match {
@@ -2207,8 +3693,10 @@ fn analyze_equality(
       match typeof_string_to_type(ts) {
         Some(narrowed) => {
           true_side.push((name, narrowed))
-          // Else side: remove variants matching that primitive.
-          let cur = env_lookup_full(env, resolver, name)
+          // Else side: remove variants matching that primitive. Use the
+          // shared helper so a `name.prop` key resolves through the
+          // property-access path instead of returning `Any`.
+          let cur = narrowing_current_type(env, resolver, name)
           let stripped = narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
           false_side.push((name, stripped))
         }
@@ -2217,43 +3705,77 @@ fn analyze_equality(
     None => ()
   }
 
-  // `x === null` / `x === undefined`. `undefined` parses as either
-  // `Var("undefined")` or `UnaryOp(Void, ...)` (the spec-mandated form).
+  // `<expr> === null` / `<expr> === undefined` — accepts any
+  // `Var` / `PropAccess`-chain operand. `undefined` parses as either
+  // `Var("undefined")`, `UnaryOp(Void, ...)`, or the bare `undefined`
+  // keyword (spec-mandated form).
   let null_match = match (left, right) {
-    (Var(name), NullLit) => Some((name, @ast.TsType::Null))
-    (NullLit, Var(name)) => Some((name, @ast.TsType::Null))
-    (Var(name), UnaryOp(Void, _)) => Some((name, @ast.TsType::Undefined))
-    (UnaryOp(Void, _), Var(name)) => Some((name, @ast.TsType::Undefined))
-    (Var(name), Var("undefined")) if name != "undefined" =>
-      Some((name, @ast.TsType::Undefined))
-    (Var("undefined"), Var(name)) if name != "undefined" =>
-      Some((name, @ast.TsType::Undefined))
+    (e, NullLit) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, @ast.TsType::Null))
+        None => None
+      }
+    (NullLit, e) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, @ast.TsType::Null))
+        None => None
+      }
+    (e, UnaryOp(Void, _)) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, @ast.TsType::Undefined))
+        None => None
+      }
+    (UnaryOp(Void, _), e) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, @ast.TsType::Undefined))
+        None => None
+      }
+    (e, Var("undefined")) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) if k != "undefined" => Some((k, @ast.TsType::Undefined))
+        _ => None
+      }
+    (Var("undefined"), e) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) if k != "undefined" => Some((k, @ast.TsType::Undefined))
+        _ => None
+      }
     _ => None
   }
   match null_match {
-    Some((name, tag)) => {
-      let cur = env_lookup_full(env, resolver, name)
-      true_side.push((name, tag))
+    Some((key, tag)) => {
+      let cur = narrowing_current_type(env, resolver, key)
+      true_side.push((key, tag))
       let stripped = narrow_remove(cur, fn(v) { type_eq(v, tag) })
-      false_side.push((name, stripped))
+      false_side.push((key, stripped))
     }
     None => ()
   }
 
-  // `obj.prop === "literal"` — discriminated union.
+  // `<chain>.<prop> === "literal"` — discriminated union narrowing on
+  // the parent chain. Accepts any `Var` / `PropAccess`-chain on the LHS
+  // so `o.shape.kind === "circle"` narrows `o.shape`.
   let disc_match = match (left, right) {
-    (PropAccess(Var(name), prop), StringLit(lit)) => Some((name, prop, lit))
-    (StringLit(lit), PropAccess(Var(name), prop)) => Some((name, prop, lit))
+    (PropAccess(parent, prop), StringLit(lit)) =>
+      match narrowing_key_for_expr(parent) {
+        Some(parent_key) => Some((parent_key, prop, lit))
+        None => None
+      }
+    (StringLit(lit), PropAccess(parent, prop)) =>
+      match narrowing_key_for_expr(parent) {
+        Some(parent_key) => Some((parent_key, prop, lit))
+        None => None
+      }
     _ => None
   }
   match disc_match {
-    Some((name, prop, lit)) => {
-      let cur = env_lookup_full(env, resolver, name)
+    Some((parent_key, prop, lit)) => {
+      let cur = narrowing_current_type(env, resolver, parent_key)
       match narrow_by_discriminant(resolver, cur, prop, lit, true) {
         Some(then_ty) => {
-          true_side.push((name, then_ty))
+          true_side.push((parent_key, then_ty))
           match narrow_by_discriminant(resolver, cur, prop, lit, false) {
-            Some(else_ty) => false_side.push((name, else_ty))
+            Some(else_ty) => false_side.push((parent_key, else_ty))
             None => ()
           }
         }
@@ -2263,15 +3785,26 @@ fn analyze_equality(
     None => ()
   }
 
-  // `x === "literal"` — literal union narrowing.
+  // `<chain> === "literal"` — literal-union narrowing on the chain
+  // itself. `Var("s") === "a"` narrows `s`; `c.kind === "a"` narrows
+  // `c.kind` (separate from the disc_match above, which narrows the
+  // parent rather than the leaf).
   let lit_match = match (left, right) {
-    (Var(name), StringLit(lit)) => Some((name, lit))
-    (StringLit(lit), Var(name)) => Some((name, lit))
+    (lhs, StringLit(lit)) =>
+      match narrowing_key_for_expr(lhs) {
+        Some(key) => Some((key, lit))
+        None => None
+      }
+    (StringLit(lit), rhs) =>
+      match narrowing_key_for_expr(rhs) {
+        Some(key) => Some((key, lit))
+        None => None
+      }
     _ => None
   }
   match lit_match {
     Some((name, lit)) => {
-      let cur = env_lookup_full(env, resolver, name)
+      let cur = narrowing_current_type(env, resolver, name)
       match cur {
         Union(_) => {
           let kept = narrow_keep(cur, fn(v) {
@@ -2667,11 +4200,27 @@ fn check_call_args_in_expr(
       }
     }
     MethodCall(receiver, method, args) => {
-      let recv_ty = infer_expr(env, ctx.resolver, receiver)
-      match ctx.resolver.lookup_method_sig(recv_ty, method) {
-        Some((params, _)) =>
+      // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
+      // Recognised by the bare-identifier shape of the receiver.
+      let static_params : Array[@ast.TsType]? = match receiver {
+        Var(name) =>
+          match global_namespace_method(name, method) {
+            Some(Func(params, _)) => Some(params)
+            _ => None
+          }
+        _ => None
+      }
+      match static_params {
+        Some(params) =>
           check_arguments(env, params, args, ctx, "call `\{method}`")
-        None => ()
+        None => {
+          let recv_ty = infer_expr(env, ctx.resolver, receiver)
+          match ctx.resolver.lookup_method_sig(recv_ty, method) {
+            Some((params, _)) =>
+              check_arguments(env, params, args, ctx, "call `\{method}`")
+            None => ()
+          }
+        }
       }
       check_call_args_in_expr(env, receiver, ctx)
       for a in args {

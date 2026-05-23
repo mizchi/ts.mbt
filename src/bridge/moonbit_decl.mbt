@@ -1241,7 +1241,7 @@ fn synthesize_func_from_expr(
         is_generator: func.is_generator,
         is_async: func.is_async,
       })
-    @ast.TsExpr::ArrowFunc(params, body, is_async) => {
+    @ast.TsExpr::ArrowFunc(params, _declared_ret, body, is_async) => {
       let normalized_params = merge_func_param_types(params, declared_type)
       let normalized_body = match body {
         @ast.TsArrowBody::ArrowExpr(expr) =>
@@ -2680,6 +2680,7 @@ fn props_with_children_named_interface_spec(
         name: props_with_children_interface_name(origin.export_name),
         type_params: [],
         extends_names: [],
+    extends_args: [],
         fields,
         readonly_fields: readonly_fields_for_fields(
           origin.iface.readonly_fields,
@@ -2731,6 +2732,7 @@ fn props_with_children_interface_spec(
         name: props_with_children_object_interface_name(inner_fields),
         type_params: [],
         extends_names: [],
+    extends_args: [],
         fields,
         readonly_fields: [],
         index_signatures: [],
@@ -2841,6 +2843,7 @@ fn component_props_with_ref_interface_spec(
             name: component_props_with_ref_interface_name(origin.export_name),
             type_params: [],
             extends_names: [],
+    extends_args: [],
             fields,
             readonly_fields: readonly_fields_for_fields(
               origin.iface.readonly_fields,
@@ -3003,6 +3006,7 @@ fn utility_mapped_interface_spec(
         name: utility_mapped_interface_name(origin.export_name, op_name),
         type_params: [],
         extends_names: [],
+    extends_args: [],
         fields,
         readonly_fields: if op_name == "Readonly" {
           all_field_names(fields)
@@ -3065,6 +3069,7 @@ fn utility_projection_interface_spec(
         ),
         type_params: [],
         extends_names: [],
+    extends_args: [],
         fields,
         readonly_fields: readonly_fields_for_fields(
           origin.iface.readonly_fields,
@@ -3848,6 +3853,7 @@ fn type_alias_record_to_interface_fields(
     name: "RecordSynthetic",
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields,
     readonly_fields: [],
     index_signatures: [],
@@ -3936,6 +3942,7 @@ fn project_interface_fields(
     name: iface.name,
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields,
     readonly_fields: readonly_fields_for_fields(iface.readonly_fields, fields),
     index_signatures: [],
@@ -3960,6 +3967,7 @@ fn map_interface_fields(
     name: iface.name,
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields,
     readonly_fields: if op_name == "Readonly" {
       all_field_names(fields)
@@ -4026,6 +4034,7 @@ fn type_alias_object_to_interface(
         name: type_alias.name,
         type_params: [],
         extends_names: [],
+    extends_args: [],
         fields: iface_fields,
         readonly_fields: [],
         index_signatures: [],
@@ -5306,6 +5315,7 @@ fn tuple_result_interface_spec(
           name: tuple_result_interface_name(export_name),
           type_params: [],
           extends_names: [],
+    extends_args: [],
           fields,
           readonly_fields: [],
           index_signatures: [],
@@ -5351,6 +5361,7 @@ fn inline_object_result_interface_spec(
           name: tuple_result_interface_name(export_name),
           type_params: [],
           extends_names: [],
+    extends_args: [],
           fields: iface_fields,
           readonly_fields: [],
           index_signatures: [],
@@ -5699,6 +5710,7 @@ fn normalize_specialized_node_interfaces(
       name: "CpuInfoTimes",
       type_params: [],
       extends_names: [],
+    extends_args: [],
       fields: [
         ("user", @ast.TsType::Number),
         ("nice", @ast.TsType::Number),
@@ -5716,6 +5728,7 @@ fn normalize_specialized_node_interfaces(
         name: "CipherAADOptions",
         type_params: [],
         extends_names: [],
+    extends_args: [],
         fields: [("plaintextLength", @ast.TsType::Number)],
         readonly_fields: [],
         index_signatures: [],
@@ -5726,6 +5739,7 @@ fn normalize_specialized_node_interfaces(
         name: "GenerateKeyOptions",
         type_params: [],
         extends_names: [],
+    extends_args: [],
         fields: [("length", @ast.TsType::Number)],
         readonly_fields: [],
         index_signatures: [],
@@ -5736,6 +5750,7 @@ fn normalize_specialized_node_interfaces(
         name: "DiffieHellmanOptions",
         type_params: [],
         extends_names: [],
+    extends_args: [],
         fields: [
           ("privateKey", @ast.TsType::Named("KeyObject")),
           ("publicKey", @ast.TsType::Named("KeyObject")),
@@ -5751,6 +5766,7 @@ fn normalize_specialized_node_interfaces(
       name: "BuiltinEnvironments",
       type_params: [],
       extends_names: [],
+    extends_args: [],
       fields: [
         ("node", @ast.TsType::Named("Environment")),
         ("jsdom", @ast.TsType::Named("Environment")),
@@ -5872,6 +5888,7 @@ fn clone_resolved_interface_origin(
     name: origin.export_name,
     type_params: origin.iface.type_params,
     extends_names: [],
+    extends_args: [],
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: origin.iface.index_signatures,
@@ -6215,6 +6232,7 @@ fn clone_exported_interface(
     name: exported.export_name,
     type_params: exported.iface.type_params,
     extends_names: [],
+    extends_args: [],
     fields,
     readonly_fields: readonly_fields_for_fields(readonly_fields, fields),
     index_signatures: exported.iface.index_signatures,

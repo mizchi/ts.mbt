@@ -732,7 +732,7 @@ fn value_decl_static_zero_arg_call_result_expr_with_depth(
     return None
   }
   match callee {
-    @ast.TsExpr::ArrowFunc(params, body, is_async) =>
+    @ast.TsExpr::ArrowFunc(params, _declared_ret, body, is_async) =>
       if params.length() != 0 || is_async {
         None
       } else {

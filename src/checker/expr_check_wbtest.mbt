@@ -2041,3 +2041,1855 @@ test "expr_check: tuple destructuring sees per-slot types" {
     None => fail("function f not found")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Round 19: generic class type-arg substitution at field / method lookup.
+// Mirrors the round-18 interface substitution but for `class C<T>` shapes.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: generic class instance field specialises at use site" {
+  let src =
+    #|declare class Box<T> { value: T; set(v: T): void; }
+    #|function unwrap(b: Box<number>): number {
+    #|  return b.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic class instance field rejects wrong return type" {
+  let src =
+    #|declare class Box<T> { value: T; }
+    #|function unwrap(b: Box<number>): string {
+    #|  return b.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic class method signature is specialised" {
+  let src =
+    #|declare class Box<T> { value: T; set(v: T): void; }
+    #|function bump(b: Box<number>): void {
+    #|  b.set("x");
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic class method return is specialised" {
+  // `Box<number>.value` and a `T`-returning method both flow as `number`
+  // — the method's return type substitutes through.
+  let src =
+    #|declare class Box<T> { get(): T; }
+    #|function unwrap(b: Box<number>): number {
+    #|  return b.get();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: two-param generic class field selection" {
+  let src =
+    #|declare class Pair<A, B> { a: A; b: B; }
+    #|function takeA(p: Pair<number, string>): number {
+    #|  return p.a;
+    #|}
+    #|function takeB(p: Pair<number, string>): string {
+    #|  return p.b;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 20: `Array.prototype.*` built-in generics. Receivers of shape
+// `Array(T)` / `Applied("Array", [T])` resolve the well-known methods with
+// the element type substituted; `map` / `flatMap` / `reduce` thread the
+// callback's body return type into the result.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: arr.length is number" {
+  let src =
+    #|function f(arr: number[]): number {
+    #|  return arr.length;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.push accepts elem type, rejects mismatched arg" {
+  let src =
+    #|function f(arr: number[]): void {
+    #|  arr.push("nope");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.pop returns elem | undefined" {
+  // `arr.pop()` may return undefined, so assigning to bare `number` fails.
+  let src =
+    #|function f(arr: number[]): number {
+    #|  return arr.pop();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.includes returns boolean" {
+  let src =
+    #|function f(arr: string[]): boolean {
+    #|  return arr.includes("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.map<U> infers U from callback body" {
+  // The callback returns a string, so arr.map yields `string[]`.
+  let src =
+    #|function f(arr: number[]): string[] {
+    #|  return arr.map(x => x.toString());
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.map mismatch when callback returns wrong type" {
+  let src =
+    #|function f(arr: number[]): number[] {
+    #|  return arr.map(x => "oops");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.filter preserves element type" {
+  let src =
+    #|function f(arr: number[]): number[] {
+    #|  return arr.filter(x => x > 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.find returns elem | undefined" {
+  let src =
+    #|function f(arr: number[]): number {
+    #|  return arr.find(x => x > 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.reduce uses initial value type as accumulator" {
+  // Initial value is `0` (number); callback returns `acc + cur`, also
+  // number. Result is `number`, matches declared return.
+  let src =
+    #|function f(arr: number[]): number {
+    #|  return arr.reduce((acc, cur) => acc + cur, 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.reduce flags wrong initial value type vs return" {
+  let src =
+    #|function f(arr: number[]): string {
+    #|  return arr.reduce((acc, cur) => acc + cur, 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.forEach returns void" {
+  let src =
+    #|function f(arr: number[]): void {
+    #|  arr.forEach(x => { /* side effect */ });
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 21: `.filter(predicate)` narrows the result element to the
+// asserted type when the callback is a `(x): x is Foo => …` predicate.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: arr.filter with type predicate narrows result element" {
+  // Without the predicate, `arr.filter(...)` would yield `(string |
+  // null)[]`. The `(x): x is string => …` predicate refines it to
+  // `string[]`, which assigns cleanly to the declared return type.
+  let src =
+    #|function nonNull(arr: (string | null)[]): string[] {
+    #|  return arr.filter((x): x is string => x !== null);
+    #|}
+  match parse_function_named(src, "nonNull") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function nonNull not found")
+  }
+}
+
+///|
+test "expr_check: arr.filter without predicate keeps element type" {
+  let src =
+    #|function nonNull(arr: (string | null)[]): string[] {
+    #|  return arr.filter(x => x !== null);
+    #|}
+  match parse_function_named(src, "nonNull") {
+    Some(f) => {
+      // Without the predicate, the result is still `(string | null)[]`,
+      // not assignable to `string[]` — should flag.
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function nonNull not found")
+  }
+}
+
+///|
+test "expr_check: arrow return type annotation flows into Func result" {
+  // `(x): number => …` declares the return type explicitly; the checker
+  // honours that annotation when computing the arrow's `Func(...)` type.
+  let src =
+    #|function caller(cb: (n: number) => number): number { return cb(1); }
+    #|function user(): number {
+    #|  return caller((x): number => x);
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 22: `String.prototype.*` built-ins.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: s.length is number" {
+  let src =
+    #|function f(s: string): number {
+    #|  return s.length;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.toUpperCase returns string" {
+  let src =
+    #|function f(s: string): string {
+    #|  return s.toUpperCase();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.startsWith returns boolean" {
+  let src =
+    #|function f(s: string): boolean {
+    #|  return s.startsWith("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.split returns string[]" {
+  let src =
+    #|function f(s: string): string[] {
+    #|  return s.split(",");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.charAt rejects non-number arg" {
+  let src =
+    #|function f(s: string): string {
+    #|  return s.charAt("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.at returns string | undefined" {
+  let src =
+    #|function f(s: string): string {
+    #|  return s.at(0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.replace returns string" {
+  let src =
+    #|function f(s: string): string {
+    #|  return s.replace("a", "b");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.includes works on string-literal receiver too" {
+  // Literal string subtypes inherit the same prototype shape via
+  // `Literal(_) => string_prototype_member(...)`.
+  let src =
+    #|function f(): boolean {
+    #|  return "hello".includes("ll");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 23: `Promise.prototype.*` chain methods. `.then(cb)` flows the
+// callback's body / inner-promise type into the result `Promise<U>`.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: promise.then flows callback return into Promise<U>" {
+  let src =
+    #|function f(p: Promise<number>): Promise<string> {
+    #|  return p.then(x => x.toString());
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: promise.then flattens nested Promise<Promise<U>>" {
+  // Callback returns Promise<string>; chaining flattens to Promise<string>
+  // rather than Promise<Promise<string>>.
+  let src =
+    #|declare function asyncOf(x: number): Promise<string>;
+    #|function f(p: Promise<number>): Promise<string> {
+    #|  return p.then(x => asyncOf(x));
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: promise.then mismatch when callback returns wrong type" {
+  let src =
+    #|function f(p: Promise<number>): Promise<string> {
+    #|  return p.then(x => x + 1);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: promise.catch preserves resolved type" {
+  let src =
+    #|function f(p: Promise<number>): Promise<number> {
+    #|  return p.catch(_ => 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: promise.finally preserves resolved type" {
+  let src =
+    #|function f(p: Promise<number>): Promise<number> {
+    #|  return p.finally(() => {});
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 24/25: global-namespace static methods —
+//   Object.{keys, values, entries, assign, hasOwn},
+//   Math.{abs, max, min, random, sqrt, pow},
+//   Number.{isFinite, isInteger, parseFloat, parseInt},
+//   JSON.{parse, stringify}, Array.{isArray, of, from},
+//   Date.{now, parse}, String.{fromCharCode}, Symbol.{for, keyFor},
+//   Promise.{resolve, reject, all, race, any, allSettled}.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: Object.keys returns string[]" {
+  let src =
+    #|function f(o: {x: number, y: string}): string[] {
+    #|  return Object.keys(o);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Object.entries returns [string, any][]" {
+  let src =
+    #|function f(o: {x: number}): [string, any][] {
+    #|  return Object.entries(o);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Math.max returns number, rejects string arg" {
+  let src =
+    #|function f(): number {
+    #|  return Math.max("oops");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Math.random returns number" {
+  let src =
+    #|function f(): number {
+    #|  return Math.random();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Number.isFinite returns boolean" {
+  let src =
+    #|function f(x: number): boolean {
+    #|  return Number.isFinite(x);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: JSON.stringify returns string" {
+  let src =
+    #|function f(o: any): string {
+    #|  return JSON.stringify(o);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Array.isArray returns boolean" {
+  let src =
+    #|function f(x: any): boolean {
+    #|  return Array.isArray(x);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Date.now returns number" {
+  let src =
+    #|function f(): number {
+    #|  return Date.now();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Promise.resolve wraps the argument type" {
+  let src =
+    #|function f(x: number): Promise<number> {
+    #|  return Promise.resolve(x);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Promise.resolve flattens nested promise" {
+  // `Promise.resolve(Promise<T>)` collapses to `Promise<T>`.
+  let src =
+    #|function f(p: Promise<number>): Promise<number> {
+    #|  return Promise.resolve(p);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Promise.all over Promise<T>[] yields Promise<T[]>" {
+  let src =
+    #|function f(ps: Promise<number>[]): Promise<number[]> {
+    #|  return Promise.all(ps);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Promise.race over Promise<T>[] yields Promise<T>" {
+  let src =
+    #|function f(ps: Promise<number>[]): Promise<number> {
+    #|  return Promise.race(ps);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 26: `extends` clause carries type arguments — `interface Sub<T>
+// extends Box<T>`, `interface StringBox extends Box<string>`, etc.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: extends with concrete type arg specialises inherited field" {
+  // `StringBox extends Box<string>` so `s.value` resolves to `string`.
+  let src =
+    #|interface Box<T> { value: T }
+    #|interface StringBox extends Box<string> { extra: number }
+    #|function f(s: StringBox): string {
+    #|  return s.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: extends with concrete type arg rejects wrong return" {
+  let src =
+    #|interface Box<T> { value: T }
+    #|interface StringBox extends Box<string> { extra: number }
+    #|function f(s: StringBox): number {
+    #|  return s.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic extends propagates outer type arg" {
+  // `Sub<T> extends Box<T>` should resolve `T` through. Calling
+  // `f` with `Sub<number>` makes `s.value` a `number`.
+  let src =
+    #|interface Box<T> { value: T }
+    #|interface Sub<T> extends Box<T> { extra: T }
+    #|function f(s: Sub<number>): number {
+    #|  return s.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: extends Box<number> as missing-field check works" {
+  let src =
+    #|interface Box<T> { value: T }
+    #|interface IntBox extends Box<number> { extra: string }
+    #|function take(b: IntBox): void {}
+    #|function user(): void {
+    #|  take({ value: "oops", extra: "s" });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains(".value") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+// ---------------------------------------------------------------------------
+// Round 27: Map<K,V> / Set<T> / Date / Number / Boolean / RegExp prototype.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: Map.get returns V | undefined" {
+  let src =
+    #|function f(m: Map<string, number>): number {
+    #|  return m.get("k");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Map.set returns the map" {
+  let src =
+    #|function f(m: Map<string, number>): Map<string, number> {
+    #|  return m.set("k", 1);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Map.has returns boolean" {
+  let src =
+    #|function f(m: Map<string, number>): boolean {
+    #|  return m.has("k");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Map.size is number" {
+  let src =
+    #|function f(m: Map<string, number>): number {
+    #|  return m.size;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Set.add returns the set" {
+  let src =
+    #|function f(s: Set<number>): Set<number> {
+    #|  return s.add(1);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Set.has returns boolean, rejects wrong arg type" {
+  let src =
+    #|function f(s: Set<number>): boolean {
+    #|  return s.has("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Date.getTime returns number" {
+  let src =
+    #|function f(d: Date): number {
+    #|  return d.getTime();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Date.toISOString returns string" {
+  let src =
+    #|function f(d: Date): string {
+    #|  return d.toISOString();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: number.toFixed returns string" {
+  let src =
+    #|function f(n: number): string {
+    #|  return n.toFixed(2);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: number.toString returns string" {
+  let src =
+    #|function f(n: number): string {
+    #|  return n.toString();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: boolean.valueOf returns boolean" {
+  let src =
+    #|function f(b: boolean): boolean {
+    #|  return b.valueOf();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: RegExp.test returns boolean" {
+  let src =
+    #|function f(re: RegExp, s: string): boolean {
+    #|  return re.test(s);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: RegExp.source returns string" {
+  let src =
+    #|function f(re: RegExp): string {
+    #|  return re.source;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: RegExp.global returns boolean" {
+  let src =
+    #|function f(re: RegExp): boolean {
+    #|  return re.global;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 28: Iterator / AsyncIterator / Generator, WeakMap / WeakSet,
+// Function.prototype.{call, apply, bind, name, length},
+// Error / TypeError instance shape.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: iterator.next returns IteratorResult<T>" {
+  let src =
+    #|function f(it: Iterator<number>): {value: number; done: boolean} {
+    #|  return it.next();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: generator.next inherits Iterator shape" {
+  let src =
+    #|function f(g: Generator<number>): boolean {
+    #|  return g.next().done;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: WeakMap.get returns V | undefined" {
+  let src =
+    #|function f(m: WeakMap<object, number>): number {
+    #|  return m.get({});
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: WeakSet.add returns the set" {
+  let src =
+    #|function f(s: WeakSet<object>): WeakSet<object> {
+    #|  return s.add({});
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: function.call returns the inner return type" {
+  let src =
+    #|function f(cb: (n: number) => string): string {
+    #|  return cb.call(null, 1);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: function.bind returns the same Func shape" {
+  let src =
+    #|function f(cb: (n: number) => string): (n: number) => string {
+    #|  return cb.bind(null);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: function.name returns string" {
+  let src =
+    #|function f(cb: () => void): string {
+    #|  return cb.name;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Error.message is string" {
+  let src =
+    #|function f(e: Error): string {
+    #|  return e.message;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: TypeError inherits Error shape" {
+  let src =
+    #|function f(e: TypeError): string {
+    #|  return e.message;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Error.stack is string | undefined" {
+  let src =
+    #|function f(e: Error): string {
+    #|  return e.stack;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: for-of over IterableIterator yields T" {
+  let src =
+    #|function f(it: IterableIterator<number>): number {
+    #|  for (const x of it) {
+    #|    return x;
+    #|  }
+    #|  return 0;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 29: console.* static dispatch and the typed-array family
+// (Int8Array, Uint8Array, ..., Float64Array, BigInt64Array, ArrayBuffer,
+// SharedArrayBuffer, DataView).
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: console.log accepts an arg and returns void" {
+  let src =
+    #|function f(): void {
+    #|  console.log("hello");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: console.error accepts an arg" {
+  let src =
+    #|function f(msg: string): void {
+    #|  console.error(msg);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Uint8Array.length is number" {
+  let src =
+    #|function f(a: Uint8Array): number {
+    #|  return a.length;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Uint8Array element is number" {
+  // `indexOf` from Array.prototype accepts the element type — `number`
+  // for Uint8Array. Passing a string should flag.
+  let src =
+    #|function f(a: Uint8Array): number {
+    #|  return a.indexOf("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Float64Array.byteLength is number" {
+  let src =
+    #|function f(a: Float64Array): number {
+    #|  return a.byteLength;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: BigInt64Array element is bigint" {
+  let src =
+    #|function f(a: BigInt64Array): bigint {
+    #|  return a[0];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: ArrayBuffer.byteLength is number" {
+  let src =
+    #|function f(b: ArrayBuffer): number {
+    #|  return b.byteLength;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: typed-array.map flows through Array.prototype.map" {
+  // The typed-array shape inherits Array.prototype, so `map<U>` runs
+  // through the same callback-driven inference as `number[].map`.
+  let src =
+    #|function f(a: Uint8Array): string[] {
+    #|  return a.map(x => x.toString());
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 30: property-access narrowing — `obj.foo !== undefined` narrows
+// the type of `obj.foo` inside the then-branch.
+// Also covers `instanceof TypeError` against an Error-shaped binding.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: prop !== undefined narrows obj.prop inside then-branch" {
+  let src =
+    #|interface Config { name?: string }
+    #|function f(c: Config): string {
+    #|  if (c.name !== undefined) {
+    #|    return c.name;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: prop !== null narrows obj.prop inside then-branch" {
+  let src =
+    #|interface Node { parent: Node | null }
+    #|function f(n: Node): Node {
+    #|  if (n.parent !== null) {
+    #|    return n.parent;
+    #|  }
+    #|  return n;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: prop !== undefined else-branch keeps original type" {
+  // The else-branch sees `c.name` as still optional (well, narrowed to
+  // `undefined` here). Returning it where `string` is expected should
+  // flag.
+  let src =
+    #|interface Config { name?: string }
+    #|function f(c: Config): string {
+    #|  if (c.name === undefined) {
+    #|    return c.name;
+    #|  }
+    #|  return c.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("undefined") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: instanceof TypeError narrows a caught error" {
+  // `catch (e)` binds `e` as `any`; the instanceof check narrows it to
+  // `TypeError` inside the then-branch so `.message` resolves through
+  // the error prototype shape.
+  let src =
+    #|function f(): string {
+    #|  try {
+    #|    return "";
+    #|  } catch (e) {
+    #|    if (e instanceof TypeError) {
+    #|      return e.message;
+    #|    }
+    #|    return "other";
+    #|  }
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 31: extended property-access narrowing — typeof / instanceof /
+// truthy on `obj.prop` shapes.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: typeof obj.prop === 'string' narrows prop access" {
+  let src =
+    #|interface Box { v: string | number }
+    #|function f(b: Box): string {
+    #|  if (typeof b.v === "string") {
+    #|    return b.v;
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof obj.prop narrowing flags wrong return type" {
+  let src =
+    #|interface Box { v: string | number }
+    #|function f(b: Box): number {
+    #|  if (typeof b.v === "string") {
+    #|    return b.v;
+    #|  }
+    #|  return 0;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: truthy `if (obj.prop)` strips null/undefined" {
+  let src =
+    #|interface Config { name?: string }
+    #|function f(c: Config): string {
+    #|  if (c.name) {
+    #|    return c.name;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: obj.prop instanceof TypeError narrows" {
+  let src =
+    #|interface Slot { err: unknown }
+    #|function f(s: Slot): string {
+    #|  if (s.err instanceof TypeError) {
+    #|    return s.err.message;
+    #|  }
+    #|  return "other";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof obj.prop literal narrows in compound `&&`" {
+  // Both sub-conditions need to apply in the then-branch.
+  let src =
+    #|interface Box { v: string | number; alt?: string }
+    #|function f(b: Box): string {
+    #|  if (typeof b.v === "string" && b.alt !== undefined) {
+    #|    return b.v + b.alt;
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 32: nested PropAccess narrowing — `obj.a.b !== undefined` and
+// `typeof obj.a.b === "string"` narrow the deep access.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: nested obj.a.b !== undefined narrows the deep access" {
+  let src =
+    #|interface Inner { name?: string }
+    #|interface Outer { inner: Inner }
+    #|function f(o: Outer): string {
+    #|  if (o.inner.name !== undefined) {
+    #|    return o.inner.name;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof nested prop access narrows" {
+  let src =
+    #|interface Box { v: string | number }
+    #|interface Outer { box: Box }
+    #|function f(o: Outer): string {
+    #|  if (typeof o.box.v === "string") {
+    #|    return o.box.v;
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: truthy nested obj.a.b strips undefined" {
+  let src =
+    #|interface Inner { name?: string }
+    #|interface Outer { inner: Inner }
+    #|function f(o: Outer): string {
+    #|  if (o.inner.name) {
+    #|    return o.inner.name;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: deeply nested (3-level) prop narrowing" {
+  let src =
+    #|interface L3 { tag?: string }
+    #|interface L2 { l3: L3 }
+    #|interface L1 { l2: L2 }
+    #|function f(o: L1): string {
+    #|  if (o.l2.l3.tag !== undefined) {
+    #|    return o.l2.l3.tag;
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: nested instanceof on prop chain narrows" {
+  let src =
+    #|interface Slot { payload: { err: unknown } }
+    #|function f(s: Slot): string {
+    #|  if (s.payload.err instanceof TypeError) {
+    #|    return s.payload.err.message;
+    #|  }
+    #|  return "other";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 33: nested-chain discriminated union narrowing + early-return on
+// prop access.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: discriminant narrowing on `obj.shape.kind === \"…\"`" {
+  // `o.shape.kind === "circle"` narrows `o.shape` to the `Circle` variant.
+  let src =
+    #|type Shape =
+    #|  | { kind: "circle"; radius: number }
+    #|  | { kind: "square"; side: number };
+    #|interface Holder { shape: Shape }
+    #|function area(h: Holder): number {
+    #|  if (h.shape.kind === "circle") {
+    #|    return h.shape.radius;
+    #|  }
+    #|  return h.shape.side;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: literal-union narrowing on `obj.prop`" {
+  let src =
+    #|interface Cfg { mode: "fast" | "slow" }
+    #|function f(c: Cfg): "fast" {
+    #|  if (c.mode === "fast") {
+    #|    return c.mode;
+    #|  }
+    #|  return "fast";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: early-return narrowing on `obj.prop !== undefined`" {
+  // After `if (c.name === undefined) return; …`, subsequent
+  // references to `c.name` should see the non-undefined narrowing.
+  let src =
+    #|interface Config { name?: string }
+    #|function f(c: Config): string {
+    #|  if (c.name === undefined) {
+    #|    return "default";
+    #|  }
+    #|  return c.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: early-return narrowing on nested prop access" {
+  let src =
+    #|interface Inner { tag?: string }
+    #|interface Outer { inner: Inner }
+    #|function f(o: Outer): string {
+    #|  if (o.inner.tag === undefined) {
+    #|    return "x";
+    #|  }
+    #|  return o.inner.tag;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 34: index-access narrowing — `arr[0] !== undefined` / `m["k"] !==
+// undefined` / `typeof arr[0] === "string"` narrow the indexed access.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: arr[0] !== undefined narrows the indexed access" {
+  let src =
+    #|function f(arr: string[]): string {
+    #|  if (arr[0] !== undefined) {
+    #|    return arr[0];
+    #|  }
+    #|  return "x";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // Arrays' element type is `string` in our model (no implicit
+  // `T | undefined`), so the unguarded path also passes. Either way,
+  // no spurious issue should fire.
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: tuple slot narrowing — `t[0] !== null`" {
+  // `[string | null, number]` — `t[0]` initially is `string | null`,
+  // and the guard narrows it to `string`.
+  let src =
+    #|function f(t: [string | null, number]): string {
+    #|  if (t[0] !== null) {
+    #|    return t[0];
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof arr[0] === \"string\" narrows" {
+  let src =
+    #|function f(arr: (string | number)[]): string {
+    #|  if (typeof arr[0] === "string") {
+    #|    return arr[0];
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: truthy `if (arr[0])` narrowing" {
+  // `arr[0]` is `string | null` here; truthy narrows it to `string`.
+  let src =
+    #|function f(arr: (string | null)[]): string {
+    #|  if (arr[0]) {
+    #|    return arr[0];
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: nested `obj.arr[0]` narrowing" {
+  let src =
+    #|interface Holder { arr: (string | null)[] }
+    #|function f(h: Holder): string {
+    #|  if (h.arr[0] !== null) {
+    #|    return h.arr[0];
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 35: index signature fallback on interface lookups.
+// `interface Dict { [k: string]: number }` — `d.foo` and `d["foo"]` both
+// resolve to `number`.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: string index signature resolves dotted access" {
+  let src =
+    #|interface Dict { [k: string]: number }
+    #|function f(d: Dict): number {
+    #|  return d.foo;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: string index signature resolves bracket access" {
+  let src =
+    #|interface Dict { [k: string]: number }
+    #|function f(d: Dict): number {
+    #|  return d["foo"];
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: index signature mismatch flags wrong return type" {
+  let src =
+    #|interface Dict { [k: string]: number }
+    #|function f(d: Dict): string {
+    #|  return d.foo;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: named field overrides index signature" {
+  let src =
+    #|interface Mixed { tag: string; [k: string]: number | string }
+    #|function f(m: Mixed): string {
+    #|  return m.tag;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // The named `tag: string` should take precedence over the index
+  // signature fallback.
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic interface with index signature substitutes V" {
+  let src =
+    #|interface Bag<V> { [k: string]: V }
+    #|function f(b: Bag<number>): number {
+    #|  return b.size;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 36: utility types — Record, Partial, Required, Readonly, Pick, Omit.
+// Handled at the field-lookup layer so callers see specialised shapes
+// without a structural rewrite.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: Record<string, number> resolves field as V" {
+  let src =
+    #|function f(r: Record<string, number>): number {
+    #|  return r.foo;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Record<string, V> rejects wrong return type" {
+  let src =
+    #|function f(r: Record<string, number>): string {
+    #|  return r.foo;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: Partial<T> makes fields optional" {
+  // `p.name` on `Partial<Config>` is `string | undefined`, not assignable
+  // to bare `string`.
+  let src =
+    #|interface Config { name: string; tag: string }
+    #|function f(p: Partial<Config>): string {
+    #|  return p.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("undefined") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: Partial<T> in object literal allows missing fields" {
+  let src =
+    #|interface Config { name: string; tag: string }
+    #|function take(p: Partial<Config>): void {}
+    #|function user(): void {
+    #|  take({ name: "x" });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Required<T> strips undefined" {
+  let src =
+    #|interface Cfg { name?: string }
+    #|function f(c: Required<Cfg>): string {
+    #|  return c.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Readonly<T> passes fields through" {
+  let src =
+    #|interface Cfg { name: string }
+    #|function f(c: Readonly<Cfg>): string {
+    #|  return c.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Pick<T, K> keeps only listed fields" {
+  let src =
+    #|interface Full { a: string; b: number; c: boolean }
+    #|function f(x: Pick<Full, "a" | "c">): string {
+    #|  return x.a;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Pick<T, K> drops unlisted fields (object literal)" {
+  let src =
+    #|interface Full { a: string; b: number; c: boolean }
+    #|function take(x: Pick<Full, "a">): void {}
+    #|function user(): void {
+    #|  take({ a: "x", b: 1 });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  // `b` should be flagged as excess-property (not in Pick<"a">).
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains(".b") && i.message.contains("does not exist") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: Omit<T, K> excludes listed fields" {
+  let src =
+    #|interface Full { a: string; b: number; c: boolean }
+    #|function take(x: Omit<Full, "b">): void {}
+    #|function user(): void {
+    #|  take({ a: "x", c: true });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: Omit<T, K> flags excess listed-key field" {
+  let src =
+    #|interface Full { a: string; b: number }
+    #|function take(x: Omit<Full, "b">): void {}
+    #|function user(): void {
+    #|  take({ a: "x", b: 1 });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains(".b") && i.message.contains("does not exist") {
+      found = true
+    }
+  }
+  assert_true(found)
+}

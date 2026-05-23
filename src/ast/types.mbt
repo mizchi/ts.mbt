@@ -137,8 +137,10 @@ pub(all) enum TsExpr {
   // operator
   Seq(TsExpr, TsExpr)
 
-  // function (is_async)
-  ArrowFunc(Array[TsParam], TsArrowBody, Bool)
+  // function (params, return_type, body, is_async). `return_type` is the
+  // explicit `(x): T => …` annotation; `Any` when omitted. Carrying it on
+  // the AST lets the checker spot `(x): x is Foo => …` predicates.
+  ArrowFunc(Array[TsParam], TsType, TsArrowBody, Bool)
 
   // functionexpression (function() {})
   FuncExpr(TsFunc)
@@ -396,6 +398,11 @@ pub(all) struct TsInterface {
   name : String
   type_params : Array[String]
   extends_names : Array[String]
+  // Type arguments supplied alongside each `extends_names[i]`, parsed
+  // from `extends Foo<A, B>`. Length matches `extends_names`; entries
+  // are empty arrays for non-generic bases. Used by the checker to
+  // substitute generic parameters when walking the inheritance chain.
+  extends_args : Array[Array[TsType]]
   fields : Array[(String, TsType)] // (fieldName, type)
   readonly_fields : Array[String]
   // Index signatures `[k: K]: V` declared on this interface. Stored as

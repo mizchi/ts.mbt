@@ -4777,6 +4777,7 @@ test "bridge: FFI struct generation deduplicates sanitized field names" {
     name: "GenericDateConstructor",
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields: [
       ("<new>", @ast.TsType::Named("DateType")),
       ("<new>", @ast.TsType::Named("DateType")),
@@ -4836,6 +4837,7 @@ test "bridge: FFI struct generation sanitizes keyword and discard fields" {
     name: "Scope",
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields: [
       ("declare", @ast.TsType::Named("DeclarationParser")),
       ("import", @ast.TsType::Named("Module")),
@@ -4887,6 +4889,7 @@ test "bridge: FFI struct generation adds method wrappers for function fields" {
     name: "NodeFactory",
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields: [
       (
         "createIdentifier",
@@ -4927,6 +4930,7 @@ test "bridge: FFI struct method wrappers unwrap optional arguments" {
     name: "SignJWT",
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields: [
       (
         "setIssuedAt",
@@ -5014,6 +5018,7 @@ test "bridge: FFI struct generation keeps generic method wrappers non-extern" {
     name: "StatsBase",
     type_params: ["T"],
     extends_names: [],
+    extends_args: [],
     // Include a T-referencing field so the bridge keeps T in the rendered
     // type parameter list — otherwise the unused-type-param filter strips it.
     fields: [
@@ -5051,6 +5056,7 @@ test "bridge: FFI struct generation caps method wrappers but keeps function fiel
     name: "LargeApi",
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields: [
       ("call0", @ast.TsType::Func([], @ast.TsType::Void)),
       ("call1", @ast.TsType::Func([], @ast.TsType::Void)),
@@ -5087,6 +5093,7 @@ test "bridge: FFI struct generation keeps callable wrapper beyond cap" {
     name: "ExpectStatic",
     type_params: [],
     extends_names: [],
+    extends_args: [],
     fields: [
       ("helper0", @ast.TsType::Func([], @ast.TsType::Void)),
       ("helper1", @ast.TsType::Func([], @ast.TsType::Void)),
@@ -5168,6 +5175,7 @@ test "bridge: FFI struct preserves selected interface type parameters locally" {
     name: "StatsBase",
     type_params: ["T"],
     extends_names: [],
+    extends_args: [],
     fields: [
       ("dev", @ast.TsType::Named("T")),
       ("isFile", @ast.TsType::Func([], @ast.TsType::Boolean)),

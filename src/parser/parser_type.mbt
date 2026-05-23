@@ -1327,6 +1327,24 @@ fn Parser::skip_paren_type(self : Parser) -> Unit raise ParseError {
 
 ///|
 /// Skip a type annotation until the top-level arrow of an arrow function.
+/// Parse the return type annotation of an arrow function (`(x): T =>`)
+/// and return it. Falls back to skipping tokens when the inner parser
+/// throws — keeps the legacy resilience but lets the checker see the
+/// annotation when it's parseable.
+fn Parser::parse_arrow_return_type(self : Parser) -> @ast.TsType {
+  let saved = self.pos
+  let ty = try? self.parse_type()
+  match ty {
+    Ok(t) => t
+    Err(_) => {
+      self.pos = saved
+      self.skip_type_until_arrow()
+      @ast.TsType::Any
+    }
+  }
+}
+
+///|
 fn Parser::skip_type_until_arrow(self : Parser) -> Unit {
   let mut paren_depth = 0
   let mut bracket_depth = 0

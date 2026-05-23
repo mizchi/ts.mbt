@@ -677,6 +677,7 @@ fn Parser::parse_single_param_arrow(
         default: None,
       },
     ],
+    @ast.TsType::Any,
     body,
     false,
   )
@@ -1705,9 +1706,11 @@ fn Parser::parse_generic_arrow_function(
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
-  if self.check(Colon) {
+  let return_type = if self.check(Colon) {
     let _ = self.advance()
-    self.skip_type_until_arrow()
+    self.parse_arrow_return_type()
+  } else {
+    @ast.TsType::Any
   }
   let _ = self.expect(Arrow)
   let body = if self.check(LBrace) {
@@ -1739,7 +1742,7 @@ fn Parser::parse_generic_arrow_function(
     let expr = self.parse_assignment()
     ArrowExpr(expr)
   }
-  ArrowFunc(params, body, false)
+  ArrowFunc(params, return_type, body, false)
 }
 
 ///|
@@ -2022,6 +2025,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               default: None,
             },
           ],
+          @ast.TsType::Any,
           body,
           false,
         )
@@ -2065,9 +2069,11 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             let _ = self.advance() // (
             let params = self.parse_params()
             let _ = self.expect(RParen)
-            if self.check(Colon) {
+            let return_type = if self.check(Colon) {
               let _ = self.advance()
-              self.skip_type_until_arrow()
+              self.parse_arrow_return_type()
+            } else {
+              @ast.TsType::Any
             }
             let _ = self.expect(Arrow)
             // : blockexpression
@@ -2103,7 +2109,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               let expr = self.parse_assignment()
               ArrowExpr(expr)
             }
-            ArrowFunc(params, body, false)
+            ArrowFunc(params, return_type, body, false)
           } else {
             self.parse_parenthesized_expr()
           }
@@ -2112,9 +2118,11 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           let _ = self.advance() // (
           let params = self.parse_params()
           let _ = self.expect(RParen)
-          if self.check(Colon) {
+          let return_type = if self.check(Colon) {
             let _ = self.advance()
-            self.skip_type_until_arrow()
+            self.parse_arrow_return_type()
+          } else {
+            @ast.TsType::Any
           }
           let _ = self.expect(Arrow)
           // : blockexpression
@@ -2150,7 +2158,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
             let expr = self.parse_assignment()
             ArrowExpr(expr)
           }
-          ArrowFunc(params, body, false)
+          ArrowFunc(params, return_type, body, false)
         } else {
           self.parse_parenthesized_expr()
         }
@@ -2159,9 +2167,11 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         let _ = self.advance() // (
         let params = self.parse_params()
         let _ = self.expect(RParen)
-        if self.check(Colon) {
+        let return_type = if self.check(Colon) {
           let _ = self.advance()
-          self.skip_type_until_arrow()
+          self.parse_arrow_return_type()
+        } else {
+          @ast.TsType::Any
         }
         let _ = self.expect(Arrow)
         // : blockexpression
@@ -2197,7 +2207,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           let expr = self.parse_assignment()
           ArrowExpr(expr)
         }
-        ArrowFunc(params, body, false)
+        ArrowFunc(params, return_type, body, false)
       } else {
         // regularexpression
         self.parse_parenthesized_expr()
@@ -3260,6 +3270,7 @@ fn Parser::parse_async_arrow_function(
             default: None,
           },
         ],
+        @ast.TsType::Any,
         body,
         true, // is_async = true
       )
@@ -3273,10 +3284,13 @@ fn Parser::parse_async_arrow_function(
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
-  // Skip optional return type annotation
-  if self.check(Colon) {
+  // Optional return type annotation — captured so the checker can see
+  // `(x): x is Foo => …` predicates.
+  let return_type = if self.check(Colon) {
     let _ = self.advance()
-    self.skip_type_until_arrow()
+    self.parse_arrow_return_type()
+  } else {
+    @ast.TsType::Any
   }
   let _ = self.expect(Arrow)
   let prev_async = self.in_async
@@ -3311,5 +3325,5 @@ fn Parser::parse_async_arrow_function(
     ArrowExpr(expr)
   }
   self.in_async = prev_async
-  ArrowFunc(params, body, true) // is_async = true
+  ArrowFunc(params, return_type, body, true) // is_async = true
 }
