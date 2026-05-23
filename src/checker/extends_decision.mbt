@@ -58,6 +58,44 @@ pub fn extends_decision(source : @ast.TsType, target : @ast.TsType) -> Bool? {
     (BooleanLiteral(_), Boolean) => return Some(true)
     _ => ()
   }
+  // Two literals of the same kind with different values are disjoint —
+  // TS `"a" extends "b"` is `false`. This matters for conditional
+  // remap patterns like `K extends 'b' ? never : K`.
+  match (source, target) {
+    (Literal(_), Literal(_)) => return Some(false)
+    (NumberLiteral(_), NumberLiteral(_)) => return Some(false)
+    (BigIntLiteral(_), BigIntLiteral(_)) => return Some(false)
+    (BooleanLiteral(_), BooleanLiteral(_)) => return Some(false)
+    _ => ()
+  }
+  // Distinct primitive vs literal of a different kind: also disjoint.
+  match (source, target) {
+    (Literal(_), Number | Int | Boolean | BigInt | Void | Null | Undefined) =>
+      return Some(false)
+    (NumberLiteral(_), String_ | Boolean | BigInt | Void | Null | Undefined) =>
+      return Some(false)
+    (
+      BigIntLiteral(_),
+      String_
+      | Number
+      | Int
+      | Boolean
+      | Void
+      | Null
+      | Undefined,
+    ) => return Some(false)
+    (
+      BooleanLiteral(_),
+      String_
+      | Number
+      | Int
+      | BigInt
+      | Void
+      | Null
+      | Undefined,
+    ) => return Some(false)
+    _ => ()
+  }
   match (source, target) {
     (
       Number

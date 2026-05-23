@@ -661,6 +661,46 @@ test "parser: parse literal-key mapped object type as fields" {
 }
 
 ///|
+test "parser: parse mapped type with `as` key remap" {
+  // Literal-source mapped type with a template-literal remap. After parse
+  // we don't simplify, so the variant must survive intact for the checker
+  // pass to materialize.
+  let parser = Parser::from_source(
+    "{ [K in \"a\" | \"b\" as `get${Capitalize<K>}`]: number }",
+  )
+  let parsed = parser.parse_type()
+  match parsed {
+    MappedTypeRemap(
+      "K",
+      Union([Literal("a"), Literal("b")]),
+      TemplateLiteralType(_, _),
+      Number,
+      false
+    ) => ()
+    other => fail("expected MappedTypeRemap, got \{other}")
+  }
+}
+
+///|
+test "parser: parse mapped type with `as` filtering via never" {
+  let parser = Parser::from_source(
+    "{ [K in \"a\" | \"b\" | \"c\" as K extends \"b\" ? never : K]: number }",
+  )
+  let parsed = parser.parse_type()
+  match parsed {
+    MappedTypeRemap(
+      "K",
+      Union(_),
+      Conditional(_, _, Never, Named("K")),
+      Number,
+      false
+    ) => ()
+    other =>
+      fail("expected MappedTypeRemap with conditional remap, got \{other}")
+  }
+}
+
+///|
 test "parser: parse array literal" {
   let parser = Parser::from_source("[1, 2, 3]")
   let expr = parser.parse_expr()

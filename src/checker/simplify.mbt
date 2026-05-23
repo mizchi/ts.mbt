@@ -123,6 +123,8 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
     Keyof(inner) => Keyof(simplify_type(inner))
     MappedType(key_param, source, value, optional) =>
       MappedType(key_param, simplify_type(source), value, optional)
+    MappedTypeRemap(key_param, source, remap, value, optional) =>
+      MappedTypeRemap(key_param, simplify_type(source), remap, value, optional)
     TemplateLiteralType(parts, args) => {
       let inner : Array[@ast.TsType] = []
       for a in args {
@@ -138,6 +140,7 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
     IndexedAccess(_, _) => simplify_indexed_access(recursed)
     Keyof(_) => simplify_keyof(recursed)
     MappedType(_, _, _, _) => simplify_mapped_type(recursed)
+    MappedTypeRemap(_, _, _, _, _) => simplify_mapped_type_remap(recursed)
     TemplateLiteralType(_, _) => simplify_template_literal(recursed)
     _ => recursed
   }
@@ -216,6 +219,51 @@ fn simplify_mapped_type(t : @ast.TsType) -> @ast.TsType {
           field_type
         }
         fields.push((Literal(k), final_type))
+      }
+      Object(fields)
+    }
+    _ => t
+  }
+}
+
+///|
+/// `{ [K in U as R]: V }` evaluator. When `U` resolves to a finite literal
+/// set, substitute `K` -> `Literal(k)` inside both `R` and `V`. The
+/// produced key set per source key comes from `resolve_literal_value_set`
+/// of the simplified remap; `Never` (TS-style "filter this key out") drops
+/// the entry; one or more literals emit one field each. Falls back to the
+/// original variant when the source or any remap result is opaque.
+fn simplify_mapped_type_remap(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    MappedTypeRemap(key_param, source, remap, value, optional) => {
+      let keys : Array[String] = match collect_mapped_source_keys(source) {
+        Some(ks) => ks
+        None => return t
+      }
+      let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      for k in keys {
+        let remapped = simplify_type(
+          substitute_named(remap, key_param, Literal(k)),
+        )
+        // `Never` filters this key out entirely (TS exclude pattern).
+        let new_keys : Array[String] = match remapped {
+          Never => continue
+          _ =>
+            match resolve_literal_value_set(remapped) {
+              Some(ks) => ks
+              None => return t
+            }
+        }
+        let substituted_value = substitute_named(value, key_param, Literal(k))
+        let field_type = simplify_type(substituted_value)
+        let final_type = if optional {
+          @ast.TsType::Union([field_type, Undefined])
+        } else {
+          field_type
+        }
+        for new_k in new_keys {
+          fields.push((Literal(new_k), final_type))
+        }
       }
       Object(fields)
     }
@@ -345,6 +393,15 @@ fn substitute_named(
       MappedType(
         inner_key,
         substitute_named(source, name, replacement),
+        substitute_named(value, name, replacement),
+        optional,
+      )
+    MappedTypeRemap(inner_key, _, _, _, _) if inner_key == name => t
+    MappedTypeRemap(inner_key, source, remap, value, optional) =>
+      MappedTypeRemap(
+        inner_key,
+        substitute_named(source, name, replacement),
+        substitute_named(remap, name, replacement),
         substitute_named(value, name, replacement),
         optional,
       )

@@ -3318,6 +3318,8 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     TemplateLiteralType(_, _) => "String"
     Keyof(inner) => "KeyOf" + utility_record_type_suffix(inner)
     MappedType(_, _, value, _) => "MappedTo" + utility_record_type_suffix(value)
+    MappedTypeRemap(_, _, _, value, _) =>
+      "RemapTo" + utility_record_type_suffix(value)
     TypePredicate(_, _) => "Bool"
   }
 }
@@ -4564,6 +4566,33 @@ fn lower_react_utility_type(
         // route through `JSValue` rather than carrying an unresolved
         // `MappedType` into emit.
         MappedType(_, _, _, _) => Any
+        other => lower_react_utility_type(info, other, modules, canonical_types)
+      }
+    }
+    MappedTypeRemap(key_param, source, remap, value, optional) => {
+      let lowered_source = lower_react_utility_type(
+        info, source, modules, canonical_types,
+      )
+      let resolved_source = resolve_named_inside_type(info, lowered_source)
+      match
+        @checker.simplify_type(
+          MappedTypeRemap(key_param, resolved_source, remap, value, optional),
+        ) {
+        Object(fields) => {
+          let lowered : Array[(@ast.TsType, @ast.TsType)] = []
+          for f in fields {
+            lowered.push(
+              (
+                f.0,
+                lower_react_utility_type(info, f.1, modules, canonical_types),
+              ),
+            )
+          }
+          Object(lowered)
+        }
+        // Couldn't resolve the remap; widen to `Any` so we don't carry
+        // the unresolved variant into emit.
+        MappedTypeRemap(_, _, _, _, _) => Any
         other => lower_react_utility_type(info, other, modules, canonical_types)
       }
     }

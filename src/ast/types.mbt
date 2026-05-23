@@ -58,6 +58,21 @@ pub(all) enum TsType {
   // when the source resolves to a union of literals. `optional` reflects
   // the literal `?` after `]`; the parser already handles `+?` / `-?`.
   MappedType(String, TsType, TsType, Bool)
+  // Mapped type with key remapping
+  // `{ [K in Source as Remap]: Value }`. Fields:
+  //   - `key_param`: binder name (e.g. `K`);
+  //   - `source`: original key union (e.g. `keyof T`);
+  //   - `remap`: the `as` expression, normally a string-mapping intrinsic
+  //     or a `Conditional` filter that references `Named(key_param)`;
+  //   - `value`: value type that may also reference `Named(key_param)`;
+  //   - `optional`: literal `?` after `]`.
+  // Evaluated by `simplify_mapped_type`: per key `k` in `source`, the
+  // remap is substituted-and-simplified; `Never` means the key is
+  // filtered out, a `Literal(new_k)` rewrites the key, and a union of
+  // literals emits one field per produced literal. Falls back to keeping
+  // the variant for opaque sources / remaps so later substitution can
+  // retry.
+  MappedTypeRemap(String, TsType, TsType, TsType, Bool)
   // Type predicate: `paramName is T`. Used as a function return type to
   // mark a user-defined type guard. Outside of the return-type position
   // it behaves like `Boolean`.

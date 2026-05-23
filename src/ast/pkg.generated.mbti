@@ -89,6 +89,7 @@ pub(all) struct TsClassMethodDecl {
   params : Array[(String, TsType)]
   return_type : TsType
   is_static : Bool
+  body : TsBlock?
 } derive(@debug.Debug)
 pub impl Show for TsClassMethodDecl
 
@@ -177,7 +178,7 @@ pub(all) enum TsExpr {
   PropAssignExpr(TsExpr, String, TsExpr)
   IndexAssignExpr(TsExpr, TsExpr, TsExpr)
   Seq(TsExpr, TsExpr)
-  ArrowFunc(Array[TsParam], TsArrowBody, Bool)
+  ArrowFunc(Array[TsParam], TsType, TsArrowBody, Bool)
   FuncExpr(TsFunc)
   Yield(TsExpr?)
   YieldStar(TsExpr)
@@ -186,6 +187,11 @@ pub(all) enum TsExpr {
   ImportMeta
   TaggedTemplate(TsExpr, Array[String], Array[String], Array[TsExpr])
   TemplateLiteral(Array[String], Array[TsExpr])
+  As(TsExpr, TsType)
+  Satisfies(TsExpr, TsType)
+  NonNull(TsExpr)
+  OptionalChain(TsExpr)
+  JsxElement(String, Array[(String, TsExpr?)], Array[TsExpr])
 } derive(@debug.Debug)
 pub impl Show for TsExpr
 
@@ -199,6 +205,7 @@ pub impl Show for TsForOfKind
 
 pub(all) struct TsFunc {
   name : String
+  type_params : Array[String]
   params : Array[TsParam]
   return_type : TsType
   body : TsBlock
@@ -210,6 +217,7 @@ pub impl Show for TsFunc
 pub(all) struct TsImport {
   name : String
   module_ : String
+  type_params : Array[String]
   params : Array[(String, TsType)]
   return_type : TsType
 } derive(@debug.Debug)
@@ -229,6 +237,7 @@ pub(all) struct TsInterface {
   name : String
   type_params : Array[String]
   extends_names : Array[String]
+  extends_args : Array[Array[TsType]]
   fields : Array[(String, TsType)]
   readonly_fields : Array[String]
   index_signatures : Array[(TsType, TsType)]
@@ -365,6 +374,8 @@ pub(all) enum TsType {
   TemplateLiteralType(Array[String], Array[TsType])
   Keyof(TsType)
   MappedType(String, TsType, TsType, Bool)
+  MappedTypeRemap(String, TsType, TsType, TsType, Bool)
+  TypePredicate(String, TsType)
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
 

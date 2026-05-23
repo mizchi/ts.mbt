@@ -144,9 +144,10 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
       return None
     }
     let keys_type = self.parse_type()
-    if self.match_(As) || self.match_ident("as") {
-      self.pos = saved_pos
-      return None
+    let remap : @ast.TsType? = if self.match_(As) || self.match_ident("as") {
+      Some(self.parse_type())
+    } else {
+      None
     }
     let _ = self.expect(RBracket)
     let optional = if self.match_(Question) {
@@ -161,6 +162,16 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
     let value_type = self.parse_type()
     let _ = self.match_(Semicolon) || self.match_(Comma)
     let _ = self.expect(RBrace)
+    // With `as Remap`: preserve the remap binder shape so the simplifier
+    // can substitute per key. We don't take a fast-path here because the
+    // remap may filter / rewrite keys.
+    match remap {
+      Some(r) =>
+        return Some(
+          MappedTypeRemap(key_param, keys_type, r, value_type, optional),
+        )
+      None => ()
+    }
     // Fast path: when the key source is already a finite literal union
     // and the value never references the binder, just materialize an
     // object so legacy passes that don't know about `MappedType` keep
@@ -254,6 +265,11 @@ fn mapped_value_references_binder(
     MappedType(inner_key, _, _, _) if inner_key == key_param => false
     MappedType(_, src, val, _) =>
       mapped_value_references_binder(src, key_param) ||
+      mapped_value_references_binder(val, key_param)
+    MappedTypeRemap(inner_key, _, _, _, _) if inner_key == key_param => false
+    MappedTypeRemap(_, src, rmap, val, _) =>
+      mapped_value_references_binder(src, key_param) ||
+      mapped_value_references_binder(rmap, key_param) ||
       mapped_value_references_binder(val, key_param)
     TemplateLiteralType(_, args) => {
       for a in args {
