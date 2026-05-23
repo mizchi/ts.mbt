@@ -2121,3 +2121,191 @@ test "expr_check: two-param generic class field selection" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 20: `Array.prototype.*` built-in generics. Receivers of shape
+// `Array(T)` / `Applied("Array", [T])` resolve the well-known methods with
+// the element type substituted; `map` / `flatMap` / `reduce` thread the
+// callback's body return type into the result.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: arr.length is number" {
+  let src =
+    #|function f(arr: number[]): number {
+    #|  return arr.length;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.push accepts elem type, rejects mismatched arg" {
+  let src =
+    #|function f(arr: number[]): void {
+    #|  arr.push("nope");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.pop returns elem | undefined" {
+  // `arr.pop()` may return undefined, so assigning to bare `number` fails.
+  let src =
+    #|function f(arr: number[]): number {
+    #|  return arr.pop();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.includes returns boolean" {
+  let src =
+    #|function f(arr: string[]): boolean {
+    #|  return arr.includes("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.map<U> infers U from callback body" {
+  // The callback returns a string, so arr.map yields `string[]`.
+  let src =
+    #|function f(arr: number[]): string[] {
+    #|  return arr.map(x => x.toString());
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.map mismatch when callback returns wrong type" {
+  let src =
+    #|function f(arr: number[]): number[] {
+    #|  return arr.map(x => "oops");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.filter preserves element type" {
+  let src =
+    #|function f(arr: number[]): number[] {
+    #|  return arr.filter(x => x > 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.find returns elem | undefined" {
+  let src =
+    #|function f(arr: number[]): number {
+    #|  return arr.find(x => x > 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.reduce uses initial value type as accumulator" {
+  // Initial value is `0` (number); callback returns `acc + cur`, also
+  // number. Result is `number`, matches declared return.
+  let src =
+    #|function f(arr: number[]): number {
+    #|  return arr.reduce((acc, cur) => acc + cur, 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.reduce flags wrong initial value type vs return" {
+  let src =
+    #|function f(arr: number[]): string {
+    #|  return arr.reduce((acc, cur) => acc + cur, 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: arr.forEach returns void" {
+  let src =
+    #|function f(arr: number[]): void {
+    #|  arr.forEach(x => { /* side effect */ });
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}

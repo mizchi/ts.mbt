@@ -183,6 +183,139 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
 /// Look up a property on a value of type `recv` named `field`. Walks
 /// interfaces / classes / objects / arrays. Returns `None` when the property
 /// cannot be resolved structurally; callers fall back to `Any`.
+///|
+/// Well-known `Array.prototype.*` members specialised at the array's
+/// element type `elem`. Returns `None` for unrecognised members so the
+/// caller can fall back to its default behaviour (typically `Any`).
+/// Methods whose return / parameter types involve a callback-local
+/// generic (`map<U>`, `reduce<U>`, …) are handled separately in
+/// `infer_expr.MethodCall` so the callback's body can supply the
+/// instantiation; this function only returns the non-generic prototype
+/// shape for those entries so call-site checks still see a sensible
+/// formal-parameter type for the argument.
+fn array_prototype_member(
+  elem : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let arr_t = @ast.TsType::Array(elem)
+  let nullable_elem = narrow_union(elem, @ast.TsType::Undefined)
+  // Helper for `(value: T, index: number, array: T[]) => R` callback shapes.
+  let cb = fn(ret) {
+    @ast.TsType::Func([elem, @ast.TsType::Number, arr_t], ret)
+  }
+  let cb_bool = cb(@ast.TsType::Boolean)
+  match field {
+    // Properties
+    "length" => Some(@ast.TsType::Number)
+    // Numeric index access falls through to the element type.
+    "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => Some(elem)
+    // Mutating methods
+    "push" => Some(@ast.TsType::Func([elem], @ast.TsType::Number))
+    "pop" => Some(@ast.TsType::Func([], nullable_elem))
+    "shift" => Some(@ast.TsType::Func([], nullable_elem))
+    "unshift" => Some(@ast.TsType::Func([elem], @ast.TsType::Number))
+    "reverse" => Some(@ast.TsType::Func([], arr_t))
+    "sort" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([elem, elem], @ast.TsType::Number)],
+          arr_t,
+        ),
+      )
+    "fill" => Some(@ast.TsType::Func([elem], arr_t))
+    // Non-mutating producers
+    "concat" => Some(@ast.TsType::Func([arr_t], arr_t))
+    "slice" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Number, @ast.TsType::Number],
+          arr_t,
+        ),
+      )
+    "flat" => Some(@ast.TsType::Func([], arr_t))
+    "join" =>
+      Some(@ast.TsType::Func([@ast.TsType::String_], @ast.TsType::String_))
+    "toString" => Some(@ast.TsType::Func([], @ast.TsType::String_))
+    // Search / predicate
+    "indexOf" =>
+      Some(@ast.TsType::Func([elem, @ast.TsType::Number], @ast.TsType::Number))
+    "lastIndexOf" =>
+      Some(@ast.TsType::Func([elem, @ast.TsType::Number], @ast.TsType::Number))
+    "includes" =>
+      Some(@ast.TsType::Func([elem], @ast.TsType::Boolean))
+    "every" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
+    "some" => Some(@ast.TsType::Func([cb_bool], @ast.TsType::Boolean))
+    "find" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
+    "findIndex" =>
+      Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
+    "findLast" => Some(@ast.TsType::Func([cb_bool], nullable_elem))
+    "findLastIndex" =>
+      Some(@ast.TsType::Func([cb_bool], @ast.TsType::Number))
+    // Iteration with element-type-preserving result
+    "filter" => Some(@ast.TsType::Func([cb_bool], arr_t))
+    "forEach" => Some(@ast.TsType::Func([cb(@ast.TsType::Void)], @ast.TsType::Void))
+    // Generic methods — the formal `U` shape is exposed here for the
+    // call-site contextual typing path to thread through, but the call
+    // site's `MethodCall` handler in `infer_expr` substitutes the real
+    // inferred return type. We use `Any` for the callback's return slot
+    // so the contextual-typing dispatch doesn't reject arrow bodies that
+    // legitimately produce any `U`.
+    "map" =>
+      Some(
+        @ast.TsType::Func(
+          [cb(@ast.TsType::Any)],
+          @ast.TsType::Array(@ast.TsType::Any),
+        ),
+      )
+    "flatMap" =>
+      Some(
+        @ast.TsType::Func(
+          [cb(@ast.TsType::Any)],
+          @ast.TsType::Array(@ast.TsType::Any),
+        ),
+      )
+    "reduce" =>
+      // (acc: U, cur: T, idx: number, arr: T[]) => U + initial U
+      Some(
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Func(
+              [
+                @ast.TsType::Any,
+                elem,
+                @ast.TsType::Number,
+                arr_t,
+              ],
+              @ast.TsType::Any,
+            ),
+            @ast.TsType::Any,
+          ],
+          @ast.TsType::Any,
+        ),
+      )
+    "reduceRight" =>
+      Some(
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Func(
+              [
+                @ast.TsType::Any,
+                elem,
+                @ast.TsType::Number,
+                arr_t,
+              ],
+              @ast.TsType::Any,
+            ),
+            @ast.TsType::Any,
+          ],
+          @ast.TsType::Any,
+        ),
+      )
+    _ => None
+  }
+}
+
+///|
 fn Resolver::lookup_field(
   self : Resolver,
   recv : @ast.TsType,
@@ -309,12 +442,9 @@ fn Resolver::lookup_field(
       }
       None
     }
-    Array(elem) =>
-      match field {
-        "length" => Some(@ast.TsType::Number)
-        "0" | "1" | "2" | "3" => Some(elem)
-        _ => None
-      }
+    Array(elem) => array_prototype_member(elem, field)
+    Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
+      array_prototype_member(elem, field)
     Tuple(items) =>
       // Numeric field on a tuple → that element type.
       match (try? @strconv.parse_int(field)) {
@@ -643,6 +773,43 @@ fn infer_expr(
     }
     MethodCall(receiver, method, args) => {
       let recv_ty = infer_expr(env, resolver, receiver)
+      // Special-case generic `Array.prototype.{map, flatMap, reduce}` so
+      // the callback's body / initial-value type flows into the result
+      // type instead of the synthetic `Any` slot returned by
+      // `array_prototype_member`.
+      let elem_opt = array_element_type(resolver, recv_ty)
+      match (elem_opt, method, args) {
+        (Some(elem), "map", [cb]) => {
+          let cb_ret = infer_arrow_body_with_params(
+            env, resolver, cb, [elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
+          )
+          return @ast.TsType::Array(cb_ret)
+        }
+        (Some(elem), "flatMap", [cb]) => {
+          let cb_ret = infer_arrow_body_with_params(
+            env, resolver, cb, [elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
+          )
+          // `flatMap` flattens one level: `T[] | T` → `T[]`.
+          let flattened = match cb_ret {
+            Array(inner) => inner
+            other => other
+          }
+          return @ast.TsType::Array(flattened)
+        }
+        (Some(elem), "reduce", [cb, init]) | (Some(elem), "reduceRight", [cb, init]) => {
+          let init_ty = infer_expr(env, resolver, init)
+          let cb_ret = infer_arrow_body_with_params(
+            env,
+            resolver,
+            cb,
+            [init_ty, elem, @ast.TsType::Number, @ast.TsType::Array(elem)],
+          )
+          // The accumulator type unions the initial value with each
+          // callback return — keep both in case the callback widens.
+          return narrow_union(init_ty, cb_ret)
+        }
+        _ => ()
+      }
       match resolver.lookup_method_sig(recv_ty, method) {
         Some((_params, ret)) => {
           for a in args {
@@ -1261,6 +1428,122 @@ fn collect_declared_fields(
 /// expected, threading the formal parameter types through. Used to catch
 /// errors inside `arr.map(x => x.someProp)` where `x` would otherwise type
 /// as `Any`.
+///|
+/// If `ty` is one of the recognised array shapes (`Array(T)` or the
+/// `Applied("Array", [T])` / `Applied("ReadonlyArray", [T])` aliases),
+/// return its element type. Falls back to `None` otherwise so callers
+/// can skip the array-specific dispatch path.
+fn array_element_type(
+  resolver : Resolver,
+  ty : @ast.TsType,
+) -> @ast.TsType? {
+  match resolver.unwrap(ty) {
+    Array(elem) => Some(elem)
+    Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) => Some(elem)
+    _ => None
+  }
+}
+
+///|
+/// Infer the return type of a callback expression when it's invoked with
+/// `formal_param_types`. Handles `ArrowFunc` (both expression and block
+/// bodies) and `FuncExpr` shapes; falls back to the existing
+/// `infer_expr` result for anything else (so opaque callbacks degrade to
+/// `Any` cleanly).
+fn infer_arrow_body_with_params(
+  outer : ExprEnv,
+  resolver : Resolver,
+  callback : @ast.TsExpr,
+  formal_param_types : Array[@ast.TsType],
+) -> @ast.TsType {
+  match callback {
+    ArrowFunc(arrow_params, body, is_async) => {
+      let env = ExprEnv::new()
+      for entry in outer.full_snapshot() {
+        env.bind(entry.0, entry.1)
+      }
+      let mut i = 0
+      while i < arrow_params.length() {
+        let p = arrow_params[i]
+        let ty = if is_checkable(p.type_) {
+          p.type_
+        } else if i < formal_param_types.length() {
+          formal_param_types[i]
+        } else {
+          p.type_
+        }
+        env.bind(p.name, ty)
+        i = i + 1
+      }
+      let inner = match body {
+        ArrowExpr(e) => infer_expr(env, resolver, e)
+        ArrowBlock(block) => infer_block_return(env, resolver, block)
+      }
+      wrap_async_return(is_async, inner)
+    }
+    FuncExpr(f) => {
+      let env = ExprEnv::new()
+      for entry in outer.full_snapshot() {
+        env.bind(entry.0, entry.1)
+      }
+      let mut i = 0
+      while i < f.params.length() {
+        let p = f.params[i]
+        let ty = if is_checkable(p.type_) {
+          p.type_
+        } else if i < formal_param_types.length() {
+          formal_param_types[i]
+        } else {
+          p.type_
+        }
+        env.bind(p.name, ty)
+        i = i + 1
+      }
+      if is_checkable(f.return_type) {
+        wrap_async_return(f.is_async, f.return_type)
+      } else {
+        let inner = infer_block_return(env, resolver, f.body)
+        wrap_async_return(f.is_async, inner)
+      }
+    }
+    _ => infer_expr(outer, resolver, callback)
+  }
+}
+
+///|
+/// Walk a block looking for `Return(Some(expr))` statements and union
+/// their inferred types. Used by callback-body inference where we need
+/// the result type of a block-bodied arrow / function expression.
+fn infer_block_return(
+  env : ExprEnv,
+  resolver : Resolver,
+  block : @ast.TsBlock,
+) -> @ast.TsType {
+  let mut acc : @ast.TsType = @ast.TsType::Undefined
+  let mut first = true
+  for stmt in block.stmts {
+    match stmt {
+      Return(Some(e)) => {
+        let t = infer_expr(env, resolver, e)
+        if first {
+          acc = t
+          first = false
+        } else {
+          acc = narrow_union(acc, t)
+        }
+      }
+      Return(None) =>
+        if first {
+          acc = @ast.TsType::Undefined
+          first = false
+        }
+      _ => ()
+    }
+  }
+  if first { @ast.TsType::Undefined } else { acc }
+}
+
+///|
 fn check_arrow_with_context(
   outer : ExprEnv,
   arrow_params : Array[@ast.TsParam],
