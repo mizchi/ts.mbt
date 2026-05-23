@@ -1,0 +1,12 @@
+import {
+  "moonbitlang/async",
+  "moonbitlang/core/env",
+  "mizchi/x/fs",
+  "mizchi/ts/parser",
+  "mizchi/ts/checker",
+  "mizchi/ts/ast",
+}
+
+options(
+  is_main: true,
+)
