@@ -185,6 +185,13 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
     let _ = self.parse_expr()
     return "<expr-base>"
   }
+  // `class C extends null { ... }` is valid TS — it creates a constructor
+  // with `null` as its prototype, used as a no-prototype class.
+  if self.check(Null) {
+    let _ = self.advance()
+    let _ = start
+    return "<expr-base>"
+  }
   let mut full_name = match self.advance().kind {
     Ident(n) => n
     k => raise ParseError("Expected base class name, got \{k}")

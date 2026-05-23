@@ -1935,6 +1935,26 @@ test "parser: parse local interface declaration inside function block" {
 }
 
 ///|
+test "parser: interface field name can be a fractional number" {
+  // `interface I { 1.0: T; }` — the lexer emits `Number(1.0)` for the key.
+  // Previously only `Int(n)` was accepted, raising "Expected field name".
+  let src = "interface I { 1.0: number; 2: string; }"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: class can `extends null`" {
+  let src = "class C extends null { x = 1; }"
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
 test "parser: parse interface call-signature with type predicate return" {
   let src = "interface I1 { (p1: A): p1 is C; }"
   match (try? Parser::from_source(src).parse_module()) {
