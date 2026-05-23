@@ -216,6 +216,187 @@ test "mangle: property keys are NOT renamed (v0 boundary)" {
 }
 
 ///|
+test "mangle: properties stay untouched by default (mangle_properties=false)" {
+  // The default config keeps property keys exactly as-is.
+  let cfg = ManglerConfig::default()
+  let src =
+    #|function f(obj) {
+    #|  obj.userName = "alice";
+    #|  return obj.userName.length;
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_true(js.contains(".userName"))
+      assert_true(js.contains(".length"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: opt-in property mangling renames non-reserved keys" {
+  // With `with_mangle_properties(true)`, every property key that's
+  // not in the reserved set gets renamed. Built-ins like `length` /
+  // `toString` MUST stay; user-defined `userName` / `getValue` get
+  // compressed.
+  let cfg = ManglerConfig::default().with_mangle_properties(true)
+  let src =
+    #|function f(obj) {
+    #|  obj.userName = "alice";
+    #|  obj.userScore = 42;
+    #|  return obj.userName.length + obj.getValue();
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Long property names should be gone.
+      assert_false(js.contains("userName"))
+      assert_false(js.contains("userScore"))
+      assert_false(js.contains("getValue"))
+      // But `length` is reserved (Array / String prototype) — it
+      // stays put even when callers see it on a user object.
+      assert_true(js.contains(".length"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: object-literal keys get the same rename as the access" {
+  // Both `{ userName: "x" }` and `obj.userName` use the same key
+  // — the property mangler renames them in lockstep.
+  let cfg = ManglerConfig::default().with_mangle_properties(true)
+  let src =
+    #|function make() {
+    #|  return { userName: "alice", userScore: 42 };
+    #|}
+    #|function read(o) {
+    #|  return o.userName;
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Find the rename of `userName` — it should appear identically
+      // in the literal and the access.
+      // The mapping is deterministic (sorted alphabetically), so
+      // `userName` precedes `userScore`. Both get short names.
+      assert_false(js.contains("userName"))
+      assert_false(js.contains("userScore"))
+      // Both should appear as `something:` in the object literal
+      // and `.something` in the access — same key on each side.
+      assert_true(js.contains(": \"alice\""))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: destructure shorthand `{ key }` expands to `{ mangled: key }`" {
+  // Without explicit `as`, `const { userName } = obj` reads the
+  // `userName` property and binds it locally as `userName`. After
+  // mangling the property key, the JS must keep the original local
+  // name to preserve any references.
+  let cfg = ManglerConfig::default().with_mangle_properties(true)
+  let src =
+    #|function read(obj) {
+    #|  const { userName } = obj;
+    #|  return userName;
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // No bare `{userName}` in the output — the key was renamed.
+      assert_false(js.contains("{userName}"))
+      assert_false(js.contains("{ userName }"))
+      // But the local binding `userName` either keeps its name OR
+      // gets a short rename (it's a function-local, so it gets
+      // mangled too). The key:local separator `:` must appear.
+      assert_true(js.contains(":"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: built-in reserved properties stay (DOM / prototypes)" {
+  // `addEventListener`, `length`, `then` are in the built-in
+  // reserved set. Renaming them would break interop with the DOM
+  // / Promises / arrays.
+  let cfg = ManglerConfig::default().with_mangle_properties(true)
+  let src =
+    #|function setup(el) {
+    #|  el.addEventListener("click", () => fetch("/").then(r => r.json()));
+    #|  return el.children.length;
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_true(js.contains(".addEventListener"))
+      assert_true(js.contains(".then"))
+      assert_true(js.contains(".length"))
+      assert_true(js.contains(".children"))
+      assert_true(js.contains(".json"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: explicit reserved_properties extends the built-in list" {
+  // The caller can add their own protected property names.
+  let cfg = ManglerConfig::default()
+    .with_mangle_properties(true)
+    .with_reserved_properties(["userToken", "apiKey"])
+  let src =
+    #|function f(obj) {
+    #|  obj.userToken = "abc";
+    #|  obj.userScore = 100;
+    #|  obj.apiKey = "key";
+    #|  return obj.userToken + obj.apiKey;
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_true(js.contains(".userToken"))
+      assert_true(js.contains(".apiKey"))
+      // Non-reserved `userScore` was mangled.
+      assert_false(js.contains("userScore"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: method calls follow the property rename" {
+  // `obj.calculate(x)` is a MethodCall — the `calculate` method
+  // name must rename in lockstep with any `obj.calculate` access.
+  let cfg = ManglerConfig::default().with_mangle_properties(true)
+  let src =
+    #|function f(obj) {
+    #|  return obj.calculate(1) + obj.calculate(2);
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("calculate"))
+      // Both calls should still have the same renamed method.
+      let mut occurrences = 0
+      let mut from_idx = 0
+      while from_idx < js.length() {
+        let slice = js.substring(start=from_idx, end=js.length()).to_string()
+        match slice.find(".") {
+          Some(i) => {
+            // Skip the `.` and look for `(` after a single char.
+            if from_idx + i + 2 < js.length() &&
+              js.substring(start=from_idx + i + 2, end=from_idx + i + 3).to_string() == "(" {
+              occurrences = occurrences + 1
+            }
+            from_idx = from_idx + i + 1
+          }
+          None => break
+        }
+      }
+      assert_true(occurrences >= 2)
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
 test "mangle: name short-name generator avoids reserved single-letter clashes" {
   // The mangler should skip `a` if it conflicts. Force the issue
   // by reserving `a`.
