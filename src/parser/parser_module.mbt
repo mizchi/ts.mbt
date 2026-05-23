@@ -136,6 +136,7 @@ fn empty_ts_module() -> @ast.TsModule {
     classes: [],
     namespaces: [],
     enums: [],
+    module_augmentations: [],
   }
 }
 
@@ -349,18 +350,32 @@ fn parse_ambient_external_module_source(
 fn Parser::parse_ambient_external_module_decl(
   self : Parser,
 ) -> @ast.TsModule? raise ParseError {
+  match self.parse_ambient_external_module_decl_with_spec() {
+    Some((_, m)) => Some(m)
+    None => None
+  }
+}
+
+///|
+/// Same as `parse_ambient_external_module_decl` but also returns the
+/// declared module specifier string. Used by the top-level parse loop
+/// to record `(spec, body)` augmentation entries on the surrounding
+/// `TsModule`.
+fn Parser::parse_ambient_external_module_decl_with_spec(
+  self : Parser,
+) -> (String, @ast.TsModule)? raise ParseError {
   if !self.match_ident("module") {
     return None
   }
   match self.peek().kind {
     Str(_) => {
-      let _ = self.expect_str_literal()
+      let spec = self.expect_str_literal()
       if self.check(LBrace) {
         let body_source = self.parse_declaration_block_source()
-        Some(parse_ambient_external_module_source(body_source))
+        Some((spec, parse_ambient_external_module_source(body_source)))
       } else {
         self.skip_declaration_block()
-        Some(empty_ts_module())
+        Some((spec, empty_ts_module()))
       }
     }
     _ => None
@@ -2832,6 +2847,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   let classes : Array[@ast.TsClassDecl] = []
   let namespaces : Array[@ast.TsNamespaceDecl] = []
   let enums : Array[@ast.TsEnumDecl] = []
+  let module_augmentations : Array[(String, @ast.TsModule)] = []
   let const_values : Map[String, @ast.TsExpr] = {}
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
@@ -2918,12 +2934,21 @@ fn Parser::parse_module_with_seeded_const_values_internal(
               Str(_) => true
               _ => false
             }) {
-            match self.parse_ambient_external_module_decl() {
-              Some(module_) =>
+            match self.parse_ambient_external_module_decl_with_spec() {
+              Some((spec, module_)) => {
+                // Record the augmentation so downstream resolvers can
+                // merge it into the imported module's surface; also
+                // append the declarations into the surrounding scope
+                // (TS's "module augmentation extends the surrounding
+                // declaration file" behavior) so existing flows that
+                // don't consult the augmentation list still see the
+                // members.
+                module_augmentations.push((spec, module_))
                 append_module_decls(
                   module_, funcs, interfaces, type_aliases, imports, values, classes,
                   namespaces, enums,
                 )
+              }
               None => ()
             }
           } else if name == "namespace" ||
@@ -3022,6 +3047,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     classes,
     namespaces,
     enums,
+    module_augmentations,
   }
 }
 

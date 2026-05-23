@@ -258,6 +258,7 @@ pub(all) struct TsModule {
   classes : Array[TsClassDecl]
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
+  module_augmentations : Array[(String, TsModule)]
 } derive(@debug.Debug)
 pub impl Show for TsModule
 

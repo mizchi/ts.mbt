@@ -3521,6 +3521,41 @@ fn apply_switch_case_narrowing(
 ///|
 /// Switch `default:` body narrowing — exclude every literal case test against
 /// the scrutinee's union. Best-effort: only string-literal cases are excluded.
+/// `default:` body of a tagged-union switch on `obj.prop`: walk the
+/// listed string-literal cases, strip every union member whose
+/// declared `prop` field already matches one of them, and bind the
+/// remainder under `obj_name`. When every member is exhausted the
+/// remainder is `Never`, which is how downstream exhaustiveness rails
+/// (e.g. `const _: never = obj`) detect a clean cover.
+fn apply_switch_disc_default_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  obj_name : String,
+  prop : String,
+  cases : Array[@ast.TsSwitchCase],
+) -> Unit {
+  let str_lits : Array[String] = []
+  for c in cases {
+    match c.test_expr {
+      Some(StringLit(s)) => str_lits.push(s)
+      _ => ()
+    }
+  }
+  if str_lits.length() == 0 {
+    return
+  }
+  let cur = env_lookup_full(env, resolver, obj_name)
+  let mut next : @ast.TsType = cur
+  for lit in str_lits {
+    match narrow_by_discriminant(resolver, next, prop, lit, false) {
+      Some(remainder) => next = remainder
+      None => ()
+    }
+  }
+  env.bind(obj_name, next)
+}
+
+///|
 fn apply_switch_default_narrowing(
   env : ExprEnv,
   resolver : Resolver,
@@ -4743,6 +4778,17 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         match (scrutinee_name, case_.test_expr) {
           (Some(name), None) =>
             apply_switch_default_narrowing(env, ctx.resolver, name, cases)
+          _ => ()
+        }
+        // Discriminator default: `switch (obj.kind) { case "a": …
+        // default: /* obj has none of the listed tags */ }`. Strip
+        // every union member whose discriminant matches one of the
+        // listed cases so the default body sees the exhaustive remainder.
+        match (scrutinee_disc, case_.test_expr) {
+          (Some((obj_name, prop)), None) =>
+            apply_switch_disc_default_narrowing(
+              env, ctx.resolver, obj_name, prop, cases,
+            )
           _ => ()
         }
         check_block(env, case_.body, ctx)

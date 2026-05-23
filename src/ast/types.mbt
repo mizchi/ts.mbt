@@ -604,6 +604,12 @@ pub(all) struct TsModule {
   classes : Array[TsClassDecl] // ambient class declarations
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
+  // Ambient module-augmentation entries (`declare module "foo" { ... }`).
+  // Each pair holds the augmented specifier string and the contributed
+  // declarations. The resolver merges the body's interfaces / type
+  // aliases / values into the matching module lookup so user code that
+  // imports from `"foo"` sees the augmented shape.
+  module_augmentations : Array[(String, TsModule)]
 } derive(Debug)
 
 ///|

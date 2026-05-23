@@ -2315,6 +2315,32 @@ test "parser: retain class-level decorators in TsClassDecl" {
 }
 
 ///|
+test "parser: retain `declare module \"X\" { ... }` as augmentation entry" {
+  let src =
+    #|declare module "express" {
+    #|  interface Request {
+    #|    user: { id: number };
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.module_augmentations.length(), 1)
+  let (spec, body) = module_.module_augmentations[0]
+  assert_eq(spec, "express")
+  assert_eq(body.interfaces.length(), 1)
+  assert_eq(body.interfaces[0].name, "Request")
+  // The augmentation members are *also* appended to the surrounding
+  // scope (existing behavior), so consumers without augmentation
+  // awareness still see them.
+  let found = module_.interfaces.iter().any(fn(i) { i.name == "Request" })
+  assert_true(found)
+}
+
+///|
 test "parser: parse dynamic import with options retains the second arg" {
   // `import("./data.json", { with: { type: "json" } })` should parse
   // with both arguments captured.

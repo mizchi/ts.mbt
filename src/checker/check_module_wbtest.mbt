@@ -9,6 +9,7 @@ fn empty_module_for_check() -> @ast.TsModule {
     classes: [],
     namespaces: [],
     enums: [],
+    module_augmentations: [],
   }
 }
 

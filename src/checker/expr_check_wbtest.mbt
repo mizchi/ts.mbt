@@ -281,6 +281,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         classes: [],
         namespaces: [],
         enums: [],
+        module_augmentations: [],
       }
   }
 }
@@ -4698,6 +4699,27 @@ test "expr_check: class static method resolves through `ClassName.method`" {
     #|}
     #|function use(): number {
     #|  return Counter.create();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: switch on `obj.kind` default narrows to remaining union" {
+  // `switch (s.kind) { case "a": …; case "b": …; default: … }` —
+  // the default body should see `s.kind` already exhausted of "a"
+  // and "b", reducing the union to its remaining members.
+  let src =
+    #|interface A { kind: "a"; a: number }
+    #|interface B { kind: "b"; b: string }
+    #|interface C { kind: "c"; c: boolean }
+    #|function pick(s: A | B | C): boolean {
+    #|  switch (s.kind) {
+    #|    case "a": return false;
+    #|    case "b": return false;
+    #|    default: return s.c;
+    #|  }
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
