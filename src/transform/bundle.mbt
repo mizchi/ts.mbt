@@ -38,11 +38,16 @@ pub(all) struct BundleOptions {
   // When `true`, the result includes a v3 source map covering every
   // module in the bundle.
   with_sourcemap : Bool
+  // When `true`, run tree shaking on every module before emit. Roots
+  // are computed cross-module: each module starts from the named
+  // bindings other live modules import from it (plus the entry's own
+  // top-level keepers / non-decl stmts).
+  tree_shake : Bool
 }
 
 ///|
 pub fn BundleOptions::default() -> BundleOptions {
-  { jsx: JsxConfig::default(), with_sourcemap: false }
+  { jsx: JsxConfig::default(), with_sourcemap: false, tree_shake: false }
 }
 
 ///|
@@ -68,7 +73,7 @@ priv struct ModuleNode {
   // Original source text (kept for sourcesContent).
   source : String
   // Parsed module body — runtime stmts after JSX lowering.
-  block : @ast.TsBlock
+  mut block : @ast.TsBlock
   // Import specifiers from this module, mapped to the *absolute*
   // resolved path (`Map[specifier, resolved_path]`).
   resolved_imports : Map[String, String]
@@ -76,6 +81,10 @@ priv struct ModuleNode {
   // (specifier, default_binding?, named_bindings, namespace_binding?,
   // type_only).
   import_decls : Array[@ast.TsImportDecl]
+  // Top-level export specs (`export { x, y as z }`, `export const x = …`).
+  // Drives tree shaking: every `local_name` here is a root for the
+  // module's own pass.
+  exports : Array[@ast.TsExportSpec]
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +195,9 @@ pub fn bundle_modules(
     Err(e) => return Err(e)
   }
   let order = topological_order(modules, entry)
+  if opts.tree_shake {
+    tree_shake_bundle(modules, entry)
+  }
   let e = Emitter::new()
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
@@ -309,8 +321,96 @@ fn load_module_graph(
     block: lowered,
     resolved_imports: resolved,
     import_decls: mb.imports,
+    exports: mb.exports,
   }
   Ok(())
+}
+
+///|
+/// Compute per-module root sets and shake each module in place.
+///
+/// Root computation:
+///   - Entry module: every `local_name` from its `exports`. Stmts
+///     without a single-Ident binding (side effects, control flow,
+///     etc.) survive `tree_shake_block` unconditionally.
+///   - Non-entry modules: every `imported` name that any other
+///     module pulls in via `import { x } from "./this"`. Default and
+///     namespace imports drag in everything (we can't tell which
+///     bindings they touch without full resolution), so we fall back
+///     to "keep every export" when those forms are seen.
+fn tree_shake_bundle(
+  modules : Map[String, ModuleNode],
+  entry : String,
+) -> Unit {
+  // Map: target module path -> set of root names to preserve there.
+  let roots_per_module : Map[String, Map[String, Bool]] = {}
+  fn root_for(path : String) -> Map[String, Bool] {
+    match roots_per_module.get(path) {
+      Some(m) => m
+      None => {
+        let m : Map[String, Bool] = {}
+        roots_per_module[path] = m
+        m
+      }
+    }
+  }
+
+  // Seed the entry's roots with its own exports.
+  match modules.get(entry) {
+    Some(entry_node) => {
+      let r = root_for(entry)
+      for spec in entry_node.exports {
+        r[spec.local_name] = true
+      }
+    }
+    None => ()
+  }
+  // Walk every module's imports → propagate roots into the source
+  // module. We treat default / namespace imports as "keep everything"
+  // since we don't track which members get touched.
+  for kv in modules {
+    let (_, node) = kv
+    for imp in node.import_decls {
+      if imp.type_only {
+        continue
+      }
+      let dep_path = match node.resolved_imports.get(imp.module_spec) {
+        Some(p) => p
+        None => continue
+      }
+      let dep_node = match modules.get(dep_path) {
+        Some(d) => d
+        None => continue
+      }
+      let dep_roots = root_for(dep_path)
+      let keep_all = imp.default_binding is Some(_) ||
+        imp.namespace_binding is Some(_)
+      if keep_all {
+        for spec in dep_node.exports {
+          dep_roots[spec.local_name] = true
+        }
+      } else {
+        for nb in imp.named_bindings {
+          // nb.0 is the imported name as it appears in the source
+          // module — that's the root we want to keep alive there.
+          dep_roots[nb.0] = true
+        }
+      }
+    }
+  }
+  // Shake each module's block in place against its root set.
+  for kv in modules {
+    let (path, node) = kv
+    let roots_arr : Array[String] = []
+    match roots_per_module.get(path) {
+      Some(m) =>
+        for r in m {
+          roots_arr.push(r.0)
+        }
+      None => ()
+    }
+    node.block = tree_shake_block(node.block, roots_arr)
+  }
 }
 
 ///|

@@ -181,6 +181,7 @@ test "bundle: sourcemap option emits multi-source v3 JSON" {
   let opts : BundleOptions = {
     jsx: JsxConfig::default(),
     with_sourcemap: true,
+    tree_shake: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) =>
@@ -197,6 +198,116 @@ test "bundle: sourcemap option emits multi-source v3 JSON" {
         }
         None => fail("expected sourcemap, got None")
       }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: tree shaking drops a dep's unused exports" {
+  // `lib.ts` exports both `used` and `unused`. `entry.ts` only
+  // imports `used`. With `tree_shake=true`, `unused` should be
+  // gone from the bundle.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { used } from \"./lib\";\nconsole.log(used);\n",
+    ),
+    (
+      "lib.ts",
+      "export const used = 1;\nexport const unused = 2;\n",
+    ),
+  ])
+  let opts : BundleOptions = {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: true,
+  }
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("const used"))
+      assert_false(out.js.contains("const unused"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: tree shaking keeps decls reached through a chain" {
+  // `helper` isn't exported, but it's referenced by `used` which is.
+  // `noise` is never reached — drop it.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { used } from \"./lib\";\nconsole.log(used());\n",
+    ),
+    (
+      "lib.ts",
+      "const helper = 2;\nconst noise = 99;\nexport const used = () => helper + 1;\n",
+    ),
+  ])
+  let opts : BundleOptions = {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: true,
+  }
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("const used"))
+      assert_true(out.js.contains("const helper"))
+      assert_false(out.js.contains("const noise"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: namespace import keeps every export of the source" {
+  // `import * as L from "./lib"` — we can't statically tell which
+  // members `L.foo` touches, so we fall back to "keep all exports".
+  let files = vfs([
+    (
+      "entry.ts",
+      "import * as L from \"./lib\";\nconsole.log(L.a, L.b);\n",
+    ),
+    (
+      "lib.ts",
+      "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n",
+    ),
+  ])
+  let opts : BundleOptions = {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: true,
+  }
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("const a"))
+      assert_true(out.js.contains("const b"))
+      assert_true(out.js.contains("const c"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: tree shaking off by default keeps every export" {
+  // The same lib + entry from above, but tree_shake is left at false.
+  // Both exports survive even though only one is imported.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { used } from \"./lib\";\nconsole.log(used);\n",
+    ),
+    (
+      "lib.ts",
+      "export const used = 1;\nexport const unused = 2;\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("const used"))
+      assert_true(out.js.contains("const unused"))
+    }
     Err(e) => fail("bundle error: \{e}")
   }
 }
