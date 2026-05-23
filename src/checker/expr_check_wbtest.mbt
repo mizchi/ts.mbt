@@ -4705,6 +4705,34 @@ test "expr_check: class static method resolves through `ClassName.method`" {
 }
 
 ///|
+test "expr_check: generator yield matching element type — clean" {
+  let src =
+    #|function* gen(): Generator<number, void, unknown> {
+    #|  yield 1;
+    #|  yield 2;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generator yielding wrong element type flags mismatch" {
+  let src =
+    #|function* gen(): Generator<number, void, unknown> {
+    #|  yield "string";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("yield") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
 test "expr_check: class index signature `[k: string]: T` resolves lookups" {
   // `c.foo` on a class with `[k: string]: number` resolves to `number`.
   let src =

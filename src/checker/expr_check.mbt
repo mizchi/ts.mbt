@@ -1489,6 +1489,11 @@ priv struct CheckCtx {
   // is the inner `T` of `Promise<T>` (since `return x` inside `async`
   // returns a `T`, not the wrapping promise).
   return_type : @ast.TsType
+  // Element type for `yield x` inside a generator function (the `T` in
+  // `Generator<T, ...>` / `Iterable<T>` / `AsyncGenerator<T, ...>`).
+  // `Any` when not in a generator or when the type isn't statically
+  // extractable — the yield check skips in that case.
+  yield_type : @ast.TsType
   resolver : Resolver
   issues : Array[ExprIssue]
 }
@@ -3065,6 +3070,7 @@ fn check_arrow_with_context(
       let inner_ctx : CheckCtx = {
         path_prefix: ctx.path_prefix,
         return_type: unwrap_async_return(is_async, formal_ret),
+        yield_type: @ast.TsType::Any,
         resolver: ctx.resolver,
         issues: ctx.issues,
       }
@@ -3114,6 +3120,7 @@ fn check_funcexpr_with_context(
   let inner_ctx : CheckCtx = {
     path_prefix: ctx.path_prefix,
     return_type: body_return,
+    yield_type: @ast.TsType::Any,
     resolver: ctx.resolver,
     issues: ctx.issues,
   }
@@ -4969,6 +4976,33 @@ fn check_call_args_in_expr(
       for e in exprs {
         check_call_args_in_expr(env, e, ctx)
       }
+    Yield(operand_opt) =>
+      match operand_opt {
+        Some(operand) => {
+          check_call_args_in_expr(env, operand, ctx)
+          // Inside a generator, `yield x` must produce a value
+          // assignable to the declared element type. Outside (or
+          // when the type isn't statically extractable) the
+          // yield_type is `Any` and the check no-ops.
+          if is_checkable(ctx.yield_type) {
+            check_expr_against(env, operand, ctx.yield_type, ctx, "yield")
+          }
+        }
+        None => ()
+      }
+    YieldStar(operand) => {
+      check_call_args_in_expr(env, operand, ctx)
+      // `yield* iter` delegates to another iterable. Validate against
+      // `Iterable<T>` / `Generator<T, ...>` of the same element type.
+      if is_checkable(ctx.yield_type) {
+        let expected : @ast.TsType = Union([
+          Applied("Iterable", [ctx.yield_type]),
+          Applied("IterableIterator", [ctx.yield_type]),
+          Applied("Generator", [ctx.yield_type, Any, Any]),
+        ])
+        check_expr_against(env, operand, expected, ctx, "yield*")
+      }
+    }
     TaggedTemplate(tag, _, _, exprs) => {
       check_call_args_in_expr(env, tag, ctx)
       for e in exprs {
@@ -5180,9 +5214,30 @@ fn check_function_body_with(
     AssertsPredicate(_, _) => @ast.TsType::Void
     other => other
   }
+  // Extract the yield-element type for generator bodies. We accept the
+  // standard ambient shapes `Generator<T, ...>` / `Iterable<T>` /
+  // `IterableIterator<T>` / `AsyncGenerator<T, ...>` / `AsyncIterable<T>`
+  // and fall back to `Any` for anything else so non-generator and
+  // unannotated bodies short-circuit the yield check.
+  let yield_type : @ast.TsType = if func.is_generator {
+    match func.return_type {
+      Applied("Generator", args)
+      | Applied("AsyncGenerator", args) if args.length() >= 1 => args[0]
+      Applied("Iterable", [t])
+      | Applied("IterableIterator", [t])
+      | Applied("Iterator", [t])
+      | Applied("AsyncIterable", [t])
+      | Applied("AsyncIterableIterator", [t])
+      | Applied("AsyncIterator", [t]) => t
+      _ => @ast.TsType::Any
+    }
+  } else {
+    @ast.TsType::Any
+  }
   let ctx : CheckCtx = {
     path_prefix: "function " + func.name,
     return_type: body_return,
+    yield_type,
     resolver,
     issues,
   }
@@ -5200,8 +5255,12 @@ fn check_function_body_with(
   }
   // Missing-return analysis: when the declared (body-level) return type is
   // concrete and doesn't accept `undefined` / `void`, every path through the
-  // body must end in `return` or `throw`.
-  if is_checkable(body_return) &&
+  // body must end in `return` or `throw`. Skip for generators — their body
+  // returns the `TReturn` slot via `return`, but the iterator itself is the
+  // declared `Generator<T, TReturn, ...>` value; not all generator
+  // signatures require an explicit `return`.
+  if !func.is_generator &&
+    is_checkable(body_return) &&
     !is_assignable_to(@ast.TsType::Undefined, body_return) &&
     !is_assignable_to(@ast.TsType::Void, body_return) &&
     !block_always_exits(func.body) {
