@@ -1955,6 +1955,61 @@ test "parser: class can `extends null`" {
 }
 
 ///|
+test "parser: `using` declaration parses as a let binding" {
+  // ES2023 `using x = expr;` — auto-disposal binding. Treated as `let`
+  // for parser / checker purposes; the runtime semantics don't change
+  // the type-level shape.
+  let src =
+    #|function f() {
+    #|  using d1 = { [Symbol.dispose]() {} };
+    #|  using d2 = null;
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: `await using` declaration parses as a let binding" {
+  let src =
+    #|async function f() {
+    #|  await using d1 = { [Symbol.asyncDispose]() {} };
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: `for (using x of arr)` parses as a for-of loop" {
+  let src =
+    #|function f() {
+    #|  for (using d of [null, undefined]) { /* body */ }
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: `using` followed by newline is still a reference" {
+  // ES2023 ASI rule: a line terminator between `using` and the binding
+  // makes this NOT a using declaration — `using` is a free reference.
+  let src =
+    #|function f() {
+    #|  using
+    #|  x;
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
 test "parser: parse interface call-signature with type predicate return" {
   let src = "interface I1 { (p1: A): p1 is C; }"
   match (try? Parser::from_source(src).parse_module()) {

@@ -43,6 +43,19 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       } else {
         self.parse_let()
       }
+    // `using x = expr;` and `await using x = expr;` (ES2023). Treat as a
+    // `let` declaration for parsing — the auto-disposal semantics don't
+    // affect the type-level shape.
+    Ident("using") if self.is_using_declaration_start() => {
+      let _ = self.advance()
+      self.parse_var_like(VarKind::Let)
+    }
+    Ident("await") if self.peek_at(1).kind is Ident("using") &&
+      self.is_await_using_declaration_start() => {
+      let _ = self.advance() // `await`
+      let _ = self.advance() // `using`
+      self.parse_var_like(VarKind::Let)
+    }
     Const =>
       match self.peek_at(1).kind {
         Ident(name) if name == "enum" => {
@@ -423,15 +436,34 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
   }
   let _ = self.expect(LParen)
 
+  // `for (using x of ...)` — ES2023 disposable binding. Same shape as
+  // `for (let x of ...)` for parsing purposes; we tag the binding with
+  // `TsForOfKind::Let` since the auto-disposal semantics don't affect the
+  // type-level shape the checker cares about.
+  let using_declaration = if self.is_using_declaration_start() {
+    let _ = self.advance()
+    true
+  } else if self.is_await_using_declaration_start() {
+    let _ = self.advance() // `await`
+    let _ = self.advance() // `using`
+    true
+  } else {
+    false
+  }
   // for...of check: for (var/let/const x of arr)
-  if (self.check(Let) && !self.is_let_for_in_head_ident()) ||
+  if using_declaration ||
+    (self.check(Let) && !self.is_let_for_in_head_ident()) ||
     self.check(Const) ||
     self.check(Var) {
-    let kind = match self.advance().kind {
-      Let => @ast.TsForOfKind::Let
-      Const => @ast.TsForOfKind::Const
-      Var => @ast.TsForOfKind::Var
-      _ => @ast.TsForOfKind::Var
+    let kind = if using_declaration {
+      @ast.TsForOfKind::Let
+    } else {
+      match self.advance().kind {
+        Let => @ast.TsForOfKind::Let
+        Const => @ast.TsForOfKind::Const
+        Var => @ast.TsForOfKind::Var
+        _ => @ast.TsForOfKind::Var
+      }
     }
     let binding = self.parse_binding_pattern()
     let var_type = self.parse_var_decl_type()
@@ -897,6 +929,50 @@ fn Parser::is_let_identifier_expr_start(self : Parser) -> Bool {
       }
       self.has_line_terminator_after()
     }
+    _ => false
+  }
+}
+
+///|
+/// True when the current token is `using` AND the upcoming pattern
+/// (`Ident`, `{`, `[`) makes this an ES2023 `using` declaration rather
+/// than a free identifier reference. The spec mandates no line
+/// terminator between `using` and the binding pattern.
+fn Parser::is_using_declaration_start(self : Parser) -> Bool {
+  match self.peek().kind {
+    Ident("using") => ()
+    _ => return false
+  }
+  // ASI: a newline between `using` and the next token makes this NOT a
+  // `using` declaration — the parser must treat `using` as a reference.
+  if self.peek_at(1).has_newline_before {
+    return false
+  }
+  match self.peek_at(1).kind {
+    Ident(_) | LBrace | LBracket => true
+    _ => false
+  }
+}
+
+///|
+/// True when the current two tokens form `await using` and the binding
+/// pattern follows on the same line. Same ASI rule as
+/// `is_using_declaration_start`.
+fn Parser::is_await_using_declaration_start(self : Parser) -> Bool {
+  match self.peek().kind {
+    Ident("await") => ()
+    _ => return false
+  }
+  match self.peek_at(1).kind {
+    Ident("using") => ()
+    _ => return false
+  }
+  if self.peek_at(1).has_newline_before ||
+    self.peek_at(2).has_newline_before {
+    return false
+  }
+  match self.peek_at(2).kind {
+    Ident(_) | LBrace | LBracket => true
     _ => false
   }
 }
