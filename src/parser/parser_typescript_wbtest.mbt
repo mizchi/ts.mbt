@@ -529,7 +529,10 @@ async fn collect_ts_source_files(dir : String) -> Array[String] {
     return []
   }
   let entries = @fs.readdir(
-    dir, include_hidden=false, include_special=false, sort=true,
+    dir,
+    include_hidden=false,
+    include_special=false,
+    sort=true,
   ) catch {
     _ => []
   }
@@ -547,9 +550,7 @@ async fn collect_ts_source_files(dir : String) -> Array[String] {
 /// Used by the conformance smoke test so a top-level directory like
 /// `conformance/expressions/` picks up nested cases without having to
 /// enumerate every feature subdir.
-async fn collect_ts_source_files_recursive(
-  dir : String,
-) -> Array[String] {
+async fn collect_ts_source_files_recursive(dir : String) -> Array[String] {
   let kind = @fs.kind(dir, follow_symlink=false) catch {
     _ => @fs.FileKind::Unknown
   }
@@ -557,7 +558,10 @@ async fn collect_ts_source_files_recursive(
     return []
   }
   let entries = @fs.readdir(
-    dir, include_hidden=false, include_special=false, sort=true,
+    dir,
+    include_hidden=false,
+    include_special=false,
+    sort=true,
   ) catch {
     _ => []
   }
@@ -587,11 +591,8 @@ async fn collect_ts_source_files_recursive(
 /// runtime TypeScript syntax.
 async test "parser: parse TypeScript compiler/services/server .ts sources" {
   let dirs = [
-    "typescript/src/compiler",
-    "typescript/src/server",
-    "typescript/src/services",
-    "typescript/src/typingsInstaller",
-    "typescript/src/jsTyping",
+    "typescript/src/compiler", "typescript/src/server", "typescript/src/services",
+    "typescript/src/typingsInstaller", "typescript/src/jsTyping",
   ]
   let failures : Array[String] = []
   let mut total = 0
@@ -599,9 +600,7 @@ async test "parser: parse TypeScript compiler/services/server .ts sources" {
     let files = collect_ts_source_files(dir)
     for path in files {
       total += 1
-      let content = @fs.read_file(path).text() catch {
-        _ => continue
-      }
+      let content = @fs.read_file(path).text() catch { _ => continue }
       match (try? Parser::from_source(content).parse_module()) {
         Ok(_) => ()
         Err(err) => failures.push(path + ": \{err}")
@@ -616,7 +615,9 @@ async test "parser: parse TypeScript compiler/services/server .ts sources" {
     for f in failures {
       println("FAIL " + f)
     }
-    fail("\{failures.length()} of \{total} TypeScript .ts files failed to parse")
+    fail(
+      "\{failures.length()} of \{total} TypeScript .ts files failed to parse",
+    )
   }
 }
 
@@ -634,39 +635,24 @@ async test "parser: parse TypeScript compiler/services/server .ts sources" {
 async test "checker: smoke-run against TypeScript conformance test corpus" {
   let dirs = [
     // Originally added: feature-specific narrowing / generics / guards.
-    "typescript/tests/cases/conformance/types/typeParameters",
-    "typescript/tests/cases/conformance/controlFlow",
-    "typescript/tests/cases/conformance/expressions/typeGuards",
-    "typescript/tests/cases/conformance/types/typeGuards",
+    "typescript/tests/cases/conformance/types/typeParameters", "typescript/tests/cases/conformance/controlFlow",
+    "typescript/tests/cases/conformance/expressions/typeGuards", "typescript/tests/cases/conformance/types/typeGuards",
     // Broader `types/` coverage — exercises union / intersection /
     // tuple / mapped / literal / conditional / utility shapes.
-    "typescript/tests/cases/conformance/types/union",
-    "typescript/tests/cases/conformance/types/intersection",
-    "typescript/tests/cases/conformance/types/tuple",
-    "typescript/tests/cases/conformance/types/literal",
-    "typescript/tests/cases/conformance/types/conditional",
-    "typescript/tests/cases/conformance/types/never",
-    "typescript/tests/cases/conformance/types/unknown",
-    "typescript/tests/cases/conformance/types/any",
-    "typescript/tests/cases/conformance/types/keyof",
-    "typescript/tests/cases/conformance/types/typeAliases",
+     "typescript/tests/cases/conformance/types/union", "typescript/tests/cases/conformance/types/intersection",
+    "typescript/tests/cases/conformance/types/tuple", "typescript/tests/cases/conformance/types/literal",
+    "typescript/tests/cases/conformance/types/conditional", "typescript/tests/cases/conformance/types/never",
+    "typescript/tests/cases/conformance/types/unknown", "typescript/tests/cases/conformance/types/any",
+    "typescript/tests/cases/conformance/types/keyof", "typescript/tests/cases/conformance/types/typeAliases",
     // Other commonly-exercised conformance corners.
-    "typescript/tests/cases/conformance/types/objectTypeLiteral",
-    "typescript/tests/cases/conformance/types/primitives",
-    "typescript/tests/cases/conformance/types/stringLiteral",
-    "typescript/tests/cases/conformance/types/uniqueSymbol",
-    "typescript/tests/cases/conformance/types/rest",
-    "typescript/tests/cases/conformance/types/specifyingTypes",
-    "typescript/tests/cases/conformance/types/contextualTypes",
-    "typescript/tests/cases/conformance/types/namedTypes",
-    "typescript/tests/cases/conformance/types/typeRelationships",
-    "typescript/tests/cases/conformance/types/forAwait",
-    "typescript/tests/cases/conformance/types/asyncGenerators",
-    "typescript/tests/cases/conformance/types/nonPrimitive",
-    "typescript/tests/cases/conformance/interfaces",
-    "typescript/tests/cases/conformance/classes",
-    "typescript/tests/cases/conformance/generics",
-    "typescript/tests/cases/conformance/expressions",
+     "typescript/tests/cases/conformance/types/objectTypeLiteral", "typescript/tests/cases/conformance/types/primitives",
+    "typescript/tests/cases/conformance/types/stringLiteral", "typescript/tests/cases/conformance/types/uniqueSymbol",
+    "typescript/tests/cases/conformance/types/rest", "typescript/tests/cases/conformance/types/specifyingTypes",
+    "typescript/tests/cases/conformance/types/contextualTypes", "typescript/tests/cases/conformance/types/namedTypes",
+    "typescript/tests/cases/conformance/types/typeRelationships", "typescript/tests/cases/conformance/types/forAwait",
+    "typescript/tests/cases/conformance/types/asyncGenerators", "typescript/tests/cases/conformance/types/nonPrimitive",
+    "typescript/tests/cases/conformance/interfaces", "typescript/tests/cases/conformance/classes",
+    "typescript/tests/cases/conformance/generics", "typescript/tests/cases/conformance/expressions",
     "typescript/tests/cases/conformance/statements",
   ]
   let mut total = 0
@@ -678,9 +664,7 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
     let files = collect_ts_source_files_recursive(dir)
     for path in files {
       total += 1
-      let content = @fs.read_file(path).text() catch {
-        _ => continue
-      }
+      let content = @fs.read_file(path).text() catch { _ => continue }
       // `.ts` (non-`.tsx`) files do not allow JSX, so the legacy
       // `<T>expr` type-assertion syntax is valid. Configure the parser
       // accordingly — using `from_source` would default `allow_jsx = true`

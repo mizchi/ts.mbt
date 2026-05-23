@@ -196,9 +196,7 @@ test "bench parser: wide interface (2000 fields)" (it : @bench.T) {
 ///   moon test --target native -p mizchi/ts/parser --filter "bench parser: TypeScript lib"
 async test "bench parser: TypeScript lib files (file IO)" {
   let candidates = [
-    "typescript/src/lib/es5.d.ts",
-    "typescript/src/lib/dom.generated.d.ts",
-    "typescript/src/compiler/scanner.ts",
+    "typescript/src/lib/es5.d.ts", "typescript/src/lib/dom.generated.d.ts", "typescript/src/compiler/scanner.ts",
     "typescript/src/compiler/parser.ts",
   ]
   let prepared : Array[(String, String)] = []
