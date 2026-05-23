@@ -54,6 +54,11 @@ pub(all) struct BundleOptions {
   // properties additions layer on top of the user's `mangle` config
   // before the mangler runs. Costs a second per-module parse.
   auto_reserve : Bool
+  // When `true`, drop class methods (and instance accessors) whose
+  // name is never referenced anywhere in the bundle. Runs after
+  // tree shaking and before mangling so the mangler doesn't waste a
+  // short name on a method that's about to be deleted.
+  drop_unused_methods : Bool
 }
 
 ///|
@@ -64,6 +69,7 @@ pub fn BundleOptions::default() -> BundleOptions {
     tree_shake: false,
     mangle: None,
     auto_reserve: false,
+    drop_unused_methods: false,
   }
 }
 
@@ -226,6 +232,9 @@ pub fn bundle_modules(
   let order = topological_order(modules, entry)
   if opts.tree_shake {
     tree_shake_bundle(modules, entry)
+  }
+  if opts.drop_unused_methods {
+    drop_unused_methods_bundle(modules, order, opts.mangle)
   }
   match opts.mangle {
     Some(cfg) => {
@@ -506,6 +515,42 @@ fn compute_auto_reserve(
     return base
   }
   auto_reserve_from_bundle(entry_block, all_decls, base)
+}
+
+///|
+/// Run class-method DCE across the bundle's blocks. The reference
+/// set is global (one method install is alive iff its name is read
+/// anywhere across modules), so all blocks see the same surface.
+/// Any `reserved_properties` the caller listed on `mangle` are
+/// added to the global set so explicit keep-lists protect methods
+/// even if no code reads them.
+fn drop_unused_methods_bundle(
+  modules : Map[String, ModuleNode],
+  order : Array[String],
+  mangle_cfg : ManglerConfig?,
+) -> Unit {
+  let blocks : Array[@ast.TsBlock] = []
+  let paths : Array[String] = []
+  for path in order {
+    match modules.get(path) {
+      Some(n) => {
+        blocks.push(n.block)
+        paths.push(path)
+      }
+      None => ()
+    }
+  }
+  let extra : Array[String] = match mangle_cfg {
+    Some(cfg) => cfg.reserved_properties
+    None => []
+  }
+  let pruned = drop_unused_methods_in_blocks(blocks, extra)
+  for i, p in paths {
+    match modules.get(p) {
+      Some(n) => n.block = pruned[i]
+      None => ()
+    }
+  }
 }
 
 ///|

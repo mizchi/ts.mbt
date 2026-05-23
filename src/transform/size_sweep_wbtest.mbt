@@ -48,40 +48,44 @@ fn fixture_files() -> Map[String, String] {
   files["emitter.ts"] =
     #|import { EventHandler, EmitterConfig, Emitter } from "./types";
     #|import { clampMaxListeners, defaultErrorHandler } from "./utils";
-    #|export function createEmitter<T>(
-    #|  config: Partial<EmitterConfig> = {},
-    #|): Emitter<T> {
-    #|  const maxListeners = clampMaxListeners(config.maxListeners ?? 10);
-    #|  const errorHandler = config.errorHandler ?? defaultErrorHandler;
-    #|  const listenerMap: Record<string, EventHandler<T>[]> = {};
-    #|  function on(event: string, handler: EventHandler<T>) {
-    #|    const list = listenerMap[event] ?? [];
-    #|    if (list.length >= maxListeners) {
-    #|      errorHandler(new Error("too many listeners"));
+    #|export class TypedEmitter<T> {
+    #|  private listenerMap: Record<string, EventHandler<T>[]> = {};
+    #|  private maxListeners: number;
+    #|  private errorHandler: (error: Error) => void;
+    #|  constructor(config: Partial<EmitterConfig> = {}) {
+    #|    this.maxListeners = clampMaxListeners(config.maxListeners ?? 10);
+    #|    this.errorHandler = config.errorHandler ?? defaultErrorHandler;
+    #|  }
+    #|  on(event: string, handler: EventHandler<T>): void {
+    #|    const list = this.listenerMap[event] ?? [];
+    #|    if (list.length >= this.maxListeners) {
+    #|      this.errorHandler(new Error("too many listeners"));
     #|      return;
     #|    }
     #|    list.push(handler);
-    #|    listenerMap[event] = list;
+    #|    this.listenerMap[event] = list;
     #|  }
-    #|  function off(event: string, handler: EventHandler<T>) {
-    #|    const list = listenerMap[event];
+    #|  off(event: string, handler: EventHandler<T>): void {
+    #|    const list = this.listenerMap[event];
     #|    if (!list) return;
-    #|    listenerMap[event] = list.filter(h => h !== handler);
+    #|    this.listenerMap[event] = list.filter(h => h !== handler);
     #|  }
-    #|  function emit(event: string, payload: T) {
-    #|    const list = listenerMap[event];
+    #|  emit(event: string, payload: T): void {
+    #|    const list = this.listenerMap[event];
     #|    if (!list) return;
     #|    for (const h of list) h(payload);
     #|  }
-    #|  function listenerCount(event: string): number {
-    #|    return (listenerMap[event] ?? []).length;
+    #|  listenerCount(event: string): number { return 0; }
+    #|  removeAllListeners(): void { this.listenerMap = {}; }
+    #|  eventNames(): string[] { return Object.keys(this.listenerMap); }
+    #|  rawHandlers(event: string): EventHandler<T>[] {
+    #|    return this.listenerMap[event] ?? [];
     #|  }
-    #|  return { on, off, emit, listenerCount };
     #|}
     #|
   files["entry.ts"] =
-    #|import { createEmitter } from "./emitter";
-    #|export const bus = createEmitter<{ value: number }>({ maxListeners: 5 });
+    #|import { TypedEmitter } from "./emitter";
+    #|export const bus = new TypedEmitter<{ value: number }>({ maxListeners: 5 });
     #|bus.on("tick", (payload) => {
     #|  console.log("got tick", payload.value);
     #|});
@@ -113,9 +117,10 @@ fn pct(base : Int, current : Int) -> String {
     return "n/a"
   }
   let saved = base - current
-  let p = saved * 1000 / base
+  let abs_saved = if saved < 0 { -saved } else { saved }
+  let p = abs_saved * 1000 / base
   let whole = p / 10
-  let frac = if p < 0 { -p % 10 } else { p % 10 }
+  let frac = p % 10
   let sign = if saved < 0 { "+" } else { "-" }
   sign + whole.to_string() + "." + frac.to_string() + "%"
 }
@@ -145,6 +150,13 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
     mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
     auto_reserve: true,
   })
+  let shaken_methods_dced = measure(files, {
+    ..BundleOptions::default(),
+    tree_shake: true,
+    mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+    auto_reserve: true,
+    drop_unused_methods: true,
+  })
   println("")
   println("┌──────────────────────────────────────────────┬─────────┬────────────┐")
   println("│ stage                                        │   bytes │  vs. raw   │")
@@ -164,6 +176,7 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
   row("+ identifier mangle", shaken_id_mangle)
   row("+ property mangle (built-in reserved only)", shaken_full_mangle)
   row("+ auto-reserve (type-aware reserved set)", shaken_auto_reserved)
+  row("+ method DCE (drop unused class methods)", shaken_methods_dced)
   println("└──────────────────────────────────────────────┴─────────┴────────────┘")
   // Assertions — each successive optimization must not make output
   // worse. If a refactor regresses, this fails loudly.
@@ -175,4 +188,7 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
   // mangle because it protects more keys. It must still be smaller
   // than the no-mangle baseline (`shaken`).
   assert_true(shaken_auto_reserved <= shaken)
+  // Method DCE pares unused class methods on top of every other
+  // pass; the final stage must be the smallest.
+  assert_true(shaken_methods_dced <= shaken_auto_reserved)
 }
