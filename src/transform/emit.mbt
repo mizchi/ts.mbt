@@ -27,11 +27,20 @@ priv struct Emitter {
   // to `false`, but the first round keeps it on so the bench fixtures
   // and tests can compare against a stable shape.
   pretty : Bool
+  // Live byte / line / column counts on the *output*. Tracked so the
+  // source-map builder can attribute each emitted statement back to
+  // its position in the original source. Updated by `write`, `nl`,
+  // and `space`.
+  mut out_line : Int
+  mut out_col : Int
+  // Source-map builder; when `None` the emitter never records
+  // mappings (fast path for callers that don't need sourcemaps).
+  mut smap : SourceMapBuilder?
 }
 
 ///|
 fn Emitter::new(pretty~ : Bool = true) -> Emitter {
-  { buf: StringBuilder::new(), indent: 0, pretty }
+  { buf: StringBuilder::new(), indent: 0, pretty, out_line: 0, out_col: 0, smap: None }
 }
 
 ///|
@@ -42,14 +51,27 @@ fn Emitter::to_string(self : Emitter) -> String {
 ///|
 fn Emitter::write(self : Emitter, s : String) -> Unit {
   self.buf.write_string(s)
+  // Update the output position counter so the source-map builder can
+  // pin emit-side coordinates without reparsing the buffer.
+  for c in s {
+    if c == '\n' {
+      self.out_line = self.out_line + 1
+      self.out_col = 0
+    } else {
+      self.out_col = self.out_col + 1
+    }
+  }
 }
 
 ///|
 fn Emitter::nl(self : Emitter) -> Unit {
   if self.pretty {
     self.buf.write_string("\n")
+    self.out_line = self.out_line + 1
+    self.out_col = 0
     for _ in 0..<self.indent {
       self.buf.write_string("  ")
+      self.out_col = self.out_col + 2
     }
   }
 }
@@ -58,6 +80,19 @@ fn Emitter::nl(self : Emitter) -> Unit {
 fn Emitter::space(self : Emitter) -> Unit {
   if self.pretty {
     self.buf.write_string(" ")
+    self.out_col = self.out_col + 1
+  }
+}
+
+///|
+/// Record a source-map segment at the current output position
+/// pointing back to `src_pos` in the original source. No-op when
+/// the emitter wasn't initialised with a source-map builder.
+fn Emitter::mark(self : Emitter, src_pos : Position) -> Unit {
+  match self.smap {
+    Some(b) =>
+      b.add_mapping(self.out_line, self.out_col, src_pos.line, src_pos.column)
+    None => ()
   }
 }
 
@@ -79,22 +114,90 @@ fn Emitter::close_block(self : Emitter) -> Unit {
 /// equivalent JavaScript. Errors are propagated as strings so callers
 /// don't have to thread the parser's `ParseError` type.
 pub fn transform_source(source : String) -> Result[String, String] {
-  // The runtime statement stream is what we want for a TS → JS
-  // transform; `parse_block_from_source` walks every top-level
-  // statement without filtering type-only declarations into
-  // separate buckets. Declarations the runtime can't observe
-  // (`interface`, `type`, `declare`, bodyless `function`) parse to
-  // statement positions that emit will skip.
-  let block = match (try? @parser.parse_block_from_source(source)) {
-    Ok(b) => b
+  transform_source_with(source, JsxConfig::default())
+}
+
+///|
+/// Same as `transform_source` but lets callers (e.g. a build tool
+/// reading `tsconfig.json`) supply a base `JsxConfig`. File-level
+/// `/** @jsxImportSource ... */` / `@jsxRuntime` / `@jsx` / `@jsxFrag`
+/// pragmas overlay on top of `base`.
+///
+/// When the input contains any JSX, the emitted JS starts with an
+/// `import { jsx, jsxs, Fragment } from "<import_source>/jsx-runtime"`
+/// line (for `runtime == "automatic"`) — only the helpers actually
+/// referenced by the lowered output are imported.
+pub fn transform_source_with(
+  source : String,
+  base : JsxConfig,
+) -> Result[String, String] {
+  match transform_source_full(source, base, with_sourcemap=false) {
+    Ok(out) => Ok(out.js)
+    Err(e) => Err(e)
+  }
+}
+
+///|
+/// Bundle of the JS source + an optional v3 source-map JSON string.
+/// `sourcemap` is `None` when the caller passed `with_sourcemap=false`.
+pub(all) struct TransformOutput {
+  js : String
+  sourcemap : String?
+}
+
+///|
+/// Full transform entrypoint with explicit sourcemap control.
+/// Statement-level source-map mappings are recorded when
+/// `with_sourcemap=true`; per-token AST positions land in a follow-up.
+pub fn transform_source_full(
+  source : String,
+  base : JsxConfig,
+  with_sourcemap~ : Bool = false,
+  source_path~ : String = "input.ts",
+  output_path~ : String = "output.js",
+) -> Result[TransformOutput, String] {
+  let (block, positions) = match
+    (try? @parser.parse_block_from_source_with_positions(source)) {
+    Ok(pair) => pair
     Err(e) => return Err("parse error: \{e}")
   }
+  let cfg = extract_jsx_pragmas(source, base)
+  let (lowered, runtime_refs) = lower_block_with_runtime_imports(cfg, block)
   let e = Emitter::new()
-  for stmt in block.stmts {
+  let line_index = LineIndex::new(source)
+  if with_sourcemap {
+    e.smap = Some(SourceMapBuilder::new())
+  }
+  if cfg.runtime == "automatic" && runtime_refs.length() > 0 {
+    e.write("import { ")
+    for i, name in runtime_refs {
+      if i > 0 {
+        e.write(", ")
+      }
+      e.write(name)
+    }
+    e.write(" } from \"")
+    e.write(cfg.import_source)
+    e.write("/jsx-runtime\";")
+    e.nl()
+  }
+  for i, stmt in lowered.stmts {
+    // Attach a mapping at the start of each top-level statement —
+    // statement-level granularity is the v0 of source-map fidelity;
+    // expression-level mappings come once AST nodes carry positions.
+    if with_sourcemap && i < positions.length() {
+      let src_pos = line_index.position(positions[i])
+      e.mark(src_pos)
+    }
     emit_stmt(e, stmt)
     e.nl()
   }
-  Ok(e.to_string())
+  let sm_json : String? = match e.smap {
+    Some(b) =>
+      Some(b.to_json(source~, source_path~, output_path~))
+    None => None
+  }
+  Ok({ js: e.to_string(), sourcemap: sm_json })
 }
 
 ///|
@@ -670,10 +773,21 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           e.write(",")
           e.space()
         }
-        e.write(entry.0)
-        e.write(":")
-        e.space()
-        emit_expr(e, entry.1, 2)
+        // JSX-runtime lowering encodes object-spread props as a
+        // sentinel `("...", Spread(expr))` entry. Emit those as the
+        // `...expr` shorthand instead of `"...": expr`.
+        match entry {
+          ("...", Spread(inner)) => {
+            e.write("...")
+            emit_expr(e, inner, 2)
+          }
+          _ => {
+            e.write(entry.0)
+            e.write(":")
+            e.space()
+            emit_expr(e, entry.1, 2)
+          }
+        }
       }
       e.write("}")
     }

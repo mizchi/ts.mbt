@@ -3273,6 +3273,25 @@ pub fn parse_block_from_source(
 }
 
 ///|
+/// Parse a statement block and also record each top-level statement's
+/// start byte offset. Returned arrays are aligned: `positions[i]` is
+/// the byte offset of the first token of `block.stmts[i]`. Used by
+/// the source-map generator to attribute emit-side statements back
+/// to their position in the original source.
+pub fn parse_block_from_source_with_positions(
+  source : String,
+) -> (@ast.TsBlock, Array[Int]) raise ParseError {
+  let parser = Parser::from_source(source)
+  let stmts : Array[@ast.TsStmt] = []
+  let positions : Array[Int] = []
+  while !parser.check(Eof) {
+    positions.push(parser.peek().pos)
+    stmts.push(parser.parse_stmt())
+  }
+  ({ stmts, }, positions)
+}
+
+///|
 // / eval : statementblock with inherited strict mode
 pub fn parse_block_from_source_strict(
   source : String,
