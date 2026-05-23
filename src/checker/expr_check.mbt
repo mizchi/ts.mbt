@@ -2290,16 +2290,31 @@ fn check_jsx_attrs(
       let name = entry.0
       match entry.1 {
         Some(value) =>
-          match ctx.resolver.lookup_field(raw_props_ty, name) {
-            Some(formal) => {
-              let actual = infer_expr(env, ctx.resolver, value)
-              // JSX inference widens literal types (`"hi"` → `string`,
-              // `1` → `number`) so a single attribute doesn't lock T
-              // to a narrow literal value the user clearly didn't
-              // intend. Matches TS's contextual widening rule.
-              infer_param_bindings(type_params, formal, widen_literal(actual), bindings)
+          if name == "" {
+            // Spread: unify each overlapping field with the props.
+            let spread_ty = infer_expr(env, ctx.resolver, value)
+            let spread_fields = collect_declared_fields(spread_ty, ctx.resolver)
+            for sf in spread_fields {
+              match ctx.resolver.lookup_field(raw_props_ty, sf.0) {
+                Some(formal) =>
+                  infer_param_bindings(
+                    type_params, formal, widen_literal(sf.1), bindings,
+                  )
+                None => ()
+              }
             }
-            None => ()
+          } else {
+            match ctx.resolver.lookup_field(raw_props_ty, name) {
+              Some(formal) => {
+                let actual = infer_expr(env, ctx.resolver, value)
+                // JSX inference widens literal types (`"hi"` → `string`,
+                // `1` → `number`) so a single attribute doesn't lock T
+                // to a narrow literal value the user clearly didn't
+                // intend. Matches TS's contextual widening rule.
+                infer_param_bindings(type_params, formal, widen_literal(actual), bindings)
+              }
+              None => ()
+            }
           }
         None => ()
       }
@@ -2308,26 +2323,51 @@ fn check_jsx_attrs(
   } else {
     raw_props_ty
   }
-  // Per-attribute type check.
+  // Per-attribute type check. Track the fields supplied by `{...spread}`
+  // entries so the missing-required pass below treats them as provided.
+  let spread_provided : Map[String, Bool] = {}
   for entry in attrs {
     let name = entry.0
     match entry.1 {
       Some(value) =>
-        match ctx.resolver.lookup_field(props, name) {
-          Some(declared) =>
-            check_expr_against(
-              env,
-              value,
-              declared,
-              ctx,
-              "<\{tag}> attr `\{name}`",
-            )
-          None =>
-            record(
-              ctx,
-              "<\{tag}> attr `\{name}`",
-              "property `\{name}` does not exist on target type",
-            )
+        if name == "" {
+          // Spread attribute: validate each overlapping field type and
+          // record the names it contributes.
+          let spread_ty = infer_expr(env, ctx.resolver, value)
+          let spread_fields = collect_declared_fields(spread_ty, ctx.resolver)
+          for sf in spread_fields {
+            spread_provided[sf.0] = true
+            match ctx.resolver.lookup_field(props, sf.0) {
+              Some(declared) =>
+                if is_checkable(declared) &&
+                  is_checkable(sf.1) &&
+                  !is_assignable_to(sf.1, declared) {
+                  record(
+                    ctx,
+                    "<\{tag}> spread `\{sf.0}`",
+                    "expected `\{type_display(declared)}` but got `\{type_display(sf.1)}`",
+                  )
+                }
+              None => ()
+            }
+          }
+        } else {
+          match ctx.resolver.lookup_field(props, name) {
+            Some(declared) =>
+              check_expr_against(
+                env,
+                value,
+                declared,
+                ctx,
+                "<\{tag}> attr `\{name}`",
+              )
+            None =>
+              record(
+                ctx,
+                "<\{tag}> attr `\{name}`",
+                "property `\{name}` does not exist on target type",
+              )
+          }
         }
       None =>
         // Boolean attribute (`<Foo bar />`) implies `bar = true`.
@@ -2347,7 +2387,12 @@ fn check_jsx_attrs(
   // child is present.
   let provided : Map[String, Bool] = {}
   for entry in attrs {
-    provided[entry.0] = true
+    if entry.0 != "" {
+      provided[entry.0] = true
+    }
+  }
+  for k in spread_provided.keys() {
+    provided[k] = true
   }
   if children.length() > 0 {
     provided["children"] = true

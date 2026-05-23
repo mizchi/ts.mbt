@@ -2069,8 +2069,20 @@ fn Parser::parse_jsx_opening_header(
       break
     }
     if c == '{' {
-      // Spread / standalone attribute. Skip but advance.
+      // Spread attribute `{...expr}` — capture as ("", Some(expr)).
       let end = self.skip_jsx_braces_in_source(i)
+      if end > i + 1 {
+        let inner_src = self.src[i + 1:end - 1].to_string()
+        let trimmed = inner_src.trim()
+        if trimmed.length() > 0 && trimmed.has_prefix("...") {
+          let payload_str = trimmed[3:].to_string().trim().to_string()
+          let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+          match (try? sub.parse_expr()) {
+            Ok(e) => attrs.push(("", Some(e)))
+            Err(_) => ()
+          }
+        }
+      }
       i = end
       continue
     }

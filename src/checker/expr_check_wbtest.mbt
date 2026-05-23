@@ -4401,3 +4401,96 @@ test "expr_check: generic component children prop checked after substitution" {
   }
   assert_true(found)
 }
+
+// ---------------------------------------------------------------------------
+// Round 43: JSX spread attributes. `<Foo {...props}/>` validates the spread
+// expression's fields against the component's prop shape, contributes to the
+// missing-required check, and feeds generic inference like a normal attribute.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX spread of compatible props passes" {
+  let src =
+    #|interface Props { x: number; y: string }
+    #|function Foo(props: Props): void {}
+    #|function comp(): void {
+    #|  const data: Props = { x: 1, y: "hi" };
+    #|  const _ = <Foo {...data}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX spread of incompatible field flags error" {
+  // `data.x` is a string but `Props.x` is a number — the spread should
+  // flag a per-field mismatch.
+  let src =
+    #|interface Props { x: number; y: string }
+    #|function Foo(props: Props): void {}
+    #|function comp(): void {
+    #|  const data = { x: "no", y: "ok" };
+    #|  const _ = <Foo {...data}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Foo> spread `x`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX spread satisfies missing-required prop" {
+  // The component requires both `x` and `y`; the spread provides them
+  // (no explicit attributes), so no missing-prop diagnostics fire.
+  let src =
+    #|interface Props { x: number; y: string }
+    #|function Foo(props: Props): void {}
+    #|function comp(): void {
+    #|  const data: Props = { x: 1, y: "hi" };
+    #|  const _ = <Foo {...data}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut bad = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Foo> missing prop") {
+      bad = true
+    }
+  }
+  assert_false(bad)
+}
+
+///|
+test "expr_check: JSX spread plus explicit override type-checks" {
+  // `data` supplies `x` and `y`; the explicit `y="bye"` then overrides.
+  // Both forms should pass typing.
+  let src =
+    #|interface Props { x: number; y: string }
+    #|function Foo(props: Props): void {}
+    #|function comp(): void {
+    #|  const data: Props = { x: 1, y: "hi" };
+    #|  const _ = <Foo {...data} y="bye"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX spread feeds generic component inference" {
+  // T is inferred from the spread's `value: string` field; the explicit
+  // children string then matches `T = string`.
+  let src =
+    #|function Wrap<T>(props: { value: T; children: T }): void {}
+    #|function comp(): void {
+    #|  const data = { value: "hi" };
+    #|  const _ = <Wrap {...data}>other</Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
