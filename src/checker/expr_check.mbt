@@ -333,11 +333,24 @@ fn Resolver::lookup_field(
           }
           // Walk `extends` chain one level (no cycle protection — the
           // checker's `check_module` already validates these).
-          for base in iface.extends_names {
-            match self.lookup_field(@ast.TsType::Named(base), field) {
+          let mut i = 0
+          while i < iface.extends_names.length() {
+            let base_name = iface.extends_names[i]
+            let base_args = if i < iface.extends_args.length() {
+              iface.extends_args[i]
+            } else {
+              []
+            }
+            let base_ty : @ast.TsType = if base_args.length() > 0 {
+              @ast.TsType::Applied(base_name, base_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            match self.lookup_field(base_ty, field) {
               Some(t) => return Some(t)
               None => ()
             }
+            i = i + 1
           }
           None
         }
@@ -370,11 +383,31 @@ fn Resolver::lookup_field(
               return Some(substitute_params(f.1, bindings))
             }
           }
-          for base in iface.extends_names {
-            match self.lookup_field(@ast.TsType::Named(base), field) {
+          let mut j = 0
+          while j < iface.extends_names.length() {
+            let base_name = iface.extends_names[j]
+            let base_args = if j < iface.extends_args.length() {
+              iface.extends_args[j]
+            } else {
+              []
+            }
+            // Substitute the outer interface's bindings into the base's
+            // type args before recursing — `Sub<number> extends Box<T>`
+            // becomes a lookup against `Box<number>`, not `Box<T>`.
+            let substituted_args : Array[@ast.TsType] = []
+            for a in base_args {
+              substituted_args.push(substitute_params(a, bindings))
+            }
+            let base_ty : @ast.TsType = if substituted_args.length() > 0 {
+              @ast.TsType::Applied(base_name, substituted_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            match self.lookup_field(base_ty, field) {
               Some(t) => return Some(substitute_params(t, bindings))
               None => ()
             }
+            j = j + 1
           }
           None
         }
@@ -492,6 +525,165 @@ fn promise_prototype_member(
       )
     "finally" =>
       Some(@ast.TsType::Func([@ast.TsType::Func([], @ast.TsType::Void)], promise_t))
+    _ => None
+  }
+}
+
+///|
+/// Well-known global namespace static methods (`Object.keys`, `Math.max`,
+/// `Number.isNaN`, etc.). Returns the conventional `Func(...)` shape so
+/// `check_call_args_in_expr` validates argument types; the result type
+/// of generic-shaped statics (e.g. `Object.entries<T>`) is handled by
+/// `global_static_method_special` at the call site.
+fn global_namespace_method(
+  namespace : String,
+  method : String,
+) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  let n = @ast.TsType::Number
+  let b = @ast.TsType::Boolean
+  let any = @ast.TsType::Any
+  let str_arr = @ast.TsType::Array(s)
+  match (namespace, method) {
+    // Object.*
+    ("Object", "keys") => Some(@ast.TsType::Func([any], str_arr))
+    ("Object", "values") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    ("Object", "entries") =>
+      Some(@ast.TsType::Func([any], @ast.TsType::Array(@ast.TsType::Tuple([s, any]))))
+    ("Object", "assign") => Some(@ast.TsType::Func([any, any], any))
+    ("Object", "freeze") => Some(@ast.TsType::Func([any], any))
+    ("Object", "isFrozen") => Some(@ast.TsType::Func([any], b))
+    ("Object", "create") => Some(@ast.TsType::Func([any], any))
+    ("Object", "fromEntries") => Some(@ast.TsType::Func([any], any))
+    ("Object", "getPrototypeOf") => Some(@ast.TsType::Func([any], any))
+    ("Object", "setPrototypeOf") => Some(@ast.TsType::Func([any, any], any))
+    ("Object", "getOwnPropertyNames") => Some(@ast.TsType::Func([any], str_arr))
+    ("Object", "hasOwn") => Some(@ast.TsType::Func([any, s], b))
+    // Math.*
+    ("Math", "abs") | ("Math", "ceil") | ("Math", "floor") | ("Math", "round")
+    | ("Math", "trunc") | ("Math", "sign") | ("Math", "sqrt")
+    | ("Math", "cbrt") | ("Math", "exp") | ("Math", "log")
+    | ("Math", "log2") | ("Math", "log10") | ("Math", "log1p")
+    | ("Math", "expm1") | ("Math", "sin") | ("Math", "cos")
+    | ("Math", "tan") | ("Math", "asin") | ("Math", "acos")
+    | ("Math", "atan") | ("Math", "sinh") | ("Math", "cosh")
+    | ("Math", "tanh") | ("Math", "asinh") | ("Math", "acosh")
+    | ("Math", "atanh") => Some(@ast.TsType::Func([n], n))
+    ("Math", "pow") | ("Math", "atan2") | ("Math", "hypot") =>
+      Some(@ast.TsType::Func([n, n], n))
+    ("Math", "max") | ("Math", "min") => Some(@ast.TsType::Func([n], n))
+    ("Math", "random") => Some(@ast.TsType::Func([], n))
+    ("Math", "fround") | ("Math", "clz32") | ("Math", "imul") =>
+      Some(@ast.TsType::Func([n], n))
+    // Number.*
+    ("Number", "isInteger")
+    | ("Number", "isSafeInteger")
+    | ("Number", "isFinite")
+    | ("Number", "isNaN") => Some(@ast.TsType::Func([any], b))
+    ("Number", "parseFloat") => Some(@ast.TsType::Func([s], n))
+    ("Number", "parseInt") => Some(@ast.TsType::Func([s, n], n))
+    // String.* (constructor namespace, not prototype)
+    ("String", "fromCharCode") => Some(@ast.TsType::Func([n], s))
+    ("String", "fromCodePoint") => Some(@ast.TsType::Func([n], s))
+    ("String", "raw") => Some(@ast.TsType::Func([any], s))
+    // JSON.*
+    ("JSON", "parse") => Some(@ast.TsType::Func([s], any))
+    ("JSON", "stringify") => Some(@ast.TsType::Func([any], s))
+    // Array.*
+    ("Array", "isArray") => Some(@ast.TsType::Func([any], b))
+    ("Array", "of") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    ("Array", "from") => Some(@ast.TsType::Func([any], @ast.TsType::Array(any)))
+    // Boolean
+    ("Boolean", "constructor") => Some(@ast.TsType::Func([any], b))
+    // Symbol.*
+    ("Symbol", "for") => Some(@ast.TsType::Func([s], @ast.TsType::Symbol))
+    ("Symbol", "keyFor") => Some(@ast.TsType::Func([@ast.TsType::Symbol], s))
+    // Date.*
+    ("Date", "now") => Some(@ast.TsType::Func([], n))
+    ("Date", "parse") => Some(@ast.TsType::Func([s], n))
+    ("Date", "UTC") => Some(@ast.TsType::Func([n], n))
+    // Promise.*
+    ("Promise", "resolve") =>
+      Some(
+        @ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])),
+      )
+    ("Promise", "reject") =>
+      Some(
+        @ast.TsType::Func([any], @ast.TsType::Applied("Promise", [any])),
+      )
+    ("Promise", "all") | ("Promise", "race") | ("Promise", "any") =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Array(any)],
+          @ast.TsType::Applied("Promise", [any]),
+        ),
+      )
+    ("Promise", "allSettled") =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Array(any)],
+          @ast.TsType::Applied("Promise", [@ast.TsType::Array(any)]),
+        ),
+      )
+    _ => None
+  }
+}
+
+///|
+/// Generic-shaped static methods that need callback / argument-driven
+/// inference for their result type. Returns the specialised result type
+/// when the static call matches a recognised pattern; otherwise `None`,
+/// letting the caller use the conventional `Func` shape.
+fn global_static_method_special(
+  env : ExprEnv,
+  resolver : Resolver,
+  namespace : String,
+  method : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsType? {
+  match (namespace, method, args) {
+    // `Promise.resolve(value)` — yields `Promise<typeof value>`. If
+    // the value is itself a promise, flatten one level.
+    ("Promise", "resolve", [v]) => {
+      let inner = infer_expr(env, resolver, v)
+      let flat = match inner {
+        Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+        other => other
+      }
+      Some(@ast.TsType::Applied("Promise", [flat]))
+    }
+    // `Promise.all(arr)` — when `arr` infers to `Array(T)` (or a tuple
+    // shape), yield `Promise<Array(unwrap(T))>` so awaited values
+    // surface with the promise-unwrapped element type.
+    ("Promise", "all", [arr]) => {
+      let arr_ty = infer_expr(env, resolver, arr)
+      let elem = match array_element_type(resolver, arr_ty) {
+        Some(e) => e
+        None => @ast.TsType::Any
+      }
+      // Unwrap each element if it's `Promise<T>` so we end up with the
+      // resolved-value array.
+      let unwrapped = match elem {
+        Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+        other => other
+      }
+      Some(
+        @ast.TsType::Applied("Promise", [@ast.TsType::Array(unwrapped)]),
+      )
+    }
+    ("Promise", "race", [arr]) | ("Promise", "any", [arr]) => {
+      let arr_ty = infer_expr(env, resolver, arr)
+      let elem = match array_element_type(resolver, arr_ty) {
+        Some(e) => e
+        None => @ast.TsType::Any
+      }
+      let unwrapped = match elem {
+        Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+        other => other
+      }
+      Some(@ast.TsType::Applied("Promise", [unwrapped]))
+    }
+    // `JSON.parse(...)` returns `any` already by convention.
     _ => None
   }
 }
@@ -860,6 +1052,43 @@ fn infer_expr(
       @ast.TsType::Any
     }
     MethodCall(receiver, method, args) => {
+      // Static namespace dispatch: `Object.keys(...)`, `Math.max(...)`,
+      // `Promise.resolve(...)` etc. — recognise the receiver by its bare
+      // identifier rather than its inferred type so we don't depend on
+      // ambient globals being declared.
+      match receiver {
+        Var(name) =>
+          match global_namespace_method(name, method) {
+            Some(sig) => {
+              // Apply per-method generic-style inference for the chosen
+              // static method, falling back to the conventional `Func`
+              // shape when no special path applies.
+              match global_static_method_special(
+                env, resolver, name, method, args,
+              ) {
+                Some(special_ret) => {
+                  // Walk args for nested call-site checks.
+                  for a in args {
+                    let _ = infer_expr(env, resolver, a)
+                  }
+                  return special_ret
+                }
+                None =>
+                  match sig {
+                    Func(_, ret) => {
+                      for a in args {
+                        let _ = infer_expr(env, resolver, a)
+                      }
+                      return ret
+                    }
+                    _ => ()
+                  }
+              }
+            }
+            None => ()
+          }
+        _ => ()
+      }
       let recv_ty = infer_expr(env, resolver, receiver)
       // Special-case generic `Array.prototype.{map, flatMap, reduce}` so
       // the callback's body / initial-value type flows into the result
@@ -1511,10 +1740,23 @@ fn collect_declared_fields(
           for f in iface.fields {
             out.push((f.0, f.1))
           }
-          for base in iface.extends_names {
-            for f in collect_declared_fields(@ast.TsType::Named(base), resolver) {
+          let mut i = 0
+          while i < iface.extends_names.length() {
+            let base_name = iface.extends_names[i]
+            let base_args = if i < iface.extends_args.length() {
+              iface.extends_args[i]
+            } else {
+              []
+            }
+            let base_ty : @ast.TsType = if base_args.length() > 0 {
+              @ast.TsType::Applied(base_name, base_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            for f in collect_declared_fields(base_ty, resolver) {
               out.push(f)
             }
+            i = i + 1
           }
         }
         None => ()
@@ -1539,10 +1781,27 @@ fn collect_declared_fields(
           for f in iface.fields {
             out.push((f.0, substitute_params(f.1, bindings)))
           }
-          for base in iface.extends_names {
-            for f in collect_declared_fields(@ast.TsType::Named(base), resolver) {
+          let mut j = 0
+          while j < iface.extends_names.length() {
+            let base_name = iface.extends_names[j]
+            let base_args = if j < iface.extends_args.length() {
+              iface.extends_args[j]
+            } else {
+              []
+            }
+            let substituted_args : Array[@ast.TsType] = []
+            for a in base_args {
+              substituted_args.push(substitute_params(a, bindings))
+            }
+            let base_ty : @ast.TsType = if substituted_args.length() > 0 {
+              @ast.TsType::Applied(base_name, substituted_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            for f in collect_declared_fields(base_ty, resolver) {
               out.push((f.0, substitute_params(f.1, bindings)))
             }
+            j = j + 1
           }
         }
         None => ()
@@ -3149,11 +3408,27 @@ fn check_call_args_in_expr(
       }
     }
     MethodCall(receiver, method, args) => {
-      let recv_ty = infer_expr(env, ctx.resolver, receiver)
-      match ctx.resolver.lookup_method_sig(recv_ty, method) {
-        Some((params, _)) =>
+      // Static-namespace dispatch: `Math.max(...)`, `JSON.stringify(...)`.
+      // Recognised by the bare-identifier shape of the receiver.
+      let static_params : Array[@ast.TsType]? = match receiver {
+        Var(name) =>
+          match global_namespace_method(name, method) {
+            Some(Func(params, _)) => Some(params)
+            _ => None
+          }
+        _ => None
+      }
+      match static_params {
+        Some(params) =>
           check_arguments(env, params, args, ctx, "call `\{method}`")
-        None => ()
+        None => {
+          let recv_ty = infer_expr(env, ctx.resolver, receiver)
+          match ctx.resolver.lookup_method_sig(recv_ty, method) {
+            Some((params, _)) =>
+              check_arguments(env, params, args, ctx, "call `\{method}`")
+            None => ()
+          }
+        }
       }
       check_call_args_in_expr(env, receiver, ctx)
       for a in args {

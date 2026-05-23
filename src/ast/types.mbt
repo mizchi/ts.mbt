@@ -398,6 +398,11 @@ pub(all) struct TsInterface {
   name : String
   type_params : Array[String]
   extends_names : Array[String]
+  // Type arguments supplied alongside each `extends_names[i]`, parsed
+  // from `extends Foo<A, B>`. Length matches `extends_names`; entries
+  // are empty arrays for non-generic bases. Used by the checker to
+  // substitute generic parameters when walking the inheritance chain.
+  extends_args : Array[Array[TsType]]
   fields : Array[(String, TsType)] // (fieldName, type)
   readonly_fields : Array[String]
   // Index signatures `[k: K]: V` declared on this interface. Stored as

@@ -2562,3 +2562,240 @@ test "expr_check: promise.finally preserves resolved type" {
     None => fail("function f not found")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Round 24/25: global-namespace static methods —
+//   Object.{keys, values, entries, assign, hasOwn},
+//   Math.{abs, max, min, random, sqrt, pow},
+//   Number.{isFinite, isInteger, parseFloat, parseInt},
+//   JSON.{parse, stringify}, Array.{isArray, of, from},
+//   Date.{now, parse}, String.{fromCharCode}, Symbol.{for, keyFor},
+//   Promise.{resolve, reject, all, race, any, allSettled}.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: Object.keys returns string[]" {
+  let src =
+    #|function f(o: {x: number, y: string}): string[] {
+    #|  return Object.keys(o);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Object.entries returns [string, any][]" {
+  let src =
+    #|function f(o: {x: number}): [string, any][] {
+    #|  return Object.entries(o);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Math.max returns number, rejects string arg" {
+  let src =
+    #|function f(): number {
+    #|  return Math.max("oops");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Math.random returns number" {
+  let src =
+    #|function f(): number {
+    #|  return Math.random();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Number.isFinite returns boolean" {
+  let src =
+    #|function f(x: number): boolean {
+    #|  return Number.isFinite(x);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: JSON.stringify returns string" {
+  let src =
+    #|function f(o: any): string {
+    #|  return JSON.stringify(o);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Array.isArray returns boolean" {
+  let src =
+    #|function f(x: any): boolean {
+    #|  return Array.isArray(x);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Date.now returns number" {
+  let src =
+    #|function f(): number {
+    #|  return Date.now();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Promise.resolve wraps the argument type" {
+  let src =
+    #|function f(x: number): Promise<number> {
+    #|  return Promise.resolve(x);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Promise.resolve flattens nested promise" {
+  // `Promise.resolve(Promise<T>)` collapses to `Promise<T>`.
+  let src =
+    #|function f(p: Promise<number>): Promise<number> {
+    #|  return Promise.resolve(p);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Promise.all over Promise<T>[] yields Promise<T[]>" {
+  let src =
+    #|function f(ps: Promise<number>[]): Promise<number[]> {
+    #|  return Promise.all(ps);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Promise.race over Promise<T>[] yields Promise<T>" {
+  let src =
+    #|function f(ps: Promise<number>[]): Promise<number> {
+    #|  return Promise.race(ps);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 26: `extends` clause carries type arguments — `interface Sub<T>
+// extends Box<T>`, `interface StringBox extends Box<string>`, etc.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: extends with concrete type arg specialises inherited field" {
+  // `StringBox extends Box<string>` so `s.value` resolves to `string`.
+  let src =
+    #|interface Box<T> { value: T }
+    #|interface StringBox extends Box<string> { extra: number }
+    #|function f(s: StringBox): string {
+    #|  return s.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: extends with concrete type arg rejects wrong return" {
+  let src =
+    #|interface Box<T> { value: T }
+    #|interface StringBox extends Box<string> { extra: number }
+    #|function f(s: StringBox): number {
+    #|  return s.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic extends propagates outer type arg" {
+  // `Sub<T> extends Box<T>` should resolve `T` through. Calling
+  // `f` with `Sub<number>` makes `s.value` a `number`.
+  let src =
+    #|interface Box<T> { value: T }
+    #|interface Sub<T> extends Box<T> { extra: T }
+    #|function f(s: Sub<number>): number {
+    #|  return s.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: extends Box<number> as missing-field check works" {
+  let src =
+    #|interface Box<T> { value: T }
+    #|interface IntBox extends Box<number> { extra: string }
+    #|function take(b: IntBox): void {}
+    #|function user(): void {
+    #|  take({ value: "oops", extra: "s" });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains(".value") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}

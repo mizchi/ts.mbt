@@ -602,9 +602,22 @@ fn Parser::restore_local_type_param_bounds(
 ///|
 /// Parse simple `extends` names while still skipping complex generic clauses.
 fn Parser::parse_extends_names_until_body(self : Parser) -> Array[String] {
+  let (names, _) = self.parse_extends_clause_until_body()
+  names
+}
+
+///|
+/// Parse the `extends Foo<A>, Bar.Baz, Qux<X, Y>` clause and return both
+/// the base names and the per-base type-argument lists. Used by the
+/// interface parser so the checker can substitute `<A>` when walking
+/// the inheritance chain.
+fn Parser::parse_extends_clause_until_body(
+  self : Parser,
+) -> (Array[String], Array[Array[@ast.TsType]]) {
   let names : Array[String] = []
+  let args_per_name : Array[Array[@ast.TsType]] = []
   if !self.check(Extends) {
-    return names
+    return (names, args_per_name)
   }
   let _ = self.advance() // consume extends
   let mut paren_depth = 0
@@ -631,7 +644,46 @@ fn Parser::parse_extends_names_until_body(self : Parser) -> Array[String] {
             _ => break
           }
         }
+        // Capture type arguments if the next token is `<`. Defensive:
+        // fall back to the depth-counting skip when parse_type throws
+        // (e.g. on malformed input).
+        let base_args : Array[@ast.TsType] = []
+        if self.check(Lt) && paren_depth == 0 && bracket_depth == 0 {
+          let saved = self.pos
+          let parsed = try? {
+            let _ = self.expect(Lt)
+            let first = self.parse_type()
+            base_args.push(first)
+            while self.match_(Comma) {
+              if self.check(Gt) || self.check(GtGt) || self.check(GtGtGt) {
+                break
+              }
+              base_args.push(self.parse_type())
+            }
+            // Accept `>` / `>>` / `>>>` as the closing token; the parser
+            // already handles the `>>`/`>>>` ASR-rewrite for nested
+            // type-arg lists.
+            if self.match_(Gt) {
+              ()
+            } else if self.check(GtGt) {
+              // Consume one `>` and leave a synthetic `Gt` for the outer
+              // context — easiest: advance and let the outer depth
+              // counter resync.
+              let _ = self.advance()
+            } else if self.check(GtGtGt) {
+              let _ = self.advance()
+            }
+          }
+          match parsed {
+            Ok(_) => ()
+            Err(_) => {
+              self.pos = saved
+              base_args.clear()
+            }
+          }
+        }
         names.push(full_name)
+        args_per_name.push(base_args)
         expect_name = false
       }
       LParen => {
@@ -683,7 +735,7 @@ fn Parser::parse_extends_names_until_body(self : Parser) -> Array[String] {
       }
     }
   }
-  names
+  (names, args_per_name)
 }
 
 ///|
@@ -756,7 +808,7 @@ pub fn Parser::parse_interface(
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
-  let extends_names = self.parse_extends_names_until_body()
+  let (extends_names, extends_args) = self.parse_extends_clause_until_body()
   let _ = self.expect(LBrace)
   let fields : Array[(String, @ast.TsType)] = []
   let readonly_fields : Array[String] = []
@@ -1109,6 +1161,7 @@ pub fn Parser::parse_interface(
     name,
     type_params,
     extends_names,
+    extends_args,
     fields,
     readonly_fields,
     index_signatures,
@@ -1265,6 +1318,7 @@ fn type_alias_object_fields_to_interface(
         name,
         type_params,
         extends_names: [],
+        extends_args: [],
         fields: iface_fields,
         readonly_fields: [],
         index_signatures: [],
