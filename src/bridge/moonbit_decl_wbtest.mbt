@@ -386,7 +386,7 @@ test "bridge: specialize TypeScript AST ergonomic API types" {
       type_params: [],
       params: [],
       return_type: @ast.TsType::Any,
-      body: { stmts: [] },
+      body: { stmts: [], stmt_positions: [] },
       const_type_params: [],
       is_generator: false,
       is_async: false,

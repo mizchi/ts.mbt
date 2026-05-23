@@ -125,6 +125,56 @@ test "sourcemap: transform_source_full emits per-statement mappings" {
 }
 
 ///|
+test "sourcemap: nested block statements get per-statement mappings" {
+  // The mapping field is built up out of `;`-separated lines, with
+  // segments inside each line. A function body with three statements
+  // should contribute three separate mappings (alongside the top-level
+  // declaration's mapping), which lands as 4+ semicolons in the
+  // VLQ string.
+  let src =
+    #|function f(x) {
+    #|  const a = x;
+    #|  const b = a + 1;
+    #|  return b;
+    #|}
+  match
+    transform_source_full(
+      src,
+      JsxConfig::default(),
+      with_sourcemap=true,
+      source_path="prog.ts",
+      output_path="prog.js",
+    ) {
+    Ok(out) =>
+      match out.sourcemap {
+        Some(json) => {
+          let mappings_start_idx = match json.find("\"mappings\":\"") {
+            Some(i) => i + "\"mappings\":\"".length()
+            None => 0
+          }
+          let after = json
+            .substring(start=mappings_start_idx, end=json.length())
+            .to_string()
+          let mut semis = 0
+          for c in after {
+            if c == ';' {
+              semis = semis + 1
+            } else if c == '"' {
+              break
+            }
+          }
+          // 4 mappings on 4 distinct lines (top-level let + 3
+          // statements inside the function body) separated by 3
+          // semicolons.
+          assert_true(semis >= 3)
+        }
+        None => fail("expected sourcemap, got None")
+      }
+    Err(e) => fail("transform error: \{e}")
+  }
+}
+
+///|
 test "sourcemap: with_sourcemap=false produces no mapping JSON" {
   match
     transform_source_full(

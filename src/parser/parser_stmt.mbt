@@ -313,7 +313,7 @@ fn Parser::parse_if(self : Parser) -> @ast.TsStmt raise ParseError {
   let else_block : @ast.TsBlock? = if self.match_(Else) {
     if self.check(If) {
       // else if
-      Some(@ast.TsBlock::{ stmts: [self.parse_if()] })
+      Some(@ast.TsBlock::{ stmts: [self.parse_if()], stmt_positions: [] })
     } else {
       Some(self.parse_block_or_stmt_no_lexical())
     }
@@ -370,10 +370,15 @@ fn Parser::parse_switch(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     let _ = self.expect(Colon)
     let stmts : Array[@ast.TsStmt] = []
+    let case_stmt_positions : Array[Int] = []
     while !self.check(Case) && !self.check(Default) && !self.check(RBrace) {
+      case_stmt_positions.push(self.peek().pos)
       stmts.push(self.parse_stmt())
     }
-    cases.push({ test_expr: case_test, body: { stmts, } })
+    cases.push({
+      test_expr: case_test,
+      body: { stmts, stmt_positions: case_stmt_positions },
+    })
   }
   self.in_switch = prev_switch
   let _ = self.expect(RBrace)
@@ -884,9 +889,11 @@ fn Parser::parse_assign_or_expr(self : Parser) -> @ast.TsStmt raise ParseError {
 pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let _ = self.expect(LBrace)
   let stmts : Array[@ast.TsStmt] = []
+  let stmt_positions : Array[Int] = []
   let prev_strict = self.in_strict
   let mut in_directive = true
   while !self.check(RBrace) && !self.check(Eof) {
+    stmt_positions.push(self.peek().pos)
     let stmt = self.parse_stmt()
     if in_directive {
       match stmt {
@@ -899,7 +906,7 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   }
   let _ = self.expect(RBrace)
   self.in_strict = prev_strict
-  { stmts, }
+  { stmts, stmt_positions }
 }
 
 ///|
@@ -909,7 +916,7 @@ fn Parser::parse_block_or_stmt_no_lexical(
   if self.check(LBrace) {
     self.parse_block()
   } else {
-    { stmts: [self.parse_stmt_no_lexical(true)] }
+    { stmts: [self.parse_stmt_no_lexical(true)], stmt_positions: [] }
   }
 }
 
@@ -1046,7 +1053,7 @@ fn Parser::merge_decl_stmts(
   if stmts.length() == 1 {
     stmts[0]
   } else {
-    Block({ stmts, })
+    Block({ stmts, stmt_positions: [] })
   }
 }
 

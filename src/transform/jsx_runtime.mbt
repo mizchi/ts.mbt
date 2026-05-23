@@ -584,7 +584,11 @@ pub fn lower_jsx_in_block(cfg : JsxConfig, block : @ast.TsBlock) -> @ast.TsBlock
   for s in block.stmts {
     stmts.push(lower_jsx_in_stmt(cfg, s))
   }
-  { stmts, }
+  // Carry the original `stmt_positions` forward so the source-map
+  // generator can still map each lowered top-level stmt back to its
+  // input position. (JSX lowering doesn't change the count or order
+  // of top-level statements.)
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

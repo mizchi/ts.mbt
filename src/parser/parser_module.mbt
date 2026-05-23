@@ -3215,7 +3215,16 @@ fn Parser::parse_module_block_with_const_values(
     }
     stmts.push(self.parse_stmt())
   }
-  ({ block: { stmts, }, imports, exports, reexports, enums }, const_values)
+  (
+    {
+      block: { stmts, stmt_positions: [] },
+      imports,
+      exports,
+      reexports,
+      enums,
+    },
+    const_values,
+  )
 }
 
 ///|
@@ -3266,10 +3275,12 @@ pub fn parse_block_from_source(
 ) -> @ast.TsBlock raise ParseError {
   let parser = Parser::from_source(source)
   let stmts : Array[@ast.TsStmt] = []
+  let stmt_positions : Array[Int] = []
   while !parser.check(Eof) {
+    stmt_positions.push(parser.peek().pos)
     stmts.push(parser.parse_stmt())
   }
-  { stmts, }
+  { stmts, stmt_positions }
 }
 
 ///|
@@ -3281,14 +3292,8 @@ pub fn parse_block_from_source(
 pub fn parse_block_from_source_with_positions(
   source : String,
 ) -> (@ast.TsBlock, Array[Int]) raise ParseError {
-  let parser = Parser::from_source(source)
-  let stmts : Array[@ast.TsStmt] = []
-  let positions : Array[Int] = []
-  while !parser.check(Eof) {
-    positions.push(parser.peek().pos)
-    stmts.push(parser.parse_stmt())
-  }
-  ({ stmts, }, positions)
+  let block = parse_block_from_source(source)
+  (block, block.stmt_positions)
 }
 
 ///|
@@ -3305,10 +3310,12 @@ pub fn parse_block_from_source_strict(
     trimmed.has_prefix("'use strict';")
   let parser = Parser::new_with_strict(tokens, inherit_strict || source_strict)
   let stmts : Array[@ast.TsStmt] = []
+  let stmt_positions : Array[Int] = []
   while !parser.check(Eof) {
+    stmt_positions.push(parser.peek().pos)
     stmts.push(parser.parse_stmt())
   }
-  { stmts, }
+  { stmts, stmt_positions }
 }
 
 ///|

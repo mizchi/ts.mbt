@@ -36,11 +36,23 @@ priv struct Emitter {
   // Source-map builder; when `None` the emitter never records
   // mappings (fast path for callers that don't need sourcemaps).
   mut smap : SourceMapBuilder?
+  // Line index for the original source, used to convert byte
+  // offsets recorded by the parser into `(line, column)` for the
+  // mappings. Empty `LineIndex` when sourcemap mode is off.
+  mut line_index : LineIndex
 }
 
 ///|
 fn Emitter::new(pretty~ : Bool = true) -> Emitter {
-  { buf: StringBuilder::new(), indent: 0, pretty, out_line: 0, out_col: 0, smap: None }
+  {
+    buf: StringBuilder::new(),
+    indent: 0,
+    pretty,
+    out_line: 0,
+    out_col: 0,
+    smap: None,
+    line_index: LineIndex::new(""),
+  }
 }
 
 ///|
@@ -164,9 +176,9 @@ pub fn transform_source_full(
   let cfg = extract_jsx_pragmas(source, base)
   let (lowered, runtime_refs) = lower_block_with_runtime_imports(cfg, block)
   let e = Emitter::new()
-  let line_index = LineIndex::new(source)
   if with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
+    e.line_index = LineIndex::new(source)
   }
   if cfg.runtime == "automatic" && runtime_refs.length() > 0 {
     e.write("import { ")
@@ -183,10 +195,10 @@ pub fn transform_source_full(
   }
   for i, stmt in lowered.stmts {
     // Attach a mapping at the start of each top-level statement —
-    // statement-level granularity is the v0 of source-map fidelity;
-    // expression-level mappings come once AST nodes carry positions.
+    // nested-block statements pick up their own mappings inside
+    // `emit_block`.
     if with_sourcemap && i < positions.length() {
-      let src_pos = line_index.position(positions[i])
+      let src_pos = e.line_index.position(positions[i])
       e.mark(src_pos)
     }
     emit_stmt(e, stmt)
@@ -203,8 +215,20 @@ pub fn transform_source_full(
 ///|
 fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
   e.open_block()
-  for stmt in block.stmts {
+  for i, stmt in block.stmts {
     e.nl()
+    // Record a source-map segment at every statement entry when the
+    // parser supplied positions. `stmt_positions` is aligned with
+    // `stmts`; synthesized blocks (e.g. class desugar) leave it
+    // empty and the emit just skips the mapping.
+    match e.smap {
+      Some(_) =>
+        if i < block.stmt_positions.length() {
+          let src_pos = e.line_index.position(block.stmt_positions[i])
+          e.mark(src_pos)
+        }
+      None => ()
+    }
     emit_stmt(e, stmt)
   }
   e.close_block()
