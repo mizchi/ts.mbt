@@ -48,6 +48,12 @@ pub(all) struct BundleOptions {
   // built from the *union* of every module's property keys so a
   // shared `obj.foo` collapses to the same short name everywhere.
   mangle : ManglerConfig?
+  // When `true` *and* `mangle` is set, parse each module a second
+  // time to gather the declaration tables and feed them through
+  // `auto_reserve_from_bundle`. The resulting reserved-set / reserved-
+  // properties additions layer on top of the user's `mangle` config
+  // before the mangler runs. Costs a second per-module parse.
+  auto_reserve : Bool
 }
 
 ///|
@@ -57,6 +63,7 @@ pub fn BundleOptions::default() -> BundleOptions {
     with_sourcemap: false,
     tree_shake: false,
     mangle: None,
+    auto_reserve: false,
   }
 }
 
@@ -95,6 +102,15 @@ priv struct ModuleNode {
   // Drives tree shaking: every `local_name` here is a root for the
   // module's own pass.
   exports : Array[@ast.TsExportSpec]
+  // Module-level declaration tables — `interface` / `class` /
+  // `type` / function-signature metadata that the auto-reserve
+  // pass walks. Only populated when `BundleOptions.auto_reserve`
+  // is on; the second parse is a measurable cost.
+  module_decls : @ast.TsModule?
+  // The original parsed `TsModuleBlock`. Needed for the auto-reserve
+  // walk so we can pass the *entry*'s block (with its post-JSX-lower
+  // reexports list intact) into `auto_reserve_from_bundle`.
+  module_block : @ast.TsModuleBlock?
 }
 
 // ---------------------------------------------------------------------------
@@ -199,8 +215,11 @@ pub fn bundle_modules(
   // of the bundle so the consumer's loader / browser handles them.
   let external_imports : Array[@ast.TsImportDecl] = []
   let external_seen : Map[String, Bool] = {}
+  let need_decls = opts.auto_reserve && opts.mangle is Some(_)
   match
-    load_module_graph(files, entry, modules, external_imports, external_seen) {
+    load_module_graph(
+      files, entry, modules, external_imports, external_seen, need_decls,
+    ) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
@@ -209,7 +228,14 @@ pub fn bundle_modules(
     tree_shake_bundle(modules, entry)
   }
   match opts.mangle {
-    Some(cfg) => mangle_bundle(modules, order, cfg)
+    Some(cfg) => {
+      let final_cfg = if opts.auto_reserve {
+        compute_auto_reserve(modules, entry, cfg)
+      } else {
+        cfg
+      }
+      mangle_bundle(modules, order, final_cfg)
+    }
     None => ()
   }
   let e = Emitter::new()
@@ -274,6 +300,7 @@ fn load_module_graph(
   modules : Map[String, ModuleNode],
   external_imports : Array[@ast.TsImportDecl],
   external_seen : Map[String, Bool],
+  need_decls : Bool,
 ) -> Result[Unit, String] {
   if modules.contains(path) {
     return Ok(())
@@ -289,6 +316,19 @@ fn load_module_graph(
   let mb = match (try? parser.parse_module_block()) {
     Ok(b) => b
     Err(e) => return Err("parse \{path}: \{e}")
+  }
+  // When auto-reserve is on, also parse the lower-level `TsModule`
+  // to surface declaration tables (`interfaces`, `classes`, etc.).
+  // The two parses are independent; the parser keeps no global
+  // state between calls.
+  let module_decls : @ast.TsModule? = if need_decls {
+    let parser2 = @parser.Parser::from_source(source)
+    match (try? parser2.parse_module()) {
+      Ok(m) => Some(m)
+      Err(e) => return Err("parse decls \{path}: \{e}")
+    }
+  } else {
+    None
   }
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
@@ -308,7 +348,12 @@ fn load_module_graph(
         resolved[imp.module_spec] = dep_path
         match
           load_module_graph(
-            files, dep_path, modules, external_imports, external_seen,
+            files,
+            dep_path,
+            modules,
+            external_imports,
+            external_seen,
+            need_decls,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -336,6 +381,8 @@ fn load_module_graph(
     resolved_imports: resolved,
     import_decls: mb.imports,
     exports: mb.exports,
+    module_decls,
+    module_block: Some(mb),
   }
   Ok(())
 }
@@ -425,6 +472,40 @@ fn tree_shake_bundle(
     }
     node.block = tree_shake_block(node.block, roots_arr)
   }
+}
+
+///|
+/// Run `auto_reserve_from_bundle` against the parsed declaration
+/// tables of every loaded module, anchored on the entry module's
+/// `TsModuleBlock`. Returns the user-supplied config augmented with
+/// the derived reserved names / properties. If anything required
+/// (entry block / decls) is missing, returns `base` unchanged so
+/// the caller still gets a sensible default.
+fn compute_auto_reserve(
+  modules : Map[String, ModuleNode],
+  entry : String,
+  base : ManglerConfig,
+) -> ManglerConfig {
+  let entry_node = match modules.get(entry) {
+    Some(n) => n
+    None => return base
+  }
+  let entry_block = match entry_node.module_block {
+    Some(b) => b
+    None => return base
+  }
+  let all_decls : Array[@ast.TsModule] = []
+  for kv in modules {
+    let (_, n) = kv
+    match n.module_decls {
+      Some(m) => all_decls.push(m)
+      None => ()
+    }
+  }
+  if all_decls.length() == 0 {
+    return base
+  }
+  auto_reserve_from_bundle(entry_block, all_decls, base)
 }
 
 ///|

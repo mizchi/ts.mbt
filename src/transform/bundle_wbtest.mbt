@@ -183,6 +183,7 @@ test "bundle: sourcemap option emits multi-source v3 JSON" {
     with_sourcemap: true,
     tree_shake: false,
     mangle: None,
+    auto_reserve: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) =>
@@ -223,6 +224,7 @@ test "bundle: tree shaking drops a dep's unused exports" {
     with_sourcemap: false,
     tree_shake: true,
     mangle: None,
+    auto_reserve: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -252,6 +254,7 @@ test "bundle: tree shaking keeps decls reached through a chain" {
     with_sourcemap: false,
     tree_shake: true,
     mangle: None,
+    auto_reserve: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -282,6 +285,7 @@ test "bundle: namespace import keeps every export of the source" {
     with_sourcemap: false,
     tree_shake: true,
     mangle: None,
+    auto_reserve: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -336,6 +340,7 @@ test "bundle: cross-module property mangling renames consistently" {
     with_sourcemap: false,
     tree_shake: false,
     mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+    auto_reserve: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -368,6 +373,7 @@ test "bundle: mangle preserves built-in props (length, then) across modules" {
     with_sourcemap: false,
     tree_shake: false,
     mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+    auto_reserve: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -393,6 +399,110 @@ test "bundle: no mangle option leaves source-form props alone" {
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => assert_true(out.js.contains("userField"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: auto-reserve protects exported interface fields cross-module" {
+  // `User` is defined in `types.ts` and referenced from `entry.ts`'s
+  // exported function signature. With auto-reserve on, the walker
+  // crosses the module boundary and keeps `User.userName` /
+  // `User.userScore` in the reserved property set.
+  let files = vfs([
+    (
+      "types.ts",
+      "export interface User { userName: string; userScore: number; }\n",
+    ),
+    (
+      "entry.ts",
+      "import { User } from \"./types\";\nexport function read(u: User) { return u.userName; }\n",
+    ),
+  ])
+  let opts : BundleOptions = {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: false,
+    mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+    auto_reserve: true,
+  }
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("userName"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: auto-reserve follows inline object return types across modules" {
+  // The exported `make` from the entry returns `User` (defined in
+  // `types.ts`). The walker has to cross the module boundary to
+  // resolve `User` and reserve its field `userName`. With
+  // auto-reserve on, the long name survives mangling on both sides
+  // of the bundle.
+  let files = vfs([
+    (
+      "types.ts",
+      "export interface User { userName: string; }\n",
+    ),
+    (
+      "lib.ts",
+      "import { User } from \"./types\";\nexport function make(): User { return { userName: \"alice\" }; }\n",
+    ),
+    (
+      "entry.ts",
+      "import { make } from \"./types\";\nexport { make };\n",
+    ),
+  ])
+  let opts : BundleOptions = {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: false,
+    mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+    auto_reserve: true,
+  }
+  // `entry.ts` re-exports `make`. Resolving `make`'s return type
+  // reaches `User` (cross-module), which keeps `userName`.
+  let files2 = vfs([
+    (
+      "types.ts",
+      "export interface User { userName: string; }\n",
+    ),
+    (
+      "entry.ts",
+      "import { User } from \"./types\";\nexport function make(): User { return { userName: \"alice\" }; }\n",
+    ),
+  ])
+  match bundle_modules(files2, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("userName"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+  let _ = files
+}
+
+///|
+test "bundle: auto-reserve off keeps the user-supplied reserved set verbatim" {
+  // Sanity: when auto-reserve is off, the mangler uses just the
+  // built-ins + caller's explicit list. `userName` isn't reserved
+  // and gets renamed.
+  let files = vfs([
+    (
+      "types.ts",
+      "export interface User { userName: string; }\n",
+    ),
+    (
+      "entry.ts",
+      "import { User } from \"./types\";\nexport function read(u: User) { return u.userName; }\n",
+    ),
+  ])
+  let opts : BundleOptions = {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: false,
+    mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+    auto_reserve: false,
+  }
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("userName"))
     Err(e) => fail("bundle error: \{e}")
   }
 }

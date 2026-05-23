@@ -17,6 +17,13 @@
 // Output: a `ManglerConfig` whose `reserved` / `reserved_properties`
 // arrays are pre-populated. The caller can layer on additional names
 // with `with_reserved` / `with_reserved_properties`.
+//
+// `auto_reserve_from_bundle` does the same thing across a bundle's
+// modules: it merges every module's declaration tables into one
+// master `TsModule` and walks from the *entry* module's exports.
+// Type references that cross module boundaries (e.g. an exported
+// function whose parameter is defined in `./types.ts`) follow
+// through the merged table.
 
 ///|
 /// Run the type-graph walk and return a `ManglerConfig` augmented with
@@ -71,6 +78,86 @@ pub fn auto_reserve_from_module(
   base
     .with_reserved(reserved_names_arr)
     .with_reserved_properties(reserved_props_arr)
+}
+
+///|
+/// Bundle-aware variant: walks the type graph from the entry
+/// module's exports through a *merged* declaration table built by
+/// concatenating every module's interfaces / classes / type aliases.
+///
+/// This handles cross-module type references the per-module walk
+/// can't follow: when `entry.ts` exports `function f(x: Foo)` and
+/// `Foo` is declared in `./types.ts`, the merged table still
+/// contains `Foo` so `walk_type_ref` finds it.
+///
+/// Name clashes (two modules each declaring `interface Config`)
+/// are conservatively merged — both contribute their fields, which
+/// is the safe direction for a reserved set.
+pub fn auto_reserve_from_bundle(
+  entry_block : @ast.TsModuleBlock,
+  modules : Array[@ast.TsModule],
+  base : ManglerConfig,
+) -> ManglerConfig {
+  let merged = merge_modules(modules)
+  auto_reserve_from_module(entry_block, merged, base)
+}
+
+///|
+/// Concatenate every module's declaration tables into a single
+/// `TsModule`. Other fields (`namespaces`, `enums`, `imports`,
+/// `module_augmentations`) are unioned too even though the walker
+/// doesn't traverse all of them yet — keeps the merge a faithful
+/// representation in case future passes need it.
+fn merge_modules(modules : Array[@ast.TsModule]) -> @ast.TsModule {
+  let funcs : Array[@ast.TsFunc] = []
+  let interfaces : Array[@ast.TsInterface] = []
+  let type_aliases : Array[@ast.TsTypeAlias] = []
+  let imports : Array[@ast.TsImport] = []
+  let values : Array[@ast.TsValueDecl] = []
+  let classes : Array[@ast.TsClassDecl] = []
+  let namespaces : Array[@ast.TsNamespaceDecl] = []
+  let enums : Array[@ast.TsEnumDecl] = []
+  let module_augmentations : Array[(String, @ast.TsModule)] = []
+  for m in modules {
+    for x in m.funcs {
+      funcs.push(x)
+    }
+    for x in m.interfaces {
+      interfaces.push(x)
+    }
+    for x in m.type_aliases {
+      type_aliases.push(x)
+    }
+    for x in m.imports {
+      imports.push(x)
+    }
+    for x in m.values {
+      values.push(x)
+    }
+    for x in m.classes {
+      classes.push(x)
+    }
+    for x in m.namespaces {
+      namespaces.push(x)
+    }
+    for x in m.enums {
+      enums.push(x)
+    }
+    for x in m.module_augmentations {
+      module_augmentations.push(x)
+    }
+  }
+  {
+    funcs,
+    interfaces,
+    type_aliases,
+    imports,
+    values,
+    classes,
+    namespaces,
+    enums,
+    module_augmentations,
+  }
 }
 
 // ---------------------------------------------------------------------------
