@@ -192,6 +192,15 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
     let _ = start
     return "<expr-base>"
   }
+  // `class C extends class { ... } { ... }` — anonymous class expression as
+  // the base. Delegate to the general expression parser; whatever it
+  // produces collapses to the `<expr-base>` marker since we only need the
+  // structural signal that an expression-shaped base was consumed.
+  if self.check(Class) {
+    let _ = self.parse_expr()
+    let _ = start
+    return "<expr-base>"
+  }
   let mut full_name = match self.advance().kind {
     Ident(n) => n
     k => raise ParseError("Expected base class name, got \{k}")

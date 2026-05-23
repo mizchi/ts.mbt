@@ -1014,6 +1014,19 @@ pub fn Parser::parse_interface(
         let _ = self.advance()
         "declare"
       }
+      // Literal-keyword identifiers also stand in as property names.
+      Bool(true) => {
+        let _ = self.advance()
+        "true"
+      }
+      Bool(false) => {
+        let _ = self.advance()
+        "false"
+      }
+      Null => {
+        let _ = self.advance()
+        "null"
+      }
       k =>
         raise ParseError("Expected field name at \{self.peek().pos}, got \{k}")
     }
