@@ -3515,3 +3515,75 @@ test "expr_check: nested instanceof on prop chain narrows" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 33: nested-chain discriminated union narrowing + early-return on
+// prop access.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: discriminant narrowing on `obj.shape.kind === \"…\"`" {
+  // `o.shape.kind === "circle"` narrows `o.shape` to the `Circle` variant.
+  let src =
+    #|type Shape =
+    #|  | { kind: "circle"; radius: number }
+    #|  | { kind: "square"; side: number };
+    #|interface Holder { shape: Shape }
+    #|function area(h: Holder): number {
+    #|  if (h.shape.kind === "circle") {
+    #|    return h.shape.radius;
+    #|  }
+    #|  return h.shape.side;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: literal-union narrowing on `obj.prop`" {
+  let src =
+    #|interface Cfg { mode: "fast" | "slow" }
+    #|function f(c: Cfg): "fast" {
+    #|  if (c.mode === "fast") {
+    #|    return c.mode;
+    #|  }
+    #|  return "fast";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: early-return narrowing on `obj.prop !== undefined`" {
+  // After `if (c.name === undefined) return; …`, subsequent
+  // references to `c.name` should see the non-undefined narrowing.
+  let src =
+    #|interface Config { name?: string }
+    #|function f(c: Config): string {
+    #|  if (c.name === undefined) {
+    #|    return "default";
+    #|  }
+    #|  return c.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: early-return narrowing on nested prop access" {
+  let src =
+    #|interface Inner { tag?: string }
+    #|interface Outer { inner: Inner }
+    #|function f(o: Outer): string {
+    #|  if (o.inner.tag === undefined) {
+    #|    return "x";
+    #|  }
+    #|  return o.inner.tag;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

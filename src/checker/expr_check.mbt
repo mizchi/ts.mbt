@@ -3530,20 +3530,30 @@ fn analyze_equality(
     None => ()
   }
 
-  // `obj.prop === "literal"` — discriminated union.
+  // `<chain>.<prop> === "literal"` — discriminated union narrowing on
+  // the parent chain. Accepts any `Var` / `PropAccess`-chain on the LHS
+  // so `o.shape.kind === "circle"` narrows `o.shape`.
   let disc_match = match (left, right) {
-    (PropAccess(Var(name), prop), StringLit(lit)) => Some((name, prop, lit))
-    (StringLit(lit), PropAccess(Var(name), prop)) => Some((name, prop, lit))
+    (PropAccess(parent, prop), StringLit(lit)) =>
+      match narrowing_key_for_expr(parent) {
+        Some(parent_key) => Some((parent_key, prop, lit))
+        None => None
+      }
+    (StringLit(lit), PropAccess(parent, prop)) =>
+      match narrowing_key_for_expr(parent) {
+        Some(parent_key) => Some((parent_key, prop, lit))
+        None => None
+      }
     _ => None
   }
   match disc_match {
-    Some((name, prop, lit)) => {
-      let cur = env_lookup_full(env, resolver, name)
+    Some((parent_key, prop, lit)) => {
+      let cur = narrowing_current_type(env, resolver, parent_key)
       match narrow_by_discriminant(resolver, cur, prop, lit, true) {
         Some(then_ty) => {
-          true_side.push((name, then_ty))
+          true_side.push((parent_key, then_ty))
           match narrow_by_discriminant(resolver, cur, prop, lit, false) {
-            Some(else_ty) => false_side.push((name, else_ty))
+            Some(else_ty) => false_side.push((parent_key, else_ty))
             None => ()
           }
         }
@@ -3553,15 +3563,26 @@ fn analyze_equality(
     None => ()
   }
 
-  // `x === "literal"` — literal union narrowing.
+  // `<chain> === "literal"` — literal-union narrowing on the chain
+  // itself. `Var("s") === "a"` narrows `s`; `c.kind === "a"` narrows
+  // `c.kind` (separate from the disc_match above, which narrows the
+  // parent rather than the leaf).
   let lit_match = match (left, right) {
-    (Var(name), StringLit(lit)) => Some((name, lit))
-    (StringLit(lit), Var(name)) => Some((name, lit))
+    (lhs, StringLit(lit)) =>
+      match narrowing_key_for_expr(lhs) {
+        Some(key) => Some((key, lit))
+        None => None
+      }
+    (StringLit(lit), rhs) =>
+      match narrowing_key_for_expr(rhs) {
+        Some(key) => Some((key, lit))
+        None => None
+      }
     _ => None
   }
   match lit_match {
     Some((name, lit)) => {
-      let cur = env_lookup_full(env, resolver, name)
+      let cur = narrowing_current_type(env, resolver, name)
       match cur {
         Union(_) => {
           let kept = narrow_keep(cur, fn(v) {
