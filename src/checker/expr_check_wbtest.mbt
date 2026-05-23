@@ -4547,6 +4547,42 @@ test "expr_check: compatible render-prop function child passes" {
 }
 
 ///|
+test "expr_check: JSX in .map() without key flags warning" {
+  let src =
+    #|interface Props { value: number }
+    #|function Item(props: Props): void {}
+    #|function comp(xs: number[]): void {
+    #|  const _ = <ul>{xs.map((n: number) => <Item value={n}/>)}</ul>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Item> in `.map()`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX in .map() with key is silent" {
+  let src =
+    #|interface Props { value: number }
+    #|function Item(props: Props): void {}
+    #|function comp(xs: number[]): void {
+    #|  const _ = <ul>{xs.map((n: number) => <Item key={n} value={n}/>)}</ul>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut bad = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("in `.map()`") {
+      bad = true
+    }
+  }
+  assert_false(bad)
+}
+
+///|
 test "expr_check: render-prop child with mismatched arg type flags error" {
   // The callback declares its argument as `string` but the prop expects
   // `(n: number) => string`. The arg-type clash should surface.

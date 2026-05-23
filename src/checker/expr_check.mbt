@@ -4673,8 +4673,76 @@ fn check_call_args_in_expr(
       // (text literals walk through as no-op).
       for c in children {
         check_call_args_in_expr(env, c, ctx)
+        // React `key` rule: when a child is `xs.map(fn)` and `fn`
+        // returns a JSX element, that element needs a `key` attr.
+        check_jsx_key_in_map(c, ctx)
       }
     }
+    _ => ()
+  }
+}
+
+///|
+/// React `key`-in-iteration rule: when a JSX child is the result of
+/// `xs.map(fn)` and the callback returns a JSX element, that element
+/// must declare a `key` attribute. The check walks the immediate child
+/// expression and records `<Tag>` missing `key` diagnostics; deeply
+/// nested misses are left to the recursive `check_call_args_in_expr`.
+fn check_jsx_key_in_map(child : @ast.TsExpr, ctx : CheckCtx) -> Unit {
+  match child {
+    MethodCall(_, method, args) =>
+      if method == "map" && args.length() >= 1 {
+        walk_map_callback_for_key(args[0], ctx)
+      }
+    CallExpr(callee, args) =>
+      match callee {
+        PropAccess(_, method) =>
+          if method == "map" && args.length() >= 1 {
+            walk_map_callback_for_key(args[0], ctx)
+          }
+        _ => ()
+      }
+    _ => ()
+  }
+}
+
+///|
+fn walk_map_callback_for_key(callback : @ast.TsExpr, ctx : CheckCtx) -> Unit {
+  match callback {
+    ArrowFunc(_, _, ArrowExpr(body), _) => check_jsx_expr_has_key(body, ctx)
+    ArrowFunc(_, _, ArrowBlock(block), _) =>
+      for stmt in block.stmts {
+        match stmt {
+          Return(Some(e)) => check_jsx_expr_has_key(e, ctx)
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+}
+
+///|
+fn check_jsx_expr_has_key(expr : @ast.TsExpr, ctx : CheckCtx) -> Unit {
+  match expr {
+    JsxElement(tag, attrs, _) =>
+      // Fragments (empty tag) can't take a key in plain JSX form; skip.
+      if tag != "" {
+        let has_key = attrs.iter().any(fn(a) { a.0 == "key" })
+        if !has_key {
+          record(
+            ctx,
+            "<\{tag}> in `.map()`",
+            "missing required `key` prop for list element",
+          )
+        }
+      }
+    // `cond ? <A/> : <B/>` — recurse into both branches.
+    Cond(_, then_e, else_e) => {
+      check_jsx_expr_has_key(then_e, ctx)
+      check_jsx_expr_has_key(else_e, ctx)
+    }
+    // `cond && <A/>`.
+    BinOp(And, _, right) => check_jsx_expr_has_key(right, ctx)
     _ => ()
   }
 }
