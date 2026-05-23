@@ -1011,13 +1011,17 @@ started.
   retained as `Constructor(params, ret, is_abstract)` and feed
   `ConstructorParameters<C>` / `InstanceType<C>` through the standard
   utility table.
-- [~] Stage-3 decorators — `skip_decorator` only; no decorator AST.
-  Decorators currently have no semantic effect on bridge generation, so
-  retaining them would be cosmetic — left as `[~]`.
+- [x] Stage-3 decorators — `TsClassDecl.decorators` carries the parsed
+  `@expr` chain in source order via the new `parse_decorator_expr`
+  helper that produces a faithful `TsExpr` (call, member access, etc.).
 - [~] `<const T>` const type parameter — recognized at
   `parser_function.mbt:499` but the modifier is ignored.
-- [~] Import attributes (`import x from "y" with { type: "json" }`) — read and
-  discarded by `skip_import_attributes` (`parser_module.mbt:1922`).
+  No corpus consumer; the modifier only affects inference contexts we
+  don't model.
+- [x] Import attributes (`import x from "y" with { type: "json" }`) —
+  retained as `TsImportDecl.attributes : Array[(String, String)]` via
+  the new `parse_import_attributes` helper; the legacy `assert { ... }`
+  form lands in the same slot.
 - [x] Labeled tuple `[name: T, age: U]` — labels stripped; `[name?: T]`
   correctly widens the element to `T | undefined`.
 - [x] Variadic tuple types (`[string, ...T, number]`) — parsed and
@@ -1027,17 +1031,19 @@ started.
   as `MappedTypeRemap(...)`; simplifier substitutes `K` per key and
   produces an `Object(...)` when the source / remap resolve, dropping
   keys whose remap evaluates to `Never`.
-- [~] `accessor` field (auto-accessor) — recognized as a class member
-  modifier but folded into the existing property representation. No
-  semantic difference at the bridge boundary.
+- [x] `accessor` field (auto-accessor) —
+  `TsClassPropertyDecl.is_accessor` flags the property; structurally
+  identical to a regular property + synthesised getter/setter.
 - [~] `using` / `await using` runtime semantics (parser already accepts
   the binding form; disposable-tracking is intentionally out of scope —
   it has no effect on bridge generation).
 - [~] Dynamic `import("x", { with: ... })` attribute argument —
-  attribute object is consumed but not retained.
-- [~] Inline per-specifier `import { type X, Y }` modifier — `type`
-  prefix is recognized and consumed but the per-specifier flag is not
-  stored (no consumer downstream).
+  attribute object is consumed but not retained on the dynamic-import
+  expression. Static-import attributes are now retained on the
+  declaration.
+- [x] Inline per-specifier `import { type X, Y }` modifier —
+  `TsImportDecl.named_type_only : Array[Bool]` is positionally aligned
+  with `named_bindings`; `true` indicates the `type` prefix was used.
 - [x] JSX explicit generic type arguments `<Box<string> ... />` — the
   JSX header scanner skips the balanced angle brackets after the tag
   name before attribute parsing.
@@ -1075,12 +1081,15 @@ started.
   Y`) — both-side length-1 tuple shape is detected by `simplify_type`
   and reduced by unwrapping before `extends_decision`.
 - [ ] `unique symbol` distinct identity (currently collapses to
-  `Symbol`). Deferred — no corpus consumer.
-- [~] Class static-side (`typeof Cls`) vs instance-side separation —
-  `typeof_class_constructor_params_type` / `typeof_class_instance_type`
-  cover the `ConstructorParameters<typeof Cls>` /
-  `InstanceType<typeof Cls>` cases at the bridge layer. A general
-  static-side merge with `namespace Cls` is still open.
+  `Symbol`). Deferred — bridge collapses `Symbol` to `JSValue` anyway;
+  no corpus consumer relies on the per-occurrence nominal identity.
+- [x] Class static-side (`typeof Cls`) vs instance-side separation —
+  `typeof_class_constructor_params_type` /
+  `typeof_class_instance_type` cover the
+  `ConstructorParameters<typeof Cls>` / `InstanceType<typeof Cls>`
+  cases at the bridge layer, and `PropAccess` on a class identifier
+  now consults the namespace-merged `globals` map plus the class's
+  static members before falling back to the instance-side lookup.
 - [x] Class index signature `[k: string]: V` — `TsClassDecl` carries
   the parsed signatures and `lookup_class_field` falls through to
   `index_signature_value` after exhausting named members.
@@ -1092,15 +1101,16 @@ started.
 - [x] Declaration merging (interface + interface) — `Resolver::ingest_module`
   now unions fields / readonly / extends / index signatures via
   `merge_interfaces`. Namespace + namespace was already implicit via
-  the recursive ingest. Namespace + class static-side merging is still
-  open.
+  the recursive ingest, and namespace + class static-side merging
+  works through the `PropAccess` lookup extension.
 - [x] Tagged-template literal typing — `tag\`...\`` returns the
   declared return type of `tag` when known instead of always collapsing
   to `String`. Real generic inference across template segments is still
   deferred (rare in our corpus).
-- [ ] Generator / async-iterator yield-type / return-type checking —
-  deferred (no corpus consumer; the iterator/iterable prototype lookup
-  already handles call-site usage).
+- [x] Generator / async-iterator yield-type checking — `CheckCtx`
+  carries the declared element type and `yield e` / `yield* iter` are
+  validated against it; the missing-return diagnostic is suppressed
+  for generator bodies.
 - [ ] `in` narrowing for record-shaped operands; tagged-union exhaustiveness
   in `switch`. The `In` operator narrowing already handles tagged
   unions; tighter exhaustiveness checking on `switch` defaults to the
@@ -1162,15 +1172,30 @@ Follow-on batches in the same branch:
 - [x] Non-distributive conditional `[T] extends [U]` — commit `8152f21`.
 - [x] JSX explicit type args, tagged-template return type, class index
   signature, variadic `Parameters<F>` — commit `454d360`.
+- [x] Import attributes + per-specifier `type` modifier retention —
+  commit `2cbff18`.
+- [x] Class-level stage-3 decorator AST — commit `e4be04b`.
+- [x] `accessor` field flag + namespace + class static-side merging —
+  commit `e6d4d95`.
+- [x] Generator yield-type checking — commit `3a8dcf2`.
 
 Remaining intentionally-deferred items (low corpus ROI / no
 runtime-bridge impact):
 
-- [ ] `unique symbol` identity.
-- [ ] `ThisType<T>` (requires `this`-parameter AST retention).
-- [ ] Generator / async-iterator yield-type checking.
-- [ ] Stage-3 decorator AST retention.
-- [ ] `accessor` field as a first-class AST shape.
-- [ ] Yarn PnP resolver.
-- [ ] `JSX.LibraryManagedAttributes` / `defaultProps`.
-- [ ] Namespace + class static-side merging.
+- [ ] `unique symbol` identity — bridge collapses `Symbol` to
+  `JSValue`; per-occurrence nominal identity doesn't survive the
+  boundary.
+- [ ] `ThisType<T>` — requires `this`-parameter AST retention; no
+  consumer.
+- [ ] `<const T>` const type parameter inference — affects contextual
+  inference only.
+- [ ] Yarn PnP resolver — pnpm corpus default.
+- [ ] `JSX.LibraryManagedAttributes` / `defaultProps` — React 19
+  deprecates the underlying pattern.
+- [ ] Dynamic `import("x", { with: ... })` attribute retention on the
+  expression itself (static-import form is covered).
+- [ ] Per-statement module augmentation graph — declarations are
+  appended to the surrounding scope, which covers the common patterns
+  but not cross-package augmentation.
+- [ ] `in` narrowing for record-shaped operands; tagged-union switch
+  exhaustiveness analysis.
