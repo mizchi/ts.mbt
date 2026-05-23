@@ -343,6 +343,17 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         let right = self.parse_assignment()
         IndexAssignExpr(obj, index, right)
       }
+      // Destructuring assignment whose LHS slipped past
+      // `is_destructuring_assignment_start` because the spread / element
+      // target wasn't expressible as a simple binding pattern — e.g.
+      // `{ ...super.a } = { ... }`. Consume the `=` and wrap as an
+      // `AssignPattern` with a `Target(...)` binding so the parser can
+      // move on. Downstream passes treat the construct opaquely.
+      ObjectLit(_) | ArrayLit(_) => {
+        let _ = self.advance()
+        let right = self.parse_assignment()
+        AssignPattern(@ast.TsBinding::Target(left), right)
+      }
       _ => left
     }
   } else if self.match_(PlusEq) {
@@ -1039,10 +1050,10 @@ fn Parser::parse_parenthesized_expr(
   if self.peek_at(1).kind == Lt {
     let temp = { ..self, pos: self.pos + 1 }
     if temp.is_jsx_element_start() {
-      temp.skip_jsx_element()
+      let jsx_expr = temp.parse_jsx_element_expr()
       if temp.check(RParen) {
         self.pos = temp.pos + 1
-        return Var("__jsx__")
+        return jsx_expr
       }
     }
   }
@@ -1330,6 +1341,336 @@ fn Parser::scan_type_assertion_source_end(
 }
 
 ///|
+/// Walk a JSX element starting at source position `start` and return
+/// its end position, the (opening-tag) tag name, the attribute list,
+/// and any remaining embedded `{expr}` sub-expressions from children
+/// / spread positions. Used by `parse_jsx_element_expr` to build a
+/// `JsxElement(tag, attrs, embeds)` AST node.
+fn Parser::scan_jsx_source_end_with_structure(
+  self : Parser,
+  start : Int,
+) -> (Int, String, Array[(String, @ast.TsExpr?)], Array[@ast.TsExpr]) {
+  let (end, embeds) = self.scan_jsx_source_end_with_embeds(start)
+  let (tag, attrs, attr_embed_count) = self.parse_jsx_opening_tag(start)
+  // The first `attr_embed_count` embeds came from attribute values;
+  // the rest are children / spreads.
+  let child_embeds : Array[@ast.TsExpr] = []
+  let mut i = attr_embed_count
+  while i < embeds.length() {
+    child_embeds.push(embeds[i])
+    i = i + 1
+  }
+  (end, tag, attrs, child_embeds)
+}
+
+///|
+/// Parse a JSX opening tag (`<Tag attr="x" foo={bar} {...spread}>` or
+/// `<Tag />` / `</Tag>`) starting at source position `start`. Returns
+/// the tag name, the attribute list, and the count of embedded
+/// `{expr}` values that were consumed inside attribute slots (so the
+/// caller can split the flat embed array into attr vs child halves).
+/// Falls back to empty results when the opening shape is malformed.
+fn Parser::parse_jsx_opening_tag(
+  self : Parser,
+  start : Int,
+) -> (String, Array[(String, @ast.TsExpr?)], Int) {
+  let attrs : Array[(String, @ast.TsExpr?)] = []
+  let mut attr_embeds = 0
+  let mut i = start
+  if i >= self.src.length() || self.src[i].to_int().unsafe_to_char() != '<' {
+    return ("", attrs, 0)
+  }
+  i += 1
+  // Skip whitespace.
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  // Fragment `<>` / closing-element `</…>` — no name.
+  if i < self.src.length() &&
+    (self.src[i].to_int().unsafe_to_char() == '>' ||
+      self.src[i].to_int().unsafe_to_char() == '/') {
+    return ("", attrs, 0)
+  }
+  // Tag name (identifier with optional `.member.access`).
+  let tag_start = i
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' ||
+      c == '$' ||
+      c == '.' ||
+      c == '-' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  let tag = self.src[tag_start:i].to_string()
+  // Attributes loop.
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      i += 1
+      continue
+    }
+    if c == '>' || c == '/' || c == '<' {
+      break
+    }
+    // `{...expr}` spread attribute — embed counted; no name pair.
+    if c == '{' {
+      let end = self.skip_jsx_braces_in_source(i)
+      if end > i + 1 {
+        let inner = self.src[i + 1:end - 1].to_string()
+        let trimmed = inner.trim()
+        if trimmed.length() > 0 {
+          attr_embeds = attr_embeds + 1
+        }
+      }
+      i = end
+      continue
+    }
+    // Attribute name.
+    let name_start = i
+    while i < self.src.length() {
+      let nc = self.src[i].to_int().unsafe_to_char()
+      if (nc >= 'a' && nc <= 'z') ||
+        (nc >= 'A' && nc <= 'Z') ||
+        (nc >= '0' && nc <= '9') ||
+        nc == '_' ||
+        nc == '$' ||
+        nc == '-' ||
+        nc == ':' {
+        i += 1
+      } else {
+        break
+      }
+    }
+    if i == name_start {
+      // Couldn't lex a name — break to avoid an infinite loop.
+      break
+    }
+    let attr_name = self.src[name_start:i].to_string()
+    // Skip whitespace.
+    while i < self.src.length() {
+      let wc = self.src[i].to_int().unsafe_to_char()
+      if wc == ' ' || wc == '\t' || wc == '\n' || wc == '\r' {
+        i += 1
+      } else {
+        break
+      }
+    }
+    // Optional value.
+    if i < self.src.length() && self.src[i].to_int().unsafe_to_char() == '=' {
+      i += 1
+      while i < self.src.length() {
+        let wc = self.src[i].to_int().unsafe_to_char()
+        if wc == ' ' || wc == '\t' || wc == '\n' || wc == '\r' {
+          i += 1
+        } else {
+          break
+        }
+      }
+      if i < self.src.length() {
+        let vc = self.src[i].to_int().unsafe_to_char()
+        if vc == '{' {
+          let end = self.skip_jsx_braces_in_source(i)
+          let inner = self.src[i + 1:end - 1].to_string()
+          let trimmed = inner.trim()
+          if trimmed.length() > 0 {
+            let payload_str = if trimmed.has_prefix("...") {
+              trimmed[3:].to_string().trim().to_string()
+            } else {
+              trimmed.to_string()
+            }
+            let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+            match (try? sub.parse_expr()) {
+              Ok(e) => {
+                attrs.push((attr_name, Some(e)))
+                attr_embeds = attr_embeds + 1
+              }
+              Err(_) => attrs.push((attr_name, None))
+            }
+          } else {
+            attrs.push((attr_name, None))
+          }
+          i = end
+        } else if vc == '"' || vc == '\'' {
+          let quote = vc
+          let str_start = i + 1
+          i += 1
+          while i < self.src.length() &&
+                self.src[i].to_int().unsafe_to_char() != quote {
+            i += 1
+          }
+          let raw = self.src[str_start:i].to_string()
+          attrs.push((attr_name, Some(@ast.TsExpr::StringLit(raw))))
+          if i < self.src.length() {
+            i += 1
+          }
+        } else {
+          attrs.push((attr_name, None))
+        }
+      } else {
+        attrs.push((attr_name, None))
+      }
+    } else {
+      // Boolean attribute.
+      attrs.push((attr_name, None))
+    }
+  }
+  (tag, attrs, attr_embeds)
+}
+
+///|
+/// Walk a JSX element starting at source position `start` and return
+/// both its end position and the embedded `{expr}` sub-expressions
+/// (attribute values, child expressions, spread targets). The caller
+/// uses the end position to advance the lexer and wraps the embedded
+/// expressions in a `JsxElement(...)` AST node so the checker still
+/// validates calls / type mismatches inside braces.
+fn Parser::scan_jsx_source_end_with_embeds(
+  self : Parser,
+  start : Int,
+) -> (Int, Array[@ast.TsExpr]) {
+  let embeds : Array[@ast.TsExpr] = []
+  let mut i = start
+  let mut depth = 0
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == '{' {
+      let end = self.skip_jsx_braces_in_source(i)
+      // Capture the source between `{` and the matching `}` and try to
+      // parse it as a TS expression. Empty braces (`{}`) are ignored.
+      if end > i + 1 {
+        let inner = self.src[i + 1:end - 1].to_string()
+        let trimmed = inner.trim()
+        if trimmed.length() > 0 {
+          // Spread-attribute syntax `{...expr}` and child-spread
+          // `{...arr}` show up as a leading `...`; strip it before
+          // parsing.
+          let payload_str = if trimmed.has_prefix("...") {
+            trimmed[3:].to_string().trim().to_string()
+          } else {
+            trimmed.to_string()
+          }
+          let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+          match (try? sub.parse_expr()) {
+            Ok(e) => embeds.push(e)
+            Err(_) => ()
+          }
+        }
+      }
+      i = end
+      continue
+    }
+    if c != '<' {
+      i += 1
+      continue
+    }
+    if i + 2 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '/' &&
+      self.src[i + 2].to_int().unsafe_to_char() == '>' {
+      i += 3
+      if depth > 0 {
+        depth -= 1
+      }
+      if depth == 0 {
+        break
+      }
+      continue
+    }
+    if i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '>' {
+      depth += 1
+      i += 2
+      continue
+    }
+    if i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '/' {
+      i += 2
+      while i < self.src.length() &&
+            self.src[i].to_int().unsafe_to_char() != '>' {
+        i += 1
+      }
+      if i < self.src.length() {
+        i += 1
+      }
+      if depth > 0 {
+        depth -= 1
+      }
+      if depth == 0 {
+        break
+      }
+      continue
+    }
+    depth += 1
+    i += 1
+    let mut quote : Char? = None
+    while i < self.src.length() {
+      let inner = self.src[i].to_int().unsafe_to_char()
+      match quote {
+        Some(q) => {
+          if inner == '\\' {
+            i += 2
+            continue
+          }
+          if inner == q {
+            quote = None
+          }
+          i += 1
+        }
+        None =>
+          if inner == '"' || inner == '\'' || inner == '`' {
+            quote = Some(inner)
+            i += 1
+          } else if inner == '{' {
+            let end = self.skip_jsx_braces_in_source(i)
+            if end > i + 1 {
+              let inner_src = self.src[i + 1:end - 1].to_string()
+              let trimmed = inner_src.trim()
+              if trimmed.length() > 0 {
+                let payload_str = if trimmed.has_prefix("...") {
+                  trimmed[3:].to_string().trim().to_string()
+                } else {
+                  trimmed.to_string()
+                }
+                let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+                match (try? sub.parse_expr()) {
+                  Ok(e) => embeds.push(e)
+                  Err(_) => ()
+                }
+              }
+            }
+            i = end
+          } else if inner == '/' &&
+            i + 1 < self.src.length() &&
+            self.src[i + 1].to_int().unsafe_to_char() == '>' {
+            i += 2
+            depth -= 1
+            break
+          } else if inner == '>' {
+            i += 1
+            break
+          } else {
+            i += 1
+          }
+      }
+    }
+    if depth == 0 {
+      break
+    }
+  }
+  (i, embeds)
+}
+
+///|
 fn Parser::scan_jsx_source_end(self : Parser, start : Int) -> Int {
   let mut i = start
   let mut depth = 0
@@ -1425,8 +1766,19 @@ fn Parser::scan_jsx_source_end(self : Parser, start : Int) -> Int {
 
 ///|
 fn Parser::try_skip_parenthesized_jsx_expr(self : Parser) -> Bool {
+  let (ok, _) = self.try_parse_parenthesized_jsx_expr()
+  ok
+}
+
+///|
+/// Same as `try_skip_parenthesized_jsx_expr` but also returns the
+/// embedded `{expr}` sub-expressions extracted from the JSX block.
+/// Caller wraps them in `JsxElement(...)`.
+fn Parser::try_parse_parenthesized_jsx_expr(
+  self : Parser,
+) -> (Bool, Array[@ast.TsExpr]) {
   if self.src.length() == 0 || !self.check(LParen) {
-    return false
+    return (false, [])
   }
   let mut i = self.peek().pos + 1
   while i < self.src.length() {
@@ -1438,9 +1790,9 @@ fn Parser::try_skip_parenthesized_jsx_expr(self : Parser) -> Bool {
     }
   }
   if i >= self.src.length() || self.src[i].to_int().unsafe_to_char() != '<' {
-    return false
+    return (false, [])
   }
-  let jsx_end = self.scan_jsx_source_end(i)
+  let (jsx_end, embeds) = self.scan_jsx_source_end_with_embeds(i)
   let mut j = jsx_end
   while j < self.src.length() {
     let c = self.src[j].to_int().unsafe_to_char()
@@ -1452,9 +1804,9 @@ fn Parser::try_skip_parenthesized_jsx_expr(self : Parser) -> Bool {
   }
   if j < self.src.length() && self.src[j].to_int().unsafe_to_char() == ')' {
     self.advance_to_source_pos(j + 1)
-    return true
+    return (true, embeds)
   }
-  false
+  (false, [])
 }
 
 ///|
@@ -1555,6 +1907,396 @@ fn Parser::skip_jsx_element(self : Parser) -> Unit {
   }
   let i = self.scan_jsx_source_end(self.peek().pos)
   self.advance_to_source_pos(i)
+}
+
+///|
+/// Same as `skip_jsx_element` but returns the embedded `{expr}` sub-
+/// expressions so callers can wrap them in a `JsxElement(...)` AST
+/// node. Call sites that want a real AST should prefer this over
+/// `skip_jsx_element + Var("__jsx__")`.
+fn Parser::parse_jsx_element_expr(
+  self : Parser,
+) -> @ast.TsExpr raise ParseError {
+  if self.src.length() == 0 {
+    self.skip_jsx_element_tokens()
+    return @ast.TsExpr::JsxElement("", [], [])
+  }
+  let start = self.peek().pos
+  match self.parse_jsx_element_at_source(start) {
+    Some((end, element)) => {
+      self.advance_to_source_pos(end)
+      element
+    }
+    None => {
+      // Fallback: structural parse failed — use the legacy flat
+      // scanner so the parser still makes progress.
+      let (end, tag, attrs, child_embeds) = self
+        .scan_jsx_source_end_with_structure(start)
+      self.advance_to_source_pos(end)
+      @ast.TsExpr::JsxElement(tag, attrs, child_embeds)
+    }
+  }
+}
+
+///|
+/// Recursive-descent JSX element parser. Returns `(end_pos, element)`
+/// when parsing succeeds, or `None` if the source at `start` doesn't
+/// open with a recognisable JSX element. Used by
+/// `parse_jsx_element_expr` to assemble a fully structured
+/// `JsxElement` node (tag + attrs + per-child entries) rather than the
+/// flat `embeds` list produced by the legacy scanner.
+fn Parser::parse_jsx_element_at_source(
+  self : Parser,
+  start : Int,
+) -> (Int, @ast.TsExpr)? {
+  if start >= self.src.length() ||
+    self.src[start].to_int().unsafe_to_char() != '<' {
+    return None
+  }
+  // Empty fragment `<>` opener.
+  let after_open = start + 1
+  if after_open < self.src.length() &&
+    self.src[after_open].to_int().unsafe_to_char() == '>' {
+    let body_start = after_open + 1
+    match self.parse_jsx_children(body_start, "") {
+      Some((after_body, children)) => {
+        // Expect `</>` to close.
+        if after_body + 2 < self.src.length() &&
+          self.src[after_body].to_int().unsafe_to_char() == '<' &&
+          self.src[after_body + 1].to_int().unsafe_to_char() == '/' &&
+          self.src[after_body + 2].to_int().unsafe_to_char() == '>' {
+          return Some(
+            (after_body + 3, @ast.TsExpr::JsxElement("", [], children)),
+          )
+        }
+        None
+      }
+      None => None
+    }
+  } else {
+    // Named opener — parse the tag header.
+    let (header_end, tag, attrs, self_close) = self
+      .parse_jsx_opening_header(start)
+    if tag == "" {
+      return None
+    }
+    if self_close {
+      return Some(
+        (header_end, @ast.TsExpr::JsxElement(tag, attrs, [])),
+      )
+    }
+    // Paired element — recurse on children until matching closing tag.
+    match self.parse_jsx_children(header_end, tag) {
+      Some((after_body, children)) => {
+        // Consume `</tag>`.
+        let after_close = self.skip_jsx_closing_tag(after_body, tag)
+        match after_close {
+          Some(end) =>
+            Some((end, @ast.TsExpr::JsxElement(tag, attrs, children)))
+          None => None
+        }
+      }
+      None => None
+    }
+  }
+}
+
+///|
+/// Parse a JSX opening header at `start` — `<Tag attr={…} …>` or
+/// `<Tag …/>`. Returns the position right after the closing `>` /
+/// `/>`, the tag name, the attribute list, and a `self_close` flag
+/// indicating whether the element terminates immediately. An empty
+/// tag name signals a malformed shape that the caller should treat
+/// as a parse failure.
+fn Parser::parse_jsx_opening_header(
+  self : Parser,
+  start : Int,
+) -> (Int, String, Array[(String, @ast.TsExpr?)], Bool) {
+  let attrs : Array[(String, @ast.TsExpr?)] = []
+  let mut i = start
+  if i >= self.src.length() || self.src[i].to_int().unsafe_to_char() != '<' {
+    return (i, "", attrs, false)
+  }
+  i += 1
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  if i >= self.src.length() {
+    return (i, "", attrs, false)
+  }
+  let first = self.src[i].to_int().unsafe_to_char()
+  if first == '>' || first == '/' {
+    return (i, "", attrs, false)
+  }
+  let name_start = i
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' ||
+      c == '$' ||
+      c == '.' ||
+      c == '-' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  let tag = self.src[name_start:i].to_string()
+  let mut self_close = false
+  // Attributes.
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      i += 1
+      continue
+    }
+    if c == '>' {
+      i += 1
+      break
+    }
+    if c == '/' &&
+      i + 1 < self.src.length() &&
+      self.src[i + 1].to_int().unsafe_to_char() == '>' {
+      self_close = true
+      i += 2
+      break
+    }
+    if c == '{' {
+      // Spread attribute `{...expr}` — capture as ("", Some(expr)).
+      let end = self.skip_jsx_braces_in_source(i)
+      if end > i + 1 {
+        let inner_src = self.src[i + 1:end - 1].to_string()
+        let trimmed = inner_src.trim()
+        if trimmed.length() > 0 && trimmed.has_prefix("...") {
+          let payload_str = trimmed[3:].to_string().trim().to_string()
+          let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+          match (try? sub.parse_expr()) {
+            Ok(e) => attrs.push(("", Some(e)))
+            Err(_) => ()
+          }
+        }
+      }
+      i = end
+      continue
+    }
+    // Attribute name.
+    let name_start = i
+    while i < self.src.length() {
+      let nc = self.src[i].to_int().unsafe_to_char()
+      if (nc >= 'a' && nc <= 'z') ||
+        (nc >= 'A' && nc <= 'Z') ||
+        (nc >= '0' && nc <= '9') ||
+        nc == '_' ||
+        nc == '$' ||
+        nc == '-' ||
+        nc == ':' {
+        i += 1
+      } else {
+        break
+      }
+    }
+    if i == name_start {
+      break
+    }
+    let attr_name = self.src[name_start:i].to_string()
+    while i < self.src.length() {
+      let wc = self.src[i].to_int().unsafe_to_char()
+      if wc == ' ' || wc == '\t' || wc == '\n' || wc == '\r' {
+        i += 1
+      } else {
+        break
+      }
+    }
+    if i < self.src.length() && self.src[i].to_int().unsafe_to_char() == '=' {
+      i += 1
+      while i < self.src.length() {
+        let wc = self.src[i].to_int().unsafe_to_char()
+        if wc == ' ' || wc == '\t' || wc == '\n' || wc == '\r' {
+          i += 1
+        } else {
+          break
+        }
+      }
+      if i < self.src.length() {
+        let vc = self.src[i].to_int().unsafe_to_char()
+        if vc == '{' {
+          let end = self.skip_jsx_braces_in_source(i)
+          let inner_src = self.src[i + 1:end - 1].to_string()
+          let trimmed = inner_src.trim()
+          if trimmed.length() > 0 {
+            let payload_str = if trimmed.has_prefix("...") {
+              trimmed[3:].to_string().trim().to_string()
+            } else {
+              trimmed.to_string()
+            }
+            let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+            match (try? sub.parse_expr()) {
+              Ok(e) => attrs.push((attr_name, Some(e)))
+              Err(_) => attrs.push((attr_name, None))
+            }
+          } else {
+            attrs.push((attr_name, None))
+          }
+          i = end
+        } else if vc == '"' || vc == '\'' {
+          let quote = vc
+          let str_start = i + 1
+          i += 1
+          while i < self.src.length() &&
+                self.src[i].to_int().unsafe_to_char() != quote {
+            i += 1
+          }
+          let raw = self.src[str_start:i].to_string()
+          attrs.push((attr_name, Some(@ast.TsExpr::StringLit(raw))))
+          if i < self.src.length() {
+            i += 1
+          }
+        } else {
+          attrs.push((attr_name, None))
+        }
+      } else {
+        attrs.push((attr_name, None))
+      }
+    } else {
+      attrs.push((attr_name, None))
+    }
+  }
+  (i, tag, attrs, self_close)
+}
+
+///|
+/// Parse JSX children starting at `start` until we encounter the
+/// closing tag matching `closing_tag` (or `</>` when `closing_tag` is
+/// empty, indicating a fragment). Returns the position of the closing
+/// `<` and the assembled children list. `None` on malformed input.
+fn Parser::parse_jsx_children(
+  self : Parser,
+  start : Int,
+  closing_tag : String,
+) -> (Int, Array[@ast.TsExpr])? {
+  let children : Array[@ast.TsExpr] = []
+  let mut i = start
+  let mut text_start = i
+  let flush_text = fn(end_idx) {
+    if end_idx > text_start {
+      let raw = self.src[text_start:end_idx].to_string()
+      let trimmed = raw.trim()
+      if trimmed.length() > 0 {
+        children.push(@ast.TsExpr::StringLit(raw))
+      }
+    }
+  }
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == '<' {
+      // Closing tag?
+      if i + 1 < self.src.length() &&
+        self.src[i + 1].to_int().unsafe_to_char() == '/' {
+        flush_text(i)
+        return Some((i, children))
+      }
+      // Nested element.
+      flush_text(i)
+      match self.parse_jsx_element_at_source(i) {
+        Some((after, element)) => {
+          children.push(element)
+          i = after
+          text_start = i
+        }
+        None => return None
+      }
+      continue
+    }
+    if c == '{' {
+      flush_text(i)
+      let end = self.skip_jsx_braces_in_source(i)
+      let inner_src = self.src[i + 1:end - 1].to_string()
+      let trimmed = inner_src.trim()
+      if trimmed.length() > 0 {
+        let payload_str = if trimmed.has_prefix("...") {
+          trimmed[3:].to_string().trim().to_string()
+        } else {
+          trimmed.to_string()
+        }
+        let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+        match (try? sub.parse_expr()) {
+          Ok(e) => children.push(e)
+          Err(_) => ()
+        }
+      }
+      i = end
+      text_start = i
+      continue
+    }
+    i += 1
+  }
+  let _ = closing_tag
+  // Reached EOF without finding a closing tag — malformed.
+  None
+}
+
+///|
+/// Consume `</tag>` starting at position `start`. Returns the position
+/// right after `>` on success, `None` if the source doesn't match.
+fn Parser::skip_jsx_closing_tag(
+  self : Parser,
+  start : Int,
+  tag : String,
+) -> Int? {
+  let mut i = start
+  if i + 1 >= self.src.length() ||
+    self.src[i].to_int().unsafe_to_char() != '<' ||
+    self.src[i + 1].to_int().unsafe_to_char() != '/' {
+    return None
+  }
+  i += 2
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  let name_start = i
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' ||
+      c == '$' ||
+      c == '.' ||
+      c == '-' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  let closing_name = self.src[name_start:i].to_string()
+  if closing_name != tag {
+    return None
+  }
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  if i < self.src.length() && self.src[i].to_int().unsafe_to_char() == '>' {
+    Some(i + 1)
+  } else {
+    None
+  }
 }
 
 ///|
@@ -1818,8 +2560,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       } else if !self.allow_jsx {
         self.parse_angle_bracket_type_assertion()
       } else if self.is_jsx_element_start() {
-        self.skip_jsx_element()
-        Var("__jsx__")
+        self.parse_jsx_element_expr()
       } else {
         raise ParseError("Unexpected token: Lt")
       }
@@ -2053,17 +2794,21 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       }
       Var(mangled)
     }
-    LParen =>
-      if self.try_skip_parenthesized_jsx_expr() {
-        Var("__jsx__")
+    LParen => {
+      let (paren_jsx, paren_embeds) = self.try_parse_parenthesized_jsx_expr()
+      if paren_jsx {
+        // Parenthesised-JSX fallback: skip tag / attr extraction since
+        // the existing skipper doesn't preserve start-positions. The
+        // checker still recurses into the embedded sub-expressions.
+        @ast.TsExpr::JsxElement("", [], paren_embeds)
         // functioncheck
       } else if self.peek_at(1).kind == Lt {
         let temp = { ..self, pos: self.pos + 1 }
         if temp.is_jsx_element_start() {
-          temp.skip_jsx_element()
+          let jsx_expr = temp.parse_jsx_element_expr()
           if temp.check(RParen) {
             self.pos = temp.pos + 1
-            Var("__jsx__")
+            jsx_expr
           } else if self.is_arrow_function() {
             // function: (params) => body
             let _ = self.advance() // (
@@ -2212,6 +2957,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         // regularexpression
         self.parse_parenthesized_expr()
       }
+    }
     LBracket => {
       // arrayliteral: [1, 2, 3]
       let _ = self.advance()

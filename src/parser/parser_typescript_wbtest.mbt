@@ -716,10 +716,9 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
     "conformance corpus: total=\{total} parsed=\{parsed} checked=\{checked}",
   )
   // 70 % parse-success floor leaves room for parser-error-recovery test
-  // cases without masking real regressions. (Most of the parse failures
-  // on this corpus correspond to TS files intentionally exercising
-  // syntax errors — `*Errors.ts`, `*Negative.ts`, etc., or experimental
-  // features like ES2023 `using` declarations.)
+  // cases without masking real regressions. (Almost all of the parse
+  // failures on this corpus correspond to TS files intentionally
+  // exercising syntax errors — `*Errors.ts`, `*Negative.ts`, etc.)
   if parsed * 100 < total * 70 {
     for f in parse_failures {
       println("PARSE FAIL " + f)

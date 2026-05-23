@@ -53,28 +53,42 @@ fn Resolver::empty() -> Resolver {
 ///|
 fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
   let r = Resolver::empty()
+  Resolver::ingest_module(r, module_, "")
+  r
+}
+
+///|
+/// Register the declarations of `module_` into `r`, prefixing every
+/// name with `prefix` (e.g. `"Layout."`). Recurses into nested
+/// namespaces so `namespace Layout { export function Header(...) }` is
+/// reachable as `Layout.Header` for member-expression JSX tags.
+fn Resolver::ingest_module(
+  r : Resolver,
+  module_ : @ast.TsModule,
+  prefix : String,
+) -> Unit {
   for i in module_.interfaces {
-    r.interfaces[i.name] = i
+    r.interfaces[prefix + i.name] = i
   }
   for c in module_.classes {
-    r.classes[c.name] = c
+    r.classes[prefix + c.name] = c
   }
   for ta in module_.type_aliases {
-    r.type_aliases[ta.name] = ta
+    r.type_aliases[prefix + ta.name] = ta
   }
   for v in module_.values {
-    r.globals[v.name] = v.type_
+    r.globals[prefix + v.name] = v.type_
   }
   for imp in module_.imports {
     let param_types : Array[@ast.TsType] = []
     for p in imp.params {
       param_types.push(p.1)
     }
-    r.globals[imp.name] = @ast.TsType::Func(param_types, imp.return_type)
+    r.globals[prefix + imp.name] = @ast.TsType::Func(param_types, imp.return_type)
     // Also expose type parameters so generic-call inference picks up
     // `declare function f<T>(...)` imports — without this the inference
     // path skipped imports entirely.
-    r.func_type_params[imp.name] = imp.type_params
+    r.func_type_params[prefix + imp.name] = imp.type_params
     // Synthesize a minimal `TsParam` list (names only) so the rich-
     // signature path used by `apply_type_predicate_narrowing` can map
     // the predicate's parameter name to an argument index.
@@ -88,7 +102,7 @@ fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
         default: None,
       })
     }
-    r.signatures[imp.name] = synth_params
+    r.signatures[prefix + imp.name] = synth_params
   }
   for f in module_.funcs {
     let param_types : Array[@ast.TsType] = []
@@ -98,11 +112,13 @@ fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
     // Async functions expose `Promise<R>` to callers even when the body's
     // declared `return_type` is the un-wrapped `R`.
     let ret = wrap_async_return(f.is_async, f.return_type)
-    r.globals[f.name] = @ast.TsType::Func(param_types, ret)
-    r.signatures[f.name] = f.params
-    r.func_type_params[f.name] = f.type_params
+    r.globals[prefix + f.name] = @ast.TsType::Func(param_types, ret)
+    r.signatures[prefix + f.name] = f.params
+    r.func_type_params[prefix + f.name] = f.type_params
   }
-  r
+  for ns in module_.namespaces {
+    Resolver::ingest_module(r, ns.module_, prefix + ns.name + ".")
+  }
 }
 
 ///|
@@ -1720,6 +1736,11 @@ fn infer_expr(
       let inner_ty = infer_expr(env, resolver, inner)
       narrow_union(inner_ty, @ast.TsType::Undefined)
     }
+    // JSX element / fragment. The value itself is opaque at the type
+    // level (we don't model React's `ReactNode` / `JSX.Element`), so
+    // return `Any`. The embedded `{expr}` sub-expressions are walked
+    // by `check_call_args_in_expr` for diagnostic recursion.
+    JsxElement(_, _, _) => @ast.TsType::Any
   }
 }
 
@@ -2144,6 +2165,311 @@ fn check_array_lit_against_tuple(
 /// Excess literal fields (not declared on the target) and missing required
 /// fields are reported individually so the diagnostic points at the
 /// specific divergence rather than the whole literal.
+///|
+/// Validate a JSX element's attributes against the receiving component's
+/// props. Recognised receiver shapes:
+///
+///   - lower-case HTML tags (`<div>` etc.) — skipped; we don't model
+///     the global JSX intrinsic table.
+///   - empty tag (fragment `<>…</>`) — skipped.
+///   - dotted tag (`<Foo.Bar/>`) — skipped (member access not modelled).
+///   - a known top-level function whose single parameter is a Props
+///     interface / object type — each attribute is validated against
+///     the corresponding prop's declared type, missing required props
+///     are flagged, and excess props surface as "does not exist on
+///     target type".
+///|
+/// Synthesise a TS type for a JSX element's children list. Used by
+/// `check_jsx_attrs` to validate the synthesised value against the
+/// component's declared `children` prop.
+///
+///   0 children → `Undefined`
+///   1 child   → that child's inferred type
+///   2+ children → `Array<union-of-child-types>`
+///
+/// JSX nested elements infer as `Any` (`JsxElement(_, _, _)` → Any),
+/// so a component declaring `children: SomeElement` won't get strict
+/// element-shape narrowing yet — but the assignability check still
+/// surfaces obvious mismatches like `children: string` vs a numeric
+/// child.
+///|
+/// Widen a value's literal type to its base — `"hi"` → `string`,
+/// `1` → `number`, `true` → `boolean`. Used by JSX generic inference
+/// so type parameters don't collapse to a too-narrow literal type the
+/// user clearly didn't intend.
+fn widen_literal(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Literal(_) => @ast.TsType::String_
+    NumberLiteral(_) => @ast.TsType::Number
+    BigIntLiteral(_) => @ast.TsType::BigInt
+    BooleanLiteral(_) => @ast.TsType::Boolean
+    Array(elem) => @ast.TsType::Array(widen_literal(elem))
+    Tuple(items) => {
+      let widened : Array[@ast.TsType] = []
+      for it in items {
+        widened.push(widen_literal(it))
+      }
+      @ast.TsType::Tuple(widened)
+    }
+    _ => t
+  }
+}
+
+///|
+fn synthesize_children_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  children : Array[@ast.TsExpr],
+) -> @ast.TsType {
+  if children.length() == 0 {
+    return @ast.TsType::Undefined
+  }
+  if children.length() == 1 {
+    return infer_expr(env, resolver, children[0])
+  }
+  let parts : Array[@ast.TsType] = []
+  for c in children {
+    parts.push(infer_expr(env, resolver, c))
+  }
+  // Dedup obviously-identical parts so the synthesised union stays
+  // readable in diagnostics.
+  let dedup : Array[@ast.TsType] = []
+  for p in parts {
+    let mut already = false
+    for existing in dedup {
+      if equivalent(p, existing) {
+        already = true
+        break
+      }
+    }
+    if !already {
+      dedup.push(p)
+    }
+  }
+  let elem = if dedup.length() == 1 {
+    dedup[0]
+  } else {
+    @ast.TsType::Union(dedup)
+  }
+  @ast.TsType::Array(elem)
+}
+
+///|
+fn check_jsx_attrs(
+  env : ExprEnv,
+  tag : String,
+  attrs : Array[(String, @ast.TsExpr?)],
+  children : Array[@ast.TsExpr],
+  ctx : CheckCtx,
+) -> Unit {
+  if tag == "" {
+    return
+  }
+  // Lower-case HTML element tags — out of scope for now.
+  if tag.length() > 0 {
+    let first = tag[0].to_int().unsafe_to_char()
+    if first >= 'a' && first <= 'z' {
+      return
+    }
+  }
+  // Dotted member-expression tags (`<Layout.Header/>`) are resolved
+  // against namespaces ingested with `prefix + name` keys; if the
+  // resolver doesn't have the dotted name registered we fall through
+  // to the standard "no signature" bail later.
+  // Resolve the component as a top-level function and pull out its
+  // single parameter's type. Component signatures we recognise:
+  //
+  //   function Comp(props: { foo: number }): JSX.Element
+  //   function Comp(props: Props): JSX.Element
+  let raw_props : @ast.TsType? = match ctx.resolver.signatures.get(tag) {
+    Some(params) if params.length() == 1 => Some(params[0].type_)
+    _ => None
+  }
+  let raw_props_ty = match raw_props {
+    Some(t) => t
+    None => return
+  }
+  // Generic-component inference: when the component declares type
+  // parameters, unify each supplied attribute's value type against the
+  // declared prop's type before per-attribute checks, then substitute
+  // the bindings into the props shape so downstream lookups see the
+  // instantiated form.
+  let type_params = match ctx.resolver.func_type_params.get(tag) {
+    Some(tps) => tps
+    None => []
+  }
+  let props = if type_params.length() > 0 {
+    let bindings : Map[String, @ast.TsType] = {}
+    for tp in type_params {
+      bindings[tp] = @ast.TsType::Any
+    }
+    for entry in attrs {
+      let name = entry.0
+      match entry.1 {
+        Some(value) =>
+          if name == "" {
+            // Spread: unify each overlapping field with the props.
+            let spread_ty = infer_expr(env, ctx.resolver, value)
+            let spread_fields = collect_declared_fields(spread_ty, ctx.resolver)
+            for sf in spread_fields {
+              match ctx.resolver.lookup_field(raw_props_ty, sf.0) {
+                Some(formal) =>
+                  infer_param_bindings(
+                    type_params, formal, widen_literal(sf.1), bindings,
+                  )
+                None => ()
+              }
+            }
+          } else {
+            match ctx.resolver.lookup_field(raw_props_ty, name) {
+              Some(formal) => {
+                let actual = infer_expr(env, ctx.resolver, value)
+                // JSX inference widens literal types (`"hi"` → `string`,
+                // `1` → `number`) so a single attribute doesn't lock T
+                // to a narrow literal value the user clearly didn't
+                // intend. Matches TS's contextual widening rule.
+                infer_param_bindings(type_params, formal, widen_literal(actual), bindings)
+              }
+              None => ()
+            }
+          }
+        None => ()
+      }
+    }
+    substitute_params(raw_props_ty, bindings)
+  } else {
+    raw_props_ty
+  }
+  // Per-attribute type check. Track the fields supplied by `{...spread}`
+  // entries so the missing-required pass below treats them as provided.
+  // `key` and `ref` are reserved JSX attributes — React intercepts them
+  // before they reach the component, so they aren't validated against
+  // the declared props.
+  let spread_provided : Map[String, Bool] = {}
+  for entry in attrs {
+    let name = entry.0
+    if name == "key" || name == "ref" {
+      continue
+    }
+    match entry.1 {
+      Some(value) =>
+        if name == "" {
+          // Spread attribute: validate each overlapping field type and
+          // record the names it contributes.
+          let spread_ty = infer_expr(env, ctx.resolver, value)
+          let spread_fields = collect_declared_fields(spread_ty, ctx.resolver)
+          for sf in spread_fields {
+            spread_provided[sf.0] = true
+            match ctx.resolver.lookup_field(props, sf.0) {
+              Some(declared) =>
+                if is_checkable(declared) &&
+                  is_checkable(sf.1) &&
+                  !is_assignable_to(sf.1, declared) {
+                  record(
+                    ctx,
+                    "<\{tag}> spread `\{sf.0}`",
+                    "expected `\{type_display(declared)}` but got `\{type_display(sf.1)}`",
+                  )
+                }
+              None => ()
+            }
+          }
+        } else {
+          match ctx.resolver.lookup_field(props, name) {
+            Some(declared) =>
+              check_expr_against(
+                env,
+                value,
+                declared,
+                ctx,
+                "<\{tag}> attr `\{name}`",
+              )
+            None =>
+              record(
+                ctx,
+                "<\{tag}> attr `\{name}`",
+                "property `\{name}` does not exist on target type",
+              )
+          }
+        }
+      None =>
+        // Boolean attribute (`<Foo bar />`) implies `bar = true`.
+        match ctx.resolver.lookup_field(props, name) {
+          Some(_) => ()
+          None =>
+            record(
+              ctx,
+              "<\{tag}> attr `\{name}`",
+              "property `\{name}` does not exist on target type",
+            )
+        }
+    }
+  }
+  // Missing-required check. JSX children populate the synthetic
+  // `children` prop, so include it in `provided` when at least one
+  // child is present.
+  let provided : Map[String, Bool] = {}
+  for entry in attrs {
+    if entry.0 != "" {
+      provided[entry.0] = true
+    }
+  }
+  for k in spread_provided.keys() {
+    provided[k] = true
+  }
+  if children.length() > 0 {
+    provided["children"] = true
+  }
+  // Children-prop type check: when the props shape declares a
+  // `children` field with a non-`Any` type, synthesise the children
+  // value (single child or array union) and validate it.
+  match ctx.resolver.lookup_field(props, "children") {
+    Some(children_ty) =>
+      if is_checkable(children_ty) {
+        let synth = synthesize_children_type(env, ctx.resolver, children)
+        if is_checkable(synth) && !is_assignable_to(synth, children_ty) {
+          record(
+            ctx,
+            "<\{tag}> children",
+            "expected `\{type_display(children_ty)}` but got `\{type_display(synth)}`",
+          )
+        }
+      }
+    None =>
+      if children.length() > 0 {
+        // The component has no `children` prop but the JSX element
+        // supplied some. Mirror TS's "Property 'children' does not
+        // exist" diagnostic.
+        let declared_fields = collect_declared_fields(props, ctx.resolver)
+        let has_children = declared_fields.iter().any(fn(d) { d.0 == "children" })
+        if !has_children && declared_fields.length() > 0 {
+          record(
+            ctx,
+            "<\{tag}> children",
+            "component does not declare a `children` prop",
+          )
+        }
+      }
+  }
+  let declared_fields = collect_declared_fields(props, ctx.resolver)
+  for d in declared_fields {
+    let n = d.0
+    let ty = d.1
+    if provided.contains(n) {
+      continue
+    }
+    if is_assignable_to(@ast.TsType::Undefined, ty) {
+      continue
+    }
+    record(
+      ctx,
+      "<\{tag}> missing prop `\{n}`",
+      "property `\{n}` is required by `\{type_display(props)}`",
+    )
+  }
+}
+
+///|
 fn check_object_lit_against_target(
   env : ExprEnv,
   entries : Array[(String, @ast.TsExpr)],
@@ -4343,6 +4669,97 @@ fn check_call_args_in_expr(
       // `x satisfies T` — verify the operand is assignable to `T`.
       check_expr_against(env, inner, ty, ctx, "satisfies")
     }
+    // JSX element / fragment: recurse into every attribute value and
+    // child sub-expression so call-site mismatches inside JSX braces
+    // are reported. When the tag resolves to a known component (a
+    // top-level function whose only parameter is a Props interface or
+    // object type), also run per-attribute type checks against the
+    // declared prop types.
+    JsxElement(tag, attrs, children) => {
+      check_jsx_attrs(env, tag, attrs, children, ctx)
+      for entry in attrs {
+        match entry.1 {
+          Some(value) => check_call_args_in_expr(env, value, ctx)
+          None => ()
+        }
+      }
+      // Each child entry is a `TsExpr` — text segments are wrapped as
+      // `StringLit(...)`, JSX expressions are parsed expressions, and
+      // nested elements are themselves `JsxElement(...)`. Recursing
+      // through `check_call_args_in_expr` handles all three uniformly
+      // (text literals walk through as no-op).
+      for c in children {
+        check_call_args_in_expr(env, c, ctx)
+        // React `key` rule: when a child is `xs.map(fn)` and `fn`
+        // returns a JSX element, that element needs a `key` attr.
+        check_jsx_key_in_map(c, ctx)
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+/// React `key`-in-iteration rule: when a JSX child is the result of
+/// `xs.map(fn)` and the callback returns a JSX element, that element
+/// must declare a `key` attribute. The check walks the immediate child
+/// expression and records `<Tag>` missing `key` diagnostics; deeply
+/// nested misses are left to the recursive `check_call_args_in_expr`.
+fn check_jsx_key_in_map(child : @ast.TsExpr, ctx : CheckCtx) -> Unit {
+  match child {
+    MethodCall(_, method, args) =>
+      if method == "map" && args.length() >= 1 {
+        walk_map_callback_for_key(args[0], ctx)
+      }
+    CallExpr(callee, args) =>
+      match callee {
+        PropAccess(_, method) =>
+          if method == "map" && args.length() >= 1 {
+            walk_map_callback_for_key(args[0], ctx)
+          }
+        _ => ()
+      }
+    _ => ()
+  }
+}
+
+///|
+fn walk_map_callback_for_key(callback : @ast.TsExpr, ctx : CheckCtx) -> Unit {
+  match callback {
+    ArrowFunc(_, _, ArrowExpr(body), _) => check_jsx_expr_has_key(body, ctx)
+    ArrowFunc(_, _, ArrowBlock(block), _) =>
+      for stmt in block.stmts {
+        match stmt {
+          Return(Some(e)) => check_jsx_expr_has_key(e, ctx)
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+}
+
+///|
+fn check_jsx_expr_has_key(expr : @ast.TsExpr, ctx : CheckCtx) -> Unit {
+  match expr {
+    JsxElement(tag, attrs, _) =>
+      // Fragments (empty tag) can't take a key in plain JSX form; skip.
+      if tag != "" {
+        let has_key = attrs.iter().any(fn(a) { a.0 == "key" })
+        if !has_key {
+          record(
+            ctx,
+            "<\{tag}> in `.map()`",
+            "missing required `key` prop for list element",
+          )
+        }
+      }
+    // `cond ? <A/> : <B/>` — recurse into both branches.
+    Cond(_, then_e, else_e) => {
+      check_jsx_expr_has_key(then_e, ctx)
+      check_jsx_expr_has_key(else_e, ctx)
+    }
+    // `cond && <A/>`.
+    BinOp(And, _, right) => check_jsx_expr_has_key(right, ctx)
     _ => ()
   }
 }
@@ -4490,6 +4907,42 @@ pub fn check_module_function_bodies(
   for func in module_.funcs {
     for issue in check_function_body_with(func, resolver) {
       all.push(issue)
+    }
+  }
+  // Class method bodies — when the parser supplied a body, walk it the
+  // same way top-level functions are walked. Synthesise a `TsFunc` so
+  // the existing checker pipeline can run unchanged. The synthetic
+  // function name embeds the class + method names so any reported
+  // issues point at the source location.
+  for cls in module_.classes {
+    for method in cls.methods {
+      match method.body {
+        Some(body) => {
+          let params : Array[@ast.TsParam] = []
+          for p in method.params {
+            params.push({
+              name: p.0,
+              binding: None,
+              is_rest: false,
+              type_: p.1,
+              default: None,
+            })
+          }
+          let synth : @ast.TsFunc = {
+            name: cls.name + "." + method.name,
+            type_params: method.type_params,
+            params,
+            return_type: method.return_type,
+            body,
+            is_generator: false,
+            is_async: false,
+          }
+          for issue in check_function_body_with(synth, resolver) {
+            all.push(issue)
+          }
+        }
+        None => ()
+      }
     }
   }
   all

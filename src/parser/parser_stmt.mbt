@@ -948,8 +948,10 @@ fn Parser::is_using_declaration_start(self : Parser) -> Bool {
   if self.peek_at(1).has_newline_before {
     return false
   }
+  // Accept contextual keywords (`of`, `from`, `as`, `async`) as binding
+  // names too — TS allows `using of = ...` etc.
   match self.peek_at(1).kind {
-    Ident(_) | LBrace | LBracket => true
+    Ident(_) | LBrace | LBracket | Of | From | As => true
     _ => false
   }
 }
@@ -972,7 +974,7 @@ fn Parser::is_await_using_declaration_start(self : Parser) -> Bool {
     return false
   }
   match self.peek_at(2).kind {
-    Ident(_) | LBrace | LBracket => true
+    Ident(_) | LBrace | LBracket | Of | From | As => true
     _ => false
   }
 }

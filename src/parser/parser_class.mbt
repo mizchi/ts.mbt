@@ -103,6 +103,11 @@ fn build_runtime_class_decl(
                 params,
                 return_type: func.return_type,
                 is_static,
+                body: if func.body.stmts.length() == 0 {
+                  None
+                } else {
+                  Some(func.body)
+                },
               })
             }
           }

@@ -182,6 +182,23 @@ pub(all) enum TsExpr {
   // shape (`PropAccess` / `MethodCall` / `IndexAccess` / `CallExpr`),
   // and at use sites the result type is widened with `undefined`.
   OptionalChain(TsExpr)
+
+  // JSX element / fragment. Carries:
+  //   - the tag name (`""` for fragments `<>…</>`; dotted for member
+  //     refs like `<Foo.Bar/>`);
+  //   - the attribute list as `(name, value?)` pairs — `value` is
+  //     `None` for boolean attrs (`<Foo bar />`) and string-literal
+  //     attrs are wrapped as `StringLit(...)`;
+  //   - the children list — one entry per logical child. Each child
+  //     is encoded as a `TsExpr`:
+  //       * `StringLit(text)` for the text segments between tags;
+  //       * the parsed `TsExpr` for `{expr}` blocks;
+  //       * a nested `JsxElement(...)` for inline JSX.
+  //
+  // The checker recurses into every child expression and (when the
+  // tag resolves to a known component or HTML element) validates the
+  // attribute values against the receiving prop / element type.
+  JsxElement(String, Array[(String, TsExpr?)], Array[TsExpr])
 } derive(Debug)
 
 ///|
@@ -467,6 +484,11 @@ pub(all) struct TsClassMethodDecl {
   params : Array[(String, TsType)]
   return_type : TsType
   is_static : Bool
+  // Method body, when the source supplied one. `None` for ambient class
+  // declarations (`declare class`), abstract methods, and overload
+  // signatures. The expression checker walks the body when present so
+  // method internals get the same coverage as top-level functions.
+  body : TsBlock?
 } derive(Debug)
 
 ///|

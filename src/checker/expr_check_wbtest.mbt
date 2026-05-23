@@ -3893,3 +3893,746 @@ test "expr_check: Omit<T, K> flags excess listed-key field" {
   }
   assert_true(found)
 }
+
+// ---------------------------------------------------------------------------
+// Round 37: class method body checking. Method bodies are now stored on
+// `TsClassMethodDecl.body` and `check_module_function_bodies` walks them
+// alongside top-level functions.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: class method body flags wrong return type" {
+  let src =
+    #|class Greeter {
+    #|  hello(name: string): number {
+    #|    return name;
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("Greeter.hello") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: class method body with correct return passes" {
+  let src =
+    #|class Greeter {
+    #|  hello(name: string): string {
+    #|    return name;
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: class method body with bad call site is flagged" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|class C {
+    #|  m(): void {
+    #|    takesString(42);
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("C.m") &&
+      i.message.contains("string") &&
+      i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: declare-class method has no body to check" {
+  // Ambient class declarations don't carry a body; the checker
+  // shouldn't crash or invent issues.
+  let src =
+    #|declare class B {
+    #|  hello(name: string): string;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 38: minimal JSX support. `<Tag attr={expr}>{child}</Tag>` parses
+// into `JsxElement(embedded)` whose payload is the list of `{…}` sub-
+// expressions; the checker recurses into each so call-site mismatches
+// inside JSX braces surface as usual.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: bad call inside JSX brace surfaces" {
+  // `takesString(42)` is wrong; the call sits inside a JSX expression
+  // child but the embedded-expression walker should still flag it.
+  let src =
+    #|function takesString(s: string): void {}
+    #|function comp(): void {
+    #|  const _ = <div>{takesString(42)}</div>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: bad call inside JSX attribute surfaces" {
+  let src =
+    #|function takesNumber(n: number): void {}
+    #|function comp(): void {
+    #|  const _ = <div className={takesNumber("x")}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX with no embedded calls produces no issues" {
+  let src =
+    #|function comp(): void {
+    #|  const _ = <div className="x">hello</div>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX fragment with embedded expressions" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|function comp(): void {
+    #|  const _ = <>{takesString(99)}</>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: nested JSX surfaces inner-tag embedded calls" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|function comp(): void {
+    #|  const _ = <div><span>{takesString(7)}</span></div>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+// ---------------------------------------------------------------------------
+// Round 39: JSX component prop validation. `<Comp foo={42}>` where
+// `Comp` is declared as `function Comp(props: Props): … {…}` now
+// type-checks attribute values against the corresponding prop types
+// and flags missing required / excess props.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX attribute well-typed passes" {
+  let src =
+    #|interface Props { name: string }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX attribute wrong type is flagged" {
+  let src =
+    #|interface Props { name: string }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name={42}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Greet> attr `name`") &&
+      i.message.contains("string") &&
+      i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX missing required prop is flagged" {
+  let src =
+    #|interface Props { name: string; age: number }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("missing prop `age`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX optional prop can be omitted" {
+  let src =
+    #|interface Props { name: string; age?: number }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX excess prop is flagged" {
+  let src =
+    #|interface Props { name: string }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi" bogus="x"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Greet> attr `bogus`") &&
+      i.message.contains("does not exist") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX HTML tag skips prop validation" {
+  // Lower-case tags are HTML intrinsics; we don't have a JSX
+  // intrinsic-element table, so attribute names aren't validated.
+  let src =
+    #|function comp(): void {
+    #|  const _ = <div className="x" anyAttr={42}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX boolean attribute satisfies a boolean prop" {
+  let src =
+    #|interface Props { disabled?: boolean }
+    #|function Button(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Button disabled/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 40: JSX children are tracked structurally — text, embedded
+// `{expr}` blocks, and nested elements each become a child entry. The
+// checker recurses through all of them.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX text children pass through cleanly" {
+  // Component declares an optional `children` prop, so the text child
+  // is accepted.
+  let src =
+    #|interface Props { name: string; children?: any }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi">Hello, world!</Greet>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: bad call inside multi-child JSX surfaces" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|function Box(props: { children?: any }): void {}
+    #|function comp(): void {
+    #|  const _ = <Box>text {takesString(7)} more</Box>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: deeply nested JSX preserves prop validation" {
+  // Outer Wrap takes no props; inner Greet needs `name: string`.
+  let src =
+    #|function Wrap(props: { children?: any }): void {}
+    #|function Greet(props: { name: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Wrap><Wrap><Greet name={42}/></Wrap></Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Greet> attr `name`") &&
+      i.message.contains("string") &&
+      i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: nested HTML inside component children skips inner validation" {
+  let src =
+    #|function Wrap(props: { children?: any }): void {}
+    #|function comp(): void {
+    #|  const _ = <Wrap><div className="x">hello</div></Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 41: JSX children prop type validation. The synthetic
+// `children` value is checked against the receiving component's
+// declared `children` prop type (when one is present).
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX children string prop accepts a text child" {
+  let src =
+    #|function Caption(props: { children: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Caption>Hello!</Caption>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX children string prop rejects a numeric child" {
+  let src =
+    #|function Caption(props: { children: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Caption>{42}</Caption>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Caption> children") &&
+      i.message.contains("string") &&
+      i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX required children prop flagged when missing" {
+  let src =
+    #|function Caption(props: { children: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Caption/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("missing prop `children`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX children supplied to component without children prop" {
+  let src =
+    #|function Atom(props: { name: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Atom name="x">extra</Atom>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Atom> children") &&
+      i.message.contains("does not declare") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX children any prop accepts anything" {
+  let src =
+    #|function Box(props: { children: any }): void {}
+    #|function comp(): void {
+    #|  const _ = <Box>text and {123} more</Box>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 42: generic JSX components. `<List<T>/>` instantiates T from the
+// supplied attribute types, mirroring the generic-call inference path
+// used for top-level functions.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: generic component infers T from items attribute" {
+  // T resolves to `number` from `items={[1,2,3]}`, so the synthetic
+  // `select` callback's parameter is also `number`. The component
+  // body itself isn't checked here; we focus on the call site.
+  let src =
+    #|function List<T>(props: { items: T[]; select: (item: T) => void }): void {}
+    #|function comp(): void {
+    #|  const _ = <List items={[1, 2, 3]} select={(n: number) => {}}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic component flags inconsistent T usages" {
+  // T resolves to `number` from `left`; `right={\"x\"}` (string) then
+  // fails against the substituted `T = number` formal.
+  let src =
+    #|function Pair<T>(props: { left: T; right: T }): void {}
+    #|function comp(): void {
+    #|  const _ = <Pair left={1} right="x"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Pair> attr `right`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic component picks up T from required attribute" {
+  // T resolves to `string` from `value`; children also `string` after
+  // substitution so the text child is accepted.
+  let src =
+    #|function Wrap<T>(props: { value: T; children: T }): void {}
+    #|function comp(): void {
+    #|  const _ = <Wrap value="hi">other</Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic component children prop checked after substitution" {
+  // T resolves to `number` from `value`, so the `children` prop is
+  // `number` and the string child mismatches.
+  let src =
+    #|function Wrap<T>(props: { value: T; children: T }): void {}
+    #|function comp(): void {
+    #|  const _ = <Wrap value={1}>other</Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Wrap> children") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+// ---------------------------------------------------------------------------
+// Round 43: JSX spread attributes. `<Foo {...props}/>` validates the spread
+// expression's fields against the component's prop shape, contributes to the
+// missing-required check, and feeds generic inference like a normal attribute.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX spread of compatible props passes" {
+  let src =
+    #|interface Props { x: number; y: string }
+    #|function Foo(props: Props): void {}
+    #|function comp(): void {
+    #|  const data: Props = { x: 1, y: "hi" };
+    #|  const _ = <Foo {...data}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX spread of incompatible field flags error" {
+  // `data.x` is a string but `Props.x` is a number — the spread should
+  // flag a per-field mismatch.
+  let src =
+    #|interface Props { x: number; y: string }
+    #|function Foo(props: Props): void {}
+    #|function comp(): void {
+    #|  const data = { x: "no", y: "ok" };
+    #|  const _ = <Foo {...data}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Foo> spread `x`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX spread satisfies missing-required prop" {
+  // The component requires both `x` and `y`; the spread provides them
+  // (no explicit attributes), so no missing-prop diagnostics fire.
+  let src =
+    #|interface Props { x: number; y: string }
+    #|function Foo(props: Props): void {}
+    #|function comp(): void {
+    #|  const data: Props = { x: 1, y: "hi" };
+    #|  const _ = <Foo {...data}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut bad = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Foo> missing prop") {
+      bad = true
+    }
+  }
+  assert_false(bad)
+}
+
+///|
+test "expr_check: JSX spread plus explicit override type-checks" {
+  // `data` supplies `x` and `y`; the explicit `y="bye"` then overrides.
+  // Both forms should pass typing.
+  let src =
+    #|interface Props { x: number; y: string }
+    #|function Foo(props: Props): void {}
+    #|function comp(): void {
+    #|  const data: Props = { x: 1, y: "hi" };
+    #|  const _ = <Foo {...data} y="bye"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX spread feeds generic component inference" {
+  // T is inferred from the spread's `value: string` field; the explicit
+  // children string then matches `T = string`.
+  let src =
+    #|function Wrap<T>(props: { value: T; children: T }): void {}
+    #|function comp(): void {
+    #|  const data = { value: "hi" };
+    #|  const _ = <Wrap {...data}>other</Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 44: reserved JSX attributes `key` and `ref`. React intercepts both
+// before they reach the component, so they should be type-checked at the
+// JSX call site but not validated against the declared props shape.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX key on a component without a key prop is accepted" {
+  let src =
+    #|interface Props { value: number }
+    #|function Item(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Item key="row-1" value={1}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX ref on a component without a ref prop is accepted" {
+  let src =
+    #|interface Props { value: number }
+    #|function Item(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Item ref={null} value={1}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 45: function-as-children (render props). When a component declares
+// `children: (x: T) => U`, the single arrow-function child is synthesised
+// and validated against that callable shape.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: compatible render-prop function child passes" {
+  let src =
+    #|interface Props { children: (n: number) => string }
+    #|function DataLoader(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <DataLoader>{(n: number) => "row " + n}</DataLoader>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX in .map() without key flags warning" {
+  let src =
+    #|interface Props { value: number }
+    #|function Item(props: Props): void {}
+    #|function comp(xs: number[]): void {
+    #|  const _ = <ul>{xs.map((n: number) => <Item value={n}/>)}</ul>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Item> in `.map()`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX member-expression component resolves via namespace" {
+  // `Layout.Header` is registered as a top-level signature so the JSX
+  // attribute check fires against the inner function's props shape.
+  let src =
+    #|namespace Layout {
+    #|  export function Header(props: { title: string }): void {}
+    #|}
+    #|function comp(): void {
+    #|  const _ = <Layout.Header title="hi"/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX member-expression component flags wrong attr type" {
+  let src =
+    #|namespace Layout {
+    #|  export function Header(props: { title: string }): void {}
+    #|}
+    #|function comp(): void {
+    #|  const _ = <Layout.Header title={1}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Layout.Header> attr `title`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX in .map() with key is silent" {
+  let src =
+    #|interface Props { value: number }
+    #|function Item(props: Props): void {}
+    #|function comp(xs: number[]): void {
+    #|  const _ = <ul>{xs.map((n: number) => <Item key={n} value={n}/>)}</ul>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut bad = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("in `.map()`") {
+      bad = true
+    }
+  }
+  assert_false(bad)
+}
+
+///|
+test "expr_check: render-prop child with mismatched arg type flags error" {
+  // The callback declares its argument as `string` but the prop expects
+  // `(n: number) => string`. The arg-type clash should surface.
+  let src =
+    #|interface Props { children: (n: number) => string }
+    #|function DataLoader(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <DataLoader>{(s: string) => s}</DataLoader>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<DataLoader> children") {
+      found = true
+    }
+  }
+  assert_true(found)
+}

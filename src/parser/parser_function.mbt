@@ -1079,6 +1079,56 @@ pub fn Parser::parse_interface(
         let _ = self.advance()
         "null"
       }
+      // Additional reserved words allowed as interface field names —
+      // TS accepts every keyword in property-name position.
+      Interface => {
+        let _ = self.advance()
+        "interface"
+      }
+      Class => {
+        let _ = self.advance()
+        "class"
+      }
+      Const => {
+        let _ = self.advance()
+        "const"
+      }
+      Var => {
+        let _ = self.advance()
+        "var"
+      }
+      Let => {
+        let _ = self.advance()
+        "let"
+      }
+      New => {
+        let _ = self.advance()
+        "new"
+      }
+      Try => {
+        let _ = self.advance()
+        "try"
+      }
+      Catch => {
+        let _ = self.advance()
+        "catch"
+      }
+      Throw => {
+        let _ = self.advance()
+        "throw"
+      }
+      Finally => {
+        let _ = self.advance()
+        "finally"
+      }
+      Extends => {
+        let _ = self.advance()
+        "extends"
+      }
+      Function => {
+        let _ = self.advance()
+        "function"
+      }
       k =>
         raise ParseError("Expected field name at \{self.peek().pos}, got \{k}")
     }
@@ -2056,6 +2106,10 @@ fn Parser::parse_declare_class(
                   params,
                   return_type,
                   is_static,
+                  // Ambient class declarations (`declare class`) and
+                  // interface-style method signatures don't carry a
+                  // body — leave it as `None`.
+                  body: None,
                 })
               }
           }
