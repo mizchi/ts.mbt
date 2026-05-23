@@ -100,6 +100,7 @@ pub(all) struct TsClassPropertyDecl {
   type_ : TsType
   is_static : Bool
   is_readonly : Bool
+  is_accessor : Bool
 } derive(@debug.Debug)
 pub impl Show for TsClassPropertyDecl
 

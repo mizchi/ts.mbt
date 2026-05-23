@@ -1998,6 +1998,7 @@ fn upsert_class_property(
         type_: merged_type,
         is_static: existing.is_static,
         is_readonly: existing.is_readonly && property.is_readonly,
+        is_accessor: false,
       }
       return
     }
@@ -2050,6 +2051,7 @@ fn Parser::parse_declare_class(
     let mut is_static = false
     let mut is_readonly = false
     let mut is_public = true
+    let mut is_accessor = false
     let mut has_modifier = true
     while has_modifier {
       has_modifier = false
@@ -2083,6 +2085,9 @@ fn Parser::parse_declare_class(
           }
           if mod == "readonly" {
             is_readonly = true
+          }
+          if mod == "accessor" {
+            is_accessor = true
           }
           if mod == "private" || mod == "protected" {
             is_public = false
@@ -2139,6 +2144,7 @@ fn Parser::parse_declare_class(
                 type_: return_type,
                 is_static,
                 is_readonly: true,
+                is_accessor: false,
               })
             Some("set") if is_public => {
               let setter_type = if params.length() > 0 {
@@ -2152,6 +2158,7 @@ fn Parser::parse_declare_class(
                 type_: setter_type,
                 is_static,
                 is_readonly: false,
+                is_accessor: false,
               })
             }
             _ =>
@@ -2199,6 +2206,7 @@ fn Parser::parse_declare_class(
           type_: property_type,
           is_static,
           is_readonly,
+          is_accessor,
         })
       _ => ()
     }

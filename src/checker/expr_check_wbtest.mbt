@@ -4672,6 +4672,39 @@ test "expr_check: without asserts call, string|number -> string is flagged" {
 }
 
 ///|
+test "expr_check: namespace+class static-side merge — namespace fn callable" {
+  // `namespace Foo { export function helper(): number }` + `class Foo`
+  // should let `Foo.helper()` resolve through the namespace.
+  let src =
+    #|declare class Foo {
+    #|  instanceMethod(): string;
+    #|}
+    #|declare namespace Foo {
+    #|  function helper(): number;
+    #|}
+    #|function use(): number {
+    #|  return Foo.helper();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: class static method resolves through `ClassName.method`" {
+  let src =
+    #|declare class Counter {
+    #|  static create(): number;
+    #|}
+    #|function use(): number {
+    #|  return Counter.create();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
 test "expr_check: class index signature `[k: string]: T` resolves lookups" {
   // `c.foo` on a class with `[k: string]: number` resolves to `number`.
   let src =

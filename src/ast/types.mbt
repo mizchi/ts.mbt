@@ -501,6 +501,11 @@ pub(all) struct TsClassPropertyDecl {
   type_ : TsType
   is_static : Bool
   is_readonly : Bool
+  // `accessor` field (TC39 stage-3 auto-accessor): `class C { accessor
+  // x: number = 0 }`. Functionally a property with synthesized
+  // getter/setter, so the checker treats it like a normal property
+  // but the flag is retained for downstream tooling.
+  is_accessor : Bool
 } derive(Debug)
 
 ///|

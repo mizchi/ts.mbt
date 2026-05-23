@@ -64,6 +64,7 @@ fn build_runtime_class_decl(
             type_: field_type,
             is_static,
             is_readonly: false,
+            is_accessor: false,
           })
         }
       Method(is_static, Name(method_name), accessor_kind, func) =>
@@ -75,6 +76,7 @@ fn build_runtime_class_decl(
                 type_: func.return_type,
                 is_static,
                 is_readonly: true,
+                is_accessor: false,
               })
             Some("set") => {
               let setter_type = if func.params.length() > 0 {
@@ -87,6 +89,7 @@ fn build_runtime_class_decl(
                 type_: setter_type,
                 is_static,
                 is_readonly: false,
+                is_accessor: false,
               })
             }
             _ => {

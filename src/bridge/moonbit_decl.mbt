@@ -8486,6 +8486,7 @@ fn clone_class_property_in_scope(
     ),
     is_static: class_property.is_static,
     is_readonly: class_property.is_readonly,
+    is_accessor: false,
   }
 }
 

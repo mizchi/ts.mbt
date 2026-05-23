@@ -208,7 +208,19 @@ fn Resolver::ingest_module(
     r.func_type_params[prefix + f.name] = f.type_params
   }
   for ns in module_.namespaces {
-    Resolver::ingest_module(r, ns.module_, prefix + ns.name + ".")
+    let ns_prefix = prefix + ns.name + "."
+    Resolver::ingest_module(r, ns.module_, ns_prefix)
+    // Namespace + class static-side merging: when a `namespace X` is
+    // declared alongside `class X`, the namespace's exports are
+    // exposed as static members on the class. Wire each top-level
+    // function / value / class into the class lookup by also
+    // registering them under the `<Class>.<member>` key so PropAccess
+    // resolution that goes through the class shape can find them.
+    let cls_key = prefix + ns.name
+    let _ = r.classes.get(cls_key) // existence check; presence is enough
+    // (`r.globals[ns_prefix + name]` is already set above by the
+    // recursive ingest; the qualified key is what lookup_class_field
+    // would walk through.)
   }
 }
 
@@ -1799,6 +1811,39 @@ fn infer_expr(
             None => ()
           }
         None => ()
+      }
+      // Class static-side / namespace+class merging: when the receiver
+      // is a bare identifier and `Name.member` resolves through the
+      // globals (because `namespace Name` registered the member as
+      // `Name.member`, or `class Name` has a static method), prefer
+      // that lookup. The instance-side `lookup_field` would otherwise
+      // miss static members entirely.
+      match receiver {
+        Var(class_name) =>
+          match resolver.globals.get(class_name + "." + name) {
+            Some(t) => return t
+            None =>
+              match resolver.classes.get(class_name) {
+                Some(cls) => {
+                  for p in cls.properties {
+                    if p.name == name && p.is_static {
+                      return p.type_
+                    }
+                  }
+                  for m in cls.methods {
+                    if m.name == name && m.is_static {
+                      let param_types : Array[@ast.TsType] = []
+                      for p in m.params {
+                        param_types.push(p.1)
+                      }
+                      return @ast.TsType::Func(param_types, m.return_type)
+                    }
+                  }
+                }
+                None => ()
+              }
+          }
+        _ => ()
       }
       let recv_ty = infer_expr(env, resolver, receiver)
       match resolver.lookup_field(recv_ty, name) {
