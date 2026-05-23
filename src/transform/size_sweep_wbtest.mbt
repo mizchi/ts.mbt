@@ -34,9 +34,10 @@ fn fixture_files() -> Map[String, String] {
     #|}
     #|
   files["utils.ts"] =
+    #|const limits = { minListeners: 1, maxListeners: 1000, defaultListeners: 10 };
     #|export function clampMaxListeners(requested: number): number {
-    #|  if (requested < 1) return 1;
-    #|  if (requested > 1000) return 1000;
+    #|  if (requested < limits.minListeners) return limits.minListeners;
+    #|  if (requested > limits.maxListeners) return limits.maxListeners;
     #|  return requested;
     #|}
     #|export function defaultErrorHandler(error: Error): void {
@@ -157,6 +158,14 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
     auto_reserve: true,
     drop_unused_methods: true,
   })
+  let shaken_inline_immutable = measure(files, {
+    ..BundleOptions::default(),
+    tree_shake: true,
+    mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+    auto_reserve: true,
+    drop_unused_methods: true,
+    inline_immutable: true,
+  })
   println("")
   println("┌──────────────────────────────────────────────┬─────────┬────────────┐")
   println("│ stage                                        │   bytes │  vs. raw   │")
@@ -177,6 +186,7 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
   row("+ property mangle (built-in reserved only)", shaken_full_mangle)
   row("+ auto-reserve (type-aware reserved set)", shaken_auto_reserved)
   row("+ method DCE (drop unused class methods)", shaken_methods_dced)
+  row("+ inline immutable (const → literal)", shaken_inline_immutable)
   println("└──────────────────────────────────────────────┴─────────┴────────────┘")
   // Assertions — each successive optimization must not make output
   // worse. If a refactor regresses, this fails loudly.
@@ -191,4 +201,5 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
   // Method DCE pares unused class methods on top of every other
   // pass; the final stage must be the smallest.
   assert_true(shaken_methods_dced <= shaken_auto_reserved)
+  assert_true(shaken_inline_immutable <= shaken_methods_dced)
 }

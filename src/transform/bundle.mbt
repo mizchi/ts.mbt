@@ -59,6 +59,12 @@ pub(all) struct BundleOptions {
   // tree shaking and before mangling so the mangler doesn't waste a
   // short name on a method that's about to be deleted.
   drop_unused_methods : Bool
+  // When `true`, run the immutability analysis: top-level
+  // `const X = { … }` bindings whose name is only ever read as a
+  // property receiver get their primitive-valued reads substituted
+  // with the literal, and the source decl is dropped if no
+  // references remain.
+  inline_immutable : Bool
 }
 
 ///|
@@ -70,6 +76,7 @@ pub fn BundleOptions::default() -> BundleOptions {
     mangle: None,
     auto_reserve: false,
     drop_unused_methods: false,
+    inline_immutable: false,
   }
 }
 
@@ -232,6 +239,9 @@ pub fn bundle_modules(
   let order = topological_order(modules, entry)
   if opts.tree_shake {
     tree_shake_bundle(modules, entry)
+  }
+  if opts.inline_immutable {
+    inline_immutable_bundle(modules, order)
   }
   if opts.drop_unused_methods {
     drop_unused_methods_bundle(modules, order, opts.mangle)
@@ -515,6 +525,40 @@ fn compute_auto_reserve(
     return base
   }
   auto_reserve_from_bundle(entry_block, all_decls, base)
+}
+
+///|
+/// Run the immutability analysis across every loaded module, inline
+/// primitive property reads, then drop any source `const` decl
+/// whose remaining references are zero. The order matters: inlining
+/// first creates the orphan, the cleanup pass removes it.
+fn inline_immutable_bundle(
+  modules : Map[String, ModuleNode],
+  order : Array[String],
+) -> Unit {
+  let blocks : Array[@ast.TsBlock] = []
+  let paths : Array[String] = []
+  for path in order {
+    match modules.get(path) {
+      Some(n) => {
+        blocks.push(n.block)
+        paths.push(path)
+      }
+      None => ()
+    }
+  }
+  let report = analyze_immutable_consts(blocks)
+  if report.immutable_objects.size() == 0 {
+    return
+  }
+  let inlined = inline_immutable_property_reads(blocks, report)
+  let cleaned = drop_orphan_immutable_decls(inlined, report)
+  for i, p in paths {
+    match modules.get(p) {
+      Some(n) => n.block = cleaned[i]
+      None => ()
+    }
+  }
 }
 
 ///|
