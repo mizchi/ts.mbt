@@ -1124,6 +1124,9 @@ fn is_valid_js_identifier(name : String) -> Bool {
 
 ///|
 fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
+  if f.is_async {
+    e.write("async ")
+  }
   e.write("function")
   if f.is_generator {
     e.write("*")
@@ -1162,7 +1165,6 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   e.write(")")
   e.space()
   emit_block(e, f.body)
-  let _ = f.is_async
 }
 
 ///|
@@ -1173,6 +1175,10 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
 fn strip_internal_prop_marker(name : String) -> String {
   if name.has_prefix("@@define:") {
     name.substring(start=9, end=name.length()).to_string()
+  } else if name.has_prefix("@@get:") {
+    name.substring(start=6, end=name.length()).to_string()
+  } else if name.has_prefix("@@set:") {
+    name.substring(start=6, end=name.length()).to_string()
   } else {
     name
   }

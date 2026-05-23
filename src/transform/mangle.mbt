@@ -260,6 +260,10 @@ let mangler_builtin_reserved_properties : Array[String] = [
   "getPrototypeOf", "setPrototypeOf", "is",
   // Buffer / TypedArray (Node + Web)
   "buffer", "byteLength", "byteOffset", "subarray", "BYTES_PER_ELEMENT",
+  // Static factory members on built-in globals (Array.from, Array.of,
+  // Object.fromEntries, etc.). The earlier blocks cover instance
+  // methods; these are the corresponding class statics.
+  "from", "of", "fromCharCode", "fromCodePoint",
   // Common reserved
   "default",
 ]
@@ -1310,7 +1314,16 @@ fn rename_param_list(
     }
     let new_name = match new_binding {
       Some(@ast.TsBinding::Ident(n)) => n
-      _ =>
+      // Destructured / array binding — `p.name` is a synthesized
+      // first-Ident placeholder that the emitter ignores (the
+      // destructure pattern emits instead). DO NOT rebind it via
+      // `scope.bind`: the actual locals already got their renames
+      // via `rename_binding_decl`, and a second call here would
+      // overwrite them — `w` (already bound to `a`) would jump to
+      // a fresh slot and the body's `w` references would resolve
+      // to the wrong short name.
+      Some(_) => p.name
+      None =>
         if p.name == "" {
           ""
         } else {
