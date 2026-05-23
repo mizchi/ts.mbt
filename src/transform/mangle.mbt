@@ -1,0 +1,1663 @@
+// Identifier mangling pass.
+//
+// This is the v0 of the type-aware mangling that's the eventual goal
+// of the transform stack (the packelyze retry). Scope of this commit:
+//
+//   - Rename function-local declarations (`let`, `const`, `var`,
+//     parameters, nested function names) to short two-letter
+//     identifiers (`a`, `b`, …, `aa`, `ab`, …).
+//   - Reserved-by-default: every top-level binding stays put (the
+//     bundle's exports + every name visible at module scope), plus
+//     every JS builtin / DOM global the engine might look up.
+//   - All references in the same function — `Var`, `PropAccess`
+//     receivers, call-site `Call(name, …)`, assignment targets,
+//     destructuring patterns — get renamed in lockstep.
+//
+// Property keys, member-call methods, and object-literal keys are
+// *not* renamed yet. That's where the checker integration lands in a
+// follow-up; for now this pass treats every dot / index access as
+// safe-to-rename only at the receiver side.
+//
+//   block ──► mangle_block(block, cfg) ──► block (with locals renamed)
+//
+// `cfg.reserved` augments the default reserved set. `cfg.preserve_top_level`
+// (`true` by default) makes every top-level binding stay so library
+// consumers can still call `export const greet = ...` after the
+// transform — flip to `false` for sealed application bundles where the
+// module-level surface is itself private.
+
+///|
+pub(all) struct ManglerConfig {
+  // Extra names that must never get mangled. Combined with the
+  // built-in reserved set (globals, JS keywords, common DOM
+  // identifiers).
+  reserved : Array[String]
+  // When `true` (default) every identifier introduced at the top
+  // level of `mangle_block` is added to the reserved set before the
+  // pass starts. Use `false` to mangle top-level names too — only
+  // safe once the caller has its own re-export shim list.
+  preserve_top_level : Bool
+  // OPT-IN: when `true`, property keys (`obj.foo`, `obj["foo"]`,
+  // object literal `{ foo: … }`, destructure patterns
+  // `{ foo } = obj`, method calls `obj.foo(…)`) get renamed too.
+  // Off by default because it's not safe-by-default: any property
+  // shared with external code (DOM, browser APIs, third-party
+  // libraries, JSON serialization) must be in the reserved set,
+  // or the consumer's accesses break silently. The built-in
+  // `mangler_builtin_reserved_properties` covers the common
+  // surface; users extend it via `reserved_properties`.
+  mangle_properties : Bool
+  // Additional property names to keep verbatim when
+  // `mangle_properties=true`. Combined with the built-in property
+  // reserved set.
+  reserved_properties : Array[String]
+}
+
+///|
+pub fn ManglerConfig::default() -> ManglerConfig {
+  {
+    reserved: [],
+    preserve_top_level: true,
+    mangle_properties: false,
+    reserved_properties: [],
+  }
+}
+
+///|
+pub fn ManglerConfig::with_reserved(
+  self : ManglerConfig,
+  names : Array[String],
+) -> ManglerConfig {
+  let merged : Array[String] = []
+  for n in self.reserved {
+    merged.push(n)
+  }
+  for n in names {
+    merged.push(n)
+  }
+  { ..self, reserved: merged }
+}
+
+///|
+pub fn ManglerConfig::with_preserve_top_level(
+  self : ManglerConfig,
+  preserve : Bool,
+) -> ManglerConfig {
+  { ..self, preserve_top_level: preserve }
+}
+
+///|
+pub fn ManglerConfig::with_mangle_properties(
+  self : ManglerConfig,
+  enable : Bool,
+) -> ManglerConfig {
+  { ..self, mangle_properties: enable }
+}
+
+///|
+pub fn ManglerConfig::with_reserved_properties(
+  self : ManglerConfig,
+  names : Array[String],
+) -> ManglerConfig {
+  let merged : Array[String] = []
+  for n in self.reserved_properties {
+    merged.push(n)
+  }
+  for n in names {
+    merged.push(n)
+  }
+  { ..self, reserved_properties: merged }
+}
+
+// ---------------------------------------------------------------------------
+// Built-in reserved set
+// ---------------------------------------------------------------------------
+
+///|
+/// Names every browser / Node engine looks up at runtime. Renaming
+/// any of these would silently break the program, so the mangler
+/// treats them as reserved unconditionally.
+let mangler_builtin_reserved : Array[String] = [
+  // JS / ECMAScript globals
+  "undefined", "null", "true", "false", "this", "globalThis",
+  "Object", "Array", "Function", "Boolean", "Number", "String",
+  "Symbol", "BigInt", "RegExp", "Date", "Error", "TypeError",
+  "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError",
+  "AggregateError", "Math", "JSON", "Promise", "Map", "Set", "WeakMap",
+  "WeakSet", "WeakRef", "FinalizationRegistry", "Proxy", "Reflect",
+  "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array",
+  "Uint16Array", "Int32Array", "Uint32Array", "Float32Array",
+  "Float64Array", "BigInt64Array", "BigUint64Array",
+  "ArrayBuffer", "SharedArrayBuffer", "DataView", "Atomics",
+  "Iterator", "AsyncIterator", "Generator", "AsyncGenerator",
+  "Infinity", "NaN", "isNaN", "isFinite", "parseInt", "parseFloat",
+  "encodeURI", "decodeURI", "encodeURIComponent", "decodeURIComponent",
+  "escape", "unescape", "eval",
+  // Browser globals
+  "window", "document", "location", "navigator", "history", "console",
+  "alert", "confirm", "prompt", "fetch", "XMLHttpRequest", "WebSocket",
+  "setTimeout", "setInterval", "clearTimeout", "clearInterval",
+  "requestAnimationFrame", "cancelAnimationFrame", "queueMicrotask",
+  // Module / runtime
+  "require", "module", "exports", "__dirname", "__filename",
+  "Buffer", "process",
+  // React / JSX runtime (so JSX-lowering output keeps working)
+  "jsx", "jsxs", "jsxDEV", "jsxsDEV", "Fragment", "React",
+  // Keywords that can't be used as identifiers anyway
+  "let", "const", "var", "function", "class", "if", "else", "return",
+  "for", "while", "do", "switch", "case", "default", "break",
+  "continue", "throw", "try", "catch", "finally", "new", "delete",
+  "typeof", "instanceof", "void", "in", "of", "yield", "await",
+  "async", "import", "export", "from", "as", "extends", "super",
+  "static", "public", "private", "protected", "readonly", "implements",
+  "interface", "type", "namespace", "module", "declare", "abstract",
+  "with", "debugger", "enum",
+]
+
+///|
+/// Property keys we never rename even when `mangle_properties` is
+/// `true`. Covers the common surface: Object/Array/String/Number
+/// prototypes, Promise, JSON, DOM, React, common iterator protocol
+/// hooks. Users extend via `reserved_properties`.
+let mangler_builtin_reserved_properties : Array[String] = [
+  // Object / inheritance
+  "constructor", "prototype", "hasOwnProperty", "isPrototypeOf",
+  "propertyIsEnumerable", "toString", "valueOf", "toLocaleString",
+  "__proto__", "__defineGetter__", "__defineSetter__",
+  // Array / iterable
+  "length", "push", "pop", "shift", "unshift", "slice", "splice",
+  "concat", "join", "reverse", "sort", "indexOf", "lastIndexOf",
+  "includes", "find", "findIndex", "findLast", "findLastIndex",
+  "filter", "map", "reduce", "reduceRight", "forEach", "every",
+  "some", "flat", "flatMap", "keys", "values", "entries", "fill",
+  "copyWithin", "at",
+  // String
+  "charAt", "charCodeAt", "codePointAt", "startsWith", "endsWith",
+  "padStart", "padEnd", "trim", "trimStart", "trimEnd", "trimLeft",
+  "trimRight", "toUpperCase", "toLowerCase", "toLocaleUpperCase",
+  "toLocaleLowerCase", "replace", "replaceAll", "split", "match",
+  "matchAll", "search", "substring", "substr", "repeat", "normalize",
+  "raw",
+  // Number / Math
+  "toFixed", "toPrecision", "toExponential", "toLocaleString",
+  // Function
+  "call", "apply", "bind", "name", "arguments", "caller",
+  // Promise
+  "then", "catch", "finally", "all", "allSettled", "race", "any",
+  "resolve", "reject", "withResolvers",
+  // JSON
+  "parse", "stringify", "toJSON",
+  // Map / Set
+  "size", "has", "get", "set", "delete", "clear", "add",
+  // Iterator protocol
+  "next", "return", "throw", "done", "value",
+  // Symbol well-knowns (the property access forms)
+  "iterator", "asyncIterator",
+  // DOM / events
+  "addEventListener", "removeEventListener", "dispatchEvent",
+  "target", "currentTarget", "preventDefault", "stopPropagation",
+  "stopImmediatePropagation", "type", "bubbles", "cancelable",
+  "innerHTML", "outerHTML", "innerText", "outerText", "textContent",
+  "appendChild", "removeChild", "replaceChild", "insertBefore",
+  "cloneNode", "childNodes", "children", "firstChild", "lastChild",
+  "firstElementChild", "lastElementChild", "parentNode", "parentElement",
+  "nextSibling", "previousSibling", "nextElementSibling",
+  "previousElementSibling", "nodeType", "nodeName", "nodeValue",
+  "tagName", "id", "className", "classList", "style", "dataset",
+  "attributes", "getAttribute", "setAttribute", "removeAttribute",
+  "hasAttribute", "querySelector", "querySelectorAll",
+  "getElementById", "getElementsByTagName", "getElementsByClassName",
+  "scrollTop", "scrollLeft", "scrollWidth", "scrollHeight",
+  "offsetTop", "offsetLeft", "offsetWidth", "offsetHeight",
+  "clientTop", "clientLeft", "clientWidth", "clientHeight",
+  "getBoundingClientRect", "matches", "closest",
+  // Web Storage / URL / fetch
+  "localStorage", "sessionStorage", "setItem", "getItem", "removeItem",
+  "key", "url", "method", "headers", "body", "status", "statusText",
+  "ok", "redirected", "json", "text", "blob", "arrayBuffer", "formData",
+  "clone",
+  // React
+  "render", "props", "state", "setState", "forceUpdate", "ref",
+  "key", "children", "context", "displayName", "defaultProps",
+  "propTypes", "contextType", "shouldComponentUpdate",
+  "componentDidMount", "componentDidUpdate", "componentWillUnmount",
+  "getSnapshotBeforeUpdate", "componentDidCatch",
+  "getDerivedStateFromError", "getDerivedStateFromProps",
+  "useState", "useEffect", "useLayoutEffect", "useMemo", "useCallback",
+  "useRef", "useContext", "useReducer", "useImperativeHandle",
+  "useDebugValue", "useDeferredValue", "useTransition", "useId",
+  "useSyncExternalStore", "useInsertionEffect",
+  // Node.js common
+  "stdout", "stderr", "stdin", "env", "argv", "exit", "pid",
+  "cwd", "chdir", "platform", "version", "versions",
+  "readFile", "writeFile", "readFileSync", "writeFileSync",
+  "exists", "existsSync", "mkdir", "mkdirSync", "rmdir", "unlink",
+  "stat", "statSync", "createReadStream", "createWriteStream",
+  // Common reserved
+  "default",
+]
+
+// ---------------------------------------------------------------------------
+// Property name renaming
+// ---------------------------------------------------------------------------
+
+///|
+/// Collect every property key referenced in the block. Used by the
+/// property-mangling pass to figure out which names are eligible
+/// for renaming.
+fn collect_property_names(block : @ast.TsBlock, out : Map[String, Bool]) -> Unit {
+  for stmt in block.stmts {
+    collect_props_in_stmt(stmt, out)
+  }
+}
+
+///|
+fn collect_props_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
+  match stmt {
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
+      collect_props_in_binding(b, out)
+      collect_props_in_expr(e, out)
+    }
+    Expr(e) | Throw(e) => collect_props_in_expr(e, out)
+    Return(opt) =>
+      match opt {
+        Some(e) => collect_props_in_expr(e, out)
+        None => ()
+      }
+    Assign(_, e) | CompoundAssign(_, _, e) =>
+      collect_props_in_expr(e, out)
+    PropAssign(recv, prop, value) => {
+      out[prop] = true
+      collect_props_in_expr(recv, out)
+      collect_props_in_expr(value, out)
+    }
+    IndexAssign(recv, idx, value) => {
+      collect_props_in_expr(recv, out)
+      collect_props_in_expr(idx, out)
+      collect_props_in_expr(value, out)
+    }
+    If(c, t, e_opt) => {
+      collect_props_in_expr(c, out)
+      collect_property_names(t, out)
+      match e_opt {
+        Some(b) => collect_property_names(b, out)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) => {
+      collect_props_in_expr(c, out)
+      collect_property_names(b, out)
+    }
+    For(init_opt, cond_opt, update_opt, body) => {
+      match init_opt {
+        Some(s) => collect_props_in_stmt(s, out)
+        None => ()
+      }
+      match cond_opt {
+        Some(c) => collect_props_in_expr(c, out)
+        None => ()
+      }
+      match update_opt {
+        Some(s) => collect_props_in_stmt(s, out)
+        None => ()
+      }
+      collect_property_names(body, out)
+    }
+    ForOf(_, b, _, iter, body)
+    | ForAwaitOf(_, b, _, iter, body)
+    | ForIn(_, b, _, iter, body) => {
+      collect_props_in_binding(b, out)
+      collect_props_in_expr(iter, out)
+      collect_property_names(body, out)
+    }
+    Switch(scrutinee, cases) => {
+      collect_props_in_expr(scrutinee, out)
+      for c in cases {
+        match c.test_expr {
+          Some(t) => collect_props_in_expr(t, out)
+          None => ()
+        }
+        collect_property_names(c.body, out)
+      }
+    }
+    Try(t, _, c, f) => {
+      collect_property_names(t, out)
+      match c {
+        Some(b) => collect_property_names(b, out)
+        None => ()
+      }
+      match f {
+        Some(b) => collect_property_names(b, out)
+        None => ()
+      }
+    }
+    Block(b) => collect_property_names(b, out)
+    Label(_, inner) => collect_props_in_stmt(inner, out)
+    With(target, body) => {
+      collect_props_in_expr(target, out)
+      collect_property_names(body, out)
+    }
+    Break(_) | Continue(_) | Empty | Debugger => ()
+  }
+}
+
+///|
+fn collect_props_in_binding(
+  binding : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match binding {
+    Ident(_) => ()
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            collect_props_in_binding(be.binding, out)
+            match be.default {
+              Some(d) => collect_props_in_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_props_in_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for p in ob.props {
+        out[p.key] = true
+        collect_props_in_binding(p.binding, out)
+        match p.default {
+          Some(d) => collect_props_in_expr(d, out)
+          None => ()
+        }
+      }
+    }
+    Target(e) => collect_props_in_expr(e, out)
+  }
+}
+
+///|
+fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
+  match expr {
+    PropAccess(recv, name) => {
+      out[name] = true
+      collect_props_in_expr(recv, out)
+    }
+    MethodCall(recv, method, args) => {
+      out[method] = true
+      collect_props_in_expr(recv, out)
+      for a in args {
+        collect_props_in_expr(a, out)
+      }
+    }
+    ObjectLit(entries) =>
+      for ent in entries {
+        if ent.0 != "..." {
+          out[ent.0] = true
+        }
+        collect_props_in_expr(ent.1, out)
+      }
+    PropAssignExpr(recv, prop, value) => {
+      out[prop] = true
+      collect_props_in_expr(recv, out)
+      collect_props_in_expr(value, out)
+    }
+    IndexAssignExpr(recv, idx, value) => {
+      collect_props_in_expr(recv, out)
+      collect_props_in_expr(idx, out)
+      collect_props_in_expr(value, out)
+    }
+    Call(_, args) | New(_, args) => {
+      for a in args {
+        collect_props_in_expr(a, out)
+      }
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_props_in_expr(callee, out)
+      for a in args {
+        collect_props_in_expr(a, out)
+      }
+    }
+    IndexAccess(recv, idx) => {
+      collect_props_in_expr(recv, out)
+      collect_props_in_expr(idx, out)
+    }
+    BinOp(_, l, r) => {
+      collect_props_in_expr(l, out)
+      collect_props_in_expr(r, out)
+    }
+    UnaryOp(_, inner) => collect_props_in_expr(inner, out)
+    Cond(c, t, e) => {
+      collect_props_in_expr(c, out)
+      collect_props_in_expr(t, out)
+      collect_props_in_expr(e, out)
+    }
+    ArrayLit(items) =>
+      for i in items {
+        collect_props_in_expr(i, out)
+      }
+    Spread(inner) | Await(inner) | YieldStar(inner) =>
+      collect_props_in_expr(inner, out)
+    Yield(opt) =>
+      match opt {
+        Some(e) => collect_props_in_expr(e, out)
+        None => ()
+      }
+    Seq(a, b) => {
+      collect_props_in_expr(a, out)
+      collect_props_in_expr(b, out)
+    }
+    ComputedProp(k, v) => {
+      collect_props_in_expr(k, out)
+      collect_props_in_expr(v, out)
+    }
+    AssignExpr(_, value)
+    | CompoundAssignExpr(_, _, value)
+    | AssignPattern(_, value) => collect_props_in_expr(value, out)
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => collect_props_in_expr(e, out)
+        ArrowBlock(b) => collect_property_names(b, out)
+      }
+    FuncExpr(f) => collect_property_names(f.body, out)
+    DynamicImport(spec, opts) => {
+      collect_props_in_expr(spec, out)
+      match opts {
+        Some(o) => collect_props_in_expr(o, out)
+        None => ()
+      }
+    }
+    TaggedTemplate(tag, _, _, exprs) => {
+      collect_props_in_expr(tag, out)
+      for e in exprs {
+        collect_props_in_expr(e, out)
+      }
+    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_props_in_expr(e, out)
+      }
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
+      collect_props_in_expr(inner, out)
+    _ => ()
+  }
+}
+
+///|
+/// Build a `original_name → mangled_name` map for every property
+/// name referenced in `block` that isn't in the reserved set.
+/// Mangled names are assigned in observation order so the output is
+/// deterministic across runs.
+fn build_property_rename_map(
+  block : @ast.TsBlock,
+  reserved : Map[String, Bool],
+) -> Map[String, String] {
+  let names : Map[String, Bool] = {}
+  collect_property_names(block, names)
+  // Filter to mangleable names, then sort so the mapping is stable
+  // across iteration orders.
+  let candidates : Array[String] = []
+  for entry in names {
+    let n = entry.0
+    if reserved.contains(n) {
+      continue
+    }
+    candidates.push(n)
+  }
+  candidates.sort()
+  let map : Map[String, String] = {}
+  let mut counter = 0
+  for n in candidates {
+    let mut candidate = next_short_name(counter)
+    counter = counter + 1
+    while reserved.contains(candidate) {
+      candidate = next_short_name(counter)
+      counter = counter + 1
+    }
+    map[n] = candidate
+  }
+  map
+}
+
+// ---------------------------------------------------------------------------
+// Scope tracking
+// ---------------------------------------------------------------------------
+
+///|
+priv struct ScopeFrame {
+  parent : ScopeFrame?
+  // Map from original name to its mangled rename. A missing entry
+  // means the name is reserved (no rename) or resolved through a
+  // parent scope.
+  renames : Map[String, String]
+  // Every short name already taken in this scope or any of its
+  // ancestors — used so generated names don't shadow a still-
+  // reachable binding.
+  used : Map[String, Bool]
+  // Counter for the next short name to allocate.
+  mut counter : Int
+  // Reserved-name set — shared across the whole scope tree so nested
+  // functions / arrow bodies see the same names as the root.
+  reserved : Map[String, Bool]
+}
+
+///|
+fn ScopeFrame::new_root(reserved : Map[String, Bool]) -> ScopeFrame {
+  let used : Map[String, Bool] = {}
+  for entry in reserved {
+    let (n, _) = entry
+    used[n] = true
+  }
+  { parent: None, renames: {}, used, counter: 0, reserved }
+}
+
+///|
+fn ScopeFrame::child(parent : ScopeFrame) -> ScopeFrame {
+  let inherited : Map[String, Bool] = {}
+  for entry in parent.used {
+    inherited[entry.0] = true
+  }
+  {
+    parent: Some(parent),
+    renames: {},
+    used: inherited,
+    counter: 0,
+    reserved: parent.reserved,
+  }
+}
+
+///|
+/// Resolve `name` through the scope chain; returns the mangled
+/// identifier (or the original when nothing was registered).
+fn ScopeFrame::resolve(self : ScopeFrame, name : String) -> String {
+  let mut cur : ScopeFrame? = Some(self)
+  while cur is Some(frame) {
+    match frame.renames.get(name) {
+      Some(renamed) => return renamed
+      None => cur = frame.parent
+    }
+  }
+  name
+}
+
+///|
+/// Register `name` as declared in this scope. Returns the chosen
+/// mangled name (the original when the name is in the reserved set
+/// or any ancestor frame has it as used and we can't safely
+/// generate a new one).
+fn ScopeFrame::bind(
+  self : ScopeFrame,
+  name : String,
+  reserved : Map[String, Bool],
+) -> String {
+  // Reserved names stay put. They still mark themselves as used so
+  // subsequent declarations don't pick a colliding short name.
+  if reserved.contains(name) {
+    self.used[name] = true
+    self.renames[name] = name
+    return name
+  }
+  // Allocate the next free short name. Bump `counter` until the
+  // generated name isn't already used in this frame or any ancestor.
+  let mut candidate = next_short_name(self.counter)
+  self.counter = self.counter + 1
+  while self.used.contains(candidate) || reserved.contains(candidate) {
+    candidate = next_short_name(self.counter)
+    self.counter = self.counter + 1
+  }
+  self.used[candidate] = true
+  self.renames[name] = candidate
+  candidate
+}
+
+///|
+/// Generate the `n`th short identifier in lexicographic order:
+///   0 → "a", 1 → "b", … 25 → "z", 26 → "aa", 27 → "ab", … 51 → "az",
+///   52 → "ba", …, 675 → "zz", 676 → "aaa", …
+fn next_short_name(n : Int) -> String {
+  let chars : Array[Int] = []
+  let mut k = n
+  while {
+    chars.push(k % 26)
+    k = k / 26
+    k > 0
+  } {
+    k = k - 1
+  }
+  let buf = StringBuilder::new()
+  let mut i = chars.length() - 1
+  while i >= 0 {
+    let c = chars[i]
+    buf.write_char(((97 + c) : Int).unsafe_to_char())
+    i = i - 1
+  }
+  buf.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Public entrypoint
+// ---------------------------------------------------------------------------
+
+///|
+/// Run the local-identifier mangling pass over `block`. Returns a
+/// new `TsBlock` with every function-local name renamed to a short
+/// `a` / `b` / … identifier. Top-level bindings stay put when
+/// `cfg.preserve_top_level` is `true`.
+pub fn mangle_block(
+  block : @ast.TsBlock,
+  cfg : ManglerConfig,
+) -> @ast.TsBlock {
+  // Reserved set = built-ins ∪ explicit ∪ (top-level decls when
+  // `preserve_top_level`).
+  let reserved : Map[String, Bool] = {}
+  for n in mangler_builtin_reserved {
+    reserved[n] = true
+  }
+  for n in cfg.reserved {
+    reserved[n] = true
+  }
+  if cfg.preserve_top_level {
+    collect_top_level_decls(block, reserved)
+  }
+  let root = ScopeFrame::new_root(reserved)
+  // Predeclare top-level names in the root frame so child scopes can
+  // see them but don't pick conflicting short names.
+  for entry in reserved {
+    let _ = root.bind(entry.0, reserved)
+  }
+  // Identifier-mangling pass first (so any synthesized identifiers
+  // can't collide with property names we're about to rename).
+  let new_stmts : Array[@ast.TsStmt] = []
+  for stmt in block.stmts {
+    new_stmts.push(rename_stmt(stmt, root, reserved))
+  }
+  let renamed : @ast.TsBlock = {
+    stmts: new_stmts,
+    stmt_positions: block.stmt_positions,
+  }
+  // Optional property-name pass on top of the identifier rename.
+  if cfg.mangle_properties {
+    let prop_reserved : Map[String, Bool] = {}
+    for n in mangler_builtin_reserved_properties {
+      prop_reserved[n] = true
+    }
+    for n in cfg.reserved_properties {
+      prop_reserved[n] = true
+    }
+    let prop_map = build_property_rename_map(renamed, prop_reserved)
+    rename_properties_in_block(renamed, prop_map)
+  } else {
+    renamed
+  }
+}
+
+///|
+fn collect_top_level_decls(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
+  for stmt in block.stmts {
+    match stmt {
+      Var(@ast.TsBinding::Ident(n), _, _)
+      | Let(@ast.TsBinding::Ident(n), _, _)
+      | Const(@ast.TsBinding::Ident(n), _, _) => out[n] = true
+      Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
+        collect_binding_names(b, out)
+      _ => ()
+    }
+  }
+}
+
+///|
+fn collect_binding_names(
+  binding : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match binding {
+    Ident(n) => out[n] = true
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => collect_binding_names(be.binding, out)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_binding_names(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for p in ob.props {
+        collect_binding_names(p.binding, out)
+      }
+      match ob.rest {
+        Some(n) => out[n] = true
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AST walker
+// ---------------------------------------------------------------------------
+
+///|
+fn rename_stmt(
+  stmt : @ast.TsStmt,
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> @ast.TsStmt {
+  match stmt {
+    Var(b, t, init) =>
+      Var(rename_binding_decl(b, scope, reserved), t, rename_expr(init, scope))
+    Let(b, t, init) =>
+      Let(rename_binding_decl(b, scope, reserved), t, rename_expr(init, scope))
+    Const(b, t, init) =>
+      Const(
+        rename_binding_decl(b, scope, reserved),
+        t,
+        rename_expr(init, scope),
+      )
+    Expr(e) => Expr(rename_expr(e, scope))
+    Return(opt) =>
+      match opt {
+        Some(e) => Return(Some(rename_expr(e, scope)))
+        None => Return(None)
+      }
+    Throw(e) => Throw(rename_expr(e, scope))
+    Assign(name, e) =>
+      Assign(scope.resolve(name), rename_expr(e, scope))
+    CompoundAssign(name, op, e) =>
+      CompoundAssign(scope.resolve(name), op, rename_expr(e, scope))
+    PropAssign(recv, prop, value) =>
+      PropAssign(rename_expr(recv, scope), prop, rename_expr(value, scope))
+    IndexAssign(recv, idx, value) =>
+      IndexAssign(
+        rename_expr(recv, scope),
+        rename_expr(idx, scope),
+        rename_expr(value, scope),
+      )
+    If(cond, then_b, else_opt) =>
+      If(rename_expr(cond, scope), rename_block_inline(then_b, scope, reserved), match else_opt {
+        Some(b) => Some(rename_block_inline(b, scope, reserved))
+        None => None
+      })
+    While(c, b) =>
+      While(rename_expr(c, scope), rename_block_inline(b, scope, reserved))
+    DoWhile(c, b) =>
+      DoWhile(rename_expr(c, scope), rename_block_inline(b, scope, reserved))
+    For(init_opt, cond_opt, update_opt, body) => {
+      // `for (let i = 0; …; …) { … }` creates a new lexical scope.
+      let inner = ScopeFrame::child(scope)
+      let new_init = match init_opt {
+        Some(s) => Some(rename_stmt(s, inner, reserved))
+        None => None
+      }
+      let new_cond = match cond_opt {
+        Some(c) => Some(rename_expr(c, inner))
+        None => None
+      }
+      let new_update = match update_opt {
+        Some(s) => Some(rename_stmt(s, inner, reserved))
+        None => None
+      }
+      let new_body = rename_block_inline(body, inner, reserved)
+      For(new_init, new_cond, new_update, new_body)
+    }
+    ForOf(kind, b, t, iter, body) => {
+      let inner = ScopeFrame::child(scope)
+      let new_binding = rename_binding_decl(b, inner, reserved)
+      let new_iter = rename_expr(iter, scope)
+      let new_body = rename_block_inline(body, inner, reserved)
+      ForOf(kind, new_binding, t, new_iter, new_body)
+    }
+    ForAwaitOf(kind, b, t, iter, body) => {
+      let inner = ScopeFrame::child(scope)
+      let new_binding = rename_binding_decl(b, inner, reserved)
+      let new_iter = rename_expr(iter, scope)
+      let new_body = rename_block_inline(body, inner, reserved)
+      ForAwaitOf(kind, new_binding, t, new_iter, new_body)
+    }
+    ForIn(kind, b, t, iter, body) => {
+      let inner = ScopeFrame::child(scope)
+      let new_binding = rename_binding_decl(b, inner, reserved)
+      let new_iter = rename_expr(iter, scope)
+      let new_body = rename_block_inline(body, inner, reserved)
+      ForIn(kind, new_binding, t, new_iter, new_body)
+    }
+    Switch(scrutinee, cases) => {
+      let new_scrutinee = rename_expr(scrutinee, scope)
+      let new_cases : Array[@ast.TsSwitchCase] = []
+      for c in cases {
+        let new_test = match c.test_expr {
+          Some(t) => Some(rename_expr(t, scope))
+          None => None
+        }
+        let inner = ScopeFrame::child(scope)
+        new_cases.push({
+          test_expr: new_test,
+          body: rename_block_inline_in(c.body, inner, reserved),
+        })
+      }
+      Switch(new_scrutinee, new_cases)
+    }
+    Try(try_b, catch_bind, catch_b, finally_b) => {
+      let new_try = rename_block_inline(try_b, scope, reserved)
+      let (new_bind, new_catch) = match (catch_bind, catch_b) {
+        (Some(b), Some(cb)) => {
+          let inner = ScopeFrame::child(scope)
+          let renamed_bind = rename_binding_decl(b, inner, reserved)
+          (Some(renamed_bind), Some(rename_block_inline_in(cb, inner, reserved)))
+        }
+        (None, Some(cb)) =>
+          (None, Some(rename_block_inline(cb, scope, reserved)))
+        _ => (None, None)
+      }
+      let new_finally = match finally_b {
+        Some(fb) => Some(rename_block_inline(fb, scope, reserved))
+        None => None
+      }
+      Try(new_try, new_bind, new_catch, new_finally)
+    }
+    Block(b) => Block(rename_block_inline(b, scope, reserved))
+    Label(name, inner) =>
+      Label(name, rename_stmt(inner, scope, reserved))
+    With(target, body) =>
+      With(rename_expr(target, scope), rename_block_inline(body, scope, reserved))
+    Break(_) | Continue(_) | Empty | Debugger => stmt
+  }
+}
+
+///|
+/// Rename `block` using the given scope without spawning a new
+/// frame. Used inside `if` / `while` / `try` bodies where TS / JS
+/// scoping is lexical-block but our v0 keeps the frames at the
+/// function granularity.
+fn rename_block_inline(
+  block : @ast.TsBlock,
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> @ast.TsBlock {
+  rename_block_inline_in(block, scope, reserved)
+}
+
+///|
+fn rename_block_inline_in(
+  block : @ast.TsBlock,
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> @ast.TsBlock {
+  let stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    stmts.push(rename_stmt(s, scope, reserved))
+  }
+  { stmts, stmt_positions: block.stmt_positions }
+}
+
+///|
+fn rename_binding_decl(
+  binding : @ast.TsBinding,
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> @ast.TsBinding {
+  match binding {
+    Ident(n) => Ident(scope.bind(n, reserved))
+    Array(ab) => {
+      let new_items : Array[@ast.TsBindingElem?] = []
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            let new_inner = rename_binding_decl(be.binding, scope, reserved)
+            let new_default : @ast.TsExpr? = match be.default {
+              Some(d) => Some(rename_expr(d, scope))
+              None => None
+            }
+            new_items.push(Some({ binding: new_inner, default: new_default }))
+          }
+          None => new_items.push(None)
+        }
+      }
+      let new_rest : @ast.TsBinding? = match ab.rest {
+        Some(r) => Some(rename_binding_decl(r, scope, reserved))
+        None => None
+      }
+      Array({ items: new_items, rest: new_rest })
+    }
+    Object(ob) => {
+      let new_props : Array[@ast.TsObjectBindingProp] = []
+      for p in ob.props {
+        let new_inner = rename_binding_decl(p.binding, scope, reserved)
+        let new_default : @ast.TsExpr? = match p.default {
+          Some(d) => Some(rename_expr(d, scope))
+          None => None
+        }
+        new_props.push({
+          key: p.key,
+          key_expr: p.key_expr,
+          binding: new_inner,
+          default: new_default,
+        })
+      }
+      let new_rest : String? = match ob.rest {
+        Some(n) => Some(scope.bind(n, reserved))
+        None => None
+      }
+      Object({ props: new_props, rest: new_rest })
+    }
+    Target(e) => Target(rename_expr(e, scope))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Expression walker
+// ---------------------------------------------------------------------------
+
+///|
+fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
+  match expr {
+    Var(name) => Var(scope.resolve(name))
+    Call(name, args) => {
+      // `Call(name, …)` is a free-function call site; the name is a
+      // variable reference, so it follows the scope chain.
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_expr(a, scope))
+      }
+      Call(scope.resolve(name), new_args)
+    }
+    CallExpr(callee, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_expr(a, scope))
+      }
+      CallExpr(rename_expr(callee, scope), new_args)
+    }
+    New(name, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_expr(a, scope))
+      }
+      New(scope.resolve(name), new_args)
+    }
+    NewExpr(callee, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_expr(a, scope))
+      }
+      NewExpr(rename_expr(callee, scope), new_args)
+    }
+    MethodCall(recv, method, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_expr(a, scope))
+      }
+      // Property name is left untouched — property mangling is a
+      // separate pass that needs type info to be safe.
+      MethodCall(rename_expr(recv, scope), method, new_args)
+    }
+    PropAccess(recv, name) => PropAccess(rename_expr(recv, scope), name)
+    IndexAccess(recv, idx) =>
+      IndexAccess(rename_expr(recv, scope), rename_expr(idx, scope))
+    BinOp(op, l, r) =>
+      BinOp(op, rename_expr(l, scope), rename_expr(r, scope))
+    UnaryOp(op, inner) => UnaryOp(op, rename_expr(inner, scope))
+    Cond(c, t, e) =>
+      Cond(rename_expr(c, scope), rename_expr(t, scope), rename_expr(e, scope))
+    ArrayLit(items) => {
+      let out : Array[@ast.TsExpr] = []
+      for i in items {
+        out.push(rename_expr(i, scope))
+      }
+      ArrayLit(out)
+    }
+    Spread(inner) => Spread(rename_expr(inner, scope))
+    ObjectLit(entries) => {
+      let out : Array[(String, @ast.TsExpr)] = []
+      for ent in entries {
+        out.push((ent.0, rename_expr(ent.1, scope)))
+      }
+      ObjectLit(out)
+    }
+    ComputedProp(k, v) =>
+      ComputedProp(rename_expr(k, scope), rename_expr(v, scope))
+    AssignExpr(name, value) =>
+      AssignExpr(scope.resolve(name), rename_expr(value, scope))
+    AssignPattern(b, value) => {
+      // Destructuring assignment to an existing pattern; the LHS is
+      // an *assignment* not a declaration, so the names resolve via
+      // the scope chain rather than introducing new bindings.
+      AssignPattern(rename_binding_lhs(b, scope), rename_expr(value, scope))
+    }
+    CompoundAssignExpr(target, op, value) =>
+      CompoundAssignExpr(
+        rename_expr(target, scope), op, rename_expr(value, scope),
+      )
+    PropAssignExpr(recv, prop, value) =>
+      PropAssignExpr(rename_expr(recv, scope), prop, rename_expr(value, scope))
+    IndexAssignExpr(recv, idx, value) =>
+      IndexAssignExpr(
+        rename_expr(recv, scope),
+        rename_expr(idx, scope),
+        rename_expr(value, scope),
+      )
+    Seq(a, b) => Seq(rename_expr(a, scope), rename_expr(b, scope))
+    ArrowFunc(params, ret_ty, body, is_async) => {
+      // New scope for the arrow function body.
+      let inner = ScopeFrame::child(scope)
+      let new_params = rename_param_list(params, inner, inner.reserved)
+      let new_body = match body {
+        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(rename_expr(e, inner))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(
+            rename_block_inline_in(b, inner, inner.reserved),
+          )
+      }
+      ArrowFunc(new_params, ret_ty, new_body, is_async)
+    }
+    FuncExpr(f) => FuncExpr(rename_function_expr(f, scope))
+    Yield(opt) =>
+      match opt {
+        Some(e) => Yield(Some(rename_expr(e, scope)))
+        None => Yield(None)
+      }
+    YieldStar(inner) => YieldStar(rename_expr(inner, scope))
+    Await(inner) => Await(rename_expr(inner, scope))
+    DynamicImport(spec, opts) =>
+      DynamicImport(rename_expr(spec, scope), match opts {
+        Some(o) => Some(rename_expr(o, scope))
+        None => None
+      })
+    TaggedTemplate(tag, parts, raw, exprs) => {
+      let out : Array[@ast.TsExpr] = []
+      for e in exprs {
+        out.push(rename_expr(e, scope))
+      }
+      TaggedTemplate(rename_expr(tag, scope), parts, raw, out)
+    }
+    TemplateLiteral(parts, exprs) => {
+      let out : Array[@ast.TsExpr] = []
+      for e in exprs {
+        out.push(rename_expr(e, scope))
+      }
+      TemplateLiteral(parts, out)
+    }
+    As(inner, ty) => As(rename_expr(inner, scope), ty)
+    Satisfies(inner, ty) => Satisfies(rename_expr(inner, scope), ty)
+    NonNull(inner) => NonNull(rename_expr(inner, scope))
+    OptionalChain(inner) => OptionalChain(rename_expr(inner, scope))
+    JsxElement(_, _, _) => expr // JSX should be lowered before mangling
+    _ => expr
+  }
+}
+
+///|
+/// Same as `rename_binding_decl` but treats `Ident(n)` as an
+/// assignment-LHS reference instead of a declaration — the name
+/// resolves through `scope.resolve` rather than introducing a new
+/// binding. Used by `AssignPattern(b, value)`.
+fn rename_binding_lhs(
+  binding : @ast.TsBinding,
+  scope : ScopeFrame,
+) -> @ast.TsBinding {
+  match binding {
+    Ident(n) => Ident(scope.resolve(n))
+    Array(ab) => {
+      let new_items : Array[@ast.TsBindingElem?] = []
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            let new_inner = rename_binding_lhs(be.binding, scope)
+            let new_default : @ast.TsExpr? = match be.default {
+              Some(d) => Some(rename_expr(d, scope))
+              None => None
+            }
+            new_items.push(Some({ binding: new_inner, default: new_default }))
+          }
+          None => new_items.push(None)
+        }
+      }
+      let new_rest : @ast.TsBinding? = match ab.rest {
+        Some(r) => Some(rename_binding_lhs(r, scope))
+        None => None
+      }
+      Array({ items: new_items, rest: new_rest })
+    }
+    Object(ob) => {
+      let new_props : Array[@ast.TsObjectBindingProp] = []
+      for p in ob.props {
+        let new_inner = rename_binding_lhs(p.binding, scope)
+        let new_default : @ast.TsExpr? = match p.default {
+          Some(d) => Some(rename_expr(d, scope))
+          None => None
+        }
+        new_props.push({
+          key: p.key,
+          key_expr: p.key_expr,
+          binding: new_inner,
+          default: new_default,
+        })
+      }
+      let new_rest : String? = match ob.rest {
+        Some(n) => Some(scope.resolve(n))
+        None => None
+      }
+      Object({ props: new_props, rest: new_rest })
+    }
+    Target(e) => Target(rename_expr(e, scope))
+  }
+}
+
+///|
+fn rename_function_expr(
+  f : @ast.TsFunc,
+  scope : ScopeFrame,
+) -> @ast.TsFunc {
+  // `function name(…)` introduces `name` into the parent scope's
+  // value namespace. v0 keeps the function name verbatim — the
+  // bundle layer can't predict whether the function is referenced
+  // by name elsewhere yet (without checker symbol-graph analysis).
+  let inner = ScopeFrame::child(scope)
+  let new_params = rename_param_list(f.params, inner, inner.reserved)
+  let new_body = rename_block_inline_in(f.body, inner, inner.reserved)
+  {
+    name: f.name,
+    type_params: f.type_params,
+    const_type_params: f.const_type_params,
+    params: new_params,
+    return_type: f.return_type,
+    body: new_body,
+    is_generator: f.is_generator,
+    is_async: f.is_async,
+  }
+}
+
+///|
+fn rename_param_list(
+  params : Array[@ast.TsParam],
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> Array[@ast.TsParam] {
+  let out : Array[@ast.TsParam] = []
+  for p in params {
+    let new_binding : @ast.TsBinding? = match p.binding {
+      Some(b) => Some(rename_binding_decl(b, scope, reserved))
+      None => None
+    }
+    let new_name = match new_binding {
+      Some(@ast.TsBinding::Ident(n)) => n
+      _ =>
+        if p.name == "" {
+          ""
+        } else {
+          scope.bind(p.name, reserved)
+        }
+    }
+    let new_default : @ast.TsExpr? = match p.default {
+      Some(d) => Some(rename_expr(d, scope))
+      None => None
+    }
+    out.push({
+      name: new_name,
+      binding: new_binding,
+      is_rest: p.is_rest,
+      type_: p.type_,
+      default: new_default,
+    })
+  }
+  out
+}
+
+// ---------------------------------------------------------------------------
+// Property-name rewriting (opt-in)
+// ---------------------------------------------------------------------------
+
+///|
+/// Apply `prop_map` (`original → mangled`) to every property-name
+/// site reachable from `block`. Sites that the property-rename pass
+/// covers:
+///
+///   - `PropAccess(recv, name)`            — receiver.member
+///   - `MethodCall(recv, method, args)`    — receiver.method(...)
+///   - `PropAssign(recv, prop, value)`     — receiver.prop = value
+///   - `PropAssignExpr(...)`               — same in expr position
+///   - `ObjectLit([(key, value), ...])`    — { key: value }
+///   - `Object({ props: [{ key, ... }] })` destructure — { key } = ...
+///
+/// `IndexAccess(recv, StringLit("name"))` could be safely rewritten
+/// too — it's an alternate spelling of the same access — but we
+/// leave it for a follow-up, since callers who *want* string-index
+/// access typically intend it to bypass mangling.
+fn rename_properties_in_block(
+  block : @ast.TsBlock,
+  prop_map : Map[String, String],
+) -> @ast.TsBlock {
+  let stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    stmts.push(rename_properties_in_stmt(s, prop_map))
+  }
+  { stmts, stmt_positions: block.stmt_positions }
+}
+
+///|
+fn rename_properties_in_stmt(
+  stmt : @ast.TsStmt,
+  prop_map : Map[String, String],
+) -> @ast.TsStmt {
+  match stmt {
+    Var(b, t, init) =>
+      Var(
+        rename_properties_in_binding(b, prop_map),
+        t,
+        rename_properties_in_expr(init, prop_map),
+      )
+    Let(b, t, init) =>
+      Let(
+        rename_properties_in_binding(b, prop_map),
+        t,
+        rename_properties_in_expr(init, prop_map),
+      )
+    Const(b, t, init) =>
+      Const(
+        rename_properties_in_binding(b, prop_map),
+        t,
+        rename_properties_in_expr(init, prop_map),
+      )
+    Expr(e) => Expr(rename_properties_in_expr(e, prop_map))
+    Return(opt) =>
+      match opt {
+        Some(e) => Return(Some(rename_properties_in_expr(e, prop_map)))
+        None => Return(None)
+      }
+    Throw(e) => Throw(rename_properties_in_expr(e, prop_map))
+    Assign(name, e) => Assign(name, rename_properties_in_expr(e, prop_map))
+    CompoundAssign(name, op, e) =>
+      CompoundAssign(name, op, rename_properties_in_expr(e, prop_map))
+    PropAssign(recv, prop, value) =>
+      PropAssign(
+        rename_properties_in_expr(recv, prop_map),
+        rename_prop_key(prop, prop_map),
+        rename_properties_in_expr(value, prop_map),
+      )
+    IndexAssign(recv, idx, value) =>
+      IndexAssign(
+        rename_properties_in_expr(recv, prop_map),
+        rename_properties_in_expr(idx, prop_map),
+        rename_properties_in_expr(value, prop_map),
+      )
+    If(c, t, e_opt) =>
+      If(rename_properties_in_expr(c, prop_map), rename_properties_in_block(t, prop_map), match e_opt {
+        Some(b) => Some(rename_properties_in_block(b, prop_map))
+        None => None
+      })
+    While(c, b) =>
+      While(
+        rename_properties_in_expr(c, prop_map),
+        rename_properties_in_block(b, prop_map),
+      )
+    DoWhile(c, b) =>
+      DoWhile(
+        rename_properties_in_expr(c, prop_map),
+        rename_properties_in_block(b, prop_map),
+      )
+    For(init_opt, cond_opt, update_opt, body) =>
+      For(
+        match init_opt {
+          Some(s) => Some(rename_properties_in_stmt(s, prop_map))
+          None => None
+        },
+        match cond_opt {
+          Some(c) => Some(rename_properties_in_expr(c, prop_map))
+          None => None
+        },
+        match update_opt {
+          Some(s) => Some(rename_properties_in_stmt(s, prop_map))
+          None => None
+        },
+        rename_properties_in_block(body, prop_map),
+      )
+    ForOf(kind, b, t, iter, body) =>
+      ForOf(
+        kind,
+        rename_properties_in_binding(b, prop_map),
+        t,
+        rename_properties_in_expr(iter, prop_map),
+        rename_properties_in_block(body, prop_map),
+      )
+    ForAwaitOf(kind, b, t, iter, body) =>
+      ForAwaitOf(
+        kind,
+        rename_properties_in_binding(b, prop_map),
+        t,
+        rename_properties_in_expr(iter, prop_map),
+        rename_properties_in_block(body, prop_map),
+      )
+    ForIn(kind, b, t, iter, body) =>
+      ForIn(
+        kind,
+        rename_properties_in_binding(b, prop_map),
+        t,
+        rename_properties_in_expr(iter, prop_map),
+        rename_properties_in_block(body, prop_map),
+      )
+    Switch(scrutinee, cases) => {
+      let new_cases : Array[@ast.TsSwitchCase] = []
+      for c in cases {
+        new_cases.push({
+          test_expr: match c.test_expr {
+            Some(t) => Some(rename_properties_in_expr(t, prop_map))
+            None => None
+          },
+          body: rename_properties_in_block(c.body, prop_map),
+        })
+      }
+      Switch(rename_properties_in_expr(scrutinee, prop_map), new_cases)
+    }
+    Try(t, cb, c, f) =>
+      Try(rename_properties_in_block(t, prop_map), cb, match c {
+        Some(b) => Some(rename_properties_in_block(b, prop_map))
+        None => None
+      }, match f {
+        Some(b) => Some(rename_properties_in_block(b, prop_map))
+        None => None
+      })
+    Block(b) => Block(rename_properties_in_block(b, prop_map))
+    Label(name, inner) => Label(name, rename_properties_in_stmt(inner, prop_map))
+    With(target, body) =>
+      With(
+        rename_properties_in_expr(target, prop_map),
+        rename_properties_in_block(body, prop_map),
+      )
+    Break(_) | Continue(_) | Empty | Debugger => stmt
+  }
+}
+
+///|
+fn rename_properties_in_expr(
+  expr : @ast.TsExpr,
+  prop_map : Map[String, String],
+) -> @ast.TsExpr {
+  match expr {
+    PropAccess(recv, name) =>
+      PropAccess(
+        rename_properties_in_expr(recv, prop_map),
+        rename_prop_key(name, prop_map),
+      )
+    MethodCall(recv, method, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_properties_in_expr(a, prop_map))
+      }
+      MethodCall(
+        rename_properties_in_expr(recv, prop_map),
+        rename_prop_key(method, prop_map),
+        new_args,
+      )
+    }
+    PropAssignExpr(recv, prop, value) =>
+      PropAssignExpr(
+        rename_properties_in_expr(recv, prop_map),
+        rename_prop_key(prop, prop_map),
+        rename_properties_in_expr(value, prop_map),
+      )
+    ObjectLit(entries) => {
+      let out : Array[(String, @ast.TsExpr)] = []
+      for ent in entries {
+        let new_key = if ent.0 == "..." {
+          ent.0
+        } else {
+          rename_prop_key(ent.0, prop_map)
+        }
+        out.push((new_key, rename_properties_in_expr(ent.1, prop_map)))
+      }
+      ObjectLit(out)
+    }
+    Call(name, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_properties_in_expr(a, prop_map))
+      }
+      Call(name, new_args)
+    }
+    CallExpr(callee, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_properties_in_expr(a, prop_map))
+      }
+      CallExpr(rename_properties_in_expr(callee, prop_map), new_args)
+    }
+    New(name, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_properties_in_expr(a, prop_map))
+      }
+      New(name, new_args)
+    }
+    NewExpr(callee, args) => {
+      let new_args : Array[@ast.TsExpr] = []
+      for a in args {
+        new_args.push(rename_properties_in_expr(a, prop_map))
+      }
+      NewExpr(rename_properties_in_expr(callee, prop_map), new_args)
+    }
+    IndexAccess(recv, idx) =>
+      IndexAccess(
+        rename_properties_in_expr(recv, prop_map),
+        rename_properties_in_expr(idx, prop_map),
+      )
+    IndexAssignExpr(recv, idx, value) =>
+      IndexAssignExpr(
+        rename_properties_in_expr(recv, prop_map),
+        rename_properties_in_expr(idx, prop_map),
+        rename_properties_in_expr(value, prop_map),
+      )
+    BinOp(op, l, r) =>
+      BinOp(
+        op,
+        rename_properties_in_expr(l, prop_map),
+        rename_properties_in_expr(r, prop_map),
+      )
+    UnaryOp(op, inner) => UnaryOp(op, rename_properties_in_expr(inner, prop_map))
+    Cond(c, t, e) =>
+      Cond(
+        rename_properties_in_expr(c, prop_map),
+        rename_properties_in_expr(t, prop_map),
+        rename_properties_in_expr(e, prop_map),
+      )
+    ArrayLit(items) => {
+      let out : Array[@ast.TsExpr] = []
+      for i in items {
+        out.push(rename_properties_in_expr(i, prop_map))
+      }
+      ArrayLit(out)
+    }
+    Spread(inner) => Spread(rename_properties_in_expr(inner, prop_map))
+    ComputedProp(k, v) =>
+      ComputedProp(
+        rename_properties_in_expr(k, prop_map),
+        rename_properties_in_expr(v, prop_map),
+      )
+    AssignExpr(name, value) =>
+      AssignExpr(name, rename_properties_in_expr(value, prop_map))
+    AssignPattern(b, value) =>
+      AssignPattern(
+        rename_properties_in_binding(b, prop_map),
+        rename_properties_in_expr(value, prop_map),
+      )
+    CompoundAssignExpr(target, op, value) =>
+      CompoundAssignExpr(
+        rename_properties_in_expr(target, prop_map),
+        op,
+        rename_properties_in_expr(value, prop_map),
+      )
+    Seq(a, b) =>
+      Seq(
+        rename_properties_in_expr(a, prop_map),
+        rename_properties_in_expr(b, prop_map),
+      )
+    ArrowFunc(params, ret, body, is_async) => {
+      let new_params : Array[@ast.TsParam] = []
+      for p in params {
+        let new_binding : @ast.TsBinding? = match p.binding {
+          Some(b) => Some(rename_properties_in_binding(b, prop_map))
+          None => None
+        }
+        let new_default : @ast.TsExpr? = match p.default {
+          Some(d) => Some(rename_properties_in_expr(d, prop_map))
+          None => None
+        }
+        new_params.push({
+          name: p.name,
+          binding: new_binding,
+          is_rest: p.is_rest,
+          type_: p.type_,
+          default: new_default,
+        })
+      }
+      let new_body = match body {
+        ArrowExpr(e) =>
+          @ast.TsArrowBody::ArrowExpr(rename_properties_in_expr(e, prop_map))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(rename_properties_in_block(b, prop_map))
+      }
+      ArrowFunc(new_params, ret, new_body, is_async)
+    }
+    FuncExpr(f) => {
+      let new_params : Array[@ast.TsParam] = []
+      for p in f.params {
+        let new_binding : @ast.TsBinding? = match p.binding {
+          Some(b) => Some(rename_properties_in_binding(b, prop_map))
+          None => None
+        }
+        let new_default : @ast.TsExpr? = match p.default {
+          Some(d) => Some(rename_properties_in_expr(d, prop_map))
+          None => None
+        }
+        new_params.push({
+          name: p.name,
+          binding: new_binding,
+          is_rest: p.is_rest,
+          type_: p.type_,
+          default: new_default,
+        })
+      }
+      FuncExpr({
+        name: f.name,
+        type_params: f.type_params,
+        const_type_params: f.const_type_params,
+        params: new_params,
+        return_type: f.return_type,
+        body: rename_properties_in_block(f.body, prop_map),
+        is_generator: f.is_generator,
+        is_async: f.is_async,
+      })
+    }
+    Yield(opt) =>
+      match opt {
+        Some(e) => Yield(Some(rename_properties_in_expr(e, prop_map)))
+        None => Yield(None)
+      }
+    YieldStar(inner) => YieldStar(rename_properties_in_expr(inner, prop_map))
+    Await(inner) => Await(rename_properties_in_expr(inner, prop_map))
+    DynamicImport(spec, opts) =>
+      DynamicImport(rename_properties_in_expr(spec, prop_map), match opts {
+        Some(o) => Some(rename_properties_in_expr(o, prop_map))
+        None => None
+      })
+    TaggedTemplate(tag, parts, raw, exprs) => {
+      let out : Array[@ast.TsExpr] = []
+      for e in exprs {
+        out.push(rename_properties_in_expr(e, prop_map))
+      }
+      TaggedTemplate(rename_properties_in_expr(tag, prop_map), parts, raw, out)
+    }
+    TemplateLiteral(parts, exprs) => {
+      let out : Array[@ast.TsExpr] = []
+      for e in exprs {
+        out.push(rename_properties_in_expr(e, prop_map))
+      }
+      TemplateLiteral(parts, out)
+    }
+    As(inner, ty) => As(rename_properties_in_expr(inner, prop_map), ty)
+    Satisfies(inner, ty) => Satisfies(rename_properties_in_expr(inner, prop_map), ty)
+    NonNull(inner) => NonNull(rename_properties_in_expr(inner, prop_map))
+    OptionalChain(inner) => OptionalChain(rename_properties_in_expr(inner, prop_map))
+    _ => expr
+  }
+}
+
+///|
+fn rename_properties_in_binding(
+  binding : @ast.TsBinding,
+  prop_map : Map[String, String],
+) -> @ast.TsBinding {
+  match binding {
+    Ident(_) => binding
+    Array(ab) => {
+      let new_items : Array[@ast.TsBindingElem?] = []
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            let new_inner = rename_properties_in_binding(be.binding, prop_map)
+            let new_default : @ast.TsExpr? = match be.default {
+              Some(d) => Some(rename_properties_in_expr(d, prop_map))
+              None => None
+            }
+            new_items.push(Some({ binding: new_inner, default: new_default }))
+          }
+          None => new_items.push(None)
+        }
+      }
+      let new_rest : @ast.TsBinding? = match ab.rest {
+        Some(r) => Some(rename_properties_in_binding(r, prop_map))
+        None => None
+      }
+      Array({ items: new_items, rest: new_rest })
+    }
+    Object(ob) => {
+      // Object-destructure key: rename the key, but preserve the
+      // local binding so the JS stays equivalent. Shorthand `{ key }`
+      // (where `prop.binding == Ident(key)`) becomes `{ mangled: key }`.
+      let new_props : Array[@ast.TsObjectBindingProp] = []
+      for p in ob.props {
+        let new_key = rename_prop_key(p.key, prop_map)
+        let key_was_renamed = new_key != p.key
+        let new_inner = rename_properties_in_binding(p.binding, prop_map)
+        let new_default : @ast.TsExpr? = match p.default {
+          Some(d) => Some(rename_properties_in_expr(d, prop_map))
+          None => None
+        }
+        // If we renamed the key AND the binding was the implicit
+        // shorthand (`{ key }` → `binding == Ident(key)`), emit it
+        // explicitly as `{ new_key: key }` so the local binding
+        // continues to use the original name.
+        new_props.push({
+          key: new_key,
+          key_expr: p.key_expr,
+          binding: if key_was_renamed && p.binding is Ident(b) && b == p.key {
+            @ast.TsBinding::Ident(b)
+          } else {
+            new_inner
+          },
+          default: new_default,
+        })
+      }
+      Object({ props: new_props, rest: ob.rest })
+    }
+    Target(e) => Target(rename_properties_in_expr(e, prop_map))
+  }
+}
+
+///|
+fn rename_prop_key(name : String, prop_map : Map[String, String]) -> String {
+  match prop_map.get(name) {
+    Some(renamed) => renamed
+    None => name
+  }
+}

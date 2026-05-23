@@ -218,7 +218,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       const_type_params,
       params,
       return_type,
-      body: { stmts: [] },
+      body: { stmts: [], stmt_positions: [] },
       is_generator,
       is_async,
     }
@@ -230,7 +230,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
       const_type_params,
       params,
       return_type,
-      body: { stmts: [] },
+      body: { stmts: [], stmt_positions: [] },
       is_generator,
       is_async,
     }

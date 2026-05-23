@@ -1247,7 +1247,10 @@ fn synthesize_func_from_expr(
       let normalized_params = merge_func_param_types(params, declared_type)
       let normalized_body = match body {
         @ast.TsArrowBody::ArrowExpr(expr) =>
-          @ast.TsBlock::{ stmts: [@ast.TsStmt::Return(Some(expr))] }
+          @ast.TsBlock::{
+            stmts: [@ast.TsStmt::Return(Some(expr))],
+            stmt_positions: [],
+          }
         @ast.TsArrowBody::ArrowBlock(block) => block
       }
       let return_type = match declared_type {

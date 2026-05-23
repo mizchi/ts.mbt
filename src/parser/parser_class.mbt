@@ -510,7 +510,7 @@ fn Parser::inject_instance_field_assigns(
     type_params: func.type_params,
     params: func.params,
     return_type: func.return_type,
-    body: { stmts: new_stmts },
+    body: { stmts: new_stmts, stmt_positions: [] },
     const_type_params: [],
     is_generator: func.is_generator,
     is_async: func.is_async,
@@ -628,7 +628,7 @@ fn Parser::parse_class_body(
         Any
       }
       let body = if self.match_(Semicolon) {
-        @ast.TsBlock::{ stmts: [] }
+        @ast.TsBlock::{ stmts: [], stmt_positions: [] }
       } else {
         // Save and set function context for method body
         let prev_generator = self.in_generator
@@ -730,7 +730,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     Some(base_name) =>
       if class_name.length() > 0 && base_name == class_name {
         let throw_expr = @ast.TsExpr::Call("ReferenceError", [])
-        let throw_body : @ast.TsBlock = { stmts: [Throw(throw_expr)] }
+        let throw_body : @ast.TsBlock = { stmts: [Throw(throw_expr)], stmt_positions: [] }
         return CallExpr(
           @ast.TsExpr::FuncExpr(@ast.TsFunc::{
             type_params: [],
@@ -869,6 +869,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
           let empty_body : @ast.TsBlock = {
             stmts: [Expr(Call("super", [@ast.TsExpr::Var(rest_name)]))],
+            stmt_positions: [],
           }
           {
             name: tmp_name,
@@ -882,7 +883,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           }
         }
         None => {
-          let empty_body : @ast.TsBlock = { stmts: [] }
+          let empty_body : @ast.TsBlock = { stmts: [], stmt_positions: [] }
           {
             name: tmp_name,
             type_params: [],
@@ -1158,7 +1159,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       name: "<class>",
       params: [],
       return_type: @ast.TsType::Any,
-      body: @ast.TsBlock::{ stmts, },
+      body: @ast.TsBlock::{ stmts, stmt_positions: [] },
       const_type_params: [],
       is_generator: false,
       is_async: false,
@@ -1315,6 +1316,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
           let empty_body : @ast.TsBlock = {
             stmts: [Expr(Call("super", [@ast.TsExpr::Var(rest_name)]))],
+            stmt_positions: [],
           }
           {
             name,
@@ -1328,7 +1330,7 @@ fn Parser::parse_class_decl_with_abstract(
           }
         }
         None => {
-          let empty_body : @ast.TsBlock = { stmts: [] }
+          let empty_body : @ast.TsBlock = { stmts: [], stmt_positions: [] }
           {
             name,
             type_params: [],
@@ -1605,7 +1607,7 @@ fn Parser::parse_class_decl_with_abstract(
         name: "<class>",
         params: [],
         return_type: @ast.TsType::Any,
-        body: @ast.TsBlock::{ stmts: internal_stmts },
+        body: @ast.TsBlock::{ stmts: internal_stmts, stmt_positions: [] },
         const_type_params: [],
         is_generator: false,
         is_async: false,

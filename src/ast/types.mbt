@@ -381,8 +381,16 @@ pub(all) enum TsStmt {
 
 ///|
 // / block (statementarray)
+//
+// `stmt_positions` is positionally aligned with `stmts`: when the
+// parser knows the source byte offset of a statement's first token,
+// it records that here. Synthesized blocks (e.g. the desugar of a
+// `class` declaration) leave the array empty — callers that don't
+// need positions can ignore it, and the source-map generator falls
+// back to "no mapping" when the array is shorter than `stmts`.
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
+  stmt_positions : Array[Int]
 } derive(Debug)
 
 ///|
