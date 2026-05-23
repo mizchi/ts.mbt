@@ -1595,6 +1595,18 @@ fn infer_expr(
     Yield(_) | YieldStar(_) => @ast.TsType::Any
     DynamicImport(_) | ImportMeta => @ast.TsType::Any
     PropAccess(receiver, name) => {
+      // Property-access narrowing: when the receiver is a bare identifier
+      // and the env has a synthesised `recv.prop` binding (set by
+      // `analyze_equality` for `recv.prop !== null/undefined` conditions),
+      // honour the narrowed type ahead of the structural lookup.
+      match receiver {
+        Var(recv_name) =>
+          match env.lookup(recv_name + "." + name) {
+            Some(narrowed) => return narrowed
+            None => ()
+          }
+        _ => ()
+      }
       let recv_ty = infer_expr(env, resolver, receiver)
       match resolver.lookup_field(recv_ty, name) {
         Some(t) => t
@@ -3310,6 +3322,29 @@ fn apply_method_type_predicate_narrowing(
 ///|
 /// Look up `name`'s current type via env first, then resolver globals,
 /// defaulting to `Any`.
+///|
+/// Resolve the current type of a `name.prop` access — first via any
+/// narrowing binding under the synthetic `name.prop` env key, then via
+/// the receiver's structural shape.
+fn prop_access_current_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  name : String,
+  prop : String,
+) -> @ast.TsType {
+  match env.lookup(name + "." + prop) {
+    Some(t) => t
+    None => {
+      let recv_ty = env_lookup_full(env, resolver, name)
+      match resolver.lookup_field(recv_ty, prop) {
+        Some(t) => t
+        None => @ast.TsType::Any
+      }
+    }
+  }
+}
+
+///|
 fn env_lookup_full(
   env : ExprEnv,
   resolver : Resolver,
@@ -3381,6 +3416,36 @@ fn analyze_equality(
       true_side.push((name, tag))
       let stripped = narrow_remove(cur, fn(v) { type_eq(v, tag) })
       false_side.push((name, stripped))
+    }
+    None => ()
+  }
+
+  // `obj.prop === null` / `obj.prop === undefined` — narrow the property
+  // access. The synthesised env key `obj.prop` (with a literal dot) is
+  // looked up by `infer_expr.PropAccess` ahead of the usual receiver
+  // resolution path.
+  let prop_null_match = match (left, right) {
+    (PropAccess(Var(name), prop), NullLit) =>
+      Some((name, prop, @ast.TsType::Null))
+    (NullLit, PropAccess(Var(name), prop)) =>
+      Some((name, prop, @ast.TsType::Null))
+    (PropAccess(Var(name), prop), UnaryOp(Void, _)) =>
+      Some((name, prop, @ast.TsType::Undefined))
+    (UnaryOp(Void, _), PropAccess(Var(name), prop)) =>
+      Some((name, prop, @ast.TsType::Undefined))
+    (PropAccess(Var(name), prop), Var("undefined")) =>
+      Some((name, prop, @ast.TsType::Undefined))
+    (Var("undefined"), PropAccess(Var(name), prop)) =>
+      Some((name, prop, @ast.TsType::Undefined))
+    _ => None
+  }
+  match prop_null_match {
+    Some((name, prop, tag)) => {
+      let cur = prop_access_current_type(env, resolver, name, prop)
+      let key = name + "." + prop
+      true_side.push((key, tag))
+      let stripped = narrow_remove(cur, fn(v) { type_eq(v, tag) })
+      false_side.push((key, stripped))
     }
     None => ()
   }

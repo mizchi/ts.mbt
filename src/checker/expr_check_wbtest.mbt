@@ -3263,3 +3263,84 @@ test "expr_check: typed-array.map flows through Array.prototype.map" {
     None => fail("function f not found")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Round 30: property-access narrowing — `obj.foo !== undefined` narrows
+// the type of `obj.foo` inside the then-branch.
+// Also covers `instanceof TypeError` against an Error-shaped binding.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: prop !== undefined narrows obj.prop inside then-branch" {
+  let src =
+    #|interface Config { name?: string }
+    #|function f(c: Config): string {
+    #|  if (c.name !== undefined) {
+    #|    return c.name;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: prop !== null narrows obj.prop inside then-branch" {
+  let src =
+    #|interface Node { parent: Node | null }
+    #|function f(n: Node): Node {
+    #|  if (n.parent !== null) {
+    #|    return n.parent;
+    #|  }
+    #|  return n;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: prop !== undefined else-branch keeps original type" {
+  // The else-branch sees `c.name` as still optional (well, narrowed to
+  // `undefined` here). Returning it where `string` is expected should
+  // flag.
+  let src =
+    #|interface Config { name?: string }
+    #|function f(c: Config): string {
+    #|  if (c.name === undefined) {
+    #|    return c.name;
+    #|  }
+    #|  return c.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("undefined") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: instanceof TypeError narrows a caught error" {
+  // `catch (e)` binds `e` as `any`; the instanceof check narrows it to
+  // `TypeError` inside the then-branch so `.message` resolves through
+  // the error prototype shape.
+  let src =
+    #|function f(): string {
+    #|  try {
+    #|    return "";
+    #|  } catch (e) {
+    #|    if (e instanceof TypeError) {
+    #|      return e.message;
+    #|    }
+    #|    return "other";
+    #|  }
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
