@@ -214,6 +214,39 @@ fn Resolver::lookup_field(
             None => None
           }
       }
+    // `Applied(N, [A, B, …])` — the type instantiates a generic
+    // interface (or class). Substitute type-parameter names with the
+    // supplied args before returning the field type so `b.value` on
+    // `b: Box<number>` resolves to `number` rather than the raw `T`.
+    Applied(n, args) =>
+      match self.interfaces.get(n) {
+        Some(iface) => {
+          let bindings : Map[String, @ast.TsType] = {}
+          let limit = if args.length() < iface.type_params.length() {
+            args.length()
+          } else {
+            iface.type_params.length()
+          }
+          let mut i = 0
+          while i < limit {
+            bindings[iface.type_params[i]] = args[i]
+            i = i + 1
+          }
+          for f in iface.fields {
+            if f.0 == field {
+              return Some(substitute_params(f.1, bindings))
+            }
+          }
+          for base in iface.extends_names {
+            match self.lookup_field(@ast.TsType::Named(base), field) {
+              Some(t) => return Some(substitute_params(t, bindings))
+              None => ()
+            }
+          }
+          None
+        }
+        None => None
+      }
     Object(entries) => {
       for entry in entries {
         match entry.0 {
@@ -979,6 +1012,19 @@ fn check_expr_against(
         }
         None => ()
       }
+    // `Applied(N, [args])` — generic interface instance. Same shape
+    // analysis as `Named`, with type-parameter substitution performed by
+    // `lookup_field` / `collect_declared_fields`.
+    (ObjectLit(entries), Applied(name, _)) =>
+      match ctx.resolver.interfaces.get(name) {
+        Some(_) => {
+          check_object_lit_against_target(
+            env, entries, expected_shape, ctx.resolver, ctx, sub_path,
+          )
+          return
+        }
+        None => ()
+      }
     _ => ()
   }
   if !is_checkable(expected) {
@@ -1127,6 +1173,34 @@ fn collect_declared_fields(
           for base in iface.extends_names {
             for f in collect_declared_fields(@ast.TsType::Named(base), resolver) {
               out.push(f)
+            }
+          }
+        }
+        None => ()
+      }
+    // Generic interface application: substitute type parameters before
+    // returning each field type. `extends` chain isn't yet specialised —
+    // bases inherit field types as declared.
+    Applied(n, args) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) => {
+          let bindings : Map[String, @ast.TsType] = {}
+          let limit = if args.length() < iface.type_params.length() {
+            args.length()
+          } else {
+            iface.type_params.length()
+          }
+          let mut i = 0
+          while i < limit {
+            bindings[iface.type_params[i]] = args[i]
+            i = i + 1
+          }
+          for f in iface.fields {
+            out.push((f.0, substitute_params(f.1, bindings)))
+          }
+          for base in iface.extends_names {
+            for f in collect_declared_fields(@ast.TsType::Named(base), resolver) {
+              out.push((f.0, substitute_params(f.1, bindings)))
             }
           }
         }

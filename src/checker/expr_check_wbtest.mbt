@@ -1923,6 +1923,99 @@ test "expr_check: object literal honours interface extends chain" {
   assert_eq(issues.length(), 0)
 }
 
+// ---------------------------------------------------------------------------
+// Round 18: generic interface type-arg substitution at use sites.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: generic interface field is specialised at use site" {
+  // `b.value` on `b: Box<number>` resolves to `number` after substituting
+  // `T -> number`; returning it where `number` is expected passes.
+  let src =
+    #|interface Box<T> { value: T }
+    #|function unwrap(b: Box<number>): number {
+    #|  return b.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic interface field rejects wrong return type" {
+  let src =
+    #|interface Box<T> { value: T }
+    #|function unwrap(b: Box<number>): string {
+    #|  return b.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic interface method signature is specialised" {
+  // `b.set(123)` on `b: Box<number>` should type-check; `b.set("x")` on
+  // the same receiver should fail.
+  let src =
+    #|interface Box<T> { value: T; set(v: T): void }
+    #|function bump(b: Box<number>): void {
+    #|  b.set("x");
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: object literal contextually types against Applied(I, args)" {
+  let src =
+    #|interface Box<T> { value: T }
+    #|function take(b: Box<number>): void {}
+    #|function user(): void {
+    #|  take({ value: "oops" });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains(".value") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: object literal flags missing field on generic interface" {
+  let src =
+    #|interface Pair<A, B> { a: A; b: B }
+    #|function take(p: Pair<number, string>): void {}
+    #|function user(): void {
+    #|  take({ a: 1 });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains(".b") && i.message.contains("required") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
 ///|
 test "expr_check: tuple destructuring sees per-slot types" {
   // `const [a, b] = […] as [number, string]` should bind `a: number` and
