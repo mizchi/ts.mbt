@@ -2338,10 +2338,12 @@ fn Parser::skip_jsx_closing_tag(
 // / function, array, property, method
 fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_primary()
-  // Track whether this chain saw any `?.` so we can wrap the outermost
-  // result in `OptionalChain(...)` for the checker to widen with
-  // `undefined`. The exact position of `?` is lost; what matters for
-  // narrowing is that the chain may short-circuit.
+  // Track whether this chain saw any `?.` so the checker can widen
+  // the overall result with `undefined`. Each `?.` link wraps its
+  // receiver in `OptionalChain(...)` to preserve the per-position
+  // information emit needs for correct `?.` placement; the
+  // outer-most wrap is still emitted so the checker sees one
+  // unified short-circuit signal.
   let mut saw_optional_chain = false
 
   // operatorcheck
@@ -2359,7 +2361,12 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       let _ = self.advance()
       let _ = self.advance()
       saw_optional_chain = true
-      if self.try_skip_call_type_args(expr) {
+      // Wrap the receiver so the very next chain link is the
+      // optional one. Emit can then output `recv ?. next` exactly
+      // where the user wrote it.
+      let optional_recv = @ast.TsExpr::OptionalChain(expr)
+      if self.try_skip_call_type_args(optional_recv) {
+        expr = optional_recv
         continue
       }
       match self.peek().kind {
@@ -2367,24 +2374,24 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
           let _ = self.advance()
           let index = self.parse_expr()
           let _ = self.expect(RBracket)
-          expr = IndexAccess(expr, index)
+          expr = IndexAccess(optional_recv, index)
           continue
         }
         LParen => {
           let _ = self.advance()
           let args = self.parse_args()
           let _ = self.expect(RParen)
-          match expr {
-            Var(name) => expr = Call(name, args)
-            PropAccess(receiver, method_name) =>
-              expr = MethodCall(receiver, method_name, args)
-            _ => expr = CallExpr(expr, args)
+          match optional_recv {
+            // Bare `name?.(args)` — preserve receiver wrapping by
+            // going through CallExpr; the optional marker lives on
+            // the OptionalChain wrapping a `Var(name)` inside.
+            _ => expr = CallExpr(optional_recv, args)
           }
           continue
         }
         _ => {
           let prop = self.parse_property_name_token()
-          expr = PropAccess(expr, prop)
+          expr = PropAccess(optional_recv, prop)
           continue
         }
       }

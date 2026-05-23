@@ -7,31 +7,27 @@
 // ---------------------------------------------------------------------------
 
 ///|
-async test "adv4: single-link `?.` short-circuits as expected" {
-  // The parser collapses multi-link chains (`a?.b?.c`) into one
-  // `OptionalChain` wrapper without tracking WHICH link carries
-  // the `?.` — we can only place `?.` at the outermost link.
-  // Test the case that DOES work: a single `?.` at the tail.
-  // Multi-`?.` precise-position support is filed as a parser
-  // TODO; for now the fixture exercises the path the emitter
-  // round-trips faithfully.
+async test "adv4: multi-link `?.` preserves per-position semantics" {
+  // The parser wraps each link's receiver in `OptionalChain(...)`
+  // so emit can place `?.` exactly where the user wrote it.
+  // `a?.b?.c` and `a?.b.c` and `a.b?.c` are all distinct: each
+  // form short-circuits at a different link.
   let files : Map[String, String] = {}
   files["entry.ts"] =
-    #|type T = { c?: number };
-    #|const live: T = { c: 7 };
-    #|const empty: T = {};
-    #|const liveVal: T | null = live;
-    #|const deadVal: T | null = null;
-    #|console.log("live.c:", live?.c);
-    #|console.log("empty.c:", empty?.c);
-    #|console.log("liveVal?.c:", liveVal?.c);
-    #|console.log("deadVal?.c:", deadVal?.c);
+    #|type T = { b?: { c?: number } } | null;
+    #|const live: T = { b: { c: 7 } };
+    #|const empty: T = null;
+    #|const partial: T = { b: undefined };
+    #|console.log("live:", live?.b?.c);
+    #|console.log("empty:", empty?.b?.c);
+    #|console.log("partial:", partial?.b?.c);
+    #|console.log("partial-2:", partial?.b?.c ?? "default");
     #|
   run_differential(
-    "adv4-optional-chain-tail",
+    "adv4-optional-chain-multi",
     files,
     "entry.ts",
-    extra_reserved_props=["c"],
+    extra_reserved_props=["b", "c"],
   )
 }
 

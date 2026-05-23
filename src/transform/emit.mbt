@@ -772,7 +772,16 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       emit_args(e, args)
     }
     CallExpr(callee, args) => {
-      emit_expr(e, callee, 18)
+      // `foo?.(args)` encodes the optional call as
+      // `CallExpr(OptionalChain(foo), args)`. The receiver wrap
+      // means the `?.` lives between the callee and the call.
+      match callee {
+        OptionalChain(actual) => {
+          emit_expr(e, actual, 18)
+          e.write("?.")
+        }
+        _ => emit_expr(e, callee, 18)
+      }
       emit_args(e, args)
     }
     Cond(cond, then_e, else_e) => {
@@ -868,14 +877,32 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       emit_expr(e, value_expr, 2)
     }
     IndexAccess(recv, idx) => {
-      emit_expr(e, recv, 18)
-      e.write("[")
+      // `OptionalChain(actual_recv)` as a receiver encodes the
+      // `?.` token between the receiver and this link.
+      match recv {
+        OptionalChain(actual) => {
+          emit_expr(e, actual, 18)
+          e.write("?.[")
+        }
+        _ => {
+          emit_expr(e, recv, 18)
+          e.write("[")
+        }
+      }
       emit_expr(e, idx, 0)
       e.write("]")
     }
     PropAccess(recv, name) => {
-      emit_expr(e, recv, 18)
-      e.write(".")
+      match recv {
+        OptionalChain(actual) => {
+          emit_expr(e, actual, 18)
+          e.write("?.")
+        }
+        _ => {
+          emit_expr(e, recv, 18)
+          e.write(".")
+        }
+      }
       e.write(strip_internal_prop_marker(name))
     }
     New(name, args) => {
@@ -889,8 +916,16 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       emit_args(e, args)
     }
     MethodCall(recv, method, args) => {
-      emit_expr(e, recv, 18)
-      e.write(".")
+      match recv {
+        OptionalChain(actual) => {
+          emit_expr(e, actual, 18)
+          e.write("?.")
+        }
+        _ => {
+          emit_expr(e, recv, 18)
+          e.write(".")
+        }
+      }
       e.write(strip_internal_prop_marker(method))
       emit_args(e, args)
     }
@@ -1024,17 +1059,11 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
       emit_expr_body(e, inner)
     OptionalChain(inner) => {
-      // The parser stores the whole chain expression inside
-      // `OptionalChain(...)` without preserving WHICH link carried
-      // the `?.` token. We approximate by re-emitting the chain
-      // with the OUTERMOST link as `?.` — that's the form a
-      // hand-written `a.b.c?.d` lands on and the most common
-      // pattern in real code (an optional tail). For interior `?.`
-      // (e.g. `a?.b.c`) this loses fidelity but at least preserves
-      // the short-circuit somewhere in the chain so the runtime
-      // doesn't throw on a null receiver. A future parser change
-      // can attach a per-link flag and let us emit exactly.
-      emit_optional_chain(e, inner)
+      // Per-link `?.` is now encoded by wrapping the receiver of
+      // the optional link in `OptionalChain(...)` at parse time —
+      // emit transparently here and let the chain links pick up
+      // the `?.` token from the wrapped receiver shape.
+      emit_expr_body(e, inner)
     }
     JsxElement(tag, attrs, children) =>
       emit_jsx_element(e, tag, attrs, children)

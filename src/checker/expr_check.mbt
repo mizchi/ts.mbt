@@ -1833,6 +1833,12 @@ fn infer_expr(
     Yield(_) | YieldStar(_) => @ast.TsType::Any
     DynamicImport(_, _) | ImportMeta => @ast.TsType::Any
     PropAccess(receiver, name) => {
+      // The parser wraps the receiver of each `?.` link in
+      // `OptionalChain(...)` to preserve per-position info for the
+      // emit. For type inference the inner wrap is transparent —
+      // the *outer* OptionalChain covers the widening. Peel inner
+      // OptionalChain wraps before doing the field lookup.
+      let receiver = peel_optional_chain_wrap(receiver)
       // Property-access narrowing: when the access is a `Var` /
       // `PropAccess`-chain that the narrowing path tracks, look up the
       // synthesised dotted env key first. Falls through to the
@@ -1969,6 +1975,19 @@ fn infer_expr(
     // return `Any`. The embedded `{expr}` sub-expressions are walked
     // by `check_call_args_in_expr` for diagnostic recursion.
     JsxElement(_, _, _) => @ast.TsType::Any
+  }
+}
+
+///|
+/// Strip per-link `OptionalChain(...)` wraps off a receiver
+/// expression. The parser inserts these to record `?.` position
+/// for the emit; type inference treats them as transparent — the
+/// outermost `OptionalChain` (covering the whole chain) is what
+/// drives the `| undefined` widening.
+fn peel_optional_chain_wrap(expr : @ast.TsExpr) -> @ast.TsExpr {
+  match expr {
+    OptionalChain(inner) => peel_optional_chain_wrap(inner)
+    _ => expr
   }
 }
 
@@ -5015,6 +5034,11 @@ fn check_call_args_in_expr(
       }
     PropAccess(recv, prop) => {
       check_call_args_in_expr(env, recv, ctx)
+      // Per-link `OptionalChain(...)` wraps on the receiver are
+      // emit-only — type checking should look at the unwrapped
+      // shape so a missing `?.foo` doesn't false-positive on
+      // `Bag | undefined` not having `foo`.
+      let recv = peel_optional_chain_wrap(recv)
       // Property-existence check: when the receiver has a concrete
       // structural shape and the resolver can't find `prop` on it,
       // surface a diagnostic. The class static-side fallback used

@@ -414,10 +414,40 @@ fn load_module_graph(
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
   let jsx_cfg = extract_jsx_pragmas(source, JsxConfig::default())
-  let (lowered, _refs) = lower_block_with_runtime_imports(jsx_cfg, mb.block)
+  let (lowered, jsx_refs) = lower_block_with_runtime_imports(jsx_cfg, mb.block)
+  // Synthesize the JSX-runtime import when lowering introduced
+  // references to `jsx` / `jsxs` / `Fragment` / etc. The import
+  // specifier is `<jsx_cfg.import_source>/jsx-runtime` (e.g.
+  // `react/jsx-runtime` for stock React, `./shim/jsx-runtime` for
+  // a vendored shim). After this synthesis the names flow through
+  // the regular import-alias pipeline.
+  let mut effective_imports = mb.imports
+  if jsx_refs.length() > 0 {
+    let named : Array[(String, String)] = []
+    let type_only_flags : Array[Bool] = []
+    for n in jsx_refs {
+      named.push((n, n))
+      type_only_flags.push(false)
+    }
+    let jsx_import : @ast.TsImportDecl = {
+      module_spec: jsx_cfg.import_source + "/jsx-runtime",
+      default_binding: None,
+      namespace_binding: None,
+      named_bindings: named,
+      named_type_only: type_only_flags,
+      side_effect_only: false,
+      type_only: false,
+      attributes: [],
+    }
+    let merged : Array[@ast.TsImportDecl] = [jsx_import]
+    for imp in effective_imports {
+      merged.push(imp)
+    }
+    effective_imports = merged
+  }
   // Walk imports, recurse into relative paths, accumulate bare ones.
   let resolved : Map[String, String] = {}
-  for imp in mb.imports {
+  for imp in effective_imports {
     if imp.type_only {
       // type-only imports don't survive into JS — leave them out.
       continue
@@ -490,7 +520,7 @@ fn load_module_graph(
     source,
     block: lowered,
     resolved_imports: resolved,
-    import_decls: mb.imports,
+    import_decls: effective_imports,
     exports: mb.exports,
     reexports: mb.reexports,
     module_decls,

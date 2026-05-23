@@ -293,10 +293,12 @@ pub fn lower_jsx_element(
 
 ///|
 fn lower_jsx_subexpr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
-  match expr {
-    JsxElement(t, a, c) => lower_jsx_element(cfg, t, a, c)
-    _ => expr
-  }
+  // Children can be any expression — including `cond && <X/>`,
+  // `cond ? <X/> : <Y/>`, `items.map(it => <li/>)`, etc. — so we
+  // need the full expression walker, not just the direct
+  // JsxElement arm. `lower_jsx_in_expr` recurses through BinOp,
+  // Cond, MethodCall, Arrow/FuncExpr, and the JsxElement arm.
+  lower_jsx_in_expr(cfg, expr)
 }
 
 ///|
@@ -688,7 +690,12 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
     Satisfies(inner, ty) => Satisfies(lower_jsx_in_expr(cfg, inner), ty)
     NonNull(inner) => NonNull(lower_jsx_in_expr(cfg, inner))
     OptionalChain(inner) => OptionalChain(lower_jsx_in_expr(cfg, inner))
-    FuncExpr(_) => expr // function-expression bodies are not JSX-walked yet
+    FuncExpr(f) => {
+      // Function-expression bodies CAN contain JSX (e.g. a
+      // functional-component declaration `function Foo() { return
+      // <p/>; }`). Recurse so the body's JSX gets lowered too.
+      FuncExpr({ ..f, body: lower_jsx_in_block(cfg, f.body) })
+    }
     _ => expr
   }
 }
@@ -845,6 +852,7 @@ fn collect_refs_expr(expr : @ast.TsExpr, mark : (String) -> Unit) -> Unit {
         ArrowExpr(e) => collect_refs_expr(e, mark)
         ArrowBlock(b) => collect_runtime_refs(b, mark)
       }
+    FuncExpr(f) => collect_runtime_refs(f.body, mark)
     _ => ()
   }
 }
