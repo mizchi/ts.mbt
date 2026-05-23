@@ -1,12 +1,12 @@
 import {
-  "mizchi/x/fs" @fs,
+  "mizchi/x/fs",
   "moonbitlang/core/debug",
-  "moonbitlang/core/env" @env,
-  "moonbitlang/core/json" @json,
+  "moonbitlang/core/env",
+  "moonbitlang/core/json",
   "moonbitlang/core/string",
-  "mizchi/ts/ast" @ast,
-  "mizchi/ts/checker" @checker,
-  "mizchi/ts/parser" @parser,
+  "mizchi/ts/ast",
+  "mizchi/ts/checker",
+  "mizchi/ts/parser",
 }
 
 import {
