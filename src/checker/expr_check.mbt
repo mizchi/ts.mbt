@@ -51,6 +51,74 @@ fn Resolver::empty() -> Resolver {
 }
 
 ///|
+/// TypeScript interface declaration merging. Two `interface Foo {...}`
+/// blocks with the same name combine into one whose member list is the
+/// union of both bodies. Later-declared members for the same key
+/// override earlier ones (TS itself rejects conflicting overrides at
+/// declaration time, but the checker doesn't enforce that — last writer
+/// wins for the lookup).
+fn merge_interfaces(a : @ast.TsInterface, b : @ast.TsInterface) -> @ast.TsInterface {
+  let fields : Array[(String, @ast.TsType)] = []
+  let seen : Map[String, Int] = {}
+  // Take `a`'s fields first, then let `b` override / extend.
+  for f in a.fields {
+    seen[f.0] = fields.length()
+    fields.push(f)
+  }
+  for f in b.fields {
+    match seen.get(f.0) {
+      Some(idx) => fields[idx] = f
+      None => {
+        seen[f.0] = fields.length()
+        fields.push(f)
+      }
+    }
+  }
+  let readonly_fields : Array[String] = []
+  let ro_seen : Map[String, Bool] = {}
+  for n in a.readonly_fields {
+    if !(ro_seen.get(n) is Some(_)) {
+      ro_seen[n] = true
+      readonly_fields.push(n)
+    }
+  }
+  for n in b.readonly_fields {
+    if !(ro_seen.get(n) is Some(_)) {
+      ro_seen[n] = true
+      readonly_fields.push(n)
+    }
+  }
+  let extends_names : Array[String] = []
+  let extends_args : Array[Array[@ast.TsType]] = []
+  for i in 0..<a.extends_names.length() {
+    extends_names.push(a.extends_names[i])
+    extends_args.push(a.extends_args[i])
+  }
+  for i in 0..<b.extends_names.length() {
+    extends_names.push(b.extends_names[i])
+    extends_args.push(b.extends_args[i])
+  }
+  let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  for sig in a.index_signatures {
+    index_signatures.push(sig)
+  }
+  for sig in b.index_signatures {
+    index_signatures.push(sig)
+  }
+  // Type parameters: use `a`'s. TS requires them to match across
+  // declarations, so it shouldn't matter which we pick.
+  {
+    name: a.name,
+    type_params: a.type_params,
+    extends_names,
+    extends_args,
+    fields,
+    readonly_fields,
+    index_signatures,
+  }
+}
+
+///|
 fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
   let r = Resolver::empty()
   Resolver::ingest_module(r, module_, "")
@@ -68,7 +136,14 @@ fn Resolver::ingest_module(
   prefix : String,
 ) -> Unit {
   for i in module_.interfaces {
-    r.interfaces[prefix + i.name] = i
+    let key = prefix + i.name
+    match r.interfaces.get(key) {
+      // TS declaration merging: `interface Foo { a }` + `interface Foo
+      // { b }` produces a single `Foo` whose members are the union of
+      // both bodies. Field-key collisions take the later declaration.
+      Some(existing) => r.interfaces[key] = merge_interfaces(existing, i)
+      None => r.interfaces[key] = i
+    }
   }
   for c in module_.classes {
     r.classes[prefix + c.name] = c

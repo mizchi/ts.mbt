@@ -51,7 +51,22 @@ pub fn match_infer_pattern(
   bindings : Map[String, @ast.TsType],
 ) -> Bool {
   match infer_marker_name(pattern) {
-    Some(name) => return bind_inferred_type(bindings, name, source)
+    Some(name) => {
+      // `infer X extends Bound` only binds when `source extends Bound`.
+      // Undecidable cases (`None`) optimistically allow the bind so
+      // generic callers can retry after substitution; definitive
+      // `Some(false)` rejects the bind so the surrounding conditional
+      // can pick its false branch.
+      match infer_marker_bound(pattern) {
+        Some(bound) =>
+          match extends_decision(source, bound) {
+            Some(false) => return false
+            _ => ()
+          }
+        None => ()
+      }
+      return bind_inferred_type(bindings, name, source)
+    }
     None => ()
   }
   if source == pattern {

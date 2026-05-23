@@ -4672,6 +4672,47 @@ test "expr_check: without asserts call, string|number -> string is flagged" {
 }
 
 ///|
+test "expr_check: interface declaration merging unions members" {
+  // `interface Foo { a }` + `interface Foo { b }` should expose both
+  // fields. A function body that reads `foo.b` after declaring `foo:
+  // Foo` should typecheck cleanly.
+  let src =
+    #|interface User { name: string }
+    #|interface User { age: number }
+    #|function readBoth(u: User): string {
+    #|  const _a = u.age;
+    #|  return u.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: interface merge — accessing un-merged field fails" {
+  // Without the merge, `u.age` would be unknown and infer to `Any`,
+  // which silently passes downstream checks. The negative angle is
+  // taken via an unsupported-property assignment that the checker is
+  // expected to flag once the merge brings the field in.
+  let src =
+    #|interface User { name: string }
+    #|interface User { age: number }
+    #|function bad(u: User): number {
+    #|  return u.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("return") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
 test "expr_check: truthy asserts strips null / undefined from operand" {
   // `assertOk(value)` declares `asserts value` (no `is T`). After the
   // call `v: T | null | undefined` is narrowed to `T`.

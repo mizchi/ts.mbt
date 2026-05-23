@@ -64,6 +64,53 @@ test "match_infer_pattern: conflicting binding fails" {
 }
 
 ///|
+fn infer_marker_with_bound(name : String, bound : @ast.TsType) -> @ast.TsType {
+  Applied("__tsmbt_infer", [Named(name), bound])
+}
+
+///|
+test "match_infer_pattern: `infer X extends Bound` rejects disjoint source" {
+  // Pattern `infer T extends string` against source `number`: the
+  // bound is definitively violated, so the conditional should pick its
+  // false branch.
+  let bindings : Map[String, @ast.TsType] = {}
+  assert_false(
+    match_infer_pattern(Number, infer_marker_with_bound("T", String_), bindings),
+  )
+  assert_eq(bindings.length(), 0)
+}
+
+///|
+test "match_infer_pattern: `infer X extends Bound` accepts matching source" {
+  // Source `"a"` extends `string` — bind succeeds.
+  let bindings : Map[String, @ast.TsType] = {}
+  assert_true(
+    match_infer_pattern(
+      Literal("a"),
+      infer_marker_with_bound("T", String_),
+      bindings,
+    ),
+  )
+  assert_eq(bindings.get("T"), Some(Literal("a")))
+}
+
+///|
+test "match_infer_pattern: `infer X extends Bound` allows undecidable source" {
+  // Source is an opaque `Named("Foo")`; bound is `Date`. The relation
+  // is undecidable, so we optimistically bind — the substitution path
+  // can retry once `Foo` is resolved.
+  let bindings : Map[String, @ast.TsType] = {}
+  assert_true(
+    match_infer_pattern(
+      Named("Foo"),
+      infer_marker_with_bound("T", Named("Date")),
+      bindings,
+    ),
+  )
+  assert_eq(bindings.get("T"), Some(Named("Foo")))
+}
+
+///|
 test "match_infer_pattern: union pattern picks the matching branch" {
   let bindings : Map[String, @ast.TsType] = {}
   // Promise<infer U> | Array<infer U>  vs  Promise<string>
