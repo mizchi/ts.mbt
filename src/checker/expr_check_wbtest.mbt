@@ -3430,3 +3430,88 @@ test "expr_check: typeof obj.prop literal narrows in compound `&&`" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 32: nested PropAccess narrowing — `obj.a.b !== undefined` and
+// `typeof obj.a.b === "string"` narrow the deep access.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: nested obj.a.b !== undefined narrows the deep access" {
+  let src =
+    #|interface Inner { name?: string }
+    #|interface Outer { inner: Inner }
+    #|function f(o: Outer): string {
+    #|  if (o.inner.name !== undefined) {
+    #|    return o.inner.name;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof nested prop access narrows" {
+  let src =
+    #|interface Box { v: string | number }
+    #|interface Outer { box: Box }
+    #|function f(o: Outer): string {
+    #|  if (typeof o.box.v === "string") {
+    #|    return o.box.v;
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: truthy nested obj.a.b strips undefined" {
+  let src =
+    #|interface Inner { name?: string }
+    #|interface Outer { inner: Inner }
+    #|function f(o: Outer): string {
+    #|  if (o.inner.name) {
+    #|    return o.inner.name;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: deeply nested (3-level) prop narrowing" {
+  let src =
+    #|interface L3 { tag?: string }
+    #|interface L2 { l3: L3 }
+    #|interface L1 { l2: L2 }
+    #|function f(o: L1): string {
+    #|  if (o.l2.l3.tag !== undefined) {
+    #|    return o.l2.l3.tag;
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: nested instanceof on prop chain narrows" {
+  let src =
+    #|interface Slot { payload: { err: unknown } }
+    #|function f(s: Slot): string {
+    #|  if (s.payload.err instanceof TypeError) {
+    #|    return s.payload.err.message;
+    #|  }
+    #|  return "other";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

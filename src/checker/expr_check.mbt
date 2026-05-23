@@ -1595,17 +1595,17 @@ fn infer_expr(
     Yield(_) | YieldStar(_) => @ast.TsType::Any
     DynamicImport(_) | ImportMeta => @ast.TsType::Any
     PropAccess(receiver, name) => {
-      // Property-access narrowing: when the receiver is a bare identifier
-      // and the env has a synthesised `recv.prop` binding (set by
-      // `analyze_equality` for `recv.prop !== null/undefined` conditions),
-      // honour the narrowed type ahead of the structural lookup.
-      match receiver {
-        Var(recv_name) =>
-          match env.lookup(recv_name + "." + name) {
+      // Property-access narrowing: when the access is a `Var` /
+      // `PropAccess`-chain that the narrowing path tracks, look up the
+      // synthesised dotted env key first. Falls through to the
+      // structural resolver lookup when no narrowing binding exists.
+      match narrowing_key_for_expr(@ast.TsExpr::PropAccess(receiver, name)) {
+        Some(key) =>
+          match env.lookup(key) {
             Some(narrowed) => return narrowed
             None => ()
           }
-        _ => ()
+        None => ()
       }
       let recv_ty = infer_expr(env, resolver, receiver)
       match resolver.lookup_field(recv_ty, name) {
@@ -3130,16 +3130,12 @@ fn collect_narrowing(
         }
         None => ()
       }
-      // `x instanceof C` narrows on equality only. Accept both bare
-      // identifiers and `obj.prop` accesses — the latter binds under the
-      // synthesised `obj.prop` env key.
+      // `x instanceof C` narrows on equality only. Accept any
+      // Var / PropAccess-chain on the left so nested access like
+      // `obj.payload.err instanceof TypeError` narrows.
       match op {
         Instanceof => {
-          let lhs_key = match left {
-            Var(name) => Some(name)
-            PropAccess(Var(recv_name), prop) => Some(recv_name + "." + prop)
-            _ => None
-          }
+          let lhs_key = narrowing_key_for_expr(left)
           let class_name_opt = match right {
             Var(c) => Some(c)
             _ => None
@@ -3192,20 +3188,6 @@ fn collect_narrowing(
         _ => ()
       }
     }
-    // `if (x)` — truthy narrowing strips null/undefined in then-branch.
-    Var(name) =>
-      if then_sense {
-        let cur = env_lookup_full(env, resolver, name)
-        then_binds.push((name, non_nullable(cur)))
-      }
-    // `if (obj.prop)` — same as above, but the narrowing binds under the
-    // synthesised `obj.prop` env key.
-    PropAccess(Var(recv_name), prop) =>
-      if then_sense {
-        let key = recv_name + "." + prop
-        let cur = narrowing_current_type(env, resolver, key)
-        then_binds.push((key, non_nullable(cur)))
-      }
     // `if (isFoo(v))` — user-defined type guard. When the callee's
     // declared return type is `paramName is T`, the corresponding
     // positional argument is narrowed to `T` in the then-branch and the
@@ -3224,6 +3206,20 @@ fn collect_narrowing(
         env, resolver, receiver, method_name, args, pair_pos, pair_neg,
       )
     }
+    // `if (x)` / `if (obj.prop)` / `if (obj.a.b)` — truthy narrowing
+    // strips null / undefined under the synthesised key. Bare `Var(_)`
+    // and arbitrary-depth `PropAccess(...)` chains share the same path
+    // via `narrowing_key_for_expr`. Must come after the `Call` /
+    // `MethodCall` arms so type-predicate narrowing isn't shadowed by
+    // this catch-all guard.
+    _ if then_sense =>
+      match narrowing_key_for_expr(cond) {
+        Some(key) => {
+          let cur = narrowing_current_type(env, resolver, key)
+          then_binds.push((key, non_nullable(cur)))
+        }
+        None => ()
+      }
     _ => ()
   }
 }
@@ -3363,6 +3359,28 @@ fn prop_access_current_type(
 }
 
 ///|
+/// Flatten a `Var(...)` / `PropAccess(...)` chain into a dotted key for
+/// the narrowing env. Returns `None` when the chain bottoms out at
+/// anything other than `Var(name)` (e.g. a `Call(...)` receiver, a
+/// computed `IndexAccess`, etc.).
+///
+/// Examples:
+///   `Var("c")`                                       → Some("c")
+///   `PropAccess(Var("c"), "name")`                   → Some("c.name")
+///   `PropAccess(PropAccess(Var("c"), "a"), "b")`     → Some("c.a.b")
+fn narrowing_key_for_expr(expr : @ast.TsExpr) -> String? {
+  match expr {
+    Var(name) => Some(name)
+    PropAccess(inner, prop) =>
+      match narrowing_key_for_expr(inner) {
+        Some(prefix) => Some(prefix + "." + prop)
+        None => None
+      }
+    _ => None
+  }
+}
+
+///|
 /// Resolve the "current" type for an arbitrary narrowing key — either a
 /// plain identifier or the synthesised `name.prop` form. Splitting on
 /// the first `.` lets the property-access narrowing path reuse
@@ -3374,11 +3392,26 @@ fn narrowing_current_type(
   resolver : Resolver,
   key : String,
 ) -> @ast.TsType {
-  match key.find(".") {
+  // First-pass: a previously-set narrowing binding under the same key
+  // wins — that's how nested chains like `c.a.b` recover the refined
+  // type even though `lookup_field` on the receiver would re-derive
+  // the original.
+  match env.lookup(key) {
+    Some(t) => return t
+    None => ()
+  }
+  match key.rev_find(".") {
     Some(idx) => {
-      let name = key[:idx].to_string()
-      let prop = key[idx + 1:].to_string()
-      prop_access_current_type(env, resolver, name, prop)
+      let prefix = key[:idx].to_string()
+      let leaf = key[idx + 1:].to_string()
+      // Recursively resolve the prefix's current type, then read the
+      // leaf field from the resolver. This lets `c.a.b` go through
+      // `narrowing_current_type("c.a") -> field "b"`.
+      let prefix_ty = narrowing_current_type(env, resolver, prefix)
+      match resolver.lookup_field(prefix_ty, leaf) {
+        Some(t) => t
+        None => @ast.TsType::Any
+      }
     }
     None => env_lookup_full(env, resolver, key)
   }
@@ -3417,15 +3450,20 @@ fn analyze_equality(
   false_side : Array[(String, @ast.TsType)],
 ) -> Unit {
   // `typeof x === "string"` — canonical form.
+  // `typeof <expr> === "string"` — accept any Var / PropAccess chain on
+  // the operand position so `typeof c.a.b === "string"` narrows the
+  // nested access.
   let typeof_match = match (left, right) {
-    (UnaryOp(Typeof, Var(name)), StringLit(s)) => Some((name, s))
-    (StringLit(s), UnaryOp(Typeof, Var(name))) => Some((name, s))
-    // `typeof obj.prop === "string"` — same pattern with a property
-    // access as the operand. Synthesise the env key `name.prop`.
-    (UnaryOp(Typeof, PropAccess(Var(name), prop)), StringLit(s)) =>
-      Some((name + "." + prop, s))
-    (StringLit(s), UnaryOp(Typeof, PropAccess(Var(name), prop))) =>
-      Some((name + "." + prop, s))
+    (UnaryOp(Typeof, operand), StringLit(s)) =>
+      match narrowing_key_for_expr(operand) {
+        Some(k) => Some((k, s))
+        None => None
+      }
+    (StringLit(s), UnaryOp(Typeof, operand)) =>
+      match narrowing_key_for_expr(operand) {
+        Some(k) => Some((k, s))
+        None => None
+      }
     _ => None
   }
   match typeof_match {
@@ -3445,52 +3483,46 @@ fn analyze_equality(
     None => ()
   }
 
-  // `x === null` / `x === undefined`. `undefined` parses as either
-  // `Var("undefined")` or `UnaryOp(Void, ...)` (the spec-mandated form).
+  // `<expr> === null` / `<expr> === undefined` — accepts any
+  // `Var` / `PropAccess`-chain operand. `undefined` parses as either
+  // `Var("undefined")`, `UnaryOp(Void, ...)`, or the bare `undefined`
+  // keyword (spec-mandated form).
   let null_match = match (left, right) {
-    (Var(name), NullLit) => Some((name, @ast.TsType::Null))
-    (NullLit, Var(name)) => Some((name, @ast.TsType::Null))
-    (Var(name), UnaryOp(Void, _)) => Some((name, @ast.TsType::Undefined))
-    (UnaryOp(Void, _), Var(name)) => Some((name, @ast.TsType::Undefined))
-    (Var(name), Var("undefined")) if name != "undefined" =>
-      Some((name, @ast.TsType::Undefined))
-    (Var("undefined"), Var(name)) if name != "undefined" =>
-      Some((name, @ast.TsType::Undefined))
+    (e, NullLit) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, @ast.TsType::Null))
+        None => None
+      }
+    (NullLit, e) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, @ast.TsType::Null))
+        None => None
+      }
+    (e, UnaryOp(Void, _)) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, @ast.TsType::Undefined))
+        None => None
+      }
+    (UnaryOp(Void, _), e) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) => Some((k, @ast.TsType::Undefined))
+        None => None
+      }
+    (e, Var("undefined")) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) if k != "undefined" => Some((k, @ast.TsType::Undefined))
+        _ => None
+      }
+    (Var("undefined"), e) =>
+      match narrowing_key_for_expr(e) {
+        Some(k) if k != "undefined" => Some((k, @ast.TsType::Undefined))
+        _ => None
+      }
     _ => None
   }
   match null_match {
-    Some((name, tag)) => {
-      let cur = env_lookup_full(env, resolver, name)
-      true_side.push((name, tag))
-      let stripped = narrow_remove(cur, fn(v) { type_eq(v, tag) })
-      false_side.push((name, stripped))
-    }
-    None => ()
-  }
-
-  // `obj.prop === null` / `obj.prop === undefined` — narrow the property
-  // access. The synthesised env key `obj.prop` (with a literal dot) is
-  // looked up by `infer_expr.PropAccess` ahead of the usual receiver
-  // resolution path.
-  let prop_null_match = match (left, right) {
-    (PropAccess(Var(name), prop), NullLit) =>
-      Some((name, prop, @ast.TsType::Null))
-    (NullLit, PropAccess(Var(name), prop)) =>
-      Some((name, prop, @ast.TsType::Null))
-    (PropAccess(Var(name), prop), UnaryOp(Void, _)) =>
-      Some((name, prop, @ast.TsType::Undefined))
-    (UnaryOp(Void, _), PropAccess(Var(name), prop)) =>
-      Some((name, prop, @ast.TsType::Undefined))
-    (PropAccess(Var(name), prop), Var("undefined")) =>
-      Some((name, prop, @ast.TsType::Undefined))
-    (Var("undefined"), PropAccess(Var(name), prop)) =>
-      Some((name, prop, @ast.TsType::Undefined))
-    _ => None
-  }
-  match prop_null_match {
-    Some((name, prop, tag)) => {
-      let cur = prop_access_current_type(env, resolver, name, prop)
-      let key = name + "." + prop
+    Some((key, tag)) => {
+      let cur = narrowing_current_type(env, resolver, key)
       true_side.push((key, tag))
       let stripped = narrow_remove(cur, fn(v) { type_eq(v, tag) })
       false_side.push((key, stripped))
