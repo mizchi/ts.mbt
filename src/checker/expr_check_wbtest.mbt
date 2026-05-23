@@ -1818,6 +1818,111 @@ test "expr_check: `declare function` predicate narrows the argument" {
   assert_eq(issues.length(), 0)
 }
 
+// ---------------------------------------------------------------------------
+// Round 17: object literal contextual typing against interface / object /
+// struct targets.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: object literal against interface — well typed passes" {
+  let src =
+    #|interface Point { x: number; y: number }
+    #|function takePoint(p: Point): void {}
+    #|function user(): void {
+    #|  takePoint({ x: 1, y: 2 });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: object literal flags wrong field type" {
+  let src =
+    #|interface Point { x: number; y: number }
+    #|function takePoint(p: Point): void {}
+    #|function user(): void {
+    #|  takePoint({ x: 1, y: "oops" });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // Per-field path: `arg[0].y` expected number, got string.
+  let mut found = false
+  for i in issues {
+    if i.path.contains(".y") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: object literal flags missing required field" {
+  let src =
+    #|interface Point { x: number; y: number }
+    #|function takePoint(p: Point): void {}
+    #|function user(): void {
+    #|  takePoint({ x: 1 });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains(".y") && i.message.contains("required") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: object literal allows missing optional field" {
+  let src =
+    #|interface Box { name: string; tag?: string }
+    #|function take(b: Box): void {}
+    #|function user(): void {
+    #|  take({ name: "ok" });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: object literal flags excess property" {
+  let src =
+    #|interface Point { x: number; y: number }
+    #|function take(p: Point): void {}
+    #|function user(): void {
+    #|  take({ x: 1, y: 2, z: 3 });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  let mut found = false
+  for i in issues {
+    if i.path.contains(".z") && i.message.contains("does not exist") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: object literal honours interface extends chain" {
+  let src =
+    #|interface Base { id: number }
+    #|interface Named extends Base { name: string }
+    #|function take(n: Named): void {}
+    #|function user(): void {
+    #|  take({ id: 1, name: "ok" });
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
 ///|
 test "expr_check: tuple destructuring sees per-slot types" {
   // `const [a, b] = […] as [number, string]` should bind `a: number` and

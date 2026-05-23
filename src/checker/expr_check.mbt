@@ -954,6 +954,33 @@ fn check_expr_against(
     }
     _ => ()
   }
+  // Contextual typing for object literals against a struct / interface /
+  // object-type target. Per-field checking surfaces actionable diagnostics
+  // (`field x expected number, got string`) instead of the generic
+  // assignability error that points at the whole literal. We only enter
+  // this path for "open" shapes (interfaces, structural objects, structs);
+  // class targets fall through to assignability because their private /
+  // constructed members aren't expressible in a literal.
+  match (expr, expected_shape) {
+    (ObjectLit(entries), Object(_))
+    | (ObjectLit(entries), Struct(_, _)) => {
+      check_object_lit_against_target(
+        env, entries, expected_shape, ctx.resolver, ctx, sub_path,
+      )
+      return
+    }
+    (ObjectLit(entries), Named(name)) =>
+      match ctx.resolver.interfaces.get(name) {
+        Some(_) => {
+          check_object_lit_against_target(
+            env, entries, expected_shape, ctx.resolver, ctx, sub_path,
+          )
+          return
+        }
+        None => ()
+      }
+    _ => ()
+  }
   if !is_checkable(expected) {
     return
   }
@@ -1005,6 +1032,109 @@ fn check_array_lit_against_tuple(
     check_expr_against(env, items[i], slots[i], ctx, sub)
     i = i + 1
   }
+}
+
+///|
+/// Match an object literal against a struct / interface / object-type
+/// target, checking each field's value against the declared field type.
+/// Excess literal fields (not declared on the target) and missing required
+/// fields are reported individually so the diagnostic points at the
+/// specific divergence rather than the whole literal.
+fn check_object_lit_against_target(
+  env : ExprEnv,
+  entries : Array[(String, @ast.TsExpr)],
+  target : @ast.TsType,
+  resolver : Resolver,
+  ctx : CheckCtx,
+  sub_path : String,
+) -> Unit {
+  // Per-field type checks for each provided key.
+  for entry in entries {
+    let key = entry.0
+    let value = entry.1
+    match resolver.lookup_field(target, key) {
+      Some(declared) =>
+        check_expr_against(
+          env, value, declared, ctx, "\{sub_path}.\{key}",
+        )
+      None =>
+        // Unknown key on the target — TS calls this an excess-property
+        // error. Skip class/struct opaque shapes by relying on lookup_field
+        // having already walked their fields above.
+        record(
+          ctx,
+          "\{sub_path}.\{key}",
+          "property `\{key}` does not exist on target type",
+        )
+    }
+  }
+  // Missing-required check: collect the declared field names of the target
+  // and see which were omitted. Properties whose declared type accepts
+  // `undefined` (optional, written `x?: T` or `T | undefined`) are
+  // exempt.
+  let declared = collect_declared_fields(target, resolver)
+  let provided : Map[String, Bool] = {}
+  for entry in entries {
+    provided[entry.0] = true
+  }
+  for d in declared {
+    let name = d.0
+    let ty = d.1
+    if provided.contains(name) {
+      continue
+    }
+    if is_assignable_to(@ast.TsType::Undefined, ty) {
+      continue
+    }
+    record(
+      ctx,
+      "\{sub_path}.\{name}",
+      "property `\{name}` is required by `\{type_display(target)}`",
+    )
+  }
+}
+
+///|
+/// Collect the (name, type) pairs an object-shaped target exposes, walking
+/// interface `extends` chains. Returns an empty list for opaque shapes
+/// (classes, applied generics, etc.) so callers don't accidentally flag
+/// missing-required errors on a literal that legitimately fills only a
+/// subset of an opaque shape.
+fn collect_declared_fields(
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Array[(String, @ast.TsType)] {
+  let out : Array[(String, @ast.TsType)] = []
+  let unwrapped = resolver.unwrap(target)
+  match unwrapped {
+    Object(entries) =>
+      for entry in entries {
+        match entry.0 {
+          Literal(name) => out.push((name, entry.1))
+          _ => ()
+        }
+      }
+    Struct(_, fields) =>
+      for f in fields {
+        out.push((f.0, f.1))
+      }
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(iface) => {
+          for f in iface.fields {
+            out.push((f.0, f.1))
+          }
+          for base in iface.extends_names {
+            for f in collect_declared_fields(@ast.TsType::Named(base), resolver) {
+              out.push(f)
+            }
+          }
+        }
+        None => ()
+      }
+    _ => ()
+  }
+  out
 }
 
 ///|
