@@ -2325,9 +2325,15 @@ fn check_jsx_attrs(
   }
   // Per-attribute type check. Track the fields supplied by `{...spread}`
   // entries so the missing-required pass below treats them as provided.
+  // `key` and `ref` are reserved JSX attributes — React intercepts them
+  // before they reach the component, so they aren't validated against
+  // the declared props.
   let spread_provided : Map[String, Bool] = {}
   for entry in attrs {
     let name = entry.0
+    if name == "key" || name == "ref" {
+      continue
+    }
     match entry.1 {
       Some(value) =>
         if name == "" {

@@ -4494,3 +4494,35 @@ test "expr_check: JSX spread feeds generic component inference" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 44: reserved JSX attributes `key` and `ref`. React intercepts both
+// before they reach the component, so they should be type-checked at the
+// JSX call site but not validated against the declared props shape.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX key on a component without a key prop is accepted" {
+  let src =
+    #|interface Props { value: number }
+    #|function Item(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Item key="row-1" value={1}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX ref on a component without a ref prop is accepted" {
+  let src =
+    #|interface Props { value: number }
+    #|function Item(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Item ref={null} value={1}/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
