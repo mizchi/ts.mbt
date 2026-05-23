@@ -43,11 +43,21 @@ pub(all) struct BundleOptions {
   // bindings other live modules import from it (plus the entry's own
   // top-level keepers / non-decl stmts).
   tree_shake : Bool
+  // Optional mangler config. When set, every module's block runs
+  // through the mangler before emit, and the property-rename map is
+  // built from the *union* of every module's property keys so a
+  // shared `obj.foo` collapses to the same short name everywhere.
+  mangle : ManglerConfig?
 }
 
 ///|
 pub fn BundleOptions::default() -> BundleOptions {
-  { jsx: JsxConfig::default(), with_sourcemap: false, tree_shake: false }
+  {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: false,
+    mangle: None,
+  }
 }
 
 ///|
@@ -197,6 +207,10 @@ pub fn bundle_modules(
   let order = topological_order(modules, entry)
   if opts.tree_shake {
     tree_shake_bundle(modules, entry)
+  }
+  match opts.mangle {
+    Some(cfg) => mangle_bundle(modules, order, cfg)
+    None => ()
   }
   let e = Emitter::new()
   if opts.with_sourcemap {
@@ -410,6 +424,38 @@ fn tree_shake_bundle(
       None => ()
     }
     node.block = tree_shake_block(node.block, roots_arr)
+  }
+}
+
+///|
+/// Drive a single mangle pass over every module's block with a
+/// shared property-rename map. Identifier renaming still happens
+/// per-module — locals don't escape — but property keys collapse
+/// consistently across the whole bundle.
+fn mangle_bundle(
+  modules : Map[String, ModuleNode],
+  order : Array[String],
+  cfg : ManglerConfig,
+) -> Unit {
+  // Collect blocks in topological order so the mangled output array
+  // lines up with the order we'll write them back in.
+  let blocks : Array[@ast.TsBlock] = []
+  let paths : Array[String] = []
+  for path in order {
+    match modules.get(path) {
+      Some(n) => {
+        blocks.push(n.block)
+        paths.push(path)
+      }
+      None => ()
+    }
+  }
+  let mangled = mangle_blocks_together(blocks, cfg)
+  for i, p in paths {
+    match modules.get(p) {
+      Some(n) => n.block = mangled[i]
+      None => ()
+    }
   }
 }
 

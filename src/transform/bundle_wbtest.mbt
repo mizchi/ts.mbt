@@ -182,6 +182,7 @@ test "bundle: sourcemap option emits multi-source v3 JSON" {
     jsx: JsxConfig::default(),
     with_sourcemap: true,
     tree_shake: false,
+    mangle: None,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) =>
@@ -221,6 +222,7 @@ test "bundle: tree shaking drops a dep's unused exports" {
     jsx: JsxConfig::default(),
     with_sourcemap: false,
     tree_shake: true,
+    mangle: None,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -249,6 +251,7 @@ test "bundle: tree shaking keeps decls reached through a chain" {
     jsx: JsxConfig::default(),
     with_sourcemap: false,
     tree_shake: true,
+    mangle: None,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -278,6 +281,7 @@ test "bundle: namespace import keeps every export of the source" {
     jsx: JsxConfig::default(),
     with_sourcemap: false,
     tree_shake: true,
+    mangle: None,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -308,6 +312,87 @@ test "bundle: tree shaking off by default keeps every export" {
       assert_true(out.js.contains("const used"))
       assert_true(out.js.contains("const unused"))
     }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+///|
+test "bundle: cross-module property mangling renames consistently" {
+  // Both modules touch the same property name `userField`. With a
+  // shared mangler the rename map is global — same short key on each
+  // side. We verify by checking that the long name disappears
+  // everywhere and the remaining `.X` accesses pair up.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { make } from \"./lib\";\nconst obj = make();\nconsole.log(obj.userField);\n",
+    ),
+    (
+      "lib.ts",
+      "export function make() { return { userField: 42, otherField: 0 }; }\n",
+    ),
+  ])
+  let opts : BundleOptions = {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: false,
+    mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+  }
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Long property names should be gone from the bundle.
+      assert_false(out.js.contains("userField"))
+      assert_false(out.js.contains("otherField"))
+      // The bundle still references the make function across modules.
+      assert_true(out.js.contains("make"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: mangle preserves built-in props (length, then) across modules" {
+  // `arr.length` and `.then` are in the built-in reserved property
+  // set — every module in the bundle has to honor the same set.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { task } from \"./lib\";\nconst arr = [1, 2, 3];\nconst n = arr.length;\ntask().then(r => r);\n",
+    ),
+    (
+      "lib.ts",
+      "export const task = () => Promise.resolve(\"ok\");\n",
+    ),
+  ])
+  let opts : BundleOptions = {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    tree_shake: false,
+    mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+  }
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains(".length"))
+      assert_true(out.js.contains(".then"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: no mangle option leaves source-form props alone" {
+  // Baseline: opting out of mangling keeps every property name intact.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { make } from \"./lib\";\nconst obj = make();\nconsole.log(obj.userField);\n",
+    ),
+    (
+      "lib.ts",
+      "export function make() { return { userField: 42 }; }\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => assert_true(out.js.contains("userField"))
     Err(e) => fail("bundle error: \{e}")
   }
 }

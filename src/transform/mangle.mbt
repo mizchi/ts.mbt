@@ -696,6 +696,77 @@ pub fn mangle_block(
 }
 
 ///|
+/// Bundle-wide mangling.
+///
+/// Each block gets identifier-mangled independently (so locals can
+/// freely reuse short names across modules), but the property-key
+/// rename map is built once by unioning the property names of every
+/// block. That keeps `obj.foo` in `lib.ts` and `obj.foo` in
+/// `entry.ts` collapsing to the same short key.
+///
+/// Order of operations:
+///   1. Per-block identifier rename with `mangle_properties=false`.
+///   2. Single property-rename map built from the union of all
+///      blocks' property names, with the same reserved set the
+///      single-block path uses.
+///   3. Apply that map to every block in place.
+///
+/// Caller still controls `cfg.reserved` / `cfg.reserved_properties`;
+/// they apply globally, not per-module.
+pub fn mangle_blocks_together(
+  blocks : Array[@ast.TsBlock],
+  cfg : ManglerConfig,
+) -> Array[@ast.TsBlock] {
+  // Identifier mangling first, independently per block.
+  let id_cfg = { ..cfg, mangle_properties: false }
+  let mangled : Array[@ast.TsBlock] = []
+  for b in blocks {
+    mangled.push(mangle_block(b, id_cfg))
+  }
+  if !cfg.mangle_properties {
+    return mangled
+  }
+  // Property rename: build the shared reserved set + the union of
+  // every block's property keys, then derive one rename map.
+  let prop_reserved : Map[String, Bool] = {}
+  for n in mangler_builtin_reserved_properties {
+    prop_reserved[n] = true
+  }
+  for n in cfg.reserved_properties {
+    prop_reserved[n] = true
+  }
+  let all_props : Map[String, Bool] = {}
+  for b in mangled {
+    collect_property_names(b, all_props)
+  }
+  let candidates : Array[String] = []
+  for entry in all_props {
+    let n = entry.0
+    if prop_reserved.contains(n) {
+      continue
+    }
+    candidates.push(n)
+  }
+  candidates.sort()
+  let prop_map : Map[String, String] = {}
+  let mut counter = 0
+  for n in candidates {
+    let mut candidate = next_short_name(counter)
+    counter = counter + 1
+    while prop_reserved.contains(candidate) {
+      candidate = next_short_name(counter)
+      counter = counter + 1
+    }
+    prop_map[n] = candidate
+  }
+  let renamed : Array[@ast.TsBlock] = []
+  for b in mangled {
+    renamed.push(rename_properties_in_block(b, prop_map))
+  }
+  renamed
+}
+
+///|
 fn collect_top_level_decls(
   block : @ast.TsBlock,
   out : Map[String, Bool],
