@@ -4636,3 +4636,52 @@ test "expr_check: render-prop child with mismatched arg type flags error" {
   }
   assert_true(found)
 }
+
+///|
+test "expr_check: asserts predicate narrows arg for subsequent stmts (typed)" {
+  // `assertString(v)` declares `asserts v is string` — after the call,
+  // `v: string | number` is narrowed to `string`, so returning it from a
+  // `: string` function must typecheck cleanly.
+  let src =
+    #|declare function assertString(value: string | number): asserts value is string;
+    #|function use(v: string | number): string {
+    #|  assertString(v);
+    #|  return v;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: without asserts call, string|number -> string is flagged" {
+  // Sanity: without the `asserts` call, `v: string | number` cannot
+  // satisfy a `string` return — the call is what unlocks the narrowing.
+  let src =
+    #|function use(v: string | number): string {
+    #|  return v;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("return") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: truthy asserts strips null / undefined from operand" {
+  // `assertOk(value)` declares `asserts value` (no `is T`). After the
+  // call `v: T | null | undefined` is narrowed to `T`.
+  let src =
+    #|declare function assertOk(value: unknown): asserts value;
+    #|function use(v: string | null | undefined): string {
+    #|  assertOk(v);
+    #|  return v;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

@@ -1935,6 +1935,9 @@ fn infer_call(
     // predicate function return `Boolean`. The predicate effect is applied
     // via the narrowing path in `if (isFoo(v))`.
     Func(_, TypePredicate(_, _)) => @ast.TsType::Boolean
+    // `asserts paramName [is T]` returns `void` at the value level — the
+    // narrowing effect applies to all statements after the call site.
+    Func(_, AssertsPredicate(_, _)) => @ast.TsType::Void
     Func(_, ret) => ret
     _ => @ast.TsType::Any
   }
@@ -3791,6 +3794,89 @@ fn apply_type_predicate_narrowing(
 }
 
 ///|
+/// Apply an `asserts paramName [is T]` predicate to the env when an
+/// expression statement is calling a function whose declared return is
+/// `AssertsPredicate(...)`. Unlike `apply_type_predicate_narrowing`,
+/// this binds the narrowed type into `env` directly because the
+/// assertion's effect persists across subsequent statements (TS
+/// "assertion functions" semantics).
+fn apply_assertion_predicate_effect(
+  env : ExprEnv,
+  resolver : Resolver,
+  expr : @ast.TsExpr,
+) -> Unit {
+  // Pull the `(callee_return, args)` pair from any call shape we know:
+  // `Call(name, args)`, `CallExpr(Var(name), args)`, or
+  // `MethodCall(recv, m, args)`.
+  let (ret, args) : (@ast.TsType, Array[@ast.TsExpr]) = match expr {
+    Call(name, args) =>
+      match resolver.globals.get(name) {
+        Some(Func(_, ret)) => (ret, args)
+        _ => return
+      }
+    CallExpr(Var(name), args) =>
+      match resolver.globals.get(name) {
+        Some(Func(_, ret)) => (ret, args)
+        _ => return
+      }
+    MethodCall(receiver, method_name, args) => {
+      let recv_ty = infer_expr(env, resolver, receiver)
+      match resolver.lookup_method_sig(recv_ty, method_name) {
+        Some((_, ret)) => (ret, args)
+        None => return
+      }
+    }
+    _ => return
+  }
+  let (param_name, target_opt) = match ret {
+    AssertsPredicate(p, t) => (p, t)
+    _ => return
+  }
+  // Resolve which positional arg this asserts refers to.
+  let idx = match expr {
+    Call(name, _) | CallExpr(Var(name), _) =>
+      match resolver.signatures.get(name) {
+        Some(params) => {
+          let mut found : Int = -1
+          let mut i = 0
+          while i < params.length() {
+            if params[i].name == param_name {
+              found = i
+              break
+            }
+            i = i + 1
+          }
+          found
+        }
+        None => 0
+      }
+    _ => 0
+  }
+  if idx < 0 || idx >= args.length() {
+    return
+  }
+  match args[idx] {
+    Var(arg_name) => {
+      let cur = env_lookup_full(env, resolver, arg_name)
+      let narrowed : @ast.TsType = match target_opt {
+        // `asserts x is T` — narrow to T.
+        Some(target) => {
+          let kept = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+          match kept {
+            Never => target
+            _ => kept
+          }
+        }
+        // `asserts x` (truthy) — strip null / undefined / false-ish.
+        None => non_nullable(cur)
+      }
+      env.bind(arg_name, narrowed)
+    }
+    _ => ()
+  }
+}
+
+///|
 /// Method form: `receiver.guardMethod(v)` where the method's declared
 /// return type is `paramName is T`. Resolves the method signature via the
 /// receiver shape and applies the same narrowing as the function form.
@@ -4306,7 +4392,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     | Const(@ast.TsBinding::Target(_), _, init) => {
       let _ = infer_expr(env, ctx.resolver, init)
     }
-    Expr(e) => check_call_args_in_expr(env, e, ctx)
+    Expr(e) => {
+      check_call_args_in_expr(env, e, ctx)
+      // `f(v)` where `f`'s declared return is `asserts v [is T]` narrows
+      // `v` for every statement that follows.
+      apply_assertion_predicate_effect(env, ctx.resolver, e)
+    }
     Assign(name, e) => {
       check_call_args_in_expr(env, e, ctx)
       match env.lookup(name) {
@@ -4935,8 +5026,12 @@ fn check_function_body_with(
   // For a type-predicate function (`x is T`), the body actually returns a
   // boolean — the predicate-ness lives only at the call site. Lower it
   // back to `Boolean` for the body-level return check.
+  //
+  // For an `asserts x [is T]` function the body actually returns `void` —
+  // the assertion is a control-flow effect.
   let body_return = match unwrap_async_return(func.is_async, func.return_type) {
     TypePredicate(_, _) => @ast.TsType::Boolean
+    AssertsPredicate(_, _) => @ast.TsType::Void
     other => other
   }
   let ctx : CheckCtx = {

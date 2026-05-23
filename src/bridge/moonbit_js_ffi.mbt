@@ -966,6 +966,9 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     // `paramName is T` is a boolean at the FFI boundary; the predicate
     // information is consumed by the checker / bridge type-guard collector.
     TypePredicate(_, _) => "Bool"
+    // `asserts x [is T]` returns `void` at runtime — the predicate is
+    // only used by the checker to narrow the calling scope.
+    AssertsPredicate(_, _) => "Unit"
     Union(parts) =>
       match ffi_synthesize_inline_union(state, parts) {
         Some(synth_name) => synth_name

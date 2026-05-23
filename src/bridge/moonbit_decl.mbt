@@ -3321,6 +3321,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     MappedTypeRemap(_, _, _, value, _) =>
       "RemapTo" + utility_record_type_suffix(value)
     TypePredicate(_, _) => "Bool"
+    AssertsPredicate(_, _) => "Unit"
   }
 }
 

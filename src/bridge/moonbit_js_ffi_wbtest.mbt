@@ -1251,9 +1251,11 @@ async test "bridge: emit primitive node assert wrappers without widening values 
       "export function __ts_mbt_not_strict_equal_string(actual, expected, message) { return notStrictEqual(actual, expected, __ts_mbt_unwrap_option(message)); }",
     ),
   )
+  // `asserts value` lowers to `Unit` at the FFI boundary — the runtime
+  // return is `void`; the predicate effect lives in the checker.
   assert_true(
     bundle.ffi_mbt.contains(
-      "pub extern \"js\" fn ok(value : JSValue, message : String?) -> JSValue = \"__ts_mbt_ok\"",
+      "pub extern \"js\" fn ok(value : JSValue, message : String?) -> Unit = \"__ts_mbt_ok\"",
     ),
   )
   assert_true(

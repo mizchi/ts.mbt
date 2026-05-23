@@ -77,6 +77,12 @@ pub(all) enum TsType {
   // mark a user-defined type guard. Outside of the return-type position
   // it behaves like `Boolean`.
   TypePredicate(String, TsType)
+  // Assertion predicate: `asserts paramName` (truthy assertion) or
+  // `asserts paramName is T` (typed assertion). The `TsType?` carries
+  // the optional `is T` payload. Function runtime return is `void`;
+  // the predicate is meaningful at call sites where the checker can
+  // narrow the named binding for code that follows.
+  AssertsPredicate(String, TsType?)
 } derive(Eq, Debug)
 
 ///|

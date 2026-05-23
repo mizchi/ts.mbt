@@ -718,10 +718,18 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       }
     }
     Ident("asserts") => {
-      // asserts x is T
+      // `asserts x` / `asserts x is T`. Capture both shapes as
+      // `AssertsPredicate(name, target?)` so the checker can narrow at
+      // call sites; bridge emit treats the function return as `Void`.
       let _ = self.advance()
-      self.skip_asserts_clause()
-      Any
+      let name = if self.is_ident() { self.parse_binding_ident() } else { "_" }
+      let target : @ast.TsType? = if self.check(Ident("is")) {
+        let _ = self.advance()
+        Some(self.parse_type())
+      } else {
+        None
+      }
+      AssertsPredicate(name, target)
     }
     Const => {
       let _ = self.advance()
@@ -1550,16 +1558,3 @@ fn Parser::skip_type_args(self : Parser) -> Unit {
   }
 }
 
-///|
-/// Skip asserts clause: asserts x is T or asserts x
-fn Parser::skip_asserts_clause(self : Parser) -> Unit raise ParseError {
-  // asserts x
-  if self.is_ident() {
-    let _ = self.advance()
-  }
-  // is T
-  if self.check(Ident("is")) {
-    let _ = self.advance()
-    let _ = self.parse_type()
-  }
-}

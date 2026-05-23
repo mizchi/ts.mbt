@@ -2205,6 +2205,31 @@ test "parser: parse class type predicate methods as type predicates" {
 }
 
 ///|
+test "parser: parse asserts predicate functions" {
+  let src =
+    #|export declare function assertString(value: unknown): asserts value is string;
+    #|export declare function assertOk(value: unknown): asserts value;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.imports.length(), 2)
+  // `asserts value is string` — typed assertion.
+  match module_.imports[0].return_type {
+    AssertsPredicate("value", Some(String_)) => ()
+    other =>
+      fail("expected `asserts value is string`, got \{other}")
+  }
+  // `asserts value` — truthy assertion, no type payload.
+  match module_.imports[1].return_type {
+    AssertsPredicate("value", None) => ()
+    other => fail("expected `asserts value`, got \{other}")
+  }
+}
+
+///|
 test "parser: parse module with imports" {
   let src =
     #|declare function log(msg: string): void;

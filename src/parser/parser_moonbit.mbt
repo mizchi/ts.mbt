@@ -520,6 +520,8 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     // `paramName is T` is a boolean at the bridge boundary; the predicate
     // information survives in the AST for the type-guard helper collector.
     TypePredicate(_, _) => "Bool"
+    // `asserts x [is T]` returns void at runtime; predicate-only metadata.
+    AssertsPredicate(_, _) => "Unit"
     Union(parts) =>
       match inline_union_synthesized_name_from_parts(parts) {
         Some(name) => name

@@ -376,6 +376,7 @@ pub(all) enum TsType {
   MappedType(String, TsType, TsType, Bool)
   MappedTypeRemap(String, TsType, TsType, TsType, Bool)
   TypePredicate(String, TsType)
+  AssertsPredicate(String, TsType?)
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
 
