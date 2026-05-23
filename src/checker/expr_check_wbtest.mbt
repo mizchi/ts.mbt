@@ -4526,3 +4526,42 @@ test "expr_check: JSX ref on a component without a ref prop is accepted" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 45: function-as-children (render props). When a component declares
+// `children: (x: T) => U`, the single arrow-function child is synthesised
+// and validated against that callable shape.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: compatible render-prop function child passes" {
+  let src =
+    #|interface Props { children: (n: number) => string }
+    #|function DataLoader(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <DataLoader>{(n: number) => "row " + n}</DataLoader>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: render-prop child with mismatched arg type flags error" {
+  // The callback declares its argument as `string` but the prop expects
+  // `(n: number) => string`. The arg-type clash should surface.
+  let src =
+    #|interface Props { children: (n: number) => string }
+    #|function DataLoader(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <DataLoader>{(s: string) => s}</DataLoader>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<DataLoader> children") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
