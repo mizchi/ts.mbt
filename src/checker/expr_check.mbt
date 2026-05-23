@@ -3130,12 +3130,23 @@ fn collect_narrowing(
         }
         None => ()
       }
-      // `x instanceof C` narrows on equality only.
+      // `x instanceof C` narrows on equality only. Accept both bare
+      // identifiers and `obj.prop` accesses — the latter binds under the
+      // synthesised `obj.prop` env key.
       match op {
-        Instanceof =>
-          match (left, right) {
-            (Var(name), Var(class_name)) => {
-              let cur = env_lookup_full(env, resolver, name)
+        Instanceof => {
+          let lhs_key = match left {
+            Var(name) => Some(name)
+            PropAccess(Var(recv_name), prop) => Some(recv_name + "." + prop)
+            _ => None
+          }
+          let class_name_opt = match right {
+            Var(c) => Some(c)
+            _ => None
+          }
+          match (lhs_key, class_name_opt) {
+            (Some(key), Some(class_name)) => {
+              let cur = narrowing_current_type(env, resolver, key)
               let class_ty = @ast.TsType::Named(class_name)
               let then_ty = narrow_keep(cur, fn(v) {
                 match v {
@@ -3143,23 +3154,22 @@ fn collect_narrowing(
                   _ => false
                 }
               })
-              // If keep yielded Never, but the original is opaque (Any) we
-              // should still narrow to the class type.
               let then_resolved = match then_ty {
                 Never => class_ty
                 _ => then_ty
               }
-              pair_pos.push((name, then_resolved))
+              pair_pos.push((key, then_resolved))
               let else_ty = narrow_remove(cur, fn(v) {
                 match v {
                   Named(n) => n == class_name
                   _ => false
                 }
               })
-              pair_neg.push((name, else_ty))
+              pair_neg.push((key, else_ty))
             }
             _ => ()
           }
+        }
         // `"key" in obj` — narrow `obj`'s union to members that own `key`.
         In =>
           match (left, right) {
@@ -3187,6 +3197,14 @@ fn collect_narrowing(
       if then_sense {
         let cur = env_lookup_full(env, resolver, name)
         then_binds.push((name, non_nullable(cur)))
+      }
+    // `if (obj.prop)` — same as above, but the narrowing binds under the
+    // synthesised `obj.prop` env key.
+    PropAccess(Var(recv_name), prop) =>
+      if then_sense {
+        let key = recv_name + "." + prop
+        let cur = narrowing_current_type(env, resolver, key)
+        then_binds.push((key, non_nullable(cur)))
       }
     // `if (isFoo(v))` — user-defined type guard. When the callee's
     // declared return type is `paramName is T`, the corresponding
@@ -3345,6 +3363,28 @@ fn prop_access_current_type(
 }
 
 ///|
+/// Resolve the "current" type for an arbitrary narrowing key — either a
+/// plain identifier or the synthesised `name.prop` form. Splitting on
+/// the first `.` lets the property-access narrowing path reuse
+/// `prop_access_current_type` so the starting type for `typeof
+/// obj.prop === "string"` is the structural shape of `obj.prop` rather
+/// than the catch-all `Any`.
+fn narrowing_current_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  key : String,
+) -> @ast.TsType {
+  match key.find(".") {
+    Some(idx) => {
+      let name = key[:idx].to_string()
+      let prop = key[idx + 1:].to_string()
+      prop_access_current_type(env, resolver, name, prop)
+    }
+    None => env_lookup_full(env, resolver, key)
+  }
+}
+
+///|
 fn env_lookup_full(
   env : ExprEnv,
   resolver : Resolver,
@@ -3380,6 +3420,12 @@ fn analyze_equality(
   let typeof_match = match (left, right) {
     (UnaryOp(Typeof, Var(name)), StringLit(s)) => Some((name, s))
     (StringLit(s), UnaryOp(Typeof, Var(name))) => Some((name, s))
+    // `typeof obj.prop === "string"` — same pattern with a property
+    // access as the operand. Synthesise the env key `name.prop`.
+    (UnaryOp(Typeof, PropAccess(Var(name), prop)), StringLit(s)) =>
+      Some((name + "." + prop, s))
+    (StringLit(s), UnaryOp(Typeof, PropAccess(Var(name), prop))) =>
+      Some((name + "." + prop, s))
     _ => None
   }
   match typeof_match {
@@ -3387,8 +3433,10 @@ fn analyze_equality(
       match typeof_string_to_type(ts) {
         Some(narrowed) => {
           true_side.push((name, narrowed))
-          // Else side: remove variants matching that primitive.
-          let cur = env_lookup_full(env, resolver, name)
+          // Else side: remove variants matching that primitive. Use the
+          // shared helper so a `name.prop` key resolves through the
+          // property-access path instead of returning `Any`.
+          let cur = narrowing_current_type(env, resolver, name)
           let stripped = narrow_remove(cur, fn(v) { type_eq(v, narrowed) })
           false_side.push((name, stripped))
         }

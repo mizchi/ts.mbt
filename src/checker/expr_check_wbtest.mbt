@@ -3344,3 +3344,89 @@ test "expr_check: instanceof TypeError narrows a caught error" {
     None => fail("function f not found")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Round 31: extended property-access narrowing — typeof / instanceof /
+// truthy on `obj.prop` shapes.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: typeof obj.prop === 'string' narrows prop access" {
+  let src =
+    #|interface Box { v: string | number }
+    #|function f(b: Box): string {
+    #|  if (typeof b.v === "string") {
+    #|    return b.v;
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof obj.prop narrowing flags wrong return type" {
+  let src =
+    #|interface Box { v: string | number }
+    #|function f(b: Box): number {
+    #|  if (typeof b.v === "string") {
+    #|    return b.v;
+    #|  }
+    #|  return 0;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: truthy `if (obj.prop)` strips null/undefined" {
+  let src =
+    #|interface Config { name?: string }
+    #|function f(c: Config): string {
+    #|  if (c.name) {
+    #|    return c.name;
+    #|  }
+    #|  return "default";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: obj.prop instanceof TypeError narrows" {
+  let src =
+    #|interface Slot { err: unknown }
+    #|function f(s: Slot): string {
+    #|  if (s.err instanceof TypeError) {
+    #|    return s.err.message;
+    #|  }
+    #|  return "other";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: typeof obj.prop literal narrows in compound `&&`" {
+  // Both sub-conditions need to apply in the then-branch.
+  let src =
+    #|interface Box { v: string | number; alt?: string }
+    #|function f(b: Box): string {
+    #|  if (typeof b.v === "string" && b.alt !== undefined) {
+    #|    return b.v + b.alt;
+    #|  }
+    #|  return "";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
