@@ -65,6 +65,11 @@ pub(all) struct BundleOptions {
   // with the literal, and the source decl is dropped if no
   // references remain.
   inline_immutable : Bool
+  // When `true`, run constant folding + dead-branch elimination
+  // across every module. Pairs naturally with `inline_immutable`:
+  // once `cfg.mode` becomes `"prod"`, `cfg.mode === "dev"` folds
+  // to `false` and `if (false) …` collapses entirely.
+  fold_constants : Bool
 }
 
 ///|
@@ -77,6 +82,7 @@ pub fn BundleOptions::default() -> BundleOptions {
     auto_reserve: false,
     drop_unused_methods: false,
     inline_immutable: false,
+    fold_constants: false,
   }
 }
 
@@ -242,6 +248,9 @@ pub fn bundle_modules(
   }
   if opts.inline_immutable {
     inline_immutable_bundle(modules, order)
+  }
+  if opts.fold_constants {
+    fold_constants_bundle(modules, order)
   }
   if opts.drop_unused_methods {
     drop_unused_methods_bundle(modules, order, opts.mangle)
@@ -556,6 +565,21 @@ fn inline_immutable_bundle(
   for i, p in paths {
     match modules.get(p) {
       Some(n) => n.block = cleaned[i]
+      None => ()
+    }
+  }
+}
+
+///|
+/// Run constant folding + dead-branch elimination across every
+/// module's block. Trivial wrapper that swaps in the folded blocks.
+fn fold_constants_bundle(
+  modules : Map[String, ModuleNode],
+  order : Array[String],
+) -> Unit {
+  for path in order {
+    match modules.get(path) {
+      Some(n) => n.block = fold_constants_in_block(n.block)
       None => ()
     }
   }
