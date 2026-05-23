@@ -2041,3 +2041,83 @@ test "expr_check: tuple destructuring sees per-slot types" {
     None => fail("function f not found")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Round 19: generic class type-arg substitution at field / method lookup.
+// Mirrors the round-18 interface substitution but for `class C<T>` shapes.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: generic class instance field specialises at use site" {
+  let src =
+    #|declare class Box<T> { value: T; set(v: T): void; }
+    #|function unwrap(b: Box<number>): number {
+    #|  return b.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic class instance field rejects wrong return type" {
+  let src =
+    #|declare class Box<T> { value: T; }
+    #|function unwrap(b: Box<number>): string {
+    #|  return b.value;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic class method signature is specialised" {
+  let src =
+    #|declare class Box<T> { value: T; set(v: T): void; }
+    #|function bump(b: Box<number>): void {
+    #|  b.set("x");
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("number") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: generic class method return is specialised" {
+  // `Box<number>.value` and a `T`-returning method both flow as `number`
+  // — the method's return type substitutes through.
+  let src =
+    #|declare class Box<T> { get(): T; }
+    #|function unwrap(b: Box<number>): number {
+    #|  return b.get();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: two-param generic class field selection" {
+  let src =
+    #|declare class Pair<A, B> { a: A; b: B; }
+    #|function takeA(p: Pair<number, string>): number {
+    #|  return p.a;
+    #|}
+    #|function takeB(p: Pair<number, string>): string {
+    #|  return p.b;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

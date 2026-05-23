@@ -245,7 +245,52 @@ fn Resolver::lookup_field(
           }
           None
         }
-        None => None
+        None =>
+          match self.classes.get(n) {
+            Some(cls) => {
+              // Same shape as the interface arm, walking class members
+              // (instance only — static members aren't reachable via
+              // `recv.field` on an instance).
+              let bindings : Map[String, @ast.TsType] = {}
+              let limit = if args.length() < cls.type_params.length() {
+                args.length()
+              } else {
+                cls.type_params.length()
+              }
+              let mut i = 0
+              while i < limit {
+                bindings[cls.type_params[i]] = args[i]
+                i = i + 1
+              }
+              for p in cls.properties {
+                if p.name == field && !p.is_static {
+                  return Some(substitute_params(p.type_, bindings))
+                }
+              }
+              for m in cls.methods {
+                if m.name == field && !m.is_static {
+                  let param_types : Array[@ast.TsType] = []
+                  for mp in m.params {
+                    param_types.push(substitute_params(mp.1, bindings))
+                  }
+                  return Some(
+                    @ast.TsType::Func(
+                      param_types,
+                      substitute_params(m.return_type, bindings),
+                    ),
+                  )
+                }
+              }
+              for base in cls.base_names {
+                match self.lookup_field(@ast.TsType::Named(base), field) {
+                  Some(t) => return Some(substitute_params(t, bindings))
+                  None => ()
+                }
+              }
+              None
+            }
+            None => None
+          }
       }
     Object(entries) => {
       for entry in entries {
