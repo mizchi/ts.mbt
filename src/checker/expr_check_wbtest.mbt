@@ -4170,3 +4170,73 @@ test "expr_check: JSX boolean attribute satisfies a boolean prop" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 40: JSX children are tracked structurally — text, embedded
+// `{expr}` blocks, and nested elements each become a child entry. The
+// checker recurses through all of them.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX text children pass through cleanly" {
+  let src =
+    #|interface Props { name: string }
+    #|function Greet(props: Props): void {}
+    #|function comp(): void {
+    #|  const _ = <Greet name="hi">Hello, world!</Greet>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: bad call inside multi-child JSX surfaces" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|function Box(props: { children?: any }): void {}
+    #|function comp(): void {
+    #|  const _ = <Box>text {takesString(7)} more</Box>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: deeply nested JSX preserves prop validation" {
+  // Outer Wrap takes no props; inner Greet needs `name: string`.
+  let src =
+    #|function Wrap(props: { children?: any }): void {}
+    #|function Greet(props: { name: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Wrap><Wrap><Greet name={42}/></Wrap></Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Greet> attr `name`") &&
+      i.message.contains("string") &&
+      i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: nested HTML inside component children skips inner validation" {
+  let src =
+    #|function Wrap(props: { children?: any }): void {}
+    #|function comp(): void {
+    #|  const _ = <Wrap><div className="x">hello</div></Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}

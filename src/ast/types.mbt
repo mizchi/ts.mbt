@@ -189,10 +189,13 @@ pub(all) enum TsExpr {
   //   - the attribute list as `(name, value?)` pairs — `value` is
   //     `None` for boolean attrs (`<Foo bar />`) and string-literal
   //     attrs are wrapped as `StringLit(...)`;
-  //   - the leftover embedded `{expr}` sub-expressions that don't
-  //     belong to a specific attribute (children + spread targets).
+  //   - the children list — one entry per logical child. Each child
+  //     is encoded as a `TsExpr`:
+  //       * `StringLit(text)` for the text segments between tags;
+  //       * the parsed `TsExpr` for `{expr}` blocks;
+  //       * a nested `JsxElement(...)` for inline JSX.
   //
-  // The checker recurses into every embedded expression and (when the
+  // The checker recurses into every child expression and (when the
   // tag resolves to a known component or HTML element) validates the
   // attribute values against the receiving prop / element type.
   JsxElement(String, Array[(String, TsExpr?)], Array[TsExpr])

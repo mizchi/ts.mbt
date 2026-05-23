@@ -4457,7 +4457,7 @@ fn check_call_args_in_expr(
     // top-level function whose only parameter is a Props interface or
     // object type), also run per-attribute type checks against the
     // declared prop types.
-    JsxElement(tag, attrs, embeds) => {
+    JsxElement(tag, attrs, children) => {
       check_jsx_attrs(env, tag, attrs, ctx)
       for entry in attrs {
         match entry.1 {
@@ -4465,8 +4465,13 @@ fn check_call_args_in_expr(
           None => ()
         }
       }
-      for e in embeds {
-        check_call_args_in_expr(env, e, ctx)
+      // Each child entry is a `TsExpr` — text segments are wrapped as
+      // `StringLit(...)`, JSX expressions are parsed expressions, and
+      // nested elements are themselves `JsxElement(...)`. Recursing
+      // through `check_call_args_in_expr` handles all three uniformly
+      // (text literals walk through as no-op).
+      for c in children {
+        check_call_args_in_expr(env, c, ctx)
       }
     }
     _ => ()
