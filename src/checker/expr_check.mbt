@@ -709,6 +709,27 @@ fn Resolver::lookup_field(
           }
       }
     String_ | Literal(_) => string_prototype_member(field)
+    // Field access on a union is only safe when *every* member
+    // declares the field. Build the per-member result and either
+    // return the union of their field types (common case) or `None`
+    // if any member lacks it (which surfaces as an error at the
+    // PropAccess site).
+    Union(items) => {
+      let parts : Array[@ast.TsType] = []
+      for it in items {
+        match self.lookup_field(it, field) {
+          Some(t) => parts.push(t)
+          None => return None
+        }
+      }
+      if parts.length() == 0 {
+        None
+      } else if parts.length() == 1 {
+        Some(parts[0])
+      } else {
+        Some(@ast.TsType::Union(parts))
+      }
+    }
     _ => None
   }
 }
@@ -3760,7 +3781,9 @@ fn narrow_by_discriminant(
   literal : String,
   keep : Bool,
 ) -> @ast.TsType? {
-  let variants = union_components(recv)
+  // Unwrap type aliases first so a `type Shape = A | B` receiver
+  // becomes the underlying union before we split it.
+  let variants = union_components(resolver.unwrap(recv))
   if variants.length() < 2 {
     return None
   }
@@ -4990,7 +5013,63 @@ fn check_call_args_in_expr(
       for ent in entries {
         check_call_args_in_expr(env, ent.1, ctx)
       }
-    PropAccess(recv, _) => check_call_args_in_expr(env, recv, ctx)
+    PropAccess(recv, prop) => {
+      check_call_args_in_expr(env, recv, ctx)
+      // Property-existence check: when the receiver has a concrete
+      // structural shape and the resolver can't find `prop` on it,
+      // surface a diagnostic. The class static-side fallback used
+      // by `infer_expr` already runs `r.globals[Class.member]` lookups
+      // and the resolver's instance/class lookup is exhaustive — so
+      // if both miss against a checkable receiver, the property
+      // genuinely doesn't exist on the static shape.
+      match recv {
+        Var(class_name) =>
+          match ctx.resolver.globals.get(class_name + "." + prop) {
+            Some(_) => ()
+            None =>
+              match ctx.resolver.classes.get(class_name) {
+                Some(cls) => {
+                  let mut has_static = false
+                  for p in cls.properties {
+                    if p.name == prop && p.is_static {
+                      has_static = true
+                    }
+                  }
+                  for m in cls.methods {
+                    if m.name == prop && m.is_static {
+                      has_static = true
+                    }
+                  }
+                  if has_static {
+                    return
+                  }
+                  // Fall through to the general lookup below.
+                  let recv_ty = infer_expr(env, ctx.resolver, recv)
+                  if is_checkable(recv_ty) &&
+                    !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
+                    record(
+                      ctx,
+                      "PropAccess `.\{prop}`",
+                      "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+                    )
+                  }
+                  return
+                }
+                None => ()
+              }
+          }
+        _ => ()
+      }
+      let recv_ty = infer_expr(env, ctx.resolver, recv)
+      if is_checkable(recv_ty) &&
+        !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+        )
+      }
+    }
     IndexAccess(recv, idx) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
