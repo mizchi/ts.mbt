@@ -1004,9 +1004,9 @@ started.
 
 ### Syntax (parser)
 
-- [~] `asserts x is T` predicate — parses but return type is widened to `Any`
-  in `parser_type.mbt:704`; `TsType::TypePredicate` is not retained on the
-  asserts branch.
+- [x] `asserts x is T` predicate — retained as `AssertsPredicate(name,
+  target?)`; lowers to `Unit` at the bridge boundary; statement-level
+  narrowing applied at the call site.
 - [~] `new (...) => T` / `abstract new (...) => T` constructor types — parsed
   and dropped to `Any` (`parser_type.mbt:640`, `:652`).
 - [~] Stage-3 decorators — `skip_decorator` only; no decorator AST.
@@ -1014,11 +1014,15 @@ started.
   `parser_function.mbt:499` but the modifier is ignored.
 - [~] Import attributes (`import x from "y" with { type: "json" }`) — read and
   discarded by `skip_import_attributes` (`parser_module.mbt:1922`).
-- [~] Labeled tuple `[name: T, age: U]` — labels stripped during tuple parse.
-- [ ] Variadic tuple types (`[string, ...T, number]`) — no spread-element
-  representation on `TsType::Tuple`.
-- [ ] Mapped-type key remapping (`{ [K in U as F<K>]: V }`) — parser bails out
-  when `as` follows the key binding (`parser_type.mbt:147`).
+- [x] Labeled tuple `[name: T, age: U]` — labels stripped; `[name?: T]`
+  correctly widens the element to `T | undefined`.
+- [x] Variadic tuple types (`[string, ...T, number]`) — parsed and
+  retained as `Tuple([..., Rest(T), ...])`; outside a tuple position
+  `Rest(T)` lowers like `Array(T)`.
+- [x] Mapped-type key remapping (`{ [K in U as F<K>]: V }`) — parsed
+  as `MappedTypeRemap(...)`; simplifier substitutes `K` per key and
+  produces an `Object(...)` when the source / remap resolve, dropping
+  keys whose remap evaluates to `Never`.
 - [ ] `accessor` field (auto-accessor) — recognized at the class member level
   but no dedicated AST node, so checker can't distinguish from a plain field.
 - [ ] `using` / `await using` runtime semantics (parse already done; no
@@ -1038,10 +1042,15 @@ started.
   `simplify_type`.
 - [ ] `ThisParameterType<T>` / `OmitThisParameter<T>` / `ThisType<T>`.
 - [ ] `NoInfer<T>` (TS 5.4+).
-- [ ] Mapped-type key remapping (`as`) evaluation.
+- [x] Mapped-type key remapping (`as`) evaluation in `simplify_type`
+  including `Capitalize<K>` / template-literal prefixing and
+  `K extends X ? never : K` filter patterns.
 - [ ] Mapped-type modifier semantics (`+?` / `-?` / `+readonly` / `-readonly`).
-- [ ] Conditional `infer T extends Bound` constraint propagation.
-- [ ] Variadic tuple inference.
+- [x] Conditional `infer T extends Bound` constraint at match time:
+  `match_infer_pattern` rejects sources that are definitively disjoint
+  from the bound; surface renderers already collapse unresolved
+  infer-with-bound markers to the bound.
+- [ ] Variadic tuple inference (`Parameters<F>` for variadic `F`).
 - [ ] Non-distributive conditional detection (`[T] extends [U] ? ...`).
 - [ ] `unique symbol` distinct identity (currently collapses to `Symbol`).
 - [ ] Class static-side (`typeof Cls`) vs instance-side separation in the
@@ -1049,8 +1058,11 @@ started.
 - [ ] Class index signature `[k: string]: V` get/set lowering at the type
   level.
 - [ ] Module augmentation effect on the resolver.
-- [ ] Declaration merging (interface + interface, namespace + class) — parses
-  but the checker doesn't merge fields/members.
+- [x] Declaration merging (interface + interface) — `Resolver::ingest_module`
+  now unions fields / readonly / extends / index signatures via
+  `merge_interfaces`. Namespace + namespace was already implicit via
+  the recursive ingest. Namespace + class static-side merging is still
+  open.
 - [ ] Tagged-template literal generic inference.
 - [ ] Generator / async-iterator yield-type / return-type checking.
 - [ ] `in` narrowing for record-shaped operands; tagged-union exhaustiveness
@@ -1081,13 +1093,29 @@ started.
 - [ ] Measure issue-count precision (not just crash rate) on the corpus so
   checker regressions surface before they reach real-world generation.
 
-### Priorities (by real-world ROI)
+### Priorities (by real-world ROI) — STATUS
 
-- [ ] Mapped-type key remapping (`as`) — unblocks zod / valibot output shapes.
-- [ ] `asserts` predicate retention — node:assert, vitest, runtime guards.
-- [ ] Labeled + variadic tuple — node:fs callbacks, function `Parameters<...>`.
-- [ ] Declaration merging in the checker — every namespace + class TS package.
-- [ ] Conditional `infer ... extends Bound` propagation — date-fns / zod.
+- [x] Mapped-type key remapping (`as`) — `MappedTypeRemap` AST +
+  simplifier (commit `2f8b33a`).
+- [x] `asserts` predicate retention — `AssertsPredicate` AST + bridge
+  Unit lowering + call-site narrowing (commit `45abff5`).
+- [x] Labeled + variadic tuple — `Rest(T)` AST + optional label
+  widening (commit `3ab53d3`).
+- [x] Interface + interface declaration merging in the checker
+  (commit `8e5cd63`).
+- [x] Conditional `infer ... extends Bound` constraint at match time
+  (commit `8e5cd63`).
+
+Next-tier work that surfaced while doing the above:
+
+- [ ] Namespace + class static-side merging (declaration merging open
+  piece): expose namespace exports as `typeof Class` members.
+- [ ] `new (...) => T` / `abstract new (...) => T` retention on the
+  AST so `ConstructorParameters<T>` / `InstanceType<T>` evaluate
+  through `simplify_type`.
+- [ ] Mapped-type modifier semantics (`+?` / `-?` / `+readonly` /
+  `-readonly`).
+- [ ] Stage-3 decorators with full AST.
 
 Deferred (low corpus ROI): `unique symbol` identity, module augmentation,
 `ThisType`, generator type checking.
