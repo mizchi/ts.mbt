@@ -2286,6 +2286,35 @@ test "parser: parse asserts predicate functions" {
 }
 
 ///|
+test "parser: retain class-level decorators in TsClassDecl" {
+  let src =
+    #|@Injectable()
+    #|@deco.factory(arg)
+    #|export declare class UserService {
+    #|  find(id: number): string;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let cls = module_.classes[0]
+  assert_eq(cls.name, "UserService")
+  assert_eq(cls.decorators.length(), 2)
+  match cls.decorators[0] {
+    CallExpr(Var("Injectable"), _) => ()
+    other => fail("expected `@Injectable()`, got \{other}")
+  }
+  match cls.decorators[1] {
+    CallExpr(PropAccess(Var("deco"), "factory"), args) =>
+      assert_eq(args.length(), 1)
+    other => fail("expected `@deco.factory(arg)`, got \{other}")
+  }
+}
+
+///|
 test "parser: parse import attributes (`with { type: \"json\" }`)" {
   let src =
     #|import data from "./data.json" with { type: "json" };

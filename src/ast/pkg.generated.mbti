@@ -80,6 +80,7 @@ pub(all) struct TsClassDecl {
   is_abstract : Bool
   is_constructible : Bool
   index_signatures : Array[(TsType, TsType)]
+  decorators : Array[TsExpr]
 } derive(@debug.Debug)
 pub impl Show for TsClassDecl
 

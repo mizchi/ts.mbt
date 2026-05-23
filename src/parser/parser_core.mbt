@@ -27,6 +27,10 @@ pub struct Parser {
   mut current_class_brand : String? // brand ID of current class being parsed
   mut last_runtime_class_decl : @ast.TsClassDecl?
   local_type_param_bounds : Array[(String, @ast.TsType)]
+  // Decorator expressions parsed at the statement level that should be
+  // attached to the next class declaration. The class parsers drain
+  // this list when they begin and clear it on exit.
+  pending_decorators : Array[@ast.TsExpr]
 } derive(Debug)
 
 ///|
@@ -68,6 +72,7 @@ pub fn Parser::new_with_strict_and_jsx(
     current_class_brand: None,
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
+    pending_decorators: [],
   }
 }
 
@@ -103,6 +108,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     current_class_brand: None,
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
+    pending_decorators: [],
   }
 }
 

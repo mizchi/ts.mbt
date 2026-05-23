@@ -2223,5 +2223,6 @@ fn Parser::parse_declare_class(
     index_signatures,
     is_abstract,
     is_constructible,
+    decorators: self.take_pending_decorators(),
   }
 }

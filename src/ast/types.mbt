@@ -539,6 +539,12 @@ pub(all) struct TsClassDecl {
   // type with the value type so the checker can resolve `instance.foo`
   // when there is no named field matching `foo`.
   index_signatures : Array[(TsType, TsType)]
+  // Stage-3 decorators applied to the class declaration (`@Foo`,
+  // `@Foo()`, `@a.b()`). Each entry is the decorator's call /
+  // reference expression in source order. Retained so downstream
+  // tooling (NestJS / TypeORM-style scanners) can inspect them; the
+  // checker does not currently interpret them.
+  decorators : Array[TsExpr]
 } derive(Debug)
 
 ///|
