@@ -514,14 +514,19 @@ fn Parser::parse_namespace_decl_with_mode(
       let module_ = if body_source.trim() == "" {
         empty_ts_module()
       } else if body_is_ambient {
-        let parser = Parser::from_source(body_source)
+        // Inherit JSX permission from the outer parser so `<T>expr`
+        // type assertions inside a `.ts` (non-JSX) source don't get
+        // misread as JSX element starts.
+        let parser = Parser::from_source_with_jsx(body_source, self.allow_jsx)
         parser.parse_module_with_seeded_const_values_internal({}, true)
       } else {
         // Runtime first, ambient fallback. This lets us parse runtime
         // namespaces in `.ts` files (with class method bodies) without
         // breaking .d.ts files that route through here via `parse_export`
         // helpers.
-        let runtime_parser = Parser::from_source(body_source)
+        let runtime_parser = Parser::from_source_with_jsx(
+          body_source, self.allow_jsx,
+        )
         match
           (try? runtime_parser.parse_module_with_seeded_const_values_internal(
             {},
@@ -529,7 +534,9 @@ fn Parser::parse_namespace_decl_with_mode(
           )) {
           Ok(module_) => module_
           Err(_) => {
-            let ambient_parser = Parser::from_source(body_source)
+            let ambient_parser = Parser::from_source_with_jsx(
+              body_source, self.allow_jsx,
+            )
             ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
               true,

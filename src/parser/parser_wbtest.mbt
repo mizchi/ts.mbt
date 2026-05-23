@@ -6883,3 +6883,29 @@ test "parser: export namespace with runtime class body" {
   assert_eq(module_.interfaces.length(), 1)
   assert_eq(module_.interfaces[0].name, "PreProcessed")
 }
+///|
+test "parser: numeric property name in interface body" {
+  let src =
+    #|interface T2 {
+    #|    1?: Base;
+    #|}
+  let _ = Parser::from_source(src).parse_module() catch {
+    e => fail("parse err: \{e}")
+  }
+}
+
+///|
+test "parser: namespace body inherits non-JSX from outer parser" {
+  // `<Derived>null` inside a `.ts` (non-JSX) namespace body used to
+  // round-trip through `Parser::from_source` (default JSX-on), which
+  // interpreted the type assertion as a JSX element start and tripped
+  // an unterminated-brace error. The namespace parser now propagates
+  // `allow_jsx` so the inner parse uses the outer's setting.
+  let src =
+    #|namespace TwoLevels {
+    #|    var b = { Foo: <Derived>null };
+    #|}
+  let _ = Parser::from_source_with_jsx(src, false).parse_module() catch {
+    e => fail("\{e}")
+  }
+}
