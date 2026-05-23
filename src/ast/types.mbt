@@ -467,6 +467,11 @@ pub(all) struct TsClassMethodDecl {
   params : Array[(String, TsType)]
   return_type : TsType
   is_static : Bool
+  // Method body, when the source supplied one. `None` for ambient class
+  // declarations (`declare class`), abstract methods, and overload
+  // signatures. The expression checker walks the body when present so
+  // method internals get the same coverage as top-level functions.
+  body : TsBlock?
 } derive(Debug)
 
 ///|

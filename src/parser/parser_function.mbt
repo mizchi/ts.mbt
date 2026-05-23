@@ -2106,6 +2106,10 @@ fn Parser::parse_declare_class(
                   params,
                   return_type,
                   is_static,
+                  // Ambient class declarations (`declare class`) and
+                  // interface-style method signatures don't carry a
+                  // body — leave it as `None`.
+                  body: None,
                 })
               }
           }

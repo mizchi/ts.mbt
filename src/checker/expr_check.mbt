@@ -4492,5 +4492,41 @@ pub fn check_module_function_bodies(
       all.push(issue)
     }
   }
+  // Class method bodies — when the parser supplied a body, walk it the
+  // same way top-level functions are walked. Synthesise a `TsFunc` so
+  // the existing checker pipeline can run unchanged. The synthetic
+  // function name embeds the class + method names so any reported
+  // issues point at the source location.
+  for cls in module_.classes {
+    for method in cls.methods {
+      match method.body {
+        Some(body) => {
+          let params : Array[@ast.TsParam] = []
+          for p in method.params {
+            params.push({
+              name: p.0,
+              binding: None,
+              is_rest: false,
+              type_: p.1,
+              default: None,
+            })
+          }
+          let synth : @ast.TsFunc = {
+            name: cls.name + "." + method.name,
+            type_params: method.type_params,
+            params,
+            return_type: method.return_type,
+            body,
+            is_generator: false,
+            is_async: false,
+          }
+          for issue in check_function_body_with(synth, resolver) {
+            all.push(issue)
+          }
+        }
+        None => ()
+      }
+    }
+  }
   all
 }

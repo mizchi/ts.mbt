@@ -8486,6 +8486,7 @@ fn clone_class_method_in_scope(
       ),
     ),
     is_static: class_method.is_static,
+    body: class_method.body,
   }
 }
 
@@ -8538,6 +8539,7 @@ fn callable_method_from_func_type(
       class_name, method_name, lowered_return_type,
     ),
     is_static,
+    body: None,
   }
 }
 

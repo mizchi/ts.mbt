@@ -3893,3 +3893,76 @@ test "expr_check: Omit<T, K> flags excess listed-key field" {
   }
   assert_true(found)
 }
+
+// ---------------------------------------------------------------------------
+// Round 37: class method body checking. Method bodies are now stored on
+// `TsClassMethodDecl.body` and `check_module_function_bodies` walks them
+// alongside top-level functions.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: class method body flags wrong return type" {
+  let src =
+    #|class Greeter {
+    #|  hello(name: string): number {
+    #|    return name;
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("Greeter.hello") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: class method body with correct return passes" {
+  let src =
+    #|class Greeter {
+    #|  hello(name: string): string {
+    #|    return name;
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: class method body with bad call site is flagged" {
+  let src =
+    #|function takesString(s: string): void {}
+    #|class C {
+    #|  m(): void {
+    #|    takesString(42);
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("C.m") &&
+      i.message.contains("string") &&
+      i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: declare-class method has no body to check" {
+  // Ambient class declarations don't carry a body; the checker
+  // shouldn't crash or invent issues.
+  let src =
+    #|declare class B {
+    #|  hello(name: string): string;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
