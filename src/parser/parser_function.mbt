@@ -1445,7 +1445,7 @@ pub fn Parser::parse_declare_function(
   // function
   let name = self.parse_binding_ident()
 
-  let (_, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
@@ -1496,7 +1496,7 @@ pub fn Parser::parse_declare_function(
   }
   self.restore_local_type_param_bounds(local_type_param_bound_len)
   self.consume_semicolon()
-  { name, module_: "env", params, return_type }
+  { name, module_: "env", type_params, params, return_type }
 }
 
 ///|

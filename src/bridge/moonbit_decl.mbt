@@ -6318,6 +6318,7 @@ fn clone_exported_import(
   {
     name: exported.export_name,
     module_: exported.import_.module_,
+    type_params: exported.import_.type_params,
     params,
     return_type: rewrite_inline_result_return_type(
       exported.export_name,

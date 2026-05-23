@@ -1723,3 +1723,123 @@ test "expr_check: two-param generic inference" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 16: contextual typing of array literals against tuple targets.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: array literal contextually types against tuple target" {
+  // Previously `return [a, b]` inferred as `Array<A | B>` and failed
+  // against the `[A, B]` declared return; now each element is checked
+  // against the matching tuple slot.
+  let src =
+    #|function pair<A, B>(a: A, b: B): [A, B] { return [a, b]; }
+    #|function user(): [number, string] {
+    #|  return pair(1, "x");
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: array literal flags wrong tuple element type" {
+  let src =
+    #|function f(): [number, string] {
+    #|  return [1, 42];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      // 42 (number) where string expected.
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: array literal flags wrong tuple arity" {
+  let src =
+    #|function f(): [number, string] {
+    #|  return [1];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("tuple") && i.message.contains("2") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: `declare function f<T>(...)` participates in inference" {
+  // `TsImport.type_params` now carries the generic parameter list, so a
+  // call to a `declare function` with type params instantiates `T` from
+  // the argument type the same way a regular `function` declaration does.
+  let src =
+    #|declare function pair<A, B>(a: A, b: B): A;
+    #|function user(): number {
+    #|  return pair(1, "x");
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: `declare function` predicate narrows the argument" {
+  // Type-predicate narrowing now works for imports too, since the resolver
+  // synthesizes a minimal `TsParam` list from `imp.params`.
+  let src =
+    #|interface Cat { meow: string }
+    #|interface Dog { bark: string }
+    #|declare function isCat(a: Cat | Dog): a is Cat;
+    #|function f(a: Cat | Dog): string {
+    #|  if (isCat(a)) { return a.meow; }
+    #|  return a.bark;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: tuple destructuring sees per-slot types" {
+  // `const [a, b] = […] as [number, string]` should bind `a: number` and
+  // `b: string`. Returning `a` in a `number` slot passes; returning `a`
+  // in a `string` slot fails.
+  let src =
+    #|function f(t: [number, string]): string {
+    #|  const [a, b] = t;
+    #|  return a;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      // `a` is number, return expects string → mismatch.
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}

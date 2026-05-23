@@ -71,6 +71,24 @@ fn Resolver::from_module(module_ : @ast.TsModule) -> Resolver {
       param_types.push(p.1)
     }
     r.globals[imp.name] = @ast.TsType::Func(param_types, imp.return_type)
+    // Also expose type parameters so generic-call inference picks up
+    // `declare function f<T>(...)` imports — without this the inference
+    // path skipped imports entirely.
+    r.func_type_params[imp.name] = imp.type_params
+    // Synthesize a minimal `TsParam` list (names only) so the rich-
+    // signature path used by `apply_type_predicate_narrowing` can map
+    // the predicate's parameter name to an argument index.
+    let synth_params : Array[@ast.TsParam] = []
+    for p in imp.params {
+      synth_params.push({
+        name: p.0,
+        binding: None,
+        is_rest: false,
+        type_: p.1,
+        default: None,
+      })
+    }
+    r.signatures[imp.name] = synth_params
   }
   for f in module_.funcs {
     let param_types : Array[@ast.TsType] = []
@@ -926,6 +944,14 @@ fn check_expr_against(
       )
       return
     }
+    // Contextual typing for array literals: `[a, b]` against a tuple type
+    // `[T1, T2]` checks each element against the corresponding slot. Without
+    // this hop the array literal would infer as `Array<elem>` and fail
+    // assignability against `Tuple(...)`.
+    (ArrayLit(items), Tuple(slots)) => {
+      check_array_lit_against_tuple(env, items, slots, ctx, sub_path)
+      return
+    }
     _ => ()
   }
   if !is_checkable(expected) {
@@ -938,6 +964,46 @@ fn check_expr_against(
   if !is_assignable_to(inferred, expected) {
     let detail = "expected `\{type_display(expected)}` but got `\{type_display(inferred)}`"
     record(ctx, sub_path, detail)
+  }
+}
+
+///|
+/// Match an array literal `[a, b, …]` against a tuple type `[T1, T2, …]`,
+/// checking each element against the corresponding slot. Excess items
+/// (more literal entries than tuple slots, or vice versa) emit an arity
+/// issue; trailing `Spread(...)` entries waive the arity check the same way
+/// they do for call-site arguments.
+fn check_array_lit_against_tuple(
+  env : ExprEnv,
+  items : Array[@ast.TsExpr],
+  slots : Array[@ast.TsType],
+  ctx : CheckCtx,
+  sub_path : String,
+) -> Unit {
+  let mut has_spread = false
+  for it in items {
+    match it {
+      Spread(_) => has_spread = true
+      _ => ()
+    }
+  }
+  if !has_spread && items.length() != slots.length() {
+    record(
+      ctx,
+      sub_path,
+      "expected tuple of \{slots.length()} element(s), got \{items.length()}",
+    )
+  }
+  let n = if items.length() < slots.length() {
+    items.length()
+  } else {
+    slots.length()
+  }
+  let mut i = 0
+  while i < n {
+    let sub = "\{sub_path}[\{i}]"
+    check_expr_against(env, items[i], slots[i], ctx, sub)
+    i = i + 1
   }
 }
 

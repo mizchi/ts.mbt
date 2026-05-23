@@ -423,6 +423,10 @@ pub(all) struct TsTypeAlias {
 pub(all) struct TsImport {
   name : String // function
   module_ : String // import (: "env")
+  // Generic type-parameter names declared on this `declare function`
+  // (e.g. `T`, `R` in `declare function map<T, R>(...)`). Empty for non-
+  // generic ambient declarations.
+  type_params : Array[String]
   params : Array[(String, TsType)] // parameter (name, type)
   return_type : TsType // return valuetype
 } derive(Debug)
