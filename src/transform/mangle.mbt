@@ -185,6 +185,9 @@ let mangler_builtin_reserved_properties : Array[String] = [
   // Promise
   "then", "catch", "finally", "all", "allSettled", "race", "any",
   "resolve", "reject", "withResolvers",
+  // Promise.allSettled result shape: each entry is
+  // `{ status: "fulfilled", value }` or `{ status: "rejected", reason }`.
+  "reason", "fulfilled", "rejected", "status",
   // JSON
   "parse", "stringify", "toJSON",
   // Map / Set

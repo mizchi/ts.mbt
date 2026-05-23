@@ -121,6 +121,11 @@ priv struct ModuleNode {
   // Drives tree shaking: every `local_name` here is a root for the
   // module's own pass.
   exports : Array[@ast.TsExportSpec]
+  // Re-exports of bindings from other modules. Each entry carries
+  // the source module specifier and the names bridged through.
+  // Drives tree shaking on the source module: `export { foo }
+  // from "./y"` must keep `foo` alive in `./y`.
+  reexports : Array[@ast.TsReExportSpec]
   // Module-level declaration tables — `interface` / `class` /
   // `type` / function-signature metadata that the auto-reserve
   // pass walks. Only populated when `BundleOptions.auto_reserve`
@@ -323,6 +328,93 @@ pub fn bundle_modules(
         None => ()
       }
     }
+    // Wire up internal-module imports: each module's `import { x } from
+    // "./y"` brings a local name `x` into scope, but after concatenation
+    // the dep's `x` is already declared at module-top — we just need an
+    // alias when the importer renamed it. For default imports
+    // (`import foo from "./y"`), the dep's default export lives as
+    // `__export_default__N`, so emit `const foo = __export_default__N;`.
+    for imp in m.import_decls {
+      if imp.type_only {
+        continue
+      }
+      let dep_path = match m.resolved_imports.get(imp.module_spec) {
+        Some(p) => p
+        None => continue
+      }
+      let dep = match modules.get(dep_path) {
+        Some(d) => d
+        None => continue
+      }
+      // Default import: `import foo from "./y"` → `const foo =
+      // <dep's default local>;`.
+      match imp.default_binding {
+        Some(local) => {
+          let mut dep_default_local : String? = None
+          for spec in dep.exports {
+            if spec.export_name == "default" {
+              dep_default_local = Some(spec.local_name)
+              break
+            }
+          }
+          match dep_default_local {
+            Some(dep_name) =>
+              if dep_name != local {
+                e.write("const ")
+                e.write(local)
+                e.write(" = ")
+                e.write(dep_name)
+                e.write(";")
+                e.nl()
+              }
+            None => ()
+          }
+        }
+        None => ()
+      }
+      // Named imports: `import { x as y } from "./y"` → `const y = x;`
+      // when the names differ. When they match, the binding is already
+      // in scope after the dep's stmts ran, so no alias is needed.
+      for nb in imp.named_bindings {
+        let imported = nb.0
+        let local = nb.1
+        if imported != local {
+          e.write("const ")
+          e.write(local)
+          e.write(" = ")
+          e.write(imported)
+          e.write(";")
+          e.nl()
+        }
+      }
+      // Namespace import: `import * as ns from "./y"` builds an
+      // object literal of every export. Emit as a synthesized
+      // `const ns = { x, y, … };` so subsequent `ns.x` accesses
+      // resolve correctly.
+      match imp.namespace_binding {
+        Some(local) => {
+          e.write("const ")
+          e.write(local)
+          e.write(" = {")
+          for j, spec in dep.exports {
+            if j > 0 {
+              e.write(",")
+              e.space()
+            }
+            if spec.local_name == spec.export_name {
+              e.write(spec.local_name)
+            } else {
+              e.write(spec.export_name)
+              e.write(": ")
+              e.write(spec.local_name)
+            }
+          }
+          e.write("};")
+          e.nl()
+        }
+        None => ()
+      }
+    }
     for j, stmt in m.block.stmts {
       if opts.with_sourcemap && j < m.block.stmt_positions.length() {
         let src_pos = e.line_index.position(m.block.stmt_positions[j])
@@ -421,6 +513,34 @@ fn load_module_graph(
       }
     }
   }
+  // `export { x } from "./y"` and `export * from "./y"` also pull
+  // `./y` into the bundle — without this, a chain of re-exports
+  // would silently drop the source modules and leave the
+  // re-exported bindings dangling.
+  for re in mb.reexports {
+    if re.type_only {
+      continue
+    }
+    match resolve_relative(path, re.module_spec) {
+      Some(base_dep) => {
+        let dep_path = resolve_with_extensions(files, base_dep)
+        resolved[re.module_spec] = dep_path
+        match
+          load_module_graph(
+            files,
+            dep_path,
+            modules,
+            external_imports,
+            external_seen,
+            need_decls,
+          ) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      None => ()
+    }
+  }
   modules[path] = {
     path,
     source,
@@ -428,6 +548,7 @@ fn load_module_graph(
     resolved_imports: resolved,
     import_decls: mb.imports,
     exports: mb.exports,
+    reexports: mb.reexports,
     module_decls,
     module_block: Some(mb),
   }
@@ -502,6 +623,73 @@ fn tree_shake_bundle(
           // nb.0 is the imported name as it appears in the source
           // module — that's the root we want to keep alive there.
           dep_roots[nb.0] = true
+        }
+      }
+    }
+  }
+  // Propagate re-exports as roots transitively. `c.ts` saying
+  // `export { foo } from "./b"` means `foo` has to stay alive in
+  // `./b`; if `./b` itself re-exports `foo` from `./a`, the next
+  // round propagates `foo` into `./a`. Iterate until the root set
+  // stops growing.
+  let mut changed = true
+  while changed {
+    changed = false
+    for kv in modules {
+      let (path, node) = kv
+      let my_roots = match roots_per_module.get(path) {
+        Some(m) => m
+        None => continue
+      }
+      for re in node.reexports {
+        if re.type_only {
+          continue
+        }
+        let dep_path = match node.resolved_imports.get(re.module_spec) {
+          Some(p) => p
+          None => continue
+        }
+        let dep_node = match modules.get(dep_path) {
+          Some(d) => d
+          None => continue
+        }
+        let dep_roots = root_for(dep_path)
+        match re.kind {
+          Named(specs) =>
+            // Each entry is (local_in_source, exported_name). We
+            // only need the local-in-source side so the dep module
+            // knows which of its own bindings to keep.
+            for s in specs {
+              let local = s.0
+              let exported = s.1
+              // The reexport contributes to *this* module's surface
+              // as `exported`. Propagate that visibility upstream:
+              // when something keeps `exported` alive on this
+              // module, the corresponding `local` must stay alive
+              // on the dep module too.
+              if my_roots.contains(exported) && !dep_roots.contains(local) {
+                dep_roots[local] = true
+                changed = true
+              }
+            }
+          All =>
+            // `export * from "./y"` — every export of `./y` becomes
+            // visible here. Mark every dep export as a root.
+            for spec in dep_node.exports {
+              if !dep_roots.contains(spec.local_name) {
+                dep_roots[spec.local_name] = true
+                changed = true
+              }
+            }
+          Namespace(_) =>
+            // `export * as ns from "./y"` — `ns` is opaque from the
+            // outside, so we have to keep every export of `./y`.
+            for spec in dep_node.exports {
+              if !dep_roots.contains(spec.local_name) {
+                dep_roots[spec.local_name] = true
+                changed = true
+              }
+            }
         }
       }
     }
