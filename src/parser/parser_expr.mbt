@@ -343,6 +343,17 @@ fn Parser::parse_assignment(self : Parser) -> @ast.TsExpr raise ParseError {
         let right = self.parse_assignment()
         IndexAssignExpr(obj, index, right)
       }
+      // Destructuring assignment whose LHS slipped past
+      // `is_destructuring_assignment_start` because the spread / element
+      // target wasn't expressible as a simple binding pattern — e.g.
+      // `{ ...super.a } = { ... }`. Consume the `=` and wrap as an
+      // `AssignPattern` with a `Target(...)` binding so the parser can
+      // move on. Downstream passes treat the construct opaquely.
+      ObjectLit(_) | ArrayLit(_) => {
+        let _ = self.advance()
+        let right = self.parse_assignment()
+        AssignPattern(@ast.TsBinding::Target(left), right)
+      }
       _ => left
     }
   } else if self.match_(PlusEq) {

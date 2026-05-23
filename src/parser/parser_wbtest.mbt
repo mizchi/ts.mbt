@@ -2053,6 +2053,41 @@ test "parser: `using` followed by newline is still a reference" {
 }
 
 ///|
+test "parser: object literal as destructuring-assignment LHS in static field" {
+  // `{ ...super.a } = { x: 0 }` — the LHS is an object literal that's
+  // re-interpreted as a destructuring assignment target. Our binding
+  // pattern parser doesn't accept complex spread targets, so the
+  // assignment falls through to a generic `AssignPattern` with a
+  // `Target(...)` binding.
+  let src =
+    #|class B { static a: any; }
+    #|class C extends B {
+    #|    static z13 = { ...super.a } = { x: 0 };
+    #|}
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
+test "parser: array literal as destructuring-assignment LHS" {
+  // `[a, b] = arr` outside of a destructuring-friendly slot — falls
+  // through to the same generic `AssignPattern(Target(...))` path.
+  let src =
+    #|function f(): void {
+    #|  let z;
+    #|  z = [super.a] = [0];
+    #|}
+  // We don't care about super in a function context; parse only checks
+  // the structural shape.
+  match (try? Parser::from_source(src).parse_module()) {
+    Ok(_) => ()
+    Err(e) => fail("parse error: \{e}")
+  }
+}
+
+///|
 test "parser: parse interface call-signature with type predicate return" {
   let src = "interface I1 { (p1: A): p1 is C; }"
   match (try? Parser::from_source(src).parse_module()) {
