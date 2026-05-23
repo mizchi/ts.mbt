@@ -3322,6 +3322,10 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
       "RemapTo" + utility_record_type_suffix(value)
     TypePredicate(_, _) => "Bool"
     AssertsPredicate(_, _) => "Unit"
+    // Outside a Tuple, a bare `Rest(T)` behaves like `Array(T)` for the
+    // purposes of suffix naming; inside a Tuple it's handled by the
+    // tuple-walker.
+    Rest(inner) => "RestOf" + utility_record_type_suffix(inner)
   }
 }
 
@@ -3348,6 +3352,17 @@ fn utility_tuple_rest_array_type(type_ : @ast.TsType) -> @ast.TsType? {
       let mut has_rest_array = false
       for item in items {
         let current = match item {
+          // `[T, ...T[]]` parsed with the variadic-tuple representation
+          // surfaces the rest as `Rest(Array(inner))`; treat that as a
+          // rest-array hit so the existing collapse path keeps working.
+          Rest(Array(inner)) => {
+            has_rest_array = true
+            inner
+          }
+          Rest(inner) => {
+            has_rest_array = true
+            inner
+          }
           Array(inner) => {
             has_rest_array = true
             inner

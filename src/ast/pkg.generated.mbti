@@ -361,6 +361,7 @@ pub(all) enum TsType {
   BooleanLiteral(Bool)
   Array(TsType)
   Tuple(Array[TsType])
+  Rest(TsType)
   Object(Array[(TsType, TsType)])
   Struct(String, Array[(String, TsType)])
   Func(Array[TsType], TsType)

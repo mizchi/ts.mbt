@@ -24,6 +24,11 @@ pub(all) enum TsType {
   // Compound types
   Array(TsType)
   Tuple(Array[TsType]) // [string, number]
+  // Variadic tuple element marker: `[A, ...B, C]` parses as
+  // `Tuple([A, Rest(B), C])`. Only meaningful as a direct child of
+  // `Tuple(...)`; outside of that position, `Rest(T)` behaves like
+  // `Array(T)` (or like `T` itself when `T` is already an array / tuple).
+  Rest(TsType)
   Object(Array[(TsType, TsType)]) // { key: value } - key is Literal for property names
   Struct(String, Array[(String, TsType)]) // name, fields (for codegen)
   Func(Array[TsType], TsType) // params, return

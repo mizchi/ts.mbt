@@ -18,6 +18,7 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
       }
       Tuple(out)
     }
+    Rest(inner) => Rest(simplify_type(inner))
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {
@@ -335,6 +336,7 @@ fn substitute_named(
       }
       Tuple(out)
     }
+    Rest(inner) => Rest(substitute_named(inner, name, replacement))
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {

@@ -69,28 +69,33 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
     return Tuple(items)
   }
   while !self.check(Eof) {
-    let _ = self.match_ellipsis()
-    match self.peek().kind {
+    let is_rest = self.match_ellipsis()
+    // Labels like `[name: T]` strip the label tokens; `[name?: T]` is
+    // additionally an optional element (equivalent to a trailing `?`
+    // on the type itself).
+    let label_optional = match self.peek().kind {
       Ident(_) if self.peek_at(1).kind == Colon => {
         let _ = self.advance()
         let _ = self.expect(Colon)
+        false
       }
       Ident(_) if self.peek_at(1).kind == Question &&
         self.peek_at(2).kind == Colon => {
         let _ = self.advance()
         let _ = self.advance()
         let _ = self.expect(Colon)
+        true
       }
-      _ => ()
+      _ => false
     }
     let item_type = self.parse_type()
-    items.push(
-      if self.match_(Question) {
-        wrap_optional_ts_type(item_type)
-      } else {
-        item_type
-      },
-    )
+    let trailing_optional = self.match_(Question)
+    let with_optional : @ast.TsType = if label_optional || trailing_optional {
+      wrap_optional_ts_type(item_type)
+    } else {
+      item_type
+    }
+    items.push(if is_rest { Rest(with_optional) } else { with_optional })
     if self.match_(Comma) {
       if self.match_(RBracket) {
         break
@@ -229,6 +234,7 @@ fn mapped_value_references_binder(
       }
       false
     }
+    Rest(inner) => mapped_value_references_binder(inner, key_param)
     Object(fields) => {
       for f in fields {
         if mapped_value_references_binder(f.1, key_param) {

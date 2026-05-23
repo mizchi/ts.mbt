@@ -522,6 +522,8 @@ fn moonbit_type_name(state : MoonBitDeclState, type_ : @ast.TsType) -> String {
     TypePredicate(_, _) => "Bool"
     // `asserts x [is T]` returns void at runtime; predicate-only metadata.
     AssertsPredicate(_, _) => "Unit"
+    // Outside a Tuple element, a bare `Rest(T)` behaves like `Array(T)`.
+    Rest(inner) => "Array[" + moonbit_type_name(state, inner) + "]"
     Union(parts) =>
       match inline_union_synthesized_name_from_parts(parts) {
         Some(name) => name

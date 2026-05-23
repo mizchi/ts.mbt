@@ -661,6 +661,44 @@ test "parser: parse literal-key mapped object type as fields" {
 }
 
 ///|
+test "parser: parse variadic tuple type with rest element" {
+  let parser = Parser::from_source("[string, ...number[]]")
+  assert_eq(
+    parser.parse_type(),
+    Tuple([String_, Rest(Array(Number))]),
+  )
+}
+
+///|
+test "parser: parse leading rest variadic tuple" {
+  let parser = Parser::from_source("[...string[], number]")
+  assert_eq(
+    parser.parse_type(),
+    Tuple([Rest(Array(String_)), Number]),
+  )
+}
+
+///|
+test "parser: parse labeled tuple drops labels, keeps shape" {
+  // Labels are TS-only structural metadata. `[name: string, age: number]`
+  // is structurally identical to `[string, number]`.
+  let parser = Parser::from_source("[name: string, age: number]")
+  assert_eq(parser.parse_type(), Tuple([String_, Number]))
+}
+
+///|
+test "parser: parse labeled tuple with optional label" {
+  let parser = Parser::from_source("[name: string, age?: number]")
+  assert_eq(parser.parse_type(), Tuple([String_, Union([Number, Undefined])]))
+}
+
+///|
+test "parser: parse labeled rest tuple element" {
+  let parser = Parser::from_source("[name: string, ...rest: number[]]")
+  assert_eq(parser.parse_type(), Tuple([String_, Rest(Array(Number))]))
+}
+
+///|
 test "parser: parse mapped type with `as` key remap" {
   // Literal-source mapped type with a template-literal remap. After parse
   // we don't simplify, so the variant must survive intact for the checker
