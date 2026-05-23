@@ -2162,10 +2162,64 @@ fn check_array_lit_against_tuple(
 ///     the corresponding prop's declared type, missing required props
 ///     are flagged, and excess props surface as "does not exist on
 ///     target type".
+///|
+/// Synthesise a TS type for a JSX element's children list. Used by
+/// `check_jsx_attrs` to validate the synthesised value against the
+/// component's declared `children` prop.
+///
+///   0 children → `Undefined`
+///   1 child   → that child's inferred type
+///   2+ children → `Array<union-of-child-types>`
+///
+/// JSX nested elements infer as `Any` (`JsxElement(_, _, _)` → Any),
+/// so a component declaring `children: SomeElement` won't get strict
+/// element-shape narrowing yet — but the assignability check still
+/// surfaces obvious mismatches like `children: string` vs a numeric
+/// child.
+fn synthesize_children_type(
+  env : ExprEnv,
+  resolver : Resolver,
+  children : Array[@ast.TsExpr],
+) -> @ast.TsType {
+  if children.length() == 0 {
+    return @ast.TsType::Undefined
+  }
+  if children.length() == 1 {
+    return infer_expr(env, resolver, children[0])
+  }
+  let parts : Array[@ast.TsType] = []
+  for c in children {
+    parts.push(infer_expr(env, resolver, c))
+  }
+  // Dedup obviously-identical parts so the synthesised union stays
+  // readable in diagnostics.
+  let dedup : Array[@ast.TsType] = []
+  for p in parts {
+    let mut already = false
+    for existing in dedup {
+      if equivalent(p, existing) {
+        already = true
+        break
+      }
+    }
+    if !already {
+      dedup.push(p)
+    }
+  }
+  let elem = if dedup.length() == 1 {
+    dedup[0]
+  } else {
+    @ast.TsType::Union(dedup)
+  }
+  @ast.TsType::Array(elem)
+}
+
+///|
 fn check_jsx_attrs(
   env : ExprEnv,
   tag : String,
   attrs : Array[(String, @ast.TsExpr?)],
+  children : Array[@ast.TsExpr],
   ctx : CheckCtx,
 ) -> Unit {
   if tag == "" {
@@ -2228,10 +2282,46 @@ fn check_jsx_attrs(
         }
     }
   }
-  // Missing-required check.
+  // Missing-required check. JSX children populate the synthetic
+  // `children` prop, so include it in `provided` when at least one
+  // child is present.
   let provided : Map[String, Bool] = {}
   for entry in attrs {
     provided[entry.0] = true
+  }
+  if children.length() > 0 {
+    provided["children"] = true
+  }
+  // Children-prop type check: when the props shape declares a
+  // `children` field with a non-`Any` type, synthesise the children
+  // value (single child or array union) and validate it.
+  match ctx.resolver.lookup_field(props, "children") {
+    Some(children_ty) =>
+      if is_checkable(children_ty) {
+        let synth = synthesize_children_type(env, ctx.resolver, children)
+        if is_checkable(synth) && !is_assignable_to(synth, children_ty) {
+          record(
+            ctx,
+            "<\{tag}> children",
+            "expected `\{type_display(children_ty)}` but got `\{type_display(synth)}`",
+          )
+        }
+      }
+    None =>
+      if children.length() > 0 {
+        // The component has no `children` prop but the JSX element
+        // supplied some. Mirror TS's "Property 'children' does not
+        // exist" diagnostic.
+        let declared_fields = collect_declared_fields(props, ctx.resolver)
+        let has_children = declared_fields.iter().any(fn(d) { d.0 == "children" })
+        if !has_children && declared_fields.length() > 0 {
+          record(
+            ctx,
+            "<\{tag}> children",
+            "component does not declare a `children` prop",
+          )
+        }
+      }
   }
   let declared_fields = collect_declared_fields(props, ctx.resolver)
   for d in declared_fields {
@@ -4458,7 +4548,7 @@ fn check_call_args_in_expr(
     // object type), also run per-attribute type checks against the
     // declared prop types.
     JsxElement(tag, attrs, children) => {
-      check_jsx_attrs(env, tag, attrs, ctx)
+      check_jsx_attrs(env, tag, attrs, children, ctx)
       for entry in attrs {
         match entry.1 {
           Some(value) => check_call_args_in_expr(env, value, ctx)

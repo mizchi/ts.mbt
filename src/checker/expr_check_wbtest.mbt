@@ -4179,8 +4179,10 @@ test "expr_check: JSX boolean attribute satisfies a boolean prop" {
 
 ///|
 test "expr_check: JSX text children pass through cleanly" {
+  // Component declares an optional `children` prop, so the text child
+  // is accepted.
   let src =
-    #|interface Props { name: string }
+    #|interface Props { name: string; children?: any }
     #|function Greet(props: Props): void {}
     #|function comp(): void {
     #|  const _ = <Greet name="hi">Hello, world!</Greet>;
@@ -4235,6 +4237,90 @@ test "expr_check: nested HTML inside component children skips inner validation" 
     #|function Wrap(props: { children?: any }): void {}
     #|function comp(): void {
     #|  const _ = <Wrap><div className="x">hello</div></Wrap>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Round 41: JSX children prop type validation. The synthetic
+// `children` value is checked against the receiving component's
+// declared `children` prop type (when one is present).
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: JSX children string prop accepts a text child" {
+  let src =
+    #|function Caption(props: { children: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Caption>Hello!</Caption>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX children string prop rejects a numeric child" {
+  let src =
+    #|function Caption(props: { children: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Caption>{42}</Caption>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Caption> children") &&
+      i.message.contains("string") &&
+      i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX required children prop flagged when missing" {
+  let src =
+    #|function Caption(props: { children: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Caption/>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("missing prop `children`") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX children supplied to component without children prop" {
+  let src =
+    #|function Atom(props: { name: string }): void {}
+    #|function comp(): void {
+    #|  const _ = <Atom name="x">extra</Atom>;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("<Atom> children") &&
+      i.message.contains("does not declare") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: JSX children any prop accepts anything" {
+  let src =
+    #|function Box(props: { children: any }): void {}
+    #|function comp(): void {
+    #|  const _ = <Box>text and {123} more</Box>;
     #|}
   let module_ = parse_module_or_empty(src)
   let issues = check_module_function_bodies(module_)
