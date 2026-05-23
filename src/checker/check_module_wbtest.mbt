@@ -138,6 +138,7 @@ test "check_module: detects duplicate class instance properties" {
     methods: [],
     is_abstract: false,
     is_constructible: true,
+    index_signatures: [],
   })
   let report = check_module(m)
   let dups = report.issues.filter(fn(i) { i.kind == ClassPropertyDuplicate })
@@ -160,6 +161,7 @@ test "check_module: instance and static with same name is OK" {
     methods: [],
     is_abstract: false,
     is_constructible: true,
+    index_signatures: [],
   })
   let report = check_module(m)
   let dups = report.issues.filter(fn(i) { i.kind == ClassPropertyDuplicate })

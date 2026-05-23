@@ -95,6 +95,22 @@ test "match_infer_pattern: `infer X extends Bound` accepts matching source" {
 }
 
 ///|
+test "match_infer_pattern: variadic Parameters<F> captures rest-tail tuple" {
+  // Source: `(a: string, ...rest: number[]) => void` lowered as
+  // `Func([String, Rest(Array(Number))], Void)`. The Parameters<F>
+  // pattern is `Func([Array(infer P)], Any)`. P should bind to
+  // `Tuple([String, Rest(Array(Number))])`.
+  let bindings : Map[String, @ast.TsType] = {}
+  let source : @ast.TsType = Func([String_, Rest(Array(Number))], Void)
+  let pattern : @ast.TsType = Func([Array(infer_marker("P"))], Any)
+  assert_true(match_infer_pattern(source, pattern, bindings))
+  assert_eq(
+    bindings.get("P"),
+    Some(Tuple([String_, Rest(Array(Number))])),
+  )
+}
+
+///|
 test "match_infer_pattern: `infer X extends Bound` allows undecidable source" {
   // Source is an opaque `Named("Foo")`; bound is `Date`. The relation
   // is undecidable, so we optimistically bind — the substitution path

@@ -1741,6 +1741,57 @@ fn Parser::parse_declare_signature_params(
 }
 
 ///|
+///|
+/// Cheap shape check: confirms the token stream starts with `[ Ident :`,
+/// the canonical opening of a TS index signature inside a class /
+/// interface body. Returns false for the general computed-name pattern
+/// `[expr]: T` so the existing skip path still handles it.
+fn Parser::is_index_signature_shape_after_lbracket(self : Parser) -> Bool {
+  if !self.check(LBracket) {
+    return false
+  }
+  match (self.peek_at(1).kind, self.peek_at(2).kind) {
+    (Ident(_), Colon) => true
+    _ => false
+  }
+}
+
+///|
+/// Parse a TS index signature inside a class body: `[name: KeyType]:
+/// ValueType`. Returns `None` if the shape doesn't match — callers
+/// fall back to the original skip path.
+fn Parser::try_parse_class_index_signature(
+  self : Parser,
+) -> (@ast.TsType, @ast.TsType)? raise ParseError {
+  let saved = self.pos
+  let _ = self.expect(LBracket)
+  match self.peek().kind {
+    Ident(_) => {
+      let _ = self.advance()
+    }
+    _ => {
+      self.pos = saved
+      return None
+    }
+  }
+  if !self.match_(Colon) {
+    self.pos = saved
+    return None
+  }
+  let key_type = self.parse_type()
+  if !self.match_(RBracket) {
+    self.pos = saved
+    return None
+  }
+  if !self.match_(Colon) {
+    self.pos = saved
+    return None
+  }
+  let value_type = self.parse_type()
+  self.consume_semicolon()
+  Some((key_type, value_type))
+}
+
 fn Parser::parse_declare_class_member_name(
   self : Parser,
 ) -> String? raise ParseError {
@@ -1974,12 +2025,27 @@ fn Parser::parse_declare_class(
   let _ = self.expect(LBrace)
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
+  let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
   let mut saw_nonpublic_constructor = false
   while !self.check(RBrace) && !self.check(Eof) {
     if self.match_(Semicolon) {
       continue
+    }
+    // Index signature: `[name: KeyType]: ValueType`. Detect before any
+    // modifier consumption so the shape isn't lost when the body opens
+    // with `[`. Stale-pattern bail-out: revert to the original skip
+    // path if the syntax doesn't match.
+    if self.check(LBracket) &&
+      self.is_index_signature_shape_after_lbracket() {
+      match self.try_parse_class_index_signature() {
+        Some(sig) => {
+          index_signatures.push(sig)
+          continue
+        }
+        None => ()
+      }
     }
     let mut is_static = false
     let mut is_readonly = false
@@ -2154,6 +2220,7 @@ fn Parser::parse_declare_class(
     constructor_params,
     properties,
     methods,
+    index_signatures,
     is_abstract,
     is_constructible,
   }

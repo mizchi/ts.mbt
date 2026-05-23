@@ -4979,6 +4979,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     methods: [],
     is_abstract: false,
     is_constructible: true,
+    index_signatures: [],
   }
   let class_method : @ast.TsClassMethodDecl = {
     name: "setIssuedAt",

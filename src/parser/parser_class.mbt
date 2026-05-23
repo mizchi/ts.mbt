@@ -122,6 +122,7 @@ fn build_runtime_class_decl(
     constructor_params,
     properties,
     methods,
+    index_signatures: [],
     is_abstract,
     is_constructible: !is_abstract,
   }

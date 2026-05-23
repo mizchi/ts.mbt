@@ -4672,6 +4672,36 @@ test "expr_check: without asserts call, string|number -> string is flagged" {
 }
 
 ///|
+test "expr_check: class index signature `[k: string]: T` resolves lookups" {
+  // `c.foo` on a class with `[k: string]: number` resolves to `number`.
+  let src =
+    #|declare class Dict {
+    #|  [key: string]: number;
+    #|}
+    #|function use(d: Dict): number {
+    #|  return d.something;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX with explicit generic type args parses + type-checks" {
+  // `<Box<string> value="hello" />` — generic type arg is consumed,
+  // props still validate against the declared `Props`.
+  let src =
+    #|interface BoxProps { value: string }
+    #|function Box<T>(props: BoxProps): void {}
+    #|function comp(): void {
+    #|  const _ = <Box<string> value="hello" />;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
 test "expr_check: interface declaration merging unions members" {
   // `interface Foo { a }` + `interface Foo { b }` should expose both
   // fields. A function body that reads `foo.b` after declaring `foo:

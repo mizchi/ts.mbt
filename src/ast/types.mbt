@@ -534,6 +534,11 @@ pub(all) struct TsClassDecl {
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool
   is_constructible : Bool
+  // Index signatures declared on the class body (e.g. `[key: string]:
+  // T` inside `class C { [key: string]: T }`). Each entry pairs the key
+  // type with the value type so the checker can resolve `instance.foo`
+  // when there is no named field matching `foo`.
+  index_signatures : Array[(TsType, TsType)]
 } derive(Debug)
 
 ///|

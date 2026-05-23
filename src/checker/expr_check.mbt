@@ -157,6 +157,11 @@ fn Resolver::ingest_module(
   for imp in module_.imports {
     let param_types : Array[@ast.TsType] = []
     for p in imp.params {
+      // `declare function`'s params come from `(name, type)` pairs without
+      // a rest flag, so each entry is taken as-is. A surface-level rest
+      // declaration like `(...args: T[])` shows up as `Array(T)` here
+      // already; the rest pattern path in `match_infer_pattern` handles
+      // single-Array-param shapes without needing an explicit Rest.
       param_types.push(p.1)
     }
     r.globals[prefix + imp.name] = @ast.TsType::Func(
@@ -185,7 +190,15 @@ fn Resolver::ingest_module(
   for f in module_.funcs {
     let param_types : Array[@ast.TsType] = []
     for p in f.params {
-      param_types.push(p.type_)
+      // Preserve rest-parameter information so `Parameters<F>` sees the
+      // variadic tail. `function f(a: string, ...rest: number[])` -> the
+      // last param type becomes `Rest(Array(Number))` so the resulting
+      // `Parameters<typeof f>` tuple carries the variadic marker.
+      if p.is_rest {
+        param_types.push(@ast.TsType::Rest(p.type_))
+      } else {
+        param_types.push(p.type_)
+      }
     }
     // Async functions expose `Promise<R>` to callers even when the body's
     // declared `return_type` is the un-wrapped `R`.
@@ -1349,7 +1362,10 @@ fn Resolver::lookup_class_field(
       None => ()
     }
   }
-  None
+  // Index-signature fallback (`class C { [k: string]: T }`): when no
+  // declared property or method matched and the index signature accepts
+  // the field's key kind, return the indexed value type.
+  index_signature_value(cls.index_signatures, field)
 }
 
 ///|
@@ -1843,7 +1859,17 @@ fn infer_expr(
         wrap_async_return(f.is_async, f.return_type),
       )
     }
-    TaggedTemplate(_, _, _, _) | TemplateLiteral(_, _) => @ast.TsType::String_
+    TaggedTemplate(tag, _, _, _) =>
+      // `tag\`...\`` calls `tag(strings, ...exprs)` at runtime. We don't
+      // model `TemplateStringsArray` here, so the most useful fallback
+      // is the return type of `tag` when it's a known function — this
+      // is what library helpers like `gql\`...\`` / `css\`...\`` /
+      // `sql\`...\`` rely on for end-to-end typing.
+      match infer_expr(env, resolver, tag) {
+        Func(_, ret) => ret
+        _ => @ast.TsType::String_
+      }
+    TemplateLiteral(_, _) => @ast.TsType::String_
     // `x as T` — forced cast; result type is `T`. We still walk `inner` so
     // any nested call sites are validated.
     As(inner, ty) => {

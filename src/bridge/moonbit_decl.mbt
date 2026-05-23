@@ -2218,6 +2218,7 @@ fn collect_exported_decls(
               properties,
               methods,
               is_constructible: false,
+              index_signatures: [],
             },
           })
         } else {
@@ -8853,6 +8854,7 @@ fn clone_exported_class(
     methods,
     is_abstract: exported.class_.is_abstract,
     is_constructible: exported.class_.is_constructible,
+    index_signatures: [],
   }
 }
 

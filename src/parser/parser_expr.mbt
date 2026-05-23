@@ -2055,6 +2055,31 @@ fn Parser::parse_jsx_opening_header(
   }
   let tag = self.src[name_start:i].to_string()
   let mut self_close = false
+  // Explicit generic type arguments `<Box<string> .../>`. Skip the
+  // balanced angle brackets so the rest of the attribute loop sees the
+  // attribute list. The generic info is dropped — the checker resolves
+  // props against the component's parameter type, not the call-site
+  // generic.
+  if i < self.src.length() && self.src[i].to_int().unsafe_to_char() == '<' {
+    let mut depth = 1
+    let mut j = i + 1
+    while j < self.src.length() && depth > 0 {
+      let cc = self.src[j].to_int().unsafe_to_char()
+      if cc == '<' {
+        depth += 1
+      } else if cc == '>' {
+        depth -= 1
+        if depth == 0 {
+          j += 1
+          break
+        }
+      }
+      j += 1
+    }
+    if depth == 0 {
+      i = j
+    }
+  }
   // Attributes.
   while i < self.src.length() {
     let c = self.src[i].to_int().unsafe_to_char()
