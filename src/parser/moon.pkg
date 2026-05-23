@@ -3,8 +3,8 @@ import {
   "moonbitlang/core/debug",
   "moonbitlang/core/string",
   "moonbitlang/core/strconv",
-  "mizchi/ts/ast" @ast,
-  "mizchi/ts/checker" @checker,
+  "mizchi/ts/ast",
+  "mizchi/ts/checker",
 }
 
 import {

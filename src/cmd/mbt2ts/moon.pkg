@@ -1,7 +1,7 @@
 import {
   "moonbitlang/async",
   "moonbitlang/core/env",
-  "mizchi/ts" @ts,
+  "mizchi/ts",
 }
 
 options(

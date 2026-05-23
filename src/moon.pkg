@@ -1,15 +1,15 @@
 import {
   "mizchi/x/fs",
-  "mizchi/x/process" @process,
-  "moonbitlang/core/json" @json,
+  "mizchi/x/process",
+  "moonbitlang/core/json",
   "moonbitlang/core/string",
-  "mizchi/ts/parser" @parser,
-  "mizchi/ts/bridge" @bridge,
+  "mizchi/ts/parser",
+  "mizchi/ts/bridge",
 }
 
 import {
   "moonbitlang/async",
   "moonbitlang/core/env",
-  "mizchi/ts/ast" @ast,
-  "mizchi/ts/checker" @checker,
+  "mizchi/ts/ast",
+  "mizchi/ts/checker",
 } for "wbtest"

@@ -1392,8 +1392,10 @@ fn Parser::parse_jsx_opening_tag(
   }
   // Fragment `<>` / closing-element `</…>` — no name.
   if i < self.src.length() &&
-    (self.src[i].to_int().unsafe_to_char() == '>' ||
-      self.src[i].to_int().unsafe_to_char() == '/') {
+    (
+      self.src[i].to_int().unsafe_to_char() == '>' ||
+      self.src[i].to_int().unsafe_to_char() == '/'
+    ) {
     return ("", attrs, 0)
   }
   // Tag name (identifier with optional `.member.access`).
@@ -1641,7 +1643,10 @@ fn Parser::scan_jsx_source_end_with_embeds(
                 } else {
                   trimmed.to_string()
                 }
-                let sub = Parser::from_source_with_jsx(payload_str, self.allow_jsx)
+                let sub = Parser::from_source_with_jsx(
+                  payload_str,
+                  self.allow_jsx,
+                )
                 match (try? sub.parse_expr()) {
                   Ok(e) => embeds.push(e)
                   Err(_) => ()
@@ -1930,8 +1935,9 @@ fn Parser::parse_jsx_element_expr(
     None => {
       // Fallback: structural parse failed — use the legacy flat
       // scanner so the parser still makes progress.
-      let (end, tag, attrs, child_embeds) = self
-        .scan_jsx_source_end_with_structure(start)
+      let (end, tag, attrs, child_embeds) = self.scan_jsx_source_end_with_structure(
+        start,
+      )
       self.advance_to_source_pos(end)
       @ast.TsExpr::JsxElement(tag, attrs, child_embeds)
     }
@@ -1975,15 +1981,14 @@ fn Parser::parse_jsx_element_at_source(
     }
   } else {
     // Named opener — parse the tag header.
-    let (header_end, tag, attrs, self_close) = self
-      .parse_jsx_opening_header(start)
+    let (header_end, tag, attrs, self_close) = self.parse_jsx_opening_header(
+      start,
+    )
     if tag == "" {
       return None
     }
     if self_close {
-      return Some(
-        (header_end, @ast.TsExpr::JsxElement(tag, attrs, [])),
-      )
+      return Some((header_end, @ast.TsExpr::JsxElement(tag, attrs, [])))
     }
     // Paired element — recurse on children until matching closing tag.
     match self.parse_jsx_children(header_end, tag) {

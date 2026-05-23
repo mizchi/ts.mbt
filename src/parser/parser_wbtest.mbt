@@ -3642,7 +3642,10 @@ test "parser: parse non-null assertion before property access" {
   let stmt = parse_stmt_from("link = stack!.value;")
   match stmt {
     Expr(
-      AssignExpr("link", PropAccess(@ast.TsExpr::NonNull(Var("stack")), "value"))
+      AssignExpr(
+        "link",
+        PropAccess(@ast.TsExpr::NonNull(Var("stack")), "value")
+      )
     ) => ()
     _ => fail("expected property access after non-null assertion")
   }
@@ -6581,7 +6584,6 @@ test "parser: parse member-access decorator on class method" {
   assert_eq(module_.classes.length(), 1)
 }
 
-
 ///|
 test "parser: export abstract class with definite-assignment field" {
   let src =
@@ -6604,9 +6606,7 @@ test "parser: export abstract class with definite-assignment field" {
 ///|
 test "parser: top-level if/expression/assignment/block statements" {
   let cases = [
-    "if (cond()) { setup(); }",
-    "setObjectAllocator(getDefault());",
-    "container.field = computeValue();",
+    "if (cond()) { setup(); }", "setObjectAllocator(getDefault());", "container.field = computeValue();",
     "{ type X<T> = T; }",
   ]
   for src in cases {
@@ -6616,7 +6616,6 @@ test "parser: top-level if/expression/assignment/block statements" {
         return
       }
     }
-
   }
 }
 

@@ -7,186 +7,186 @@ fn[T : Debug] write_debug_show(logger : &Logger, value : T) -> Unit {
 }
 
 ///|
-pub impl Show for TsType with output(self, logger) {
+pub impl Show for TsType with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsExpr with output(self, logger) {
+pub impl Show for TsExpr with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsArrowBody with output(self, logger) {
+pub impl Show for TsArrowBody with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsBinOp with output(self, logger) {
+pub impl Show for TsBinOp with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsUnaryOp with output(self, logger) {
+pub impl Show for TsUnaryOp with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsCompoundOp with output(self, logger) {
+pub impl Show for TsCompoundOp with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsForOfKind with output(self, logger) {
+pub impl Show for TsForOfKind with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsStmt with output(self, logger) {
+pub impl Show for TsStmt with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsBlock with output(self, logger) {
+pub impl Show for TsBlock with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsSwitchCase with output(self, logger) {
+pub impl Show for TsSwitchCase with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsParam with output(self, logger) {
+pub impl Show for TsParam with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsBinding with output(self, logger) {
+pub impl Show for TsBinding with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsBindingElem with output(self, logger) {
+pub impl Show for TsBindingElem with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsArrayBinding with output(self, logger) {
+pub impl Show for TsArrayBinding with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsObjectBindingProp with output(self, logger) {
+pub impl Show for TsObjectBindingProp with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsObjectBinding with output(self, logger) {
+pub impl Show for TsObjectBinding with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsFunc with output(self, logger) {
+pub impl Show for TsFunc with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsInterface with output(self, logger) {
+pub impl Show for TsInterface with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsTypeAlias with output(self, logger) {
+pub impl Show for TsTypeAlias with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsImport with output(self, logger) {
+pub impl Show for TsImport with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsValueDecl with output(self, logger) {
+pub impl Show for TsValueDecl with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsClassPropertyDecl with output(self, logger) {
+pub impl Show for TsClassPropertyDecl with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsClassMethodDecl with output(self, logger) {
+pub impl Show for TsClassMethodDecl with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsClassDecl with output(self, logger) {
+pub impl Show for TsClassDecl with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsEnumMemberValue with output(self, logger) {
+pub impl Show for TsEnumMemberValue with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsEnumMember with output(self, logger) {
+pub impl Show for TsEnumMember with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsEnumDecl with output(self, logger) {
+pub impl Show for TsEnumDecl with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsModule with output(self, logger) {
+pub impl Show for TsModule with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsImportDecl with output(self, logger) {
+pub impl Show for TsImportDecl with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsExportSpec with output(self, logger) {
+pub impl Show for TsExportSpec with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsReExportKind with output(self, logger) {
+pub impl Show for TsReExportKind with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsReExportSpec with output(self, logger) {
+pub impl Show for TsReExportSpec with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TsModuleBlock with output(self, logger) {
+pub impl Show for TsModuleBlock with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TypedExpr with output(self, logger) {
+pub impl Show for TypedExpr with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TypedStmt with output(self, logger) {
+pub impl Show for TypedStmt with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TypedFunc with output(self, logger) {
+pub impl Show for TypedFunc with fn output(self, logger) {
   write_debug_show(logger, self)
 }
 
 ///|
-pub impl Show for TypedModule with output(self, logger) {
+pub impl Show for TypedModule with fn output(self, logger) {
   write_debug_show(logger, self)
 }
