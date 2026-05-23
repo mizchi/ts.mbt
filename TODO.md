@@ -1007,9 +1007,13 @@ started.
 - [x] `asserts x is T` predicate — retained as `AssertsPredicate(name,
   target?)`; lowers to `Unit` at the bridge boundary; statement-level
   narrowing applied at the call site.
-- [~] `new (...) => T` / `abstract new (...) => T` constructor types — parsed
-  and dropped to `Any` (`parser_type.mbt:640`, `:652`).
+- [x] `new (...) => T` / `abstract new (...) => T` constructor types —
+  retained as `Constructor(params, ret, is_abstract)` and feed
+  `ConstructorParameters<C>` / `InstanceType<C>` through the standard
+  utility table.
 - [~] Stage-3 decorators — `skip_decorator` only; no decorator AST.
+  Decorators currently have no semantic effect on bridge generation, so
+  retaining them would be cosmetic — left as `[~]`.
 - [~] `<const T>` const type parameter — recognized at
   `parser_function.mbt:499` but the modifier is ignored.
 - [~] Import attributes (`import x from "y" with { type: "json" }`) — read and
@@ -1023,12 +1027,20 @@ started.
   as `MappedTypeRemap(...)`; simplifier substitutes `K` per key and
   produces an `Object(...)` when the source / remap resolve, dropping
   keys whose remap evaluates to `Never`.
-- [ ] `accessor` field (auto-accessor) — recognized at the class member level
-  but no dedicated AST node, so checker can't distinguish from a plain field.
-- [ ] `using` / `await using` runtime semantics (parse already done; no
-  disposable-tracking in the checker).
-- [ ] Dynamic `import("x", { with: ... })` attribute argument.
-- [ ] Inline per-specifier `import { type X, Y }` modifier.
+- [~] `accessor` field (auto-accessor) — recognized as a class member
+  modifier but folded into the existing property representation. No
+  semantic difference at the bridge boundary.
+- [~] `using` / `await using` runtime semantics (parser already accepts
+  the binding form; disposable-tracking is intentionally out of scope —
+  it has no effect on bridge generation).
+- [~] Dynamic `import("x", { with: ... })` attribute argument —
+  attribute object is consumed but not retained.
+- [~] Inline per-specifier `import { type X, Y }` modifier — `type`
+  prefix is recognized and consumed but the per-specifier flag is not
+  stored (no consumer downstream).
+- [x] JSX explicit generic type arguments `<Box<string> ... />` — the
+  JSX header scanner skips the balanced angle brackets after the tag
+  name before attribute parsing.
 
 ### Type system (checker)
 
@@ -1037,36 +1049,62 @@ started.
   ReturnType / Parameters / Awaited`.
 - [x] String-mapping intrinsics (`Capitalize / Lowercase / Uppercase /
   Uncapitalize`) in `simplify.mbt`.
-- [~] `InstanceType<T>` / `ConstructorParameters<T>` — narrow handling in the
-  bridge (`moonbit_decl.mbt:4662`) only; no general evaluation path through
-  `simplify_type`.
-- [ ] `ThisParameterType<T>` / `OmitThisParameter<T>` / `ThisType<T>`.
-- [ ] `NoInfer<T>` (TS 5.4+).
+- [x] `InstanceType<C>` / `ConstructorParameters<C>` — first-class
+  utility-table entries that reduce through
+  `is_assignable_to_with_generics` and pattern-match on the new
+  `Constructor(...)` shape.
+- [x] `ThisParameterType<F>` / `OmitThisParameter<F>` — utility-table
+  entries with `infer`-based bodies. `ThisType<T>` remains deferred
+  (no `this`-parameter retention in the AST).
+- [x] `NoInfer<T>` (TS 5.4+) — identity alias in the utility table.
 - [x] Mapped-type key remapping (`as`) evaluation in `simplify_type`
   including `Capitalize<K>` / template-literal prefixing and
   `K extends X ? never : K` filter patterns.
-- [ ] Mapped-type modifier semantics (`+?` / `-?` / `+readonly` / `-readonly`).
+- [x] Mapped-type modifier semantics: leading `readonly` / `+readonly`
+  / `-readonly` consumed, trailing `?` / `+?` widen with `Undefined`,
+  trailing `-?` strips `Undefined` from the value type after
+  substitution via a synthetic `__tsmbt_strip_undef` marker.
 - [x] Conditional `infer T extends Bound` constraint at match time:
   `match_infer_pattern` rejects sources that are definitively disjoint
   from the bound; surface renderers already collapse unresolved
   infer-with-bound markers to the bound.
-- [ ] Variadic tuple inference (`Parameters<F>` for variadic `F`).
-- [ ] Non-distributive conditional detection (`[T] extends [U] ? ...`).
-- [ ] `unique symbol` distinct identity (currently collapses to `Symbol`).
-- [ ] Class static-side (`typeof Cls`) vs instance-side separation in the
-  checker resolver.
-- [ ] Class index signature `[k: string]: V` get/set lowering at the type
-  level.
-- [ ] Module augmentation effect on the resolver.
+- [x] Variadic tuple inference: `Resolver::ingest_module` wraps a
+  function's rest parameter as `Rest(T)` so `Parameters<typeof f>`
+  binds `P` to the rest-tail tuple.
+- [x] Non-distributive conditional detection (`[T] extends [U] ? X :
+  Y`) — both-side length-1 tuple shape is detected by `simplify_type`
+  and reduced by unwrapping before `extends_decision`.
+- [ ] `unique symbol` distinct identity (currently collapses to
+  `Symbol`). Deferred — no corpus consumer.
+- [~] Class static-side (`typeof Cls`) vs instance-side separation —
+  `typeof_class_constructor_params_type` / `typeof_class_instance_type`
+  cover the `ConstructorParameters<typeof Cls>` /
+  `InstanceType<typeof Cls>` cases at the bridge layer. A general
+  static-side merge with `namespace Cls` is still open.
+- [x] Class index signature `[k: string]: V` — `TsClassDecl` carries
+  the parsed signatures and `lookup_class_field` falls through to
+  `index_signature_value` after exhausting named members.
+- [~] Module augmentation effect on the resolver — `declare module
+  "foo" { ... }` is parsed; the contained declarations are appended to
+  the surrounding scope, which covers the common patterns. True
+  per-imported-module augmentation would require a separate
+  module-graph pass.
 - [x] Declaration merging (interface + interface) — `Resolver::ingest_module`
   now unions fields / readonly / extends / index signatures via
   `merge_interfaces`. Namespace + namespace was already implicit via
   the recursive ingest. Namespace + class static-side merging is still
   open.
-- [ ] Tagged-template literal generic inference.
-- [ ] Generator / async-iterator yield-type / return-type checking.
+- [x] Tagged-template literal typing — `tag\`...\`` returns the
+  declared return type of `tag` when known instead of always collapsing
+  to `String`. Real generic inference across template segments is still
+  deferred (rare in our corpus).
+- [ ] Generator / async-iterator yield-type / return-type checking —
+  deferred (no corpus consumer; the iterator/iterable prototype lookup
+  already handles call-site usage).
 - [ ] `in` narrowing for record-shaped operands; tagged-union exhaustiveness
-  in `switch`.
+  in `switch`. The `In` operator narrowing already handles tagged
+  unions; tighter exhaustiveness checking on `switch` defaults to the
+  declared scrutinee type, which is sufficient for the bridge.
 
 ### JSX
 
@@ -1074,17 +1112,27 @@ started.
 - [x] Render props, recursive child checking.
 - [x] `.map(...)` child key warning.
 - [x] Member-expression tags `<Foo.Bar />`.
-- [ ] Generic component explicit type args `<Box<string> ... />`.
-- [ ] `defaultProps` reflection in required-prop checking.
-- [ ] Fragment (`<></>`) key on the iterating side.
-- [ ] `JSX.LibraryManagedAttributes` reflection.
+- [x] Generic component explicit type args `<Box<string> ... />`.
+- [ ] `defaultProps` reflection in required-prop checking — deferred
+  (React 19 deprecates `defaultProps`; default parameter values on the
+  component function already cover the modern pattern).
+- [~] Fragment (`<></>`) key on the iterating side — `key` on a JSX
+  fragment is only meaningful for React.Fragment; the bare `<></>`
+  form has no attribute slot, so the `.map`-key warning already skips
+  fragments (`tag == ""`).
+- [ ] `JSX.LibraryManagedAttributes` reflection — deferred (TS-only
+  shim for class-component `defaultProps`; not used outside React 18-).
 
 ### Module resolver / surrounding
 
 - [x] `exports` / `typesVersions` / `node:*` / `@types/*` resolution.
-- [ ] Yarn PnP (`.pnp.cjs`) resolution.
-- [ ] Import-attribute driven type-only routing (e.g. JSON modules).
-- [ ] `tsconfig.json` `paths` mapping.
+- [ ] Yarn PnP (`.pnp.cjs`) resolution — deferred (pnpm is the corpus
+  default; PnP doesn't appear).
+- [~] Import-attribute driven type-only routing (e.g. JSON modules) —
+  attributes are read and discarded; JSON modules already resolve via
+  the file-based path.
+- [x] `tsconfig.json` `paths` mapping — handled by
+  `resolve_tsconfig_specifier` (paths + baseUrl + wildcard targets).
 
 ### Conformance corpus follow-up
 
@@ -1095,27 +1143,34 @@ started.
 
 ### Priorities (by real-world ROI) — STATUS
 
-- [x] Mapped-type key remapping (`as`) — `MappedTypeRemap` AST +
-  simplifier (commit `2f8b33a`).
-- [x] `asserts` predicate retention — `AssertsPredicate` AST + bridge
-  Unit lowering + call-site narrowing (commit `45abff5`).
-- [x] Labeled + variadic tuple — `Rest(T)` AST + optional label
-  widening (commit `3ab53d3`).
-- [x] Interface + interface declaration merging in the checker
-  (commit `8e5cd63`).
-- [x] Conditional `infer ... extends Bound` constraint at match time
-  (commit `8e5cd63`).
+All five high-ROI items from 2026-05-23 shipped:
 
-Next-tier work that surfaced while doing the above:
+- [x] Mapped-type key remapping (`as`) — commit `2f8b33a`.
+- [x] `asserts` predicate retention — commit `45abff5`.
+- [x] Labeled + variadic tuple — commit `3ab53d3`.
+- [x] Interface declaration merging — commit `8e5cd63`.
+- [x] `infer ... extends Bound` constraint — commit `8e5cd63`.
 
-- [ ] Namespace + class static-side merging (declaration merging open
-  piece): expose namespace exports as `typeof Class` members.
-- [ ] `new (...) => T` / `abstract new (...) => T` retention on the
-  AST so `ConstructorParameters<T>` / `InstanceType<T>` evaluate
-  through `simplify_type`.
-- [ ] Mapped-type modifier semantics (`+?` / `-?` / `+readonly` /
-  `-readonly`).
-- [ ] Stage-3 decorators with full AST.
+Follow-on batches in the same branch:
 
-Deferred (low corpus ROI): `unique symbol` identity, module augmentation,
-`ThisType`, generator type checking.
+- [x] Constructor types AST + utility-table evaluation —
+  `Constructor(...)` variant, `ConstructorParameters` / `InstanceType`
+  / `ThisParameterType` / `OmitThisParameter` / `NoInfer` —
+  commit `8152f21`.
+- [x] Mapped-type modifier semantics (`+?` / `-?` / `+readonly` /
+  `-readonly`) — commit `8152f21`.
+- [x] Non-distributive conditional `[T] extends [U]` — commit `8152f21`.
+- [x] JSX explicit type args, tagged-template return type, class index
+  signature, variadic `Parameters<F>` — commit `454d360`.
+
+Remaining intentionally-deferred items (low corpus ROI / no
+runtime-bridge impact):
+
+- [ ] `unique symbol` identity.
+- [ ] `ThisType<T>` (requires `this`-parameter AST retention).
+- [ ] Generator / async-iterator yield-type checking.
+- [ ] Stage-3 decorator AST retention.
+- [ ] `accessor` field as a first-class AST shape.
+- [ ] Yarn PnP resolver.
+- [ ] `JSX.LibraryManagedAttributes` / `defaultProps`.
+- [ ] Namespace + class static-side merging.
