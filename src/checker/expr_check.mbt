@@ -403,7 +403,11 @@ fn Resolver::lookup_field(
             }
             i = i + 1
           }
-          None
+          // Index-signature fallback: when no named field / extends
+          // chain entry matched, consult the interface's index
+          // signatures so `d.foo` on `{ [k: string]: V }` resolves to
+          // `V` (and likewise for numeric keys).
+          index_signature_value(iface.index_signatures, field)
         }
         None =>
           match self.classes.get(n) {
@@ -486,7 +490,12 @@ fn Resolver::lookup_field(
             }
             j = j + 1
           }
-          None
+          // Index-signature fallback with the outer-interface bindings
+          // applied to the signature's value type.
+          match index_signature_value(iface.index_signatures, field) {
+            Some(t) => Some(substitute_params(t, bindings))
+            None => None
+          }
         }
         None =>
           match self.classes.get(n) {
@@ -1836,7 +1845,7 @@ fn infer_call(
 
 ///|
 fn infer_index(
-  _resolver : Resolver,
+  resolver : Resolver,
   recv : @ast.TsType,
   idx : @ast.TsType,
   idx_expr : @ast.TsExpr,
@@ -1871,6 +1880,24 @@ fn infer_index(
     String_ | Literal(_) =>
       match idx {
         Number | Int | NumberLiteral(_) => @ast.TsType::String_
+        _ => @ast.TsType::Any
+      }
+    // Interface receivers — `obj[key]` runs through `lookup_field` so
+    // string-literal indices match named fields and (failing that) the
+    // index signature. Non-literal indices on an interface fall through
+    // to the catch-all `Any` since we can't narrow the lookup.
+    Named(_) | Applied(_, _) =>
+      match idx_expr {
+        StringLit(key) =>
+          match resolver.lookup_field(recv, key) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
+        IntLit(i) =>
+          match resolver.lookup_field(recv, i.to_string()) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
         _ => @ast.TsType::Any
       }
     _ => @ast.TsType::Any
@@ -3468,6 +3495,36 @@ fn narrowing_current_type(
 /// Read an element type from an indexable shape. `inner` is the raw
 /// bracket contents — `0`, `"k"`, etc. Used by both narrowing key
 /// resolution and the structural `IndexAccess` lookup path.
+///|
+/// Resolve a field name against an interface's index signatures. Returns
+/// `Some(value_type)` when the field name's lexical category (numeric vs
+/// other) matches one of the declared signatures. Numeric keys (parseable
+/// as an integer) prefer the `[k: number]` signature when available;
+/// otherwise the `[k: string]` signature is the catch-all.
+fn index_signature_value(
+  signatures : Array[(@ast.TsType, @ast.TsType)],
+  field : String,
+) -> @ast.TsType? {
+  let is_numeric = (try? @strconv.parse_int(field)) is Ok(_)
+  let mut numeric_value : @ast.TsType? = None
+  let mut string_value : @ast.TsType? = None
+  for sig in signatures {
+    match sig.0 {
+      Number | Int => numeric_value = Some(sig.1)
+      String_ | Literal(_) => string_value = Some(sig.1)
+      _ => ()
+    }
+  }
+  if is_numeric {
+    match numeric_value {
+      Some(t) => return Some(t)
+      None => ()
+    }
+  }
+  string_value
+}
+
+///|
 fn index_into_type(
   resolver : Resolver,
   recv : @ast.TsType,

@@ -3669,3 +3669,76 @@ test "expr_check: nested `obj.arr[0]` narrowing" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 35: index signature fallback on interface lookups.
+// `interface Dict { [k: string]: number }` — `d.foo` and `d["foo"]` both
+// resolve to `number`.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: string index signature resolves dotted access" {
+  let src =
+    #|interface Dict { [k: string]: number }
+    #|function f(d: Dict): number {
+    #|  return d.foo;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: string index signature resolves bracket access" {
+  let src =
+    #|interface Dict { [k: string]: number }
+    #|function f(d: Dict): number {
+    #|  return d["foo"];
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: index signature mismatch flags wrong return type" {
+  let src =
+    #|interface Dict { [k: string]: number }
+    #|function f(d: Dict): string {
+    #|  return d.foo;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.message.contains("string") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: named field overrides index signature" {
+  let src =
+    #|interface Mixed { tag: string; [k: string]: number | string }
+    #|function f(m: Mixed): string {
+    #|  return m.tag;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // The named `tag: string` should take precedence over the index
+  // signature fallback.
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generic interface with index signature substitutes V" {
+  let src =
+    #|interface Bag<V> { [k: string]: V }
+    #|function f(b: Bag<number>): number {
+    #|  return b.size;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
