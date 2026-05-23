@@ -593,8 +593,18 @@ pub(all) struct TsImportDecl {
   default_binding : String?
   namespace_binding : String?
   named_bindings : Array[(String, String)] // imported, local
+  // Per-specifier `type` modifier: `import { type X, Y } from "..."`.
+  // Length matches `named_bindings`; entries are `true` when the
+  // imported specifier was prefixed with `type`. When the whole
+  // import is `import type { ... }`, `type_only` covers it and each
+  // entry's flag is `false` (the top-level modifier implies all).
+  named_type_only : Array[Bool]
   side_effect_only : Bool
   type_only : Bool
+  // Import attributes: `import x from "y" with { type: "json" }`
+  // (and the legacy `assert { ... }` form). Each entry is a
+  // `(key, string_value)` pair; non-string values are omitted.
+  attributes : Array[(String, String)]
 } derive(Debug)
 
 ///|

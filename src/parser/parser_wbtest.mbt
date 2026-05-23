@@ -2286,6 +2286,41 @@ test "parser: parse asserts predicate functions" {
 }
 
 ///|
+test "parser: parse import attributes (`with { type: \"json\" }`)" {
+  let src =
+    #|import data from "./data.json" with { type: "json" };
+  let parser = Parser::from_source(src)
+  let block = parser.parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(block.imports.length(), 1)
+  let imp = block.imports[0]
+  assert_eq(imp.module_spec, "./data.json")
+  assert_eq(imp.attributes, [("type", "json")])
+}
+
+///|
+test "parser: parse per-specifier type modifier on named imports" {
+  let src =
+    #|import { type Foo, Bar, type Baz } from "./mod";
+  let parser = Parser::from_source(src)
+  let block = parser.parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(block.imports.length(), 1)
+  let imp = block.imports[0]
+  assert_eq(imp.named_bindings, [("Foo", "Foo"), ("Bar", "Bar"), ("Baz", "Baz")])
+  assert_eq(imp.named_type_only, [true, false, true])
+  assert_false(imp.type_only)
+}
+
+///|
 test "parser: parse module with imports" {
   let src =
     #|declare function log(msg: string): void;

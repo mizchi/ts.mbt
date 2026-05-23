@@ -58,9 +58,21 @@ fn Parser::next_temp(self : Parser, prefix : String) -> String {
 fn Parser::parse_named_imports(
   self : Parser,
 ) -> Array[(String, String)] raise ParseError {
+  let (items, _) = self.parse_named_imports_with_type_flags()
+  items
+}
+
+///|
+/// Same as `parse_named_imports`, but additionally reports whether each
+/// specifier was prefixed with `type` (`import { type X, Y }`). The two
+/// arrays are aligned positionally.
+fn Parser::parse_named_imports_with_type_flags(
+  self : Parser,
+) -> (Array[(String, String)], Array[Bool]) raise ParseError {
   let items : Array[(String, String)] = []
+  let type_flags : Array[Bool] = []
   while !self.check(RBrace) {
-    let _ = self.maybe_match_type_modifier()
+    let is_type = self.maybe_match_type_modifier()
     let imported = self.parse_binding_ident()
     let local_name = if self.match_(As) || self.match_ident("as") {
       self.parse_binding_ident()
@@ -68,6 +80,7 @@ fn Parser::parse_named_imports(
       imported
     }
     items.push((imported, local_name))
+    type_flags.push(is_type)
     if self.match_(Comma) {
       if self.check(RBrace) {
         break
@@ -76,7 +89,7 @@ fn Parser::parse_named_imports(
     }
     break
   }
-  items
+  (items, type_flags)
 }
 
 ///|
@@ -561,8 +574,10 @@ fn Parser::parse_import_equals_decl(
     default_binding: None,
     namespace_binding: Some(local_name),
     named_bindings: [],
+    named_type_only: [],
     side_effect_only: false,
     type_only: false,
+    attributes: [],
   }
 }
 
@@ -1849,15 +1864,17 @@ fn Parser::parse_import_decl(
   match self.peek().kind {
     Str(_) => {
       let module_spec = self.expect_str_literal()
-      self.skip_import_attributes()
+      let attributes = self.parse_import_attributes()
       self.consume_semicolon()
       return {
         module_spec,
         default_binding: None,
         namespace_binding: None,
         named_bindings: [],
+        named_type_only: [],
         side_effect_only: true,
         type_only,
+        attributes,
       }
     }
     _ => ()
@@ -1865,6 +1882,7 @@ fn Parser::parse_import_decl(
   let mut default_binding : String? = None
   let mut namespace_binding : String? = None
   let named_bindings : Array[(String, String)] = []
+  let named_type_only : Array[Bool] = []
   match self.peek().kind {
     Ident(_) =>
       if !type_only && self.peek_at(1).kind == Eq {
@@ -1880,15 +1898,17 @@ fn Parser::parse_import_decl(
     } else {
       self.expect_from()
       let module_spec = self.expect_str_literal()
-      self.skip_import_attributes()
+      let attributes = self.parse_import_attributes()
       self.consume_semicolon()
       return {
         module_spec,
         default_binding,
         namespace_binding: None,
         named_bindings,
+        named_type_only,
         side_effect_only: false,
         type_only,
+        attributes,
       }
     }
   }
@@ -1898,34 +1918,110 @@ fn Parser::parse_import_decl(
     }
     namespace_binding = Some(self.parse_binding_ident())
   } else if self.match_(LBrace) {
-    let items = self.parse_named_imports()
+    let (items, type_flags) = self.parse_named_imports_with_type_flags()
     for item in items {
       named_bindings.push(item)
+    }
+    for f in type_flags {
+      named_type_only.push(f)
     }
     let _ = self.expect(RBrace)
   }
   self.expect_from()
   let module_spec = self.expect_str_literal()
-  self.skip_import_attributes()
+  let attributes = self.parse_import_attributes()
   self.consume_semicolon()
   {
     module_spec,
     default_binding,
     namespace_binding,
     named_bindings,
+    named_type_only,
     side_effect_only: false,
     type_only,
+    attributes,
   }
 }
 
 ///|
 fn Parser::skip_import_attributes(self : Parser) -> Unit {
+  let _ = self.parse_import_attributes()
+
+}
+
+///|
+/// Parse `with { key: "value", ... }` (or the legacy `assert { ... }`)
+/// attribute object on an import declaration. Returns each
+/// `(key, string_value)` pair in source order. Non-string values are
+/// silently dropped — the spec only defines string-valued attributes
+/// today.
+fn Parser::parse_import_attributes(
+  self : Parser,
+) -> Array[(String, String)] {
+  let out : Array[(String, String)] = []
   if !(self.match_(With) || self.match_ident("assert")) {
-    return
+    return out
   }
-  if self.check(LBrace) {
-    self.skip_object_type()
+  if !self.check(LBrace) {
+    return out
   }
+  let _ = self.advance() // consume `{`
+  let mut depth = 1
+  while depth > 0 && !self.check(Eof) {
+    // Key: identifier or string literal.
+    let key_opt : String? = match self.peek().kind {
+      Ident(name) => {
+        let _ = self.advance()
+        Some(name)
+      }
+      // `type` is a reserved keyword that's still valid as an import
+      // attribute key (e.g. `with { type: "json" }`).
+      Type => {
+        let _ = self.advance()
+        Some("type")
+      }
+      Str(s) => {
+        let _ = self.advance()
+        Some(s)
+      }
+      RBrace => {
+        let _ = self.advance()
+        depth -= 1
+        continue
+      }
+      _ => {
+        let _ = self.advance()
+        None
+      }
+    }
+    match key_opt {
+      Some(key) =>
+        if self.match_(Colon) {
+          match self.peek().kind {
+            Str(value) => {
+              let _ = self.advance()
+              out.push((key, value))
+            }
+            _ => {
+              // unknown value shape — skip token
+              let _ = self.advance()
+            }
+          }
+        }
+      None => ()
+    }
+    if !self.match_(Comma) {
+      // Expect closing `}` next (or another key if no comma).
+      match self.peek().kind {
+        RBrace => {
+          let _ = self.advance()
+          depth -= 1
+        }
+        _ => ()
+      }
+    }
+  }
+  out
 }
 
 ///|

@@ -229,8 +229,10 @@ pub(all) struct TsImportDecl {
   default_binding : String?
   namespace_binding : String?
   named_bindings : Array[(String, String)]
+  named_type_only : Array[Bool]
   side_effect_only : Bool
   type_only : Bool
+  attributes : Array[(String, String)]
 } derive(@debug.Debug)
 pub impl Show for TsImportDecl
 
