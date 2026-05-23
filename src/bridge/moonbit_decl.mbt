@@ -412,6 +412,7 @@ async fn load_decl_module_info(
           classes: [],
           namespaces: [],
           enums: [],
+          module_augmentations: [],
         }
       }
   }
@@ -1238,6 +1239,7 @@ fn synthesize_func_from_expr(
         params: merge_func_param_types(func.params, declared_type),
         return_type: infer_func_return_type(func, declared_type),
         body: func.body,
+        const_type_params: [],
         is_generator: func.is_generator,
         is_async: func.is_async,
       })
@@ -1264,6 +1266,7 @@ fn synthesize_func_from_expr(
         params: normalized_params,
         return_type,
         body: normalized_body,
+        const_type_params: [],
         is_generator: false,
         is_async,
       })
@@ -1517,9 +1520,10 @@ fn namespace_has_non_type_members(namespace_ : @ast.TsNamespaceDecl) -> Bool {
 ///|
 fn value_decl_has_runtime_binding(value : @ast.TsValueDecl) -> Bool {
   match value.type_ {
-    // The parser emits Symbol for `unique symbol`, which .d.ts files use for
-    // type-level marker keys that often do not exist as runtime exports.
-    Symbol => false
+    // `.d.ts` files use `Symbol` / `unique symbol` for marker keys that
+    // often do not exist as runtime exports. Both variants are treated
+    // as non-runtime here.
+    Symbol | UniqueSymbol(_) => false
     _ => true
   }
 }
@@ -2218,6 +2222,8 @@ fn collect_exported_decls(
               properties,
               methods,
               is_constructible: false,
+              index_signatures: [],
+              decorators: [],
             },
           })
         } else {
@@ -3318,7 +3324,17 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     TemplateLiteralType(_, _) => "String"
     Keyof(inner) => "KeyOf" + utility_record_type_suffix(inner)
     MappedType(_, _, value, _) => "MappedTo" + utility_record_type_suffix(value)
+    MappedTypeRemap(_, _, _, value, _) =>
+      "RemapTo" + utility_record_type_suffix(value)
     TypePredicate(_, _) => "Bool"
+    AssertsPredicate(_, _) => "Unit"
+    // Outside a Tuple, a bare `Rest(T)` behaves like `Array(T)` for the
+    // purposes of suffix naming; inside a Tuple it's handled by the
+    // tuple-walker.
+    Rest(inner) => "RestOf" + utility_record_type_suffix(inner)
+    Constructor(_, ret, _) =>
+      "CtorOf" + utility_record_type_suffix(ret)
+    UniqueSymbol(_) => "Symbol"
   }
 }
 
@@ -3345,6 +3361,17 @@ fn utility_tuple_rest_array_type(type_ : @ast.TsType) -> @ast.TsType? {
       let mut has_rest_array = false
       for item in items {
         let current = match item {
+          // `[T, ...T[]]` parsed with the variadic-tuple representation
+          // surfaces the rest as `Rest(Array(inner))`; treat that as a
+          // rest-array hit so the existing collapse path keeps working.
+          Rest(Array(inner)) => {
+            has_rest_array = true
+            inner
+          }
+          Rest(inner) => {
+            has_rest_array = true
+            inner
+          }
           Array(inner) => {
             has_rest_array = true
             inner
@@ -4567,6 +4594,33 @@ fn lower_react_utility_type(
         other => lower_react_utility_type(info, other, modules, canonical_types)
       }
     }
+    MappedTypeRemap(key_param, source, remap, value, optional) => {
+      let lowered_source = lower_react_utility_type(
+        info, source, modules, canonical_types,
+      )
+      let resolved_source = resolve_named_inside_type(info, lowered_source)
+      match
+        @checker.simplify_type(
+          MappedTypeRemap(key_param, resolved_source, remap, value, optional),
+        ) {
+        Object(fields) => {
+          let lowered : Array[(@ast.TsType, @ast.TsType)] = []
+          for f in fields {
+            lowered.push(
+              (
+                f.0,
+                lower_react_utility_type(info, f.1, modules, canonical_types),
+              ),
+            )
+          }
+          Object(lowered)
+        }
+        // Couldn't resolve the remap; widen to `Any` so we don't carry
+        // the unresolved variant into emit.
+        MappedTypeRemap(_, _, _, _, _) => Any
+        other => lower_react_utility_type(info, other, modules, canonical_types)
+      }
+    }
     Applied(name, [inner_type]) if @checker.is_props_passthrough_name(name) =>
       lower_react_utility_type(info, inner_type, modules, canonical_types)
     Applied(name, [source_type]) if @checker.is_mapped_interface_utility_name(
@@ -4659,6 +4713,19 @@ fn lower_react_utility_type(
       }
       Tuple(lowered_params)
     }
+    Applied("ConstructorParameters", [Constructor(params, _, _)]) => {
+      // Standalone `new (...args) => T` typedef: extract the param
+      // tuple directly.
+      let lowered_params : Array[@ast.TsType] = []
+      for param in params {
+        lowered_params.push(
+          lower_react_utility_type(info, param, modules, canonical_types),
+        )
+      }
+      Tuple(lowered_params)
+    }
+    Applied("InstanceType", [Constructor(_, ret, _)]) =>
+      lower_react_utility_type(info, ret, modules, canonical_types)
     Applied("InstanceType", [TypeOf(query)]) =>
       match typeof_class_instance_type(info, query, modules, canonical_types) {
         Some(type_) => type_
@@ -8161,6 +8228,7 @@ fn clone_exported_func(
       return_type,
     ),
     body: exported.func.body,
+    const_type_params: [],
     is_generator: exported.func.is_generator,
     is_async: exported.func.is_async,
   }
@@ -8424,6 +8492,7 @@ fn clone_class_property_in_scope(
     ),
     is_static: class_property.is_static,
     is_readonly: class_property.is_readonly,
+    is_accessor: false,
   }
 }
 
@@ -8793,6 +8862,8 @@ fn clone_exported_class(
     methods,
     is_abstract: exported.class_.is_abstract,
     is_constructible: exported.class_.is_constructible,
+    index_signatures: [],
+    decorators: [],
   }
 }
 
@@ -8993,6 +9064,7 @@ pub async fn emit_moonbit_decl_from_entry_path(
     classes,
     namespaces: [],
     enums,
+    module_augmentations: [],
   }
   // Run the checker over the final module shape and surface anything it
   // catches as a generator-level note. The emit pipeline is internally

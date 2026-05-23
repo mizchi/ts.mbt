@@ -16,6 +16,9 @@ pub struct Parser {
   mut in_generator : Bool
   mut in_async : Bool
   mut temp_index : Int
+  // Counter assigned to every `unique symbol` occurrence so the type
+  // gets a stable per-occurrence tag.
+  mut unique_symbol_index : Int
   mut in_strict : Bool
   mut in_function : Bool // for return validation
   mut in_iteration : Bool // for continue validation
@@ -27,6 +30,10 @@ pub struct Parser {
   mut current_class_brand : String? // brand ID of current class being parsed
   mut last_runtime_class_decl : @ast.TsClassDecl?
   local_type_param_bounds : Array[(String, @ast.TsType)]
+  // Decorator expressions parsed at the statement level that should be
+  // attached to the next class declaration. The class parsers drain
+  // this list when they begin and clear it on exit.
+  pending_decorators : Array[@ast.TsExpr]
 } derive(Debug)
 
 ///|
@@ -57,6 +64,7 @@ pub fn Parser::new_with_strict_and_jsx(
     in_generator: false,
     in_async: false,
     temp_index: 0,
+    unique_symbol_index: 0,
     in_strict,
     in_function: false,
     in_iteration: false,
@@ -68,6 +76,7 @@ pub fn Parser::new_with_strict_and_jsx(
     current_class_brand: None,
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
+    pending_decorators: [],
   }
 }
 
@@ -92,6 +101,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_generator: false,
     in_async: false,
     temp_index: 0,
+    unique_symbol_index: 0,
     in_strict,
     in_function: false,
     in_iteration: false,
@@ -103,6 +113,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     current_class_brand: None,
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
+    pending_decorators: [],
   }
 }
 

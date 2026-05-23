@@ -861,6 +861,10 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     Void => "Unit"
     Array(inner) => "Array[" + ffi_type_name(state, inner) + "]"
     Tuple(items) => ffi_tuple_type_name(state, items)
+    // Outside a Tuple element, a bare `Rest(T)` behaves like `Array(T)`.
+    Rest(inner) => "Array[" + ffi_type_name(state, inner) + "]"
+    Constructor(params, return_type, _) =>
+      ffi_func_type_name(state, params, return_type)
     Func(params, return_type) => ffi_func_type_name(state, params, return_type)
     Struct(name, _) => ffi_type_identifier(name, "OpaqueType")
     Named("any") | Named("Function") => {
@@ -966,6 +970,15 @@ fn ffi_type_name(state : MoonBitJsFfiState, type_ : @ast.TsType) -> String {
     // `paramName is T` is a boolean at the FFI boundary; the predicate
     // information is consumed by the checker / bridge type-guard collector.
     TypePredicate(_, _) => "Bool"
+    // `asserts x [is T]` returns `void` at runtime — the predicate is
+    // only used by the checker to narrow the calling scope.
+    AssertsPredicate(_, _) => "Unit"
+    // `unique symbol` has no MoonBit equivalent that preserves the
+    // nominal identity. The runtime value is a JS `symbol`.
+    UniqueSymbol(_) => {
+      state.needs_js_any = true
+      "JSValue"
+    }
     Union(parts) =>
       match ffi_synthesize_inline_union(state, parts) {
         Some(synth_name) => synth_name

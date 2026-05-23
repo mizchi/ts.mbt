@@ -237,6 +237,91 @@ test "simplify_type: mapped preserved when source is opaque" {
 }
 
 ///|
+test "simplify_type: mapped `-?` strips undefined from value" {
+  // `{ [K in 'a' | 'b']-?: number | undefined }` ⇒
+  //   `{ a: number, b: number }`.
+  let t : @ast.TsType = MappedType(
+    "K",
+    Union([Literal("a"), Literal("b")]),
+    Applied("__tsmbt_strip_undef", [Union([Number, Undefined])]),
+    false,
+  )
+  assert_eq(
+    simplify_type(t),
+    Object([(Literal("a"), Number), (Literal("b"), Number)]),
+  )
+}
+
+///|
+test "simplify_type: mapped remap via Capitalize prefixes each key" {
+  // `{ [K in 'a' | 'b' as `get${Capitalize<K>}`]: number }`
+  //   ⇒ `{ getA: number, getB: number }`
+  let t : @ast.TsType = MappedTypeRemap(
+    "K",
+    Union([Literal("a"), Literal("b")]),
+    TemplateLiteralType(["get", ""], [Applied("Capitalize", [Named("K")])]),
+    Number,
+    false,
+  )
+  assert_eq(
+    simplify_type(t),
+    Object([(Literal("getA"), Number), (Literal("getB"), Number)]),
+  )
+}
+
+///|
+test "simplify_type: mapped remap to Never filters key out" {
+  // `{ [K in 'a' | 'b' | 'c' as K extends 'b' ? never : K]: number }`
+  //   ⇒ `{ a: number, c: number }`. The remap is encoded as a
+  // `Conditional` and reduced per key.
+  let t : @ast.TsType = MappedTypeRemap(
+    "K",
+    Union([Literal("a"), Literal("b"), Literal("c")]),
+    Conditional(Named("K"), Literal("b"), Never, Named("K")),
+    Number,
+    false,
+  )
+  assert_eq(
+    simplify_type(t),
+    Object([(Literal("a"), Number), (Literal("c"), Number)]),
+  )
+}
+
+///|
+test "simplify_type: mapped remap rewrites value with K binding" {
+  // `{ [K in keyof Foo as Uppercase<K & string>]: Foo[K] }` for
+  // `Foo = { a: number, b: string }` ⇒
+  //   `{ A: number, B: string }`. Here Foo[K] resolves via the
+  // generic IndexedAccess + substitution path.
+  let foo : @ast.TsType = Struct("Foo", [("a", Number), ("b", String_)])
+  let t : @ast.TsType = MappedTypeRemap(
+    "K",
+    Keyof(foo),
+    Applied("Uppercase", [Named("K")]),
+    IndexedAccess(foo, Named("K")),
+    false,
+  )
+  assert_eq(
+    simplify_type(t),
+    Object([(Literal("A"), Number), (Literal("B"), String_)]),
+  )
+}
+
+///|
+test "simplify_type: mapped remap preserved when source is opaque" {
+  // `{ [K in keyof T as Uppercase<K & string>]: T[K] }` with `T` opaque —
+  // keep the variant so a later substitution can resolve `T`.
+  let t : @ast.TsType = MappedTypeRemap(
+    "K",
+    Keyof(Named("T")),
+    Applied("Uppercase", [Named("K")]),
+    IndexedAccess(Named("T"), Named("K")),
+    false,
+  )
+  assert_eq(simplify_type(t), t)
+}
+
+///|
 test "simplify_type: template literal substitutes single literal" {
   // `` `prefix-${'foo'}` `` ⇒ `'prefix-foo'`
   let t : @ast.TsType = TemplateLiteralType(["prefix-", ""], [Literal("foo")])

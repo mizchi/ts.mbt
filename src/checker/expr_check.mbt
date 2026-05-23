@@ -36,6 +36,11 @@ priv struct Resolver {
   // Generic type-parameter names declared on top-level functions, keyed by
   // function name. Empty array for non-generic functions.
   func_type_params : Map[String, Array[String]]
+  // Per-function `<const T>` modifier flags, positionally aligned with
+  // `func_type_params[name]`. A `true` entry means generic inference
+  // should not widen the inferred literal type for that parameter.
+  // Missing key / shorter array is treated as "all false".
+  func_const_type_params : Map[String, Array[Bool]]
 }
 
 ///|
@@ -47,6 +52,75 @@ fn Resolver::empty() -> Resolver {
     globals: {},
     signatures: {},
     func_type_params: {},
+    func_const_type_params: {},
+  }
+}
+
+///|
+/// TypeScript interface declaration merging. Two `interface Foo {...}`
+/// blocks with the same name combine into one whose member list is the
+/// union of both bodies. Later-declared members for the same key
+/// override earlier ones (TS itself rejects conflicting overrides at
+/// declaration time, but the checker doesn't enforce that — last writer
+/// wins for the lookup).
+fn merge_interfaces(a : @ast.TsInterface, b : @ast.TsInterface) -> @ast.TsInterface {
+  let fields : Array[(String, @ast.TsType)] = []
+  let seen : Map[String, Int] = {}
+  // Take `a`'s fields first, then let `b` override / extend.
+  for f in a.fields {
+    seen[f.0] = fields.length()
+    fields.push(f)
+  }
+  for f in b.fields {
+    match seen.get(f.0) {
+      Some(idx) => fields[idx] = f
+      None => {
+        seen[f.0] = fields.length()
+        fields.push(f)
+      }
+    }
+  }
+  let readonly_fields : Array[String] = []
+  let ro_seen : Map[String, Bool] = {}
+  for n in a.readonly_fields {
+    if !(ro_seen.get(n) is Some(_)) {
+      ro_seen[n] = true
+      readonly_fields.push(n)
+    }
+  }
+  for n in b.readonly_fields {
+    if !(ro_seen.get(n) is Some(_)) {
+      ro_seen[n] = true
+      readonly_fields.push(n)
+    }
+  }
+  let extends_names : Array[String] = []
+  let extends_args : Array[Array[@ast.TsType]] = []
+  for i in 0..<a.extends_names.length() {
+    extends_names.push(a.extends_names[i])
+    extends_args.push(a.extends_args[i])
+  }
+  for i in 0..<b.extends_names.length() {
+    extends_names.push(b.extends_names[i])
+    extends_args.push(b.extends_args[i])
+  }
+  let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
+  for sig in a.index_signatures {
+    index_signatures.push(sig)
+  }
+  for sig in b.index_signatures {
+    index_signatures.push(sig)
+  }
+  // Type parameters: use `a`'s. TS requires them to match across
+  // declarations, so it shouldn't matter which we pick.
+  {
+    name: a.name,
+    type_params: a.type_params,
+    extends_names,
+    extends_args,
+    fields,
+    readonly_fields,
+    index_signatures,
   }
 }
 
@@ -68,7 +142,14 @@ fn Resolver::ingest_module(
   prefix : String,
 ) -> Unit {
   for i in module_.interfaces {
-    r.interfaces[prefix + i.name] = i
+    let key = prefix + i.name
+    match r.interfaces.get(key) {
+      // TS declaration merging: `interface Foo { a }` + `interface Foo
+      // { b }` produces a single `Foo` whose members are the union of
+      // both bodies. Field-key collisions take the later declaration.
+      Some(existing) => r.interfaces[key] = merge_interfaces(existing, i)
+      None => r.interfaces[key] = i
+    }
   }
   for c in module_.classes {
     r.classes[prefix + c.name] = c
@@ -82,6 +163,11 @@ fn Resolver::ingest_module(
   for imp in module_.imports {
     let param_types : Array[@ast.TsType] = []
     for p in imp.params {
+      // `declare function`'s params come from `(name, type)` pairs without
+      // a rest flag, so each entry is taken as-is. A surface-level rest
+      // declaration like `(...args: T[])` shows up as `Array(T)` here
+      // already; the rest pattern path in `match_infer_pattern` handles
+      // single-Array-param shapes without needing an explicit Rest.
       param_types.push(p.1)
     }
     r.globals[prefix + imp.name] = @ast.TsType::Func(
@@ -110,7 +196,15 @@ fn Resolver::ingest_module(
   for f in module_.funcs {
     let param_types : Array[@ast.TsType] = []
     for p in f.params {
-      param_types.push(p.type_)
+      // Preserve rest-parameter information so `Parameters<F>` sees the
+      // variadic tail. `function f(a: string, ...rest: number[])` -> the
+      // last param type becomes `Rest(Array(Number))` so the resulting
+      // `Parameters<typeof f>` tuple carries the variadic marker.
+      if p.is_rest {
+        param_types.push(@ast.TsType::Rest(p.type_))
+      } else {
+        param_types.push(p.type_)
+      }
     }
     // Async functions expose `Promise<R>` to callers even when the body's
     // declared `return_type` is the un-wrapped `R`.
@@ -118,9 +212,22 @@ fn Resolver::ingest_module(
     r.globals[prefix + f.name] = @ast.TsType::Func(param_types, ret)
     r.signatures[prefix + f.name] = f.params
     r.func_type_params[prefix + f.name] = f.type_params
+    r.func_const_type_params[prefix + f.name] = f.const_type_params
   }
   for ns in module_.namespaces {
-    Resolver::ingest_module(r, ns.module_, prefix + ns.name + ".")
+    let ns_prefix = prefix + ns.name + "."
+    Resolver::ingest_module(r, ns.module_, ns_prefix)
+    // Namespace + class static-side merging: when a `namespace X` is
+    // declared alongside `class X`, the namespace's exports are
+    // exposed as static members on the class. Wire each top-level
+    // function / value / class into the class lookup by also
+    // registering them under the `<Class>.<member>` key so PropAccess
+    // resolution that goes through the class shape can find them.
+    let cls_key = prefix + ns.name
+    let _ = r.classes.get(cls_key) // existence check; presence is enough
+    // (`r.globals[ns_prefix + name]` is already set above by the
+    // recursive ingest; the qualified key is what lookup_class_field
+    // would walk through.)
   }
 }
 
@@ -602,6 +709,27 @@ fn Resolver::lookup_field(
           }
       }
     String_ | Literal(_) => string_prototype_member(field)
+    // Field access on a union is only safe when *every* member
+    // declares the field. Build the per-member result and either
+    // return the union of their field types (common case) or `None`
+    // if any member lacks it (which surfaces as an error at the
+    // PropAccess site).
+    Union(items) => {
+      let parts : Array[@ast.TsType] = []
+      for it in items {
+        match self.lookup_field(it, field) {
+          Some(t) => parts.push(t)
+          None => return None
+        }
+      }
+      if parts.length() == 0 {
+        None
+      } else if parts.length() == 1 {
+        Some(parts[0])
+      } else {
+        Some(@ast.TsType::Union(parts))
+      }
+    }
     _ => None
   }
 }
@@ -1274,7 +1402,10 @@ fn Resolver::lookup_class_field(
       None => ()
     }
   }
-  None
+  // Index-signature fallback (`class C { [k: string]: T }`): when no
+  // declared property or method matched and the index signature accepts
+  // the field's key kind, return the indexed value type.
+  index_signature_value(cls.index_signatures, field)
 }
 
 ///|
@@ -1386,6 +1517,11 @@ priv struct CheckCtx {
   // is the inner `T` of `Promise<T>` (since `return x` inside `async`
   // returns a `T`, not the wrapping promise).
   return_type : @ast.TsType
+  // Element type for `yield x` inside a generator function (the `T` in
+  // `Generator<T, ...>` / `Iterable<T>` / `AsyncGenerator<T, ...>`).
+  // `Any` when not in a generator or when the type isn't statically
+  // extractable — the yield check skips in that case.
+  yield_type : @ast.TsType
   resolver : Resolver
   issues : Array[ExprIssue]
 }
@@ -1695,7 +1831,7 @@ fn infer_expr(
         other => other
       }
     Yield(_) | YieldStar(_) => @ast.TsType::Any
-    DynamicImport(_) | ImportMeta => @ast.TsType::Any
+    DynamicImport(_, _) | ImportMeta => @ast.TsType::Any
     PropAccess(receiver, name) => {
       // Property-access narrowing: when the access is a `Var` /
       // `PropAccess`-chain that the narrowing path tracks, look up the
@@ -1708,6 +1844,39 @@ fn infer_expr(
             None => ()
           }
         None => ()
+      }
+      // Class static-side / namespace+class merging: when the receiver
+      // is a bare identifier and `Name.member` resolves through the
+      // globals (because `namespace Name` registered the member as
+      // `Name.member`, or `class Name` has a static method), prefer
+      // that lookup. The instance-side `lookup_field` would otherwise
+      // miss static members entirely.
+      match receiver {
+        Var(class_name) =>
+          match resolver.globals.get(class_name + "." + name) {
+            Some(t) => return t
+            None =>
+              match resolver.classes.get(class_name) {
+                Some(cls) => {
+                  for p in cls.properties {
+                    if p.name == name && p.is_static {
+                      return p.type_
+                    }
+                  }
+                  for m in cls.methods {
+                    if m.name == name && m.is_static {
+                      let param_types : Array[@ast.TsType] = []
+                      for p in m.params {
+                        param_types.push(p.1)
+                      }
+                      return @ast.TsType::Func(param_types, m.return_type)
+                    }
+                  }
+                }
+                None => ()
+              }
+          }
+        _ => ()
       }
       let recv_ty = infer_expr(env, resolver, receiver)
       match resolver.lookup_field(recv_ty, name) {
@@ -1768,7 +1937,17 @@ fn infer_expr(
         wrap_async_return(f.is_async, f.return_type),
       )
     }
-    TaggedTemplate(_, _, _, _) | TemplateLiteral(_, _) => @ast.TsType::String_
+    TaggedTemplate(tag, _, _, _) =>
+      // `tag\`...\`` calls `tag(strings, ...exprs)` at runtime. We don't
+      // model `TemplateStringsArray` here, so the most useful fallback
+      // is the return type of `tag` when it's a known function — this
+      // is what library helpers like `gql\`...\`` / `css\`...\`` /
+      // `sql\`...\`` rely on for end-to-end typing.
+      match infer_expr(env, resolver, tag) {
+        Func(_, ret) => ret
+        _ => @ast.TsType::String_
+      }
+    TemplateLiteral(_, _) => @ast.TsType::String_
     // `x as T` — forced cast; result type is `T`. We still walk `inner` so
     // any nested call sites are validated.
     As(inner, ty) => {
@@ -1935,6 +2114,9 @@ fn infer_call(
     // predicate function return `Boolean`. The predicate effect is applied
     // via the narrowing path in `if (isFoo(v))`.
     Func(_, TypePredicate(_, _)) => @ast.TsType::Boolean
+    // `asserts paramName [is T]` returns `void` at the value level — the
+    // narrowing effect applies to all statements after the call site.
+    Func(_, AssertsPredicate(_, _)) => @ast.TsType::Void
     Func(_, ret) => ret
     _ => @ast.TsType::Any
   }
@@ -2366,6 +2548,28 @@ fn check_jsx_attrs(
     Some(tps) => tps
     None => []
   }
+  let const_flags = match ctx.resolver.func_const_type_params.get(tag) {
+    Some(flags) => flags
+    None => []
+  }
+  // `<const T>` skips the literal-widening pass below so the inferred
+  // binding keeps its narrow shape. We pre-compute whether *any* type
+  // parameter on this component is const — if so, the safer behavior
+  // is to skip widening across the board, since the binding could end
+  // up flowing into the const param.
+  let mut has_const_param = false
+  for f in const_flags {
+    if f {
+      has_const_param = true
+    }
+  }
+  let maybe_widen = fn(t : @ast.TsType) -> @ast.TsType {
+    if has_const_param {
+      t
+    } else {
+      widen_literal(t)
+    }
+  }
   let props = if type_params.length() > 0 {
     let bindings : Map[String, @ast.TsType] = {}
     for tp in type_params {
@@ -2385,7 +2589,7 @@ fn check_jsx_attrs(
                   infer_param_bindings(
                     type_params,
                     formal,
-                    widen_literal(sf.1),
+                    maybe_widen(sf.1),
                     bindings,
                   )
                 None => ()
@@ -2398,11 +2602,13 @@ fn check_jsx_attrs(
                 // JSX inference widens literal types (`"hi"` → `string`,
                 // `1` → `number`) so a single attribute doesn't lock T
                 // to a narrow literal value the user clearly didn't
-                // intend. Matches TS's contextual widening rule.
+                // intend. Matches TS's contextual widening rule. The
+                // wrapper is a no-op when any of the component's type
+                // params is `<const T>`.
                 infer_param_bindings(
                   type_params,
                   formal,
-                  widen_literal(actual),
+                  maybe_widen(actual),
                   bindings,
                 )
               }
@@ -2916,6 +3122,7 @@ fn check_arrow_with_context(
       let inner_ctx : CheckCtx = {
         path_prefix: ctx.path_prefix,
         return_type: unwrap_async_return(is_async, formal_ret),
+        yield_type: @ast.TsType::Any,
         resolver: ctx.resolver,
         issues: ctx.issues,
       }
@@ -2965,6 +3172,7 @@ fn check_funcexpr_with_context(
   let inner_ctx : CheckCtx = {
     path_prefix: ctx.path_prefix,
     return_type: body_return,
+    yield_type: @ast.TsType::Any,
     resolver: ctx.resolver,
     issues: ctx.issues,
   }
@@ -3365,6 +3573,41 @@ fn apply_switch_case_narrowing(
 ///|
 /// Switch `default:` body narrowing — exclude every literal case test against
 /// the scrutinee's union. Best-effort: only string-literal cases are excluded.
+/// `default:` body of a tagged-union switch on `obj.prop`: walk the
+/// listed string-literal cases, strip every union member whose
+/// declared `prop` field already matches one of them, and bind the
+/// remainder under `obj_name`. When every member is exhausted the
+/// remainder is `Never`, which is how downstream exhaustiveness rails
+/// (e.g. `const _: never = obj`) detect a clean cover.
+fn apply_switch_disc_default_narrowing(
+  env : ExprEnv,
+  resolver : Resolver,
+  obj_name : String,
+  prop : String,
+  cases : Array[@ast.TsSwitchCase],
+) -> Unit {
+  let str_lits : Array[String] = []
+  for c in cases {
+    match c.test_expr {
+      Some(StringLit(s)) => str_lits.push(s)
+      _ => ()
+    }
+  }
+  if str_lits.length() == 0 {
+    return
+  }
+  let cur = env_lookup_full(env, resolver, obj_name)
+  let mut next : @ast.TsType = cur
+  for lit in str_lits {
+    match narrow_by_discriminant(resolver, next, prop, lit, false) {
+      Some(remainder) => next = remainder
+      None => ()
+    }
+  }
+  env.bind(obj_name, next)
+}
+
+///|
 fn apply_switch_default_narrowing(
   env : ExprEnv,
   resolver : Resolver,
@@ -3538,7 +3781,9 @@ fn narrow_by_discriminant(
   literal : String,
   keep : Bool,
 ) -> @ast.TsType? {
-  let variants = union_components(recv)
+  // Unwrap type aliases first so a `type Shape = A | B` receiver
+  // becomes the underlying union before we split it.
+  let variants = union_components(resolver.unwrap(recv))
   if variants.length() < 2 {
     return None
   }
@@ -3785,6 +4030,89 @@ fn apply_type_predicate_narrowing(
       // Negative: strip members that fit T.
       let else_ty = narrow_remove(cur, fn(v) { is_assignable_to(v, target) })
       pair_neg.push((arg_name, else_ty))
+    }
+    _ => ()
+  }
+}
+
+///|
+/// Apply an `asserts paramName [is T]` predicate to the env when an
+/// expression statement is calling a function whose declared return is
+/// `AssertsPredicate(...)`. Unlike `apply_type_predicate_narrowing`,
+/// this binds the narrowed type into `env` directly because the
+/// assertion's effect persists across subsequent statements (TS
+/// "assertion functions" semantics).
+fn apply_assertion_predicate_effect(
+  env : ExprEnv,
+  resolver : Resolver,
+  expr : @ast.TsExpr,
+) -> Unit {
+  // Pull the `(callee_return, args)` pair from any call shape we know:
+  // `Call(name, args)`, `CallExpr(Var(name), args)`, or
+  // `MethodCall(recv, m, args)`.
+  let (ret, args) : (@ast.TsType, Array[@ast.TsExpr]) = match expr {
+    Call(name, args) =>
+      match resolver.globals.get(name) {
+        Some(Func(_, ret)) => (ret, args)
+        _ => return
+      }
+    CallExpr(Var(name), args) =>
+      match resolver.globals.get(name) {
+        Some(Func(_, ret)) => (ret, args)
+        _ => return
+      }
+    MethodCall(receiver, method_name, args) => {
+      let recv_ty = infer_expr(env, resolver, receiver)
+      match resolver.lookup_method_sig(recv_ty, method_name) {
+        Some((_, ret)) => (ret, args)
+        None => return
+      }
+    }
+    _ => return
+  }
+  let (param_name, target_opt) = match ret {
+    AssertsPredicate(p, t) => (p, t)
+    _ => return
+  }
+  // Resolve which positional arg this asserts refers to.
+  let idx = match expr {
+    Call(name, _) | CallExpr(Var(name), _) =>
+      match resolver.signatures.get(name) {
+        Some(params) => {
+          let mut found : Int = -1
+          let mut i = 0
+          while i < params.length() {
+            if params[i].name == param_name {
+              found = i
+              break
+            }
+            i = i + 1
+          }
+          found
+        }
+        None => 0
+      }
+    _ => 0
+  }
+  if idx < 0 || idx >= args.length() {
+    return
+  }
+  match args[idx] {
+    Var(arg_name) => {
+      let cur = env_lookup_full(env, resolver, arg_name)
+      let narrowed : @ast.TsType = match target_opt {
+        // `asserts x is T` — narrow to T.
+        Some(target) => {
+          let kept = narrow_keep(cur, fn(v) { is_assignable_to(v, target) })
+          match kept {
+            Never => target
+            _ => kept
+          }
+        }
+        // `asserts x` (truthy) — strip null / undefined / false-ish.
+        None => non_nullable(cur)
+      }
+      env.bind(arg_name, narrowed)
     }
     _ => ()
   }
@@ -4306,7 +4634,12 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     | Const(@ast.TsBinding::Target(_), _, init) => {
       let _ = infer_expr(env, ctx.resolver, init)
     }
-    Expr(e) => check_call_args_in_expr(env, e, ctx)
+    Expr(e) => {
+      check_call_args_in_expr(env, e, ctx)
+      // `f(v)` where `f`'s declared return is `asserts v [is T]` narrows
+      // `v` for every statement that follows.
+      apply_assertion_predicate_effect(env, ctx.resolver, e)
+    }
     Assign(name, e) => {
       check_call_args_in_expr(env, e, ctx)
       match env.lookup(name) {
@@ -4501,6 +4834,17 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
             apply_switch_default_narrowing(env, ctx.resolver, name, cases)
           _ => ()
         }
+        // Discriminator default: `switch (obj.kind) { case "a": …
+        // default: /* obj has none of the listed tags */ }`. Strip
+        // every union member whose discriminant matches one of the
+        // listed cases so the default body sees the exhaustive remainder.
+        match (scrutinee_disc, case_.test_expr) {
+          (Some((obj_name, prop)), None) =>
+            apply_switch_disc_default_narrowing(
+              env, ctx.resolver, obj_name, prop, cases,
+            )
+          _ => ()
+        }
         check_block(env, case_.body, ctx)
         env.restore_from(pre)
       }
@@ -4669,7 +5013,63 @@ fn check_call_args_in_expr(
       for ent in entries {
         check_call_args_in_expr(env, ent.1, ctx)
       }
-    PropAccess(recv, _) => check_call_args_in_expr(env, recv, ctx)
+    PropAccess(recv, prop) => {
+      check_call_args_in_expr(env, recv, ctx)
+      // Property-existence check: when the receiver has a concrete
+      // structural shape and the resolver can't find `prop` on it,
+      // surface a diagnostic. The class static-side fallback used
+      // by `infer_expr` already runs `r.globals[Class.member]` lookups
+      // and the resolver's instance/class lookup is exhaustive — so
+      // if both miss against a checkable receiver, the property
+      // genuinely doesn't exist on the static shape.
+      match recv {
+        Var(class_name) =>
+          match ctx.resolver.globals.get(class_name + "." + prop) {
+            Some(_) => ()
+            None =>
+              match ctx.resolver.classes.get(class_name) {
+                Some(cls) => {
+                  let mut has_static = false
+                  for p in cls.properties {
+                    if p.name == prop && p.is_static {
+                      has_static = true
+                    }
+                  }
+                  for m in cls.methods {
+                    if m.name == prop && m.is_static {
+                      has_static = true
+                    }
+                  }
+                  if has_static {
+                    return
+                  }
+                  // Fall through to the general lookup below.
+                  let recv_ty = infer_expr(env, ctx.resolver, recv)
+                  if is_checkable(recv_ty) &&
+                    !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
+                    record(
+                      ctx,
+                      "PropAccess `.\{prop}`",
+                      "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+                    )
+                  }
+                  return
+                }
+                None => ()
+              }
+          }
+        _ => ()
+      }
+      let recv_ty = infer_expr(env, ctx.resolver, recv)
+      if is_checkable(recv_ty) &&
+        !(ctx.resolver.lookup_field(recv_ty, prop) is Some(_)) {
+        record(
+          ctx,
+          "PropAccess `.\{prop}`",
+          "property `\{prop}` does not exist on `\{type_display(recv_ty)}`",
+        )
+      }
+    }
     IndexAccess(recv, idx) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
@@ -4732,6 +5132,33 @@ fn check_call_args_in_expr(
       for e in exprs {
         check_call_args_in_expr(env, e, ctx)
       }
+    Yield(operand_opt) =>
+      match operand_opt {
+        Some(operand) => {
+          check_call_args_in_expr(env, operand, ctx)
+          // Inside a generator, `yield x` must produce a value
+          // assignable to the declared element type. Outside (or
+          // when the type isn't statically extractable) the
+          // yield_type is `Any` and the check no-ops.
+          if is_checkable(ctx.yield_type) {
+            check_expr_against(env, operand, ctx.yield_type, ctx, "yield")
+          }
+        }
+        None => ()
+      }
+    YieldStar(operand) => {
+      check_call_args_in_expr(env, operand, ctx)
+      // `yield* iter` delegates to another iterable. Validate against
+      // `Iterable<T>` / `Generator<T, ...>` of the same element type.
+      if is_checkable(ctx.yield_type) {
+        let expected : @ast.TsType = Union([
+          Applied("Iterable", [ctx.yield_type]),
+          Applied("IterableIterator", [ctx.yield_type]),
+          Applied("Generator", [ctx.yield_type, Any, Any]),
+        ])
+        check_expr_against(env, operand, expected, ctx, "yield*")
+      }
+    }
     TaggedTemplate(tag, _, _, exprs) => {
       check_call_args_in_expr(env, tag, ctx)
       for e in exprs {
@@ -4935,13 +5362,38 @@ fn check_function_body_with(
   // For a type-predicate function (`x is T`), the body actually returns a
   // boolean — the predicate-ness lives only at the call site. Lower it
   // back to `Boolean` for the body-level return check.
+  //
+  // For an `asserts x [is T]` function the body actually returns `void` —
+  // the assertion is a control-flow effect.
   let body_return = match unwrap_async_return(func.is_async, func.return_type) {
     TypePredicate(_, _) => @ast.TsType::Boolean
+    AssertsPredicate(_, _) => @ast.TsType::Void
     other => other
+  }
+  // Extract the yield-element type for generator bodies. We accept the
+  // standard ambient shapes `Generator<T, ...>` / `Iterable<T>` /
+  // `IterableIterator<T>` / `AsyncGenerator<T, ...>` / `AsyncIterable<T>`
+  // and fall back to `Any` for anything else so non-generator and
+  // unannotated bodies short-circuit the yield check.
+  let yield_type : @ast.TsType = if func.is_generator {
+    match func.return_type {
+      Applied("Generator", args)
+      | Applied("AsyncGenerator", args) if args.length() >= 1 => args[0]
+      Applied("Iterable", [t])
+      | Applied("IterableIterator", [t])
+      | Applied("Iterator", [t])
+      | Applied("AsyncIterable", [t])
+      | Applied("AsyncIterableIterator", [t])
+      | Applied("AsyncIterator", [t]) => t
+      _ => @ast.TsType::Any
+    }
+  } else {
+    @ast.TsType::Any
   }
   let ctx : CheckCtx = {
     path_prefix: "function " + func.name,
     return_type: body_return,
+    yield_type,
     resolver,
     issues,
   }
@@ -4959,8 +5411,12 @@ fn check_function_body_with(
   }
   // Missing-return analysis: when the declared (body-level) return type is
   // concrete and doesn't accept `undefined` / `void`, every path through the
-  // body must end in `return` or `throw`.
-  if is_checkable(body_return) &&
+  // body must end in `return` or `throw`. Skip for generators — their body
+  // returns the `TReturn` slot via `return`, but the iterator itself is the
+  // declared `Generator<T, TReturn, ...>` value; not all generator
+  // signatures require an explicit `return`.
+  if !func.is_generator &&
+    is_checkable(body_return) &&
     !is_assignable_to(@ast.TsType::Undefined, body_return) &&
     !is_assignable_to(@ast.TsType::Void, body_return) &&
     !block_always_exits(func.body) {
@@ -5012,6 +5468,7 @@ pub fn check_module_function_bodies(
             params,
             return_type: method.return_type,
             body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }

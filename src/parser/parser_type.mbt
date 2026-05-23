@@ -62,6 +62,62 @@ fn Parser::parse_paren_or_function_type(
 }
 
 ///|
+/// Parse the tail of a constructor type after the `new` keyword has been
+/// consumed: optional `<...>` type params, `(...)` parameter list, then
+/// `=> T`. Falls back to `Any` when any part fails so the existing
+/// permissive behavior is preserved on malformed sources.
+fn Parser::parse_constructor_tail(
+  self : Parser,
+  is_abstract : Bool,
+) -> @ast.TsType raise ParseError {
+  if self.check(Lt) {
+    self.skip_type_args()
+  }
+  if !self.check(LParen) {
+    return Any
+  }
+  let saved = self.pos
+  let _ = self.expect(LParen)
+  let param_types : Array[@ast.TsType] = []
+  if !self.match_(RParen) {
+    let mut ok = true
+    while true {
+      let _ = self.match_ellipsis()
+      let _ = self.parse_declare_param_name() catch {
+        _ => {
+          ok = false
+          break
+        }
+      }
+      let _ = self.match_(Question)
+      if self.match_(Colon) {
+        param_types.push(self.parse_type())
+      } else {
+        param_types.push(@ast.TsType::Any)
+      }
+      if self.match_(Comma) {
+        if self.check(RParen) {
+          break
+        }
+        continue
+      }
+      break
+    }
+    if !ok {
+      self.pos = saved
+      self.skip_paren_type()
+      return Any
+    }
+    let _ = self.expect(RParen)
+  }
+  if !self.match_(Arrow) {
+    return Any
+  }
+  let ret = self.parse_type()
+  Constructor(param_types, ret, is_abstract)
+}
+
+///|
 fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
   let _ = self.expect(LBracket)
   let items : Array[@ast.TsType] = []
@@ -69,28 +125,36 @@ fn Parser::parse_tuple_type(self : Parser) -> @ast.TsType raise ParseError {
     return Tuple(items)
   }
   while !self.check(Eof) {
-    let _ = self.match_ellipsis()
-    match self.peek().kind {
-      Ident(_) if self.peek_at(1).kind == Colon => {
-        let _ = self.advance()
-        let _ = self.expect(Colon)
-      }
-      Ident(_) if self.peek_at(1).kind == Question &&
-        self.peek_at(2).kind == Colon => {
-        let _ = self.advance()
-        let _ = self.advance()
-        let _ = self.expect(Colon)
-      }
-      _ => ()
+    let is_rest = self.match_ellipsis()
+    // Labels like `[name: T]` strip the label tokens; `[name?: T]` is
+    // additionally an optional element (equivalent to a trailing `?`
+    // on the type itself). TS allows reserved keywords as label
+    // names (e.g. `[declare: AmdModuleDeclaration]`), so accept any
+    // identifier-shaped token via `is_tuple_label_token` rather than
+    // a strict `Ident(_)` match.
+    let label_optional = if self.is_tuple_label_token(0) &&
+      self.peek_at(1).kind == Colon {
+      let _ = self.advance()
+      let _ = self.expect(Colon)
+      false
+    } else if self.is_tuple_label_token(0) &&
+      self.peek_at(1).kind == Question &&
+      self.peek_at(2).kind == Colon {
+      let _ = self.advance()
+      let _ = self.advance()
+      let _ = self.expect(Colon)
+      true
+    } else {
+      false
     }
     let item_type = self.parse_type()
-    items.push(
-      if self.match_(Question) {
-        wrap_optional_ts_type(item_type)
-      } else {
-        item_type
-      },
-    )
+    let trailing_optional = self.match_(Question)
+    let with_optional : @ast.TsType = if label_optional || trailing_optional {
+      wrap_optional_ts_type(item_type)
+    } else {
+      item_type
+    }
+    items.push(if is_rest { Rest(with_optional) } else { with_optional })
     if self.match_(Comma) {
       if self.match_(RBracket) {
         break
@@ -127,7 +191,14 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
 ) -> @ast.TsType? {
   let saved_pos = self.pos
   try {
-    let _ = self.match_ident("readonly")
+    // Leading `readonly` / `+readonly` / `-readonly` modifier. We don't
+    // track readonly at the type level, so the modifier is consumed but
+    // not retained.
+    if self.match_(Plus) || self.match_(Minus) {
+      let _ = self.match_ident("readonly")
+    } else {
+      let _ = self.match_ident("readonly")
+    }
     let _ = self.expect(LBracket)
     let key_param = match self.peek().kind {
       Ident(name) => {
@@ -144,23 +215,51 @@ fn Parser::try_parse_simple_mapped_object_type_after_lbrace(
       return None
     }
     let keys_type = self.parse_type()
-    if self.match_(As) || self.match_ident("as") {
-      self.pos = saved_pos
-      return None
+    let remap : @ast.TsType? = if self.match_(As) || self.match_ident("as") {
+      Some(self.parse_type())
+    } else {
+      None
     }
     let _ = self.expect(RBracket)
+    // Trailing optional modifier:
+    //   `?`  / `+?` — widen value to `T | undefined`
+    //   `-?`        — strip `undefined` from `T` (post-substitution)
+    //   none        — use `T` as-is
     let optional = if self.match_(Question) {
       true
-    } else if self.match_(Minus) {
-      let _ = self.match_(Question)
+    } else if self.match_(Plus) {
+      self.match_(Question)
+    } else {
       false
+    }
+    let strip_undef = if !optional && self.match_(Minus) {
+      self.match_(Question)
     } else {
       false
     }
     let _ = self.expect(Colon)
-    let value_type = self.parse_type()
+    let raw_value = self.parse_type()
+    // Encode the `-?` modifier by wrapping the value in a marker the
+    // simplifier strips after per-key substitution. Stays inert when
+    // the source remains opaque, so legacy passes still see a normal
+    // `MappedType`.
+    let value_type : @ast.TsType = if strip_undef {
+      Applied("__tsmbt_strip_undef", [raw_value])
+    } else {
+      raw_value
+    }
     let _ = self.match_(Semicolon) || self.match_(Comma)
     let _ = self.expect(RBrace)
+    // With `as Remap`: preserve the remap binder shape so the simplifier
+    // can substitute per key. We don't take a fast-path here because the
+    // remap may filter / rewrite keys.
+    match remap {
+      Some(r) =>
+        return Some(
+          MappedTypeRemap(key_param, keys_type, r, value_type, optional),
+        )
+      None => ()
+    }
     // Fast path: when the key source is already a finite literal union
     // and the value never references the binder, just materialize an
     // object so legacy passes that don't know about `MappedType` keep
@@ -218,6 +317,7 @@ fn mapped_value_references_binder(
       }
       false
     }
+    Rest(inner) => mapped_value_references_binder(inner, key_param)
     Object(fields) => {
       for f in fields {
         if mapped_value_references_binder(f.1, key_param) {
@@ -254,6 +354,11 @@ fn mapped_value_references_binder(
     MappedType(inner_key, _, _, _) if inner_key == key_param => false
     MappedType(_, src, val, _) =>
       mapped_value_references_binder(src, key_param) ||
+      mapped_value_references_binder(val, key_param)
+    MappedTypeRemap(inner_key, _, _, _, _) if inner_key == key_param => false
+    MappedTypeRemap(_, src, rmap, val, _) =>
+      mapped_value_references_binder(src, key_param) ||
+      mapped_value_references_binder(rmap, key_param) ||
       mapped_value_references_binder(val, key_param)
     TemplateLiteralType(_, args) => {
       for a in args {
@@ -362,6 +467,58 @@ fn Parser::try_parse_simple_type_args(self : Parser) -> Array[@ast.TsType]? {
       self.pending_gt = 0
       None
     }
+  }
+}
+
+///|
+/// True when the token at `offset` is an identifier or a reserved
+/// keyword that's still valid as a labeled-tuple element name. TS
+/// permits any `IdentifierName` here, which includes most keywords.
+fn Parser::is_tuple_label_token(self : Parser, offset : Int) -> Bool {
+  match self.peek_at(offset).kind {
+    Ident(_)
+    | Type
+    | Declare
+    | Function
+    | Class
+    | New
+    | Import
+    | Export
+    | From
+    | As
+    | In
+    | Of
+    | Extends
+    | Typeof
+    | Instanceof
+    | Let
+    | Const
+    | Var
+    | If
+    | Else
+    | Return
+    | Throw
+    | Try
+    | Catch
+    | Finally
+    | For
+    | While
+    | Do
+    | Switch
+    | Case
+    | Default
+    | Break
+    | Continue
+    | With
+    | Debugger
+    | StringType
+    | NumberType
+    | BooleanType
+    | IntType
+    | VoidType
+    | Interface
+    | Null => true
+    _ => false
   }
 }
 
@@ -639,29 +796,13 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
     // Constructor type: new (...args: T) => U
     New => {
       let _ = self.advance()
-      // Skip type parameters if present
-      if self.check(Lt) {
-        self.skip_type_args()
-      }
-      // Skip parameter list
-      if self.check(LParen) {
-        self.skip_paren_type()
-      }
-      Any
+      self.parse_constructor_tail(false)
     }
     // abstract new (...) => T
-    Ident("abstract") => {
+    Ident("abstract") if self.peek_at(1).kind == New => {
       let _ = self.advance()
-      if self.check(New) {
-        let _ = self.advance()
-        if self.check(Lt) {
-          self.skip_type_args()
-        }
-        if self.check(LParen) {
-          self.skip_paren_type()
-        }
-      }
-      Any
+      let _ = self.advance()
+      self.parse_constructor_tail(true)
     }
     // Special identifier-like keywords
     Ident("infer") => {
@@ -691,21 +832,32 @@ fn Parser::parse_primary_type(self : Parser) -> @ast.TsType raise ParseError {
       self.parse_primary_type()
     }
     Ident("unique") => {
-      // unique symbol
+      // `unique symbol`: each occurrence gets a per-Parser tag so two
+      // references that are reached from the same declaration share an
+      // identity and distinct declarations don't.
       let _ = self.advance()
       match self.peek().kind {
         Ident("symbol") => {
           let _ = self.advance()
-          Symbol
+          self.unique_symbol_index = self.unique_symbol_index + 1
+          UniqueSymbol("__tsmbt_us_" + self.unique_symbol_index.to_string())
         }
         _ => Any
       }
     }
     Ident("asserts") => {
-      // asserts x is T
+      // `asserts x` / `asserts x is T`. Capture both shapes as
+      // `AssertsPredicate(name, target?)` so the checker can narrow at
+      // call sites; bridge emit treats the function return as `Void`.
       let _ = self.advance()
-      self.skip_asserts_clause()
-      Any
+      let name = if self.is_ident() { self.parse_binding_ident() } else { "_" }
+      let target : @ast.TsType? = if self.check(Ident("is")) {
+        let _ = self.advance()
+        Some(self.parse_type())
+      } else {
+        None
+      }
+      AssertsPredicate(name, target)
     }
     Const => {
       let _ = self.advance()
@@ -1534,16 +1686,3 @@ fn Parser::skip_type_args(self : Parser) -> Unit {
   }
 }
 
-///|
-/// Skip asserts clause: asserts x is T or asserts x
-fn Parser::skip_asserts_clause(self : Parser) -> Unit raise ParseError {
-  // asserts x
-  if self.is_ident() {
-    let _ = self.advance()
-  }
-  // is T
-  if self.check(Ident("is")) {
-    let _ = self.advance()
-    let _ = self.parse_type()
-  }
-}

@@ -9,6 +9,7 @@ fn empty_module_for_check() -> @ast.TsModule {
     classes: [],
     namespaces: [],
     enums: [],
+    module_augmentations: [],
   }
 }
 
@@ -132,12 +133,14 @@ test "check_module: detects duplicate class instance properties" {
     base_names: [],
     constructor_params: None,
     properties: [
-      { name: "value", type_: Number, is_static: false, is_readonly: false },
-      { name: "value", type_: String_, is_static: false, is_readonly: false },
+      { name: "value", type_: Number, is_static: false, is_readonly: false, is_accessor: false },
+      { name: "value", type_: String_, is_static: false, is_readonly: false, is_accessor: false },
     ],
     methods: [],
     is_abstract: false,
     is_constructible: true,
+    index_signatures: [],
+    decorators: [],
   })
   let report = check_module(m)
   let dups = report.issues.filter(fn(i) { i.kind == ClassPropertyDuplicate })
@@ -154,12 +157,14 @@ test "check_module: instance and static with same name is OK" {
     base_names: [],
     constructor_params: None,
     properties: [
-      { name: "value", type_: Number, is_static: false, is_readonly: false },
-      { name: "value", type_: Number, is_static: true, is_readonly: false },
+      { name: "value", type_: Number, is_static: false, is_readonly: false, is_accessor: false },
+      { name: "value", type_: Number, is_static: true, is_readonly: false, is_accessor: false },
     ],
     methods: [],
     is_abstract: false,
     is_constructible: true,
+    index_signatures: [],
+    decorators: [],
   })
   let report = check_module(m)
   let dups = report.issues.filter(fn(i) { i.kind == ClassPropertyDuplicate })

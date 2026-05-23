@@ -18,6 +18,7 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
       }
       Tuple(out)
     }
+    Rest(inner) => Rest(simplify_type(inner))
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {
@@ -38,6 +39,13 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
         out.push(simplify_type(p))
       }
       Func(out, simplify_type(ret))
+    }
+    Constructor(params, ret, is_abstract) => {
+      let out : Array[@ast.TsType] = []
+      for p in params {
+        out.push(simplify_type(p))
+      }
+      Constructor(out, simplify_type(ret), is_abstract)
     }
     Applied(name, args) => {
       let out : Array[@ast.TsType] = []
@@ -77,6 +85,24 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
       let s_extends = simplify_type(extends_)
       let s_t = simplify_type(t_branch)
       let s_f = simplify_type(f_branch)
+      // Non-distributive conditional pattern `[T] extends [U] ? X : Y`:
+      // both sides are length-1 tuples, which TypeScript uses to opt
+      // out of distribution. Unwrap and check the inner pair directly.
+      match (s_check, s_extends) {
+        (Tuple([inner_check]), Tuple([inner_extends])) =>
+          return match extends_decision(inner_check, inner_extends) {
+            Some(true) => s_t
+            Some(false) => s_f
+            None =>
+              Conditional(
+                Tuple([inner_check]),
+                Tuple([inner_extends]),
+                s_t,
+                s_f,
+              )
+          }
+        _ => ()
+      }
       // Distributive conditional: `(A | B) extends T ? X : Y`
       // -> `(A extends T ? X : Y) | (B extends T ? X : Y)`. Each leaf is
       // resolved through `extends_decision`; only commit the distribution
@@ -123,6 +149,8 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
     Keyof(inner) => Keyof(simplify_type(inner))
     MappedType(key_param, source, value, optional) =>
       MappedType(key_param, simplify_type(source), value, optional)
+    MappedTypeRemap(key_param, source, remap, value, optional) =>
+      MappedTypeRemap(key_param, simplify_type(source), remap, value, optional)
     TemplateLiteralType(parts, args) => {
       let inner : Array[@ast.TsType] = []
       for a in args {
@@ -138,6 +166,7 @@ pub fn simplify_type(type_ : @ast.TsType) -> @ast.TsType {
     IndexedAccess(_, _) => simplify_indexed_access(recursed)
     Keyof(_) => simplify_keyof(recursed)
     MappedType(_, _, _, _) => simplify_mapped_type(recursed)
+    MappedTypeRemap(_, _, _, _, _) => simplify_mapped_type_remap(recursed)
     TemplateLiteralType(_, _) => simplify_template_literal(recursed)
     _ => recursed
   }
@@ -195,6 +224,44 @@ fn simplify_keyof(t : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+/// Strip `Undefined` from a type produced by a mapped-type `-?` modifier.
+/// Walks `Applied("__tsmbt_strip_undef", [t])` and removes the optional
+/// branch; transparent on anything else.
+fn unwrap_strip_undef(t : @ast.TsType) -> (@ast.TsType, Bool) {
+  match t {
+    Applied("__tsmbt_strip_undef", [inner]) => (inner, true)
+    _ => (t, false)
+  }
+}
+
+///|
+/// Remove `Undefined` / `Null` (only undefined for `-?`) from a value
+/// type. Used after per-key substitution when the mapped type carries
+/// a `-?` strip marker.
+fn strip_undefined_from(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    Union(items) => {
+      let kept : Array[@ast.TsType] = []
+      for it in items {
+        match it {
+          Undefined => continue
+          _ => kept.push(it)
+        }
+      }
+      if kept.length() == 0 {
+        Never
+      } else if kept.length() == 1 {
+        kept[0]
+      } else {
+        Union(kept)
+      }
+    }
+    Undefined => Never
+    _ => t
+  }
+}
+
+///|
 /// `{ [K in U]: V }` evaluator. Substitutes `K` with each literal in `U`
 /// when the source resolves to a finite literal union (or single literal,
 /// or `Keyof Struct(...)`), producing an `Object(fields)`. Preserved
@@ -206,16 +273,67 @@ fn simplify_mapped_type(t : @ast.TsType) -> @ast.TsType {
         Some(ks) => ks
         None => return t
       }
+      let (raw_value, strip) = unwrap_strip_undef(value)
       let fields : Array[(@ast.TsType, @ast.TsType)] = []
       for k in keys {
-        let substituted = substitute_named(value, key_param, Literal(k))
+        let substituted = substitute_named(raw_value, key_param, Literal(k))
         let field_type = simplify_type(substituted)
+        let stripped = if strip {
+          strip_undefined_from(field_type)
+        } else {
+          field_type
+        }
+        let final_type = if optional {
+          @ast.TsType::Union([stripped, Undefined])
+        } else {
+          stripped
+        }
+        fields.push((Literal(k), final_type))
+      }
+      Object(fields)
+    }
+    _ => t
+  }
+}
+
+///|
+/// `{ [K in U as R]: V }` evaluator. When `U` resolves to a finite literal
+/// set, substitute `K` -> `Literal(k)` inside both `R` and `V`. The
+/// produced key set per source key comes from `resolve_literal_value_set`
+/// of the simplified remap; `Never` (TS-style "filter this key out") drops
+/// the entry; one or more literals emit one field each. Falls back to the
+/// original variant when the source or any remap result is opaque.
+fn simplify_mapped_type_remap(t : @ast.TsType) -> @ast.TsType {
+  match t {
+    MappedTypeRemap(key_param, source, remap, value, optional) => {
+      let keys : Array[String] = match collect_mapped_source_keys(source) {
+        Some(ks) => ks
+        None => return t
+      }
+      let fields : Array[(@ast.TsType, @ast.TsType)] = []
+      for k in keys {
+        let remapped = simplify_type(
+          substitute_named(remap, key_param, Literal(k)),
+        )
+        // `Never` filters this key out entirely (TS exclude pattern).
+        let new_keys : Array[String] = match remapped {
+          Never => continue
+          _ =>
+            match resolve_literal_value_set(remapped) {
+              Some(ks) => ks
+              None => return t
+            }
+        }
+        let substituted_value = substitute_named(value, key_param, Literal(k))
+        let field_type = simplify_type(substituted_value)
         let final_type = if optional {
           @ast.TsType::Union([field_type, Undefined])
         } else {
           field_type
         }
-        fields.push((Literal(k), final_type))
+        for new_k in new_keys {
+          fields.push((Literal(new_k), final_type))
+        }
       }
       Object(fields)
     }
@@ -287,6 +405,7 @@ fn substitute_named(
       }
       Tuple(out)
     }
+    Rest(inner) => Rest(substitute_named(inner, name, replacement))
     Object(fields) => {
       let out : Array[(@ast.TsType, @ast.TsType)] = []
       for f in fields {
@@ -305,6 +424,13 @@ fn substitute_named(
         out.push(substitute_named(p, name, replacement))
       }
       Func(out, substitute_named(ret, name, replacement))
+    }
+    Constructor(params, ret, is_abstract) => {
+      let out : Array[@ast.TsType] = []
+      for p in params {
+        out.push(substitute_named(p, name, replacement))
+      }
+      Constructor(out, substitute_named(ret, name, replacement), is_abstract)
     }
     Union(items) => {
       let out : Array[@ast.TsType] = []
@@ -345,6 +471,15 @@ fn substitute_named(
       MappedType(
         inner_key,
         substitute_named(source, name, replacement),
+        substitute_named(value, name, replacement),
+        optional,
+      )
+    MappedTypeRemap(inner_key, _, _, _, _) if inner_key == name => t
+    MappedTypeRemap(inner_key, source, remap, value, optional) =>
+      MappedTypeRemap(
+        inner_key,
+        substitute_named(source, name, replacement),
+        substitute_named(remap, name, replacement),
         substitute_named(value, name, replacement),
         optional,
       )

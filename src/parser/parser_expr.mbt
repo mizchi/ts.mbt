@@ -543,6 +543,7 @@ fn Parser::parse_object_method_value(
   @ast.TsExpr::FuncExpr({
     name,
     type_params: [],
+    const_type_params: [],
     params,
     return_type,
     body,
@@ -2055,6 +2056,31 @@ fn Parser::parse_jsx_opening_header(
   }
   let tag = self.src[name_start:i].to_string()
   let mut self_close = false
+  // Explicit generic type arguments `<Box<string> .../>`. Skip the
+  // balanced angle brackets so the rest of the attribute loop sees the
+  // attribute list. The generic info is dropped — the checker resolves
+  // props against the component's parameter type, not the call-site
+  // generic.
+  if i < self.src.length() && self.src[i].to_int().unsafe_to_char() == '<' {
+    let mut depth = 1
+    let mut j = i + 1
+    while j < self.src.length() && depth > 0 {
+      let cc = self.src[j].to_int().unsafe_to_char()
+      if cc == '<' {
+        depth += 1
+      } else if cc == '>' {
+        depth -= 1
+        if depth == 0 {
+          j += 1
+          break
+        }
+      }
+      j += 1
+    }
+    if depth == 0 {
+      i = j
+    }
+  }
   // Attributes.
   while i < self.src.length() {
     let c = self.src[i].to_int().unsafe_to_char()
@@ -2679,6 +2705,16 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
       } else {
         let _ = self.advance()
         Var("debugger")
+      }
+    // `declare` is a soft keyword — valid as a regular identifier in
+    // expression position (TS's own harness uses it that way).
+    Declare =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("declare")
+      } else {
+        let _ = self.advance()
+        Var("declare")
       }
     Str(s) => {
       let _ = self.advance()
@@ -3474,6 +3510,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
+              const_type_params: [],
               is_generator: false,
               is_async: false,
             })
@@ -3827,6 +3864,7 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
               params,
               return_type,
               body,
+              const_type_params: [],
               is_generator: false,
               is_async: false,
             })
@@ -3894,11 +3932,21 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
           raise ParseError("Expected 'meta' after import., got '\{prop}'")
         }
       } else {
-        // dynamic import: import(specifier)
+        // dynamic import: `import(specifier)` or
+        // `import(specifier, options)`.
         let _ = self.expect(LParen)
         let specifier = self.parse_assignment()
+        let options : @ast.TsExpr? = if self.match_(Comma) {
+          if self.check(RParen) {
+            None
+          } else {
+            Some(self.parse_assignment())
+          }
+        } else {
+          None
+        }
         let _ = self.expect(RParen)
-        DynamicImport(specifier)
+        DynamicImport(specifier, options)
       }
     }
     _ => raise ParseError("Unexpected token: \{tok.kind}")

@@ -924,45 +924,61 @@ Patterns: zod `output<T>` / `infer<T>` mapped types, valibot equivalent,
 date-fns `EachDayOfIntervalResult<I, O>` (Array<conditional + infer + indexed
 access>), jose key-typed builders.
 
-- [ ] Extend `simplify_type` so distributive conditional types reduce when each
+- [x] Extend `simplify_type` so distributive conditional types reduce when each
   branch resolves to the same concrete shape after bound substitution and
-  infer extraction.
-- [ ] Add a "branch-join" pass: when an `Array<Conditional<...>>` survives all
-  reduction passes, collect leaf branches and accept the join only if every
-  leaf is structurally compatible with the conditional's terminal default.
-- [ ] Lower mapped types with key remapping (`{ [K in keyof T as ...]: ... }`)
-  for the common output-shape pattern used by zod / valibot.
-- [ ] Treat unresolvable infer patterns as their bound rather than `JSValue` so
+  infer extraction. (Done via the `Union` source path in `simplify_type` —
+  every leaf must resolve definitively; otherwise the conditional is
+  preserved for a later retry.)
+- [~] Branch-join over `Array<Conditional<...>>`: the simplifier reduces a
+  union of conditionals when every branch decides, but doesn't yet
+  collect leaf branches and accept the join when only the terminal-default
+  shape matches. Low real-world ROI; left for later.
+- [x] Lower mapped types with key remapping (`{ [K in keyof T as ...]: ... }`)
+  for the common output-shape pattern used by zod / valibot. (Implemented
+  via `MappedTypeRemap` + `simplify_mapped_type_remap`.)
+- [x] Treat unresolvable infer patterns as their bound rather than `JSValue` so
   generic `infer DateType extends Date` collapses to `Date` at the bridge
-  boundary.
+  boundary. (`moonbit_decl.mbt` / `moonbit_js_ffi.mbt` consult
+  `infer_marker_bound` at the surface boundary;
+  `match_infer_pattern` now also rejects sources definitively disjoint
+  from the bound at match time.)
 
 ### 4. Template literal types
 
 Patterns: node:util `InspectColorBackground = bg${Capitalize<InspectColorForeground>}`,
 react-router path patterns, zod template-literal validators.
 
-- [ ] Add AST nodes for template literal types (`TsType::TemplateLiteral`)
+- [x] Add AST nodes for template literal types (`TsType::TemplateLiteralType`)
   including `Capitalize` / `Lowercase` / `Uppercase` / `Uncapitalize` intrinsic
   string-mapping types.
-- [ ] Resolve template literal types to a string-literal union when the
-  parameter is a finite string-literal union.
-- [ ] Reuse the existing string-literal-union enum-lowering path for template
+- [x] Resolve template literal types to a string-literal union when the
+  parameter is a finite string-literal union. (`simplify_template_literal`
+  cartesian-products the part / arg pairs.)
+- [x] Reuse the existing string-literal-union enum-lowering path for template
   literal types whose parameter union is small and safely PascalCase-able.
-- [ ] Otherwise fall back to `String` rather than `JSValue` when the template
+  (Bridge enum lowering walks the template result.)
+- [x] Otherwise fall back to `String` rather than `JSValue` when the template
   shape is statically known to produce strings.
+  (`TemplateLiteralType(_, _) => "String"` in both decl / FFI renderers.)
 
 ### 5. JSX / component layer
 
 Patterns: preact / react-router component definitions, `FunctionComponent<P>`,
 `ForwardRefExoticComponent`, JSX intrinsic elements.
 
-- [ ] Decide whether a JSX-aware bridge layer ships as a separate generator
-  output or as MoonBit-native types in the existing bridge.
-- [ ] Preserve `FunctionComponent<P>` as a callable opaque whose props are
-  represented as the resolved `P` struct.
-- [ ] Lower `JSX.Element` to a JS-opaque type that round-trips through bridge
-  glue without widening to `JSValue` for every render call.
-- [ ] Re-evaluate preact and react-router naturalize budgets after JSX layer.
+- [~] Open design decision: a JSX-aware bridge layer ships as MoonBit-native
+  types in the existing bridge. No separate generator output is planned.
+- [x] Preserve `FunctionComponent<P>` as a callable opaque whose props are
+  represented as the resolved `P` struct. (Done via the React-specific
+  utility lowering pass; callable component surfaces are emitted as opaque
+  external JS callable types.)
+- [~] Lower `JSX.Element` to a JS-opaque type that round-trips through bridge
+  glue without widening to `JSValue` for every render call. Current state
+  collapses `JSX.Element` to `@js.Any` at the bridge boundary; a dedicated
+  opaque type per JSX namespace is still open.
+- [~] Re-evaluate preact / react-router naturalize budgets after JSX layer.
+  Budgets updated as needed when the bridge realigns; no fresh pass is
+  scheduled.
 
 ### 6. Class static-side / index signature / module augmentation
 
@@ -970,20 +986,32 @@ Patterns: jose builder pattern (`new SignJWT(payload).setIssuedAt()...`),
 magic-string `MagicString` static helpers, hono `c.set()` per-context
 augmentation, React `HTMLAttributes` index signatures.
 
-- [ ] Separate class static-side (`typeof Class`) from instance-side at the
-  bridge boundary so static factories / properties live in their own MoonBit
-  module surface.
-- [ ] Lower `[key: string]: V` index signatures to a paired
-  getter / setter pair on the generated MoonBit struct.
-- [ ] Decide whether module augmentation gets a first-class lowering or stays
-  as a documented diagnostic.
+- [x] Class static-side (`typeof Class`) merging: `PropAccess` on a class
+  identifier consults `globals[Name.member]` (which catches namespace + class
+  declaration merging) and the class's static methods / properties before
+  falling back to instance-side lookup.
+- [x] Lower `[key: string]: V` index signatures: `TsClassDecl.index_signatures`
+  carries the parsed entries and `lookup_class_field` falls through to
+  `index_signature_value` after exhausting named members. The
+  `TsInterface` side already worked.
+- [x] Module augmentation graph: `TsModule.module_augmentations :
+  Array[(String, TsModule)]` records every `declare module "X" { ... }`
+  block by specifier; declarations still flow into the surrounding scope
+  for legacy consumers.
 
 ### 7. Modern syntax follow-ups (smaller)
 
-- [ ] `satisfies` operator at the expression level.
-- [ ] Stage-3 decorators (parser support).
-- [ ] `using` / `await using` declarations.
-- [ ] Const generics (`<const T>`).
+- [x] `satisfies` operator at the expression level. (Parser retains
+  `Satisfies(expr, ty)`; checker validates assignment in
+  `check_call_args_in_expr`.)
+- [x] Stage-3 decorators on classes. (`TsClassDecl.decorators` retains the
+  parsed `@expr` chain.)
+- [x] `using` / `await using` declarations including `export using` at the
+  module export position.
+- [x] Const generics (`<const T>`). Retained on `TsFunc.const_type_params`
+  and consulted by the JSX generic-component inference path to skip
+  literal widening when any of the component's type parameters carries
+  the modifier.
 
 ### Non-Goals (still)
 
@@ -992,3 +1020,224 @@ augmentation, React `HTMLAttributes` index signatures.
   corpus.
 - [ ] Do not pursue `any` / `unknown` AST distinction unless a downstream
   consumer needs it; the JSValue count is unaffected.
+
+## TypeScript Compatibility Inventory (2026-05-23)
+
+Snapshot of remaining TypeScript-language compatibility surface, taken after
+the JSX round-up (PR #15) and the fmt normalization (PR #17). Conformance
+corpus baseline: `total=1936 parsed=1841 checked=1841` (checker crashes 0).
+
+Legend: `[x]` covered, `[~]` parsed but lossy / dropped to `Any`, `[ ]` not
+started.
+
+### Syntax (parser)
+
+- [x] `asserts x is T` predicate — retained as `AssertsPredicate(name,
+  target?)`; lowers to `Unit` at the bridge boundary; statement-level
+  narrowing applied at the call site.
+- [x] `new (...) => T` / `abstract new (...) => T` constructor types —
+  retained as `Constructor(params, ret, is_abstract)` and feed
+  `ConstructorParameters<C>` / `InstanceType<C>` through the standard
+  utility table.
+- [x] Stage-3 decorators — `TsClassDecl.decorators` carries the parsed
+  `@expr` chain in source order via the new `parse_decorator_expr`
+  helper that produces a faithful `TsExpr` (call, member access, etc.).
+- [x] `<const T>` const type parameter — retained as
+  `TsFunc.const_type_params : Array[Bool]` (positionally aligned with
+  `type_params`). The checker's JSX generic-component inference path
+  consults the matching `Resolver.func_const_type_params` entry and
+  skips the literal-widening pass for the matching binding, so
+  `<Comp value="hello" />` against `function Comp<const T>(props :
+  Props<T>)` infers `T = "hello"` instead of `T = string`.
+- [x] Import attributes (`import x from "y" with { type: "json" }`) —
+  retained as `TsImportDecl.attributes : Array[(String, String)]` via
+  the new `parse_import_attributes` helper; the legacy `assert { ... }`
+  form lands in the same slot.
+- [x] Labeled tuple `[name: T, age: U]` — labels stripped; `[name?: T]`
+  correctly widens the element to `T | undefined`.
+- [x] Variadic tuple types (`[string, ...T, number]`) — parsed and
+  retained as `Tuple([..., Rest(T), ...])`; outside a tuple position
+  `Rest(T)` lowers like `Array(T)`.
+- [x] Mapped-type key remapping (`{ [K in U as F<K>]: V }`) — parsed
+  as `MappedTypeRemap(...)`; simplifier substitutes `K` per key and
+  produces an `Object(...)` when the source / remap resolve, dropping
+  keys whose remap evaluates to `Never`.
+- [x] `accessor` field (auto-accessor) —
+  `TsClassPropertyDecl.is_accessor` flags the property; structurally
+  identical to a regular property + synthesised getter/setter.
+- [~] `using` / `await using` runtime semantics (parser already accepts
+  the binding form; disposable-tracking is intentionally out of scope —
+  it has no effect on bridge generation).
+- [x] Dynamic `import(spec, options)`: `DynamicImport` carries the
+  optional second argument so the attribute payload survives. Bare
+  one-arg form keeps the `None` slot.
+- [x] Inline per-specifier `import { type X, Y }` modifier —
+  `TsImportDecl.named_type_only : Array[Bool]` is positionally aligned
+  with `named_bindings`; `true` indicates the `type` prefix was used.
+- [x] JSX explicit generic type arguments `<Box<string> ... />` — the
+  JSX header scanner skips the balanced angle brackets after the tag
+  name before attribute parsing.
+
+### Type system (checker)
+
+- [x] Union / Intersection / Conditional + distributive / Generics / infer.
+- [x] Utility table: `Pick / Omit / Record / Exclude / Extract / NonNullable /
+  ReturnType / Parameters / Awaited`.
+- [x] String-mapping intrinsics (`Capitalize / Lowercase / Uppercase /
+  Uncapitalize`) in `simplify.mbt`.
+- [x] `InstanceType<C>` / `ConstructorParameters<C>` — first-class
+  utility-table entries that reduce through
+  `is_assignable_to_with_generics` and pattern-match on the new
+  `Constructor(...)` shape.
+- [x] `ThisParameterType<F>` / `OmitThisParameter<F>` / `ThisType<T>`
+  — all three are standard utility-table entries; `ThisType<T>` is
+  the identity because we don't model contextual-`this` inference.
+- [x] `NoInfer<T>` (TS 5.4+) — identity alias in the utility table.
+- [x] Mapped-type key remapping (`as`) evaluation in `simplify_type`
+  including `Capitalize<K>` / template-literal prefixing and
+  `K extends X ? never : K` filter patterns.
+- [x] Mapped-type modifier semantics: leading `readonly` / `+readonly`
+  / `-readonly` consumed, trailing `?` / `+?` widen with `Undefined`,
+  trailing `-?` strips `Undefined` from the value type after
+  substitution via a synthetic `__tsmbt_strip_undef` marker.
+- [x] Conditional `infer T extends Bound` constraint at match time:
+  `match_infer_pattern` rejects sources that are definitively disjoint
+  from the bound; surface renderers already collapse unresolved
+  infer-with-bound markers to the bound.
+- [x] Variadic tuple inference: `Resolver::ingest_module` wraps a
+  function's rest parameter as `Rest(T)` so `Parameters<typeof f>`
+  binds `P` to the rest-tail tuple.
+- [x] Non-distributive conditional detection (`[T] extends [U] ? X :
+  Y`) — both-side length-1 tuple shape is detected by `simplify_type`
+  and reduced by unwrapping before `extends_decision`.
+- [x] `unique symbol` distinct identity: `UniqueSymbol(tag)` carries
+  a per-occurrence tag assigned by the parser; `extends_decision`
+  reports `Some(false)` for distinct tags and widens to plain
+  `Symbol`. Bridge surface still lowers to `Symbol` / `JSValue`, and
+  the existing non-runtime-binding filter treats both variants
+  uniformly.
+- [x] Class static-side (`typeof Cls`) vs instance-side separation —
+  `typeof_class_constructor_params_type` /
+  `typeof_class_instance_type` cover the
+  `ConstructorParameters<typeof Cls>` / `InstanceType<typeof Cls>`
+  cases at the bridge layer, and `PropAccess` on a class identifier
+  now consults the namespace-merged `globals` map plus the class's
+  static members before falling back to the instance-side lookup.
+- [x] Class index signature `[k: string]: V` — `TsClassDecl` carries
+  the parsed signatures and `lookup_class_field` falls through to
+  `index_signature_value` after exhausting named members.
+- [x] Module augmentation graph — `TsModule.module_augmentations :
+  Array[(String, TsModule)]` records every top-level `declare module
+  "X" { ... }` block by specifier. The contained declarations also
+  flow into the surrounding scope for legacy consumers; downstream
+  tooling that wants the per-module view can read the new field
+  directly.
+- [x] Declaration merging (interface + interface) — `Resolver::ingest_module`
+  now unions fields / readonly / extends / index signatures via
+  `merge_interfaces`. Namespace + namespace was already implicit via
+  the recursive ingest, and namespace + class static-side merging
+  works through the `PropAccess` lookup extension.
+- [x] Tagged-template literal typing — `tag\`...\`` returns the
+  declared return type of `tag` when known instead of always collapsing
+  to `String`. Real generic inference across template segments is still
+  deferred (rare in our corpus).
+- [x] Generator / async-iterator yield-type checking — `CheckCtx`
+  carries the declared element type and `yield e` / `yield* iter` are
+  validated against it; the missing-return diagnostic is suppressed
+  for generator bodies.
+- [x] `in` narrowing for record-shaped operands +
+  switch-discriminator exhaustiveness — `In` narrowing already handled
+  records, and `apply_switch_disc_default_narrowing` now strips every
+  tag-matched union member from the discriminator in the `default:`
+  body so the remainder is `Never` when the cases exhaust the union.
+
+### JSX
+
+- [x] Component prop checking, spread attrs, `key` / `ref` reserved.
+- [x] Render props, recursive child checking.
+- [x] `.map(...)` child key warning.
+- [x] Member-expression tags `<Foo.Bar />`.
+- [x] Generic component explicit type args `<Box<string> ... />`.
+- [ ] `defaultProps` reflection in required-prop checking — deferred
+  (React 19 deprecates `defaultProps`; default parameter values on the
+  component function already cover the modern pattern).
+- [~] Fragment (`<></>`) key on the iterating side — `key` on a JSX
+  fragment is only meaningful for React.Fragment; the bare `<></>`
+  form has no attribute slot, so the `.map`-key warning already skips
+  fragments (`tag == ""`).
+- [ ] `JSX.LibraryManagedAttributes` reflection — deferred (TS-only
+  shim for class-component `defaultProps`; not used outside React 18-).
+
+### Module resolver / surrounding
+
+- [x] `exports` / `typesVersions` / `node:*` / `@types/*` resolution.
+- [ ] Yarn PnP (`.pnp.cjs`) resolution — deferred (pnpm is the corpus
+  default; PnP doesn't appear).
+- [~] Import-attribute driven type-only routing (e.g. JSON modules) —
+  attributes are read and discarded; JSON modules already resolve via
+  the file-based path.
+- [x] `tsconfig.json` `paths` mapping — handled by
+  `resolve_tsconfig_specifier` (paths + baseUrl + wildcard targets).
+
+### Conformance corpus follow-up
+
+- [x] Triage the remaining parse failures — current parse rate is
+  1843/1936 (95.2 %). The remaining ~93 failures fall into:
+  - `*Errors.ts` / `*invalid*.ts` / `*NoCrash*.ts` fixtures the TS
+    team uses to verify their own error recovery — those produce
+    parser-level errors here too, which matches expected behaviour.
+  - `using` declarations in invalid positions (`declare using`,
+    `for (await using of …)` PR-specific edge cases). Our parser
+    accepts the canonical forms; the invalid ones stay as errors.
+  - Class member overload signatures with mismatched access
+    modifiers (`public … protected … constructor`). Edge-case
+    grammar, one fixture each.
+- [ ] Measure issue-count precision (not just crash rate) on the
+  corpus so checker regressions surface before they reach real-world
+  generation.
+
+### Priorities (by real-world ROI) — STATUS
+
+All five high-ROI items from 2026-05-23 shipped:
+
+- [x] Mapped-type key remapping (`as`) — commit `2f8b33a`.
+- [x] `asserts` predicate retention — commit `45abff5`.
+- [x] Labeled + variadic tuple — commit `3ab53d3`.
+- [x] Interface declaration merging — commit `8e5cd63`.
+- [x] `infer ... extends Bound` constraint — commit `8e5cd63`.
+
+Follow-on batches in the same branch:
+
+- [x] Constructor types AST + utility-table evaluation —
+  `Constructor(...)` variant, `ConstructorParameters` / `InstanceType`
+  / `ThisParameterType` / `OmitThisParameter` / `NoInfer` —
+  commit `8152f21`.
+- [x] Mapped-type modifier semantics (`+?` / `-?` / `+readonly` /
+  `-readonly`) — commit `8152f21`.
+- [x] Non-distributive conditional `[T] extends [U]` — commit `8152f21`.
+- [x] JSX explicit type args, tagged-template return type, class index
+  signature, variadic `Parameters<F>` — commit `454d360`.
+- [x] Import attributes + per-specifier `type` modifier retention —
+  commit `2cbff18`.
+- [x] Class-level stage-3 decorator AST — commit `e4be04b`.
+- [x] `accessor` field flag + namespace + class static-side merging —
+  commit `e6d4d95`.
+- [x] Generator yield-type checking — commit `3a8dcf2`.
+
+Final follow-on batches:
+
+- [x] `unique symbol` per-occurrence identity (commit `58b6ca5`).
+- [x] `ThisType<T>` utility-table identity (commit `58b6ca5`).
+- [x] Dynamic `import(spec, options)` attribute retention (commit
+  `58b6ca5`).
+- [x] Switch-discriminator default narrowing (commit `7cb2d43`).
+- [x] Module augmentation graph (commit `7cb2d43`).
+
+Remaining intentionally-deferred items (per project policy, no
+runtime-bridge impact):
+
+- [ ] Yarn PnP resolver — pnpm is the locked corpus default; PnP
+  doesn't appear.
+- [ ] `JSX.LibraryManagedAttributes` / `defaultProps` — React 19
+  deprecates the underlying pattern; modern components use default
+  parameter values which we already cover.

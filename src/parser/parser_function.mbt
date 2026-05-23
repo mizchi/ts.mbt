@@ -195,7 +195,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   let is_generator = self.match_(Star)
   let is_async = self.in_async
   let name = self.parse_binding_ident()
-  let (type_params, type_param_bounds) = self.parse_type_param_names_and_bounds()
+  let (type_params, const_type_params, type_param_bounds) = self.parse_type_param_names_bounds_and_const_flags()
   let local_type_param_bound_len = self.push_local_type_param_bounds(
     type_param_bounds,
   )
@@ -215,6 +215,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     return {
       name,
       type_params,
+      const_type_params,
       params,
       return_type,
       body: { stmts: [] },
@@ -226,6 +227,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
     return {
       name,
       type_params,
+      const_type_params,
       params,
       return_type,
       body: { stmts: [] },
@@ -268,7 +270,7 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, type_params, params, return_type, body, is_generator, is_async }
+  { name, type_params, const_type_params, params, return_type, body, is_generator, is_async }
 }
 
 ///|
@@ -300,7 +302,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
     | In => self.parse_binding_ident()
     _ => "<anon>"
   }
-  let (type_params, _) = self.parse_type_param_names_and_bounds()
+  let (type_params, const_type_params, _) = self.parse_type_param_names_bounds_and_const_flags()
   let _ = self.expect(LParen)
   let params = self.parse_params()
   let _ = self.expect(RParen)
@@ -345,7 +347,7 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, type_params, params, return_type, body, is_generator, is_async }
+  { name, type_params, const_type_params, params, return_type, body, is_generator, is_async }
 }
 
 ///|
@@ -484,10 +486,24 @@ fn Parser::skip_type_param_tail_until_delim(self : Parser) -> Unit {
 fn Parser::parse_type_param_names_and_bounds(
   self : Parser,
 ) -> (Array[String], Array[(String, @ast.TsType)]) {
+  let (names, _, bounds) = self.parse_type_param_names_bounds_and_const_flags()
+  (names, bounds)
+}
+
+///|
+/// Like `parse_type_param_names_and_bounds` but also returns a
+/// parallel array of `const`-modifier flags (one per parameter).
+/// `<const T extends ...>` flips the matching `const_flags` entry to
+/// `true`; subsequent generic-inference passes consult this to skip
+/// literal widening on `T`.
+fn Parser::parse_type_param_names_bounds_and_const_flags(
+  self : Parser,
+) -> (Array[String], Array[Bool], Array[(String, @ast.TsType)]) {
   let names : Array[String] = []
+  let const_flags : Array[Bool] = []
   let bounds : Array[(String, @ast.TsType)] = []
   if !self.check(Lt) {
-    return (names, bounds)
+    return (names, const_flags, bounds)
   }
   let _ = self.advance()
   while !self.check(Eof) {
@@ -496,10 +512,13 @@ fn Parser::parse_type_param_names_and_bounds(
       break
     }
     // Optional `const` modifier introduced in TypeScript 5.0:
-    // `<const T extends ...>`. The const modifier has no impact on the
-    // erased generic shape we keep, so consume and discard it.
-    if self.check(Const) {
+    // `<const T extends ...>`. Captured per-parameter so the
+    // generic-inference pass can keep literal types narrow.
+    let is_const = if self.check(Const) {
       let _ = self.advance()
+      true
+    } else {
+      false
     }
     // Variance modifiers `in` / `out` (TypeScript 4.7+):
     // `<out T extends ..., in U, in out V>`. Both keywords are
@@ -546,6 +565,7 @@ fn Parser::parse_type_param_names_and_bounds(
       break
     }
     names.push(name)
+    const_flags.push(is_const)
     if self.match_(Extends) {
       let saved_pos = self.pos
       let saved_pending_gt = self.pending_gt
@@ -574,7 +594,7 @@ fn Parser::parse_type_param_names_and_bounds(
       break
     }
   }
-  (names, bounds)
+  (names, const_flags, bounds)
 }
 
 ///|
@@ -1741,6 +1761,57 @@ fn Parser::parse_declare_signature_params(
 }
 
 ///|
+///|
+/// Cheap shape check: confirms the token stream starts with `[ Ident :`,
+/// the canonical opening of a TS index signature inside a class /
+/// interface body. Returns false for the general computed-name pattern
+/// `[expr]: T` so the existing skip path still handles it.
+fn Parser::is_index_signature_shape_after_lbracket(self : Parser) -> Bool {
+  if !self.check(LBracket) {
+    return false
+  }
+  match (self.peek_at(1).kind, self.peek_at(2).kind) {
+    (Ident(_), Colon) => true
+    _ => false
+  }
+}
+
+///|
+/// Parse a TS index signature inside a class body: `[name: KeyType]:
+/// ValueType`. Returns `None` if the shape doesn't match — callers
+/// fall back to the original skip path.
+fn Parser::try_parse_class_index_signature(
+  self : Parser,
+) -> (@ast.TsType, @ast.TsType)? raise ParseError {
+  let saved = self.pos
+  let _ = self.expect(LBracket)
+  match self.peek().kind {
+    Ident(_) => {
+      let _ = self.advance()
+    }
+    _ => {
+      self.pos = saved
+      return None
+    }
+  }
+  if !self.match_(Colon) {
+    self.pos = saved
+    return None
+  }
+  let key_type = self.parse_type()
+  if !self.match_(RBracket) {
+    self.pos = saved
+    return None
+  }
+  if !self.match_(Colon) {
+    self.pos = saved
+    return None
+  }
+  let value_type = self.parse_type()
+  self.consume_semicolon()
+  Some((key_type, value_type))
+}
+
 fn Parser::parse_declare_class_member_name(
   self : Parser,
 ) -> String? raise ParseError {
@@ -1947,6 +2018,7 @@ fn upsert_class_property(
         type_: merged_type,
         is_static: existing.is_static,
         is_readonly: existing.is_readonly && property.is_readonly,
+        is_accessor: false,
       }
       return
     }
@@ -1974,6 +2046,7 @@ fn Parser::parse_declare_class(
   let _ = self.expect(LBrace)
   let properties : Array[@ast.TsClassPropertyDecl] = []
   let methods : Array[@ast.TsClassMethodDecl] = []
+  let index_signatures : Array[(@ast.TsType, @ast.TsType)] = []
   let mut constructor_params : Array[(String, @ast.TsType)]? = None
   let mut saw_public_constructor = false
   let mut saw_nonpublic_constructor = false
@@ -1981,9 +2054,24 @@ fn Parser::parse_declare_class(
     if self.match_(Semicolon) {
       continue
     }
+    // Index signature: `[name: KeyType]: ValueType`. Detect before any
+    // modifier consumption so the shape isn't lost when the body opens
+    // with `[`. Stale-pattern bail-out: revert to the original skip
+    // path if the syntax doesn't match.
+    if self.check(LBracket) &&
+      self.is_index_signature_shape_after_lbracket() {
+      match self.try_parse_class_index_signature() {
+        Some(sig) => {
+          index_signatures.push(sig)
+          continue
+        }
+        None => ()
+      }
+    }
     let mut is_static = false
     let mut is_readonly = false
     let mut is_public = true
+    let mut is_accessor = false
     let mut has_modifier = true
     while has_modifier {
       has_modifier = false
@@ -2017,6 +2105,9 @@ fn Parser::parse_declare_class(
           }
           if mod == "readonly" {
             is_readonly = true
+          }
+          if mod == "accessor" {
+            is_accessor = true
           }
           if mod == "private" || mod == "protected" {
             is_public = false
@@ -2073,6 +2164,7 @@ fn Parser::parse_declare_class(
                 type_: return_type,
                 is_static,
                 is_readonly: true,
+                is_accessor: false,
               })
             Some("set") if is_public => {
               let setter_type = if params.length() > 0 {
@@ -2086,6 +2178,7 @@ fn Parser::parse_declare_class(
                 type_: setter_type,
                 is_static,
                 is_readonly: false,
+                is_accessor: false,
               })
             }
             _ =>
@@ -2133,6 +2226,7 @@ fn Parser::parse_declare_class(
           type_: property_type,
           is_static,
           is_readonly,
+          is_accessor,
         })
       _ => ()
     }
@@ -2154,7 +2248,9 @@ fn Parser::parse_declare_class(
     constructor_params,
     properties,
     methods,
+    index_signatures,
     is_abstract,
     is_constructible,
+    decorators: self.take_pending_decorators(),
   }
 }

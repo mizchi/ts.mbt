@@ -11,6 +11,12 @@ pub(all) enum TsType {
   Void
   BigInt // bigint
   Symbol // symbol
+  // `unique symbol`: TS treats each occurrence as a nominally distinct
+  // type. The string carries a stable per-occurrence tag the parser
+  // assigns so two `unique symbol` references that point to the same
+  // declaration are interchangeable while distinct declarations are
+  // not. Bridge emit still lowers the type to `Symbol` / `JSValue`.
+  UniqueSymbol(String)
   // Special types
   Any // unknown/any
   Never // bottom type (no value)
@@ -24,9 +30,20 @@ pub(all) enum TsType {
   // Compound types
   Array(TsType)
   Tuple(Array[TsType]) // [string, number]
+  // Variadic tuple element marker: `[A, ...B, C]` parses as
+  // `Tuple([A, Rest(B), C])`. Only meaningful as a direct child of
+  // `Tuple(...)`; outside of that position, `Rest(T)` behaves like
+  // `Array(T)` (or like `T` itself when `T` is already an array / tuple).
+  Rest(TsType)
   Object(Array[(TsType, TsType)]) // { key: value } - key is Literal for property names
   Struct(String, Array[(String, TsType)]) // name, fields (for codegen)
   Func(Array[TsType], TsType) // params, return
+  // Constructor type: `new (...args) => T` or `abstract new (...) => T`.
+  // Stored separately from `Func` so utility passes (`ConstructorParameters`,
+  // `InstanceType`) can pattern-match on the call form, and so a bridge
+  // emitter can decide between a class wrapper and a plain callable.
+  // The last field is `is_abstract`.
+  Constructor(Array[TsType], TsType, Bool)
   // Type operators
   Union(Array[TsType]) // A | B
   Intersection(Array[TsType]) // A & B
@@ -58,10 +75,31 @@ pub(all) enum TsType {
   // when the source resolves to a union of literals. `optional` reflects
   // the literal `?` after `]`; the parser already handles `+?` / `-?`.
   MappedType(String, TsType, TsType, Bool)
+  // Mapped type with key remapping
+  // `{ [K in Source as Remap]: Value }`. Fields:
+  //   - `key_param`: binder name (e.g. `K`);
+  //   - `source`: original key union (e.g. `keyof T`);
+  //   - `remap`: the `as` expression, normally a string-mapping intrinsic
+  //     or a `Conditional` filter that references `Named(key_param)`;
+  //   - `value`: value type that may also reference `Named(key_param)`;
+  //   - `optional`: literal `?` after `]`.
+  // Evaluated by `simplify_mapped_type`: per key `k` in `source`, the
+  // remap is substituted-and-simplified; `Never` means the key is
+  // filtered out, a `Literal(new_k)` rewrites the key, and a union of
+  // literals emits one field per produced literal. Falls back to keeping
+  // the variant for opaque sources / remaps so later substitution can
+  // retry.
+  MappedTypeRemap(String, TsType, TsType, TsType, Bool)
   // Type predicate: `paramName is T`. Used as a function return type to
   // mark a user-defined type guard. Outside of the return-type position
   // it behaves like `Boolean`.
   TypePredicate(String, TsType)
+  // Assertion predicate: `asserts paramName` (truthy assertion) or
+  // `asserts paramName is T` (typed assertion). The `TsType?` carries
+  // the optional `is T` payload. Function runtime return is `void`;
+  // the predicate is meaningful at call sites where the checker can
+  // narrow the named binding for code that follows.
+  AssertsPredicate(String, TsType?)
 } derive(Eq, Debug)
 
 ///|
@@ -152,8 +190,11 @@ pub(all) enum TsExpr {
   // await expression (async)
   Await(TsExpr)
 
-  // dynamic import expression: import(specifier)
-  DynamicImport(TsExpr)
+  // dynamic import expression: `import(specifier)` or
+  // `import(specifier, options)`. The optional second argument is
+  // typically `{ with: { type: "json" } }` — retained as a plain
+  // expression so downstream code can read the attribute literal.
+  DynamicImport(TsExpr, TsExpr?)
 
   // import.meta expression
   ImportMeta
@@ -402,6 +443,11 @@ pub(all) struct TsFunc {
   // Generic type parameters declared on this function (e.g. `T`, `R` in
   // `function map<T, R>(...)`). Empty for non-generic functions.
   type_params : Array[String]
+  // Parallel to `type_params`: `true` when the param was declared as
+  // `<const T>` (TypeScript 5.0+). Empty arrays are also acceptable
+  // — callers treat a missing flag as `false`. Generic inference uses
+  // this to skip literal widening for the matching parameter.
+  const_type_params : Array[Bool]
   params : Array[TsParam]
   return_type : TsType
   body : TsBlock
@@ -469,6 +515,11 @@ pub(all) struct TsClassPropertyDecl {
   type_ : TsType
   is_static : Bool
   is_readonly : Bool
+  // `accessor` field (TC39 stage-3 auto-accessor): `class C { accessor
+  // x: number = 0 }`. Functionally a property with synthesized
+  // getter/setter, so the checker treats it like a normal property
+  // but the flag is retained for downstream tooling.
+  is_accessor : Bool
 } derive(Debug)
 
 ///|
@@ -502,6 +553,17 @@ pub(all) struct TsClassDecl {
   methods : Array[TsClassMethodDecl]
   is_abstract : Bool
   is_constructible : Bool
+  // Index signatures declared on the class body (e.g. `[key: string]:
+  // T` inside `class C { [key: string]: T }`). Each entry pairs the key
+  // type with the value type so the checker can resolve `instance.foo`
+  // when there is no named field matching `foo`.
+  index_signatures : Array[(TsType, TsType)]
+  // Stage-3 decorators applied to the class declaration (`@Foo`,
+  // `@Foo()`, `@a.b()`). Each entry is the decorator's call /
+  // reference expression in source order. Retained so downstream
+  // tooling (NestJS / TypeORM-style scanners) can inspect them; the
+  // checker does not currently interpret them.
+  decorators : Array[TsExpr]
 } derive(Debug)
 
 ///|
@@ -547,6 +609,12 @@ pub(all) struct TsModule {
   classes : Array[TsClassDecl] // ambient class declarations
   namespaces : Array[TsNamespaceDecl]
   enums : Array[TsEnumDecl]
+  // Ambient module-augmentation entries (`declare module "foo" { ... }`).
+  // Each pair holds the augmented specifier string and the contributed
+  // declarations. The resolver merges the body's interfaces / type
+  // aliases / values into the matching module lookup so user code that
+  // imports from `"foo"` sees the augmented shape.
+  module_augmentations : Array[(String, TsModule)]
 } derive(Debug)
 
 ///|
@@ -556,8 +624,18 @@ pub(all) struct TsImportDecl {
   default_binding : String?
   namespace_binding : String?
   named_bindings : Array[(String, String)] // imported, local
+  // Per-specifier `type` modifier: `import { type X, Y } from "..."`.
+  // Length matches `named_bindings`; entries are `true` when the
+  // imported specifier was prefixed with `type`. When the whole
+  // import is `import type { ... }`, `type_only` covers it and each
+  // entry's flag is `false` (the top-level modifier implies all).
+  named_type_only : Array[Bool]
   side_effect_only : Bool
   type_only : Bool
+  // Import attributes: `import x from "y" with { type: "json" }`
+  // (and the legacy `assert { ... }` form). Each entry is a
+  // `(key, string_value)` pair; non-string values are omitted.
+  attributes : Array[(String, String)]
 } derive(Debug)
 
 ///|

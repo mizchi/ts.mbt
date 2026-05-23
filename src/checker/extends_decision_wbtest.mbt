@@ -1,4 +1,16 @@
 ///|
+test "extends_decision: distinct unique-symbol tags are disjoint" {
+  // Two different occurrences of `unique symbol` should not extend
+  // each other.
+  let a : @ast.TsType = UniqueSymbol("__tsmbt_us_1")
+  let b : @ast.TsType = UniqueSymbol("__tsmbt_us_2")
+  assert_eq(extends_decision(a, b), Some(false))
+  assert_eq(extends_decision(a, a), Some(true))
+  // Either still widens to bare `Symbol`.
+  assert_eq(extends_decision(a, @ast.TsType::Symbol), Some(true))
+}
+
+///|
 test "extends_decision: identity is true" {
   assert_eq(extends_decision(String_, String_), Some(true))
   assert_eq(extends_decision(Number, Number), Some(true))

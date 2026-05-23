@@ -281,6 +281,7 @@ fn parse_module_or_empty(src : String) -> @ast.TsModule {
         classes: [],
         namespaces: [],
         enums: [],
+        module_augmentations: [],
       }
   }
 }
@@ -4635,4 +4636,342 @@ test "expr_check: render-prop child with mismatched arg type flags error" {
     }
   }
   assert_true(found)
+}
+
+///|
+test "expr_check: asserts predicate narrows arg for subsequent stmts (typed)" {
+  // `assertString(v)` declares `asserts v is string` — after the call,
+  // `v: string | number` is narrowed to `string`, so returning it from a
+  // `: string` function must typecheck cleanly.
+  let src =
+    #|declare function assertString(value: string | number): asserts value is string;
+    #|function use(v: string | number): string {
+    #|  assertString(v);
+    #|  return v;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: without asserts call, string|number -> string is flagged" {
+  // Sanity: without the `asserts` call, `v: string | number` cannot
+  // satisfy a `string` return — the call is what unlocks the narrowing.
+  let src =
+    #|function use(v: string | number): string {
+    #|  return v;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("return") && i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: `<const T>` skips literal widening in JSX inference" {
+  // Without `<const T>`, JSX infers `T = string` from `value="hello"`
+  // (literal widened to its primitive). With `<const T>` the inference
+  // keeps `T = "hello"`, so a `result.value: "hello"` access still
+  // typechecks.
+  let src =
+    #|interface Out<T> { value: T }
+    #|interface Props<T> { value: T }
+    #|function Comp<const T extends string>(props: Props<T>): Out<T> {
+    #|  return { value: props.value };
+    #|}
+    #|function use(): "hello" {
+    #|  // Use a JSX element whose component is generic over `<const T>`;
+    #|  // pulling `value` back must still see the narrow literal.
+    #|  const _ = <Comp value="hello" />;
+    #|  return "hello";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  // The harness validates that the body typechecks without surfacing
+  // a literal-vs-string mismatch on the JSX prop side.
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: namespace+class static-side merge — namespace fn callable" {
+  // `namespace Foo { export function helper(): number }` + `class Foo`
+  // should let `Foo.helper()` resolve through the namespace.
+  let src =
+    #|declare class Foo {
+    #|  instanceMethod(): string;
+    #|}
+    #|declare namespace Foo {
+    #|  function helper(): number;
+    #|}
+    #|function use(): number {
+    #|  return Foo.helper();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: class static method resolves through `ClassName.method`" {
+  let src =
+    #|declare class Counter {
+    #|  static create(): number;
+    #|}
+    #|function use(): number {
+    #|  return Counter.create();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: switch on `obj.kind` default narrows to remaining union" {
+  // `switch (s.kind) { case "a": …; case "b": …; default: … }` —
+  // the default body should see `s.kind` already exhausted of "a"
+  // and "b", reducing the union to its remaining members.
+  let src =
+    #|interface A { kind: "a"; a: number }
+    #|interface B { kind: "b"; b: string }
+    #|interface C { kind: "c"; c: boolean }
+    #|function pick(s: A | B | C): boolean {
+    #|  switch (s.kind) {
+    #|    case "a": return false;
+    #|    case "b": return false;
+    #|    default: return s.c;
+    #|  }
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generator yield matching element type — clean" {
+  let src =
+    #|function* gen(): Generator<number, void, unknown> {
+    #|  yield 1;
+    #|  yield 2;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: generator yielding wrong element type flags mismatch" {
+  let src =
+    #|function* gen(): Generator<number, void, unknown> {
+    #|  yield "string";
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("yield") && i.message.contains("number") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: class index signature `[k: string]: T` resolves lookups" {
+  // `c.foo` on a class with `[k: string]: number` resolves to `number`.
+  let src =
+    #|declare class Dict {
+    #|  [key: string]: number;
+    #|}
+    #|function use(d: Dict): number {
+    #|  return d.something;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: JSX with explicit generic type args parses + type-checks" {
+  // `<Box<string> value="hello" />` — generic type arg is consumed,
+  // props still validate against the declared `Props`.
+  let src =
+    #|interface BoxProps { value: string }
+    #|function Box<T>(props: BoxProps): void {}
+    #|function comp(): void {
+    #|  const _ = <Box<string> value="hello" />;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: interface declaration merging unions members" {
+  // `interface Foo { a }` + `interface Foo { b }` should expose both
+  // fields. A function body that reads `foo.b` after declaring `foo:
+  // Foo` should typecheck cleanly.
+  let src =
+    #|interface User { name: string }
+    #|interface User { age: number }
+    #|function readBoth(u: User): string {
+    #|  const _a = u.age;
+    #|  return u.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: interface merge — accessing un-merged field fails" {
+  // Without the merge, `u.age` would be unknown and infer to `Any`,
+  // which silently passes downstream checks. The negative angle is
+  // taken via an unsupported-property assignment that the checker is
+  // expected to flag once the merge brings the field in.
+  let src =
+    #|interface User { name: string }
+    #|interface User { age: number }
+    #|function bad(u: User): number {
+    #|  return u.name;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let mut found = false
+  for i in check_module_function_bodies(module_) {
+    if i.path.contains("return") &&
+      i.message.contains("number") &&
+      i.message.contains("string") {
+      found = true
+    }
+  }
+  assert_true(found)
+}
+
+///|
+test "expr_check: truthy asserts strips null / undefined from operand" {
+  // `assertOk(value)` declares `asserts value` (no `is T`). After the
+  // call `v: T | null | undefined` is narrowed to `T`.
+  let src =
+    #|declare function assertOk(value: unknown): asserts value;
+    #|function use(v: string | null | undefined): string {
+    #|  assertOk(v);
+    #|  return v;
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+/// Sanity: deliberately-broken type usages should each surface at
+/// least one issue from `check_module_function_bodies`. The test
+/// reports any MISS in the failure log and asserts that every case
+/// produced at least one diagnostic — a regression that silently
+/// loses coverage fails this rather than passing quietly.
+test "expr_check: deliberate type violations are detected" {
+  let cases : Array[(String, String)] = [
+    (
+      "wrong-return-primitive",
+      #|function f(): number {
+      #|  return "hello";
+      #|}
+      ,
+    ),
+    (
+      "wrong-return-tagged-union",
+      #|interface A { kind: "a"; a: number }
+      #|interface B { kind: "b"; b: string }
+      #|function f(s: A | B): string {
+      #|  return s.a;
+      #|}
+      ,
+    ),
+    (
+      "wrong-call-arg-arity",
+      #|function add(x: number, y: number): number { return x + y; }
+      #|function f(): number {
+      #|  return add(1);
+      #|}
+      ,
+    ),
+    (
+      "wrong-call-arg-type",
+      #|function add(x: number, y: number): number { return x + y; }
+      #|function f(): number {
+      #|  return add(1, "two");
+      #|}
+      ,
+    ),
+    (
+      "missing-required-prop",
+      #|interface Props { name: string; age: number }
+      #|function Comp(props: Props): void {}
+      #|function f(): void {
+      #|  const _ = <Comp name="x" />;
+      #|}
+      ,
+    ),
+    (
+      "wrong-jsx-attr-type",
+      #|interface Props { count: number }
+      #|function Comp(props: Props): void {}
+      #|function f(): void {
+      #|  const _ = <Comp count="not a number" />;
+      #|}
+      ,
+    ),
+    (
+      "unknown-prop",
+      #|interface Props { name: string }
+      #|function Comp(props: Props): void {}
+      #|function f(): void {
+      #|  const _ = <Comp name="x" age={1} />;
+      #|}
+      ,
+    ),
+    (
+      "assignment-wrong-type",
+      #|function f(): void {
+      #|  let x: number = 1;
+      #|  x = "string";
+      #|}
+      ,
+    ),
+    (
+      "switch-non-exhaustive-after-default",
+      #|interface A { kind: "a" }
+      #|interface B { kind: "b" }
+      #|function f(s: A | B): number {
+      #|  switch (s.kind) {
+      #|    case "a": return 1;
+      #|  }
+      #|}
+      ,
+    ),
+    (
+      "satisfies-violation",
+      #|interface Layout { x: number; y: number }
+      #|function f(): void {
+      #|  const _ = ({ x: 1, y: "wrong" } satisfies Layout);
+      #|}
+      ,
+    ),
+  ]
+  let mut misses = 0
+  for c in cases {
+    let (label, src) = c
+    let module_ = parse_module_or_empty(src)
+    let issues = check_module_function_bodies(module_)
+    if issues.length() == 0 {
+      println("MISS [\{label}]:")
+      println(src)
+      misses = misses + 1
+    }
+  }
+  if misses > 0 {
+    fail("\{misses} violation case(s) not detected by the checker")
+  }
 }

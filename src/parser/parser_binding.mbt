@@ -369,6 +369,11 @@ fn Parser::parse_object_binding_key(self : Parser) -> String raise ParseError {
     IntType => "int"
     Type => "type"
     Extends => "extends"
+    Null => "null"
+    // Boolean literals are valid as object-destructure keys
+    // (e.g. `const { true: a, false: b } = ...`).
+    Bool(true) => "true"
+    Bool(false) => "false"
     k => raise ParseError("Expected object binding key, got \{k}")
   }
 }

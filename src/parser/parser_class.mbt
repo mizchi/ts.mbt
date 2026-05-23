@@ -64,6 +64,7 @@ fn build_runtime_class_decl(
             type_: field_type,
             is_static,
             is_readonly: false,
+            is_accessor: false,
           })
         }
       Method(is_static, Name(method_name), accessor_kind, func) =>
@@ -75,6 +76,7 @@ fn build_runtime_class_decl(
                 type_: func.return_type,
                 is_static,
                 is_readonly: true,
+                is_accessor: false,
               })
             Some("set") => {
               let setter_type = if func.params.length() > 0 {
@@ -87,6 +89,7 @@ fn build_runtime_class_decl(
                 type_: setter_type,
                 is_static,
                 is_readonly: false,
+                is_accessor: false,
               })
             }
             _ => {
@@ -122,8 +125,13 @@ fn build_runtime_class_decl(
     constructor_params,
     properties,
     methods,
+    index_signatures: [],
     is_abstract,
     is_constructible: !is_abstract,
+    // Decorators on runtime classes are attached by the caller via
+    // `Parser::take_pending_decorators` after build returns; the
+    // builder is parser-agnostic so it leaves the slot empty.
+    decorators: [],
   }
 }
 
@@ -381,51 +389,80 @@ fn Parser::is_super_call_stmt(_self : Parser, stmt : @ast.TsStmt) -> Bool {
 //   DecoratorMemberExpression ::= '(' Expression ')'
 //                              | IdentifierReference ('.' IdentifierName)*
 fn Parser::skip_decorator(self : Parser) -> Unit {
+  match (try? self.parse_decorator_expr()) {
+    Ok(Some(expr)) => self.pending_decorators.push(expr)
+    _ => ()
+  }
+}
+
+///|
+/// Parse a single `@expr` decorator and return its expression form so
+/// the caller can attach it to the next declaration. Mirrors the
+/// shape of `skip_decorator` but builds a `TsExpr` instead of
+/// discarding tokens. Returns `None` when the `@` isn't followed by a
+/// recognized decorator head — keeps the existing permissive
+/// recovery.
+fn Parser::parse_decorator_expr(
+  self : Parser,
+) -> @ast.TsExpr? raise ParseError {
   let _ = self.match_(At)
-  match self.peek().kind {
+  let head : @ast.TsExpr = match self.peek().kind {
     LParen => {
-      // Parenthesized expression form: `@(expr)`
+      // `@(expr)` form. Use the standard parenthesized-expression
+      // parser so the captured expression is faithful.
       let _ = self.advance()
-      let mut depth = 1
-      while depth > 0 && !self.check(Eof) {
-        match self.peek().kind {
-          LParen => depth += 1
-          RParen => depth -= 1
-          _ => ()
-        }
-        let _ = self.advance()
-      }
+      let inner = self.parse_assignment()
+      let _ = self.expect(RParen)
+      inner
     }
     Ident(_) => {
-      let _ = self.advance()
-      // Member access chain `a.b.c`
+      let name = self.parse_binding_ident()
+      let mut expr : @ast.TsExpr = Var(name)
+      // Member access chain `@a.b.c`.
       while self.check(Dot) {
         let _ = self.advance()
         match self.peek().kind {
-          Ident(_) => {
+          Ident(prop) => {
             let _ = self.advance()
+            expr = PropAccess(expr, prop)
           }
           _ => break
         }
       }
+      expr
     }
-    _ => return
+    _ => return None
   }
-  // Optional call arguments. Decorators may take a single Arguments list
-  // (e.g. `@deco(arg1, arg2)`). No type arguments are valid here per TS
-  // grammar, so we only consume `(...)`.
+  // Optional call form `@a(b, c)`.
   if self.check(LParen) {
     let _ = self.advance()
-    let mut paren_depth = 1
-    while paren_depth > 0 && !self.check(Eof) {
-      match self.peek().kind {
-        LParen => paren_depth += 1
-        RParen => paren_depth -= 1
-        _ => ()
+    let args : Array[@ast.TsExpr] = []
+    if !self.check(RParen) {
+      args.push(self.parse_assignment())
+      while self.match_(Comma) {
+        if self.check(RParen) {
+          break
+        }
+        args.push(self.parse_assignment())
       }
-      let _ = self.advance()
     }
+    let _ = self.expect(RParen)
+    return Some(CallExpr(head, args))
   }
+  Some(head)
+}
+
+///|
+/// Drain any decorators accumulated via `skip_decorator` since the
+/// last drain. Class parsers call this just before constructing the
+/// `TsClassDecl` so the decorators end up on the right declaration.
+fn Parser::take_pending_decorators(self : Parser) -> Array[@ast.TsExpr] {
+  let out : Array[@ast.TsExpr] = []
+  for d in self.pending_decorators {
+    out.push(d)
+  }
+  self.pending_decorators.clear()
+  out
 }
 
 ///|
@@ -474,6 +511,7 @@ fn Parser::inject_instance_field_assigns(
     params: func.params,
     return_type: func.return_type,
     body: { stmts: new_stmts },
+    const_type_params: [],
     is_generator: func.is_generator,
     is_async: func.is_async,
   }
@@ -608,6 +646,7 @@ fn Parser::parse_class_body(
       let func : @ast.TsFunc = {
         name: method_name,
         type_params: [],
+        const_type_params: [],
         params,
         return_type,
         body,
@@ -699,6 +738,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [],
             return_type: @ast.TsType::Any,
             body: throw_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }),
@@ -708,19 +748,32 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     None => ()
   }
   let tmp_name = if class_name == "" { "<anon>" } else { class_name }
-  self.last_runtime_class_decl = Some(
-    build_runtime_class_decl(
-      if class_name == "" {
-        "<class>"
-      } else {
-        class_name
-      },
-      class_type_params,
-      ctor_opt,
-      elements,
-      false,
-    ),
+  let runtime_decl = build_runtime_class_decl(
+    if class_name == "" {
+      "<class>"
+    } else {
+      class_name
+    },
+    class_type_params,
+    ctor_opt,
+    elements,
+    false,
   )
+  // Attach any decorators accumulated via `skip_decorator` before this
+  // class statement.
+  let decorated : @ast.TsClassDecl = {
+    name: runtime_decl.name,
+    type_params: runtime_decl.type_params,
+    base_names: runtime_decl.base_names,
+    constructor_params: runtime_decl.constructor_params,
+    properties: runtime_decl.properties,
+    methods: runtime_decl.methods,
+    index_signatures: runtime_decl.index_signatures,
+    is_abstract: runtime_decl.is_abstract,
+    is_constructible: runtime_decl.is_constructible,
+    decorators: self.take_pending_decorators(),
+  }
+  self.last_runtime_class_decl = Some(decorated)
   let instance_assigns : Array[@ast.TsStmt] = []
   let has_instance_private = has_instance_private_elements(elements)
   let has_static_private = has_static_private_elements(elements)
@@ -823,6 +876,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [rest_param],
             return_type: Any,
             body: empty_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }
@@ -835,6 +889,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             params: [],
             return_type: Any,
             body: empty_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }
@@ -1084,6 +1139,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           params: [],
           return_type: @ast.TsType::Any,
           body: block,
+          const_type_params: [],
           is_generator: false,
           is_async: false,
         })
@@ -1103,6 +1159,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       params: [],
       return_type: @ast.TsType::Any,
       body: @ast.TsBlock::{ stmts, },
+      const_type_params: [],
       is_generator: false,
       is_async: false,
     }),
@@ -1265,6 +1322,7 @@ fn Parser::parse_class_decl_with_abstract(
             params: [rest_param],
             return_type: Any,
             body: empty_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }
@@ -1277,6 +1335,7 @@ fn Parser::parse_class_decl_with_abstract(
             params: [],
             return_type: Any,
             body: empty_body,
+            const_type_params: [],
             is_generator: false,
             is_async: false,
           }
@@ -1517,6 +1576,7 @@ fn Parser::parse_class_decl_with_abstract(
           params: [],
           return_type: @ast.TsType::Any,
           body: block,
+          const_type_params: [],
           is_generator: false,
           is_async: false,
         })
@@ -1546,6 +1606,7 @@ fn Parser::parse_class_decl_with_abstract(
         params: [],
         return_type: @ast.TsType::Any,
         body: @ast.TsBlock::{ stmts: internal_stmts },
+        const_type_params: [],
         is_generator: false,
         is_async: false,
       }),

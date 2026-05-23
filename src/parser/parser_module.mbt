@@ -58,9 +58,21 @@ fn Parser::next_temp(self : Parser, prefix : String) -> String {
 fn Parser::parse_named_imports(
   self : Parser,
 ) -> Array[(String, String)] raise ParseError {
+  let (items, _) = self.parse_named_imports_with_type_flags()
+  items
+}
+
+///|
+/// Same as `parse_named_imports`, but additionally reports whether each
+/// specifier was prefixed with `type` (`import { type X, Y }`). The two
+/// arrays are aligned positionally.
+fn Parser::parse_named_imports_with_type_flags(
+  self : Parser,
+) -> (Array[(String, String)], Array[Bool]) raise ParseError {
   let items : Array[(String, String)] = []
+  let type_flags : Array[Bool] = []
   while !self.check(RBrace) {
-    let _ = self.maybe_match_type_modifier()
+    let is_type = self.maybe_match_type_modifier()
     let imported = self.parse_binding_ident()
     let local_name = if self.match_(As) || self.match_ident("as") {
       self.parse_binding_ident()
@@ -68,6 +80,7 @@ fn Parser::parse_named_imports(
       imported
     }
     items.push((imported, local_name))
+    type_flags.push(is_type)
     if self.match_(Comma) {
       if self.check(RBrace) {
         break
@@ -76,7 +89,7 @@ fn Parser::parse_named_imports(
     }
     break
   }
-  items
+  (items, type_flags)
 }
 
 ///|
@@ -123,6 +136,7 @@ fn empty_ts_module() -> @ast.TsModule {
     classes: [],
     namespaces: [],
     enums: [],
+    module_augmentations: [],
   }
 }
 
@@ -336,18 +350,32 @@ fn parse_ambient_external_module_source(
 fn Parser::parse_ambient_external_module_decl(
   self : Parser,
 ) -> @ast.TsModule? raise ParseError {
+  match self.parse_ambient_external_module_decl_with_spec() {
+    Some((_, m)) => Some(m)
+    None => None
+  }
+}
+
+///|
+/// Same as `parse_ambient_external_module_decl` but also returns the
+/// declared module specifier string. Used by the top-level parse loop
+/// to record `(spec, body)` augmentation entries on the surrounding
+/// `TsModule`.
+fn Parser::parse_ambient_external_module_decl_with_spec(
+  self : Parser,
+) -> (String, @ast.TsModule)? raise ParseError {
   if !self.match_ident("module") {
     return None
   }
   match self.peek().kind {
     Str(_) => {
-      let _ = self.expect_str_literal()
+      let spec = self.expect_str_literal()
       if self.check(LBrace) {
         let body_source = self.parse_declaration_block_source()
-        Some(parse_ambient_external_module_source(body_source))
+        Some((spec, parse_ambient_external_module_source(body_source)))
       } else {
         self.skip_declaration_block()
-        Some(empty_ts_module())
+        Some((spec, empty_ts_module()))
       }
     }
     _ => None
@@ -486,14 +514,19 @@ fn Parser::parse_namespace_decl_with_mode(
       let module_ = if body_source.trim() == "" {
         empty_ts_module()
       } else if body_is_ambient {
-        let parser = Parser::from_source(body_source)
+        // Inherit JSX permission from the outer parser so `<T>expr`
+        // type assertions inside a `.ts` (non-JSX) source don't get
+        // misread as JSX element starts.
+        let parser = Parser::from_source_with_jsx(body_source, self.allow_jsx)
         parser.parse_module_with_seeded_const_values_internal({}, true)
       } else {
         // Runtime first, ambient fallback. This lets us parse runtime
         // namespaces in `.ts` files (with class method bodies) without
         // breaking .d.ts files that route through here via `parse_export`
         // helpers.
-        let runtime_parser = Parser::from_source(body_source)
+        let runtime_parser = Parser::from_source_with_jsx(
+          body_source, self.allow_jsx,
+        )
         match
           (try? runtime_parser.parse_module_with_seeded_const_values_internal(
             {},
@@ -501,7 +534,9 @@ fn Parser::parse_namespace_decl_with_mode(
           )) {
           Ok(module_) => module_
           Err(_) => {
-            let ambient_parser = Parser::from_source(body_source)
+            let ambient_parser = Parser::from_source_with_jsx(
+              body_source, self.allow_jsx,
+            )
             ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
               true,
@@ -561,8 +596,10 @@ fn Parser::parse_import_equals_decl(
     default_binding: None,
     namespace_binding: Some(local_name),
     named_bindings: [],
+    named_type_only: [],
     side_effect_only: false,
     type_only: false,
+    attributes: [],
   }
 }
 
@@ -1849,15 +1886,17 @@ fn Parser::parse_import_decl(
   match self.peek().kind {
     Str(_) => {
       let module_spec = self.expect_str_literal()
-      self.skip_import_attributes()
+      let attributes = self.parse_import_attributes()
       self.consume_semicolon()
       return {
         module_spec,
         default_binding: None,
         namespace_binding: None,
         named_bindings: [],
+        named_type_only: [],
         side_effect_only: true,
         type_only,
+        attributes,
       }
     }
     _ => ()
@@ -1865,6 +1904,7 @@ fn Parser::parse_import_decl(
   let mut default_binding : String? = None
   let mut namespace_binding : String? = None
   let named_bindings : Array[(String, String)] = []
+  let named_type_only : Array[Bool] = []
   match self.peek().kind {
     Ident(_) =>
       if !type_only && self.peek_at(1).kind == Eq {
@@ -1880,15 +1920,17 @@ fn Parser::parse_import_decl(
     } else {
       self.expect_from()
       let module_spec = self.expect_str_literal()
-      self.skip_import_attributes()
+      let attributes = self.parse_import_attributes()
       self.consume_semicolon()
       return {
         module_spec,
         default_binding,
         namespace_binding: None,
         named_bindings,
+        named_type_only,
         side_effect_only: false,
         type_only,
+        attributes,
       }
     }
   }
@@ -1898,34 +1940,110 @@ fn Parser::parse_import_decl(
     }
     namespace_binding = Some(self.parse_binding_ident())
   } else if self.match_(LBrace) {
-    let items = self.parse_named_imports()
+    let (items, type_flags) = self.parse_named_imports_with_type_flags()
     for item in items {
       named_bindings.push(item)
+    }
+    for f in type_flags {
+      named_type_only.push(f)
     }
     let _ = self.expect(RBrace)
   }
   self.expect_from()
   let module_spec = self.expect_str_literal()
-  self.skip_import_attributes()
+  let attributes = self.parse_import_attributes()
   self.consume_semicolon()
   {
     module_spec,
     default_binding,
     namespace_binding,
     named_bindings,
+    named_type_only,
     side_effect_only: false,
     type_only,
+    attributes,
   }
 }
 
 ///|
 fn Parser::skip_import_attributes(self : Parser) -> Unit {
+  let _ = self.parse_import_attributes()
+
+}
+
+///|
+/// Parse `with { key: "value", ... }` (or the legacy `assert { ... }`)
+/// attribute object on an import declaration. Returns each
+/// `(key, string_value)` pair in source order. Non-string values are
+/// silently dropped — the spec only defines string-valued attributes
+/// today.
+fn Parser::parse_import_attributes(
+  self : Parser,
+) -> Array[(String, String)] {
+  let out : Array[(String, String)] = []
   if !(self.match_(With) || self.match_ident("assert")) {
-    return
+    return out
   }
-  if self.check(LBrace) {
-    self.skip_object_type()
+  if !self.check(LBrace) {
+    return out
   }
+  let _ = self.advance() // consume `{`
+  let mut depth = 1
+  while depth > 0 && !self.check(Eof) {
+    // Key: identifier or string literal.
+    let key_opt : String? = match self.peek().kind {
+      Ident(name) => {
+        let _ = self.advance()
+        Some(name)
+      }
+      // `type` is a reserved keyword that's still valid as an import
+      // attribute key (e.g. `with { type: "json" }`).
+      Type => {
+        let _ = self.advance()
+        Some("type")
+      }
+      Str(s) => {
+        let _ = self.advance()
+        Some(s)
+      }
+      RBrace => {
+        let _ = self.advance()
+        depth -= 1
+        continue
+      }
+      _ => {
+        let _ = self.advance()
+        None
+      }
+    }
+    match key_opt {
+      Some(key) =>
+        if self.match_(Colon) {
+          match self.peek().kind {
+            Str(value) => {
+              let _ = self.advance()
+              out.push((key, value))
+            }
+            _ => {
+              // unknown value shape — skip token
+              let _ = self.advance()
+            }
+          }
+        }
+      None => ()
+    }
+    if !self.match_(Comma) {
+      // Expect closing `}` next (or another key if no comma).
+      match self.peek().kind {
+        RBrace => {
+          let _ = self.advance()
+          depth -= 1
+        }
+        _ => ()
+      }
+    }
+  }
+  out
 }
 
 ///|
@@ -2717,6 +2835,15 @@ fn Parser::parse_export_stmt(
     collect_value_decls_from_stmt(stmt, values, const_values)
     return
   }
+  // ES2023 `using` / `await using` declarations at the module export
+  // position. The body parses via the regular statement-level
+  // `using` path (which builds an effective `Let(...)` binding).
+  if self.is_using_declaration_start() || self.is_await_using_declaration_start() {
+    let stmt = self.parse_stmt()
+    collect_static_const_exprs_from_stmt(stmt, const_values)
+    collect_value_decls_from_stmt(stmt, values, const_values)
+    return
+  }
   raise ParseError("Unsupported export statement")
 }
 
@@ -2736,6 +2863,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   let classes : Array[@ast.TsClassDecl] = []
   let namespaces : Array[@ast.TsNamespaceDecl] = []
   let enums : Array[@ast.TsEnumDecl] = []
+  let module_augmentations : Array[(String, @ast.TsModule)] = []
   let const_values : Map[String, @ast.TsExpr] = {}
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
@@ -2822,12 +2950,21 @@ fn Parser::parse_module_with_seeded_const_values_internal(
               Str(_) => true
               _ => false
             }) {
-            match self.parse_ambient_external_module_decl() {
-              Some(module_) =>
+            match self.parse_ambient_external_module_decl_with_spec() {
+              Some((spec, module_)) => {
+                // Record the augmentation so downstream resolvers can
+                // merge it into the imported module's surface; also
+                // append the declarations into the surrounding scope
+                // (TS's "module augmentation extends the surrounding
+                // declaration file" behavior) so existing flows that
+                // don't consult the augmentation list still see the
+                // members.
+                module_augmentations.push((spec, module_))
                 append_module_decls(
                   module_, funcs, interfaces, type_aliases, imports, values, classes,
                   namespaces, enums,
                 )
+              }
               None => ()
             }
           } else if name == "namespace" ||
@@ -2926,6 +3063,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
     classes,
     namespaces,
     enums,
+    module_augmentations,
   }
 }
 

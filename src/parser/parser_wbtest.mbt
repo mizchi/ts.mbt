@@ -661,6 +661,102 @@ test "parser: parse literal-key mapped object type as fields" {
 }
 
 ///|
+test "parser: parse constructor type `new (...) => T`" {
+  let parser = Parser::from_source("new (x: string) => Foo")
+  assert_eq(
+    parser.parse_type(),
+    Constructor([String_], Named("Foo"), false),
+  )
+}
+
+///|
+test "parser: parse abstract constructor type" {
+  let parser = Parser::from_source("abstract new (x: string) => Foo")
+  assert_eq(
+    parser.parse_type(),
+    Constructor([String_], Named("Foo"), true),
+  )
+}
+
+///|
+test "parser: parse variadic tuple type with rest element" {
+  let parser = Parser::from_source("[string, ...number[]]")
+  assert_eq(
+    parser.parse_type(),
+    Tuple([String_, Rest(Array(Number))]),
+  )
+}
+
+///|
+test "parser: parse leading rest variadic tuple" {
+  let parser = Parser::from_source("[...string[], number]")
+  assert_eq(
+    parser.parse_type(),
+    Tuple([Rest(Array(String_)), Number]),
+  )
+}
+
+///|
+test "parser: parse labeled tuple drops labels, keeps shape" {
+  // Labels are TS-only structural metadata. `[name: string, age: number]`
+  // is structurally identical to `[string, number]`.
+  let parser = Parser::from_source("[name: string, age: number]")
+  assert_eq(parser.parse_type(), Tuple([String_, Number]))
+}
+
+///|
+test "parser: parse labeled tuple with optional label" {
+  let parser = Parser::from_source("[name: string, age?: number]")
+  assert_eq(parser.parse_type(), Tuple([String_, Union([Number, Undefined])]))
+}
+
+///|
+test "parser: parse labeled rest tuple element" {
+  let parser = Parser::from_source("[name: string, ...rest: number[]]")
+  assert_eq(parser.parse_type(), Tuple([String_, Rest(Array(Number))]))
+}
+
+///|
+test "parser: parse mapped type with `as` key remap" {
+  // Literal-source mapped type with a template-literal remap. After parse
+  // we don't simplify, so the variant must survive intact for the checker
+  // pass to materialize.
+  let parser = Parser::from_source(
+    "{ [K in \"a\" | \"b\" as `get${Capitalize<K>}`]: number }",
+  )
+  let parsed = parser.parse_type()
+  match parsed {
+    MappedTypeRemap(
+      "K",
+      Union([Literal("a"), Literal("b")]),
+      TemplateLiteralType(_, _),
+      Number,
+      false
+    ) => ()
+    other => fail("expected MappedTypeRemap, got \{other}")
+  }
+}
+
+///|
+test "parser: parse mapped type with `as` filtering via never" {
+  let parser = Parser::from_source(
+    "{ [K in \"a\" | \"b\" | \"c\" as K extends \"b\" ? never : K]: number }",
+  )
+  let parsed = parser.parse_type()
+  match parsed {
+    MappedTypeRemap(
+      "K",
+      Union(_),
+      Conditional(_, _, Never, Named("K")),
+      Number,
+      false
+    ) => ()
+    other =>
+      fail("expected MappedTypeRemap with conditional remap, got \{other}")
+  }
+}
+
+///|
 test "parser: parse array literal" {
   let parser = Parser::from_source("[1, 2, 3]")
   let expr = parser.parse_expr()
@@ -2162,6 +2258,146 @@ test "parser: parse class type predicate methods as type predicates" {
     TypePredicate("this", Applied("Err", _)) => ()
     other => fail("expected isErr to return `this is Err<T, E>`, got \{other}")
   }
+}
+
+///|
+test "parser: parse asserts predicate functions" {
+  let src =
+    #|export declare function assertString(value: unknown): asserts value is string;
+    #|export declare function assertOk(value: unknown): asserts value;
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.imports.length(), 2)
+  // `asserts value is string` — typed assertion.
+  match module_.imports[0].return_type {
+    AssertsPredicate("value", Some(String_)) => ()
+    other =>
+      fail("expected `asserts value is string`, got \{other}")
+  }
+  // `asserts value` — truthy assertion, no type payload.
+  match module_.imports[1].return_type {
+    AssertsPredicate("value", None) => ()
+    other => fail("expected `asserts value`, got \{other}")
+  }
+}
+
+///|
+test "parser: retain class-level decorators in TsClassDecl" {
+  let src =
+    #|@Injectable()
+    #|@deco.factory(arg)
+    #|export declare class UserService {
+    #|  find(id: number): string;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.classes.length(), 1)
+  let cls = module_.classes[0]
+  assert_eq(cls.name, "UserService")
+  assert_eq(cls.decorators.length(), 2)
+  match cls.decorators[0] {
+    CallExpr(Var("Injectable"), _) => ()
+    other => fail("expected `@Injectable()`, got \{other}")
+  }
+  match cls.decorators[1] {
+    CallExpr(PropAccess(Var("deco"), "factory"), args) =>
+      assert_eq(args.length(), 1)
+    other => fail("expected `@deco.factory(arg)`, got \{other}")
+  }
+}
+
+///|
+test "parser: retain `declare module \"X\" { ... }` as augmentation entry" {
+  let src =
+    #|declare module "express" {
+    #|  interface Request {
+    #|    user: { id: number };
+    #|  }
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.module_augmentations.length(), 1)
+  let (spec, body) = module_.module_augmentations[0]
+  assert_eq(spec, "express")
+  assert_eq(body.interfaces.length(), 1)
+  assert_eq(body.interfaces[0].name, "Request")
+  // The augmentation members are *also* appended to the surrounding
+  // scope (existing behavior), so consumers without augmentation
+  // awareness still see them.
+  let found = module_.interfaces.iter().any(fn(i) { i.name == "Request" })
+  assert_true(found)
+}
+
+///|
+test "parser: parse dynamic import with options retains the second arg" {
+  // `import("./data.json", { with: { type: "json" } })` should parse
+  // with both arguments captured.
+  let parser = Parser::from_source(
+    #|import("./data.json", { with: { type: "json" } })
+    ,
+  )
+  let expr = parser.parse_expr()
+  match expr {
+    DynamicImport(StringLit("./data.json"), Some(_)) => ()
+    other => fail("expected dynamic import with options, got \{other}")
+  }
+}
+
+///|
+test "parser: parse dynamic import without options keeps slot empty" {
+  let parser = Parser::from_source("import(\"./mod\")")
+  let expr = parser.parse_expr()
+  match expr {
+    DynamicImport(StringLit("./mod"), None) => ()
+    other => fail("expected bare dynamic import, got \{other}")
+  }
+}
+
+///|
+test "parser: parse import attributes (`with { type: \"json\" }`)" {
+  let src =
+    #|import data from "./data.json" with { type: "json" };
+  let parser = Parser::from_source(src)
+  let block = parser.parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(block.imports.length(), 1)
+  let imp = block.imports[0]
+  assert_eq(imp.module_spec, "./data.json")
+  assert_eq(imp.attributes, [("type", "json")])
+}
+
+///|
+test "parser: parse per-specifier type modifier on named imports" {
+  let src =
+    #|import { type Foo, Bar, type Baz } from "./mod";
+  let parser = Parser::from_source(src)
+  let block = parser.parse_module_block() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(block.imports.length(), 1)
+  let imp = block.imports[0]
+  assert_eq(imp.named_bindings, [("Foo", "Foo"), ("Bar", "Bar"), ("Baz", "Baz")])
+  assert_eq(imp.named_type_only, [true, false, true])
+  assert_false(imp.type_only)
 }
 
 ///|
@@ -6646,4 +6882,95 @@ test "parser: export namespace with runtime class body" {
   assert_eq(module_.namespaces[0].name, "ScriptSnapshot")
   assert_eq(module_.interfaces.length(), 1)
   assert_eq(module_.interfaces[0].name, "PreProcessed")
+}
+///|
+test "parser: numeric property name in interface body" {
+  let src =
+    #|interface T2 {
+    #|    1?: Base;
+    #|}
+  let _ = Parser::from_source(src).parse_module() catch {
+    e => fail("parse err: \{e}")
+  }
+}
+
+///|
+test "parser: namespace body inherits non-JSX from outer parser" {
+  // `<Derived>null` inside a `.ts` (non-JSX) namespace body used to
+  // round-trip through `Parser::from_source` (default JSX-on), which
+  // interpreted the type assertion as a JSX element start and tripped
+  // an unterminated-brace error. The namespace parser now propagates
+  // `allow_jsx` so the inner parse uses the outer's setting.
+  let src =
+    #|namespace TwoLevels {
+    #|    var b = { Foo: <Derived>null };
+    #|}
+  let _ = Parser::from_source_with_jsx(src, false).parse_module() catch {
+    e => fail("\{e}")
+  }
+}
+
+///|
+test "parser: retain `<const T>` const modifier on function type params" {
+  // `function foo<const T>(x: T): T { return x; }` — the `const`
+  // modifier flips the matching entry on `func.const_type_params` to
+  // `true`. The other parameters stay `false`.
+  let src =
+    #|function foo<const T, U>(x: T, y: U): T {
+    #|  return x;
+    #|}
+  let module_ = Parser::from_source(src).parse_module() catch {
+    e => {
+      fail("Parse error: \{e}")
+      return
+    }
+  }
+  assert_eq(module_.funcs.length(), 1)
+  let f = module_.funcs[0]
+  assert_eq(f.type_params, ["T", "U"])
+  assert_eq(f.const_type_params, [true, false])
+}
+
+///|
+test "parser: parse `export using` declaration at module level" {
+  // ES2023 `using` extends to the module-level export position.
+  let src =
+    #|export using x = null;
+  let _ = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
+}
+
+///|
+test "parser: parse `export await using` declaration at module level" {
+  let src =
+    #|export await using x = null;
+  let _ = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
+}
+
+///|
+test "parser: `declare` accepted as soft keyword in value positions" {
+  // TypeScript's own harness uses `declare` as a variable name,
+  // arrow-param, and labeled-tuple element. The parser accepts all
+  // those positions.
+  let cases = [
+    "const x = declare;",
+    "const f = (declare) => declare;",
+    "const [declare] = args;",
+    "type T = [declare: AmdModuleDeclaration];",
+    #|interface F { register(declare: SystemModuleRegisterCallback): void; }
+    ,
+  ]
+  for src in cases {
+    let _ = Parser::from_source(src).parse_module() catch {
+      e => fail("\{src} : \{e}")
+    }
+  }
+}
+
+///|
+test "parser: boolean-literal object destructure keys" {
+  // `const { true: a, false: b } = source` — `true` / `false` are
+  // valid object destructure keys (used in TS's own compiler).
+  let src =
+    #|const { true: metadata, false: decorators } = source;
+  let _ = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
 }
