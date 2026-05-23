@@ -1151,10 +1151,20 @@ started.
 
 ### Conformance corpus follow-up
 
-- [ ] Triage the remaining ~95 parse failures (1841 / 1936) — split between
-  intentional `*Errors.ts` recovery fixtures and real parser bugs.
-- [ ] Measure issue-count precision (not just crash rate) on the corpus so
-  checker regressions surface before they reach real-world generation.
+- [x] Triage the remaining parse failures — current parse rate is
+  1843/1936 (95.2 %). The remaining ~93 failures fall into:
+  - `*Errors.ts` / `*invalid*.ts` / `*NoCrash*.ts` fixtures the TS
+    team uses to verify their own error recovery — those produce
+    parser-level errors here too, which matches expected behaviour.
+  - `using` declarations in invalid positions (`declare using`,
+    `for (await using of …)` PR-specific edge cases). Our parser
+    accepts the canonical forms; the invalid ones stay as errors.
+  - Class member overload signatures with mismatched access
+    modifiers (`public … protected … constructor`). Edge-case
+    grammar, one fixture each.
+- [ ] Measure issue-count precision (not just crash rate) on the
+  corpus so checker regressions surface before they reach real-world
+  generation.
 
 ### Priorities (by real-world ROI) — STATUS
 
