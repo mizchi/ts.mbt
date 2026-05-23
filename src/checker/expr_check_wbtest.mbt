@@ -2366,3 +2366,199 @@ test "expr_check: arrow return type annotation flows into Func result" {
   let issues = check_module_function_bodies(module_)
   assert_eq(issues.length(), 0)
 }
+
+// ---------------------------------------------------------------------------
+// Round 22: `String.prototype.*` built-ins.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: s.length is number" {
+  let src =
+    #|function f(s: string): number {
+    #|  return s.length;
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.toUpperCase returns string" {
+  let src =
+    #|function f(s: string): string {
+    #|  return s.toUpperCase();
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.startsWith returns boolean" {
+  let src =
+    #|function f(s: string): boolean {
+    #|  return s.startsWith("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.split returns string[]" {
+  let src =
+    #|function f(s: string): string[] {
+    #|  return s.split(",");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.charAt rejects non-number arg" {
+  let src =
+    #|function f(s: string): string {
+    #|  return s.charAt("x");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("number") && i.message.contains("string") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.at returns string | undefined" {
+  let src =
+    #|function f(s: string): string {
+    #|  return s.at(0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("undefined") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.replace returns string" {
+  let src =
+    #|function f(s: string): string {
+    #|  return s.replace("a", "b");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: s.includes works on string-literal receiver too" {
+  // Literal string subtypes inherit the same prototype shape via
+  // `Literal(_) => string_prototype_member(...)`.
+  let src =
+    #|function f(): boolean {
+    #|  return "hello".includes("ll");
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 23: `Promise.prototype.*` chain methods. `.then(cb)` flows the
+// callback's body / inner-promise type into the result `Promise<U>`.
+// ---------------------------------------------------------------------------
+
+///|
+test "expr_check: promise.then flows callback return into Promise<U>" {
+  let src =
+    #|function f(p: Promise<number>): Promise<string> {
+    #|  return p.then(x => x.toString());
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: promise.then flattens nested Promise<Promise<U>>" {
+  // Callback returns Promise<string>; chaining flattens to Promise<string>
+  // rather than Promise<Promise<string>>.
+  let src =
+    #|declare function asyncOf(x: number): Promise<string>;
+    #|function f(p: Promise<number>): Promise<string> {
+    #|  return p.then(x => asyncOf(x));
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  assert_eq(issues.length(), 0)
+}
+
+///|
+test "expr_check: promise.then mismatch when callback returns wrong type" {
+  let src =
+    #|function f(p: Promise<number>): Promise<string> {
+    #|  return p.then(x => x + 1);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let mut found = false
+      for i in issues {
+        if i.message.contains("string") && i.message.contains("number") {
+          found = true
+        }
+      }
+      assert_true(found)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: promise.catch preserves resolved type" {
+  let src =
+    #|function f(p: Promise<number>): Promise<number> {
+    #|  return p.catch(_ => 0);
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: promise.finally preserves resolved type" {
+  let src =
+    #|function f(p: Promise<number>): Promise<number> {
+    #|  return p.finally(() => {});
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => assert_eq(check_function_body(f).length(), 0)
+    None => fail("function f not found")
+  }
+}

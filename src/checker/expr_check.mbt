@@ -445,6 +445,8 @@ fn Resolver::lookup_field(
     Array(elem) => array_prototype_member(elem, field)
     Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
       array_prototype_member(elem, field)
+    Applied("Promise", [inner]) | Applied("PromiseLike", [inner]) =>
+      promise_prototype_member(inner, field)
     Tuple(items) =>
       // Numeric field on a tuple → that element type.
       match (try? @strconv.parse_int(field)) {
@@ -455,11 +457,97 @@ fn Resolver::lookup_field(
             _ => None
           }
       }
-    String_ | Literal(_) =>
-      match field {
-        "length" => Some(@ast.TsType::Number)
-        _ => None
-      }
+    String_ | Literal(_) => string_prototype_member(field)
+    _ => None
+  }
+}
+
+///|
+/// Well-known `Promise.prototype.*` members. `inner` is the resolved-value
+/// type (the `T` in `Promise<T>`). The chainable `then` / `catch` /
+/// `finally` methods need callback-driven inference for the result type;
+/// they're handled in `infer_expr.MethodCall` so the result `Promise<U>`
+/// reflects the callback's body, similar to `Array.prototype.map`.
+fn promise_prototype_member(
+  inner : @ast.TsType,
+  field : String,
+) -> @ast.TsType? {
+  let promise_t = @ast.TsType::Applied("Promise", [inner])
+  match field {
+    // Chain methods — return promise-typed; the call-site path
+    // substitutes the callback's return.
+    "then" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([inner], @ast.TsType::Any)],
+          promise_t,
+        ),
+      )
+    "catch" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Func([@ast.TsType::Any], @ast.TsType::Any)],
+          promise_t,
+        ),
+      )
+    "finally" =>
+      Some(@ast.TsType::Func([@ast.TsType::Func([], @ast.TsType::Void)], promise_t))
+    _ => None
+  }
+}
+
+///|
+/// Well-known `String.prototype.*` members. Strings are immutable in JS so
+/// every "mutating-looking" method returns a new string rather than
+/// modifying the receiver. We expose the most commonly used ones with
+/// concrete `Func(...)` signatures.
+fn string_prototype_member(field : String) -> @ast.TsType? {
+  let s = @ast.TsType::String_
+  let n = @ast.TsType::Number
+  let b = @ast.TsType::Boolean
+  let str_arr = @ast.TsType::Array(s)
+  match field {
+    // Properties
+    "length" => Some(n)
+    // Char access
+    "charAt" => Some(@ast.TsType::Func([n], s))
+    "charCodeAt" => Some(@ast.TsType::Func([n], n))
+    "codePointAt" => Some(@ast.TsType::Func([n], n))
+    "at" => Some(@ast.TsType::Func([n], narrow_union(s, @ast.TsType::Undefined)))
+    // Search
+    "indexOf" => Some(@ast.TsType::Func([s, n], n))
+    "lastIndexOf" => Some(@ast.TsType::Func([s, n], n))
+    "includes" => Some(@ast.TsType::Func([s], b))
+    "startsWith" => Some(@ast.TsType::Func([s], b))
+    "endsWith" => Some(@ast.TsType::Func([s], b))
+    "search" => Some(@ast.TsType::Func([s], n))
+    "match" => Some(@ast.TsType::Func([s], narrow_union(str_arr, @ast.TsType::Null)))
+    "matchAll" => Some(@ast.TsType::Func([s], str_arr))
+    // Transformation (returns string)
+    "slice" => Some(@ast.TsType::Func([n, n], s))
+    "substring" => Some(@ast.TsType::Func([n, n], s))
+    "substr" => Some(@ast.TsType::Func([n, n], s))
+    "replace" => Some(@ast.TsType::Func([s, s], s))
+    "replaceAll" => Some(@ast.TsType::Func([s, s], s))
+    "toLowerCase" => Some(@ast.TsType::Func([], s))
+    "toUpperCase" => Some(@ast.TsType::Func([], s))
+    "toLocaleLowerCase" => Some(@ast.TsType::Func([], s))
+    "toLocaleUpperCase" => Some(@ast.TsType::Func([], s))
+    "trim" => Some(@ast.TsType::Func([], s))
+    "trimStart" => Some(@ast.TsType::Func([], s))
+    "trimEnd" => Some(@ast.TsType::Func([], s))
+    "padStart" => Some(@ast.TsType::Func([n, s], s))
+    "padEnd" => Some(@ast.TsType::Func([n, s], s))
+    "repeat" => Some(@ast.TsType::Func([n], s))
+    "normalize" => Some(@ast.TsType::Func([s], s))
+    "concat" => Some(@ast.TsType::Func([s], s))
+    // Splitting
+    "split" => Some(@ast.TsType::Func([s], str_arr))
+    // Conversion
+    "toString" => Some(@ast.TsType::Func([], s))
+    "valueOf" => Some(@ast.TsType::Func([], s))
+    // Comparison
+    "localeCompare" => Some(@ast.TsType::Func([s], n))
     _ => None
   }
 }
@@ -820,6 +908,28 @@ fn infer_expr(
             }
           }
         }
+        _ => ()
+      }
+      // `promise.then(cb)` — flow the callback's body return into the
+      // result `Promise<U>`. If the callback returns a `Promise<V>`,
+      // flatten it (chaining): the chain produces `Promise<V>`.
+      let promise_inner_opt = match resolver.unwrap(recv_ty) {
+        Applied("Promise", [t]) | Applied("PromiseLike", [t]) => Some(t)
+        _ => None
+      }
+      match (promise_inner_opt, method, args) {
+        (Some(inner), "then", [cb]) => {
+          let cb_ret = infer_arrow_body_with_params(env, resolver, cb, [inner])
+          let flattened = match cb_ret {
+            Applied("Promise", [t]) | Applied("PromiseLike", [t]) => t
+            other => other
+          }
+          return @ast.TsType::Applied("Promise", [flattened])
+        }
+        (Some(inner), "catch", [_]) =>
+          return @ast.TsType::Applied("Promise", [inner])
+        (Some(inner), "finally", [_]) =>
+          return @ast.TsType::Applied("Promise", [inner])
         _ => ()
       }
       match resolver.lookup_method_sig(recv_ty, method) {
