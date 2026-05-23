@@ -543,6 +543,44 @@ async fn collect_ts_source_files(dir : String) -> Array[String] {
 }
 
 ///|
+/// Like `collect_ts_source_files` but walks subdirectories recursively.
+/// Used by the conformance smoke test so a top-level directory like
+/// `conformance/expressions/` picks up nested cases without having to
+/// enumerate every feature subdir.
+async fn collect_ts_source_files_recursive(
+  dir : String,
+) -> Array[String] {
+  let kind = @fs.kind(dir, follow_symlink=false) catch {
+    _ => @fs.FileKind::Unknown
+  }
+  if not(kind is @fs.FileKind::Directory) {
+    return []
+  }
+  let entries = @fs.readdir(
+    dir, include_hidden=false, include_special=false, sort=true,
+  ) catch {
+    _ => []
+  }
+  let files : Array[String] = []
+  for name in entries {
+    let path = dir + "/" + name
+    if name.has_suffix(".ts") && not(name.has_suffix(".d.ts")) {
+      files.push(path)
+    } else {
+      let sub_kind = @fs.kind(path, follow_symlink=false) catch {
+        _ => @fs.FileKind::Unknown
+      }
+      if sub_kind is @fs.FileKind::Directory {
+        for f in collect_ts_source_files_recursive(path) {
+          files.push(f)
+        }
+      }
+    }
+  }
+  files
+}
+
+///|
 /// Every `.ts` (non-declaration) source file shipped with the upstream
 /// TypeScript compiler/services/server in the pinned submodule must parse
 /// without errors. Acts as a broad regression gate against real-world
@@ -595,10 +633,41 @@ async test "parser: parse TypeScript compiler/services/server .ts sources" {
 /// generous; if it ever fails, broaden the parser instead of relaxing it.
 async test "checker: smoke-run against TypeScript conformance test corpus" {
   let dirs = [
+    // Originally added: feature-specific narrowing / generics / guards.
     "typescript/tests/cases/conformance/types/typeParameters",
     "typescript/tests/cases/conformance/controlFlow",
     "typescript/tests/cases/conformance/expressions/typeGuards",
     "typescript/tests/cases/conformance/types/typeGuards",
+    // Broader `types/` coverage — exercises union / intersection /
+    // tuple / mapped / literal / conditional / utility shapes.
+    "typescript/tests/cases/conformance/types/union",
+    "typescript/tests/cases/conformance/types/intersection",
+    "typescript/tests/cases/conformance/types/tuple",
+    "typescript/tests/cases/conformance/types/literal",
+    "typescript/tests/cases/conformance/types/conditional",
+    "typescript/tests/cases/conformance/types/never",
+    "typescript/tests/cases/conformance/types/unknown",
+    "typescript/tests/cases/conformance/types/any",
+    "typescript/tests/cases/conformance/types/keyof",
+    "typescript/tests/cases/conformance/types/typeAliases",
+    // Other commonly-exercised conformance corners.
+    "typescript/tests/cases/conformance/types/objectTypeLiteral",
+    "typescript/tests/cases/conformance/types/primitives",
+    "typescript/tests/cases/conformance/types/stringLiteral",
+    "typescript/tests/cases/conformance/types/uniqueSymbol",
+    "typescript/tests/cases/conformance/types/rest",
+    "typescript/tests/cases/conformance/types/specifyingTypes",
+    "typescript/tests/cases/conformance/types/contextualTypes",
+    "typescript/tests/cases/conformance/types/namedTypes",
+    "typescript/tests/cases/conformance/types/typeRelationships",
+    "typescript/tests/cases/conformance/types/forAwait",
+    "typescript/tests/cases/conformance/types/asyncGenerators",
+    "typescript/tests/cases/conformance/types/nonPrimitive",
+    "typescript/tests/cases/conformance/interfaces",
+    "typescript/tests/cases/conformance/classes",
+    "typescript/tests/cases/conformance/generics",
+    "typescript/tests/cases/conformance/expressions",
+    "typescript/tests/cases/conformance/statements",
   ]
   let mut total = 0
   let mut parsed = 0
@@ -606,7 +675,7 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
   let parse_failures : Array[String] = []
   let check_crashes : Array[String] = []
   for dir in dirs {
-    let files = collect_ts_source_files(dir)
+    let files = collect_ts_source_files_recursive(dir)
     for path in files {
       total += 1
       let content = @fs.read_file(path).text() catch {
@@ -647,7 +716,9 @@ async test "checker: smoke-run against TypeScript conformance test corpus" {
     "conformance corpus: total=\{total} parsed=\{parsed} checked=\{checked}",
   )
   // 70 % parse-success floor leaves room for parser-error-recovery test
-  // cases without masking real regressions.
+  // cases without masking real regressions. (Most of the parse failures
+  // on this corpus correspond to TS files intentionally exercising
+  // syntax errors — `*Errors.ts`, `*Negative.ts`, etc.)
   if parsed * 100 < total * 70 {
     for f in parse_failures {
       println("PARSE FAIL " + f)

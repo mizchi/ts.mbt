@@ -842,10 +842,16 @@ pub fn Parser::parse_interface(
         let _ = self.advance()
         s
       }
-      // Number literal as field name: 0, 1, etc.
+      // Number literal as field name: 0, 1, etc. Both `Int` (integers that
+      // fit in i32) and `Number` (anything else: `1.0`, `1e9`, etc.) are
+      // valid TS property keys.
       Int(n) => {
         let _ = self.advance()
         n.to_string()
+      }
+      Number(d) => {
+        let _ = self.advance()
+        d.to_string()
       }
       // Keywords as field names (TypeScript allows this)
       Finally => {
