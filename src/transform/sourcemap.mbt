@@ -142,11 +142,28 @@ pub(all) struct SourceMapBuilder {
   lines : Array[Array[Segment]]
   // Tracked so the builder can grow lines lazily.
   mut last_out_line : Int
+  // Index into the `sources` array used when `add_mapping` is called
+  // without explicit source-id. The bundler switches this between
+  // modules so each module's mappings point at the right source
+  // file.
+  mut current_source : Int
 }
 
 ///|
 pub fn SourceMapBuilder::new() -> SourceMapBuilder {
-  { lines: [[]], last_out_line: 0 }
+  { lines: [[]], last_out_line: 0, current_source: 0 }
+}
+
+///|
+/// Switch the active source-id for subsequent `add_mapping` calls.
+/// Used by the bundler when concatenating modules so each module's
+/// mappings point back at its own slot in the source-map's
+/// `sources` array.
+pub fn SourceMapBuilder::set_current_source(
+  self : SourceMapBuilder,
+  source_id : Int,
+) -> Unit {
+  self.current_source = source_id
 }
 
 ///|
@@ -176,7 +193,7 @@ pub fn SourceMapBuilder::add_mapping(
     out_col,
     src_line: Some(src_line),
     src_col: Some(src_col),
-    src_id: Some(0),
+    src_id: Some(self.current_source),
   })
 }
 
@@ -213,14 +230,41 @@ pub fn SourceMapBuilder::to_json(
   source_path~ : String,
   output_path~ : String,
 ) -> String {
+  self.to_json_multi([source_path], [source], output_path~)
+}
+
+///|
+/// Multi-source variant: emits the same v3 document but with `n`
+/// entries in `sources` / `sourcesContent`. Used by the bundler so
+/// every module shows up in the map.
+pub fn SourceMapBuilder::to_json_multi(
+  self : SourceMapBuilder,
+  sources : Array[String],
+  sources_content : Array[String],
+  output_path~ : String,
+) -> String {
   let buf = StringBuilder::new()
   buf.write_string("{\"version\":3,\"file\":\"")
   write_json_escaped(buf, output_path)
-  buf.write_string("\",\"sources\":[\"")
-  write_json_escaped(buf, source_path)
-  buf.write_string("\"],\"sourcesContent\":[\"")
-  write_json_escaped(buf, source)
-  buf.write_string("\"],\"names\":[],\"mappings\":\"")
+  buf.write_string("\",\"sources\":[")
+  for i, s in sources {
+    if i > 0 {
+      buf.write_char(',')
+    }
+    buf.write_char('"')
+    write_json_escaped(buf, s)
+    buf.write_char('"')
+  }
+  buf.write_string("],\"sourcesContent\":[")
+  for i, c in sources_content {
+    if i > 0 {
+      buf.write_char(',')
+    }
+    buf.write_char('"')
+    write_json_escaped(buf, c)
+    buf.write_char('"')
+  }
+  buf.write_string("],\"names\":[],\"mappings\":\"")
   buf.write_string(self.encode_mappings())
   buf.write_string("\"}")
   buf.to_string()

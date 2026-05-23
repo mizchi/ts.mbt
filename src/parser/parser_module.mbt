@@ -3211,6 +3211,11 @@ fn Parser::parse_module_block_with_const_values(
     if self.check(Const) {
       let stmt = self.parse_stmt()
       collect_static_const_exprs_from_stmt(stmt, const_values)
+      // Keep the const declaration on the runtime statement stream
+      // too — bridge passes consume `const_values` for build-time
+      // table extraction, but the transform / bundle phase needs
+      // every runtime statement in `block.stmts`.
+      stmts.push(stmt)
       continue
     }
     stmts.push(self.parse_stmt())

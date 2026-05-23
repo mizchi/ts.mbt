@@ -4736,7 +4736,10 @@ test "parser: parse plain enum declaration in ts module block" {
     module_.enums[0].members[1].value,
     Some(@ast.TsEnumMemberValue::Number("1")),
   )
-  assert_eq(module_.block.stmts.length(), 0)
+  // Runtime const decls flow into `block.stmts` so the
+  // transform / bundle phase can re-emit them; the bridge path
+  // also keeps reading `const_values` for static evaluation.
+  assert_eq(module_.block.stmts.length(), 1)
 }
 
 ///|
