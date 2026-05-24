@@ -52,13 +52,15 @@ echo "==> Generating corpus ($COUNT modules) under $CORPUS"
 node bench/gen_corpus.mjs "$CORPUS" "$COUNT"
 
 echo "==> Smoke run (correctness check)"
-"$MTSC_BIN" "$CORPUS/entry.ts" --bundle              -o "$OUT/mtsc.js"
-"$MTSC_BIN" "$CORPUS/entry.ts" --bundle --mangle     -o "$OUT/mtsc.mangle.js"
+"$MTSC_BIN" "$CORPUS/entry.ts" --bundle                          -o "$OUT/mtsc.js"
+"$MTSC_BIN" "$CORPUS/entry.ts" --bundle --treeshake              -o "$OUT/mtsc.ts.js"
+"$MTSC_BIN" "$CORPUS/entry.ts" --bundle --mangle                 -o "$OUT/mtsc.mangle.js"
+"$MTSC_BIN" "$CORPUS/entry.ts" --bundle --treeshake --mangle     -o "$OUT/mtsc.ts.mangle.js"
 node_modules/.bin/rolldown "$CORPUS/entry.ts" -o "$OUT/rolldown.js"             -f esm > /dev/null
 node_modules/.bin/rolldown "$CORPUS/entry.ts" -o "$OUT/rolldown.min.js"         -f esm --minify > /dev/null
 
 want="$(node "$OUT/mtsc.js")"
-for f in "$OUT/mtsc.mangle.js" "$OUT/rolldown.js" "$OUT/rolldown.min.js"; do
+for f in "$OUT/mtsc.ts.js" "$OUT/mtsc.mangle.js" "$OUT/mtsc.ts.mangle.js" "$OUT/rolldown.js" "$OUT/rolldown.min.js"; do
   got="$(node "$f")"
   if [ "$got" != "$want" ]; then
     echo "smoke mismatch: $f differs from mtsc.js" >&2
@@ -71,12 +73,12 @@ echo "    output: $want"
 
 echo "==> Bundle sizes (bytes)"
 {
-  echo "| tool                 | size |"
-  echo "|----------------------|-----:|"
-  for f in "$OUT/mtsc.js" "$OUT/mtsc.mangle.js" "$OUT/rolldown.js" "$OUT/rolldown.min.js"; do
+  echo "| tool                     | size |"
+  echo "|--------------------------|-----:|"
+  for f in "$OUT/mtsc.js" "$OUT/mtsc.ts.js" "$OUT/mtsc.mangle.js" "$OUT/mtsc.ts.mangle.js" "$OUT/rolldown.js" "$OUT/rolldown.min.js"; do
     name="$(basename "$f")"
     size="$(wc -c < "$f")"
-    printf "| %-20s | %5d |\n" "$name" "$size"
+    printf "| %-24s | %5d |\n" "$name" "$size"
   done
 } | tee "$BENCH_DIR/sizes.md"
 
@@ -87,10 +89,12 @@ hyperfine \
   --warmup "$WARMUPS" \
   --runs "$RUNS" \
   --export-markdown "$REPORT" \
-  --command-name "mtsc --bundle"             "$MTSC_BIN $CORPUS/entry.ts --bundle -o $OUT/mtsc.js" \
-  --command-name "mtsc --bundle --mangle"    "$MTSC_BIN $CORPUS/entry.ts --bundle --mangle -o $OUT/mtsc.mangle.js" \
-  --command-name "rolldown"                  "node_modules/.bin/rolldown $CORPUS/entry.ts -o $OUT/rolldown.js -f esm" \
-  --command-name "rolldown --minify"         "node_modules/.bin/rolldown $CORPUS/entry.ts -o $OUT/rolldown.min.js -f esm --minify"
+  --command-name "mtsc --bundle"                          "$MTSC_BIN $CORPUS/entry.ts --bundle -o $OUT/mtsc.js" \
+  --command-name "mtsc --bundle --treeshake"              "$MTSC_BIN $CORPUS/entry.ts --bundle --treeshake -o $OUT/mtsc.ts.js" \
+  --command-name "mtsc --bundle --mangle"                 "$MTSC_BIN $CORPUS/entry.ts --bundle --mangle -o $OUT/mtsc.mangle.js" \
+  --command-name "mtsc --bundle --treeshake --mangle"     "$MTSC_BIN $CORPUS/entry.ts --bundle --treeshake --mangle -o $OUT/mtsc.ts.mangle.js" \
+  --command-name "rolldown"                               "node_modules/.bin/rolldown $CORPUS/entry.ts -o $OUT/rolldown.js -f esm" \
+  --command-name "rolldown --minify"                      "node_modules/.bin/rolldown $CORPUS/entry.ts -o $OUT/rolldown.min.js -f esm --minify"
 
 echo ""
 echo "Report written to $REPORT"

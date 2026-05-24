@@ -26,6 +26,7 @@ priv struct MtscOptions {
   mut input : String?
   mut out : String?
   mut bundle : Bool
+  mut treeshake : Bool
   mut mangle : Bool
   mut mangle_properties : Bool
   mut sourcemap : Bool
@@ -41,6 +42,7 @@ fn mtsc_options_new() -> MtscOptions {
     input: None,
     out: None,
     bundle: false,
+    treeshake: false,
     mangle: false,
     mangle_properties: false,
     sourcemap: false,
@@ -61,6 +63,9 @@ fn mtsc_print_usage() -> Unit {
   println("  --out, -o <file>          Write JS to <file> (default: stdout)")
   println(
     "  --bundle                  Follow relative imports from <input.ts> and emit one bundle",
+  )
+  println(
+    "  --treeshake               Drop top-level declarations unreached from any live stmt (implies --bundle)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println(
@@ -93,6 +98,10 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         continue
       }
       "--bundle" => opts.bundle = true
+      "--treeshake" => {
+        opts.treeshake = true
+        opts.bundle = true
+      }
       "--mangle" => opts.mangle = true
       "--mangle-properties" => {
         opts.mangle = true
@@ -339,6 +348,7 @@ async fn main {
       .with_mangle(opts.mangle)
       .with_mangle_properties(opts.mangle_properties)
       .with_sourcemap(opts.sourcemap)
+      .with_treeshake(opts.treeshake)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
     let out = match result {

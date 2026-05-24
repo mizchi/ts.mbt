@@ -45,6 +45,11 @@ pub(all) struct BundleOptions {
   // When `true` (and `mangle == true`), also rename non-reserved
   // property keys via the opt-in property-mangling path.
   mangle_properties : Bool
+  // When `true`, drop top-level declarations that nothing reachable
+  // from a side-effect statement references. Requires the merged-
+  // block emit path, so the bundler forces single-scope folding
+  // whenever this is set (just like `mangle` does).
+  treeshake : Bool
 }
 
 ///|
@@ -54,6 +59,7 @@ pub fn BundleOptions::default() -> BundleOptions {
     with_sourcemap: false,
     mangle: false,
     mangle_properties: false,
+    treeshake: false,
   }
 }
 
@@ -76,6 +82,14 @@ pub fn BundleOptions::with_sourcemap(
   s : Bool,
 ) -> BundleOptions {
   { ..self, with_sourcemap: s }
+}
+
+///|
+pub fn BundleOptions::with_treeshake(
+  self : BundleOptions,
+  t : Bool,
+) -> BundleOptions {
+  { ..self, treeshake: t }
 }
 
 ///|
@@ -235,12 +249,12 @@ pub fn bundle_modules(
   let sources : Array[String] = []
   let sources_content : Array[String] = []
   let module_paths : Array[String] = []
-  // When mangling, fold every module's stmts into a single block so
-  // cross-module references resolve through one shared scope. Per-
-  // module separator comments and source-map mappings are dropped —
-  // both rely on a per-module emit pass that doesn't survive the
-  // rename.
-  if opts.mangle {
+  // When mangling or tree-shaking, fold every module's stmts into a
+  // single block so cross-module references resolve through one
+  // shared scope. Per-module separator comments and source-map
+  // mappings are dropped — both rely on a per-module emit pass that
+  // doesn't survive the rename / DCE.
+  if opts.mangle || opts.treeshake {
     let combined_stmts : Array[@ast.TsStmt] = []
     for path in order {
       let m = match modules.get(path) {
@@ -252,15 +266,26 @@ pub fn bundle_modules(
         combined_stmts.push(s)
       }
     }
-    let combined : @ast.TsBlock = { stmts: combined_stmts, stmt_positions: [] }
-    let mangler_cfg = ManglerConfig::default()
-      .with_mangle_properties(opts.mangle_properties)
-      // The bundle has no public ABI of its own — every binding
-      // becomes internal once we glue modules together, so the
-      // top-level can be renamed freely.
-      .with_preserve_top_level(false)
-    let mangled = mangle_block(combined, mangler_cfg)
-    for s in mangled.stmts {
+    let mut combined : @ast.TsBlock = {
+      stmts: combined_stmts,
+      stmt_positions: [],
+    }
+    // Tree-shake first: dropping declarations shrinks the input that
+    // the mangler has to walk, and lets the mangler skip naming
+    // slots for names that no longer appear.
+    if opts.treeshake {
+      combined = treeshake_block(combined)
+    }
+    if opts.mangle {
+      let mangler_cfg = ManglerConfig::default()
+        .with_mangle_properties(opts.mangle_properties)
+        // The bundle has no public ABI of its own — every binding
+        // becomes internal once we glue modules together, so the
+        // top-level can be renamed freely.
+        .with_preserve_top_level(false)
+      combined = mangle_block(combined, mangler_cfg)
+    }
+    for s in combined.stmts {
       emit_stmt(e, s)
       e.nl()
     }

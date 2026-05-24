@@ -23,11 +23,13 @@ The script:
    four helpers (`pair`, `dispatch`, `helper`, `describe`) and the
    entrypoint chains every module's functions so a tree-shaking
    bundler can't drop anything.
-2. Runs each tool once and verifies the four outputs all evaluate to
-   the same stdout under Node (correctness smoke).
-3. Runs `hyperfine` over four configurations:
+2. Runs each tool once and verifies every output evaluates to the
+   same stdout under Node (correctness smoke).
+3. Runs `hyperfine` over six configurations:
    - `mtsc --bundle`
+   - `mtsc --bundle --treeshake`
    - `mtsc --bundle --mangle`
+   - `mtsc --bundle --treeshake --mangle`
    - `rolldown`
    - `rolldown --minify`
 
@@ -42,5 +44,8 @@ Reports land at `_build/bench/report.md` (timings) and
   trims the warm-up window for `npm`/`node_modules` I/O.
 - `rolldown` is invoked through `node_modules/.bin/rolldown`
   directly to avoid the `npx` shim's ~250 ms startup tax.
-- mtsc currently does not tree-shake; bundle output is larger than
-  rolldown's by design.
+- `mtsc --bundle --treeshake` drops top-level declarations that
+  aren't reachable from any side-effect statement. It only drops
+  declarations whose initializer is statically pure (literals,
+  function / arrow expressions, pure object / array literals).
+  Anything else stays as a side-effect root.
