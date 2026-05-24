@@ -1015,7 +1015,18 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       e.write("=>")
       e.space()
       match body {
-        ArrowExpr(inner) => emit_expr(e, inner, 2)
+        ArrowExpr(inner) =>
+          match inner {
+            // `(...) => { a: 1 }` would be parsed as a block. Wrap
+            // the ObjectLit in parens so the arrow's body
+            // unambiguously commits to expression form.
+            ObjectLit(_) => {
+              e.write("(")
+              emit_expr(e, inner, 2)
+              e.write(")")
+            }
+            _ => emit_expr(e, inner, 2)
+          }
         ArrowBlock(block) => emit_block(e, block)
       }
     }
