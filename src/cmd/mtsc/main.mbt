@@ -29,6 +29,10 @@ priv struct MtscOptions {
   mut treeshake : Bool
   mut fold : Bool
   mut minify : Bool
+  // Bare specifiers the user wants left as `import … from "<spec>"`
+  // in the emitted bundle. Anything not on this list is resolved
+  // through node_modules / tsconfig paths and inlined when found.
+  externals : Map[String, Bool]
   mut mangle : Bool
   mut mangle_properties : Bool
   mut sourcemap : Bool
@@ -47,6 +51,7 @@ fn mtsc_options_new() -> MtscOptions {
     treeshake: false,
     fold: false,
     minify: false,
+    externals: {},
     mangle: false,
     mangle_properties: false,
     sourcemap: false,
@@ -76,6 +81,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println(
     "  --fold                    Constant-fold identity arithmetic and dead branches (implies --bundle)",
+  )
+  println(
+    "  --external <spec>         Keep this bare-specifier import external (repeatable; comma-separated also OK)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println(
@@ -116,6 +124,19 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
       "--fold" => {
         opts.fold = true
         opts.bundle = true
+      }
+      "--external" => {
+        if i + 1 >= argv.length() {
+          return Err("missing value for --external")
+        }
+        for raw in argv[i + 1].split(",") {
+          let spec = raw.to_string().trim().to_string()
+          if spec != "" {
+            opts.externals[spec] = true
+          }
+        }
+        i = i + 2
+        continue
       }
       "--mangle" => opts.mangle = true
       "--mangle-properties" => {
@@ -244,43 +265,58 @@ fn mtsc_normalize(path : String) -> String {
 async fn mtsc_load_bundle_files(
   entry_path : String,
   files : Map[String, String],
+  aliases : Map[String, String],
+  externals : Map[String, Bool],
 ) -> Result[Unit, String] {
+  // Sequential DFS over the import graph. moonbitlang/async runs on
+  // a cooperative single-threaded scheduler, so spawning per-file
+  // tasks adds task-group overhead without overlapping any real
+  // work — the parser itself stays the dominant CPU cost.
   let queue : Array[String] = [entry_path]
   while queue.length() > 0 {
-    let path = queue[queue.length() - 1]
+    let disk_path = queue[queue.length() - 1]
     let _ = queue.pop()
-    if files.contains(path) {
+    if files.contains(disk_path) {
       continue
     }
-    let resolved = mtsc_resolve_existing(path)
+    let resolved = mtsc_resolve_existing(disk_path)
     let source = @fs.read_file(resolved).text() catch {
       e => return Err("read error \{resolved}: \{e}")
     }
     files[resolved] = source
-    if path != resolved {
-      // Keep the original-spelled path in the map too so the bundler's
-      // `Map[String, String]` lookup finds it under whichever name the
-      // import wrote.
-      files[path] = source
+    if disk_path != resolved && not(files.contains(disk_path)) {
+      files[disk_path] = source
     }
     let mb = @parser.Parser::from_source(source).parse_module_block() catch {
       e => return Err("parse \{resolved}: \{e}")
     }
-    let dir = mtsc_dirname(resolved)
     for imp in mb.imports {
       if imp.type_only {
         continue
       }
       let spec = imp.module_spec
-      if !(spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/")) {
+      if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
+        let combined = if spec.has_prefix("/") {
+          mtsc_normalize(spec)
+        } else {
+          mtsc_normalize(mtsc_join_path(mtsc_dirname(resolved), spec))
+        }
+        queue.push(combined)
         continue
       }
-      let combined = if spec.has_prefix("/") {
-        mtsc_normalize(spec)
-      } else {
-        mtsc_normalize(mtsc_join_path(dir, spec))
+      if externals.contains(spec) {
+        continue
       }
-      queue.push(combined)
+      if aliases.contains(spec) {
+        continue
+      }
+      match @parser.resolve_runtime_module_specifier(resolved, spec) {
+        Some(found) => {
+          aliases[spec] = found
+          queue.push(found)
+        }
+        None => ()
+      }
     }
   }
   Ok(())
@@ -352,7 +388,8 @@ async fn main {
   }
   if opts.bundle {
     let files : Map[String, String] = {}
-    match mtsc_load_bundle_files(input_path, files) {
+    let aliases : Map[String, String] = {}
+    match mtsc_load_bundle_files(input_path, files, aliases, opts.externals) {
       Ok(_) => ()
       Err(e) => {
         println("mtsc: \{e}")
@@ -366,6 +403,7 @@ async fn main {
       .with_treeshake(opts.treeshake)
       .with_minify(opts.minify)
       .with_fold(opts.fold)
+      .with_aliases(aliases)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
     let out = match result {

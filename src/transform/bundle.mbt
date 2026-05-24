@@ -58,6 +58,11 @@ pub(all) struct BundleOptions {
   // treeshake / mangle passes. Folds identity-element arithmetic,
   // dead `if (true/false)` branches, boolean short-circuits, etc.
   fold : Bool
+  // Pre-built (bare-specifier -> disk-path) map. Lets callers (mtsc
+  // `--bundle`) resolve `import "react"` via `node_modules` before
+  // handing the VFS to the bundler. Empty map = no aliases (every
+  // bare specifier is treated as external).
+  aliases : Map[String, String]
 }
 
 ///|
@@ -70,7 +75,16 @@ pub fn BundleOptions::default() -> BundleOptions {
     treeshake: false,
     minify: false,
     fold: false,
+    aliases: {},
   }
+}
+
+///|
+pub fn BundleOptions::with_aliases(
+  self : BundleOptions,
+  a : Map[String, String],
+) -> BundleOptions {
+  { ..self, aliases: a }
 }
 
 ///|
@@ -248,7 +262,9 @@ pub fn bundle_modules(
   let external_imports : Array[@ast.TsImportDecl] = []
   let external_seen : Map[String, Bool] = {}
   match
-    load_module_graph(files, entry, modules, external_imports, external_seen) {
+    load_module_graph(
+      files, entry, modules, external_imports, external_seen, opts.aliases,
+    ) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
@@ -371,6 +387,7 @@ fn load_module_graph(
   modules : Map[String, ModuleNode],
   external_imports : Array[@ast.TsImportDecl],
   external_seen : Map[String, Bool],
+  aliases : Map[String, String],
 ) -> Result[Unit, String] {
   if modules.contains(path) {
     return Ok(())
@@ -405,25 +422,56 @@ fn load_module_graph(
         resolved[imp.module_spec] = dep_path
         match
           load_module_graph(
-            files, dep_path, modules, external_imports, external_seen,
+            files, dep_path, modules, external_imports, external_seen, aliases,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
       }
-      None => {
-        // Bare specifier — emit verbatim at the bundle top.
-        let key = imp.module_spec +
-          ":" +
-          (match imp.default_binding {
-            Some(s) => s
-            None => ""
-          })
-        if !external_seen.contains(key) {
-          external_seen[key] = true
-          external_imports.push(imp)
+      None =>
+        // Bare specifier. Two pre-resolved sources, in priority
+        // order: (a) the alias map (`react -> /abs/.../react/index.js`)
+        // and (b) a direct hit in `files`. Either way we recurse
+        // through the disk-path key so a follow-up `../utils/...`
+        // relative import inside the package resolves correctly.
+        match aliases.get(imp.module_spec) {
+          Some(disk) => {
+            let dep_path = resolve_with_extensions(files, disk)
+            resolved[imp.module_spec] = dep_path
+            match
+              load_module_graph(
+                files, dep_path, modules, external_imports, external_seen,
+                aliases,
+              ) {
+              Ok(_) => ()
+              Err(e) => return Err(e)
+            }
+          }
+          None =>
+            if files.contains(imp.module_spec) {
+              let dep_path = resolve_with_extensions(files, imp.module_spec)
+              resolved[imp.module_spec] = dep_path
+              match
+                load_module_graph(
+                  files, dep_path, modules, external_imports, external_seen,
+                  aliases,
+                ) {
+                Ok(_) => ()
+                Err(e) => return Err(e)
+              }
+            } else {
+              let key = imp.module_spec +
+                ":" +
+                (match imp.default_binding {
+                  Some(s) => s
+                  None => ""
+                })
+              if !external_seen.contains(key) {
+                external_seen[key] = true
+                external_imports.push(imp)
+              }
+            }
         }
-      }
     }
   }
   modules[path] = {
