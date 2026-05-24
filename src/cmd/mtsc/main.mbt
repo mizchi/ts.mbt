@@ -25,6 +25,7 @@
 priv struct MtscOptions {
   mut input : String?
   mut out : String?
+  mut bundle : Bool
   mut mangle : Bool
   mut mangle_properties : Bool
   mut sourcemap : Bool
@@ -39,6 +40,7 @@ fn mtsc_options_new() -> MtscOptions {
   {
     input: None,
     out: None,
+    bundle: false,
     mangle: false,
     mangle_properties: false,
     sourcemap: false,
@@ -57,6 +59,9 @@ fn mtsc_print_usage() -> Unit {
   println("")
   println("Options:")
   println("  --out, -o <file>          Write JS to <file> (default: stdout)")
+  println(
+    "  --bundle                  Follow relative imports from <input.ts> and emit one bundle",
+  )
   println("  --mangle                  Rename non-exported local identifiers")
   println(
     "  --mangle-properties       Also rename non-reserved property keys",
@@ -87,6 +92,7 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         i = i + 2
         continue
       }
+      "--bundle" => opts.bundle = true
       "--mangle" => opts.mangle = true
       "--mangle-properties" => {
         opts.mangle = true
@@ -166,6 +172,123 @@ async fn write_text(path : String, content : String) -> Bool {
 }
 
 ///|
+fn mtsc_dirname(path : String) -> String {
+  match path.rev_find("/") {
+    Some(i) => path.substring(start=0, end=i).to_string()
+    None => ""
+  }
+}
+
+///|
+fn mtsc_join_path(dir : String, child : String) -> String {
+  if dir == "" {
+    child
+  } else if dir.has_suffix("/") {
+    dir + child
+  } else {
+    dir + "/" + child
+  }
+}
+
+///|
+fn mtsc_normalize(path : String) -> String {
+  let parts : Array[String] = []
+  for part in path.split("/") {
+    let p = part.to_string()
+    if p == "" || p == "." {
+      continue
+    }
+    if p == ".." {
+      if parts.length() > 0 && parts[parts.length() - 1] != ".." {
+        let _ = parts.pop()
+      } else {
+        parts.push("..")
+      }
+      continue
+    }
+    parts.push(p)
+  }
+  let leading = if path.has_prefix("/") { "/" } else { "" }
+  leading + parts.join("/")
+}
+
+///|
+/// Walk imports starting from `entry_path` and read every reachable
+/// file from disk into `files`. Only relative imports (`./x`, `../y`)
+/// and rooted paths are followed — bare specifiers (`react`, `@scope/x`)
+/// are left to the bundler to emit verbatim.
+async fn mtsc_load_bundle_files(
+  entry_path : String,
+  files : Map[String, String],
+) -> Result[Unit, String] {
+  let queue : Array[String] = [entry_path]
+  while queue.length() > 0 {
+    let path = queue[queue.length() - 1]
+    let _ = queue.pop()
+    if files.contains(path) {
+      continue
+    }
+    let resolved = mtsc_resolve_existing(path)
+    let source = @fs.read_file(resolved).text() catch {
+      e => return Err("read error \{resolved}: \{e}")
+    }
+    files[resolved] = source
+    if path != resolved {
+      // Keep the original-spelled path in the map too so the bundler's
+      // `Map[String, String]` lookup finds it under whichever name the
+      // import wrote.
+      files[path] = source
+    }
+    let mb = @parser.Parser::from_source(source).parse_module_block() catch {
+      e => return Err("parse \{resolved}: \{e}")
+    }
+    let dir = mtsc_dirname(resolved)
+    for imp in mb.imports {
+      if imp.type_only {
+        continue
+      }
+      let spec = imp.module_spec
+      if !(spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/")) {
+        continue
+      }
+      let combined = if spec.has_prefix("/") {
+        mtsc_normalize(spec)
+      } else {
+        mtsc_normalize(mtsc_join_path(dir, spec))
+      }
+      queue.push(combined)
+    }
+  }
+  Ok(())
+}
+
+///|
+async fn mtsc_resolve_existing(base : String) -> String {
+  if mtsc_path_exists(base) {
+    return base
+  }
+  let exts = [".ts", ".tsx", ".js", ".mjs", ".jsx"]
+  for ext in exts {
+    let cand = base + ext
+    if mtsc_path_exists(cand) {
+      return cand
+    }
+  }
+  for ext in exts {
+    let cand = base + "/index" + ext
+    if mtsc_path_exists(cand) {
+      return cand
+    }
+  }
+  base
+}
+
+///|
+async fn mtsc_path_exists(path : String) -> Bool {
+  @fs.exists(path)
+}
+
+///|
 async fn main {
   let argv = @env.args()
   if argv.length() < 2 {
@@ -198,16 +321,65 @@ async fn main {
     )
     return
   }
+  let jsx_cfg = mtsc_build_jsx_config(opts)
+  let output_path = match opts.out {
+    Some(p) => p
+    None => "output.js"
+  }
+  if opts.bundle {
+    let files : Map[String, String] = {}
+    match mtsc_load_bundle_files(input_path, files) {
+      Ok(_) => ()
+      Err(e) => {
+        println("mtsc: \{e}")
+        return
+      }
+    }
+    let bundle_opts = @transform.BundleOptions::default()
+      .with_mangle(opts.mangle)
+      .with_mangle_properties(opts.mangle_properties)
+      .with_sourcemap(opts.sourcemap)
+    let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
+    let result = @transform.bundle_modules(files, input_path, bundle_opts)
+    let out = match result {
+      Ok(o) => o
+      Err(e) => {
+        println("mtsc: \{e}")
+        return
+      }
+    }
+    match opts.out {
+      Some(path) => {
+        let js = match out.sourcemap {
+          Some(_) => {
+            let base = match path.rev_find("/") {
+              Some(i) => path[i + 1:path.length()].to_string()
+              None => path
+            }
+            out.js + "\n//# sourceMappingURL=" + base + ".map\n"
+          }
+          None => out.js
+        }
+        if !write_text(path, js) {
+          return
+        }
+        match out.sourcemap {
+          Some(map_json) => {
+            let _ = write_text(path + ".map", map_json)
+
+          }
+          None => ()
+        }
+      }
+      None => println(out.js)
+    }
+    return
+  }
   let source = @fs.read_file(input_path).text() catch {
     e => {
       println("mtsc: read error \{input_path}: \{e}")
       return
     }
-  }
-  let jsx_cfg = mtsc_build_jsx_config(opts)
-  let output_path = match opts.out {
-    Some(p) => p
-    None => "output.js"
   }
   let result = @transform.transform_source_full(
     source,

@@ -178,10 +178,7 @@ test "bundle: sourcemap option emits multi-source v3 JSON" {
     ("entry.ts", "import { x } from \"./lib\";\nconst v = x;\n"),
     ("lib.ts", "export const x = 1;\n"),
   ])
-  let opts : BundleOptions = {
-    jsx: JsxConfig::default(),
-    with_sourcemap: true,
-  }
+  let opts : BundleOptions = BundleOptions::default().with_sourcemap(true)
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) =>
       match out.sourcemap {
@@ -197,6 +194,75 @@ test "bundle: sourcemap option emits multi-source v3 JSON" {
         }
         None => fail("expected sourcemap, got None")
       }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: mangle folds modules into one scope and renames everything" {
+  // Two modules — the bundle should expose `b.compute` as the entry
+  // through the same renamed slot used inside `a`. With
+  // `--mangle`, the per-module separator comments are dropped and
+  // every binding gets a short name.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { compute } from \"./lib\";\nconst out = compute(7);\nconsole.log(out);\n",
+    ),
+    (
+      "lib.ts",
+      "export function compute(seed: number): number {\n  const offset = 3;\n  return seed + offset;\n}\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_mangle(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Parameter / local names should be gone.
+      assert_false(out.js.contains("offset"))
+      assert_false(out.js.contains("seed"))
+      // Per-module separator banners are skipped in mangle mode.
+      assert_false(out.js.contains("// ===== "))
+      // `console` stays put — it's in the built-in reserved set.
+      assert_true(out.js.contains("console.log"))
+      assert_eq(out.modules.length(), 2)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: mangle keeps the shared call site consistent across modules" {
+  // `helper` is defined in `lib.ts`, called from `entry.ts`. The
+  // mangle pass folds both into one block so the bundle's call
+  // site must refer to the same renamed identifier as the
+  // declaration's outer binding.
+  let files = vfs([
+    (
+      "entry.ts",
+      "import { helper } from \"./lib\";\nconst v = helper(2);\nconsole.log(v);\n",
+    ),
+    (
+      "lib.ts", "export function helper(n: number): number {\n  return n * 2;\n}\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_mangle(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Find a single-letter binding (`let X = function …`) and
+      // verify the same X appears as a call target somewhere.
+      // The function-expression's internal `helper` name is kept
+      // verbatim by design; only the outer `let` binding renames.
+      let mut found = false
+      for candidate in ["a", "b", "c", "d", "e"] {
+        if out.js.contains("let " + candidate + " = function ") &&
+          out.js.contains("= " + candidate + "(") {
+          found = true
+        }
+      }
+      if !found {
+        fail("expected matched declaration / call rename in: \{out.js}")
+      }
+    }
     Err(e) => fail("bundle error: \{e}")
   }
 }

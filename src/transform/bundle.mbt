@@ -38,11 +38,44 @@ pub(all) struct BundleOptions {
   // When `true`, the result includes a v3 source map covering every
   // module in the bundle.
   with_sourcemap : Bool
+  // When `true`, run the identifier-mangling pass on the final
+  // concatenated module block. Source-map positions are skipped in
+  // this mode because the rename pass doesn't carry positions yet.
+  mangle : Bool
+  // When `true` (and `mangle == true`), also rename non-reserved
+  // property keys via the opt-in property-mangling path.
+  mangle_properties : Bool
 }
 
 ///|
 pub fn BundleOptions::default() -> BundleOptions {
-  { jsx: JsxConfig::default(), with_sourcemap: false }
+  {
+    jsx: JsxConfig::default(),
+    with_sourcemap: false,
+    mangle: false,
+    mangle_properties: false,
+  }
+}
+
+///|
+pub fn BundleOptions::with_mangle(self : BundleOptions, m : Bool) -> BundleOptions {
+  { ..self, mangle: m }
+}
+
+///|
+pub fn BundleOptions::with_mangle_properties(
+  self : BundleOptions,
+  m : Bool,
+) -> BundleOptions {
+  { ..self, mangle_properties: m, mangle: self.mangle || m }
+}
+
+///|
+pub fn BundleOptions::with_sourcemap(
+  self : BundleOptions,
+  s : Bool,
+) -> BundleOptions {
+  { ..self, with_sourcemap: s }
 }
 
 ///|
@@ -202,35 +235,66 @@ pub fn bundle_modules(
   let sources : Array[String] = []
   let sources_content : Array[String] = []
   let module_paths : Array[String] = []
-  for i, path in order {
-    let m = match modules.get(path) {
-      Some(node) => node
-      None => continue
-    }
-    e.write("// ===== ")
-    e.write(path)
-    e.write(" =====")
-    e.nl()
-    let _ = i
-    sources.push(path)
-    sources_content.push(m.source)
-    module_paths.push(path)
-    // Per-module sourcemap: set the line index + map source id to
-    // the module's slot in `sources`.
-    if opts.with_sourcemap {
-      e.line_index = LineIndex::new(m.source)
-      match e.smap {
-        Some(b) => b.set_current_source(sources.length() - 1)
-        None => ()
+  // When mangling, fold every module's stmts into a single block so
+  // cross-module references resolve through one shared scope. Per-
+  // module separator comments and source-map mappings are dropped —
+  // both rely on a per-module emit pass that doesn't survive the
+  // rename.
+  if opts.mangle {
+    let combined_stmts : Array[@ast.TsStmt] = []
+    for path in order {
+      let m = match modules.get(path) {
+        Some(node) => node
+        None => continue
+      }
+      module_paths.push(path)
+      for s in m.block.stmts {
+        combined_stmts.push(s)
       }
     }
-    for j, stmt in m.block.stmts {
-      if opts.with_sourcemap && j < m.block.stmt_positions.length() {
-        let src_pos = e.line_index.position(m.block.stmt_positions[j])
-        e.mark(src_pos)
-      }
-      emit_stmt(e, stmt)
+    let combined : @ast.TsBlock = { stmts: combined_stmts, stmt_positions: [] }
+    let mangler_cfg = ManglerConfig::default()
+      .with_mangle_properties(opts.mangle_properties)
+      // The bundle has no public ABI of its own — every binding
+      // becomes internal once we glue modules together, so the
+      // top-level can be renamed freely.
+      .with_preserve_top_level(false)
+    let mangled = mangle_block(combined, mangler_cfg)
+    for s in mangled.stmts {
+      emit_stmt(e, s)
       e.nl()
+    }
+  } else {
+    for i, path in order {
+      let m = match modules.get(path) {
+        Some(node) => node
+        None => continue
+      }
+      e.write("// ===== ")
+      e.write(path)
+      e.write(" =====")
+      e.nl()
+      let _ = i
+      sources.push(path)
+      sources_content.push(m.source)
+      module_paths.push(path)
+      // Per-module sourcemap: set the line index + map source id to
+      // the module's slot in `sources`.
+      if opts.with_sourcemap {
+        e.line_index = LineIndex::new(m.source)
+        match e.smap {
+          Some(b) => b.set_current_source(sources.length() - 1)
+          None => ()
+        }
+      }
+      for j, stmt in m.block.stmts {
+        if opts.with_sourcemap && j < m.block.stmt_positions.length() {
+          let src_pos = e.line_index.position(m.block.stmt_positions[j])
+          e.mark(src_pos)
+        }
+        emit_stmt(e, stmt)
+        e.nl()
+      }
     }
   }
   let sm_json : String? = match e.smap {
