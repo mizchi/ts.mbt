@@ -320,8 +320,38 @@ pub fn bundle_modules(
       combined = treeshake_block(combined)
     }
     if opts.mangle {
+      // Type-driven safety for property mangling: walk the merged
+      // block looking for property accesses on bindings that
+      // escape the bundle (external imports) and reflection sinks
+      // (`JSON.stringify`, `Object.keys`, `for-in`). The result
+      // augments the mangler's reserved-properties list. If the
+      // analysis hits a fully-dynamic case (`*`), we suppress
+      // property mangling entirely — the bundle isn't provably
+      // safe to rename. This is what upgrades `--mangle-properties`
+      // from "heuristic best-effort" to "type-checked safe": you
+      // never get a silently-broken bundle.
+      let mut effective_mangle_props = opts.mangle_properties
+      let extra_reserved : Array[String] = []
+      if opts.mangle_properties {
+        let externals = external_import_bindings(external_imports)
+        let escapes = collect_externally_visible_props(combined, externals)
+        let mut wildcard = false
+        for n in escapes {
+          if n == "*" {
+            wildcard = true
+          } else {
+            extra_reserved.push(n)
+          }
+        }
+        if wildcard {
+          // Bail out on property mangling — we can't prove
+          // safety. Identifier mangling still runs.
+          effective_mangle_props = false
+        }
+      }
       let mangler_cfg = ManglerConfig::default()
-        .with_mangle_properties(opts.mangle_properties)
+        .with_mangle_properties(effective_mangle_props)
+        .with_reserved_properties(extra_reserved)
         // The bundle has no public ABI of its own — every binding
         // becomes internal once we glue modules together, so the
         // top-level can be renamed freely.
