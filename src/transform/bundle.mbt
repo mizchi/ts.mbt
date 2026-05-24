@@ -306,13 +306,13 @@ pub fn bundle_modules(
       stmts: combined_stmts,
       stmt_positions: [],
     }
-    // Order: fold -> treeshake -> mangle -> peephole. Fold turns
-    // dead `if (false)` branches into nothing and identity
-    // arithmetic into a single operand; treeshake then drops
-    // declarations the now-smaller graph never reaches; mangle
-    // renames whatever survived; peephole finally compacts the
-    // result with `x += y` and `void 0` rewrites that benefit from
-    // running on the already-renamed shape.
+    // Order: fold -> treeshake -> mangle -> inline -> peephole.
+    // Fold turns dead `if (false)` branches into nothing and
+    // identity arithmetic into a single operand; treeshake then
+    // drops declarations the now-smaller graph never reaches;
+    // mangle renames whatever survived; inline collapses single-
+    // use bindings into their unique reference; peephole finally
+    // compacts the result with `x += y` and `void 0` rewrites.
     if opts.fold {
       combined = fold_block(combined)
     }
@@ -328,11 +328,12 @@ pub fn bundle_modules(
         .with_preserve_top_level(false)
       combined = mangle_block(combined, mangler_cfg)
     }
-    // Peephole is safe to run unconditionally — every rewrite is
-    // semantically transparent and only kicks in on already-
-    // matching shapes. Keep it gated on `minify` for now so plain
-    // `--bundle` output stays close to the original source.
     if opts.minify {
+      // Inline runs before peephole so `const X = expr; return X`
+      // shapes collapse before the peephole pass sees them. Gated
+      // on `minify` since the inlining produces deeply nested
+      // expressions that are unpleasant in pretty mode.
+      combined = inline_block(combined)
       combined = peephole_block(combined)
     }
     for s in combined.stmts {
