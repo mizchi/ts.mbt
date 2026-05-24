@@ -417,7 +417,7 @@ fn load_module_graph(
   // First strip / lower TS-only constructs (enums, overload
   // signatures) into the runtime stmt stream so the optimizer
   // doesn't see surprise sentinel decls.
-  let desugared = ts_desugar_block(mb.block, mb.enums, [])
+  let desugared = ts_desugar_block(mb.block, mb.enums, mb.namespaces)
   let (lowered, jsx_refs) = lower_block_with_runtime_imports(jsx_cfg, desugared)
   // Synthesize the JSX-runtime import when lowering introduced
   // references to `jsx` / `jsxs` / `Fragment` / etc. The import

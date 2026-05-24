@@ -531,6 +531,12 @@ pub(all) struct TsImport {
 pub(all) struct TsValueDecl {
   name : String
   type_ : TsType
+  // Initializer expression when the value was declared as
+  // `const x = …` (or `let / var = …`) inside a namespace body.
+  // `None` for plain ambient `declare const x : T`. Used by the
+  // transform layer's namespace-lowering pass to materialize
+  // `NS.x = <init>` assignments on the synthesized object.
+  init : TsExpr?
 } derive(Debug)
 
 ///|
@@ -694,6 +700,11 @@ pub(all) struct TsModuleBlock {
   exports : Array[TsExportSpec]
   reexports : Array[TsReExportSpec]
   enums : Array[TsEnumDecl]
+  // Module-level namespace declarations (`namespace X { … }`) so
+  // the transform layer can desugar them to a runtime object
+  // without re-parsing the source. Populated by `parse_module_block`
+  // alongside `enums`; empty for plain JS module blocks.
+  namespaces : Array[TsNamespaceDecl]
 } derive(Debug)
 
 // ============================================

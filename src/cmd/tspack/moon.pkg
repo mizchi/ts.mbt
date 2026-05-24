@@ -1,0 +1,12 @@
+import {
+  "moonbitlang/async",
+  "moonbitlang/core/env",
+  "moonbitlang/core/strconv",
+  "mizchi/x/fs",
+  "mizchi/ts",
+  "mizchi/ts/transform",
+}
+
+options(
+  is_main: true,
+)

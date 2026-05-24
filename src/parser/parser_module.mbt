@@ -503,7 +503,7 @@ fn Parser::parse_namespace_decl_with_mode(
   }
   let value = match name {
     Some(name) => {
-      let next_value : @ast.TsValueDecl = { name, type_: @ast.TsType::Any }
+      let next_value : @ast.TsValueDecl = { name, type_: @ast.TsType::Any, init: None }
       Some(next_value)
     }
     None => None
@@ -615,6 +615,24 @@ fn collect_decl_names_from_stmt(
       for inner in block.stmts {
         collect_decl_names_from_stmt(inner, names)
       }
+    _ => ()
+  }
+}
+
+///|
+/// Mirror a runtime `Const(Ident(name), _, init)` stmt as a
+/// `TsValueDecl { name, type_: Any, init: Some(…) }` so transform
+/// passes that walk namespace bodies (`@transform.ts_desugar_block`)
+/// can recover the initializer expression. Only handles single-Ident
+/// bindings; destructuring patterns at top-level namespace scope
+/// are rare and don't have a clean materialization path.
+fn collect_runtime_const_into_values(
+  stmt : @ast.TsStmt,
+  values : Array[@ast.TsValueDecl],
+) -> Unit {
+  match stmt {
+    Const(@ast.TsBinding::Ident(name), _, init) =>
+      values.push({ name, type_: @ast.TsType::Any, init: Some(init) })
     _ => ()
   }
 }
@@ -1786,7 +1804,8 @@ fn collect_value_decls_from_binding(
 ) -> Unit {
   let source_type = value_decl_resolve_type(type_, init)
   match binding {
-    @ast.TsBinding::Ident(name) => values.push({ name, type_: source_type })
+    @ast.TsBinding::Ident(name) =>
+      values.push({ name, type_: source_type, init })
     @ast.TsBinding::Array(arr_binding) => {
       for i, item in arr_binding.items {
         match item {
@@ -1838,6 +1857,7 @@ fn collect_value_decls_from_binding(
             type_: value_decl_object_rest_struct_type(
               source_type, obj_binding, rest_name, const_values,
             ),
+            init: None,
           })
         None => ()
       }
@@ -3098,6 +3118,7 @@ fn Parser::parse_module_block_with_const_values(
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
   let enums : Array[@ast.TsEnumDecl] = []
+  let namespaces : Array[@ast.TsNamespaceDecl] = []
   let const_values : Map[String, @ast.TsExpr] = {}
   for entry in seeded_const_values {
     const_values[entry.0] = entry.1
@@ -3201,7 +3222,14 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.is_namespace_decl_start() {
-      self.skip_declaration_block()
+      // Used to skip — now parse so the transform layer can desugar
+      // `namespace X { … }` to a runtime object. Errors fall back to
+      // a skip so we don't regress modules that have unusual
+      // namespace shapes we don't yet understand.
+      match (try? self.parse_namespace_decl_runtime()) {
+        Ok(Some((_, Some(ns)))) => namespaces.push(ns)
+        Ok(_) | Err(_) => self.skip_declaration_block()
+      }
       continue
     }
     if self.is_const_enum_decl_start() {
@@ -3231,6 +3259,7 @@ fn Parser::parse_module_block_with_const_values(
       exports,
       reexports,
       enums,
+      namespaces,
     },
     const_values,
   )

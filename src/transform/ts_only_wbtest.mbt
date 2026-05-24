@@ -127,20 +127,24 @@ async test "ts-only: method overloads collapse to a single implementation" {
 // becomes a runtime object.
 // ---------------------------------------------------------------------------
 
-// NOTE: `namespace X { export const … }` lowering is not yet
-// implemented — the parser exposes `TsValueDecl { name, type_ }`
-// inside a namespace's module table, with no carrier for the
-// initializer expression. Lowering namespaces with constants
-// requires a parser extension to keep the init exprs alongside
-// the value decls. Tracking as a separate TODO; the corresponding
-// fixture is commented out until then.
-//
-//   namespace Constants {
-//     export const VERSION = "1.0";
-//     export function describe(): string { return VERSION; }
-//   }
-//   console.log(Constants.VERSION);
-//   console.log(Constants.describe());
+///|
+async test "ts-only: value namespace produces a runtime object" {
+  let files : Map[String, String] = {}
+  files["entry.ts"] =
+    #|namespace Constants {
+    #|  export const VERSION = "1.0";
+    #|  export const MAX = 100;
+    #|}
+    #|console.log(Constants.VERSION);
+    #|console.log(Constants.MAX);
+    #|
+  run_differential(
+    "ts-namespace",
+    files,
+    "entry.ts",
+    extra_reserved_props=["VERSION", "MAX"],
+  )
+}
 
 // ---------------------------------------------------------------------------
 // `declare` modifier — pure-type declarations that have no runtime

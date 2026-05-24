@@ -2029,6 +2029,7 @@ fn resolve_decl_from_local_name(
                                                 value: {
                                                   name: local_name,
                                                   type_: @ast.TsType::Any,
+                                                  init: None,
                                                 },
                                               })
                                             }
@@ -8466,6 +8467,7 @@ fn clone_exported_value(
         canonical_types,
       ),
     ),
+    init: None,
   }
 }
 

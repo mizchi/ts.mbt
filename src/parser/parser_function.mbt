@@ -1731,14 +1731,14 @@ fn Parser::parse_declare_values(
   if self.match_(Eq) {
     let _ = self.parse_expr()
   }
-  values.push({ name, type_ })
+  values.push({ name, type_, init: None })
   while self.match_(Comma) {
     let next_name = self.parse_binding_ident()
     let next_type = self.parse_var_decl_type()
     if self.match_(Eq) {
       let _ = self.parse_expr()
     }
-    values.push({ name: next_name, type_: next_type })
+    values.push({ name: next_name, type_: next_type, init: None })
   }
   self.consume_semicolon()
   values

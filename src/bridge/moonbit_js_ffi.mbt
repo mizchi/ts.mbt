@@ -5619,6 +5619,7 @@ pub async fn emit_moonbit_js_ffi_bundle_from_entry_path(
     let fallback_value : @ast.TsValueDecl = {
       name: export_.export_name,
       type_: @ast.TsType::Any,
+      init: None,
     }
     let getter_name = "__ts_mbt_get_" + ffi_to_snake_case(export_.export_name)
     push_unique_ffi_section(

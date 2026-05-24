@@ -232,13 +232,18 @@ fn lower_namespace(ns : @ast.TsNamespaceDecl) -> @ast.TsStmt? {
   for f in ns.module_.funcs {
     entries.push((f.name, @ast.TsExpr::FuncExpr(f)))
   }
-  // Value constants — `TsValueDecl` only carries name + type, no
-  // initializer. We can't reconstruct the initializer from there;
-  // skip values that aren't function decls (function bodies are
-  // recoverable via `module_.funcs`). Real-world namespace usage
-  // mostly mixes functions + nested namespaces anyway.
-  // Skip TsValueDecl entries for now.
-  let _ = ns.module_.values
+  // Value constants — parser stores runtime `const X = init`
+  // alongside the ambient `declare const X : T` entries on
+  // `module_.values`, with the init expression attached to the
+  // value's `init : TsExpr?` slot. Only values with an init slot
+  // make it into the synthesized object; ambient declarations
+  // (`declare const X`) have no runtime presence.
+  for v in ns.module_.values {
+    match v.init {
+      Some(init) => entries.push((v.name, init))
+      None => ()
+    }
+  }
   // Nested enums
   for en in ns.module_.enums {
     if en.is_declare {
