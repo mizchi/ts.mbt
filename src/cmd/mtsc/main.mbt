@@ -29,6 +29,12 @@ priv struct MtscOptions {
   mut treeshake : Bool
   mut fold : Bool
   mut minify : Bool
+  // Library-mode opt-in. When `true`, every property name that
+  // appears in an interface / type alias / class declaration is
+  // added to the mangler's reserved set so downstream consumers
+  // can still type-check against the emitted bundle. Off by
+  // default because plain `--bundle` is self-contained.
+  mut reserve_typed_props : Bool
   // Bare specifiers the user wants left as `import … from "<spec>"`
   // in the emitted bundle. Anything not on this list is resolved
   // through node_modules / tsconfig paths and inlined when found.
@@ -51,6 +57,7 @@ fn mtsc_options_new() -> MtscOptions {
     treeshake: false,
     fold: false,
     minify: false,
+    reserve_typed_props: false,
     externals: {},
     mangle: false,
     mangle_properties: false,
@@ -84,6 +91,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println(
     "  --external <spec>         Keep this bare-specifier import external (repeatable; comma-separated also OK)",
+  )
+  println(
+    "  --reserve-typed-props     Reserve every property declared in an interface / type alias / class (library mode)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println(
@@ -125,6 +135,7 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.fold = true
         opts.bundle = true
       }
+      "--reserve-typed-props" => opts.reserve_typed_props = true
       "--external" => {
         if i + 1 >= argv.length() {
           return Err("missing value for --external")
@@ -267,6 +278,7 @@ async fn mtsc_load_bundle_files(
   files : Map[String, String],
   aliases : Map[String, String],
   externals : Map[String, Bool],
+  type_props : Map[String, Bool],
 ) -> Result[Unit, String] {
   // Sequential DFS over the import graph. moonbitlang/async runs on
   // a cooperative single-threaded scheduler, so spawning per-file
@@ -289,6 +301,29 @@ async fn mtsc_load_bundle_files(
     }
     let mb = @parser.Parser::from_source(source).parse_module_block() catch {
       e => return Err("parse \{resolved}: \{e}")
+    }
+    // Second-pass parse for the TYPE side. The block parser above
+    // only sees runtime statements; interfaces / type aliases /
+    // classes live on `TsModule`, so we run a second parse to
+    // harvest the property names declared in those type
+    // declarations. They get added to the bundler's reserved-prop
+    // set so the property mangler never renames a name that's
+    // part of any module's public type surface.
+    let module_ = @parser.Parser::from_source(source).parse_module() catch {
+      _ => @ast.TsModule::{
+        funcs: [],
+        interfaces: [],
+        type_aliases: [],
+        imports: [],
+        values: [],
+        classes: [],
+        namespaces: [],
+        enums: [],
+        module_augmentations: [],
+      }
+    }
+    for n in @transform.type_declared_property_names(module_) {
+      type_props[n] = true
     }
     for imp in mb.imports {
       if imp.type_only {
@@ -389,11 +424,30 @@ async fn main {
   if opts.bundle {
     let files : Map[String, String] = {}
     let aliases : Map[String, String] = {}
-    match mtsc_load_bundle_files(input_path, files, aliases, opts.externals) {
+    let type_props : Map[String, Bool] = {}
+    match
+      mtsc_load_bundle_files(
+        input_path, files, aliases, opts.externals, type_props,
+      ) {
       Ok(_) => ()
       Err(e) => {
         println("mtsc: \{e}")
         return
+      }
+    }
+    // `type_props` collects every property name declared in an
+    // interface / type alias / class across the input. We DON'T
+    // feed it to the bundler by default: in bundle mode the type
+    // contract is erased at runtime (the bundle is self-contained,
+    // so no consumer can see the original property names through
+    // TypeScript reflection). The harvested list lives behind
+    // `--reserve-typed-props` for the library-emission scenario
+    // where the bundle's types DO escape and would type-check
+    // against a downstream consumer.
+    let extra_reserved : Array[String] = []
+    if opts.reserve_typed_props {
+      for n in type_props.keys() {
+        extra_reserved.push(n)
       }
     }
     let bundle_opts = @transform.BundleOptions::default()
@@ -404,6 +458,7 @@ async fn main {
       .with_minify(opts.minify)
       .with_fold(opts.fold)
       .with_aliases(aliases)
+      .with_extra_reserved_props(extra_reserved)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
     let out = match result {

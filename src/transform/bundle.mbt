@@ -63,6 +63,13 @@ pub(all) struct BundleOptions {
   // handing the VFS to the bundler. Empty map = no aliases (every
   // bare specifier is treated as external).
   aliases : Map[String, String]
+  // Caller-supplied additional reserved-property names. Used by
+  // mtsc's `--bundle` loader to feed in every property name
+  // declared in an `interface` / `type alias` / `class` across
+  // the input modules — those names are part of the bundle's
+  // public type surface and can't be renamed even when
+  // `--mangle-properties` is otherwise safe.
+  extra_reserved_props : Array[String]
 }
 
 ///|
@@ -76,7 +83,16 @@ pub fn BundleOptions::default() -> BundleOptions {
     minify: false,
     fold: false,
     aliases: {},
+    extra_reserved_props: [],
   }
+}
+
+///|
+pub fn BundleOptions::with_extra_reserved_props(
+  self : BundleOptions,
+  props : Array[String],
+) -> BundleOptions {
+  { ..self, extra_reserved_props: props }
 }
 
 ///|
@@ -332,6 +348,13 @@ pub fn bundle_modules(
       // never get a silently-broken bundle.
       let mut effective_mangle_props = opts.mangle_properties
       let extra_reserved : Array[String] = []
+      // Caller-supplied type-declared property names (interfaces /
+      // type aliases / classes). These are always part of the
+      // bundle's public type surface and must stay reserved,
+      // independent of the escape analysis.
+      for n in opts.extra_reserved_props {
+        extra_reserved.push(n)
+      }
       if opts.mangle_properties {
         let externals = external_import_bindings(external_imports)
         let escapes = collect_externally_visible_props(combined, externals)
@@ -348,6 +371,22 @@ pub fn bundle_modules(
           // safety. Identifier mangling still runs.
           effective_mangle_props = false
         }
+      }
+      // Dead-property elimination runs before mangling so the
+      // mangler doesn't allocate name slots for keys we're about
+      // to drop. Gated on the same "no wildcard" safety: when
+      // property mangling is suppressed, dead-prop pruning is
+      // suppressed too — both depend on the same proof that no
+      // property name escapes via reflection.
+      if effective_mangle_props {
+        let reserved_set : Map[String, Bool] = {}
+        for n in extra_reserved {
+          reserved_set[n] = true
+        }
+        for n in mangler_builtin_reserved_properties {
+          reserved_set[n] = true
+        }
+        combined = drop_dead_properties_block(combined, reserved_set)
       }
       let mangler_cfg = ManglerConfig::default()
         .with_mangle_properties(effective_mangle_props)
