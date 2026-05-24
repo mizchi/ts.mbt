@@ -1241,3 +1241,134 @@ runtime-bridge impact):
 - [ ] `JSX.LibraryManagedAttributes` / `defaultProps` — React 19
   deprecates the underlying pattern; modern components use default
   parameter values which we already cover.
+
+## TS → JS Bundler / Optimizer (`src/transform/`)
+
+Separate product surface from the bridge generator. Parses TS → JS,
+tree-shakes, mangles identifiers + properties, inlines immutable
+values, folds constants, drops dead branches and unused methods,
+lowers JSX, minifies, and emits a single-file bundle with optional
+inline source map. CLI entry: `tspack`.
+
+Baseline (2026-05-24): 1768/1768 tests passing, spec-compliance
+matrix green on neverthrow / zod / mitt across dev / prod / full /
+full+min, byte-identical stdout vs esbuild on 4 fixtures, size
+delta -60% on small fixtures and +28-113% on larger libraries.
+
+### Correctness / reliability (remaining from group C)
+
+- [ ] Property-based / fuzz testing.
+  - Generate random TS expression / statement shapes (within a
+    parser-supported subset), bundle at every opt level, execute
+    under node, assert stdout matches the baseline (no-opt) run.
+  - Target classes of bugs: operator precedence regressions in the
+    emitter, mangler collisions, fold-then-inline ordering bugs,
+    `instanceof` / `in` / `typeof` / `delete` word-boundary cases,
+    template-literal-in-arrow-body edge cases.
+  - Start with a hand-rolled shape generator before reaching for an
+    external QuickCheck-style harness.
+- [ ] Broaden the esbuild parity corpus.
+  - Add: async / await, generators, destructuring assignment with
+    defaults, try/catch/finally with rebound bindings, getters /
+    setters, computed property names, `for-of` over Map / Set, spread
+    in calls, `?.` / `??` chains, `class` with `#private` fields.
+  - Each fixture: stdout-identical to esbuild; size delta logged.
+- [ ] Close the size gap to esbuild on real libraries.
+  - Current state: ours = +28-113% over esbuild on cross-module /
+    class / neverthrow. Investigate where the extra bytes live —
+    likely candidates:
+    - identifier mangling doesn't yet rename across module boundaries
+      after import binding flattening;
+    - unused IIFE wrappers around module bodies (esbuild inlines the
+      single-module case);
+    - long property names from `Map` / `Set` instance methods (we
+      conservatively reserve all `Map.prototype` member names — could
+      be tightened with a type-aware reserve set).
+- [ ] Bundle-level invariant checks under property test.
+  - "Bundled output has no free `import` / `export` keywords."
+  - "Every emitted identifier is in scope at its use site."
+  - "Mangle map is injective per scope."
+
+### Optimization gaps
+
+- [ ] Dead-store elimination on locals.
+  - `let x = expr_with_no_side_effects; x = other; use(x)` should
+    drop the first assignment. Currently we keep the binding.
+- [ ] Inline single-use, single-assign function-locals when the RHS
+  is pure and the use site is in the same basic block.
+- [ ] Pure-call detection beyond the `/* @__PURE__ */` annotation:
+  detect calls to functions that are themselves pure (no global
+  writes, no IO, only pure callees) and drop them when their result
+  is unused.
+- [ ] Constant propagation across module boundaries.
+  - `export const N = 5;` consumed as `import { N } from "./x"` —
+    currently inlined only within the same module. Should propagate
+    through the import-binding rewrite step.
+- [ ] Loop-invariant hoisting for tight numeric loops (low ROI for
+  TS-shape bundles; defer until a real-world need surfaces).
+- [ ] Class layout flattening: when a class has no `extends`, no
+  `super` references, and no instance-side `this` escapes, lower
+  `new C(...)` to a plain object-literal factory.
+
+### Emit / minifier
+
+- [x] `instanceof` / `in` word-separator in minified mode.
+- [ ] `typeof` / `void` / `delete` / `new` word-separator audit —
+  same shape as the `instanceof` bug; verify each unary keyword.
+- [ ] `return\n<expr>` ASI hazard: minified emit must not insert a
+  newline between `return` and a parenthesised expression on the
+  next line (esbuild specifically guards this).
+- [ ] Short-form arrow body detection: `() => { return x; }` →
+  `() => x` when the body is a single return.
+- [ ] Numeric literal shortening: `1000` → `1e3`, `0.5` → `.5`,
+  `1000000` → `1e6` when shorter.
+
+### JSX / runtime
+
+- [x] Classic JSX lowering (React.createElement).
+- [x] Automatic runtime (`jsx-runtime`).
+- [ ] JSX fragment short-circuit: `<>{x}</>` with a single child
+  should drop the fragment wrapper when the consumer accepts a single
+  node (low ROI; deferred).
+- [ ] Lower `<Comp {...props} />` to a single object literal at emit
+  time instead of going through `Object.assign`.
+
+### CLI / DX (`tspack`)
+
+- [x] `--minify` / `--inline-sourcemap` flags.
+- [x] `--profile dev|prod|full` profile presets.
+- [ ] `--watch` mode that re-bundles on file change. Wire to the
+  existing async fs polling helper rather than inotify.
+- [ ] `--analyze` flag emitting a bundle composition report
+  (per-module byte size, top-N largest functions, mangle-budget
+  utilisation, JSValue surface — for parity with `webpack-bundle-analyzer`).
+- [ ] `--external <pkg>` flag to mark packages as external (skip
+  bundling, emit `require("pkg")` / `import "pkg"`).
+- [ ] Source-map external file mode (`--sourcemap` writes `.js.map`
+  alongside instead of inlining).
+- [ ] `tspack --check` mode: parse + type-check (via `src/checker`)
+  but do not emit. Useful as a fast CI gate before running the full
+  bundle.
+
+### Real-world corpus expansion
+
+- [x] mitt / classnames / dlv / debounce / invariant / kleur / nanoid /
+  state / neverthrow / zod / effect-tiny / React shims.
+- [ ] Add: redux-toolkit slim, immer slim, valtio slim, jotai-like
+  atom store, RxJS-style observable chain, fastify route handler
+  shape, hono context shape.
+- [ ] Each library: spec test (`[name] PASS/FAIL` matrix) +
+  esbuild parity (stdout-identical) + size delta logged.
+
+### Open questions / non-goals (transform)
+
+- [ ] Do not chase byte-for-byte parity with esbuild. The goal is
+  semantic parity (stdout-identical execution) and competitive size
+  on real libraries — within ~2x is acceptable, < 1.5x would be
+  excellent.
+- [ ] Do not implement a TypeScript type-checker inside transform —
+  re-use `src/checker` when a type-aware optimisation needs it
+  (e.g. reserved-property auto-derivation).
+- [ ] No source-level macro / preprocessor system. Pure-call hints
+  via `/* @__PURE__ */` are the only out-of-band optimization
+  signal we accept.
