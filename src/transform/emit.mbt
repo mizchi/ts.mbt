@@ -161,12 +161,20 @@ pub(all) struct TransformOutput {
 /// Full transform entrypoint with explicit sourcemap control.
 /// Statement-level source-map mappings are recorded when
 /// `with_sourcemap=true`; per-token AST positions land in a follow-up.
+///
+/// Pass `mangle~=true` to run the identifier-mangling pass on the
+/// lowered block before emission (`preserve_top_level=true` so the
+/// module's exported surface stays intact). `mangle_properties~=true`
+/// additionally renames non-reserved property keys, matching the
+/// opt-in property mode of `ManglerConfig`.
 pub fn transform_source_full(
   source : String,
   base : JsxConfig,
   with_sourcemap~ : Bool = false,
   source_path~ : String = "input.ts",
   output_path~ : String = "output.js",
+  mangle~ : Bool = false,
+  mangle_properties~ : Bool = false,
 ) -> Result[TransformOutput, String] {
   let (block, positions) = match
     (try? @parser.parse_block_from_source_with_positions(source)) {
@@ -175,6 +183,14 @@ pub fn transform_source_full(
   }
   let cfg = extract_jsx_pragmas(source, base)
   let (lowered, runtime_refs) = lower_block_with_runtime_imports(cfg, block)
+  let mangled = if mangle {
+    let mangler_cfg = ManglerConfig::default().with_mangle_properties(
+      mangle_properties,
+    )
+    mangle_block(lowered, mangler_cfg)
+  } else {
+    lowered
+  }
   let e = Emitter::new()
   if with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
@@ -193,11 +209,14 @@ pub fn transform_source_full(
     e.write("/jsx-runtime\";")
     e.nl()
   }
-  for i, stmt in lowered.stmts {
-    // Attach a mapping at the start of each top-level statement —
-    // nested-block statements pick up their own mappings inside
-    // `emit_block`.
-    if with_sourcemap && i < positions.length() {
+  // Source-map positions are tied to the unmangled block — when
+  // mangling reorders or drops statements the position array would
+  // need to be updated in lockstep. For now, skip per-statement
+  // mappings when mangling is on; consumers asking for both should
+  // file a follow-up.
+  let emit_positions = (not(mangle)) && with_sourcemap
+  for i, stmt in mangled.stmts {
+    if emit_positions && i < positions.length() {
       let src_pos = e.line_index.position(positions[i])
       e.mark(src_pos)
     }
@@ -205,8 +224,7 @@ pub fn transform_source_full(
     e.nl()
   }
   let sm_json : String? = match e.smap {
-    Some(b) =>
-      Some(b.to_json(source~, source_path~, output_path~))
+    Some(b) => Some(b.to_json(source~, source_path~, output_path~))
     None => None
   }
   Ok({ js: e.to_string(), sourcemap: sm_json })
