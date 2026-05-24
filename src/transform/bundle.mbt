@@ -630,19 +630,37 @@ fn tree_shake_bundle(
         let dep_roots = root_for(dep_path)
         match re.kind {
           Named(specs) =>
-            // Each entry is (local_in_source, exported_name). We
-            // only need the local-in-source side so the dep module
-            // knows which of its own bindings to keep.
+            // Each entry is (local_in_source_exports, exported_name_here).
+            // `local` is the *exported name* on the dep — e.g.
+            // `default` for `export { default as mitt } from "./x"`.
+            // Tree-shake's per-module roots match against actual
+            // binding names, so we have to resolve `local` to the
+            // dep's `local_name` slot in its exports table.
             for s in specs {
               let local = s.0
               let exported = s.1
-              // The reexport contributes to *this* module's surface
-              // as `exported`. Propagate that visibility upstream:
-              // when something keeps `exported` alive on this
-              // module, the corresponding `local` must stay alive
-              // on the dep module too.
-              if my_roots.contains(exported) && !dep_roots.contains(local) {
-                dep_roots[local] = true
+              if !my_roots.contains(exported) {
+                continue
+              }
+              // Resolve the dep's binding name for `local`.
+              let mut dep_local : String? = None
+              for ds in dep_node.exports {
+                if ds.export_name == local {
+                  dep_local = Some(ds.local_name)
+                  break
+                }
+              }
+              let target_name = match dep_local {
+                Some(n) => n
+                // Fallback: when the dep doesn't directly export
+                // `local`, the chain probably continues through
+                // another re-export. Add the raw name and let the
+                // fixpoint pick it up via the next iteration when
+                // the dep itself re-exports.
+                None => local
+              }
+              if !dep_roots.contains(target_name) {
+                dep_roots[target_name] = true
                 changed = true
               }
             }
