@@ -290,11 +290,13 @@ pub fn bundle_modules(
       stmts: combined_stmts,
       stmt_positions: [],
     }
-    // Order: fold -> treeshake -> mangle. Fold turns dead `if
-    // (false)` branches into nothing and identity arithmetic into a
-    // single operand; treeshake then drops declarations the now-
-    // smaller graph never reaches; mangle finally renames whatever
-    // survived.
+    // Order: fold -> treeshake -> mangle -> peephole. Fold turns
+    // dead `if (false)` branches into nothing and identity
+    // arithmetic into a single operand; treeshake then drops
+    // declarations the now-smaller graph never reaches; mangle
+    // renames whatever survived; peephole finally compacts the
+    // result with `x += y` and `void 0` rewrites that benefit from
+    // running on the already-renamed shape.
     if opts.fold {
       combined = fold_block(combined)
     }
@@ -309,6 +311,13 @@ pub fn bundle_modules(
         // top-level can be renamed freely.
         .with_preserve_top_level(false)
       combined = mangle_block(combined, mangler_cfg)
+    }
+    // Peephole is safe to run unconditionally — every rewrite is
+    // semantically transparent and only kicks in on already-
+    // matching shapes. Keep it gated on `minify` for now so plain
+    // `--bundle` output stays close to the original source.
+    if opts.minify {
+      combined = peephole_block(combined)
     }
     for s in combined.stmts {
       emit_stmt(e, s)

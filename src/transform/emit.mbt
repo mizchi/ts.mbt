@@ -23,9 +23,9 @@ priv struct Emitter {
   buf : StringBuilder
   mut indent : Int
   // When `true`, the emitter inserts whitespace + newlines that make
-  // the output diffable. The minify phase will eventually flip this
-  // to `false`, but the first round keeps it on so the bench fixtures
-  // and tests can compare against a stable shape.
+  // the output diffable. With `false`, indentation/newlines/optional
+  // spaces drop out and statement terminators take a "lazy" path so
+  // a `;` immediately followed by `}` can be elided.
   pretty : Bool
   // Live byte / line / column counts on the *output*. Tracked so the
   // source-map builder can attribute each emitted statement back to
@@ -40,7 +40,27 @@ priv struct Emitter {
   // offsets recorded by the parser into `(line, column)` for the
   // mappings. Empty `LineIndex` when sourcemap mode is off.
   mut line_index : LineIndex
+  // Pending statement terminator (`;`). In minify mode `semi()`
+  // sets this instead of writing the byte right away — the next
+  // write either commits it or, for `close_block`, drops it. In
+  // pretty mode `semi()` writes through directly and this flag
+  // stays false.
+  mut pending_semi : Bool
+  // Tracks the most recently emitted top-level token kind so we can
+  // suppress optional whitespace in minify mode (e.g. drop the
+  // space between `return` and a following `{` / `[` / string /
+  // template literal).
+  mut last_token : LastTok
 }
+
+///|
+priv enum LastTok {
+  Other
+  // Most recent text emitted was an identifier or keyword whose
+  // next-byte separator depends on the upcoming token (e.g.
+  // `return`, `typeof`, `delete`).
+  Word
+} derive(Eq)
 
 ///|
 fn Emitter::new(pretty~ : Bool = true) -> Emitter {
@@ -52,6 +72,30 @@ fn Emitter::new(pretty~ : Bool = true) -> Emitter {
     out_col: 0,
     smap: None,
     line_index: LineIndex::new(""),
+    pending_semi: false,
+    last_token: LastTok::Other,
+  }
+}
+
+///|
+fn Emitter::flush_semi(self : Emitter) -> Unit {
+  if self.pending_semi {
+    self.buf.write_string(";")
+    self.out_col = self.out_col + 1
+    self.pending_semi = false
+  }
+}
+
+///|
+/// Emit a statement terminator. In pretty mode this writes `;`
+/// immediately; in minify mode it parks the `;` so `close_block`
+/// can drop it when it's the last byte before `}`.
+fn Emitter::semi(self : Emitter) -> Unit {
+  if self.pretty {
+    self.buf.write_string(";")
+    self.out_col = self.out_col + 1
+  } else {
+    self.pending_semi = true
   }
 }
 
@@ -62,7 +106,11 @@ fn Emitter::to_string(self : Emitter) -> String {
 
 ///|
 fn Emitter::write(self : Emitter, s : String) -> Unit {
+  if self.pending_semi {
+    self.flush_semi()
+  }
   self.buf.write_string(s)
+  self.last_token = LastTok::Other
   // Update the output position counter so the source-map builder can
   // pin emit-side coordinates without reparsing the buffer.
   for c in s {
@@ -76,8 +124,56 @@ fn Emitter::write(self : Emitter, s : String) -> Unit {
 }
 
 ///|
+/// Emit a keyword (e.g. `return`, `typeof`, `void`, `delete`) and
+/// mark the trailing token-kind so the next call can decide whether
+/// an optional whitespace separator is needed in minify mode.
+fn Emitter::word(self : Emitter, s : String) -> Unit {
+  if self.pending_semi {
+    self.flush_semi()
+  }
+  self.buf.write_string(s)
+  for c in s {
+    if c == '\n' {
+      self.out_line = self.out_line + 1
+      self.out_col = 0
+    } else {
+      self.out_col = self.out_col + 1
+    }
+  }
+  self.last_token = LastTok::Word
+}
+
+///|
+/// Optional separator between a `Word` token and whatever follows.
+/// In pretty mode this is always a space; in minify mode it's a
+/// space only when the next character could legally extend the
+/// preceding identifier / keyword. `first_byte` is the first byte
+/// of the upcoming token (0 if unknown / always-separated).
+fn Emitter::sep_after_word(self : Emitter, first_byte : Char) -> Unit {
+  if self.pretty {
+    self.buf.write_string(" ")
+    self.out_col = self.out_col + 1
+    return
+  }
+  // Bytes that can never start an identifier: punctuators that
+  // immediately terminate the preceding ident. `{`, `[`, `(`, `"`,
+  // `'`, `` ` ``, `/`, digits + dots-on-number are safe to abut.
+  let needs_space = match first_byte {
+    '{' | '[' | '(' | '"' | '\'' | '`' | '!' | '~' | '+' | '-' => false
+    _ => true
+  }
+  if needs_space {
+    self.buf.write_string(" ")
+    self.out_col = self.out_col + 1
+  }
+}
+
+///|
 fn Emitter::nl(self : Emitter) -> Unit {
   if self.pretty {
+    if self.pending_semi {
+      self.flush_semi()
+    }
     self.buf.write_string("\n")
     self.out_line = self.out_line + 1
     self.out_col = 0
@@ -85,6 +181,10 @@ fn Emitter::nl(self : Emitter) -> Unit {
       self.buf.write_string("  ")
       self.out_col = self.out_col + 2
     }
+  } else if self.pending_semi {
+    // Minify: a `nl()` between two stmts commits the trailing `;`.
+    // Pending stays set until close_block runs (then it's dropped).
+    self.flush_semi()
   }
 }
 
@@ -116,6 +216,13 @@ fn Emitter::open_block(self : Emitter) -> Unit {
 
 ///|
 fn Emitter::close_block(self : Emitter) -> Unit {
+  // The last statement inside the block may have parked a `;` on
+  // `pending_semi`. In minify mode that semicolon is redundant
+  // before `}` — drop it. In pretty mode `nl()` will flush it
+  // first.
+  if not(self.pretty) {
+    self.pending_semi = false
+  }
   self.indent = self.indent - 1
   self.nl()
   self.write("}")
@@ -254,6 +361,46 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
 }
 
 ///|
+/// Variant for control-flow bodies (`if`, `while`, `for*`). In
+/// minify mode, when the body is a single statement and that
+/// statement isn't a `Let / Const / Var / function-decl` (whose
+/// scope `if (cond) let x = …` would semantically collapse around),
+/// emit it without braces. In pretty mode this just delegates to
+/// `emit_block` for diffable output.
+fn emit_branch_body(e : Emitter, block : @ast.TsBlock) -> Unit {
+  if e.pretty || block.stmts.length() != 1 {
+    emit_block(e, block)
+    return
+  }
+  let s = block.stmts[0]
+  if can_braceless(s) {
+    emit_stmt(e, s)
+  } else {
+    emit_block(e, block)
+  }
+}
+
+///|
+/// Statements that can stand alone as the body of an `if` / `while`
+/// / `for` without braces. `let` / `const` are excluded because
+/// `if (cond) let x = 1;` is a syntax error: lexical declarations
+/// can't be the direct child of a control flow head. `function`
+/// declarations have the same restriction.
+fn can_braceless(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Let(_, _, _) | Const(_, _, _) => false
+    // A bare `function foo() {…}` (which our emitter lowers from
+    // a `Let(Ident, _, FuncExpr)` pair) also can't sit as a single
+    // branch body. Detect the pattern.
+    Var(_, _, _) =>
+      // `var` is function-scoped, hoisting makes it survive — but
+      // some engines warn. Leave braces on for now.
+      false
+    _ => true
+  }
+}
+
+///|
 fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
   // The parser desugars top-level `function foo() {}` to
   // `Let(Ident("foo"), Any, FuncExpr({name: "foo", …}))`. Detect
@@ -268,31 +415,34 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
   }
   match stmt {
     Var(binding, _ty, init) => {
-      e.write("var ")
+      e.word("var")
+      e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
       e.space()
       e.write("=")
       e.space()
       emit_expr(e, init, 0)
-      e.write(";")
+      e.semi()
     }
     Let(binding, _ty, init) => {
-      e.write("let ")
+      e.word("let")
+      e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
       e.space()
       e.write("=")
       e.space()
       emit_expr(e, init, 0)
-      e.write(";")
+      e.semi()
     }
     Const(binding, _ty, init) => {
-      e.write("const ")
+      e.word("const")
+      e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
       e.space()
       e.write("=")
       e.space()
       emit_expr(e, init, 0)
-      e.write(";")
+      e.semi()
     }
     Assign(name, expr) => {
       e.write(name)
@@ -300,7 +450,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("=")
       e.space()
       emit_expr(e, expr, 0)
-      e.write(";")
+      e.semi()
     }
     CompoundAssign(name, op, expr) => {
       e.write(name)
@@ -308,7 +458,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write(compound_op_str(op))
       e.space()
       emit_expr(e, expr, 0)
-      e.write(";")
+      e.semi()
     }
     IndexAssign(recv, idx, value) => {
       emit_expr(e, recv, 18)
@@ -319,7 +469,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("=")
       e.space()
       emit_expr(e, value, 0)
-      e.write(";")
+      e.semi()
     }
     PropAssign(recv, prop, value) => {
       emit_expr(e, recv, 18)
@@ -329,26 +479,35 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("=")
       e.space()
       emit_expr(e, value, 0)
-      e.write(";")
+      e.semi()
     }
     Expr(expr) => {
       emit_expr(e, expr, 0)
-      e.write(";")
+      e.semi()
     }
-    Empty => e.write(";")
+    Empty => e.semi()
     Return(opt) =>
       match opt {
         Some(expr) => {
-          e.write("return ")
+          e.word("return")
+          // Optional separator: a Word token followed by a literal
+          // / brace / bracket / template can abut without a space.
+          let first = expr_leading_byte(expr)
+          e.sep_after_word(first)
           emit_expr(e, expr, 0)
-          e.write(";")
+          e.semi()
         }
-        None => e.write("return;")
+        None => {
+          e.write("return")
+          e.semi()
+        }
       }
     Throw(expr) => {
-      e.write("throw ")
+      e.word("throw")
+      let first = expr_leading_byte(expr)
+      e.sep_after_word(first)
       emit_expr(e, expr, 0)
-      e.write(";")
+      e.semi()
     }
     If(cond, then_b, else_opt) => {
       e.write("if")
@@ -357,13 +516,19 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, cond, 0)
       e.write(")")
       e.space()
-      emit_block(e, then_b)
+      emit_branch_body(e, then_b)
       match else_opt {
         Some(else_b) => {
           e.space()
           e.write("else")
-          e.space()
-          emit_block(e, else_b)
+          // The `else` keyword may abut its body when the body
+          // starts with `{` / `[` / etc. in minify mode.
+          if else_b.stmts.length() == 1 && can_braceless(else_b.stmts[0]) {
+            e.sep_after_word(stmt_leading_byte(else_b.stmts[0]))
+          } else {
+            e.space()
+          }
+          emit_branch_body(e, else_b)
         }
         None => ()
       }
@@ -375,18 +540,19 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, cond, 0)
       e.write(")")
       e.space()
-      emit_block(e, body)
+      emit_branch_body(e, body)
     }
     DoWhile(cond, body) => {
       e.write("do")
       e.space()
-      emit_block(e, body)
+      emit_branch_body(e, body)
       e.space()
       e.write("while")
       e.space()
       e.write("(")
       emit_expr(e, cond, 0)
-      e.write(");")
+      e.write(")")
+      e.semi()
     }
     For(init_opt, cond_opt, update_opt, body) => {
       e.write("for")
@@ -414,7 +580,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       }
       e.write(")")
       e.space()
-      emit_block(e, body)
+      emit_branch_body(e, body)
     }
     ForOf(kind, binding, _ty, iter, body) => {
       e.write("for")
@@ -426,7 +592,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
-      emit_block(e, body)
+      emit_branch_body(e, body)
     }
     ForAwaitOf(kind, binding, _ty, iter, body) => {
       e.write("for await")
@@ -438,7 +604,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
-      emit_block(e, body)
+      emit_branch_body(e, body)
     }
     ForIn(kind, binding, _ty, iter, body) => {
       e.write("for")
@@ -450,7 +616,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
-      emit_block(e, body)
+      emit_branch_body(e, body)
     }
     Switch(scrutinee, cases) => {
       e.write("switch")
@@ -464,7 +630,8 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.nl()
         match case_.test_expr {
           Some(t) => {
-            e.write("case ")
+            e.word("case")
+            e.sep_after_word(expr_leading_byte(t))
             emit_expr(e, t, 0)
             e.write(":")
           }
@@ -542,10 +709,82 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
 ///|
 /// Inside the head of a `for(init; cond; update)`, statements emit
 /// without a trailing semicolon (the loop syntax supplies the `;`).
+///|
+/// Guess the first byte the emitter will write for `expr`. Used by
+/// `sep_after_word` to decide whether the optional whitespace
+/// between a keyword and the next expression is needed in minify
+/// mode. Returns a punctuator byte for shapes we know don't extend
+/// the preceding word, and `?` (always-needs-space) for everything
+/// else.
+fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
+  match expr {
+    ObjectLit(_) | ComputedProp(_, _) => '{'
+    ArrayLit(_) => '['
+    StringLit(_) => '"'
+    TemplateLiteral(_, _) | TaggedTemplate(_, _, _, _) => '`'
+    NumberLit(_) | IntLit(_) => '0'
+    BigIntLit(_) => '0'
+    BoolLit(_) => '?'
+    NullLit => '?'
+    UnaryOp(op, _) =>
+      match op {
+        Not => '!'
+        BitwiseNot => '~'
+        Neg => '-'
+        Plus => '+'
+        _ => '?'
+      }
+    Call(_, _) | New(_, _) | Var(_) => '?'
+    CallExpr(callee, _) | NewExpr(callee, _) => expr_leading_byte(callee)
+    MethodCall(recv, _, _) | PropAccess(recv, _) | IndexAccess(recv, _) =>
+      expr_leading_byte(recv)
+    ArrowFunc(_, _, _, _) => '('
+    FuncExpr(_) => '?'
+    _ => '?'
+  }
+}
+
+///|
+///|
+/// First byte a top-level statement will emit, for the purpose of
+/// deciding whether an `else` keyword must be separated from its
+/// braceless body by a space.
+fn stmt_leading_byte(stmt : @ast.TsStmt) -> Char {
+  match stmt {
+    If(_, _, _) => 'i'
+    While(_, _) => 'w'
+    For(_, _, _, _) | ForOf(_, _, _, _, _) | ForIn(_, _, _, _, _) => 'f'
+    DoWhile(_, _) => 'd'
+    Switch(_, _) => 's'
+    Try(_, _, _, _) => 't'
+    Throw(_) => 't'
+    Return(_) => 'r'
+    Block(_) => '{'
+    Expr(e) => expr_leading_byte(e)
+    Empty => ';'
+    _ => '?'
+  }
+}
+
+///|
+/// First byte the binding emit will write — used by callers to skip
+/// the keyword separator when the binding starts with a `{` / `[`
+/// destructure pattern.
+fn binding_leading_byte(b : @ast.TsBinding) -> Char {
+  match b {
+    Ident(_) => '?'
+    Array(_) => '['
+    Object(_) => '{'
+    Target(_) => '?'
+  }
+}
+
+///|
 fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
   match stmt {
     Var(b, _, init) => {
-      e.write("var ")
+      e.word("var")
+      e.sep_after_word(binding_leading_byte(b))
       emit_binding(e, b)
       e.space()
       e.write("=")
@@ -553,7 +792,8 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, init, 0)
     }
     Let(b, _, init) => {
-      e.write("let ")
+      e.word("let")
+      e.sep_after_word(binding_leading_byte(b))
       emit_binding(e, b)
       e.space()
       e.write("=")
@@ -561,7 +801,8 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, init, 0)
     }
     Const(b, _, init) => {
-      e.write("const ")
+      e.word("const")
+      e.sep_after_word(binding_leading_byte(b))
       emit_binding(e, b)
       e.space()
       e.write("=")
