@@ -255,6 +255,17 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
 
 ///|
 fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
+  // The parser desugars top-level `function foo() {}` to
+  // `Let(Ident("foo"), Any, FuncExpr({name: "foo", …}))`. Detect
+  // that shape and emit a real function declaration — that's
+  // tighter (`function foo() {}` vs `let foo = function foo() {};`,
+  // ~15 bytes per function) and lets us drop the redundant
+  // FuncExpr internal name. Hoisting becomes more permissive than
+  // `let`, but never less, so this is a safe rewrite.
+  match try_emit_function_decl(e, stmt) {
+    true => return
+    false => ()
+  }
   match stmt {
     Var(binding, _ty, init) => {
       e.write("var ")
@@ -268,11 +279,6 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
     Let(binding, _ty, init) => {
       e.write("let ")
       emit_binding(e, binding)
-      // Skip the initializer when the source had no initializer at all
-      // (parser fills the slot with a placeholder). Without an explicit
-      // marker we emit `let x` for `NullLit` if the original lacked an
-      // `= …`; otherwise emit the value. Heuristic: omit init if it's
-      // a bare `NullLit` AND the binding type was `Any` (declare-style).
       e.space()
       e.write("=")
       e.space()
@@ -1089,6 +1095,50 @@ fn emit_jsx_child(e : Emitter, child : @ast.TsExpr) -> Unit {
       e.write("}")
     }
   }
+}
+
+///|
+///|
+/// Recognize the `Let / Const / Var(Ident(N), _, FuncExpr(f))`
+/// pattern the parser produces for `function foo() {…}` and emit a
+/// real function declaration. Returns `true` when the pattern
+/// matched (caller should skip the regular Let / Const / Var path).
+///
+/// Constraints:
+/// - The outer binding name must be a valid JS identifier (the
+///   bundle's merged top-level block guarantees this for source-
+///   derived names; mangle renames stay alphabetic too).
+/// - We emit the outer name as the function declaration's name and
+///   drop the FuncExpr internal name. Recursive calls in the body
+///   referenced the outer binding by `Var(...)`, which the mangler
+///   already kept in sync; the internal name is unreferenced after
+///   that pass.
+fn try_emit_function_decl(e : Emitter, stmt : @ast.TsStmt) -> Bool {
+  let (name, func) = match stmt {
+    Let(@ast.TsBinding::Ident(n), _, @ast.TsExpr::FuncExpr(f)) => (n, f)
+    Const(@ast.TsBinding::Ident(n), _, @ast.TsExpr::FuncExpr(f)) => (n, f)
+    Var(@ast.TsBinding::Ident(n), _, @ast.TsExpr::FuncExpr(f)) => (n, f)
+    _ => return false
+  }
+  if name == "" || not(is_valid_js_ident(name)) {
+    return false
+  }
+  // Async function declarations: emit `async function foo() {…}`.
+  if func.is_async {
+    e.write("async ")
+  }
+  e.write("function")
+  if func.is_generator {
+    e.write("*")
+  }
+  e.write(" ")
+  e.write(name)
+  e.write("(")
+  emit_runtime_params(e, func.params)
+  e.write(")")
+  e.space()
+  emit_block(e, func.body)
+  true
 }
 
 ///|

@@ -147,11 +147,13 @@ test "mangle: nested function bodies get their own scope" {
     #|}
   match mangle_to_js(src, cfg) {
     Ok(js) => {
+      // Top-level `outer` is preserved (default mangler config).
       assert_true(js.contains("function outer"))
-      // Inner fn name `inner` is a local declaration — keep its
-      // name slot (v0 doesn't rename nested function declarations).
-      assert_true(js.contains("function inner"))
-      // Parameter `count` was renamed.
+      // Inner `inner` is a local declaration in `outer`'s scope —
+      // the mangler renames it. After emit-time function-decl
+      // lowering, the outer-binding rename IS the function name.
+      assert_false(js.contains("inner"))
+      // Parameter `count` was renamed too.
       assert_false(js.contains("count + 1"))
     }
     Err(e) => fail("\{e}")

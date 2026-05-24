@@ -248,13 +248,15 @@ test "bundle: mangle keeps the shared call site consistent across modules" {
   let opts = BundleOptions::default().with_mangle(true)
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
-      // Find a single-letter binding (`let X = function …`) and
-      // verify the same X appears as a call target somewhere.
-      // The function-expression's internal `helper` name is kept
-      // verbatim by design; only the outer `let` binding renames.
+      // Emit-time function-decl lowering converts
+      // `Let(Ident(X), _, FuncExpr({name: X|orig, …}))` into a
+      // plain `function X(…) {…}`. The FuncExpr internal name is
+      // dropped; rename consistency between declaration and call
+      // site is preserved by the mangler walking `Var`/`Call`
+      // references in the body.
       let mut found = false
       for candidate in ["a", "b", "c", "d", "e"] {
-        if out.js.contains("let " + candidate + " = function ") &&
+        if out.js.contains("function " + candidate + "(") &&
           out.js.contains("= " + candidate + "(") {
           found = true
         }
