@@ -5,6 +5,7 @@ import {
   "moonbitlang/core/string",
   "mizchi/ts/parser",
   "mizchi/ts/bridge",
+  "mizchi/ts/transform",
 }
 
 import {

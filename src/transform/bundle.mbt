@@ -414,7 +414,11 @@ fn load_module_graph(
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
   let jsx_cfg = extract_jsx_pragmas(source, JsxConfig::default())
-  let (lowered, jsx_refs) = lower_block_with_runtime_imports(jsx_cfg, mb.block)
+  // First strip / lower TS-only constructs (enums, overload
+  // signatures) into the runtime stmt stream so the optimizer
+  // doesn't see surprise sentinel decls.
+  let desugared = ts_desugar_block(mb.block, mb.enums, [])
+  let (lowered, jsx_refs) = lower_block_with_runtime_imports(jsx_cfg, desugared)
   // Synthesize the JSX-runtime import when lowering introduced
   // references to `jsx` / `jsxs` / `Fragment` / etc. The import
   // specifier is `<jsx_cfg.import_source>/jsx-runtime` (e.g.
