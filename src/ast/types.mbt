@@ -105,6 +105,12 @@ pub(all) enum TsType {
   // (the operand's type flows through); meaningful to the transform
   // layer's immutability analysis as an explicit user signal.
   ConstAssertion
+  // `/* @__PURE__ */` annotation marker. Only appears as the type
+  // argument of `As(expr, PureCallMarker)`. Tells the optimizer
+  // that the wrapped call expression is side-effect-free, so the
+  // tree-shake pass can drop a binding whose RHS is a pure call
+  // when nothing references the binding.
+  PureCallMarker
 } derive(Eq, Debug)
 
 ///|
@@ -115,6 +121,29 @@ pub(all) enum TsType {
 pub fn peel_const_assertion(expr : TsExpr) -> TsExpr {
   match expr {
     As(inner, ConstAssertion) => peel_const_assertion(inner)
+    _ => expr
+  }
+}
+
+///|
+/// `true` when the expression is wrapped with the `/* @__PURE__ */`
+/// annotation marker (`As(inner, PureCallMarker)`). The optimizer
+/// uses this signal to drop the surrounding `let X = …` when `X`
+/// has no other references, even though the underlying call would
+/// normally be assumed to have side effects.
+pub fn is_pure_call_marked(expr : TsExpr) -> Bool {
+  match expr {
+    As(_, PureCallMarker) => true
+    _ => false
+  }
+}
+
+///|
+/// Strip the outer `As(inner, PureCallMarker)` wrap and return
+/// `inner`. No-op when the expression doesn't carry the marker.
+pub fn peel_pure_call_marker(expr : TsExpr) -> TsExpr {
+  match expr {
+    As(inner, PureCallMarker) => inner
     _ => expr
   }
 }

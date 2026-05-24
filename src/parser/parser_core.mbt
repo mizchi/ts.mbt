@@ -131,9 +131,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
 // / currentget
 fn Parser::peek(self : Parser) -> Token {
   if self.pending_gt > 0 {
-    { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+    { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false, pure_marked: false }
   } else if self.pos >= self.tokens.length() {
-    { kind: Eof, pos: 0, has_newline_before: false }
+    { kind: Eof, pos: 0, has_newline_before: false, pure_marked: false }
   } else {
     self.tokens[self.pos]
   }
@@ -144,7 +144,7 @@ fn Parser::peek(self : Parser) -> Token {
 fn Parser::advance(self : Parser) -> Token {
   if self.pending_gt > 0 {
     self.pending_gt -= 1
-    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false, pure_marked: false }
   }
   let tok = self.peek()
   if tok.kind != Eof {
@@ -177,11 +177,11 @@ fn Parser::check(self : Parser, kind : TokenKind) -> Bool {
 // / get
 fn Parser::peek_at(self : Parser, offset : Int) -> Token {
   if offset < self.pending_gt {
-    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false }
+    return { kind: Gt, pos: self.pending_gt_pos, has_newline_before: false, pure_marked: false }
   }
   let idx = self.pos + offset - self.pending_gt
   if idx >= self.tokens.length() {
-    { kind: Eof, pos: 0, has_newline_before: false }
+    { kind: Eof, pos: 0, has_newline_before: false, pure_marked: false }
   } else {
     self.tokens[idx]
   }

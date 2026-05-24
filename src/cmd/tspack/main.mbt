@@ -24,6 +24,10 @@ fn tspack_print_usage() -> Unit {
   println("                                 prod = tree-shake + method DCE (safe)")
   println("                                 full = tree-shake + mangle + inline + fold")
   println("  --sourcemap                  Emit `<out>.map` alongside the JS")
+  println("  --minify                     Strip whitespace + section comments")
+  println("  --inline-sourcemap           Embed the source map as a data URI")
+  println("                                 (`//# sourceMappingURL=data:…`)")
+  println("                                 — requires --sourcemap")
   println("  --root <dir>                 Resolve relative imports against <dir>")
   println("                                 (default: directory of <entry.ts>)")
   println("  --help                       Print this message and exit")
@@ -246,6 +250,8 @@ async fn main {
   let mut out_path : String? = None
   let mut profile : @ts.BundleProfile = Development
   let mut want_sourcemap = false
+  let mut want_minify = false
+  let mut want_inline_sourcemap = false
   let mut root_dir : String? = None
   let mut i = 1
   while i < argv.length() {
@@ -268,6 +274,11 @@ async fn main {
       i = i + 2
       continue
     } else if arg == "--sourcemap" {
+      want_sourcemap = true
+    } else if arg == "--minify" {
+      want_minify = true
+    } else if arg == "--inline-sourcemap" {
+      want_inline_sourcemap = true
       want_sourcemap = true
     } else if arg == "--root" && i + 1 < argv.length() {
       root_dir = Some(argv[i + 1])
@@ -310,6 +321,12 @@ async fn main {
   let mut opts = profile.to_options()
   if want_sourcemap {
     opts = { ..opts, with_sourcemap: true }
+  }
+  if want_minify {
+    opts = { ..opts, minify: true }
+  }
+  if want_inline_sourcemap {
+    opts = { ..opts, inline_sourcemap: true }
   }
   let result = @ts.bundle_files_with(files, rel_entry, opts)
   match result {

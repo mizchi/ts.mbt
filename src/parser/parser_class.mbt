@@ -877,7 +877,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       class_name = n
       self.advance()
     }
-    _ => { kind: Eof, pos: 0, has_newline_before: false }
+    _ => { kind: Eof, pos: 0, has_newline_before: false, pure_marked: false }
   }
   let mut class_type_params : Array[String] = []
   let mut class_type_param_bound_len = self.local_type_param_bounds.length()

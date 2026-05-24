@@ -130,6 +130,13 @@ pub struct Token {
   kind : TokenKind
   pos : Int // position
   has_newline_before : Bool // true if there was a newline before this token
+  // `true` when the most recently skipped block comment carried a
+  // `@__PURE__` (or `#__PURE__`) annotation. The parser reads this
+  // when constructing a Call / CallExpr / NewExpr and wraps the
+  // call with `As(_, PureCallMarker)` so the optimizer's
+  // tree-shake pass can drop a `let x = …` binding whose RHS is
+  // a pure-marked call.
+  pure_marked : Bool
 } derive(Debug)
 
 ///|
@@ -150,6 +157,13 @@ pub struct Lexer {
   mut pending : Array[Token]
   mut pending_index : Int
   mut newline_before_next : Bool // Set when whitespace skipping encounters a newline
+  // Set when the most recently skipped block comment was a
+  // `/* @__PURE__ */` (or terser's equivalent `/* #__PURE__ */`)
+  // annotation. The parser reads this immediately before
+  // constructing the next call expression and wraps the call with
+  // `As(_, PureCallMarker)` so the optimizer can drop the
+  // surrounding binding when nothing references its result.
+  mut pure_call_pending : Bool
 } derive(Debug)
 
 ///|
@@ -192,6 +206,7 @@ pub fn Lexer::new(src : String) -> Lexer {
     pending: [],
     pending_index: 0,
     newline_before_next: false,
+    pure_call_pending: false,
   }
 }
 
@@ -340,6 +355,29 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             // block
             let _ = self.advance()
             let _ = self.advance()
+            // Sniff for the terser-style purity annotation inside
+            // the comment body. Two equivalent forms are accepted:
+            // `@__PURE__` and `#__PURE__`, optionally with leading
+            // whitespace (`/* @__PURE__ */`). The flag stays
+            // sticky until the next significant token consumes it.
+            let src_len = self.src.length()
+            let mut sniff_pos = self.pos
+            while sniff_pos < src_len {
+              let b = self.src[sniff_pos].to_int()
+              if b == 0x20 || b == 0x09 {
+                sniff_pos = sniff_pos + 1
+              } else {
+                break
+              }
+            }
+            if sniff_pos + 9 <= src_len {
+              let head = self.src
+                .substring(start=sniff_pos, end=sniff_pos + 9)
+                .to_string()
+              if head == "@__PURE__" || head == "#__PURE__" {
+                self.pure_call_pending = true
+              }
+            }
             while true {
               match self.peek() {
                 None => break
@@ -1774,6 +1812,7 @@ fn Lexer::enqueue_template_tokens(self : Lexer, pos : Int) -> Unit {
     kind: Template(cooked_parts, raw_parts, exprs),
     pos,
     has_newline_before: has_newline,
+    pure_marked: false,
   }
   if self.pending_index >= self.pending.length() {
     self.pending = [token]
@@ -2076,9 +2115,14 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
   }
   self.skip_whitespace()
   let has_newline = self.newline_before_next
+  // Consume the pure-call marker the comment-skipper set while
+  // chewing through trivia. The next token gets the flag; clear
+  // so subsequent tokens don't inherit it.
+  let pure_flag = self.pure_call_pending
+  self.pure_call_pending = false
   let pos = self.pos
   match self.advance() {
-    None => { kind: Eof, pos, has_newline_before: has_newline }
+    None => { kind: Eof, pos, has_newline_before: has_newline, pure_marked: pure_flag }
     Some(c) => {
       let kind : TokenKind = match c {
         '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
@@ -2432,7 +2476,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
         _ => Ident(c.to_string())
       }
       self.allow_regex = next_allow_regex(self.allow_regex, kind)
-      { kind, pos, has_newline_before: has_newline }
+      { kind, pos, has_newline_before: has_newline, pure_marked: pure_flag }
     }
   }
 }

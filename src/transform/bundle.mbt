@@ -70,6 +70,18 @@ pub(all) struct BundleOptions {
   // once `cfg.mode` becomes `"prod"`, `cfg.mode === "dev"` folds
   // to `false` and `if (false) …` collapses entirely.
   fold_constants : Bool
+  // When `true`, emit minified output — no leading whitespace on
+  // statements, no trailing newlines, all stmts joined with `;`
+  // instead of `\n`. Pairs with `mangle` for production builds.
+  // Per-module section comments (`// ===== <path> =====`) are
+  // omitted in minified mode.
+  minify : Bool
+  // When `true` AND `with_sourcemap` is set, the JS output is
+  // appended with a `//# sourceMappingURL=data:…;base64,…`
+  // comment that inlines the source map. The `sourcemap` field on
+  // the result is still populated so callers that want the JSON
+  // separately can read it from there.
+  inline_sourcemap : Bool
 }
 
 ///|
@@ -83,6 +95,8 @@ pub fn BundleOptions::default() -> BundleOptions {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
 }
 
@@ -313,7 +327,7 @@ pub fn bundle_modules(
     }
     None => ()
   }
-  let e = Emitter::new()
+  let e = Emitter::new(pretty=!opts.minify)
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
   }
@@ -334,10 +348,12 @@ pub fn bundle_modules(
       Some(node) => node
       None => continue
     }
-    e.write("// ===== ")
-    e.write(path)
-    e.write(" =====")
-    e.nl()
+    if !opts.minify {
+      e.write("// ===== ")
+      e.write(path)
+      e.write(" =====")
+      e.nl()
+    }
     let _ = i
     sources.push(path)
     sources_content.push(m.source)
@@ -369,7 +385,26 @@ pub fn bundle_modules(
       Some(b.to_json_multi(sources, sources_content, output_path="bundle.js"))
     None => None
   }
-  Ok({ js: e.to_string(), sourcemap: sm_json, modules: module_paths })
+  // Inline source map as a `//# sourceMappingURL=data:…;base64,…`
+  // comment when both flags are set. Consumers that load the
+  // bundle directly into a browser dev-tool will see the original
+  // source positions without needing a side-by-side .map file.
+  let final_js = if opts.inline_sourcemap {
+    match sm_json {
+      Some(json) => {
+        let encoded = @base64.encode(json.to_bytes())
+        let prefix = if opts.minify { "" } else { "\n" }
+        e.to_string() +
+        prefix +
+        "//# sourceMappingURL=data:application/json;base64," +
+        encoded
+      }
+      None => e.to_string()
+    }
+  } else {
+    e.to_string()
+  }
+  Ok({ js: final_js, sourcemap: sm_json, modules: module_paths })
 }
 
 ///|

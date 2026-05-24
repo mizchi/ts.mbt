@@ -1093,6 +1093,7 @@ fn Parser::parse_parenthesized_expr(
     kind: Eof,
     pos: self.tokens[end_idx].pos,
     has_newline_before: false,
+    pure_marked: false,
   })
 
   let temp = {
@@ -1166,6 +1167,7 @@ fn Parser::parse_expr_until_top_level(
     kind: Eof,
     pos: self.tokens[end_idx].pos,
     has_newline_before: false,
+    pure_marked: false,
   })
 
   let temp = {
@@ -2337,6 +2339,12 @@ fn Parser::skip_jsx_closing_tag(
 ///|
 // / function, array, property, method
 fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
+  // Snapshot whether the next token carries the `/* @__PURE__ */`
+  // / `/* #__PURE__ */` annotation BEFORE consuming it — once the
+  // primary is parsed the flag may have flowed forward to the
+  // next call link. Used at the end to wrap the entire chain
+  // with `As(_, PureCallMarker)` when the user marked it pure.
+  let pure_marked = self.peek().pure_marked
   let mut expr = self.parse_primary()
   // Track whether this chain saw any `?.` so the checker can widen
   // the overall result with `undefined`. Each `?.` link wraps its
@@ -2438,10 +2446,21 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       }
     }
   }
-  if saw_optional_chain {
+  let chained = if saw_optional_chain {
     @ast.TsExpr::OptionalChain(expr)
   } else {
     expr
+  }
+  // Wrap with the purity marker when the user prefixed the call
+  // with `/* @__PURE__ */`. The marker only carries meaning when
+  // the chained expression is actually a call shape; bare
+  // identifiers or property accesses get the wrap too but it's a
+  // no-op for the optimizer (the tree-shake check looks at the
+  // unwrapped shape).
+  if pure_marked {
+    @ast.TsExpr::As(chained, @ast.TsType::PureCallMarker)
+  } else {
+    chained
   }
 }
 

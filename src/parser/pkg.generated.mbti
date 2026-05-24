@@ -53,6 +53,7 @@ pub struct Lexer {
   mut pending : Array[Token]
   mut pending_index : Int
   mut newline_before_next : Bool
+  mut pure_call_pending : Bool
 } derive(@debug.Debug)
 pub fn Lexer::new(String) -> Self
 pub fn Lexer::next_token(Self) -> Token
@@ -101,6 +102,7 @@ pub struct Token {
   kind : TokenKind
   pos : Int
   has_newline_before : Bool
+  pure_marked : Bool
 } derive(@debug.Debug)
 pub impl Show for Token
 

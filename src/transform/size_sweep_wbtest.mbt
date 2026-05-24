@@ -186,6 +186,16 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
     inline_immutable: true,
     fold_constants: true,
   })
+  let shaken_minified = measure(files, {
+    ..BundleOptions::default(),
+    tree_shake: true,
+    mangle: Some(ManglerConfig::default().with_mangle_properties(true)),
+    auto_reserve: true,
+    drop_unused_methods: true,
+    inline_immutable: true,
+    fold_constants: true,
+    minify: true,
+  })
   println("")
   println("┌──────────────────────────────────────────────┬─────────┬────────────┐")
   println("│ stage                                        │   bytes │  vs. raw   │")
@@ -208,6 +218,7 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
   row("+ method DCE (drop unused class methods)", shaken_methods_dced)
   row("+ inline immutable (const → literal)", shaken_inline_immutable)
   row("+ const fold + dead-branch elim", shaken_folded)
+  row("+ minify (single line, no whitespace)", shaken_minified)
   println("└──────────────────────────────────────────────┴─────────┴────────────┘")
   // Assertions — each successive optimization must not make output
   // worse. If a refactor regresses, this fails loudly.
@@ -224,4 +235,5 @@ test "size sweep: pipeline reductions on a 4-module event-bus fixture" {
   assert_true(shaken_methods_dced <= shaken_auto_reserved)
   assert_true(shaken_inline_immutable <= shaken_methods_dced)
   assert_true(shaken_folded <= shaken_inline_immutable)
+  assert_true(shaken_minified <= shaken_folded)
 }

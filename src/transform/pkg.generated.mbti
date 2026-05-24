@@ -72,6 +72,8 @@ pub(all) struct BundleOptions {
   drop_unused_methods : Bool
   inline_immutable : Bool
   fold_constants : Bool
+  minify : Bool
+  inline_sourcemap : Bool
 }
 pub fn BundleOptions::default() -> Self
 

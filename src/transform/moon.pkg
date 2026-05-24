@@ -1,6 +1,7 @@
 import {
   "moonbitlang/core/string",
   "moonbitlang/core/strconv",
+  "moonbitlang/core/encoding/base64",
   "mizchi/ts/ast",
   "mizchi/ts/parser",
 }

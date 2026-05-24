@@ -187,6 +187,8 @@ test "bundle: sourcemap option emits multi-source v3 JSON" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) =>
@@ -231,6 +233,8 @@ test "bundle: tree shaking drops a dep's unused exports" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -264,6 +268,8 @@ test "bundle: tree shaking keeps decls reached through a chain" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -298,6 +304,8 @@ test "bundle: namespace import keeps every export of the source" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -356,6 +364,8 @@ test "bundle: cross-module property mangling renames consistently" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -392,6 +402,8 @@ test "bundle: mangle preserves built-in props (length, then) across modules" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
@@ -446,6 +458,8 @@ test "bundle: auto-reserve protects exported interface fields cross-module" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => assert_true(out.js.contains("userName"))
@@ -483,6 +497,8 @@ test "bundle: auto-reserve follows inline object return types across modules" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   // `entry.ts` re-exports `make`. Resolving `make`'s return type
   // reaches `User` (cross-module), which keeps `userName`.
@@ -527,6 +543,8 @@ test "bundle: auto-reserve off keeps the user-supplied reserved set verbatim" {
     drop_unused_methods: false,
     inline_immutable: false,
     fold_constants: false,
+    minify: false,
+    inline_sourcemap: false,
   }
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => assert_false(out.js.contains("userName"))

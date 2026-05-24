@@ -49,15 +49,20 @@ pub fn tree_shake_block(
   for i, stmt in block.stmts {
     match decl_name[i] {
       None => {
-        // Non-decl stmt — always kept.
-        keeper[i] = true
-        for k in refs_per_stmt[i] {
-          live[k.0] = true
+        // Non-decl stmt. `Expr(As(call, PureCallMarker))` is the
+        // `/* @__PURE__ */ foo()` shape — the user promised the
+        // call has no side effects, so we can drop it (and its
+        // referenced names don't get pinned as live). Anything
+        // else is treated as a keeper.
+        if !stmt_is_pure_marked_expr(stmt) {
+          keeper[i] = true
+          for k in refs_per_stmt[i] {
+            live[k.0] = true
+          }
         }
       }
       Some(_) => ()
     }
-    let _ = stmt
   }
   // 3. Fixed-point: when a named decl's name becomes live, mark
   //    every name it references as live too. Repeat until stable.
@@ -87,7 +92,9 @@ pub fn tree_shake_block(
   for i, stmt in block.stmts {
     let alive = match decl_name[i] {
       Some(name) => live.contains(name)
-      None => true
+      // Pure-marked side-effect stmts are droppable; everything
+      // else without a binding stays.
+      None => !stmt_is_pure_marked_expr(stmt)
     }
     if alive {
       kept_stmts.push(stmt)
@@ -110,6 +117,17 @@ fn decl_binding_name(stmt : @ast.TsStmt) -> String? {
     | Const(@ast.TsBinding::Ident(name), _, _)
     | Var(@ast.TsBinding::Ident(name), _, _) => Some(name)
     _ => None
+  }
+}
+
+///|
+/// `true` when the stmt is the `Expr(As(_, PureCallMarker))` shape —
+/// i.e. a `/* @__PURE__ */ foo()` top-level call the user promised
+/// is side-effect-free. Tree-shake drops these unconditionally.
+fn stmt_is_pure_marked_expr(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Expr(@ast.TsExpr::As(_, @ast.TsType::PureCallMarker)) => true
+    _ => false
   }
 }
 

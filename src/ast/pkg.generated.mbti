@@ -6,7 +6,11 @@ import {
 }
 
 // Values
+pub fn is_pure_call_marked(TsExpr) -> Bool
+
 pub fn peel_const_assertion(TsExpr) -> TsExpr
+
+pub fn peel_pure_call_marker(TsExpr) -> TsExpr
 
 // Errors
 
@@ -391,6 +395,7 @@ pub(all) enum TsType {
   TypePredicate(String, TsType)
   AssertsPredicate(String, TsType?)
   ConstAssertion
+  PureCallMarker
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
 

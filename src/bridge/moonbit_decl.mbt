@@ -3341,6 +3341,8 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     UniqueSymbol(_) => "Symbol"
     // `as const` marker — transparent for naming purposes.
     ConstAssertion => "Const"
+    // `/* @__PURE__ */` annotation marker — runtime hint only.
+    PureCallMarker => "Pure"
   }
 }
 
