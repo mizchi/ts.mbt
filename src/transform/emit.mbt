@@ -736,9 +736,24 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     BinOp(op, l, r) => {
       let prec = binop_precedence(op)
       emit_expr(e, l, prec)
-      e.space()
+      // Word-like operators (`instanceof`, `in`) need a literal
+      // separator between the identifier and the keyword; the
+      // minifier's `space()` drops to `""` in pretty=false mode.
+      let needs_word_sep = match op {
+        Instanceof | In => true
+        _ => false
+      }
+      if needs_word_sep {
+        e.write(" ")
+      } else {
+        e.space()
+      }
       e.write(binop_str(op))
-      e.space()
+      if needs_word_sep {
+        e.write(" ")
+      } else {
+        e.space()
+      }
       // Right-associative ** uses prec, others prec+1 so left chains.
       let right_prec = match op {
         Pow => prec
