@@ -6,6 +6,7 @@ import {
 }
 
 // Values
+pub fn peel_const_assertion(TsExpr) -> TsExpr
 
 // Errors
 
@@ -67,6 +68,7 @@ pub impl Show for TsBindingElem
 
 pub(all) struct TsBlock {
   stmts : Array[TsStmt]
+  stmt_positions : Array[Int]
 } derive(@debug.Debug)
 pub impl Show for TsBlock
 
@@ -269,6 +271,7 @@ pub(all) struct TsModuleBlock {
   exports : Array[TsExportSpec]
   reexports : Array[TsReExportSpec]
   enums : Array[TsEnumDecl]
+  namespaces : Array[TsNamespaceDecl]
 } derive(@debug.Debug)
 pub impl Show for TsModuleBlock
 
@@ -387,6 +390,7 @@ pub(all) enum TsType {
   MappedTypeRemap(String, TsType, TsType, TsType, Bool)
   TypePredicate(String, TsType)
   AssertsPredicate(String, TsType?)
+  ConstAssertion
 } derive(Eq, @debug.Debug)
 pub impl Show for TsType
 
@@ -416,6 +420,7 @@ pub impl Show for TsUnaryOp
 pub(all) struct TsValueDecl {
   name : String
   type_ : TsType
+  init : TsExpr?
 } derive(@debug.Debug)
 pub impl Show for TsValueDecl
 

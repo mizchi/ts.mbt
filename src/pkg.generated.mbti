@@ -1,8 +1,18 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "mizchi/ts"
 
+import {
+  "mizchi/ts/transform",
+}
+
 // Values
 pub const CLI_VERSION : String = "0.3.0"
+
+pub fn bundle_files(Map[String, String], String, profile? : BundleProfile, with_sourcemap? : Bool) -> Result[@transform.BundleOutput, String]
+
+pub fn bundle_files_with(Map[String, String], String, @transform.BundleOptions) -> Result[@transform.BundleOutput, String]
+
+pub fn bundle_source(String, profile? : BundleProfile) -> Result[String, String]
 
 pub fn cli_bail(String) -> Unit
 
@@ -55,6 +65,13 @@ pub async fn ts2mbt_vendor_package(String, module_spec_override? : String?, vend
 // Errors
 
 // Types and methods
+pub(all) enum BundleProfile {
+  Development
+  Production
+  Full
+} derive(Eq, Show)
+pub fn BundleProfile::to_options(Self) -> @transform.BundleOptions
+
 pub enum CliArgScan {
   Args(Array[String])
   HelpRequested

@@ -476,16 +476,38 @@ fn load_module_graph(
         }
       }
       None => {
-        // Bare specifier — emit verbatim at the bundle top.
-        let key = imp.module_spec +
-          ":" +
-          (match imp.default_binding {
-            Some(s) => s
-            None => ""
-          })
-        if !external_seen.contains(key) {
-          external_seen[key] = true
-          external_imports.push(imp)
+        // Bare specifier (e.g. `react/jsx-runtime`). Two options:
+        //   1. The VFS has a file at that path → treat as a
+        //      vendored bare dep and bundle it.
+        //   2. Otherwise → external peer dep, re-emit verbatim
+        //      at the bundle top.
+        let probed = resolve_with_extensions(files, imp.module_spec)
+        if files.contains(probed) {
+          resolved[imp.module_spec] = probed
+          match
+            load_module_graph(
+              files,
+              probed,
+              modules,
+              external_imports,
+              external_seen,
+              visiting,
+              need_decls,
+            ) {
+            Ok(_) => ()
+            Err(e) => return Err(e)
+          }
+        } else {
+          let key = imp.module_spec +
+            ":" +
+            (match imp.default_binding {
+              Some(s) => s
+              None => ""
+            })
+          if !external_seen.contains(key) {
+            external_seen[key] = true
+            external_imports.push(imp)
+          }
         }
       }
     }

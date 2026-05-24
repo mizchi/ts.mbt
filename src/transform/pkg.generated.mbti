@@ -1,0 +1,155 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/ts/transform"
+
+import {
+  "mizchi/ts/ast",
+}
+
+// Values
+pub fn analyze_immutable_consts(Array[@ast.TsBlock]) -> ImmutabilityReport
+
+pub fn analyze_immutable_consts_with_sigs(Array[@ast.TsBlock], Array[@ast.TsFunc]) -> ImmutabilityReport
+
+pub fn auto_reserve_from_bundle(@ast.TsModuleBlock, Array[@ast.TsModule], ManglerConfig) -> ManglerConfig
+
+pub fn auto_reserve_from_module(@ast.TsModuleBlock, @ast.TsModule, ManglerConfig) -> ManglerConfig
+
+pub fn bundle_modules(Map[String, String], String, BundleOptions) -> Result[BundleOutput, String]
+
+pub fn collect_dynamic_property_reservations(Array[@ast.TsBlock]) -> Array[String]
+
+pub fn drop_orphan_immutable_decls(Array[@ast.TsBlock], ImmutabilityReport) -> Array[@ast.TsBlock]
+
+pub fn drop_unused_methods_in_blocks(Array[@ast.TsBlock], Array[String]) -> Array[@ast.TsBlock]
+
+pub fn extract_jsx_pragmas(String, JsxConfig) -> JsxConfig
+
+pub fn fold_constants_in_block(@ast.TsBlock) -> @ast.TsBlock
+
+pub fn fold_constants_in_blocks(Array[@ast.TsBlock]) -> Array[@ast.TsBlock]
+
+pub fn inline_immutable_property_reads(Array[@ast.TsBlock], ImmutabilityReport) -> Array[@ast.TsBlock]
+
+pub fn lower_block_with_runtime_imports(JsxConfig, @ast.TsBlock) -> (@ast.TsBlock, Array[String])
+
+pub fn lower_jsx_element(JsxConfig, String, Array[(String, @ast.TsExpr?)], Array[@ast.TsExpr]) -> @ast.TsExpr
+
+pub fn lower_jsx_in_block(JsxConfig, @ast.TsBlock) -> @ast.TsBlock
+
+pub fn lower_jsx_in_expr(JsxConfig, @ast.TsExpr) -> @ast.TsExpr
+
+pub fn lower_jsx_in_stmt(JsxConfig, @ast.TsStmt) -> @ast.TsStmt
+
+pub fn mangle_block(@ast.TsBlock, ManglerConfig) -> @ast.TsBlock
+
+pub fn mangle_blocks_together(Array[@ast.TsBlock], ManglerConfig) -> Array[@ast.TsBlock]
+
+pub fn mangle_source_with_auto_reserve(String, ManglerConfig) -> Result[String, String]
+
+pub fn resolve_top_level_collisions(Array[@ast.TsBlock]) -> Array[@ast.TsBlock]
+
+pub fn transform_source(String) -> Result[String, String]
+
+pub fn transform_source_full(String, JsxConfig, with_sourcemap? : Bool, source_path? : String, output_path? : String) -> Result[TransformOutput, String]
+
+pub fn transform_source_with(String, JsxConfig) -> Result[String, String]
+
+pub fn tree_shake_block(@ast.TsBlock, Array[String]) -> @ast.TsBlock
+
+pub fn ts_desugar_block(@ast.TsBlock, Array[@ast.TsEnumDecl], Array[@ast.TsNamespaceDecl]) -> @ast.TsBlock
+
+pub fn vlq_encode(Int) -> String
+
+// Errors
+
+// Types and methods
+pub(all) struct BundleOptions {
+  jsx : JsxConfig
+  with_sourcemap : Bool
+  tree_shake : Bool
+  mangle : ManglerConfig?
+  auto_reserve : Bool
+  drop_unused_methods : Bool
+  inline_immutable : Bool
+  fold_constants : Bool
+}
+pub fn BundleOptions::default() -> Self
+
+pub(all) struct BundleOutput {
+  js : String
+  sourcemap : String?
+  modules : Array[String]
+}
+
+pub(all) struct ImmutabilityReport {
+  immutable_objects : Map[String, Map[String, @ast.TsExpr]]
+}
+pub fn ImmutabilityReport::is_immutable(Self, String) -> Bool
+pub fn ImmutabilityReport::lookup(Self, String, String) -> @ast.TsExpr?
+
+pub(all) struct JsxConfig {
+  runtime : String
+  import_source : String
+  dev : Bool
+  pragma_jsx : String
+  pragma_jsx_frag : String
+}
+pub fn JsxConfig::default() -> Self
+pub fn JsxConfig::with_dev(Self, Bool) -> Self
+pub fn JsxConfig::with_import_source(Self, String) -> Self
+pub fn JsxConfig::with_pragma_jsx(Self, String) -> Self
+pub fn JsxConfig::with_pragma_jsx_frag(Self, String) -> Self
+pub fn JsxConfig::with_runtime(Self, String) -> Self
+
+pub(all) struct LineIndex {
+  line_starts : Array[Int]
+}
+pub fn LineIndex::new(String) -> Self
+pub fn LineIndex::position(Self, Int) -> Position
+
+pub(all) struct ManglerConfig {
+  reserved : Array[String]
+  preserve_top_level : Bool
+  mangle_properties : Bool
+  reserved_properties : Array[String]
+}
+pub fn ManglerConfig::default() -> Self
+pub fn ManglerConfig::with_mangle_properties(Self, Bool) -> Self
+pub fn ManglerConfig::with_preserve_top_level(Self, Bool) -> Self
+pub fn ManglerConfig::with_reserved(Self, Array[String]) -> Self
+pub fn ManglerConfig::with_reserved_properties(Self, Array[String]) -> Self
+
+pub(all) struct Position {
+  line : Int
+  column : Int
+} derive(Eq, Show)
+pub fn Position::new(Int, Int) -> Self
+
+pub(all) struct Segment {
+  out_col : Int
+  src_line : Int?
+  src_col : Int?
+  src_id : Int?
+}
+
+pub(all) struct SourceMapBuilder {
+  lines : Array[Array[Segment]]
+  mut last_out_line : Int
+  mut current_source : Int
+}
+pub fn SourceMapBuilder::add_mapping(Self, Int, Int, Int, Int) -> Unit
+pub fn SourceMapBuilder::add_unmapped(Self, Int, Int) -> Unit
+pub fn SourceMapBuilder::new() -> Self
+pub fn SourceMapBuilder::set_current_source(Self, Int) -> Unit
+pub fn SourceMapBuilder::to_json(Self, source~ : String, source_path~ : String, output_path~ : String) -> String
+pub fn SourceMapBuilder::to_json_multi(Self, Array[String], Array[String], output_path~ : String) -> String
+
+pub(all) struct TransformOutput {
+  js : String
+  sourcemap : String?
+}
+
+// Type aliases
+
+// Traits
+
