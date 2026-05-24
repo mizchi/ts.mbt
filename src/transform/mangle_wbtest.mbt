@@ -382,7 +382,10 @@ test "mangle: method calls follow the property rename" {
           Some(i) => {
             // Skip the `.` and look for `(` after a single char.
             if from_idx + i + 2 < js.length() &&
-              js.substring(start=from_idx + i + 2, end=from_idx + i + 3).to_string() == "(" {
+              js
+              .substring(start=from_idx + i + 2, end=from_idx + i + 3)
+              .to_string() ==
+              "(" {
               occurrences = occurrences + 1
             }
             from_idx = from_idx + i + 1
@@ -391,6 +394,220 @@ test "mangle: method calls follow the property rename" {
         }
       }
       assert_true(occurrences >= 2)
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+
+///|
+test "mangle: block-scoped let in separate if arms can share short names" {
+  // `firstName` lives only in the `then` branch; `lastName` lives only
+  // in the `else` branch. With block-scope frames they should both
+  // compress to the same short name (`a`) — the rename map is local
+  // to each arm and the slot is reused once the arm exits.
+  let cfg = ManglerConfig::default()
+  let src =
+    #|function pick(flag) {
+    #|  if (flag) {
+    #|    let firstName = "alice";
+    #|    return firstName;
+    #|  } else {
+    #|    let lastName = "smith";
+    #|    return lastName;
+    #|  }
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("firstName"))
+      assert_false(js.contains("lastName"))
+      // The block frames are independent, so both arms collide on
+      // the same short slot — count how many `let <single-letter>`
+      // declarations end up with the same name across the two arms.
+      let mut shared : String? = None
+      for candidate in ["a", "b", "c"] {
+        let needle = "let " + candidate + " ="
+        let mut occurrences = 0
+        let mut from_idx = 0
+        while from_idx < js.length() {
+          let slice = js.substring(start=from_idx, end=js.length()).to_string()
+          match slice.find(needle) {
+            Some(i) => {
+              occurrences = occurrences + 1
+              from_idx = from_idx + i + 1
+            }
+            None => break
+          }
+        }
+        if occurrences >= 2 {
+          shared = Some(candidate)
+        }
+      }
+      match shared {
+        Some(_) => ()
+        None => fail("expected both if arms to reuse a short slot, got: \{js}")
+      }
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: var declared inside an if is hoisted to the function frame" {
+  // `var counter` is function-scoped per JS spec — the reference
+  // after the `if` must still resolve to the same renamed identifier.
+  let cfg = ManglerConfig::default()
+  let src =
+    #|function run(flag) {
+    #|  if (flag) {
+    #|    var counter = 1;
+    #|  }
+    #|  return counter;
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("counter"))
+      // The `var` declaration and the post-if `return` must end up
+      // referring to the same renamed identifier. Look for both
+      // `var <name>` and `return <name>` matching.
+      let mut hoisted_to : String? = None
+      for candidate in ["a", "b", "c", "d"] {
+        if js.contains("var " + candidate + " =") &&
+          js.contains("return " + candidate + ";") {
+          hoisted_to = Some(candidate)
+        }
+      }
+      match hoisted_to {
+        Some(_) => ()
+        None =>
+          fail("expected var + return to share a renamed identifier in: \{js}")
+      }
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: nested while bodies open their own block frame" {
+  // Two sibling `while` loops each introduce their own `let`. The
+  // counter should reset between them so the second loop reuses the
+  // first loop's short name.
+  let cfg = ManglerConfig::default()
+  let src =
+    #|function loops() {
+    #|  while (true) {
+    #|    let cursor = 0;
+    #|    cursor = cursor + 1;
+    #|  }
+    #|  while (true) {
+    #|    let counter = 0;
+    #|    counter = counter + 1;
+    #|  }
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("cursor"))
+      assert_false(js.contains("counter"))
+      // Both inner `let` slots should land on the same short name
+      // because the block frames are independent.
+      let mut occurrences = 0
+      let mut from_idx = 0
+      while from_idx < js.length() {
+        let slice = js.substring(start=from_idx, end=js.length()).to_string()
+        match slice.find("let a") {
+          Some(i) => {
+            occurrences = occurrences + 1
+            from_idx = from_idx + i + 1
+          }
+          None => break
+        }
+      }
+      assert_true(occurrences >= 2)
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: try / catch / finally each get an independent frame" {
+  // Block-scoped `let` in `try`, the catch parameter, and a `let`
+  // in `finally` should all be able to share the same short name —
+  // their lifetimes don't overlap.
+  let cfg = ManglerConfig::default()
+  let src =
+    #|function safe(work) {
+    #|  try {
+    #|    let attempt = work();
+    #|    return attempt;
+    #|  } catch (failure) {
+    #|    return failure;
+    #|  } finally {
+    #|    let cleanup = 1;
+    #|    return cleanup;
+    #|  }
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("attempt"))
+      assert_false(js.contains("failure"))
+      assert_false(js.contains("cleanup"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: bare block stmt opens its own frame" {
+  // A `{ … }` block at function level is a lexical scope; the
+  // `let` should not bleed into the surrounding function's frame.
+  let cfg = ManglerConfig::default()
+  let src =
+    #|function nest() {
+    #|  let outer = 1;
+    #|  {
+    #|    let middle = 2;
+    #|    return outer + middle;
+    #|  }
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("outer"))
+      assert_false(js.contains("middle"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
+test "mangle: var inside nested blocks still hoists to the function" {
+  // `var hoistMe` is wrapped in two nested blocks; the function-
+  // level reference must still bind to the same rename.
+  let cfg = ManglerConfig::default()
+  let src =
+    #|function f() {
+    #|  while (true) {
+    #|    if (true) {
+    #|      var hoistMe = 1;
+    #|    }
+    #|  }
+    #|  return hoistMe;
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      assert_false(js.contains("hoistMe"))
+      // The `var` and the `return` must share a renamed identifier.
+      let mut bound : String? = None
+      for candidate in ["a", "b", "c", "d", "e"] {
+        if js.contains("var " + candidate + " =") &&
+          js.contains("return " + candidate + ";") {
+          bound = Some(candidate)
+        }
+      }
+      match bound {
+        Some(_) => ()
+        None => fail("expected var hoisting to bind across blocks in: \{js}")
+      }
     }
     Err(e) => fail("\{e}")
   }
@@ -427,4 +644,3 @@ test "mangle: name short-name generator avoids reserved single-letter clashes" {
     Err(e) => fail("\{e}")
   }
 }
-
