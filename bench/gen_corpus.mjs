@@ -25,8 +25,6 @@ await mkdir(outDir, { recursive: true });
 function bodyFor(i) {
   // TS surface that lowers cleanly: generics, narrowing on string-
   // literal unions, destructuring, template literals, plain helpers.
-  // Classes are intentionally skipped because the emitter's class
-  // desugar uses some non-final placeholders.
   const generic = `export function pair${i}<T, U>(t: T, u: U): { left: T; right: U } {
   return { left: t, right: u };
 }`;

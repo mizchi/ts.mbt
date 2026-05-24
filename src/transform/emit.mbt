@@ -175,6 +175,7 @@ pub fn transform_source_full(
   output_path~ : String = "output.js",
   mangle~ : Bool = false,
   mangle_properties~ : Bool = false,
+  minify~ : Bool = false,
 ) -> Result[TransformOutput, String] {
   let (block, positions) = match
     (try? @parser.parse_block_from_source_with_positions(source)) {
@@ -191,7 +192,7 @@ pub fn transform_source_full(
   } else {
     lowered
   }
-  let e = Emitter::new()
+  let e = Emitter::new(pretty=not(minify))
   if with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
     e.line_index = LineIndex::new(source)
@@ -918,28 +919,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         e.write("async ")
       }
       e.write("(")
-      for i, p in params {
-        if i > 0 {
-          e.write(",")
-          e.space()
-        }
-        if p.is_rest {
-          e.write("...")
-        }
-        match p.binding {
-          Some(b) => emit_binding(e, b)
-          None => e.write(p.name)
-        }
-        match p.default {
-          Some(d) => {
-            e.space()
-            e.write("=")
-            e.space()
-            emit_expr(e, d, 2)
-          }
-          None => ()
-        }
-      }
+      emit_runtime_params(e, params)
       e.write(")")
       e.space()
       e.write("=>")
@@ -1117,16 +1097,38 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   if f.is_generator {
     e.write("*")
   }
-  if f.name != "" {
+  // Synthesized class-desugar nodes carry a placeholder `<class>` /
+  // `<anon>` name. Those aren't valid JS identifiers, so emit the
+  // expression in its anonymous form (`function () {…}`).
+  if f.name != "" && is_valid_js_ident(f.name) {
     e.write(" ")
     e.write(f.name)
   }
   e.write("(")
-  for i, p in f.params {
-    if i > 0 {
+  emit_runtime_params(e, f.params)
+  e.write(")")
+  e.space()
+  emit_block(e, f.body)
+  let _ = f.is_async
+}
+
+///|
+/// Emit the runtime parameter list for a function / arrow / method,
+/// filtering out the TypeScript-only `this` annotation parameter.
+/// `this` at index 0 has no runtime slot — it's a type annotation
+/// for the receiver. Letting it through produces `function f(this)`,
+/// which V8 rejects as a syntax error.
+fn emit_runtime_params(e : Emitter, params : Array[@ast.TsParam]) -> Unit {
+  let mut written = 0
+  for p in params {
+    if is_this_type_annotation_param(p) {
+      continue
+    }
+    if written > 0 {
       e.write(",")
       e.space()
     }
+    written = written + 1
     if p.is_rest {
       e.write("...")
     }
@@ -1144,10 +1146,55 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
       None => ()
     }
   }
-  e.write(")")
-  e.space()
-  emit_block(e, f.body)
-  let _ = f.is_async
+}
+
+///|
+/// `function f(this: T, ...)` declares the receiver's type, not a
+/// runtime argument. JS rejects `this` as a parameter name, so we
+/// drop the slot during emit.
+fn is_this_type_annotation_param(p : @ast.TsParam) -> Bool {
+  if p.is_rest {
+    return false
+  }
+  if p.name != "this" {
+    return false
+  }
+  match p.binding {
+    None => true
+    Some(@ast.TsBinding::Ident(n)) => n == "this"
+    _ => false
+  }
+}
+
+///|
+/// Quick check: is `s` a syntactically valid JS identifier? Used to
+/// decide whether to emit a name on a synthesized function
+/// expression. We only need a coarse rejector — the parser handles
+/// the full Unicode case for real source identifiers.
+fn is_valid_js_ident(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  let head = s[0]
+  let head_ok = (head >= 'a' && head <= 'z') ||
+    (head >= 'A' && head <= 'Z') ||
+    head == '_' ||
+    head == '$'
+  if not(head_ok) {
+    return false
+  }
+  for i = 1; i < s.length(); i = i + 1 {
+    let c = s[i]
+    let ok = (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' ||
+      c == '$'
+    if not(ok) {
+      return false
+    }
+  }
+  true
 }
 
 ///|

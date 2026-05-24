@@ -107,7 +107,10 @@ test "transform: class declaration emits via the parser's class desugar" {
     ,
     [
       "let Counter",
-      "function <class>",
+      // The desugar IIFE's outer wrapper is anonymous — the parser
+      // tags it with `<class>` internally; the emitter drops invalid
+      // identifier characters and falls back to `function ()`.
+      "function()",
       "function Counter()",
       "Counter.prototype.inc",
       "return Counter",

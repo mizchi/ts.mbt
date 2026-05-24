@@ -50,6 +50,14 @@ pub(all) struct BundleOptions {
   // block emit path, so the bundler forces single-scope folding
   // whenever this is set (just like `mangle` does).
   treeshake : Bool
+  // When `true`, suppress indentation, newlines, and most optional
+  // whitespace in the emitted JS. Mutually exclusive with
+  // `with_sourcemap` because line / column tracking degenerates.
+  minify : Bool
+  // When `true`, run the lightweight constant-folder before the
+  // treeshake / mangle passes. Folds identity-element arithmetic,
+  // dead `if (true/false)` branches, boolean short-circuits, etc.
+  fold : Bool
 }
 
 ///|
@@ -60,7 +68,19 @@ pub fn BundleOptions::default() -> BundleOptions {
     mangle: false,
     mangle_properties: false,
     treeshake: false,
+    minify: false,
+    fold: false,
   }
+}
+
+///|
+pub fn BundleOptions::with_minify(self : BundleOptions, m : Bool) -> BundleOptions {
+  { ..self, minify: m }
+}
+
+///|
+pub fn BundleOptions::with_fold(self : BundleOptions, f : Bool) -> BundleOptions {
+  { ..self, fold: f }
 }
 
 ///|
@@ -233,7 +253,7 @@ pub fn bundle_modules(
     Err(e) => return Err(e)
   }
   let order = topological_order(modules, entry)
-  let e = Emitter::new()
+  let e = Emitter::new(pretty=not(opts.minify))
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
   }
@@ -254,7 +274,7 @@ pub fn bundle_modules(
   // shared scope. Per-module separator comments and source-map
   // mappings are dropped — both rely on a per-module emit pass that
   // doesn't survive the rename / DCE.
-  if opts.mangle || opts.treeshake {
+  if opts.mangle || opts.treeshake || opts.fold {
     let combined_stmts : Array[@ast.TsStmt] = []
     for path in order {
       let m = match modules.get(path) {
@@ -270,9 +290,14 @@ pub fn bundle_modules(
       stmts: combined_stmts,
       stmt_positions: [],
     }
-    // Tree-shake first: dropping declarations shrinks the input that
-    // the mangler has to walk, and lets the mangler skip naming
-    // slots for names that no longer appear.
+    // Order: fold -> treeshake -> mangle. Fold turns dead `if
+    // (false)` branches into nothing and identity arithmetic into a
+    // single operand; treeshake then drops declarations the now-
+    // smaller graph never reaches; mangle finally renames whatever
+    // survived.
+    if opts.fold {
+      combined = fold_block(combined)
+    }
     if opts.treeshake {
       combined = treeshake_block(combined)
     }

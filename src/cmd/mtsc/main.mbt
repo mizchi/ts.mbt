@@ -27,6 +27,8 @@ priv struct MtscOptions {
   mut out : String?
   mut bundle : Bool
   mut treeshake : Bool
+  mut fold : Bool
+  mut minify : Bool
   mut mangle : Bool
   mut mangle_properties : Bool
   mut sourcemap : Bool
@@ -43,6 +45,8 @@ fn mtsc_options_new() -> MtscOptions {
     out: None,
     bundle: false,
     treeshake: false,
+    fold: false,
+    minify: false,
     mangle: false,
     mangle_properties: false,
     sourcemap: false,
@@ -66,6 +70,12 @@ fn mtsc_print_usage() -> Unit {
   )
   println(
     "  --treeshake               Drop top-level declarations unreached from any live stmt (implies --bundle)",
+  )
+  println(
+    "  --minify                  Suppress indentation / newlines / optional whitespace",
+  )
+  println(
+    "  --fold                    Constant-fold identity arithmetic and dead branches (implies --bundle)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println(
@@ -100,6 +110,11 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
       "--bundle" => opts.bundle = true
       "--treeshake" => {
         opts.treeshake = true
+        opts.bundle = true
+      }
+      "--minify" => opts.minify = true
+      "--fold" => {
+        opts.fold = true
         opts.bundle = true
       }
       "--mangle" => opts.mangle = true
@@ -349,6 +364,8 @@ async fn main {
       .with_mangle_properties(opts.mangle_properties)
       .with_sourcemap(opts.sourcemap)
       .with_treeshake(opts.treeshake)
+      .with_minify(opts.minify)
+      .with_fold(opts.fold)
     let bundle_opts = { ..bundle_opts, jsx: jsx_cfg }
     let result = @transform.bundle_modules(files, input_path, bundle_opts)
     let out = match result {
@@ -399,6 +416,7 @@ async fn main {
     output_path~,
     mangle=opts.mangle,
     mangle_properties=opts.mangle_properties,
+    minify=opts.minify,
   )
   let out = match result {
     Ok(o) => o
