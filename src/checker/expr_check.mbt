@@ -1969,6 +1969,7 @@ fn infer_expr(
     // return `Any`. The embedded `{expr}` sub-expressions are walked
     // by `check_call_args_in_expr` for diagnostic recursion.
     JsxElement(_, _, _) => @ast.TsType::Any
+    NativeClassExpr(_, _) => @ast.TsType::Any
   }
 }
 
@@ -4877,6 +4878,7 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
     Block(b) => check_block(env, b, ctx)
     Label(_, inner) => check_stmt(env, inner, ctx)
     Empty | Break(_) | Continue(_) | Debugger => ()
+    NativeClassStmt(_, _) => ()
   }
 }
 

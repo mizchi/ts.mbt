@@ -615,6 +615,11 @@ fn collect_decl_names_from_stmt(
       for inner in block.stmts {
         collect_decl_names_from_stmt(inner, names)
       }
+    // `class X extends Y { … }` produced as a native class
+    // declaration. The export tracker needs to see `X` so
+    // `export class App extends LitElement {}` registers the
+    // export.
+    NativeClassStmt(decl, _) => if decl.name != "" { names.push(decl.name) }
     _ => ()
   }
 }

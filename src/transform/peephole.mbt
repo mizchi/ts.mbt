@@ -120,6 +120,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       })
     Label(name, inner) => Label(name, peep_stmt(inner, ctx))
     Block(b) => Block(peep_block(b, ctx))
+    NativeClassStmt(_, _) => stmt
   }
 }
 

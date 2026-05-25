@@ -183,6 +183,14 @@ pub(all) enum TsExpr {
   // functionexpression (function() {})
   FuncExpr(TsFunc)
 
+  // Native class expression `class [Name] extends Base { … }`.
+  // Used by the parser when the source's class can't safely be
+  // lowered to the `(function() { … })()` IIFE because it extends
+  // another class — `super(…)` would be invalid outside a real
+  // class body. The optional name is the class's declared name
+  // (anonymous when "").
+  NativeClassExpr(TsClassDecl, TsFunc?)
+
   // yield expression (generator)
   Yield(TsExpr?)
   YieldStar(TsExpr)
@@ -373,6 +381,16 @@ pub(all) enum TsStmt {
   Debugger
   Label(String, TsStmt)
   Block(TsBlock)
+  // Native `class Name extends Base { … }` declaration. Used by the
+  // parser when the source can't be safely lowered to the
+  // `let X = (function() { … })()` IIFE — primarily because the
+  // class extends another class (the IIFE's `super(…)` call is a
+  // syntax error outside a real class body). The `TsClassDecl`
+  // carries the structural shape (name, base, fields, methods);
+  // `ctor_func` carries the constructor's full signature + body so
+  // the emitter can preserve rest / default / destructuring
+  // parameters that the checker-side declaration doesn't model.
+  NativeClassStmt(TsClassDecl, TsFunc?)
 
   // break/continue
   Break(String?)

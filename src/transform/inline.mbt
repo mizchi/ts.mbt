@@ -120,6 +120,7 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
       })
     Label(name, inner) => Label(name, inline_into_stmt(inner))
     Block(b) => Block(inline_block(b))
+    NativeClassStmt(_, _) => stmt
   }
 }
 

@@ -309,3 +309,47 @@ test "bundle: longer cycle through three modules" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: class extends emits native syntax with working super()" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "class MyError extends Error {\n  res: number;\n  constructor(m: string, r: number) { super(m); this.res = r; }\n}\nconsole.log(new MyError(\"x\", 1).message);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Native `class … extends Error { … }` syntax, not the
+      // IIFE desugar. Without this fix, the IIFE's `super(…)`
+      // call landed outside a method body and V8 rejected it.
+      assert_true(out.js.contains("class MyError extends Error"))
+      assert_true(out.js.contains("super(m)"))
+      // The brittle bits of the old IIFE form should not appear.
+      assert_false(out.js.contains("__super_proto"))
+      assert_false(out.js.contains("__super_ctor"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: for-loop comma-separated init unfolds correctly" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function sum(arr: number[]): number {\n  let total = 0;\n  for (let i = 0, n = arr.length; i < n; i++) {\n    total += arr[i];\n  }\n  return total;\n}\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Comma-separated `for (let i = 0, n = …; …; …)` is emitted as
+      // a single declaration, not as a brace-block.
+      assert_true(out.js.contains("for (let i = 0, n = arr.length;"))
+      // Block-form `for ({…}; …; …)` is what the buggy emit
+      // produced — must not appear.
+      assert_false(out.js.contains("for ({"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

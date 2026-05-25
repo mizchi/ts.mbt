@@ -170,6 +170,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       }
     }
     Block(b) => out.push(Block(fold_block(b)))
+    NativeClassStmt(_, _) => out.push(stmt)
   }
 }
 

@@ -241,6 +241,7 @@ fn collect_var_refs_in_stmt(
     }
     Label(_, inner) => collect_var_refs_in_stmt(inner, out)
     Block(b) => collect_var_refs_in_block(b, out)
+    NativeClassStmt(_, _) => ()
   }
 }
 

@@ -126,6 +126,7 @@ fn collect_read_property_names_stmt(
     }
     Label(_, inner) => collect_read_property_names_stmt(inner, out)
     Block(b) => collect_read_property_names_block(b, out)
+    NativeClassStmt(_, _) => ()
     _ => ()
   }
 }
@@ -402,6 +403,7 @@ fn drop_dead_props_stmt(
     Label(name, inner) =>
       Label(name, drop_dead_props_stmt(inner, reserved, read_props))
     Block(b) => Block(drop_dead_props_block(b, reserved, read_props))
+    NativeClassStmt(_, _) => stmt
   }
 }
 

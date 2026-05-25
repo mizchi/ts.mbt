@@ -322,6 +322,7 @@ fn collect_props_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
       collect_property_names(body, out)
     }
     Break(_) | Continue(_) | Empty | Debugger => ()
+    NativeClassStmt(_, _) => ()
   }
 }
 
@@ -1029,6 +1030,7 @@ fn rename_stmt(
       )
     }
     Break(_) | Continue(_) | Empty | Debugger => stmt
+    NativeClassStmt(_, _) => stmt
   }
 }
 
@@ -1562,6 +1564,7 @@ fn rename_properties_in_stmt(
         rename_properties_in_block(body, prop_map),
       )
     Break(_) | Continue(_) | Empty | Debugger => stmt
+    NativeClassStmt(_, _) => stmt
   }
 }
 

@@ -688,6 +688,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         None => e.write("continue;")
       }
     Block(b) => emit_block(e, b)
+    NativeClassStmt(decl, ctor_body) => emit_native_class(e, decl, ctor_body)
     Label(name, inner) => {
       e.write(name + ":")
       e.space()
@@ -780,7 +781,71 @@ fn binding_leading_byte(b : @ast.TsBinding) -> Char {
 }
 
 ///|
+/// Recognize the parser's `for (let i = 0, n = arr.length; …)` lower
+/// — a `Block` of same-kind single-ident declarations — and emit
+/// the original comma-separated form. Returns `true` when the
+/// pattern matched.
+fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
+  let block = match stmt {
+    Block(b) => b
+    _ => return false
+  }
+  if block.stmts.length() < 2 {
+    return false
+  }
+  // All stmts must be the same lexical kind.
+  let kind = match block.stmts[0] {
+    Var(_, _, _) => "var"
+    Let(_, _, _) => "let"
+    Const(_, _, _) => "const"
+    _ => return false
+  }
+  for s in block.stmts {
+    match s {
+      Var(_, _, _) => if kind != "var" { return false }
+      Let(_, _, _) => if kind != "let" { return false }
+      Const(_, _, _) => if kind != "const" { return false }
+      _ => return false
+    }
+  }
+  // Emit `kind name = init, name = init, ...`.
+  e.word(kind)
+  // The first byte after the kind is the first binding's leading
+  // byte (always `?` for identifier-only in our parser path here).
+  let first_byte = match block.stmts[0] {
+    Var(b, _, _) | Let(b, _, _) | Const(b, _, _) => binding_leading_byte(b)
+    _ => '?'
+  }
+  e.sep_after_word(first_byte)
+  for i, s in block.stmts {
+    if i > 0 {
+      e.write(",")
+      e.space()
+    }
+    match s {
+      Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
+        emit_binding(e, b)
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
+      _ => ()
+    }
+  }
+  true
+}
+
+///|
 fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
+  // The parser wraps comma-separated decls (`for (let i = 0, n = …;`)
+  // in a Block since they parse as multiple statements. JS grammar
+  // requires a single declaration with comma-separated binders here,
+  // so detect the same-kind-block pattern and unfold it.
+  match try_emit_multi_decl_for_head(e, stmt) {
+    true => return
+    false => ()
+  }
   match stmt {
     Var(b, _, init) => {
       e.word("var")
@@ -1226,6 +1291,8 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     }
     JsxElement(tag, attrs, children) =>
       emit_jsx_element(e, tag, attrs, children)
+    NativeClassExpr(decl, ctor_body) =>
+      emit_native_class(e, decl, ctor_body)
   }
 }
 
@@ -1654,8 +1721,77 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
     ComputedProp(_, _) => 19
     FuncExpr(_) => 19
     DynamicImport(_, _) => 18
+    // Class expressions sit at the same precedence as function
+    // expressions — both are primary atoms.
+    NativeClassExpr(_, _) => 19
     // TS-only wrappers — same precedence as their inner expression.
     As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
       expr_precedence(inner)
   }
+}
+
+///|
+/// Emit a native `class Name extends Base { … }` declaration. Used
+/// when the parser bypassed the IIFE desugar — primarily for
+/// `class X extends Y` shapes where the desugar's `super(…)` call
+/// would be invalid outside a method body.
+fn emit_native_class(
+  e : Emitter,
+  decl : @ast.TsClassDecl,
+  ctor_func : @ast.TsFunc?,
+) -> Unit {
+  e.word("class")
+  if decl.name != "" && is_valid_js_ident(decl.name) {
+    e.sep_after_word('A')
+    e.write(decl.name)
+  }
+  if decl.base_names.length() > 0 {
+    e.space()
+    e.write("extends")
+    e.sep_after_word('A')
+    e.write(decl.base_names[0])
+  }
+  e.space()
+  e.open_block()
+  // Constructor — emit the full TsFunc so rest / default /
+  // destructuring params are preserved verbatim.
+  match ctor_func {
+    Some(func) => {
+      e.nl()
+      e.write("constructor")
+      e.write("(")
+      emit_runtime_params(e, func.params)
+      e.write(")")
+      e.space()
+      emit_block(e, func.body)
+    }
+    None => ()
+  }
+  // Methods.
+  for m in decl.methods {
+    e.nl()
+    if m.is_static {
+      e.word("static")
+      e.sep_after_word('A')
+    }
+    e.write(m.name)
+    e.write("(")
+    for i, p in m.params {
+      if i > 0 {
+        e.write(",")
+        e.space()
+      }
+      e.write(p.0)
+    }
+    e.write(")")
+    e.space()
+    match m.body {
+      Some(b) => emit_block(e, b)
+      None => {
+        e.write("{")
+        e.write("}")
+      }
+    }
+  }
+  e.close_block()
 }
