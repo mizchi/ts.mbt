@@ -1050,6 +1050,32 @@ test "class-method-dce: drops methods nothing in the bundle accesses (native cla
 }
 
 ///|
+test "iife-class-lift: simple class without extends becomes native syntax" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Foo {\n" +
+      "  start() { return 1; }\n" +
+      "  stop() { return 2; }\n" +
+      "}\n" +
+      "const f = new Foo();\n" +
+      "const out = f.start() + f.stop();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The IIFE wrapper is gone; a native `class Foo` declaration
+      // takes its place.
+      assert_true(out.js.contains("class Foo"))
+      assert_false(out.js.contains("Foo.prototype.start"))
+      assert_false(out.js.contains("__super_proto"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class-method-dce: drops methods on IIFE-lowered class" {
   let files = vfs([
     (

@@ -399,6 +399,12 @@ pub fn bundle_modules(
     // never observed outside switch heads and `===`/`!==`
     // comparisons, swap the string tags for small integers.
     combined = tag_rewrite_block(combined, combined_type_aliases)
+    // Lift the IIFE-lowered class shape back to native
+    // `class Name { … }` syntax. Smaller emit, plus
+    // `class_method_dce_block` then operates on the structured
+    // form (NativeClassStmt) instead of pattern-matching the
+    // prototype-assignment chain.
+    combined = iife_class_lift_block(combined)
     // Class-method DCE: drop methods on native class declarations
     // that nothing in the bundle accesses by name. Gated on the
     // absence of reflection / dynamic-key access in the bundle.
