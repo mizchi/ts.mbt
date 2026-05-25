@@ -482,7 +482,7 @@ fn load_module_graph(
   // parser collects enums on a side list and leaves an `Empty`
   // placeholder in the runtime block — without this step, every
   // enum reference becomes `undefined` at runtime.
-  let lowered = if mb.enums.length() > 0 {
+  let lowered_with_enums = if mb.enums.length() > 0 {
     let enum_stmts = lower_enums(mb.enums)
     let combined : Array[@ast.TsStmt] = []
     for s in enum_stmts {
@@ -494,6 +494,16 @@ fn load_module_graph(
     @ast.TsBlock::{ stmts: combined, stmt_positions: [] }
   } else {
     lowered_jsx
+  }
+  // `const enum` inlining: replace `E.Member` use sites with the
+  // member's literal value. The lowering above already skipped
+  // runtime emission for `is_const` decls, so the var is absent;
+  // this step makes sure no stale `E.Member` references remain.
+  let lowered = if mb.enums.length() > 0 {
+    let table = build_const_enum_table(mb.enums)
+    inline_const_enums(lowered_with_enums, table)
+  } else {
+    lowered_with_enums
   }
   // Insert a placeholder BEFORE recursing into imports so cyclic
   // module references hit the early-return guard above and break

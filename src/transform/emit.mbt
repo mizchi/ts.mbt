@@ -284,13 +284,40 @@ pub fn transform_source_full(
   mangle_properties~ : Bool = false,
   minify~ : Bool = false,
 ) -> Result[TransformOutput, String] {
-  let (block, positions) = match
-    (try? @parser.parse_block_from_source_with_positions(source)) {
-    Ok(pair) => pair
-    Err(e) => return Err("parse error: \{e}")
+  // Parse via the module-block entry so we can inline `const enum`
+  // use sites — the side list `mb.enums` carries the original
+  // declarations even though the parser's stmt-level path drops
+  // their runtime stmts. Falls back to the plain block parse if
+  // the source isn't a module-shaped fragment.
+  let (block, positions, enums) = match
+    (try? @parser.parse_module_block_from_source(source)) {
+    Ok(mb) => (mb.block, mb.block.stmt_positions, mb.enums)
+    Err(_) =>
+      match (try? @parser.parse_block_from_source_with_positions(source)) {
+        Ok(pair) => (pair.0, pair.1, [])
+        Err(e) => return Err("parse error: \{e}")
+      }
   }
   let cfg = extract_jsx_pragmas(source, base)
-  let (lowered, runtime_refs) = lower_block_with_runtime_imports(cfg, block)
+  let (lowered_jsx, runtime_refs) = lower_block_with_runtime_imports(cfg, block)
+  // Splice runtime enum stmts (regular, non-const) and inline
+  // `const enum` use sites with their literal values. Same flow
+  // the bundler uses; mirrored here so single-file mode works.
+  let lowered = if enums.length() > 0 {
+    let enum_stmts = lower_enums(enums)
+    let combined : Array[@ast.TsStmt] = []
+    for s in enum_stmts {
+      combined.push(s)
+    }
+    for s in lowered_jsx.stmts {
+      combined.push(s)
+    }
+    let with_enums : @ast.TsBlock = { stmts: combined, stmt_positions: [] }
+    let table = build_const_enum_table(enums)
+    inline_const_enums(with_enums, table)
+  } else {
+    lowered_jsx
+  }
   let mangled = if mangle {
     let mangler_cfg = ManglerConfig::default().with_mangle_properties(
       mangle_properties,

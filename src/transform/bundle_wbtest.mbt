@@ -559,3 +559,76 @@ test "enum lowering: string enum omits reverse mapping" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "const-enum: numeric values inline at use sites, no runtime var" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const enum Status { OK = 200, NotFound = 404 }\nconsole.log(Status.OK, Status.NotFound);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The const-enum's runtime declaration must NOT appear.
+      assert_false(out.js.contains("var Status"))
+      assert_false(out.js.contains("Status[\"OK\"]"))
+      // Use sites become the literal values.
+      assert_true(out.js.contains("console.log(200, 404)"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "const-enum: string values inline as string literals" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const enum Mode { R = \"r\", W = \"w\" }\nconsole.log(Mode.R, Mode.W);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_false(out.js.contains("var Mode"))
+      assert_true(out.js.contains("console.log(\"r\", \"w\")"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "const-enum: auto-increment after explicit numeric anchor" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const enum E { A = 10, B, C }\nconsole.log(E.A, E.B, E.C);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) =>
+      // 10 is explicit, 11 / 12 come from auto-increment.
+      assert_true(out.js.contains("console.log(10, 11, 12)"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "const-enum: regular `enum` keeps its runtime var when adjacent" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const enum Inline { X = 10 }\nenum Regular { A, B }\nconsole.log(Inline.X + Regular.A);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Only `Regular` materializes; `Inline` is fully erased.
+      assert_false(out.js.contains("var Inline"))
+      assert_true(out.js.contains("var Regular"))
+      // `Inline.X` → 10; `Regular.A` left as runtime lookup.
+      assert_true(out.js.contains("console.log(10 + Regular.A)"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

@@ -316,6 +316,14 @@ pub fn lower_enum_decl_to_runtime_stmts(
   if decl.is_declare {
     return out
   }
+  // `const enum` decls don't generate any runtime object —
+  // their use sites are inlined to literal values by
+  // `transform/const_enum_inline.mbt`. Emitting the var would
+  // both bloat the bundle and break the TS-spec contract that
+  // const enums vanish at runtime.
+  if decl.is_const {
+    return out
+  }
   out.push(
     Var(@ast.TsBinding::Ident(decl.name), @ast.TsType::Any, ObjectLit([])),
   )
@@ -3171,6 +3179,7 @@ fn Parser::parse_module_block_with_const_values(
   seeded_const_values : Map[String, @ast.TsExpr],
 ) -> (@ast.TsModuleBlock, Map[String, @ast.TsExpr]) raise ParseError {
   let stmts : Array[@ast.TsStmt] = []
+  let stmt_positions : Array[Int] = []
   let imports : Array[@ast.TsImportDecl] = []
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
@@ -3290,20 +3299,24 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Const) {
+      let pos = self.peek().pos
       let stmt = self.parse_stmt()
       collect_static_const_exprs_from_stmt(stmt, const_values)
       // Keep the const declaration on the runtime statement stream
       // too — bridge passes consume `const_values` for build-time
       // table extraction, but the transform / bundle phase needs
       // every runtime statement in `block.stmts`.
+      stmt_positions.push(pos)
       stmts.push(stmt)
       continue
     }
+    let pos = self.peek().pos
     stmts.push(self.parse_stmt())
+    stmt_positions.push(pos)
   }
   (
     {
-      block: { stmts, stmt_positions: [] },
+      block: { stmts, stmt_positions },
       imports,
       exports,
       reexports,
