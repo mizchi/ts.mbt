@@ -500,6 +500,7 @@ async fn main {
           enums: [],
           internal_names: {},
           deprecations: {},
+          pure_declarations: {},
         })
         let module_ = (try?
           @parser.parse_module_from_source_with_const_values(entry_source, {})).or(
@@ -597,6 +598,7 @@ async fn main {
             enums: [],
             internal_names: {},
           deprecations: {},
+          pure_declarations: {},
           })
           let entry_module = (try?
             @parser.parse_module_from_source_with_const_values(

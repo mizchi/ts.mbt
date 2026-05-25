@@ -713,6 +713,12 @@ pub(all) struct TsModuleBlock {
   // JSDoc comment so downstream consumers' IDEs surface the
   // notice. Empty message means "deprecated but no explanation".
   deprecations : Map[String, String]
+  // Function declarations annotated with `@__PURE__` or
+  // `@__NO_SIDE_EFFECTS__` JSDoc. The purity pass adds these to
+  // its pure set unconditionally, overriding the call-graph
+  // fixpoint. Useful for functions that call into externally-
+  // declared APIs the analyzer can't see through.
+  pure_declarations : Map[String, Bool]
 } derive(Debug)
 
 // ============================================

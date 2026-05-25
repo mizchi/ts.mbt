@@ -61,6 +61,9 @@ pub struct Parser {
   // Names with a `@deprecated` tag — fed into the emitted
   // `TsModuleBlock` so `.d.ts` emit can mark them.
   collected_deprecations : Map[String, String]
+  // Function names with a `@__PURE__` or `@__NO_SIDE_EFFECTS__`
+  // tag. The purity pass treats these as unconditionally pure.
+  collected_pure_declarations : Map[String, Bool]
 } derive(Debug)
 
 ///|
@@ -110,6 +113,7 @@ pub fn Parser::new_with_strict_and_jsx(
     collected_internal_names: {},
     jsdoc_at_pos: {},
     collected_deprecations: {},
+    collected_pure_declarations: {},
   }
 }
 
@@ -157,6 +161,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     collected_internal_names: {},
     jsdoc_at_pos: lexer.jsdoc_at_pos,
     collected_deprecations: {},
+    collected_pure_declarations: {},
   }
 }
 

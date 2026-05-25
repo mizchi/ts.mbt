@@ -313,7 +313,7 @@ pub fn transform_source_full(
       combined.push(s)
     }
     let with_enums : @ast.TsBlock = { stmts: combined, stmt_positions: [] }
-    let table = build_const_enum_table(enums)
+    let table = build_enum_inline_table(enums, include_non_const=true)
     inline_const_enums(with_enums, table)
   } else {
     lowered_jsx

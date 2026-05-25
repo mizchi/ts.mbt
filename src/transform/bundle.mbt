@@ -177,6 +177,10 @@ priv struct ModuleNode {
   // (specifier, default_binding?, named_bindings, namespace_binding?,
   // type_only).
   import_decls : Array[@ast.TsImportDecl]
+  // Names this module declared with a `@__PURE__` /
+  // `@__NO_SIDE_EFFECTS__` JSDoc tag. Union across modules
+  // becomes the assumed-pure set fed into purity analysis.
+  pure_declarations : Map[String, Bool]
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +317,10 @@ pub fn bundle_modules(
   // `--mangle` / `--minify` happen to be on.
   {
     let combined_for_analysis : Array[@ast.TsStmt] = []
+    // Union the per-module JSDoc-asserted pure set so the
+    // analysis trusts the user's `@__NO_SIDE_EFFECTS__` /
+    // `@__PURE__` annotations across the whole bundle.
+    let assumed_pure : Map[String, Bool] = {}
     for path in order {
       let m = match modules.get(path) {
         Some(node) => node
@@ -321,11 +329,14 @@ pub fn bundle_modules(
       for s in m.block.stmts {
         combined_for_analysis.push(s)
       }
+      for n in m.pure_declarations.keys() {
+        assumed_pure[n] = true
+      }
     }
-    let report = analyze_purity({
-      stmts: combined_for_analysis,
-      stmt_positions: [],
-    })
+    let report = analyze_purity_with(
+      { stmts: combined_for_analysis, stmt_positions: [] },
+      assumed_pure,
+    )
     for g in report.impure_getters {
       warnings.push(
         "warning: getter `\{g.class_name}.\{g.getter_name}` " + g.reason,
@@ -353,6 +364,19 @@ pub fn bundle_modules(
       stmts: combined_stmts,
       stmt_positions: [],
     }
+    // Type-predicate inline.
+    {
+      let predicates = build_predicate_table(combined)
+      if not(predicates.entries.is_empty()) {
+        combined = inline_predicates(combined, predicates)
+      }
+    }
+    // Type-aware constant folding: `typeof x === "string"` /
+    // `x === null` etc. when the bound `x` carries a primitive
+    // type annotation. Runs BEFORE the regular fold so the
+    // resulting `BoolLit(true/false)` feeds into dead-branch
+    // elimination.
+    combined = type_fold_block(combined)
     // Order: fold -> treeshake -> mangle -> inline -> peephole.
     // Fold turns dead `if (false)` branches into nothing and
     // identity arithmetic into a single operand; treeshake then
@@ -536,7 +560,10 @@ fn load_module_graph(
   // runtime emission for `is_const` decls, so the var is absent;
   // this step makes sure no stale `E.Member` references remain.
   let lowered = if mb.enums.length() > 0 {
-    let table = build_const_enum_table(mb.enums)
+    // Inline ALL enum member accesses (`E.Member`) — const enums
+    // erase entirely, regular enums also fold the access while
+    // keeping their runtime table for `E[reverseValue]` lookups.
+    let table = build_enum_inline_table(mb.enums, include_non_const=true)
     inline_const_enums(lowered_with_enums, table)
   } else {
     lowered_with_enums
@@ -553,6 +580,7 @@ fn load_module_graph(
     block: lowered,
     resolved_imports: {},
     import_decls: mb.imports,
+    pure_declarations: mb.pure_declarations,
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
   let resolved : Map[String, String] = {}
@@ -627,6 +655,7 @@ fn load_module_graph(
     block: lowered,
     resolved_imports: resolved,
     import_decls: mb.imports,
+    pure_declarations: mb.pure_declarations,
   }
   Ok(())
 }

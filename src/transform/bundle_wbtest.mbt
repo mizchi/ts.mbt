@@ -626,8 +626,10 @@ test "const-enum: regular `enum` keeps its runtime var when adjacent" {
       // Only `Regular` materializes; `Inline` is fully erased.
       assert_false(out.js.contains("var Inline"))
       assert_true(out.js.contains("var Regular"))
-      // `Inline.X` → 10; `Regular.A` left as runtime lookup.
-      assert_true(out.js.contains("console.log(10 + Regular.A)"))
+      // Both members get inlined now (regular numeric enum
+      // member access is folded to the literal value while the
+      // runtime table stays in place for reverse lookups).
+      assert_true(out.js.contains("console.log(10 + 0)"))
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -697,4 +699,97 @@ test "@internal: collected_internal_names lists tagged decls" {
   let block = @parser.parse_module_block_from_source(src)
   assert_true(block.internal_names.contains("helper"))
   assert_false(block.internal_names.contains("pub"))
+}
+
+///|
+test "@__NO_SIDE_EFFECTS__: suppresses impure-getter diagnostic for annotated callee" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "declare function expensive(): any;\n" +
+      "/** @__NO_SIDE_EFFECTS__ */\nfunction compute(x: number) { return expensive() + x; }\n" +
+      "class Box { v = 1; get value() { return compute(this.v); } }\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => assert_eq(out.warnings.length(), 0)
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "enum: regular numeric enum members inline at use sites" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "enum Status { OK = 200, NotFound = 404 }\nconsole.log(Status.OK, Status.NotFound);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Runtime var stays (other code might use Status[200] reverse lookup).
+      assert_true(out.js.contains("var Status"))
+      // Member access folds to the literal.
+      assert_true(out.js.contains("console.log(200, 404)"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "predicate-inline: `function isX(): x is T { return cond }` body substitutes" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function isString(x: any): x is string { return typeof x === \"string\"; }\n" +
+      "function f(v: any) { if (isString(v)) { return v.length; } return 0; }\n" +
+      "console.log(f(\"hi\"));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The call site became the inlined body, the predicate
+      // function was treeshaken away.
+      assert_true(out.js.contains("if (typeof v === \"string\")"))
+      assert_false(out.js.contains("isString"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type-fold: typeof check on typed parameter folds to bool" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function f(x: number) { if (typeof x === \"number\") return 1; return 0; }\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `typeof x === "number"` for `x: number` folds to true.
+      // The fold pass then collapses `if (true) {…}` to its body.
+      assert_true(out.js.contains("return 1;"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type-fold: null check on non-nullable primitive folds to false" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function f(x: number) { if (x === null) return 1; return 0; }\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `x === null` for `x: number` is statically false → branch
+      // gets eliminated.
+      assert_false(out.js.contains("return 1"))
+    Err(e) => fail("bundle error: \{e}")
+  }
 }

@@ -3203,11 +3203,13 @@ fn Parser::parse_module_block_with_const_values(
       let export_pos = self.peek().pos
       let is_internal = self.internal_marker_positions.contains(export_pos)
       let mut deprecation_msg : String? = None
+      let mut is_pure = false
       match self.jsdoc_at_pos.get(export_pos) {
         Some(jb) =>
           for t in jb.tags {
             match t {
               Deprecated(msg) => deprecation_msg = Some(msg)
+              Pure | NoSideEffects => is_pure = true
               _ => ()
             }
           }
@@ -3238,6 +3240,9 @@ fn Parser::parse_module_block_with_const_values(
         exports.push(spec)
         if is_internal {
           self.collected_internal_names[spec.local_name] = true
+        }
+        if is_pure {
+          self.collected_pure_declarations[spec.local_name] = true
         }
         match deprecation_msg {
           Some(msg) => self.collected_deprecations[spec.local_name] = msg
@@ -3341,7 +3346,29 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     let pos = self.peek().pos
-    stmts.push(self.parse_stmt())
+    // Capture JSDoc purity annotations on non-export decls too.
+    // `function helper() {}` with `/** @__NO_SIDE_EFFECTS__ */`
+    // attached should be treated as pure by the analysis.
+    let mut is_pure_decl = false
+    match self.jsdoc_at_pos.get(pos) {
+      Some(jb) =>
+        for t in jb.tags {
+          match t {
+            Pure | NoSideEffects => is_pure_decl = true
+            _ => ()
+          }
+        }
+      None => ()
+    }
+    let stmt = self.parse_stmt()
+    if is_pure_decl {
+      let names : Array[String] = []
+      collect_decl_names_from_stmt(stmt, names)
+      for n in names {
+        self.collected_pure_declarations[n] = true
+      }
+    }
+    stmts.push(stmt)
     stmt_positions.push(pos)
   }
   (
@@ -3353,6 +3380,7 @@ fn Parser::parse_module_block_with_const_values(
       enums,
       internal_names: self.collected_internal_names,
       deprecations: self.collected_deprecations,
+      pure_declarations: self.collected_pure_declarations,
     },
     const_values,
   )

@@ -57,6 +57,20 @@ let pure_global_functions : Array[String] = [
 /// Run the purity pass over a flat top-level block. Returns the
 /// pure function set + impure-getter diagnostics.
 pub fn analyze_purity(block : @ast.TsBlock) -> PurityReport {
+  analyze_purity_with(block, {})
+}
+
+///|
+/// `assumed_pure` is the caller-supplied "definitely pure"
+/// override — typically populated from JSDoc
+/// `@__PURE__` / `@__NO_SIDE_EFFECTS__` annotations on function
+/// declarations. Names in this set are added to the pure result
+/// unconditionally and exempt their callers from being marked
+/// impure through them.
+pub fn analyze_purity_with(
+  block : @ast.TsBlock,
+  assumed_pure : Map[String, Bool],
+) -> PurityReport {
   // Step 1: collect every top-level function-like declaration —
   // both `Let/Const(Ident(name), _, FuncExpr/ArrowFunc)` and
   // explicit `NativeClassStmt` declarations.
@@ -116,7 +130,11 @@ pub fn analyze_purity(block : @ast.TsBlock) -> PurityReport {
   let impure : Map[String, Bool] = {}
   for entry in direct_impure {
     let (name, flag) = entry
-    if flag {
+    // `assumed_pure` overrides direct-impurity flags: a JSDoc-
+    // annotated function trusted to be pure stays out of the
+    // impure set even when its body calls into externally-
+    // declared APIs the analyzer can't see through.
+    if flag && not(assumed_pure.contains(name)) {
       impure[name] = true
     }
   }
@@ -150,13 +168,19 @@ pub fn analyze_purity(block : @ast.TsBlock) -> PurityReport {
       }
     }
   }
-  // Step 4: invert — pure = funcs that aren't impure.
+  // Step 4: invert — pure = funcs that aren't impure. Also fold
+  // in every assumption from `assumed_pure` so JSDoc-annotated
+  // functions land in the output even when they aren't in our
+  // collected function table (e.g. ambient `declare function`).
   let pure : Map[String, Bool] = {}
   for entry in direct_impure {
     let (name, _) = entry
     if not(impure.contains(name)) {
       pure[name] = true
     }
+  }
+  for name in assumed_pure.keys() {
+    pure[name] = true
   }
   // Step 5: getter side-effect detection. Walk every
   // `NativeClassStmt` (and the IIFE-shape `@@get:` PropAssigns,
@@ -184,7 +208,7 @@ pub fn analyze_purity(block : @ast.TsBlock) -> PurityReport {
   }
   // Also scan the desugar IIFE form for `Object.defineProperty(
   //   proto, "name", { get: fn })` patterns and check the `fn`.
-  scan_iife_classes_for_impure_getters(block, getter_warnings)
+  scan_iife_classes_for_impure_getters(block, getter_warnings, assumed_pure)
   { pure_functions: pure, impure_getters: getter_warnings }
 }
 
@@ -504,9 +528,10 @@ fn walk_expr_for_purity(
 fn scan_iife_classes_for_impure_getters(
   block : @ast.TsBlock,
   out : Array[ImpureGetter],
+  assumed_pure : Map[String, Bool],
 ) -> Unit {
   for stmt in block.stmts {
-    scan_stmt_for_impure_getters(stmt, "<anonymous>", out)
+    scan_stmt_for_impure_getters(stmt, "<anonymous>", out, assumed_pure)
   }
 }
 
@@ -515,6 +540,7 @@ fn scan_stmt_for_impure_getters(
   stmt : @ast.TsStmt,
   class_name : String,
   out : Array[ImpureGetter],
+  assumed_pure : Map[String, Bool],
 ) -> Unit {
   match stmt {
     // `let ClassName = function() { … }()` — the desugar IIFE.
@@ -538,7 +564,7 @@ fn scan_stmt_for_impure_getters(
               }
               match unwrapped {
                 Some(getter_fn) => {
-                  let reason = check_getter_purity(getter_fn)
+                  let reason = check_getter_purity(getter_fn, assumed_pure)
                   match reason {
                     Some(r) =>
                       out.push({
@@ -557,7 +583,7 @@ fn scan_stmt_for_impure_getters(
       }
       // Also recurse — nested classes inside a method body could
       // contain getters.
-      walk_inner_class_getters(f.body, name, out)
+      walk_inner_class_getters(f.body, name, out, assumed_pure)
     }
     NativeClassStmt(_, _) =>
       // The native-class path keeps getters as TsClassMethodDecl
@@ -567,7 +593,7 @@ fn scan_stmt_for_impure_getters(
       ()
     Block(b) =>
       for inner in b.stmts {
-        scan_stmt_for_impure_getters(inner, class_name, out)
+        scan_stmt_for_impure_getters(inner, class_name, out, assumed_pure)
       }
     _ => ()
   }
@@ -578,9 +604,10 @@ fn walk_inner_class_getters(
   block : @ast.TsBlock,
   outer_class_name : String,
   out : Array[ImpureGetter],
+  assumed_pure : Map[String, Bool],
 ) -> Unit {
   for stmt in block.stmts {
-    scan_stmt_for_impure_getters(stmt, outer_class_name, out)
+    scan_stmt_for_impure_getters(stmt, outer_class_name, out, assumed_pure)
   }
 }
 
@@ -616,7 +643,10 @@ fn find_temp_getter_body(
 /// effects: assignments, mutations, calls to non-pure globals.
 /// Returns a short human-readable reason when an effect is
 /// found, or `None` when the body looks pure.
-fn check_getter_purity(fn_expr : @ast.TsExpr) -> String? {
+fn check_getter_purity(
+  fn_expr : @ast.TsExpr,
+  assumed_pure : Map[String, Bool],
+) -> String? {
   let body = match fn_expr {
     FuncExpr(f) => f.body
     ArrowFunc(_, _, @ast.TsArrowBody::ArrowBlock(b), _) => b
@@ -634,7 +664,9 @@ fn check_getter_purity(fn_expr : @ast.TsExpr) -> String? {
           reason = Some("has a direct side effect (assign / call / mutation)")
         }
       Calls(name) =>
-        if reason is None && not(pure_global_functions.contains(name)) {
+        if reason is None &&
+          not(pure_global_functions.contains(name)) &&
+          not(assumed_pure.contains(name)) {
           reason = Some("calls `\{name}` (potentially impure)")
         }
     }

@@ -21,10 +21,48 @@
 pub fn build_const_enum_table(
   enums : Array[@ast.TsEnumDecl],
 ) -> Map[String, @ast.TsExpr] {
+  build_enum_inline_table(enums, include_non_const=false)
+}
+
+///|
+/// Build the full enum-member → literal substitution table. When
+/// `include_non_const` is `true`, regular (non-const) enums whose
+/// members all have literal values also contribute. The runtime
+/// `var EnumName = {…}` table the parser emits for regular enums
+/// stays put — code that does `EnumName[reverseValue]` still
+/// works — but member accesses `EnumName.Member` are folded to
+/// the literal at use sites, saving a property lookup and a few
+/// bytes per occurrence.
+///
+/// Members with a computed (non-literal) initializer disqualify
+/// the whole enum from inlining; mixing literal and computed
+/// members is a TS error anyway in the non-const case.
+pub fn build_enum_inline_table(
+  enums : Array[@ast.TsEnumDecl],
+  include_non_const~ : Bool = false,
+) -> Map[String, @ast.TsExpr] {
   let out : Map[String, @ast.TsExpr] = {}
   for decl in enums {
-    if not(decl.is_const) || decl.is_declare {
+    if decl.is_declare {
       continue
+    }
+    if not(decl.is_const) && not(include_non_const) {
+      continue
+    }
+    // Non-const enums can carry computed initializers. We can
+    // only inline when every member resolves to a literal — bail
+    // out otherwise so accesses fall back to runtime lookup.
+    if not(decl.is_const) {
+      let mut all_literal = true
+      for m in decl.members {
+        if m.is_computed {
+          all_literal = false
+          break
+        }
+      }
+      if not(all_literal) {
+        continue
+      }
     }
     let mut next_numeric : Int = 0
     for member in decl.members {
