@@ -181,6 +181,10 @@ priv struct ModuleNode {
   // `@__NO_SIDE_EFFECTS__` JSDoc tag. Union across modules
   // becomes the assumed-pure set fed into purity analysis.
   pure_declarations : Map[String, Bool]
+  // Type aliases declared in this module (`type T = …`). The
+  // tag-rewrite / dts-emit / future cross-module type-driven
+  // passes consult these.
+  type_aliases : Array[@ast.TsTypeAlias]
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +354,7 @@ pub fn bundle_modules(
   // doesn't survive the rename / DCE.
   if opts.mangle || opts.treeshake || opts.fold {
     let combined_stmts : Array[@ast.TsStmt] = []
+    let combined_type_aliases : Array[@ast.TsTypeAlias] = []
     for path in order {
       let m = match modules.get(path) {
         Some(node) => node
@@ -358,6 +363,9 @@ pub fn bundle_modules(
       module_paths.push(path)
       for s in m.block.stmts {
         combined_stmts.push(s)
+      }
+      for ta in m.type_aliases {
+        combined_type_aliases.push(ta)
       }
     }
     let mut combined : @ast.TsBlock = {
@@ -385,6 +393,12 @@ pub fn bundle_modules(
     // when NAME is a top-level `const` of all-literal-element shape
     // and every reference is a safe static read.
     combined = as_const_inline_block(combined)
+    // Discriminant-tag string -> number rewrite. Gated on
+    // a bundle-wide no-escape-sink scan; for each closed
+    // string-literal discriminated union whose `K` property is
+    // never observed outside switch heads and `===`/`!==`
+    // comparisons, swap the string tags for small integers.
+    combined = tag_rewrite_block(combined, combined_type_aliases)
     // Type-aware constant folding: `typeof x === "string"` /
     // `x === null` etc. when the bound `x` carries a primitive
     // type annotation. Runs BEFORE the regular fold so the
@@ -595,6 +609,7 @@ fn load_module_graph(
     resolved_imports: {},
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
+    type_aliases: mb.type_aliases,
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
   let resolved : Map[String, String] = {}
@@ -670,6 +685,7 @@ fn load_module_graph(
     resolved_imports: resolved,
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
+    type_aliases: mb.type_aliases,
   }
   Ok(())
 }

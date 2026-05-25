@@ -2209,6 +2209,7 @@ fn Parser::parse_export_decl_for_module(
     }
     let type_alias = self.parse_type_alias_after_type_keyword()
     exports.push({ local_name: type_alias.name, export_name: type_alias.name })
+    self.collected_type_aliases.push(type_alias)
     return (stmts, exports, reexports)
   }
   if self.match_(Default) || self.match_ident("default") {
@@ -3318,7 +3319,10 @@ fn Parser::parse_module_block_with_const_values(
       _ => ()
     }
     if self.check(Type) {
-      self.skip_type_alias()
+      // Type aliases are erased at runtime but we keep them in
+      // `TsModuleBlock.type_aliases` so whole-program type-driven
+      // passes (e.g. discriminant-tag rewrite) can inspect them.
+      self.collected_type_aliases.push(self.parse_type_alias())
       continue
     }
     if self.is_namespace_decl_start() {
@@ -3381,6 +3385,7 @@ fn Parser::parse_module_block_with_const_values(
       internal_names: self.collected_internal_names,
       deprecations: self.collected_deprecations,
       pure_declarations: self.collected_pure_declarations,
+      type_aliases: self.collected_type_aliases,
     },
     const_values,
   )

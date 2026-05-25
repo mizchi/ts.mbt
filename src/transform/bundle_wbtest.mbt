@@ -938,6 +938,57 @@ test "switch-exhaustive: non-exhaustive case set keeps the default" {
 }
 
 ///|
+test "tag-rewrite: discriminated union string tags become integers" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "type Shape = { kind: \"circle\", r: number } | { kind: \"square\", side: number };\n" +
+      "function area(s: Shape): number {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"circle\": return s.r * s.r;\n" +
+      "    case \"square\": return s.side * s.side;\n" +
+      "  }\n" +
+      "  return 0;\n" +
+      "}\n" +
+      "const c: Shape = { kind: \"circle\", r: 3 };\n" +
+      "const out = area(c);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // After rewrite, the source no longer carries `"circle"` /
+      // `"square"` discriminant strings — they became 0 / 1.
+      assert_false(out.js.contains("\"circle\""))
+      assert_false(out.js.contains("\"square\""))
+      assert_true(out.js.contains("case 0:"))
+      assert_true(out.js.contains("case 1:"))
+      assert_true(out.js.contains("kind: 0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "tag-rewrite: skipped when console.log mentions the bundle" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "type Shape = { kind: \"a\", x: number } | { kind: \"b\", y: number };\n" +
+      "const s: Shape = { kind: \"a\", x: 1 };\n" +
+      "console.log(s);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `console.log` is an escape sink — the tag stays a string.
+      assert_true(out.js.contains("\"a\""))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "type-fold: null check on non-nullable primitive folds to false" {
   let files = vfs([
     (

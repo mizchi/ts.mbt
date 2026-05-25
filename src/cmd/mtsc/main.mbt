@@ -501,6 +501,7 @@ async fn main {
           internal_names: {},
           deprecations: {},
           pure_declarations: {},
+          type_aliases: [],
         })
         let module_ = (try?
           @parser.parse_module_from_source_with_const_values(entry_source, {})).or(
@@ -599,6 +600,7 @@ async fn main {
             internal_names: {},
           deprecations: {},
           pure_declarations: {},
+          type_aliases: [],
           })
           let entry_module = (try?
             @parser.parse_module_from_source_with_const_values(

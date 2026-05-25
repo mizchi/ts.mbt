@@ -719,6 +719,11 @@ pub(all) struct TsModuleBlock {
   // fixpoint. Useful for functions that call into externally-
   // declared APIs the analyzer can't see through.
   pure_declarations : Map[String, Bool]
+  // `type T = ...` aliases parsed at this module's top level.
+  // Threaded through the bundler so whole-program type-driven
+  // passes (e.g. discriminant-tag string→number rewrite) can
+  // enumerate every declared shape.
+  type_aliases : Array[TsTypeAlias]
 } derive(Debug)
 
 // ============================================

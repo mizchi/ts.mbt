@@ -64,6 +64,10 @@ pub struct Parser {
   // Function names with a `@__PURE__` or `@__NO_SIDE_EFFECTS__`
   // tag. The purity pass treats these as unconditionally pure.
   collected_pure_declarations : Map[String, Bool]
+  // Type aliases declared anywhere in the module — `type T = …`,
+  // `export type T = …`. Threaded out via `TsModuleBlock` so the
+  // bundle can run whole-program type-driven passes.
+  collected_type_aliases : Array[@ast.TsTypeAlias]
 } derive(Debug)
 
 ///|
@@ -114,6 +118,7 @@ pub fn Parser::new_with_strict_and_jsx(
     jsdoc_at_pos: {},
     collected_deprecations: {},
     collected_pure_declarations: {},
+    collected_type_aliases: [],
   }
 }
 
@@ -162,6 +167,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     jsdoc_at_pos: lexer.jsdoc_at_pos,
     collected_deprecations: {},
     collected_pure_declarations: {},
+    collected_type_aliases: [],
   }
 }
 
