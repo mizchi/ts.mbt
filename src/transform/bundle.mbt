@@ -399,6 +399,10 @@ pub fn bundle_modules(
     // never observed outside switch heads and `===`/`!==`
     // comparisons, swap the string tags for small integers.
     combined = tag_rewrite_block(combined, combined_type_aliases)
+    // Class-method DCE: drop methods on native class declarations
+    // that nothing in the bundle accesses by name. Gated on the
+    // absence of reflection / dynamic-key access in the bundle.
+    combined = class_method_dce_block(combined)
     // Type-aware constant folding: `typeof x === "string"` /
     // `x === null` etc. when the bound `x` carries a primitive
     // type annotation. Runs BEFORE the regular fold so the

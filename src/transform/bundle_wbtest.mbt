@@ -989,6 +989,79 @@ test "tag-rewrite: skipped when console.log mentions the bundle" {
 }
 
 ///|
+test "class-method-dce: drops methods nothing in the bundle accesses (native class)" {
+  // Forces the `NativeClassStmt` path via `extends`.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Base {}\n" +
+      "class Foo extends Base {\n" +
+      "  start() { return 1; }\n" +
+      "  legacy() { return 2; }\n" +
+      "}\n" +
+      "const f = new Foo();\n" +
+      "const out = f.start();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("start"))
+      assert_false(out.js.contains("legacy"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: drops methods on IIFE-lowered class" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Foo {\n" +
+      "  start() { return 1; }\n" +
+      "  legacy() { return 2; }\n" +
+      "}\n" +
+      "const f = new Foo();\n" +
+      "const out = f.start();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("start"))
+      assert_false(out.js.contains("legacy"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class-method-dce: kept under reflection-sink presence" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Base {}\n" +
+      "class Foo extends Base {\n" +
+      "  start() { return 1; }\n" +
+      "  legacy() { return 2; }\n" +
+      "}\n" +
+      "const f = new Foo();\n" +
+      "const names = Object.getOwnPropertyNames(f);\n" +
+      "const out = f.start();\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The reflection call disqualifies the optimization — `legacy`
+      // stays in.
+      assert_true(out.js.contains("legacy"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "type-fold: null check on non-nullable primitive folds to false" {
   let files = vfs([
     (
