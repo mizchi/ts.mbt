@@ -268,3 +268,44 @@ test "bundle: mangle keeps the shared call site consistent across modules" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+///|
+test "bundle: cyclic imports don't stack-overflow" {
+  // `a.js` <-> `b.js` form a 2-cycle. Without the cycle-break
+  // sentinel in `load_module_graph`, this used to recurse
+  // infinitely until SIGSEGV.
+  let files = vfs([
+    (
+      "a.js",
+      "import { B } from \"./b.js\";\nexport const A = 1;\nconsole.log(A + B);\n",
+    ),
+    ("b.js", "import { A } from \"./a.js\";\nexport const B = 2;\n"),
+  ])
+  match bundle_modules(files, "a.js", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("const A"))
+      assert_true(out.js.contains("const B"))
+      // Both modules show up in the output.
+      assert_eq(out.modules.length(), 2)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: longer cycle through three modules" {
+  let files = vfs([
+    (
+      "a.js", "import { B } from \"./b.js\";\nexport const A = 1;\n",
+    ),
+    (
+      "b.js", "import { C } from \"./c.js\";\nexport const B = 2;\n",
+    ),
+    (
+      "c.js", "import { A } from \"./a.js\";\nexport const C = 3;\n",
+    ),
+  ])
+  match bundle_modules(files, "a.js", BundleOptions::default()) {
+    Ok(out) => assert_eq(out.modules.length(), 3)
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

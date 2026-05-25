@@ -747,7 +747,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       }
     None => ()
   }
-  let tmp_name = if class_name == "" { "<anon>" } else { class_name }
+  // `<anon>` was the historical sentinel for "this class expression
+  // has no source-level name". The angle brackets aren't valid JS
+  // identifier syntax, so the emitter rejects them and writes
+  // `let <anon> = …` literally, producing invalid output. Use a
+  // legal-but-reserved-looking name instead; the class-desugar IIFE
+  // only references it internally, so a stable token is enough.
+  let tmp_name = if class_name == "" { "_anon" } else { class_name }
   let runtime_decl = build_runtime_class_decl(
     if class_name == "" {
       "<class>"

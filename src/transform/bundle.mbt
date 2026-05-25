@@ -478,6 +478,19 @@ fn load_module_graph(
   // its own `/** @jsxImportSource ... */` etc.
   let jsx_cfg = extract_jsx_pragmas(source, JsxConfig::default())
   let (lowered, _refs) = lower_block_with_runtime_imports(jsx_cfg, mb.block)
+  // Insert a placeholder BEFORE recursing into imports so cyclic
+  // module references hit the early-return guard above and break
+  // the recursion. We finalize `resolved_imports` / `import_decls`
+  // at the bottom of the function with the real values; topological
+  // sort and emit only need the path → ModuleNode mapping to exist
+  // during walking.
+  modules[path] = {
+    path,
+    source,
+    block: lowered,
+    resolved_imports: {},
+    import_decls: mb.imports,
+  }
   // Walk imports, recurse into relative paths, accumulate bare ones.
   let resolved : Map[String, String] = {}
   for imp in mb.imports {
@@ -544,6 +557,7 @@ fn load_module_graph(
         }
     }
   }
+  // Finalize the entry with the resolved-imports map populated.
   modules[path] = {
     path,
     source,
