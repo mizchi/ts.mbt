@@ -472,14 +472,42 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.semi()
     }
     PropAssign(recv, prop, value) => {
-      emit_expr(e, recv, 18)
-      e.write(".")
-      e.write(strip_internal_prop_marker(prop))
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, value, 0)
-      e.semi()
+      // `@@get:name` / `@@set:name` are internal markers from the
+      // class-desugar pass meaning "install a getter/setter on
+      // the prototype". Emit them as `Object.defineProperty(...)`
+      // so the JS output actually wires up the accessor.
+      if prop.has_prefix("@@get:") || prop.has_prefix("@@set:") {
+        let accessor = if prop.has_prefix("@@get:") { "get" } else { "set" }
+        let real_name = prop.substring(start=6, end=prop.length()).to_string()
+        e.write("Object.defineProperty(")
+        emit_expr(e, recv, 0)
+        e.write(",")
+        e.space()
+        emit_string_literal(e, real_name)
+        e.write(",")
+        e.space()
+        e.write("{")
+        e.write(accessor)
+        e.write(":")
+        e.space()
+        emit_expr(e, value, 0)
+        e.write(",")
+        e.space()
+        e.write("configurable:")
+        e.space()
+        e.write("true")
+        e.write("})")
+        e.semi()
+      } else {
+        emit_expr(e, recv, 18)
+        e.write(".")
+        e.write(strip_internal_prop_marker(prop))
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, value, 0)
+        e.semi()
+      }
     }
     Expr(expr) => {
       emit_expr(e, expr, 0)

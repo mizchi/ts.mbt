@@ -177,7 +177,11 @@ fn has_instance_private_elements(elements : Array[ClassElement]) -> Bool {
 ///|
 fn mangle_private_name(name : String, brand : String) -> String {
   if name.has_prefix("#") {
-    brand + "__" + name
+    // Strip the `#` — keeping it produces an invalid JS
+    // identifier (`__brand__#field`). The brand prefix already
+    // gives uniqueness for access control; the `#` was only
+    // meaningful in the source-level private-field syntax.
+    brand + "__" + name.substring(start=1, end=name.length()).to_string()
   } else {
     name
   }

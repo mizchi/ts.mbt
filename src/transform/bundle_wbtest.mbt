@@ -394,3 +394,48 @@ test "bundle: constructor parameter properties become this.x = x" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: private fields strip the `#` after brand mangling" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Counter {\n  #count = 0;\n  inc() { this.#count++; return this.#count; }\n  get value() { return this.#count; }\n}\nconst c = new Counter();\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The brand prefix is fine, but `#` must not appear in the
+      // emitted identifier — it isn't a legal JS ident char outside
+      // the native `#field` syntax.
+      assert_false(out.js.contains("__#"))
+      assert_false(out.js.contains("#count"))
+      // Brand'd field is still namespaced so external access
+      // doesn't collide with public fields.
+      assert_true(out.js.contains("__private_brand__"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: class getter desugars to Object.defineProperty" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Box {\n  v = 7;\n  get value() { return this.v; }\n}\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The `@@get:value` desugar marker must become
+      // `Object.defineProperty(...)` in the output — without this
+      // the previous emit wrote `proto.@@get:value = …`, which V8
+      // rejects.
+      assert_true(out.js.contains("Object.defineProperty"))
+      assert_false(out.js.contains("@@get:"))
+      assert_false(out.js.contains("@@set:"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
