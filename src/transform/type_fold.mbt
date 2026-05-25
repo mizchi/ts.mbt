@@ -20,8 +20,273 @@
 
 ///|
 pub fn type_fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
+  // Cheap pre-scan: type-fold only does work when something it can
+  // act on appears in the block — `typeof` comparisons, `=== null`
+  // checks, or a switch on a literal-string union. If none of those
+  // are present, the full recursive walk would do nothing useful;
+  // skip it and avoid the cost on bundles that don't need it.
+  if not(block_needs_type_fold(block)) {
+    return block
+  }
   let scope : Map[String, @ast.TsType] = {}
   type_fold_block_in(block, scope)
+}
+
+///|
+fn block_needs_type_fold(block : @ast.TsBlock) -> Bool {
+  for s in block.stmts {
+    if stmt_needs_type_fold(s) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
+    | CompoundAssign(_, _, e) | Throw(e) => expr_needs_type_fold(e)
+    Return(Some(e)) => expr_needs_type_fold(e)
+    Return(None) | Empty | Debugger | Break(_) | Continue(_) => false
+    IndexAssign(t, idx, v) =>
+      expr_needs_type_fold(t) ||
+          expr_needs_type_fold(idx) ||
+          expr_needs_type_fold(v)
+    PropAssign(t, _, v) =>
+      expr_needs_type_fold(t) || expr_needs_type_fold(v)
+    If(c, t, e) => {
+      if expr_needs_type_fold(c) {
+        return true
+      }
+      if block_needs_type_fold(t) {
+        return true
+      }
+      match e {
+        Some(b) => block_needs_type_fold(b)
+        None => false
+      }
+    }
+    While(c, body) | DoWhile(c, body) | With(c, body) =>
+      expr_needs_type_fold(c) || block_needs_type_fold(body)
+    For(init, cond, update, body) => {
+      let init_b = match init {
+        Some(s) => stmt_needs_type_fold(s)
+        None => false
+      }
+      if init_b {
+        return true
+      }
+      let cond_b = match cond {
+        Some(e) => expr_needs_type_fold(e)
+        None => false
+      }
+      if cond_b {
+        return true
+      }
+      let upd_b = match update {
+        Some(s) => stmt_needs_type_fold(s)
+        None => false
+      }
+      if upd_b {
+        return true
+      }
+      block_needs_type_fold(body)
+    }
+    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body)
+    | ForIn(_, _, _, iter, body) =>
+      expr_needs_type_fold(iter) || block_needs_type_fold(body)
+    // Switch with an exhaustive default-drop target counts.
+    Switch(e, cases) => {
+      if expr_needs_type_fold(e) {
+        return true
+      }
+      // Default arm with `throw …` is the drop-target shape.
+      for c in cases {
+        match c.test_expr {
+          None =>
+            if c.body.stmts.length() == 1 {
+              match c.body.stmts[0] {
+                Throw(_) => return true
+                _ => ()
+              }
+            }
+          Some(te) =>
+            if expr_needs_type_fold(te) {
+              return true
+            }
+        }
+        if block_needs_type_fold(c.body) {
+          return true
+        }
+      }
+      false
+    }
+    Try(b, _, cb, fb) => {
+      if block_needs_type_fold(b) {
+        return true
+      }
+      let cb_b = match cb {
+        Some(blk) => block_needs_type_fold(blk)
+        None => false
+      }
+      if cb_b {
+        return true
+      }
+      match fb {
+        Some(blk) => block_needs_type_fold(blk)
+        None => false
+      }
+    }
+    Label(_, inner) => stmt_needs_type_fold(inner)
+    Block(b) => block_needs_type_fold(b)
+    NativeClassStmt(decl, ctor_body) => {
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            if block_needs_type_fold(b) {
+              return true
+            }
+          None => ()
+        }
+      }
+      match ctor_body {
+        Some(f) => block_needs_type_fold(f.body)
+        None => false
+      }
+    }
+  }
+}
+
+///|
+fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    // `typeof x === "lit"` — discriminant we can fold.
+    BinOp(op, l, r) => {
+      let is_eq_op = match op {
+        BinEq | BinNe | AbstractEq | AbstractNe => true
+        _ => false
+      }
+      if is_eq_op {
+        match (l, r) {
+          (@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _), @ast.TsExpr::StringLit(_))
+          | (@ast.TsExpr::StringLit(_), @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _)) =>
+            return true
+          // `x === null` / `x === undefined`.
+          (@ast.TsExpr::Var(_), @ast.TsExpr::NullLit)
+          | (@ast.TsExpr::NullLit, @ast.TsExpr::Var(_)) => return true
+          (@ast.TsExpr::Var(_), @ast.TsExpr::Var("undefined"))
+          | (@ast.TsExpr::Var("undefined"), @ast.TsExpr::Var(_)) => return true
+          _ => ()
+        }
+      }
+      expr_needs_type_fold(l) || expr_needs_type_fold(r)
+    }
+    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
+    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
+      expr_needs_type_fold(inner)
+    Cond(c, t, e) =>
+      expr_needs_type_fold(c) ||
+          expr_needs_type_fold(t) ||
+          expr_needs_type_fold(e)
+    Seq(l, r) => expr_needs_type_fold(l) || expr_needs_type_fold(r)
+    PropAccess(recv, _) => expr_needs_type_fold(recv)
+    IndexAccess(recv, idx) =>
+      expr_needs_type_fold(recv) || expr_needs_type_fold(idx)
+    Call(_, args) | New(_, args) => {
+      for a in args {
+        if expr_needs_type_fold(a) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      if expr_needs_type_fold(callee) {
+        return true
+      }
+      for a in args {
+        if expr_needs_type_fold(a) {
+          return true
+        }
+      }
+      false
+    }
+    MethodCall(recv, _, args) => {
+      if expr_needs_type_fold(recv) {
+        return true
+      }
+      for a in args {
+        if expr_needs_type_fold(a) {
+          return true
+        }
+      }
+      false
+    }
+    ArrayLit(items) => {
+      for i in items {
+        if expr_needs_type_fold(i) {
+          return true
+        }
+      }
+      false
+    }
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_needs_type_fold(ent.1) {
+          return true
+        }
+      }
+      false
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => expr_needs_type_fold(e)
+        ArrowBlock(b) => block_needs_type_fold(b)
+      }
+    FuncExpr(f) => block_needs_type_fold(f.body)
+    AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
+      expr_needs_type_fold(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_needs_type_fold(t) || expr_needs_type_fold(v)
+    IndexAssignExpr(recv, idx, v) =>
+      expr_needs_type_fold(recv) ||
+          expr_needs_type_fold(idx) ||
+          expr_needs_type_fold(v)
+    ComputedProp(k, v) =>
+      expr_needs_type_fold(k) || expr_needs_type_fold(v)
+    As(inner, _) | Satisfies(inner, _) => expr_needs_type_fold(inner)
+    Yield(Some(inner)) => expr_needs_type_fold(inner)
+    TaggedTemplate(tag, _, _, exprs) => {
+      if expr_needs_type_fold(tag) {
+        return true
+      }
+      for e in exprs {
+        if expr_needs_type_fold(e) {
+          return true
+        }
+      }
+      false
+    }
+    TemplateLiteral(_, exprs) => {
+      for e in exprs {
+        if expr_needs_type_fold(e) {
+          return true
+        }
+      }
+      false
+    }
+    DynamicImport(spec, opts) => {
+      if expr_needs_type_fold(spec) {
+        return true
+      }
+      match opts {
+        Some(o) => expr_needs_type_fold(o)
+        None => false
+      }
+    }
+    _ => false
+  }
 }
 
 ///|
