@@ -302,6 +302,82 @@ fn Parser::parse_enum_decl_after_enum_keyword(
 }
 
 ///|
+///|
+/// Lower a parsed `enum` declaration to the equivalent runtime
+/// statements:
+///   `var Name = {}; Name["A"] = 0; Name[0] = "A"; …`
+/// Reverse mapping (`Name[value] = "Name"`) is emitted only for
+/// numeric members so string enums don't accidentally collide on
+/// the value side. `declare enum` produces no runtime code.
+pub fn lower_enum_decl_to_runtime_stmts(
+  decl : @ast.TsEnumDecl,
+) -> Array[@ast.TsStmt] {
+  let out : Array[@ast.TsStmt] = []
+  if decl.is_declare {
+    return out
+  }
+  out.push(
+    Var(@ast.TsBinding::Ident(decl.name), @ast.TsType::Any, ObjectLit([])),
+  )
+  let mut next_numeric : Int = 0
+  for member in decl.members {
+    let value_expr : @ast.TsExpr? = match member.value {
+      Some(@ast.TsEnumMemberValue::Number(s)) =>
+        match (try? @strconv.parse_int(s)) {
+          Ok(i) => {
+            next_numeric = i + 1
+            Some(@ast.TsExpr::IntLit(i))
+          }
+          Err(_) =>
+            // Float / hex / negative / etc — fall back to `0.0`
+            // for auto-increment (rare in practice).
+            Some(
+              @ast.TsExpr::NumberLit(
+                match (try? @strconv.parse_double(s)) {
+                  Ok(d) => d
+                  Err(_) => 0.0
+                },
+              ),
+            )
+        }
+      Some(@ast.TsEnumMemberValue::String(s)) => Some(@ast.TsExpr::StringLit(s))
+      Some(@ast.TsEnumMemberValue::BigInt(s)) => Some(@ast.TsExpr::BigIntLit(s))
+      Some(@ast.TsEnumMemberValue::Bool(b)) => Some(@ast.TsExpr::BoolLit(b))
+      None => {
+        let v = next_numeric
+        next_numeric = next_numeric + 1
+        Some(@ast.TsExpr::IntLit(v))
+      }
+    }
+    match value_expr {
+      Some(v) => {
+        out.push(
+          IndexAssign(
+            @ast.TsExpr::Var(decl.name),
+            @ast.TsExpr::StringLit(member.name),
+            v,
+          ),
+        )
+        // Reverse map only for numeric values.
+        match v {
+          IntLit(_) | NumberLit(_) | BigIntLit(_) =>
+            out.push(
+              IndexAssign(
+                @ast.TsExpr::Var(decl.name),
+                v,
+                @ast.TsExpr::StringLit(member.name),
+              ),
+            )
+          _ => ()
+        }
+      }
+      None => ()
+    }
+  }
+  out
+}
+
+///|
 fn Parser::parse_const_enum_decl(
   self : Parser,
   is_declare : Bool,

@@ -59,8 +59,18 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     Const =>
       match self.peek_at(1).kind {
         Ident(name) if name == "enum" => {
-          self.skip_declaration_block()
-          Empty
+          // `const enum E { … }` at stmt level. Parse the decl and
+          // lower to runtime statements (var + IndexAssigns)
+          // wrapped in a `Block` so the caller's `Array[TsStmt]`
+          // sees a single stmt. The const-enum is treated like
+          // a regular enum for emit purposes — actual inlining at
+          // use sites would require call-graph analysis we
+          // don't do yet.
+          let decl = self.parse_const_enum_decl(false)
+          Block({
+            stmts: lower_enum_decl_to_runtime_stmts(decl),
+            stmt_positions: [],
+          })
         }
         _ => self.parse_const()
       }
@@ -84,8 +94,13 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       Empty
     }
     Ident(name) if name == "enum" => {
-      self.skip_declaration_block()
-      Empty
+      // Plain `enum E { … }` at stmt level. Parse + lower inline
+      // so the resulting `var E = {}; …` lands in the runtime block.
+      let decl = self.parse_enum_decl_after_enum_keyword(false, false)
+      Block({
+        stmts: lower_enum_decl_to_runtime_stmts(decl),
+        stmt_positions: [],
+      })
     }
     If => self.parse_if()
     Switch => self.parse_switch()

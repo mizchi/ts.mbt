@@ -4701,15 +4701,23 @@ test "parser: parse nested template literal inside template expression" {
 }
 
 ///|
-test "parser: skip plain enum declaration in statement position" {
+test "parser: lower plain enum declaration in statement position" {
   let src =
     #|enum FileType {
     #|  Unknown = 0,
     #|}
   let stmt = parse_stmt_from(src)
+  // Stmt-position `enum` no longer expands to `Empty`; it lowers
+  // to a `Block` of runtime stmts (`var FileType = {}; …`).
   match stmt {
-    Empty => ()
-    _ => fail("expected enum declaration to be skipped")
+    Block(b) => {
+      assert_true(b.stmts.length() >= 1)
+      match b.stmts[0] {
+        Var(@ast.TsBinding::Ident(name), _, _) => assert_eq(name, "FileType")
+        _ => fail("expected first stmt to be `var FileType = …`")
+      }
+    }
+    _ => fail("expected enum to lower into a Block, got: \{stmt}")
   }
 }
 

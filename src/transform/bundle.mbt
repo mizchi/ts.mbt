@@ -477,7 +477,24 @@ fn load_module_graph(
   // Reuse the per-file JSX pragma extractor so each module honors
   // its own `/** @jsxImportSource ... */` etc.
   let jsx_cfg = extract_jsx_pragmas(source, JsxConfig::default())
-  let (lowered, _refs) = lower_block_with_runtime_imports(jsx_cfg, mb.block)
+  let (lowered_jsx, _refs) = lower_block_with_runtime_imports(jsx_cfg, mb.block)
+  // Splice in the runtime form of every `enum` declaration. The
+  // parser collects enums on a side list and leaves an `Empty`
+  // placeholder in the runtime block — without this step, every
+  // enum reference becomes `undefined` at runtime.
+  let lowered = if mb.enums.length() > 0 {
+    let enum_stmts = lower_enums(mb.enums)
+    let combined : Array[@ast.TsStmt] = []
+    for s in enum_stmts {
+      combined.push(s)
+    }
+    for s in lowered_jsx.stmts {
+      combined.push(s)
+    }
+    @ast.TsBlock::{ stmts: combined, stmt_positions: [] }
+  } else {
+    lowered_jsx
+  }
   // Insert a placeholder BEFORE recursing into imports so cyclic
   // module references hit the early-return guard above and break
   // the recursion. We finalize `resolved_imports` / `import_decls`

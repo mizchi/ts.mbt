@@ -493,3 +493,69 @@ test "bundle: --reserve-entry-exports follows class signatures" {
   assert_true(r.contains("port"))
   assert_true(r.contains("call"))
 }
+
+///|
+test "dts: emits only entry-exported declarations" {
+  let src = "interface Internal { tag: string }\n" +
+    "export interface Config { host: string; port: number }\n" +
+    "function helper(): Internal { return { tag: \"x\" }; }\n" +
+    "export function start(cfg: Config): void { console.log(cfg.host); }\n"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let dts = emit_entry_dts(module_, ["Config", "start"])
+  // Exported interface survives, including its public field names.
+  assert_true(dts.contains("export interface Config"))
+  assert_true(dts.contains("host: string"))
+  assert_true(dts.contains("port: number"))
+  // Exported function with its signature.
+  assert_true(dts.contains("export declare function start(cfg: Config)"))
+  // Internal helper interface is dropped from the published surface.
+  assert_false(dts.contains("Internal"))
+  assert_false(dts.contains("tag"))
+}
+
+///|
+test "dts: prints conditional + union extends + mapped + indexed access" {
+  let src = "export type Maybe<T> = T extends null | undefined ? never : T;\n" +
+    "export type Pick2<T, K extends keyof T> = { [P in K]: T[P] };\n"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let dts = emit_entry_dts(module_, ["Maybe", "Pick2"])
+  assert_true(dts.contains("T extends (null | undefined)"))
+  assert_true(dts.contains("? never : T"))
+  assert_true(dts.contains("{ [P in K]: T[P] }"))
+}
+
+///|
+test "enum lowering: numeric enum picks up reverse mapping" {
+  let files = vfs([
+    (
+      "entry.ts", "enum Color { Red, Green, Blue }\nconsole.log(Color.Red);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Forward mapping
+      assert_true(out.js.contains("Color[\"Red\"] = 0"))
+      // Reverse mapping (numeric enums only)
+      assert_true(out.js.contains("Color[0] = \"Red\""))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "enum lowering: string enum omits reverse mapping" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "enum Size { Small = \"s\", Medium = \"m\" }\nconsole.log(Size.Small);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("Size[\"Small\"] = \"s\""))
+      // String enums must NOT have the reverse-map assignment.
+      assert_false(out.js.contains("Size[\"s\"] ="))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

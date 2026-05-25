@@ -43,6 +43,10 @@ priv struct MtscOptions {
   // built-in globals list in `mangle_safety.mbt`. Off by default;
   // takes precedence over `--reserve-typed-props` when both are set.
   mut reserve_entry_exports : Bool
+  // Emit a companion `.d.ts` next to the JS output. Contains only
+  // the entry module's exported type surface — internal helper
+  // types are omitted. Requires `--bundle`.
+  mut dts : Bool
   // Bare specifiers the user wants left as `import … from "<spec>"`
   // in the emitted bundle. Anything not on this list is resolved
   // through node_modules / tsconfig paths and inlined when found.
@@ -67,6 +71,7 @@ fn mtsc_options_new() -> MtscOptions {
     minify: false,
     reserve_typed_props: false,
     reserve_entry_exports: false,
+    dts: false,
     externals: {},
     mangle: false,
     mangle_properties: false,
@@ -106,6 +111,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println(
     "  --reserve-entry-exports   Reserve only property names reachable from the entry's exports (library mode, selective)",
+  )
+  println(
+    "  --dts                     Emit a companion <out>.d.ts with the entry's exported type surface",
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println(
@@ -149,6 +157,10 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
       }
       "--reserve-typed-props" => opts.reserve_typed_props = true
       "--reserve-entry-exports" => opts.reserve_entry_exports = true
+      "--dts" => {
+        opts.dts = true
+        opts.bundle = true
+      }
       "--external" => {
         if i + 1 >= argv.length() {
           return Err("missing value for --external")
@@ -543,6 +555,52 @@ async fn main {
 
           }
           None => ()
+        }
+        if opts.dts {
+          // Emit the companion `.d.ts`. Strip a trailing `.js`
+          // from the output path (if present) before appending
+          // `.d.ts` so `bundle.js` becomes `bundle.d.ts` rather
+          // than `bundle.js.d.ts`.
+          let dts_path = if path.has_suffix(".js") {
+            path.substring(start=0, end=path.length() - 3).to_string() +
+            ".d.ts"
+          } else {
+            path + ".d.ts"
+          }
+          let entry_source = match files.get(input_path) {
+            Some(s) => s
+            None => ""
+          }
+          let entry_block = (try?
+            @parser.parse_module_block_from_source(entry_source)).or({
+            block: { stmts: [], stmt_positions: [] },
+            imports: [],
+            exports: [],
+            reexports: [],
+            enums: [],
+          })
+          let entry_module = (try?
+            @parser.parse_module_from_source_with_const_values(
+              entry_source, {},
+            )).or(
+            @ast.TsModule::{
+              funcs: [],
+              interfaces: [],
+              type_aliases: [],
+              imports: [],
+              values: [],
+              classes: [],
+              namespaces: [],
+              enums: [],
+              module_augmentations: [],
+            },
+          )
+          let local_names : Array[String] = []
+          for ex in entry_block.exports {
+            local_names.push(ex.local_name)
+          }
+          let dts_text = @transform.emit_entry_dts(entry_module, local_names)
+          let _ = write_text(dts_path, dts_text)
         }
       }
       None => println(out.js)
