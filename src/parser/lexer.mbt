@@ -150,6 +150,26 @@ pub struct Lexer {
   mut pending : Array[Token]
   mut pending_index : Int
   mut newline_before_next : Bool // Set when whitespace skipping encounters a newline
+  // JSDoc / annotation tracking. The lexer skips block comments
+  // for parsing purposes, but it also peeks inside each one for a
+  // few annotations the rest of the toolchain cares about. When a
+  // comment contains the marker, the position of the FOLLOWING
+  // non-comment token gets recorded — the parser then asks "was
+  // this token preceded by `/* @__PURE__ */`?" without having to
+  // re-scan source text.
+  mut pending_pure_marker : Bool
+  mut pending_internal_marker : Bool
+  // Pending JSDoc block waiting to be associated with the next
+  // non-comment token. When multiple JSDoc blocks stack up before
+  // a declaration we keep the LAST one — that's the convention
+  // tsc and IDE tooltips follow.
+  mut pending_jsdoc : JsdocBlock?
+  pure_marker_positions : Map[Int, Bool]
+  internal_marker_positions : Map[Int, Bool]
+  // Per-token-position parsed JSDoc block (when a `/** … */`
+  // comment immediately preceded the token). Parser consults
+  // through `Parser.jsdoc_at_pos`.
+  jsdoc_at_pos : Map[Int, JsdocBlock]
 } derive(Debug)
 
 ///|
@@ -192,6 +212,12 @@ pub fn Lexer::new(src : String) -> Lexer {
     pending: [],
     pending_index: 0,
     newline_before_next: false,
+    pending_pure_marker: false,
+    pending_internal_marker: false,
+    pending_jsdoc: None,
+    pure_marker_positions: {},
+    internal_marker_positions: {},
+    jsdoc_at_pos: {},
   }
 }
 
@@ -337,7 +363,9 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             }
           }
           Some('*') => {
-            // block
+            // block comment. Record the start so we can slice the
+            // body when scanning for annotations.
+            let comment_start = self.pos
             let _ = self.advance()
             let _ = self.advance()
             while true {
@@ -357,6 +385,33 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
                 _ => {
                   let _ = self.advance()
                 }
+              }
+            }
+            // Capture the full comment span. Plain `/* … */`
+            // gets a substring scan (we only care about the
+            // inline `@__PURE__` marker); JSDoc `/** … */` goes
+            // through the structured parser so individual tags
+            // are queryable downstream.
+            let comment_text = self.src
+              .substring(start=comment_start, end=self.pos)
+              .to_string()
+            // Quick-and-cheap markers — these still drive the
+            // existing `pure_marker_positions` /
+            // `internal_marker_positions` tables for callers that
+            // only need a flag.
+            if comment_text.contains("@__PURE__") {
+              self.pending_pure_marker = true
+            }
+            if comment_text.contains("@internal") {
+              self.pending_internal_marker = true
+            }
+            // Structured JSDoc — only fires for `/** … */`. The
+            // last block wins when multiple stack up before one
+            // declaration.
+            if comment_text.has_prefix("/**") {
+              match parse_jsdoc_block(comment_text) {
+                Some(jb) => self.pending_jsdoc = Some(jb)
+                None => ()
               }
             }
           }
@@ -2077,6 +2132,23 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
   self.skip_whitespace()
   let has_newline = self.newline_before_next
   let pos = self.pos
+  // Stamp annotation markers onto the upcoming token's position so
+  // the parser can look them up after tokenize() finishes.
+  if self.pending_pure_marker {
+    self.pure_marker_positions[pos] = true
+    self.pending_pure_marker = false
+  }
+  if self.pending_internal_marker {
+    self.internal_marker_positions[pos] = true
+    self.pending_internal_marker = false
+  }
+  match self.pending_jsdoc {
+    Some(jb) => {
+      self.jsdoc_at_pos[pos] = jb
+      self.pending_jsdoc = None
+    }
+    None => ()
+  }
   match self.advance() {
     None => { kind: Eof, pos, has_newline_before: has_newline }
     Some(c) => {

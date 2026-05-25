@@ -34,6 +34,40 @@ pub struct Parser {
   // attached to the next class declaration. The class parsers drain
   // this list when they begin and clear it on exit.
   pending_decorators : Array[@ast.TsExpr]
+  // Stack of "I'm parsing a class constructor's parameter list"
+  // scopes. Each scope is a list of parameter names that carried
+  // `public` / `private` / `protected` / `readonly` modifiers — TS
+  // parameter properties. The class parser pushes a fresh scope
+  // before calling `parse_params` for a constructor and pops it
+  // afterwards, then emits `this.name = name` for every entry.
+  param_property_scopes : Array[Array[String]]
+  // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
+  // just before this token". The lexer populates this when it
+  // skips a block comment whose contents contain the literal
+  // `@__PURE__`. The call-expr parser consults the map to wrap
+  // its result in `TsExpr::PureCall(...)`.
+  pure_marker_positions : Map[Int, Bool]
+  // Same shape for `/** @internal */` JSDoc blocks. The decl
+  // parser flags the next declaration's name into
+  // `collected_internal_names`, which gets attached to the
+  // emitted `TsModuleBlock`. `.d.ts` emit then drops those
+  // names from the published surface.
+  internal_marker_positions : Map[Int, Bool]
+  collected_internal_names : Map[String, Bool]
+  // Parsed JSDoc block per next-token position. Populated by the
+  // lexer; queried by decl parsers to attach tag info (`@param`,
+  // `@returns`, `@deprecated`, …) to the AST.
+  jsdoc_at_pos : Map[Int, JsdocBlock]
+  // Names with a `@deprecated` tag — fed into the emitted
+  // `TsModuleBlock` so `.d.ts` emit can mark them.
+  collected_deprecations : Map[String, String]
+  // Function names with a `@__PURE__` or `@__NO_SIDE_EFFECTS__`
+  // tag. The purity pass treats these as unconditionally pure.
+  collected_pure_declarations : Map[String, Bool]
+  // Type aliases declared anywhere in the module — `type T = …`,
+  // `export type T = …`. Threaded out via `TsModuleBlock` so the
+  // bundle can run whole-program type-driven passes.
+  collected_type_aliases : Array[@ast.TsTypeAlias]
 } derive(Debug)
 
 ///|
@@ -77,8 +111,20 @@ pub fn Parser::new_with_strict_and_jsx(
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
     pending_decorators: [],
+    param_property_scopes: [],
+    pure_marker_positions: {},
+    internal_marker_positions: {},
+    collected_internal_names: {},
+    jsdoc_at_pos: {},
+    collected_deprecations: {},
+    collected_pure_declarations: {},
+    collected_type_aliases: [],
   }
 }
+
+// (`from_source` below picks up the marker maps from the Lexer
+// so the parser can answer "was this token preceded by
+// `/* @__PURE__ */` / `/** @internal */`?").
 
 ///|
 // / create
@@ -114,6 +160,14 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
     pending_decorators: [],
+    param_property_scopes: [],
+    pure_marker_positions: lexer.pure_marker_positions,
+    internal_marker_positions: lexer.internal_marker_positions,
+    collected_internal_names: {},
+    jsdoc_at_pos: lexer.jsdoc_at_pos,
+    collected_deprecations: {},
+    collected_pure_declarations: {},
+    collected_type_aliases: [],
   }
 }
 

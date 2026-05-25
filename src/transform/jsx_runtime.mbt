@@ -575,6 +575,7 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
         lower_jsx_in_expr(cfg, value),
       )
     Break(_) | Continue(_) | Debugger | Empty => stmt
+    NativeClassStmt(_, _) => stmt
   }
 }
 

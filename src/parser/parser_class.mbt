@@ -177,7 +177,11 @@ fn has_instance_private_elements(elements : Array[ClassElement]) -> Bool {
 ///|
 fn mangle_private_name(name : String, brand : String) -> String {
   if name.has_prefix("#") {
-    brand + "__" + name
+    // Strip the `#` — keeping it produces an invalid JS
+    // identifier (`__brand__#field`). The brand prefix already
+    // gives uniqueness for access control; the `#` was only
+    // meaningful in the source-level private-field syntax.
+    brand + "__" + name.substring(start=1, end=name.length()).to_string()
   } else {
     name
   }
@@ -590,7 +594,16 @@ fn Parser::parse_class_body(
       Ident(n) if (n == "get" || n == "set") &&
         self.peek_at(1).kind != LParen &&
         self.peek_at(1).kind != Lt &&
-        self.peek_at(1).kind != Colon => {
+        self.peek_at(1).kind != Colon &&
+        // `class C { get; }` declares an uninitialized field named
+        // `get`, not a get-accessor. Same for `set;`, `get = …;`,
+        // `set, …`. The accessor form REQUIRES a method body, so
+        // anything that looks like a field-decl terminator means
+        // we should treat `get` / `set` as an identifier.
+        self.peek_at(1).kind != Semicolon &&
+        self.peek_at(1).kind != Eq &&
+        self.peek_at(1).kind != Comma &&
+        self.peek_at(1).kind != RBrace => {
         let _ = self.advance()
         accessor_kind = Some(n)
       }
@@ -613,11 +626,29 @@ fn Parser::parse_class_body(
       None => false
     }
     if self.check(LParen) || is_getter_without_parens {
+      // Push a fresh "parameter property" scope when parsing a
+      // constructor — `parse_param` records `public x` / `private y`
+      // names there so we can synthesize `this.x = x` afterwards.
+      // Non-constructor methods leave the stack untouched (any
+      // accidental modifier on a non-ctor param would be a TS
+      // error the checker reports later).
+      let is_constructor_method = key is Name("constructor")
+      if is_constructor_method {
+        self.param_property_scopes.push([])
+      }
       let params = if self.check(LParen) {
         let _ = self.expect(LParen)
         let params = self.parse_params()
         let _ = self.expect(RParen)
         params
+      } else {
+        []
+      }
+      let property_names : Array[String] = if is_constructor_method {
+        let last = self.param_property_scopes.length() - 1
+        let collected = self.param_property_scopes[last]
+        let _ = self.param_property_scopes.pop()
+        collected
       } else {
         []
       }
@@ -643,6 +674,40 @@ fn Parser::parse_class_body(
         body
       }
       self.restore_local_type_param_bounds(local_type_param_bound_len)
+      // Inject `this.name = name` assigns for every parameter
+      // property at the TOP of the constructor body — after `super(…)`
+      // when there is one. Vanilla TS semantics.
+      let body = if property_names.length() > 0 {
+        let new_stmts : Array[@ast.TsStmt] = []
+        let mut super_inserted = false
+        for s in body.stmts {
+          new_stmts.push(s)
+          if not(super_inserted) && self.is_super_call_stmt(s) {
+            for n in property_names {
+              new_stmts.push(
+                PropAssign(@ast.TsExpr::Var("this"), n, @ast.TsExpr::Var(n)),
+              )
+            }
+            super_inserted = true
+          }
+        }
+        if not(super_inserted) {
+          let prepended : Array[@ast.TsStmt] = []
+          for n in property_names {
+            prepended.push(
+              PropAssign(@ast.TsExpr::Var("this"), n, @ast.TsExpr::Var(n)),
+            )
+          }
+          for s in new_stmts {
+            prepended.push(s)
+          }
+          @ast.TsBlock::{ stmts: prepended, stmt_positions: [] }
+        } else {
+          @ast.TsBlock::{ stmts: new_stmts, stmt_positions: [] }
+        }
+      } else {
+        body
+      }
       let func : @ast.TsFunc = {
         name: method_name,
         type_params: [],
@@ -726,6 +791,9 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   let (ctor_opt, elements) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
+  // Self-extending classes (`class C extends C {}`) intentionally
+  // throw at evaluation time per ES spec; preserve that with a
+  // tiny IIFE.
   match base {
     Some(base_name) =>
       if class_name.length() > 0 && base_name == class_name {
@@ -747,7 +815,84 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       }
     None => ()
   }
-  let tmp_name = if class_name == "" { "<anon>" } else { class_name }
+  // Class expression with `extends Base` — produce a native
+  // `class … extends … { … }` rather than the IIFE desugar (whose
+  // `super(…)` calls would land outside a real class body).
+  match base {
+    Some(base_name) => {
+      let runtime_decl = build_runtime_class_decl(
+        class_name, class_type_params, ctor_opt, elements, false,
+      )
+      let decorated : @ast.TsClassDecl = {
+        ..runtime_decl,
+        base_names: [base_name],
+        decorators: self.take_pending_decorators(),
+      }
+      self.last_runtime_class_decl = Some(decorated)
+      // Add field initializers to the constructor body so `class
+      // … extends X { y = 2; constructor() {…} }` doesn't lose
+      // its non-static field defaults.
+      let field_assigns : Array[@ast.TsStmt] = []
+      for element in elements {
+        match element {
+          Field(is_static, Name(field_name), _, Some(init)) =>
+            if not(is_static) {
+              field_assigns.push(
+                PropAssign(@ast.TsExpr::Var("this"), field_name, init),
+              )
+            }
+          _ => ()
+        }
+      }
+      let ctor_func : @ast.TsFunc? = match ctor_opt {
+        Some(func) =>
+          if field_assigns.length() > 0 {
+            Some(self.inject_instance_field_assigns(func, field_assigns, Some(base_name)))
+          } else {
+            Some(func)
+          }
+        None =>
+          if field_assigns.length() > 0 {
+            let rest_name = "__super_args__"
+            let body_stmts : Array[@ast.TsStmt] = [
+              Expr(Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))])),
+            ]
+            for a in field_assigns {
+              body_stmts.push(a)
+            }
+            Some(@ast.TsFunc::{
+              name: "constructor",
+              type_params: [],
+              params: [
+                {
+                  name: rest_name,
+                  binding: Some(@ast.TsBinding::Ident(rest_name)),
+                  is_rest: true,
+                  type_: @ast.TsType::Any,
+                  default: None,
+                },
+              ],
+              return_type: @ast.TsType::Any,
+              body: { stmts: body_stmts, stmt_positions: [] },
+              const_type_params: [],
+              is_generator: false,
+              is_async: false,
+            })
+          } else {
+            None
+          }
+      }
+      return NativeClassExpr(decorated, ctor_func)
+    }
+    None => ()
+  }
+  // `<anon>` was the historical sentinel for "this class expression
+  // has no source-level name". The angle brackets aren't valid JS
+  // identifier syntax, so the emitter rejects them and writes
+  // `let <anon> = …` literally, producing invalid output. Use a
+  // legal-but-reserved-looking name instead; the class-desugar IIFE
+  // only references it internally, so a stable token is enough.
+  let tmp_name = if class_name == "" { "_anon" } else { class_name }
   let runtime_decl = build_runtime_class_decl(
     if class_name == "" {
       "<class>"
@@ -1009,7 +1154,16 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
                 )
               }
               None => {
-                let prop_key = "@@define:" + method_name
+                // The `@@define:` prefix the desugar used to attach
+                // here was unused downstream — neither the checker
+                // nor any transform actually inspects it, and the
+                // emit-time stripper was a no-op once mangling
+                // renamed the prefixed name. Use the raw method
+                // name so property-mangling treats it like every
+                // other prop and stays consistent across the
+                // `prototype.method = …` assignment and any later
+                // `prototype.method.something = …` chain.
+                let prop_key = method_name
                 // Set __super_proto for both instance and static methods
                 let super_proto = if is_static {
                   // Static: super refers to parent class (or Function.prototype)
@@ -1209,11 +1363,105 @@ fn Parser::parse_class_decl_with_abstract(
   let (ctor_opt, elements) = self.parse_class_body()
   self.current_class_brand = prev_brand
   self.restore_local_type_param_bounds(class_type_param_bound_len)
-  self.last_runtime_class_decl = Some(
-    build_runtime_class_decl(
-      name, class_type_params, ctor_opt, elements, is_abstract,
-    ),
+  let runtime_decl = build_runtime_class_decl(
+    name, class_type_params, ctor_opt, elements, is_abstract,
   )
+  self.last_runtime_class_decl = Some(runtime_decl)
+  // When the class extends another class, the IIFE desugar below
+  // produces a `super(…)` call outside a real class body — V8
+  // rejects that as a SyntaxError. Bypass the desugar and emit
+  // native `class … extends … { … }` instead. Modern engines
+  // (Node 12+, ES2015 spec) handle the syntax directly; the IIFE
+  // path is only retained for non-extending classes that still
+  // round-trip through the original lowering.
+  match base {
+    Some(base_name) => {
+      // Build per-field `this.x = init` assigns for non-static
+      // fields with default values; this mirrors what the IIFE
+      // path does via `instance_assigns`, but we splice them into
+      // the constructor body directly so the class body looks
+      // like idiomatic ES2022 syntax.
+      let field_assigns : Array[@ast.TsStmt] = []
+      for element in elements {
+        match element {
+          Field(is_static, Name(field_name), _, Some(init)) =>
+            if not(is_static) {
+              field_assigns.push(
+                PropAssign(@ast.TsExpr::Var("this"), field_name, init),
+              )
+            }
+          _ => ()
+        }
+      }
+      // Inject field assigns AFTER the super() call (or at the
+      // start when there's no constructor). `inject_instance_field_assigns`
+      // already handles the super-call-aware ordering.
+      let merged_ctor = match ctor_opt {
+        Some(func) =>
+          if field_assigns.length() > 0 {
+            self.inject_instance_field_assigns(func, field_assigns, Some(base_name))
+          } else {
+            func
+          }
+        None =>
+          if field_assigns.length() > 0 {
+            // Synthesize a constructor body that forwards `...args`
+            // to `super(...)` and then runs the field assigns.
+            let rest_name = "__super_args__"
+            let body_stmts : Array[@ast.TsStmt] = [
+              Expr(Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))])),
+            ]
+            for a in field_assigns {
+              body_stmts.push(a)
+            }
+            @ast.TsFunc::{
+              name: "constructor",
+              type_params: [],
+              params: [
+                {
+                  name: rest_name,
+                  binding: Some(@ast.TsBinding::Ident(rest_name)),
+                  is_rest: true,
+                  type_: @ast.TsType::Any,
+                  default: None,
+                },
+              ],
+              return_type: @ast.TsType::Any,
+              body: { stmts: body_stmts, stmt_positions: [] },
+              const_type_params: [],
+              is_generator: false,
+              is_async: false,
+            }
+          } else {
+            // No fields and no constructor — emit class with no
+            // constructor; the default does the right thing
+            // (`constructor(...args) { super(...args); }`).
+            @ast.TsFunc::{
+              name: "",
+              type_params: [],
+              params: [],
+              return_type: @ast.TsType::Any,
+              body: { stmts: [], stmt_positions: [] },
+              const_type_params: [],
+              is_generator: false,
+              is_async: false,
+            }
+          }
+      }
+      let ctor_func : @ast.TsFunc? = if ctor_opt is None && field_assigns.length() == 0 {
+        None
+      } else {
+        Some(merged_ctor)
+      }
+      let decorated : @ast.TsClassDecl = {
+        ..runtime_decl,
+        base_names: [base_name],
+        decorators: self.take_pending_decorators(),
+      }
+      return NativeClassStmt(decorated, ctor_func)
+    }
+    None => ()
+  }
   let instance_assigns : Array[@ast.TsStmt] = []
   let has_instance_private = has_instance_private_elements(elements)
   let has_static_private = has_static_private_elements(elements)
@@ -1449,7 +1697,16 @@ fn Parser::parse_class_decl_with_abstract(
                 )
               }
               None => {
-                let prop_key = "@@define:" + method_name
+                // The `@@define:` prefix the desugar used to attach
+                // here was unused downstream — neither the checker
+                // nor any transform actually inspects it, and the
+                // emit-time stripper was a no-op once mangling
+                // renamed the prefixed name. Use the raw method
+                // name so property-mangling treats it like every
+                // other prop and stays consistent across the
+                // `prototype.method = …` assignment and any later
+                // `prototype.method.something = …` chain.
+                let prop_key = method_name
                 // Set __super_proto for both instance and static methods
                 let super_proto = if is_static {
                   // Static: super refers to parent class (or Function.prototype)

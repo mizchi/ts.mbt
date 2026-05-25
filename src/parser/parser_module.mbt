@@ -302,6 +302,90 @@ fn Parser::parse_enum_decl_after_enum_keyword(
 }
 
 ///|
+///|
+/// Lower a parsed `enum` declaration to the equivalent runtime
+/// statements:
+///   `var Name = {}; Name["A"] = 0; Name[0] = "A"; …`
+/// Reverse mapping (`Name[value] = "Name"`) is emitted only for
+/// numeric members so string enums don't accidentally collide on
+/// the value side. `declare enum` produces no runtime code.
+pub fn lower_enum_decl_to_runtime_stmts(
+  decl : @ast.TsEnumDecl,
+) -> Array[@ast.TsStmt] {
+  let out : Array[@ast.TsStmt] = []
+  if decl.is_declare {
+    return out
+  }
+  // `const enum` decls don't generate any runtime object —
+  // their use sites are inlined to literal values by
+  // `transform/const_enum_inline.mbt`. Emitting the var would
+  // both bloat the bundle and break the TS-spec contract that
+  // const enums vanish at runtime.
+  if decl.is_const {
+    return out
+  }
+  out.push(
+    Var(@ast.TsBinding::Ident(decl.name), @ast.TsType::Any, ObjectLit([])),
+  )
+  let mut next_numeric : Int = 0
+  for member in decl.members {
+    let value_expr : @ast.TsExpr? = match member.value {
+      Some(@ast.TsEnumMemberValue::Number(s)) =>
+        match (try? @strconv.parse_int(s)) {
+          Ok(i) => {
+            next_numeric = i + 1
+            Some(@ast.TsExpr::IntLit(i))
+          }
+          Err(_) =>
+            // Float / hex / negative / etc — fall back to `0.0`
+            // for auto-increment (rare in practice).
+            Some(
+              @ast.TsExpr::NumberLit(
+                match (try? @strconv.parse_double(s)) {
+                  Ok(d) => d
+                  Err(_) => 0.0
+                },
+              ),
+            )
+        }
+      Some(@ast.TsEnumMemberValue::String(s)) => Some(@ast.TsExpr::StringLit(s))
+      Some(@ast.TsEnumMemberValue::BigInt(s)) => Some(@ast.TsExpr::BigIntLit(s))
+      Some(@ast.TsEnumMemberValue::Bool(b)) => Some(@ast.TsExpr::BoolLit(b))
+      None => {
+        let v = next_numeric
+        next_numeric = next_numeric + 1
+        Some(@ast.TsExpr::IntLit(v))
+      }
+    }
+    match value_expr {
+      Some(v) => {
+        out.push(
+          IndexAssign(
+            @ast.TsExpr::Var(decl.name),
+            @ast.TsExpr::StringLit(member.name),
+            v,
+          ),
+        )
+        // Reverse map only for numeric values.
+        match v {
+          IntLit(_) | NumberLit(_) | BigIntLit(_) =>
+            out.push(
+              IndexAssign(
+                @ast.TsExpr::Var(decl.name),
+                v,
+                @ast.TsExpr::StringLit(member.name),
+              ),
+            )
+          _ => ()
+        }
+      }
+      None => ()
+    }
+  }
+  out
+}
+
+///|
 fn Parser::parse_const_enum_decl(
   self : Parser,
   is_declare : Bool,
@@ -615,6 +699,11 @@ fn collect_decl_names_from_stmt(
       for inner in block.stmts {
         collect_decl_names_from_stmt(inner, names)
       }
+    // `class X extends Y { … }` produced as a native class
+    // declaration. The export tracker needs to see `X` so
+    // `export class App extends LitElement {}` registers the
+    // export.
+    NativeClassStmt(decl, _) => if decl.name != "" { names.push(decl.name) }
     _ => ()
   }
 }
@@ -2120,6 +2209,7 @@ fn Parser::parse_export_decl_for_module(
     }
     let type_alias = self.parse_type_alias_after_type_keyword()
     exports.push({ local_name: type_alias.name, export_name: type_alias.name })
+    self.collected_type_aliases.push(type_alias)
     return (stmts, exports, reexports)
   }
   if self.match_(Default) || self.match_ident("default") {
@@ -3090,6 +3180,7 @@ fn Parser::parse_module_block_with_const_values(
   seeded_const_values : Map[String, @ast.TsExpr],
 ) -> (@ast.TsModuleBlock, Map[String, @ast.TsExpr]) raise ParseError {
   let stmts : Array[@ast.TsStmt] = []
+  let stmt_positions : Array[Int] = []
   let imports : Array[@ast.TsImportDecl] = []
   let exports : Array[@ast.TsExportSpec] = []
   let reexports : Array[@ast.TsReExportSpec] = []
@@ -3107,10 +3198,35 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Export) {
+      // Remember which JSDoc tags decorated this `export` token.
+      // `@internal` hides the decl from `.d.ts`; `@deprecated`
+      // gets carried over as a comment in the emitted decl.
+      let export_pos = self.peek().pos
+      let is_internal = self.internal_marker_positions.contains(export_pos)
+      let mut deprecation_msg : String? = None
+      let mut is_pure = false
+      match self.jsdoc_at_pos.get(export_pos) {
+        Some(jb) =>
+          for t in jb.tags {
+            match t {
+              Deprecated(msg) => deprecation_msg = Some(msg)
+              Pure | NoSideEffects => is_pure = true
+              _ => ()
+            }
+          }
+        None => ()
+      }
       match self.parse_export_enum_decl_for_module_block() {
         Some(enum_) => {
           enums.push(enum_)
           exports.push({ local_name: enum_.name, export_name: enum_.name })
+          if is_internal {
+            self.collected_internal_names[enum_.name] = true
+          }
+          match deprecation_msg {
+            Some(msg) => self.collected_deprecations[enum_.name] = msg
+            None => ()
+          }
           continue
         }
         None => ()
@@ -3123,6 +3239,16 @@ fn Parser::parse_module_block_with_const_values(
       }
       for spec in export_specs {
         exports.push(spec)
+        if is_internal {
+          self.collected_internal_names[spec.local_name] = true
+        }
+        if is_pure {
+          self.collected_pure_declarations[spec.local_name] = true
+        }
+        match deprecation_msg {
+          Some(msg) => self.collected_deprecations[spec.local_name] = msg
+          None => ()
+        }
       }
       for spec in reexport_specs {
         reexports.push(spec)
@@ -3193,7 +3319,10 @@ fn Parser::parse_module_block_with_const_values(
       _ => ()
     }
     if self.check(Type) {
-      self.skip_type_alias()
+      // Type aliases are erased at runtime but we keep them in
+      // `TsModuleBlock.type_aliases` so whole-program type-driven
+      // passes (e.g. discriminant-tag rewrite) can inspect them.
+      self.collected_type_aliases.push(self.parse_type_alias())
       continue
     }
     if self.is_namespace_decl_start() {
@@ -3209,24 +3338,54 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Const) {
+      let pos = self.peek().pos
       let stmt = self.parse_stmt()
       collect_static_const_exprs_from_stmt(stmt, const_values)
       // Keep the const declaration on the runtime statement stream
       // too — bridge passes consume `const_values` for build-time
       // table extraction, but the transform / bundle phase needs
       // every runtime statement in `block.stmts`.
+      stmt_positions.push(pos)
       stmts.push(stmt)
       continue
     }
-    stmts.push(self.parse_stmt())
+    let pos = self.peek().pos
+    // Capture JSDoc purity annotations on non-export decls too.
+    // `function helper() {}` with `/** @__NO_SIDE_EFFECTS__ */`
+    // attached should be treated as pure by the analysis.
+    let mut is_pure_decl = false
+    match self.jsdoc_at_pos.get(pos) {
+      Some(jb) =>
+        for t in jb.tags {
+          match t {
+            Pure | NoSideEffects => is_pure_decl = true
+            _ => ()
+          }
+        }
+      None => ()
+    }
+    let stmt = self.parse_stmt()
+    if is_pure_decl {
+      let names : Array[String] = []
+      collect_decl_names_from_stmt(stmt, names)
+      for n in names {
+        self.collected_pure_declarations[n] = true
+      }
+    }
+    stmts.push(stmt)
+    stmt_positions.push(pos)
   }
   (
     {
-      block: { stmts, stmt_positions: [] },
+      block: { stmts, stmt_positions },
       imports,
       exports,
       reexports,
       enums,
+      internal_names: self.collected_internal_names,
+      deprecations: self.collected_deprecations,
+      pure_declarations: self.collected_pure_declarations,
+      type_aliases: self.collected_type_aliases,
     },
     const_values,
   )
@@ -3299,6 +3458,18 @@ pub fn parse_block_from_source_with_positions(
 ) -> (@ast.TsBlock, Array[Int]) raise ParseError {
   let block = parse_block_from_source(source)
   (block, block.stmt_positions)
+}
+
+///|
+/// Parse a TypeScript type expression from a string. Used by the
+/// JSDoc consumption pass to lift `@param {Type}` / `@returns {Type}`
+/// brace contents into proper `TsType` values that downstream passes
+/// can reason about.
+pub fn parse_type_from_source(
+  source : String,
+) -> @ast.TsType raise ParseError {
+  let parser = Parser::from_source(source)
+  parser.parse_type()
 }
 
 ///|

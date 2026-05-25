@@ -107,7 +107,10 @@ test "transform: class declaration emits via the parser's class desugar" {
     ,
     [
       "let Counter",
-      "function <class>",
+      // The desugar IIFE's outer wrapper is anonymous — the parser
+      // tags it with `<class>` internally; the emitter drops invalid
+      // identifier characters and falls back to `function ()`.
+      "function()",
       "function Counter()",
       "Counter.prototype.inc",
       "return Counter",
@@ -237,4 +240,46 @@ test "transform: declare / type / interface are dropped from the JS output" {
     ,
     ["interface", "type T"],
   )
+}
+
+///|
+test "transform: mangle option compresses function-locals but keeps top-level" {
+  // `transform_source_full` exposes the mangle pass directly so a
+  // CLI driver like `mtsc --mangle` can skip the JSX lowering +
+  // emit dance manually. Top-level names stay verbatim by default.
+  let src =
+    (
+      #|function greetUser(name) {
+      #|  const message = "hi " + name;
+      #|  return message;
+      #|}
+    )
+  let out = match
+    transform_source_full(src, JsxConfig::default(), mangle=true) {
+    Ok(o) => o
+    Err(e) => fail("transform error: \{e}")
+  }
+  // Top-level function name is preserved.
+  assert_true(out.js.contains("greetUser"))
+  // Function-locals are gone.
+  assert_false(out.js.contains("name"))
+  assert_false(out.js.contains("message"))
+}
+
+///|
+test "transform: mangle does not rename runtime jsx helpers" {
+  // JSX lowering emits references to `jsx` / `jsxs` / `Fragment`;
+  // they're in the mangler's built-in reserved set so the calls
+  // line up with the inserted runtime import.
+  let src = "const el = (props) => <h1>{props.title}</h1>;"
+  let out = match
+    transform_source_full(src, JsxConfig::default(), mangle=true) {
+    Ok(o) => o
+    Err(e) => fail("transform error: \{e}")
+  }
+  assert_true(out.js.contains("import { jsx } from \"react/jsx-runtime\""))
+  // The `jsx(...)` call survives the rename.
+  assert_true(out.js.contains("jsx(\"h1\""))
+  // `props` got renamed inside the arrow function.
+  assert_false(out.js.contains("props.title"))
 }

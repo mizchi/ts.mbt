@@ -1253,7 +1253,19 @@ fn Parser::parse_conditional_type_tail(
   source : @ast.TsType,
 ) -> @ast.TsType raise ParseError {
   let _ = self.expect(Extends)
-  let target = self.parse_intersection_type()
+  // Per TS grammar, the extends-target is a `Type` that allows
+  // unions / intersections but NOT another nested conditional
+  // (`A extends B extends C ? … : …` is parse-rejected).
+  let target_first = self.parse_intersection_type()
+  let target = if self.check(Pipe) {
+    let items : Array[@ast.TsType] = [target_first]
+    while self.match_(Pipe) {
+      items.push(self.parse_intersection_type())
+    }
+    @ast.TsType::Union(items)
+  } else {
+    target_first
+  }
   let _ = self.expect(Question)
   let true_type = self.parse_type()
   let _ = self.expect(Colon)

@@ -1,11 +1,15 @@
 // Identifier mangling pass.
 //
-// This is the v0 of the type-aware mangling that's the eventual goal
-// of the transform stack (the packelyze retry). Scope of this commit:
+// This is the type-aware mangling that's the eventual goal of the
+// transform stack (the packelyze retry). Scope of this pass:
 //
 //   - Rename function-local declarations (`let`, `const`, `var`,
 //     parameters, nested function names) to short two-letter
 //     identifiers (`a`, `b`, …, `aa`, `ab`, …).
+//   - `let` / `const` are renamed per lexical block frame, so
+//     non-overlapping `if` / `while` / `try` / bare-`{}` blocks can
+//     reuse the same short slot. `var` is pre-hoisted to the
+//     enclosing function frame, matching JS scoping.
 //   - Reserved-by-default: every top-level binding stays put (the
 //     bundle's exports + every name visible at module scope), plus
 //     every JS builtin / DOM global the engine might look up.
@@ -13,10 +17,8 @@
 //     receivers, call-site `Call(name, …)`, assignment targets,
 //     destructuring patterns — get renamed in lockstep.
 //
-// Property keys, member-call methods, and object-literal keys are
-// *not* renamed yet. That's where the checker integration lands in a
-// follow-up; for now this pass treats every dot / index access as
-// safe-to-rename only at the receiver side.
+// Property mangling is opt-in via `cfg.mangle_properties` and runs
+// as a separate pass on top of the identifier rename.
 //
 //   block ──► mangle_block(block, cfg) ──► block (with locals renamed)
 //
@@ -119,39 +121,33 @@ pub fn ManglerConfig::with_reserved_properties(
 /// treats them as reserved unconditionally.
 let mangler_builtin_reserved : Array[String] = [
   // JS / ECMAScript globals
-  "undefined", "null", "true", "false", "this", "globalThis",
-  "Object", "Array", "Function", "Boolean", "Number", "String",
-  "Symbol", "BigInt", "RegExp", "Date", "Error", "TypeError",
-  "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError",
-  "AggregateError", "Math", "JSON", "Promise", "Map", "Set", "WeakMap",
-  "WeakSet", "WeakRef", "FinalizationRegistry", "Proxy", "Reflect",
-  "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array",
-  "Uint16Array", "Int32Array", "Uint32Array", "Float32Array",
-  "Float64Array", "BigInt64Array", "BigUint64Array",
-  "ArrayBuffer", "SharedArrayBuffer", "DataView", "Atomics",
-  "Iterator", "AsyncIterator", "Generator", "AsyncGenerator",
-  "Infinity", "NaN", "isNaN", "isFinite", "parseInt", "parseFloat",
-  "encodeURI", "decodeURI", "encodeURIComponent", "decodeURIComponent",
-  "escape", "unescape", "eval",
+  "undefined", "null", "true", "false", "this", "globalThis", "Object", "Array",
+  "Function", "Boolean", "Number", "String", "Symbol", "BigInt", "RegExp", "Date",
+  "Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError",
+  "URIError", "AggregateError", "Math", "JSON", "Promise", "Map", "Set", "WeakMap",
+  "WeakSet", "WeakRef", "FinalizationRegistry", "Proxy", "Reflect", "Int8Array",
+  "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+  "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array", "ArrayBuffer",
+  "SharedArrayBuffer", "DataView", "Atomics", "Iterator", "AsyncIterator", "Generator",
+  "AsyncGenerator", "Infinity", "NaN", "isNaN", "isFinite", "parseInt", "parseFloat",
+  "encodeURI", "decodeURI", "encodeURIComponent", "decodeURIComponent", "escape",
+  "unescape", "eval",
   // Browser globals
-  "window", "document", "location", "navigator", "history", "console",
-  "alert", "confirm", "prompt", "fetch", "XMLHttpRequest", "WebSocket",
-  "setTimeout", "setInterval", "clearTimeout", "clearInterval",
-  "requestAnimationFrame", "cancelAnimationFrame", "queueMicrotask",
+   "window", "document", "location", "navigator", "history", "console", "alert",
+  "confirm", "prompt", "fetch", "XMLHttpRequest", "WebSocket", "setTimeout", "setInterval",
+  "clearTimeout", "clearInterval", "requestAnimationFrame", "cancelAnimationFrame",
+  "queueMicrotask",
   // Module / runtime
-  "require", "module", "exports", "__dirname", "__filename",
-  "Buffer", "process",
+   "require", "module", "exports", "__dirname", "__filename", "Buffer", "process",
   // React / JSX runtime (so JSX-lowering output keeps working)
-  "jsx", "jsxs", "jsxDEV", "jsxsDEV", "Fragment", "React",
+   "jsx", "jsxs", "jsxDEV", "jsxsDEV", "Fragment", "React",
   // Keywords that can't be used as identifiers anyway
-  "let", "const", "var", "function", "class", "if", "else", "return",
-  "for", "while", "do", "switch", "case", "default", "break",
-  "continue", "throw", "try", "catch", "finally", "new", "delete",
-  "typeof", "instanceof", "void", "in", "of", "yield", "await",
-  "async", "import", "export", "from", "as", "extends", "super",
-  "static", "public", "private", "protected", "readonly", "implements",
-  "interface", "type", "namespace", "module", "declare", "abstract",
-  "with", "debugger", "enum",
+   "let", "const", "var", "function", "class", "if", "else", "return", "for", "while",
+  "do", "switch", "case", "default", "break", "continue", "throw", "try", "catch",
+  "finally", "new", "delete", "typeof", "instanceof", "void", "in", "of", "yield",
+  "await", "async", "import", "export", "from", "as", "extends", "super", "static",
+  "public", "private", "protected", "readonly", "implements", "interface", "type",
+  "namespace", "module", "declare", "abstract", "with", "debugger", "enum",
 ]
 
 ///|
@@ -161,80 +157,66 @@ let mangler_builtin_reserved : Array[String] = [
 /// hooks. Users extend via `reserved_properties`.
 let mangler_builtin_reserved_properties : Array[String] = [
   // Object / inheritance
-  "constructor", "prototype", "hasOwnProperty", "isPrototypeOf",
-  "propertyIsEnumerable", "toString", "valueOf", "toLocaleString",
-  "__proto__", "__defineGetter__", "__defineSetter__",
+  "constructor", "prototype", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+  "toString", "valueOf", "toLocaleString", "__proto__", "__defineGetter__", "__defineSetter__",
   // Array / iterable
-  "length", "push", "pop", "shift", "unshift", "slice", "splice",
-  "concat", "join", "reverse", "sort", "indexOf", "lastIndexOf",
-  "includes", "find", "findIndex", "findLast", "findLastIndex",
-  "filter", "map", "reduce", "reduceRight", "forEach", "every",
-  "some", "flat", "flatMap", "keys", "values", "entries", "fill",
-  "copyWithin", "at",
+   "length", "push", "pop", "shift", "unshift", "slice", "splice", "concat", "join",
+  "reverse", "sort", "indexOf", "lastIndexOf", "includes", "find", "findIndex", "findLast",
+  "findLastIndex", "filter", "map", "reduce", "reduceRight", "forEach", "every",
+  "some", "flat", "flatMap", "keys", "values", "entries", "fill", "copyWithin", "at",
   // String
-  "charAt", "charCodeAt", "codePointAt", "startsWith", "endsWith",
-  "padStart", "padEnd", "trim", "trimStart", "trimEnd", "trimLeft",
-  "trimRight", "toUpperCase", "toLowerCase", "toLocaleUpperCase",
-  "toLocaleLowerCase", "replace", "replaceAll", "split", "match",
-  "matchAll", "search", "substring", "substr", "repeat", "normalize",
-  "raw",
+   "charAt", "charCodeAt", "codePointAt", "startsWith", "endsWith", "padStart", "padEnd",
+  "trim", "trimStart", "trimEnd", "trimLeft", "trimRight", "toUpperCase", "toLowerCase",
+  "toLocaleUpperCase", "toLocaleLowerCase", "replace", "replaceAll", "split", "match",
+  "matchAll", "search", "substring", "substr", "repeat", "normalize", "raw",
   // Number / Math
-  "toFixed", "toPrecision", "toExponential", "toLocaleString",
+   "toFixed", "toPrecision", "toExponential", "toLocaleString",
   // Function
-  "call", "apply", "bind", "name", "arguments", "caller",
+   "call", "apply", "bind", "name", "arguments", "caller",
   // Promise
-  "then", "catch", "finally", "all", "allSettled", "race", "any",
-  "resolve", "reject", "withResolvers",
+   "then", "catch", "finally", "all", "allSettled", "race", "any", "resolve", "reject",
+  "withResolvers",
   // JSON
-  "parse", "stringify", "toJSON",
+   "parse", "stringify", "toJSON",
   // Map / Set
-  "size", "has", "get", "set", "delete", "clear", "add",
+   "size", "has", "get", "set", "delete", "clear", "add",
   // Iterator protocol
-  "next", "return", "throw", "done", "value",
+   "next", "return", "throw", "done", "value",
   // Symbol well-knowns (the property access forms)
-  "iterator", "asyncIterator",
+   "iterator", "asyncIterator",
   // DOM / events
-  "addEventListener", "removeEventListener", "dispatchEvent",
-  "target", "currentTarget", "preventDefault", "stopPropagation",
-  "stopImmediatePropagation", "type", "bubbles", "cancelable",
-  "innerHTML", "outerHTML", "innerText", "outerText", "textContent",
-  "appendChild", "removeChild", "replaceChild", "insertBefore",
-  "cloneNode", "childNodes", "children", "firstChild", "lastChild",
-  "firstElementChild", "lastElementChild", "parentNode", "parentElement",
-  "nextSibling", "previousSibling", "nextElementSibling",
-  "previousElementSibling", "nodeType", "nodeName", "nodeValue",
-  "tagName", "id", "className", "classList", "style", "dataset",
-  "attributes", "getAttribute", "setAttribute", "removeAttribute",
-  "hasAttribute", "querySelector", "querySelectorAll",
-  "getElementById", "getElementsByTagName", "getElementsByClassName",
-  "scrollTop", "scrollLeft", "scrollWidth", "scrollHeight",
-  "offsetTop", "offsetLeft", "offsetWidth", "offsetHeight",
-  "clientTop", "clientLeft", "clientWidth", "clientHeight",
-  "getBoundingClientRect", "matches", "closest",
+   "addEventListener", "removeEventListener", "dispatchEvent", "target", "currentTarget",
+  "preventDefault", "stopPropagation", "stopImmediatePropagation", "type", "bubbles",
+  "cancelable", "innerHTML", "outerHTML", "innerText", "outerText", "textContent",
+  "appendChild", "removeChild", "replaceChild", "insertBefore", "cloneNode", "childNodes",
+  "children", "firstChild", "lastChild", "firstElementChild", "lastElementChild",
+  "parentNode", "parentElement", "nextSibling", "previousSibling", "nextElementSibling",
+  "previousElementSibling", "nodeType", "nodeName", "nodeValue", "tagName", "id",
+  "className", "classList", "style", "dataset", "attributes", "getAttribute", "setAttribute",
+  "removeAttribute", "hasAttribute", "querySelector", "querySelectorAll", "getElementById",
+  "getElementsByTagName", "getElementsByClassName", "scrollTop", "scrollLeft", "scrollWidth",
+  "scrollHeight", "offsetTop", "offsetLeft", "offsetWidth", "offsetHeight", "clientTop",
+  "clientLeft", "clientWidth", "clientHeight", "getBoundingClientRect", "matches",
+  "closest",
   // Web Storage / URL / fetch
-  "localStorage", "sessionStorage", "setItem", "getItem", "removeItem",
-  "key", "url", "method", "headers", "body", "status", "statusText",
-  "ok", "redirected", "json", "text", "blob", "arrayBuffer", "formData",
-  "clone",
+   "localStorage", "sessionStorage", "setItem", "getItem", "removeItem", "key", "url",
+  "method", "headers", "body", "status", "statusText", "ok", "redirected", "json",
+  "text", "blob", "arrayBuffer", "formData", "clone",
   // React
-  "render", "props", "state", "setState", "forceUpdate", "ref",
-  "key", "children", "context", "displayName", "defaultProps",
-  "propTypes", "contextType", "shouldComponentUpdate",
-  "componentDidMount", "componentDidUpdate", "componentWillUnmount",
-  "getSnapshotBeforeUpdate", "componentDidCatch",
-  "getDerivedStateFromError", "getDerivedStateFromProps",
-  "useState", "useEffect", "useLayoutEffect", "useMemo", "useCallback",
-  "useRef", "useContext", "useReducer", "useImperativeHandle",
-  "useDebugValue", "useDeferredValue", "useTransition", "useId",
-  "useSyncExternalStore", "useInsertionEffect",
+   "render", "props", "state", "setState", "forceUpdate", "ref", "key", "children",
+  "context", "displayName", "defaultProps", "propTypes", "contextType", "shouldComponentUpdate",
+  "componentDidMount", "componentDidUpdate", "componentWillUnmount", "getSnapshotBeforeUpdate",
+  "componentDidCatch", "getDerivedStateFromError", "getDerivedStateFromProps", "useState",
+  "useEffect", "useLayoutEffect", "useMemo", "useCallback", "useRef", "useContext",
+  "useReducer", "useImperativeHandle", "useDebugValue", "useDeferredValue", "useTransition",
+  "useId", "useSyncExternalStore", "useInsertionEffect",
   // Node.js common
-  "stdout", "stderr", "stdin", "env", "argv", "exit", "pid",
-  "cwd", "chdir", "platform", "version", "versions",
-  "readFile", "writeFile", "readFileSync", "writeFileSync",
-  "exists", "existsSync", "mkdir", "mkdirSync", "rmdir", "unlink",
-  "stat", "statSync", "createReadStream", "createWriteStream",
+   "stdout", "stderr", "stdin", "env", "argv", "exit", "pid", "cwd", "chdir", "platform",
+  "version", "versions", "readFile", "writeFile", "readFileSync", "writeFileSync",
+  "exists", "existsSync", "mkdir", "mkdirSync", "rmdir", "unlink", "stat", "statSync",
+  "createReadStream", "createWriteStream",
   // Common reserved
-  "default",
+   "default",
 ]
 
 // ---------------------------------------------------------------------------
@@ -245,7 +227,10 @@ let mangler_builtin_reserved_properties : Array[String] = [
 /// Collect every property key referenced in the block. Used by the
 /// property-mangling pass to figure out which names are eligible
 /// for renaming.
-fn collect_property_names(block : @ast.TsBlock, out : Map[String, Bool]) -> Unit {
+fn collect_property_names(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
   for stmt in block.stmts {
     collect_props_in_stmt(stmt, out)
   }
@@ -264,8 +249,7 @@ fn collect_props_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
         Some(e) => collect_props_in_expr(e, out)
         None => ()
       }
-    Assign(_, e) | CompoundAssign(_, _, e) =>
-      collect_props_in_expr(e, out)
+    Assign(_, e) | CompoundAssign(_, _, e) => collect_props_in_expr(e, out)
     PropAssign(recv, prop, value) => {
       out[prop] = true
       collect_props_in_expr(recv, out)
@@ -338,6 +322,7 @@ fn collect_props_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
       collect_property_names(body, out)
     }
     Break(_) | Continue(_) | Empty | Debugger => ()
+    NativeClassStmt(_, _) => ()
   }
 }
 
@@ -366,7 +351,7 @@ fn collect_props_in_binding(
         None => ()
       }
     }
-    Object(ob) => {
+    Object(ob) =>
       for p in ob.props {
         out[p.key] = true
         collect_props_in_binding(p.binding, out)
@@ -375,7 +360,6 @@ fn collect_props_in_binding(
           None => ()
         }
       }
-    }
     Target(e) => collect_props_in_expr(e, out)
   }
 }
@@ -411,11 +395,10 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_props_in_expr(idx, out)
       collect_props_in_expr(value, out)
     }
-    Call(_, args) | New(_, args) => {
+    Call(_, args) | New(_, args) =>
       for a in args {
         collect_props_in_expr(a, out)
       }
-    }
     CallExpr(callee, args) | NewExpr(callee, args) => {
       collect_props_in_expr(callee, out)
       for a in args {
@@ -481,8 +464,10 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       for e in exprs {
         collect_props_in_expr(e, out)
       }
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      collect_props_in_expr(inner, out)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => collect_props_in_expr(inner, out)
     _ => ()
   }
 }
@@ -557,17 +542,37 @@ fn ScopeFrame::new_root(reserved : Map[String, Bool]) -> ScopeFrame {
 
 ///|
 fn ScopeFrame::child(parent : ScopeFrame) -> ScopeFrame {
-  let inherited : Map[String, Bool] = {}
-  for entry in parent.used {
-    inherited[entry.0] = true
-  }
+  // Previously this copied parent.used into the new frame so the
+  // bind-collision check could read it as a single hash lookup. For
+  // a bundle with 200+ modules concatenated into one root frame,
+  // the root's used set grows into the thousands and every nested
+  // scope pays an O(|parent.used|) creation cost. Walking the chain
+  // on lookup is cheaper for shallow / typical scope trees.
+  //
+  // Counter starts at the parent's so child allocations land
+  // ABOVE every name the parent has already taken, dodging
+  // collisions without needing the eager copy.
   {
     parent: Some(parent),
     renames: {},
-    used: inherited,
-    counter: 0,
+    used: {},
+    counter: parent.counter,
     reserved: parent.reserved,
   }
+}
+
+///|
+/// True when any frame in the chain starting at `self` records
+/// `name` as already used. Replaces the eager copy in `child()`.
+fn ScopeFrame::is_used_in_chain(self : ScopeFrame, name : String) -> Bool {
+  let mut cur : ScopeFrame? = Some(self)
+  while cur is Some(frame) {
+    if frame.used.contains(name) {
+      return true
+    }
+    cur = frame.parent
+  }
+  false
 }
 
 ///|
@@ -602,10 +607,11 @@ fn ScopeFrame::bind(
     return name
   }
   // Allocate the next free short name. Bump `counter` until the
-  // generated name isn't already used in this frame or any ancestor.
+  // generated name isn't already used in this frame's chain or in
+  // the reserved set.
   let mut candidate = next_short_name(self.counter)
   self.counter = self.counter + 1
-  while self.used.contains(candidate) || reserved.contains(candidate) {
+  while self.is_used_in_chain(candidate) || reserved.contains(candidate) {
     candidate = next_short_name(self.counter)
     self.counter = self.counter + 1
   }
@@ -615,24 +621,55 @@ fn ScopeFrame::bind(
 }
 
 ///|
-/// Generate the `n`th short identifier in lexicographic order:
-///   0 → "a", 1 → "b", … 25 → "z", 26 → "aa", 27 → "ab", … 51 → "az",
-///   52 → "ba", …, 675 → "zz", 676 → "aaa", …
+/// Generate the `n`th short identifier in lexicographic order.
+///
+/// First-character alphabet (52 chars): `a-z` then `A-Z`. Subsequent-
+/// character alphabet (62 chars): the first set + `0-9`. The
+/// encoding is bijective from `n` to a non-empty identifier:
+///
+///   0..52    → single char (`a`, `b`, …, `z`, `A`, …, `Z`)
+///   52..3276 → two chars (`aa`, `ab`, …, `Z9`)
+///   3276..   → three chars (`aaa`, …)
+///
+/// The first character can't be a digit, so the leading position
+/// uses the smaller alphabet. JS reserved keywords (`do`, `if`,
+/// `in`, `as`, …) sit in `mangler_builtin_reserved` and the caller
+/// skips them by bumping the counter — `next_short_name` itself is
+/// pure index-to-name.
 fn next_short_name(n : Int) -> String {
-  let chars : Array[Int] = []
-  let mut k = n
-  while {
-    chars.push(k % 26)
-    k = k / 26
-    k > 0
-  } {
-    k = k - 1
+  let first_alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  let subseq_alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  // 1. Find the length L such that n falls in the L-char band:
+  //    capacity(L) = 52 * 62^(L-1).
+  let mut len = 1
+  let mut consumed = 0
+  let mut band = 52
+  while n >= consumed + band {
+    consumed = consumed + band
+    band = band * 62
+    len = len + 1
   }
+  // 2. m = position within this band.
+  let mut m = n - consumed
+  // 3. Decompose m into digits, low-to-high.
+  let digits : Array[Int] = []
+  for _i in 0..<(len - 1) {
+    digits.push(m % 62)
+    m = m / 62
+  }
+  // The high digit picks from the 52-char first-alphabet.
+  digits.push(m)
+  // 4. Emit high → low.
   let buf = StringBuilder::new()
-  let mut i = chars.length() - 1
+  let mut i = digits.length() - 1
+  let n_digits = digits.length()
   while i >= 0 {
-    let c = chars[i]
-    buf.write_char(((97 + c) : Int).unsafe_to_char())
+    let c = digits[i]
+    if i == n_digits - 1 {
+      buf.write_char(first_alpha[c].to_int().unsafe_to_char())
+    } else {
+      buf.write_char(subseq_alpha[c].to_int().unsafe_to_char())
+    }
     i = i - 1
   }
   buf.to_string()
@@ -647,10 +684,7 @@ fn next_short_name(n : Int) -> String {
 /// new `TsBlock` with every function-local name renamed to a short
 /// `a` / `b` / … identifier. Top-level bindings stay put when
 /// `cfg.preserve_top_level` is `true`.
-pub fn mangle_block(
-  block : @ast.TsBlock,
-  cfg : ManglerConfig,
-) -> @ast.TsBlock {
+pub fn mangle_block(block : @ast.TsBlock, cfg : ManglerConfig) -> @ast.TsBlock {
   // Reserved set = built-ins ∪ explicit ∪ (top-level decls when
   // `preserve_top_level`).
   let reserved : Map[String, Bool] = {}
@@ -669,6 +703,11 @@ pub fn mangle_block(
   for entry in reserved {
     let _ = root.bind(entry.0, reserved)
   }
+  // Hoist every `var`-declared name into the module-level frame
+  // before the recursive walk so cross-block references still
+  // resolve once block-scoped frames take over inside `if` / `while`
+  // / `try` bodies.
+  hoist_var_decls_into_scope(block, root, reserved)
   // Identifier-mangling pass first (so any synthesized identifiers
   // can't collide with property names we're about to rename).
   let new_stmts : Array[@ast.TsStmt] = []
@@ -745,6 +784,140 @@ fn collect_binding_names(
 }
 
 // ---------------------------------------------------------------------------
+// var-hoisting
+// ---------------------------------------------------------------------------
+//
+// `var` declarations are function-scoped: `if (cond) { var x = 1; }` makes
+// `x` visible in the surrounding function regardless of which branch ran.
+// Block-scope-aware renaming therefore has to pre-bind every `var` name
+// (and the names introduced by destructured-`var` patterns) into the
+// enclosing function frame *before* the walk dives into child block
+// frames, otherwise a reference after the block fails to resolve.
+//
+// The walker stops descending at function / arrow boundaries — those
+// open their own function-scope frame and run their own hoist pass.
+
+///|
+fn hoist_var_names_from_binding(
+  binding : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match binding {
+    Ident(n) => out[n] = true
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => hoist_var_names_from_binding(be.binding, out)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => hoist_var_names_from_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for p in ob.props {
+        hoist_var_names_from_binding(p.binding, out)
+      }
+      match ob.rest {
+        Some(n) => out[n] = true
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+///|
+fn hoist_var_names_from_stmt(
+  stmt : @ast.TsStmt,
+  out : Map[String, Bool],
+) -> Unit {
+  match stmt {
+    Var(b, _, _) => hoist_var_names_from_binding(b, out)
+    Let(_, _, _) | Const(_, _, _) => ()
+    If(_, t, e_opt) => {
+      hoist_var_names_from_block(t, out)
+      match e_opt {
+        Some(b) => hoist_var_names_from_block(b, out)
+        None => ()
+      }
+    }
+    While(_, b) | DoWhile(_, b) => hoist_var_names_from_block(b, out)
+    For(init_opt, _, _, body) => {
+      match init_opt {
+        Some(s) => hoist_var_names_from_stmt(s, out)
+        None => ()
+      }
+      hoist_var_names_from_block(body, out)
+    }
+    ForOf(kind, b, _, _, body)
+    | ForAwaitOf(kind, b, _, _, body)
+    | ForIn(kind, b, _, _, body) => {
+      if kind is Var {
+        hoist_var_names_from_binding(b, out)
+      }
+      hoist_var_names_from_block(body, out)
+    }
+    Switch(_, cases) =>
+      for c in cases {
+        hoist_var_names_from_block(c.body, out)
+      }
+    Try(try_b, _, catch_b, finally_b) => {
+      hoist_var_names_from_block(try_b, out)
+      match catch_b {
+        Some(b) => hoist_var_names_from_block(b, out)
+        None => ()
+      }
+      match finally_b {
+        Some(b) => hoist_var_names_from_block(b, out)
+        None => ()
+      }
+    }
+    Block(b) => hoist_var_names_from_block(b, out)
+    Label(_, inner) => hoist_var_names_from_stmt(inner, out)
+    With(_, body) => hoist_var_names_from_block(body, out)
+    _ => ()
+  }
+}
+
+///|
+fn hoist_var_names_from_block(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
+  for s in block.stmts {
+    hoist_var_names_from_stmt(s, out)
+  }
+}
+
+///|
+/// Pre-bind every `var`-declared name visible in `block` into `scope`,
+/// so subsequent block-scope frames resolve `Var(...)` references back
+/// to this function-level binding. Idempotent on duplicates.
+fn hoist_var_decls_into_scope(
+  block : @ast.TsBlock,
+  scope : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> Unit {
+  let names : Map[String, Bool] = {}
+  hoist_var_names_from_block(block, names)
+  // Sort so the rename map is deterministic across compiler runs.
+  let sorted : Array[String] = []
+  for entry in names {
+    sorted.push(entry.0)
+  }
+  sorted.sort()
+  for n in sorted {
+    if scope.renames.contains(n) {
+      continue
+    }
+    let _ = scope.bind(n, reserved)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // AST walker
 // ---------------------------------------------------------------------------
 
@@ -756,7 +929,11 @@ fn rename_stmt(
 ) -> @ast.TsStmt {
   match stmt {
     Var(b, t, init) =>
-      Var(rename_binding_decl(b, scope, reserved), t, rename_expr(init, scope))
+      // `var` names were pre-bound by `hoist_var_decls_into_scope` at the
+      // enclosing function frame; resolve through the chain instead of
+      // re-binding so a `var` inside a child block scope still maps to
+      // the function-level rename.
+      Var(rename_binding_lhs(b, scope), t, rename_expr(init, scope))
     Let(b, t, init) =>
       Let(rename_binding_decl(b, scope, reserved), t, rename_expr(init, scope))
     Const(b, t, init) =>
@@ -772,8 +949,7 @@ fn rename_stmt(
         None => Return(None)
       }
     Throw(e) => Throw(rename_expr(e, scope))
-    Assign(name, e) =>
-      Assign(scope.resolve(name), rename_expr(e, scope))
+    Assign(name, e) => Assign(scope.resolve(name), rename_expr(e, scope))
     CompoundAssign(name, op, e) =>
       CompoundAssign(scope.resolve(name), op, rename_expr(e, scope))
     PropAssign(recv, prop, value) =>
@@ -784,15 +960,30 @@ fn rename_stmt(
         rename_expr(idx, scope),
         rename_expr(value, scope),
       )
-    If(cond, then_b, else_opt) =>
-      If(rename_expr(cond, scope), rename_block_inline(then_b, scope, reserved), match else_opt {
-        Some(b) => Some(rename_block_inline(b, scope, reserved))
+    If(cond, then_b, else_opt) => {
+      // Each arm opens its own block-level frame so `let` / `const`
+      // bindings introduced in one branch don't leak short-name slots
+      // into the other. `var` bindings were already hoisted to the
+      // enclosing function scope and resolve through the chain.
+      let then_scope = ScopeFrame::child(scope)
+      let then_renamed = rename_block_inline_in(then_b, then_scope, reserved)
+      let else_renamed = match else_opt {
+        Some(b) => {
+          let else_scope = ScopeFrame::child(scope)
+          Some(rename_block_inline_in(b, else_scope, reserved))
+        }
         None => None
-      })
-    While(c, b) =>
-      While(rename_expr(c, scope), rename_block_inline(b, scope, reserved))
-    DoWhile(c, b) =>
-      DoWhile(rename_expr(c, scope), rename_block_inline(b, scope, reserved))
+      }
+      If(rename_expr(cond, scope), then_renamed, else_renamed)
+    }
+    While(c, b) => {
+      let inner = ScopeFrame::child(scope)
+      While(rename_expr(c, scope), rename_block_inline_in(b, inner, reserved))
+    }
+    DoWhile(c, b) => {
+      let inner = ScopeFrame::child(scope)
+      DoWhile(rename_expr(c, scope), rename_block_inline_in(b, inner, reserved))
+    }
     For(init_opt, cond_opt, update_opt, body) => {
       // `for (let i = 0; …; …) { … }` creates a new lexical scope.
       let inner = ScopeFrame::child(scope)
@@ -813,23 +1004,23 @@ fn rename_stmt(
     }
     ForOf(kind, b, t, iter, body) => {
       let inner = ScopeFrame::child(scope)
-      let new_binding = rename_binding_decl(b, inner, reserved)
+      let new_binding = rename_for_binding(kind, b, inner, reserved)
       let new_iter = rename_expr(iter, scope)
-      let new_body = rename_block_inline(body, inner, reserved)
+      let new_body = rename_block_inline_in(body, inner, reserved)
       ForOf(kind, new_binding, t, new_iter, new_body)
     }
     ForAwaitOf(kind, b, t, iter, body) => {
       let inner = ScopeFrame::child(scope)
-      let new_binding = rename_binding_decl(b, inner, reserved)
+      let new_binding = rename_for_binding(kind, b, inner, reserved)
       let new_iter = rename_expr(iter, scope)
-      let new_body = rename_block_inline(body, inner, reserved)
+      let new_body = rename_block_inline_in(body, inner, reserved)
       ForAwaitOf(kind, new_binding, t, new_iter, new_body)
     }
     ForIn(kind, b, t, iter, body) => {
       let inner = ScopeFrame::child(scope)
-      let new_binding = rename_binding_decl(b, inner, reserved)
+      let new_binding = rename_for_binding(kind, b, inner, reserved)
       let new_iter = rename_expr(iter, scope)
-      let new_body = rename_block_inline(body, inner, reserved)
+      let new_body = rename_block_inline_in(body, inner, reserved)
       ForIn(kind, new_binding, t, new_iter, new_body)
     }
     Switch(scrutinee, cases) => {
@@ -849,37 +1040,59 @@ fn rename_stmt(
       Switch(new_scrutinee, new_cases)
     }
     Try(try_b, catch_bind, catch_b, finally_b) => {
-      let new_try = rename_block_inline(try_b, scope, reserved)
+      let try_scope = ScopeFrame::child(scope)
+      let new_try = rename_block_inline_in(try_b, try_scope, reserved)
       let (new_bind, new_catch) = match (catch_bind, catch_b) {
         (Some(b), Some(cb)) => {
           let inner = ScopeFrame::child(scope)
           let renamed_bind = rename_binding_decl(b, inner, reserved)
-          (Some(renamed_bind), Some(rename_block_inline_in(cb, inner, reserved)))
+          (
+            Some(renamed_bind),
+            Some(rename_block_inline_in(cb, inner, reserved)),
+          )
         }
-        (None, Some(cb)) =>
-          (None, Some(rename_block_inline(cb, scope, reserved)))
+        (None, Some(cb)) => {
+          let inner = ScopeFrame::child(scope)
+          (None, Some(rename_block_inline_in(cb, inner, reserved)))
+        }
         _ => (None, None)
       }
       let new_finally = match finally_b {
-        Some(fb) => Some(rename_block_inline(fb, scope, reserved))
+        Some(fb) => {
+          let finally_scope = ScopeFrame::child(scope)
+          Some(rename_block_inline_in(fb, finally_scope, reserved))
+        }
         None => None
       }
       Try(new_try, new_bind, new_catch, new_finally)
     }
-    Block(b) => Block(rename_block_inline(b, scope, reserved))
-    Label(name, inner) =>
-      Label(name, rename_stmt(inner, scope, reserved))
-    With(target, body) =>
-      With(rename_expr(target, scope), rename_block_inline(body, scope, reserved))
+    Block(b) => {
+      let inner = ScopeFrame::child(scope)
+      Block(rename_block_inline_in(b, inner, reserved))
+    }
+    Label(name, inner) => Label(name, rename_stmt(inner, scope, reserved))
+    With(target, body) => {
+      // `with` extends the scope chain dynamically; the static rename
+      // still needs lexical `let` / `const` bindings to live in their
+      // own frame so cross-block reuse is allowed.
+      let inner = ScopeFrame::child(scope)
+      With(
+        rename_expr(target, scope),
+        rename_block_inline_in(body, inner, reserved),
+      )
+    }
     Break(_) | Continue(_) | Empty | Debugger => stmt
+    NativeClassStmt(_, _) => stmt
   }
 }
 
 ///|
 /// Rename `block` using the given scope without spawning a new
-/// frame. Used inside `if` / `while` / `try` bodies where TS / JS
-/// scoping is lexical-block but our v0 keeps the frames at the
-/// function granularity.
+/// frame. Callers that need a fresh block-scope frame should
+/// allocate it via `ScopeFrame::child(scope)` and pass that to
+/// `rename_block_inline_in` directly — this helper is kept for the
+/// rare callers where the caller already represents the scope they
+/// want the body to inhabit (e.g. the function-body root frame).
 fn rename_block_inline(
   block : @ast.TsBlock,
   scope : ScopeFrame,
@@ -899,6 +1112,24 @@ fn rename_block_inline_in(
     stmts.push(rename_stmt(s, scope, reserved))
   }
   { stmts, stmt_positions: block.stmt_positions }
+}
+
+///|
+/// Pick the right binding strategy for a `for-of` / `for-in` /
+/// `for-await-of` header. `Let` / `Const` introduce a fresh block-
+/// scoped binding; `Var` was already hoisted to the enclosing function
+/// frame so its name must resolve through the scope chain; `Assign`
+/// refers to an existing variable and behaves the same way.
+fn rename_for_binding(
+  kind : @ast.TsForOfKind,
+  binding : @ast.TsBinding,
+  inner : ScopeFrame,
+  reserved : Map[String, Bool],
+) -> @ast.TsBinding {
+  match kind {
+    Let | Const => rename_binding_decl(binding, inner, reserved)
+    Var | Assign => rename_binding_lhs(binding, inner)
+  }
 }
 
 ///|
@@ -1005,8 +1236,7 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     PropAccess(recv, name) => PropAccess(rename_expr(recv, scope), name)
     IndexAccess(recv, idx) =>
       IndexAccess(rename_expr(recv, scope), rename_expr(idx, scope))
-    BinOp(op, l, r) =>
-      BinOp(op, rename_expr(l, scope), rename_expr(r, scope))
+    BinOp(op, l, r) => BinOp(op, rename_expr(l, scope), rename_expr(r, scope))
     UnaryOp(op, inner) => UnaryOp(op, rename_expr(inner, scope))
     Cond(c, t, e) =>
       Cond(rename_expr(c, scope), rename_expr(t, scope), rename_expr(e, scope))
@@ -1029,15 +1259,16 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
       ComputedProp(rename_expr(k, scope), rename_expr(v, scope))
     AssignExpr(name, value) =>
       AssignExpr(scope.resolve(name), rename_expr(value, scope))
-    AssignPattern(b, value) => {
+    AssignPattern(b, value) =>
       // Destructuring assignment to an existing pattern; the LHS is
       // an *assignment* not a declaration, so the names resolve via
       // the scope chain rather than introducing new bindings.
       AssignPattern(rename_binding_lhs(b, scope), rename_expr(value, scope))
-    }
     CompoundAssignExpr(target, op, value) =>
       CompoundAssignExpr(
-        rename_expr(target, scope), op, rename_expr(value, scope),
+        rename_expr(target, scope),
+        op,
+        rename_expr(value, scope),
       )
     PropAssignExpr(recv, prop, value) =>
       PropAssignExpr(rename_expr(recv, scope), prop, rename_expr(value, scope))
@@ -1054,10 +1285,12 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
       let new_params = rename_param_list(params, inner, inner.reserved)
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(rename_expr(e, inner))
-        ArrowBlock(b) =>
+        ArrowBlock(b) => {
+          hoist_var_decls_into_scope(b, inner, inner.reserved)
           @ast.TsArrowBody::ArrowBlock(
             rename_block_inline_in(b, inner, inner.reserved),
           )
+        }
       }
       ArrowFunc(new_params, ret_ty, new_body, is_async)
     }
@@ -1070,10 +1303,13 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     YieldStar(inner) => YieldStar(rename_expr(inner, scope))
     Await(inner) => Await(rename_expr(inner, scope))
     DynamicImport(spec, opts) =>
-      DynamicImport(rename_expr(spec, scope), match opts {
-        Some(o) => Some(rename_expr(o, scope))
-        None => None
-      })
+      DynamicImport(
+        rename_expr(spec, scope),
+        match opts {
+          Some(o) => Some(rename_expr(o, scope))
+          None => None
+        },
+      )
     TaggedTemplate(tag, parts, raw, exprs) => {
       let out : Array[@ast.TsExpr] = []
       for e in exprs {
@@ -1155,16 +1391,16 @@ fn rename_binding_lhs(
 }
 
 ///|
-fn rename_function_expr(
-  f : @ast.TsFunc,
-  scope : ScopeFrame,
-) -> @ast.TsFunc {
+fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
   // `function name(…)` introduces `name` into the parent scope's
   // value namespace. v0 keeps the function name verbatim — the
   // bundle layer can't predict whether the function is referenced
   // by name elsewhere yet (without checker symbol-graph analysis).
   let inner = ScopeFrame::child(scope)
   let new_params = rename_param_list(f.params, inner, inner.reserved)
+  // Hoist `var` names from the body into the function frame so
+  // block-scoped child frames can resolve them through the chain.
+  hoist_var_decls_into_scope(f.body, inner, inner.reserved)
   let new_body = rename_block_inline_in(f.body, inner, inner.reserved)
   {
     name: f.name,
@@ -1192,12 +1428,7 @@ fn rename_param_list(
     }
     let new_name = match new_binding {
       Some(@ast.TsBinding::Ident(n)) => n
-      _ =>
-        if p.name == "" {
-          ""
-        } else {
-          scope.bind(p.name, reserved)
-        }
+      _ => if p.name == "" { "" } else { scope.bind(p.name, reserved) }
     }
     let new_default : @ast.TsExpr? = match p.default {
       Some(d) => Some(rename_expr(d, scope))
@@ -1292,10 +1523,14 @@ fn rename_properties_in_stmt(
         rename_properties_in_expr(value, prop_map),
       )
     If(c, t, e_opt) =>
-      If(rename_properties_in_expr(c, prop_map), rename_properties_in_block(t, prop_map), match e_opt {
-        Some(b) => Some(rename_properties_in_block(b, prop_map))
-        None => None
-      })
+      If(
+        rename_properties_in_expr(c, prop_map),
+        rename_properties_in_block(t, prop_map),
+        match e_opt {
+          Some(b) => Some(rename_properties_in_block(b, prop_map))
+          None => None
+        },
+      )
     While(c, b) =>
       While(
         rename_properties_in_expr(c, prop_map),
@@ -1360,21 +1595,28 @@ fn rename_properties_in_stmt(
       Switch(rename_properties_in_expr(scrutinee, prop_map), new_cases)
     }
     Try(t, cb, c, f) =>
-      Try(rename_properties_in_block(t, prop_map), cb, match c {
-        Some(b) => Some(rename_properties_in_block(b, prop_map))
-        None => None
-      }, match f {
-        Some(b) => Some(rename_properties_in_block(b, prop_map))
-        None => None
-      })
+      Try(
+        rename_properties_in_block(t, prop_map),
+        cb,
+        match c {
+          Some(b) => Some(rename_properties_in_block(b, prop_map))
+          None => None
+        },
+        match f {
+          Some(b) => Some(rename_properties_in_block(b, prop_map))
+          None => None
+        },
+      )
     Block(b) => Block(rename_properties_in_block(b, prop_map))
-    Label(name, inner) => Label(name, rename_properties_in_stmt(inner, prop_map))
+    Label(name, inner) =>
+      Label(name, rename_properties_in_stmt(inner, prop_map))
     With(target, body) =>
       With(
         rename_properties_in_expr(target, prop_map),
         rename_properties_in_block(body, prop_map),
       )
     Break(_) | Continue(_) | Empty | Debugger => stmt
+    NativeClassStmt(_, _) => stmt
   }
 }
 
@@ -1463,7 +1705,8 @@ fn rename_properties_in_expr(
         rename_properties_in_expr(l, prop_map),
         rename_properties_in_expr(r, prop_map),
       )
-    UnaryOp(op, inner) => UnaryOp(op, rename_properties_in_expr(inner, prop_map))
+    UnaryOp(op, inner) =>
+      UnaryOp(op, rename_properties_in_expr(inner, prop_map))
     Cond(c, t, e) =>
       Cond(
         rename_properties_in_expr(c, prop_map),
@@ -1566,10 +1809,13 @@ fn rename_properties_in_expr(
     YieldStar(inner) => YieldStar(rename_properties_in_expr(inner, prop_map))
     Await(inner) => Await(rename_properties_in_expr(inner, prop_map))
     DynamicImport(spec, opts) =>
-      DynamicImport(rename_properties_in_expr(spec, prop_map), match opts {
-        Some(o) => Some(rename_properties_in_expr(o, prop_map))
-        None => None
-      })
+      DynamicImport(
+        rename_properties_in_expr(spec, prop_map),
+        match opts {
+          Some(o) => Some(rename_properties_in_expr(o, prop_map))
+          None => None
+        },
+      )
     TaggedTemplate(tag, parts, raw, exprs) => {
       let out : Array[@ast.TsExpr] = []
       for e in exprs {
@@ -1585,9 +1831,11 @@ fn rename_properties_in_expr(
       TemplateLiteral(parts, out)
     }
     As(inner, ty) => As(rename_properties_in_expr(inner, prop_map), ty)
-    Satisfies(inner, ty) => Satisfies(rename_properties_in_expr(inner, prop_map), ty)
+    Satisfies(inner, ty) =>
+      Satisfies(rename_properties_in_expr(inner, prop_map), ty)
     NonNull(inner) => NonNull(rename_properties_in_expr(inner, prop_map))
-    OptionalChain(inner) => OptionalChain(rename_properties_in_expr(inner, prop_map))
+    OptionalChain(inner) =>
+      OptionalChain(rename_properties_in_expr(inner, prop_map))
     _ => expr
   }
 }

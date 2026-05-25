@@ -183,6 +183,22 @@ pub(all) enum TsExpr {
   // functionexpression (function() {})
   FuncExpr(TsFunc)
 
+  // `/* @__PURE__ */ f(args)` — terser / rolldown convention for
+  // "this call has no observable side effects". Wraps any call-like
+  // expression (`Call` / `CallExpr` / `MethodCall` / `New` /
+  // `NewExpr`). Treeshake / DCE consult this marker to drop the
+  // call when its result is unused; the emit pass restores the
+  // comment so downstream minifiers preserve the annotation.
+  PureCall(TsExpr)
+
+  // Native class expression `class [Name] extends Base { … }`.
+  // Used by the parser when the source's class can't safely be
+  // lowered to the `(function() { … })()` IIFE because it extends
+  // another class — `super(…)` would be invalid outside a real
+  // class body. The optional name is the class's declared name
+  // (anonymous when "").
+  NativeClassExpr(TsClassDecl, TsFunc?)
+
   // yield expression (generator)
   Yield(TsExpr?)
   YieldStar(TsExpr)
@@ -373,6 +389,16 @@ pub(all) enum TsStmt {
   Debugger
   Label(String, TsStmt)
   Block(TsBlock)
+  // Native `class Name extends Base { … }` declaration. Used by the
+  // parser when the source can't be safely lowered to the
+  // `let X = (function() { … })()` IIFE — primarily because the
+  // class extends another class (the IIFE's `super(…)` call is a
+  // syntax error outside a real class body). The `TsClassDecl`
+  // carries the structural shape (name, base, fields, methods);
+  // `ctor_func` carries the constructor's full signature + body so
+  // the emitter can preserve rest / default / destructuring
+  // parameters that the checker-side declaration doesn't model.
+  NativeClassStmt(TsClassDecl, TsFunc?)
 
   // break/continue
   Break(String?)
@@ -677,6 +703,27 @@ pub(all) struct TsModuleBlock {
   exports : Array[TsExportSpec]
   reexports : Array[TsReExportSpec]
   enums : Array[TsEnumDecl]
+  // Names tagged with a `/** @internal */` JSDoc block. These are
+  // exported at JS level but hidden from `.d.ts` emit — downstream
+  // TypeScript consumers can't `import { x }` them through the
+  // declaration, while runtime code in the same package can.
+  internal_names : Map[String, Bool]
+  // Names tagged with `@deprecated` along with the (optional)
+  // deprecation message. The `.d.ts` emit renders this as a
+  // JSDoc comment so downstream consumers' IDEs surface the
+  // notice. Empty message means "deprecated but no explanation".
+  deprecations : Map[String, String]
+  // Function declarations annotated with `@__PURE__` or
+  // `@__NO_SIDE_EFFECTS__` JSDoc. The purity pass adds these to
+  // its pure set unconditionally, overriding the call-graph
+  // fixpoint. Useful for functions that call into externally-
+  // declared APIs the analyzer can't see through.
+  pure_declarations : Map[String, Bool]
+  // `type T = ...` aliases parsed at this module's top level.
+  // Threaded through the bundler so whole-program type-driven
+  // passes (e.g. discriminant-tag string→number rewrite) can
+  // enumerate every declared shape.
+  type_aliases : Array[TsTypeAlias]
 } derive(Debug)
 
 // ============================================

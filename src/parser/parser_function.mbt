@@ -57,7 +57,13 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
 }
 
 ///|
-fn Parser::skip_param_modifiers(self : Parser) -> Unit {
+fn Parser::skip_param_modifiers(self : Parser) -> Bool {
+  // Returns `true` when at least one TS-only parameter modifier
+  // (`public` / `private` / `protected` / `readonly` / `override`)
+  // was consumed. Constructor-parameter callers use the flag to
+  // synthesize `this.x = x` assigns — the so-called "parameter
+  // property" TS shortcut.
+  let mut saw_property_modifier = false
   let mut has_modifier = true
   while has_modifier {
     has_modifier = false
@@ -81,6 +87,11 @@ fn Parser::skip_param_modifiers(self : Parser) -> Unit {
           | Type
           | Of
           | In => {
+            // `override` alone isn't a "parameter property"; the
+            // other four (public/private/protected/readonly) are.
+            if name != "override" {
+              saw_property_modifier = true
+            }
             let _ = self.advance()
             has_modifier = true
           }
@@ -89,6 +100,7 @@ fn Parser::skip_param_modifiers(self : Parser) -> Unit {
       _ => ()
     }
   }
+  saw_property_modifier
 }
 
 ///|
@@ -113,10 +125,19 @@ fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   self.skip_param_decorators()
-  self.skip_param_modifiers()
+  let is_param_property = self.skip_param_modifiers()
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
+  // Record the name so the surrounding constructor parser can
+  // synthesize `this.name = name` field assigns. The collector is
+  // a stack-of-slots managed by `enter_param_property_scope` /
+  // `exit_param_property_scope`; only constructor-param parsing
+  // pushes a slot, so non-constructor params are no-ops.
+  if is_param_property && self.param_property_scopes.length() > 0 {
+    let top = self.param_property_scopes.length() - 1
+    self.param_property_scopes[top].push(name)
+  }
   let is_optional = self.match_(Question)
   // type ()
   let base_type = if self.check(Colon) {
@@ -191,6 +212,10 @@ fn Parser::parse_params(self : Parser) -> Array[@ast.TsParam] raise ParseError {
 ///|
 // / function
 pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
+  // Capture the position of `function` so we can look up an
+  // attached JSDoc block (for `@param {Type}` / `@returns {Type}`
+  // overlay below).
+  let func_kw_pos = self.peek().pos
   let _ = self.expect(Function)
   let is_generator = self.match_(Star)
   let is_async = self.in_async
@@ -270,7 +295,161 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, type_params, const_type_params, params, return_type, body, is_generator, is_async }
+  // JSDoc type overlay: when the function lacks explicit type
+  // annotations (parameters resolved to `Any` because no `: T`
+  // was present, return type fell through to `Any`) AND a JSDoc
+  // block precedes the `function` keyword, lift `@param {Type}` /
+  // `@returns {Type}` brace contents into the AST so downstream
+  // type-driven passes can reason about them.
+  let final_params = apply_jsdoc_param_overlay(self.jsdoc_at_pos, func_kw_pos, params)
+  let final_return = apply_jsdoc_return_overlay(
+    self.jsdoc_at_pos, func_kw_pos, return_type,
+  )
+  {
+    name,
+    type_params,
+    const_type_params,
+    params: final_params,
+    return_type: final_return,
+    body,
+    is_generator,
+    is_async,
+  }
+}
+
+///|
+fn apply_jsdoc_param_overlay(
+  jsdoc_at_pos : Map[Int, JsdocBlock],
+  pos : Int,
+  params : Array[@ast.TsParam],
+) -> Array[@ast.TsParam] {
+  let jb = match jsdoc_at_pos.get(pos) {
+    Some(b) => b
+    None => return params
+  }
+  // Build a name -> JSDoc-type-string map.
+  let by_name : Map[String, String] = {}
+  for t in jb.tags {
+    match t {
+      Param(pname, Some(ty), _) => by_name[pname] = ty
+      _ => ()
+    }
+  }
+  if by_name.is_empty() {
+    return params
+  }
+  let out : Array[@ast.TsParam] = []
+  for p in params {
+    let needs_overlay = match p.type_ {
+      Any => true
+      _ => false
+    }
+    if not(needs_overlay) {
+      out.push(p)
+      continue
+    }
+    match by_name.get(p.name) {
+      Some(raw) =>
+        match try_parse_jsdoc_type(raw) {
+          Some(ty) => out.push({ ..p, type_: ty })
+          None => out.push(p)
+        }
+      None => out.push(p)
+    }
+  }
+  out
+}
+
+///|
+fn apply_jsdoc_return_overlay(
+  jsdoc_at_pos : Map[Int, JsdocBlock],
+  pos : Int,
+  return_type : @ast.TsType,
+) -> @ast.TsType {
+  match return_type {
+    Any => ()
+    _ => return return_type
+  }
+  let jb = match jsdoc_at_pos.get(pos) {
+    Some(b) => b
+    None => return return_type
+  }
+  for t in jb.tags {
+    match t {
+      Returns(Some(ty_str), _) =>
+        match try_parse_jsdoc_type(ty_str) {
+          Some(ty) => return ty
+          None => ()
+        }
+      _ => ()
+    }
+  }
+  return_type
+}
+
+///|
+/// Try to lift a JSDoc brace-content string into a `TsType`. Many
+/// JSDoc forms are already valid TS (`string`, `number`,
+/// `string | number`, `Array<number>`); these parse directly. JSDoc-
+/// specific forms (`function(...)`, `Object<K, V>`, `?T`, `*`) get
+/// a light textual translation before the parse attempt; anything
+/// that still fails resolves to `None` and the AST keeps `Any`.
+fn try_parse_jsdoc_type(raw : String) -> @ast.TsType? {
+  let translated = translate_jsdoc_type(raw)
+  try parse_type_from_source(translated) catch {
+    _ => None
+  } noraise {
+    ty => Some(ty)
+  }
+}
+
+///|
+/// Minimal JSDoc → TS textual translation. Covers the common
+/// shapes; unrecognized syntax is left alone (the downstream parse
+/// will simply fail and the overlay falls back to `Any`).
+fn translate_jsdoc_type(raw : String) -> String {
+  let s = raw.trim().to_string()
+  // `*` → `any`
+  if s == "*" {
+    return "any"
+  }
+  // `?T` → `T | null` for the simple identifier case.
+  if s.has_prefix("?") {
+    let inner = s.substring(start=1, end=s.length()).to_string().trim().to_string()
+    if is_simple_type_ident(inner) {
+      return "(\{inner} | null)"
+    }
+  }
+  // `!T` → `T` (strip the non-null marker; TS lacks a 1:1 syntax
+  // and `NonNullable<T>` is more invasive than warranted here).
+  if s.has_prefix("!") {
+    let inner = s.substring(start=1, end=s.length()).to_string().trim().to_string()
+    return inner
+  }
+  // `Object<K, V>` → `Record<K, V>`.
+  if s.has_prefix("Object<") {
+    return "Record" +
+      s.substring(start=6, end=s.length()).to_string()
+  }
+  s
+}
+
+///|
+fn is_simple_type_ident(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  for i in 0..<s.length() {
+    let c = s[i]
+    let ok = (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' || c == '$'
+    if not(ok) {
+      return false
+    }
+  }
+  true
 }
 
 ///|
