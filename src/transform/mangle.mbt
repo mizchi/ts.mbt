@@ -599,6 +599,15 @@ fn ScopeFrame::bind(
   name : String,
   reserved : Map[String, Bool],
 ) -> String {
+  // Idempotency: if this frame already chose a rename for `name`
+  // (e.g. via the function-declaration hoist pre-pass) return it
+  // instead of allocating a fresh short slot. Multiple `bind` calls
+  // for the same name in the same frame would otherwise pick
+  // different shorts and break references.
+  match self.renames.get(name) {
+    Some(existing) => return existing
+    None => ()
+  }
   // Reserved names stay put. They still mark themselves as used so
   // subsequent declarations don't pick a colliding short name.
   if reserved.contains(name) {
@@ -1107,6 +1116,23 @@ fn rename_block_inline_in(
   scope : ScopeFrame,
   reserved : Map[String, Bool],
 ) -> @ast.TsBlock {
+  // Hoist function declarations: in JS, `function f() {}` is
+  // visible from the start of its containing scope, so an earlier
+  // `return f();` should resolve to the SAME rename as the later
+  // declaration. Pre-bind every `<kind>(Ident(name), _, FuncExpr)`
+  // before the recursive walk so the call site and the declaration
+  // both pick up the same short name.
+  for s in block.stmts {
+    match s {
+      Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
+      | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
+      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_)) =>
+        if not(scope.renames.contains(name)) {
+          let _ = scope.bind(name, reserved)
+        }
+      _ => ()
+    }
+  }
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(rename_stmt(s, scope, reserved))
