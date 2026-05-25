@@ -47,6 +47,11 @@ priv struct MtscOptions {
   // the entry module's exported type surface — internal helper
   // types are omitted. Requires `--bundle`.
   mut dts : Bool
+  // Print a warning when a getter's body contains a direct side
+  // effect (assignment, call to an impure function, `++` / `--`,
+  // etc). Getters in JS are conventionally pure; an impure one
+  // is almost always a bug. Off by default to keep output quiet.
+  mut warn_impure_getters : Bool
   // Bare specifiers the user wants left as `import … from "<spec>"`
   // in the emitted bundle. Anything not on this list is resolved
   // through node_modules / tsconfig paths and inlined when found.
@@ -72,6 +77,7 @@ fn mtsc_options_new() -> MtscOptions {
     reserve_typed_props: false,
     reserve_entry_exports: false,
     dts: false,
+    warn_impure_getters: false,
     externals: {},
     mangle: false,
     mangle_properties: false,
@@ -114,6 +120,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println(
     "  --dts                     Emit a companion <out>.d.ts with the entry's exported type surface",
+  )
+  println(
+    "  --warn-impure-getters     Warn when a class getter body has a direct side effect (assign, call, mutation)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println(
@@ -161,6 +170,7 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.dts = true
         opts.bundle = true
       }
+      "--warn-impure-getters" => opts.warn_impure_getters = true
       "--external" => {
         if i + 1 >= argv.length() {
           return Err("missing value for --external")
@@ -532,6 +542,11 @@ async fn main {
       Err(e) => {
         println("mtsc: \{e}")
         return
+      }
+    }
+    if opts.warn_impure_getters {
+      for w in out.warnings {
+        println("mtsc: " + w)
       }
     }
     match opts.out {

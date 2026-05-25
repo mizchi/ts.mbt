@@ -594,7 +594,16 @@ fn Parser::parse_class_body(
       Ident(n) if (n == "get" || n == "set") &&
         self.peek_at(1).kind != LParen &&
         self.peek_at(1).kind != Lt &&
-        self.peek_at(1).kind != Colon => {
+        self.peek_at(1).kind != Colon &&
+        // `class C { get; }` declares an uninitialized field named
+        // `get`, not a get-accessor. Same for `set;`, `get = …;`,
+        // `set, …`. The accessor form REQUIRES a method body, so
+        // anything that looks like a field-decl terminator means
+        // we should treat `get` / `set` as an identifier.
+        self.peek_at(1).kind != Semicolon &&
+        self.peek_at(1).kind != Eq &&
+        self.peek_at(1).kind != Comma &&
+        self.peek_at(1).kind != RBrace => {
         let _ = self.advance()
         accessor_kind = Some(n)
       }

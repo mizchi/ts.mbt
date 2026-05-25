@@ -152,6 +152,10 @@ pub(all) struct BundleOutput {
   // Modules included in the bundle, in dependency order. First entry
   // is the deepest dependency; last is the entry.
   modules : Array[String]
+  // Lint / diagnostic warnings the bundler picked up. Today
+  // limited to impure-getter detection; future passes can append
+  // here. Empty when nothing is amiss.
+  warnings : Array[String]
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +305,33 @@ pub fn bundle_modules(
   let sources : Array[String] = []
   let sources_content : Array[String] = []
   let module_paths : Array[String] = []
+  let warnings : Array[String] = []
+  // Run the purity / impure-getter diagnostic over a combined
+  // view of every module's lowered stmts. Doing this once up
+  // front, BEFORE the optimization passes restructure the AST,
+  // keeps the analysis scope-aware and independent of whether
+  // `--mangle` / `--minify` happen to be on.
+  {
+    let combined_for_analysis : Array[@ast.TsStmt] = []
+    for path in order {
+      let m = match modules.get(path) {
+        Some(node) => node
+        None => continue
+      }
+      for s in m.block.stmts {
+        combined_for_analysis.push(s)
+      }
+    }
+    let report = analyze_purity({
+      stmts: combined_for_analysis,
+      stmt_positions: [],
+    })
+    for g in report.impure_getters {
+      warnings.push(
+        "warning: getter `\{g.class_name}.\{g.getter_name}` " + g.reason,
+      )
+    }
+  }
   // When mangling or tree-shaking, fold every module's stmts into a
   // single block so cross-module references resolve through one
   // shared scope. Per-module separator comments and source-map
@@ -447,7 +478,12 @@ pub fn bundle_modules(
       Some(b.to_json_multi(sources, sources_content, output_path="bundle.js"))
     None => None
   }
-  Ok({ js: e.to_string(), sourcemap: sm_json, modules: module_paths })
+  Ok({
+    js: e.to_string(),
+    sourcemap: sm_json,
+    modules: module_paths,
+    warnings,
+  })
 }
 
 ///|
