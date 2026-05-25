@@ -542,17 +542,37 @@ fn ScopeFrame::new_root(reserved : Map[String, Bool]) -> ScopeFrame {
 
 ///|
 fn ScopeFrame::child(parent : ScopeFrame) -> ScopeFrame {
-  let inherited : Map[String, Bool] = {}
-  for entry in parent.used {
-    inherited[entry.0] = true
-  }
+  // Previously this copied parent.used into the new frame so the
+  // bind-collision check could read it as a single hash lookup. For
+  // a bundle with 200+ modules concatenated into one root frame,
+  // the root's used set grows into the thousands and every nested
+  // scope pays an O(|parent.used|) creation cost. Walking the chain
+  // on lookup is cheaper for shallow / typical scope trees.
+  //
+  // Counter starts at the parent's so child allocations land
+  // ABOVE every name the parent has already taken, dodging
+  // collisions without needing the eager copy.
   {
     parent: Some(parent),
     renames: {},
-    used: inherited,
-    counter: 0,
+    used: {},
+    counter: parent.counter,
     reserved: parent.reserved,
   }
+}
+
+///|
+/// True when any frame in the chain starting at `self` records
+/// `name` as already used. Replaces the eager copy in `child()`.
+fn ScopeFrame::is_used_in_chain(self : ScopeFrame, name : String) -> Bool {
+  let mut cur : ScopeFrame? = Some(self)
+  while cur is Some(frame) {
+    if frame.used.contains(name) {
+      return true
+    }
+    cur = frame.parent
+  }
+  false
 }
 
 ///|
@@ -587,10 +607,11 @@ fn ScopeFrame::bind(
     return name
   }
   // Allocate the next free short name. Bump `counter` until the
-  // generated name isn't already used in this frame or any ancestor.
+  // generated name isn't already used in this frame's chain or in
+  // the reserved set.
   let mut candidate = next_short_name(self.counter)
   self.counter = self.counter + 1
-  while self.used.contains(candidate) || reserved.contains(candidate) {
+  while self.is_used_in_chain(candidate) || reserved.contains(candidate) {
     candidate = next_short_name(self.counter)
     self.counter = self.counter + 1
   }
