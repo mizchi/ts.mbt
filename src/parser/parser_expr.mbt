@@ -2334,11 +2334,6 @@ fn Parser::skip_jsx_closing_tag(
 // / function, array, property, method
 fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
   let mut expr = self.parse_primary()
-  // Track whether this chain saw any `?.` so we can wrap the outermost
-  // result in `OptionalChain(...)` for the checker to widen with
-  // `undefined`. The exact position of `?` is lost; what matters for
-  // narrowing is that the chain may short-circuit.
-  let mut saw_optional_chain = false
 
   // operatorcheck
   while true {
@@ -2354,33 +2349,46 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
     if self.check(Question) && self.peek_at(1).kind == Dot {
       let _ = self.advance()
       let _ = self.advance()
-      saw_optional_chain = true
-      if self.try_skip_call_type_args(expr) {
-        continue
-      }
+      // `?.<T>(args)` — generic optional call. Consume the type
+      // args then fall through to the `LParen` branch so the
+      // OptionalChain wrap still happens.
+      let _ = self.try_skip_call_type_args(expr)
+      // Wrap THIS step in `OptionalChain(...)` so the emitter can
+      // restore the `?.` token. Each `?.` in a chain produces one
+      // wrap; the inner accessor (`PropAccess` / `IndexAccess` /
+      // `Call` / `MethodCall` / `CallExpr`) tells the emitter
+      // which form to use.
       match self.peek().kind {
         LBracket => {
           let _ = self.advance()
           let index = self.parse_expr()
           let _ = self.expect(RBracket)
-          expr = IndexAccess(expr, index)
+          expr = @ast.TsExpr::OptionalChain(IndexAccess(expr, index))
           continue
         }
         LParen => {
           let _ = self.advance()
           let args = self.parse_args()
           let _ = self.expect(RParen)
-          match expr {
-            Var(name) => expr = Call(name, args)
+          // We only collapse `MethodCall` / `Call` when the
+          // previous step has NO `?.` wrapper of its own. When the
+          // previous step is already an OptionalChain (e.g.
+          // `obj?.method?.()` — the second `?.` ), keep the
+          // wrapper intact and fall back to `CallExpr`; otherwise
+          // the inner `?.` between `obj` and `method` would be
+          // erased.
+          let chained : @ast.TsExpr = match expr {
+            Var(name) => Call(name, args)
             PropAccess(receiver, method_name) =>
-              expr = MethodCall(receiver, method_name, args)
-            _ => expr = CallExpr(expr, args)
+              MethodCall(receiver, method_name, args)
+            _ => CallExpr(expr, args)
           }
+          expr = @ast.TsExpr::OptionalChain(chained)
           continue
         }
         _ => {
           let prop = self.parse_property_name_token()
-          expr = PropAccess(expr, prop)
+          expr = @ast.TsExpr::OptionalChain(PropAccess(expr, prop))
           continue
         }
       }
@@ -2427,11 +2435,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       }
     }
   }
-  if saw_optional_chain {
-    @ast.TsExpr::OptionalChain(expr)
-  } else {
-    expr
-  }
+  expr
 }
 
 ///|

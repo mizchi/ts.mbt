@@ -613,11 +613,29 @@ fn Parser::parse_class_body(
       None => false
     }
     if self.check(LParen) || is_getter_without_parens {
+      // Push a fresh "parameter property" scope when parsing a
+      // constructor — `parse_param` records `public x` / `private y`
+      // names there so we can synthesize `this.x = x` afterwards.
+      // Non-constructor methods leave the stack untouched (any
+      // accidental modifier on a non-ctor param would be a TS
+      // error the checker reports later).
+      let is_constructor_method = key is Name("constructor")
+      if is_constructor_method {
+        self.param_property_scopes.push([])
+      }
       let params = if self.check(LParen) {
         let _ = self.expect(LParen)
         let params = self.parse_params()
         let _ = self.expect(RParen)
         params
+      } else {
+        []
+      }
+      let property_names : Array[String] = if is_constructor_method {
+        let last = self.param_property_scopes.length() - 1
+        let collected = self.param_property_scopes[last]
+        let _ = self.param_property_scopes.pop()
+        collected
       } else {
         []
       }
@@ -643,6 +661,40 @@ fn Parser::parse_class_body(
         body
       }
       self.restore_local_type_param_bounds(local_type_param_bound_len)
+      // Inject `this.name = name` assigns for every parameter
+      // property at the TOP of the constructor body — after `super(…)`
+      // when there is one. Vanilla TS semantics.
+      let body = if property_names.length() > 0 {
+        let new_stmts : Array[@ast.TsStmt] = []
+        let mut super_inserted = false
+        for s in body.stmts {
+          new_stmts.push(s)
+          if not(super_inserted) && self.is_super_call_stmt(s) {
+            for n in property_names {
+              new_stmts.push(
+                PropAssign(@ast.TsExpr::Var("this"), n, @ast.TsExpr::Var(n)),
+              )
+            }
+            super_inserted = true
+          }
+        }
+        if not(super_inserted) {
+          let prepended : Array[@ast.TsStmt] = []
+          for n in property_names {
+            prepended.push(
+              PropAssign(@ast.TsExpr::Var("this"), n, @ast.TsExpr::Var(n)),
+            )
+          }
+          for s in new_stmts {
+            prepended.push(s)
+          }
+          @ast.TsBlock::{ stmts: prepended, stmt_positions: [] }
+        } else {
+          @ast.TsBlock::{ stmts: new_stmts, stmt_positions: [] }
+        }
+      } else {
+        body
+      }
       let func : @ast.TsFunc = {
         name: method_name,
         type_params: [],

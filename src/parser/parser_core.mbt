@@ -34,6 +34,13 @@ pub struct Parser {
   // attached to the next class declaration. The class parsers drain
   // this list when they begin and clear it on exit.
   pending_decorators : Array[@ast.TsExpr]
+  // Stack of "I'm parsing a class constructor's parameter list"
+  // scopes. Each scope is a list of parameter names that carried
+  // `public` / `private` / `protected` / `readonly` modifiers — TS
+  // parameter properties. The class parser pushes a fresh scope
+  // before calling `parse_params` for a constructor and pops it
+  // afterwards, then emits `this.name = name` for every entry.
+  param_property_scopes : Array[Array[String]]
 } derive(Debug)
 
 ///|
@@ -77,6 +84,7 @@ pub fn Parser::new_with_strict_and_jsx(
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
     pending_decorators: [],
+    param_property_scopes: [],
   }
 }
 
@@ -114,6 +122,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     last_runtime_class_decl: None,
     local_type_param_bounds: [],
     pending_decorators: [],
+    param_property_scopes: [],
   }
 }
 

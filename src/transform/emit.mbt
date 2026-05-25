@@ -1281,13 +1281,40 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
       emit_expr_body(e, inner)
     OptionalChain(inner) => {
-      // The wrapped inner expression already encodes `.b` / `[k]` /
-      // `(args)` via its conventional AST shape; for now emit the
-      // inner faithfully and trust the parser to have produced the
-      // right chain. The lossy `?.` marker is retained via the
-      // OptionalChain wrapper; in a follow-up the emitter will walk
-      // the chain and reintroduce the `?.` tokens.
-      emit_expr_body(e, inner)
+      // The wrapped inner expression encodes the access shape; we
+      // restore the `?.` separator here. Each `?.` step in the
+      // original source produces one OptionalChain wrap, so
+      // nested chains (`obj?.foo?.bar`) get one wrap per step.
+      match inner {
+        PropAccess(recv, name) => {
+          emit_expr(e, recv, 18)
+          e.write("?.")
+          e.write(strip_internal_prop_marker(name))
+        }
+        IndexAccess(recv, idx) => {
+          emit_expr(e, recv, 18)
+          e.write("?.[")
+          emit_expr(e, idx, 0)
+          e.write("]")
+        }
+        MethodCall(recv, method, args) => {
+          emit_expr(e, recv, 18)
+          e.write("?.")
+          e.write(strip_internal_prop_marker(method))
+          emit_args(e, args)
+        }
+        Call(name, args) => {
+          e.write(name)
+          e.write("?.")
+          emit_args(e, args)
+        }
+        CallExpr(callee, args) => {
+          emit_expr(e, callee, 18)
+          e.write("?.")
+          emit_args(e, args)
+        }
+        _ => emit_expr_body(e, inner)
+      }
     }
     JsxElement(tag, attrs, children) =>
       emit_jsx_element(e, tag, attrs, children)

@@ -353,3 +353,44 @@ test "bundle: for-loop comma-separated init unfolds correctly" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: optional chaining emits ?. tokens" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const obj: any = { foo: 1 };\nconst arr: any = null;\nconsole.log(obj?.foo, arr?.[0], obj?.method?.());\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // Each `?.` step is restored in the output.
+      assert_true(out.js.contains("obj?.foo"))
+      assert_true(out.js.contains("arr?.["))
+      assert_true(out.js.contains("?.method"))
+      // The chain `obj?.method?.()` keeps both `?.` markers.
+      assert_true(out.js.contains("?.method?.("))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: constructor parameter properties become this.x = x" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Point {\n  constructor(public x: number, private y: number, readonly z: number = 99) {}\n  sum() { return this.x + this.y + this.z; }\n}\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The constructor body needs to assign each parameter-property
+      // back onto `this` so `sum()` can read the fields later.
+      assert_true(out.js.contains("this.x = x"))
+      assert_true(out.js.contains("this.y = y"))
+      assert_true(out.js.contains("this.z = z"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

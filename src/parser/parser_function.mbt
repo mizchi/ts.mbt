@@ -57,7 +57,13 @@ fn Parser::skip_param_decorators(self : Parser) -> Unit raise ParseError {
 }
 
 ///|
-fn Parser::skip_param_modifiers(self : Parser) -> Unit {
+fn Parser::skip_param_modifiers(self : Parser) -> Bool {
+  // Returns `true` when at least one TS-only parameter modifier
+  // (`public` / `private` / `protected` / `readonly` / `override`)
+  // was consumed. Constructor-parameter callers use the flag to
+  // synthesize `this.x = x` assigns — the so-called "parameter
+  // property" TS shortcut.
+  let mut saw_property_modifier = false
   let mut has_modifier = true
   while has_modifier {
     has_modifier = false
@@ -81,6 +87,11 @@ fn Parser::skip_param_modifiers(self : Parser) -> Unit {
           | Type
           | Of
           | In => {
+            // `override` alone isn't a "parameter property"; the
+            // other four (public/private/protected/readonly) are.
+            if name != "override" {
+              saw_property_modifier = true
+            }
             let _ = self.advance()
             has_modifier = true
           }
@@ -89,6 +100,7 @@ fn Parser::skip_param_modifiers(self : Parser) -> Unit {
       _ => ()
     }
   }
+  saw_property_modifier
 }
 
 ///|
@@ -113,10 +125,19 @@ fn wrap_optional_ts_type(type_ : @ast.TsType) -> @ast.TsType {
 // / parameter
 fn Parser::parse_param(self : Parser) -> @ast.TsParam raise ParseError {
   self.skip_param_decorators()
-  self.skip_param_modifiers()
+  let is_param_property = self.skip_param_modifiers()
   let is_rest = self.match_ellipsis()
   let binding = self.parse_binding_pattern()
   let name = self.binding_first_name(binding)
+  // Record the name so the surrounding constructor parser can
+  // synthesize `this.name = name` field assigns. The collector is
+  // a stack-of-slots managed by `enter_param_property_scope` /
+  // `exit_param_property_scope`; only constructor-param parsing
+  // pushes a slot, so non-constructor params are no-ops.
+  if is_param_property && self.param_property_scopes.length() > 0 {
+    let top = self.param_property_scopes.length() - 1
+    self.param_property_scopes[top].push(name)
+  }
   let is_optional = self.match_(Question)
   // type ()
   let base_type = if self.check(Colon) {
