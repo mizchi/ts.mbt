@@ -777,6 +777,167 @@ test "type-fold: typeof check on typed parameter folds to bool" {
 }
 
 ///|
+test "switch-fold: literal-union dispatch arm substitutes at call site" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function dispatch(k: \"x\" | \"y\" | \"z\", n: number): number {\n" +
+      "  switch (k) {\n" +
+      "    case \"x\": return n + 1;\n" +
+      "    case \"y\": return n + 2;\n" +
+      "    case \"z\": return n + 3;\n" +
+      "  }\n" +
+      "}\n" +
+      "console.log(dispatch(\"y\", 10));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The "y" arm's body `n + 2` got substituted with `10`, then
+      // the fold pass collapsed `10 + 2` to `12`. Either way, the
+      // `dispatch` symbol must be gone post-treeshake.
+      assert_false(out.js.contains("dispatch"))
+      assert_true(out.js.contains("console.log(12)"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "switch-fold: non-literal first arg leaves call alone" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function dispatch(k: \"x\" | \"y\", n: number): number {\n" +
+      "  switch (k) {\n" +
+      "    case \"x\": return n + 1;\n" +
+      "    case \"y\": return n + 2;\n" +
+      "  }\n" +
+      "}\n" +
+      "declare const k: \"x\" | \"y\";\n" +
+      "console.log(dispatch(k, 5));\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `k` is a variable, not a literal — the call must stay.
+      assert_true(out.js.contains("dispatch(k, 5)"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "as-const: literal array indexed read inlines to the element" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const STATUSES = [\"ok\", \"warn\", \"err\"] as const;\n" +
+      "console.log(STATUSES[1]);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("console.log(\"warn\")"))
+      assert_false(out.js.contains("STATUSES"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "as-const: literal object property read inlines to the value" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const HTTP = { OK: 200, NF: 404 } as const;\n" +
+      "function status() { return HTTP.OK; }\n" +
+      "console.log(status());\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // `HTTP.OK` got replaced by `200`; the binding survives only
+      // if something else references it (here, nothing does).
+      assert_true(out.js.contains("200"))
+      assert_false(out.js.contains("HTTP"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "as-const: bare reference disqualifies the binding" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const ARR = [1, 2, 3] as const;\n" +
+      "const COPY = ARR;\n" +
+      "console.log(ARR[0], COPY[0]);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `const COPY = ARR` is a bare-identifier capture — neither
+      // ARR nor COPY can inline at access sites because they'd
+      // diverge from the array identity.
+      assert_true(out.js.contains("ARR"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "switch-exhaustive: default throw drops when union is fully covered" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function area(k: \"circle\" | \"square\"): number {\n" +
+      "  switch (k) {\n" +
+      "    case \"circle\": return 1;\n" +
+      "    case \"square\": return 2;\n" +
+      "    default: throw new Error(\"unreachable\");\n" +
+      "  }\n" +
+      "}\n" +
+      "console.log(area(\"circle\"));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The default arm went away — no `throw` remains in the output.
+      assert_false(out.js.contains("unreachable"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "switch-exhaustive: non-exhaustive case set keeps the default" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function area(k: \"circle\" | \"square\"): number {\n" +
+      "  switch (k) {\n" +
+      "    case \"circle\": return 1;\n" +
+      "    default: throw new Error(\"unreachable\");\n" +
+      "  }\n" +
+      "}\n" +
+      "console.log(area(\"circle\"));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // Only `circle` is covered — the default must stay.
+      assert_true(out.js.contains("unreachable"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "type-fold: null check on non-nullable primitive folds to false" {
   let files = vfs([
     (

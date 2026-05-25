@@ -371,6 +371,20 @@ pub fn bundle_modules(
         combined = inline_predicates(combined, predicates)
       }
     }
+    // Literal-union switch folding. Specializes `dispatch("x", n)`
+    // when `dispatch` is a `switch (k) { case ...: return ... }`
+    // function whose first param is a closed string-literal union.
+    {
+      let sw = build_switch_fold_table(combined)
+      if not(sw.entries.is_empty()) {
+        combined = switch_fold(combined, sw)
+      }
+    }
+    // `as const` (and equivalent) array/object inline at use sites.
+    // Replaces `NAME[i]` / `NAME.k` with the underlying literal value
+    // when NAME is a top-level `const` of all-literal-element shape
+    // and every reference is a safe static read.
+    combined = as_const_inline_block(combined)
     // Type-aware constant folding: `typeof x === "string"` /
     // `x === null` etc. when the bound `x` carries a primitive
     // type annotation. Runs BEFORE the regular fold so the

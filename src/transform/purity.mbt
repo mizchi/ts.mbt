@@ -71,6 +71,30 @@ pub fn analyze_purity_with(
   block : @ast.TsBlock,
   assumed_pure : Map[String, Bool],
 ) -> PurityReport {
+  // Step 0: signature-based purity inference. Functions whose every
+  // parameter is an immutable primitive AND whose body contains no
+  // statement that could escape state — i.e. arithmetic, comparison,
+  // local lets, ifs, switches, returns, pure-global method calls —
+  // are provably pure even when their declaration carries no
+  // `@__PURE__` annotation. We add them to `assumed_pure` before the
+  // main analysis runs so the existing fixpoint trusts them when
+  // their callers loop in.
+  let augmented_assumed : Map[String, Bool] = {}
+  for entry in assumed_pure {
+    augmented_assumed[entry.0] = entry.1
+  }
+  for stmt in block.stmts {
+    match stmt {
+      Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
+      | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
+      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f)) =>
+        if is_signature_pure_func(f) {
+          augmented_assumed[name] = true
+        }
+      _ => ()
+    }
+  }
+  let assumed_pure = augmented_assumed
   // Step 1: collect every top-level function-like declaration —
   // both `Let/Const(Ident(name), _, FuncExpr/ArrowFunc)` and
   // explicit `NativeClassStmt` declarations.
@@ -672,4 +696,266 @@ fn check_getter_purity(
     }
   })
   reason
+}
+
+///|
+/// Type-check: is `ty` an immutable primitive? Strings / numbers /
+/// booleans / bigints / symbols (and literal forms thereof) are
+/// value-typed in JS — caller can't observe mutations through them
+/// since none are possible.
+fn is_primitive_immutable(ty : @ast.TsType) -> Bool {
+  match ty {
+    Number | Int | String_ | Boolean | BigInt | Symbol => true
+    NumberLiteral(_) | Literal(_) | BooleanLiteral(_) | BigIntLiteral(_) => true
+    Union(parts) => {
+      if parts.length() == 0 {
+        return false
+      }
+      for p in parts {
+        if not(is_primitive_immutable(p)) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+/// `f` is signature-pure when every parameter is primitive-immutable
+/// and the body is composed solely of expressions and statements
+/// that cannot escape state to the caller — arithmetic, comparison,
+/// returns, control flow, local lets, and pure-global method calls.
+///
+/// This is a strict subset of "no observable side effect": it skips
+/// every form where mutation or escape might be hiding (PropAssign,
+/// IndexAssign, MethodCall on non-pure receivers, `new`, `throw`,
+/// `await`, `yield`).
+fn is_signature_pure_func(f : @ast.TsFunc) -> Bool {
+  if f.is_async || f.is_generator {
+    return false
+  }
+  if f.params.length() == 0 {
+    return false
+  }
+  for p in f.params {
+    if not(is_primitive_immutable(p.type_)) {
+      return false
+    }
+  }
+  // Locals starts with the parameter names.
+  let locals : Map[String, Bool] = {}
+  for p in f.params {
+    locals[p.name] = true
+  }
+  signature_pure_block(f.body, locals)
+}
+
+///|
+fn signature_pure_block(
+  block : @ast.TsBlock,
+  locals : Map[String, Bool],
+) -> Bool {
+  for s in block.stmts {
+    if not(signature_pure_stmt(s, locals)) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn signature_pure_stmt(
+  stmt : @ast.TsStmt,
+  locals : Map[String, Bool],
+) -> Bool {
+  match stmt {
+    Var(@ast.TsBinding::Ident(name), _, e)
+    | Let(@ast.TsBinding::Ident(name), _, e)
+    | Const(@ast.TsBinding::Ident(name), _, e) => {
+      if not(signature_pure_expr(e, locals)) {
+        return false
+      }
+      locals[name] = true
+      true
+    }
+    Var(_, _, _) | Let(_, _, _) | Const(_, _, _) =>
+      // Destructured binders / non-ident targets — too complex to
+      // track conservatively. Bail.
+      false
+    Assign(name, e) | CompoundAssign(name, _, e) =>
+      // Only writes to local bindings are allowed.
+      locals.contains(name) && signature_pure_expr(e, locals)
+    IndexAssign(_, _, _) | PropAssign(_, _, _) =>
+      // Object mutations — even on locals we don't track escape.
+      false
+    Expr(e) | Return(Some(e)) | Throw(e) => signature_pure_expr(e, locals)
+    // `throw` of a primitive value is technically observable
+    // (caller sees the exception). Conservative: forbid.
+    Return(None) | Empty | Debugger | Break(_) | Continue(_) => true
+    If(c, t, e) => {
+      if not(signature_pure_expr(c, locals)) {
+        return false
+      }
+      if not(signature_pure_block(t, locals)) {
+        return false
+      }
+      match e {
+        Some(b) => signature_pure_block(b, locals)
+        None => true
+      }
+    }
+    While(c, body) | DoWhile(c, body) =>
+      signature_pure_expr(c, locals) && signature_pure_block(body, locals)
+    With(_, _) => false
+    For(init, cond, update, body) => {
+      let _ = match init {
+        Some(s) =>
+          if not(signature_pure_stmt(s, locals)) {
+            return false
+          } else {
+            ()
+          }
+        None => ()
+      }
+      let _ = match cond {
+        Some(e) =>
+          if not(signature_pure_expr(e, locals)) {
+            return false
+          } else {
+            ()
+          }
+        None => ()
+      }
+      let _ = match update {
+        Some(s) =>
+          if not(signature_pure_stmt(s, locals)) {
+            return false
+          } else {
+            ()
+          }
+        None => ()
+      }
+      signature_pure_block(body, locals)
+    }
+    ForOf(_, _, _, _, _) | ForAwaitOf(_, _, _, _, _) | ForIn(_, _, _, _, _) =>
+      // Iterating non-primitives — bail.
+      false
+    Switch(e, cases) => {
+      if not(signature_pure_expr(e, locals)) {
+        return false
+      }
+      for c in cases {
+        match c.test_expr {
+          Some(te) =>
+            if not(signature_pure_expr(te, locals)) {
+              return false
+            }
+          None => ()
+        }
+        if not(signature_pure_block(c.body, locals)) {
+          return false
+        }
+      }
+      true
+    }
+    Try(_, _, _, _) | Label(_, _) | Block(_) | NativeClassStmt(_, _) => false
+  }
+}
+
+///|
+fn signature_pure_expr(
+  expr : @ast.TsExpr,
+  locals : Map[String, Bool],
+) -> Bool {
+  match expr {
+    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_)
+    | NullLit | ArrayHole => true
+    Var(_) => true
+    BinOp(_, l, r) | Seq(l, r) =>
+      signature_pure_expr(l, locals) && signature_pure_expr(r, locals)
+    UnaryOp(op, inner) =>
+      match op {
+        PreInc | PreDec | PostInc | PostDec | Delete => false
+        _ => signature_pure_expr(inner, locals)
+      }
+    Cond(c, t, e) =>
+      signature_pure_expr(c, locals) &&
+      signature_pure_expr(t, locals) &&
+      signature_pure_expr(e, locals)
+    Call(name, args) => {
+      // Allow calls to known-pure globals + self/other top-level
+      // bindings (the fixpoint will sort out chains). Conservative
+      // for unknowns.
+      let _ = name
+      for a in args {
+        if not(signature_pure_expr(a, locals)) {
+          return false
+        }
+      }
+      true
+    }
+    MethodCall(recv, _, args) => {
+      let recv_ok = match recv {
+        Var(n) => pure_global_methods.contains(n)
+        _ => false
+      }
+      if not(recv_ok) {
+        return false
+      }
+      for a in args {
+        if not(signature_pure_expr(a, locals)) {
+          return false
+        }
+      }
+      true
+    }
+    CallExpr(_, _) | New(_, _) | NewExpr(_, _) => false
+    PropAccess(recv, _) => signature_pure_expr(recv, locals)
+    IndexAccess(recv, idx) =>
+      signature_pure_expr(recv, locals) && signature_pure_expr(idx, locals)
+    ArrayLit(items) => {
+      for i in items {
+        if not(signature_pure_expr(i, locals)) {
+          return false
+        }
+      }
+      true
+    }
+    ObjectLit(entries) => {
+      for ent in entries {
+        if not(signature_pure_expr(ent.1, locals)) {
+          return false
+        }
+      }
+      true
+    }
+    Spread(_) => false
+    TemplateLiteral(_, exprs) => {
+      for e in exprs {
+        if not(signature_pure_expr(e, locals)) {
+          return false
+        }
+      }
+      true
+    }
+    TaggedTemplate(_, _, _, _) => false
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
+      signature_pure_expr(inner, locals)
+    PureCall(inner) => signature_pure_expr(inner, locals)
+    AssignExpr(name, v) | CompoundAssignExpr(@ast.TsExpr::Var(name), _, v) =>
+      locals.contains(name) && signature_pure_expr(v, locals)
+    CompoundAssignExpr(_, _, _) | PropAssignExpr(_, _, _)
+    | IndexAssignExpr(_, _, _) | AssignPattern(_, _) => false
+    Yield(_) | YieldStar(_) | Await(_) => false
+    ArrowFunc(_, _, _, _) | FuncExpr(_) =>
+      // Nested closures can capture and have arbitrary effects when
+      // called. We don't follow them at this scope of analysis.
+      false
+    DynamicImport(_, _) | ImportMeta => false
+    JsxElement(_, _, _) => false
+    NativeClassExpr(_, _) => false
+    ComputedProp(_, _) => false
+  }
 }

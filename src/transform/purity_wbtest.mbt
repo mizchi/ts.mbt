@@ -34,3 +34,13 @@ test "purity: pure_global_methods recognized" {
   // `Math.floor` is a known pure global method — `compute` stays pure.
   assert_true(report.pure_functions.contains("compute"))
 }
+
+test "purity: signature-pure inferred from primitive params" {
+  // No `@__PURE__` annotation, but every parameter is a primitive
+  // and the body is pure arithmetic. Signature-based inference
+  // should still mark `addOne` pure.
+  let src = "function addOne(n: number): number { let acc = n; acc += 1; return acc; }\n"
+  let block = @parser.parse_block_from_source(src)
+  let report = analyze_purity(block)
+  assert_true(report.pure_functions.contains("addOne"))
+}

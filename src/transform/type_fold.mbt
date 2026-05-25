@@ -132,7 +132,14 @@ fn type_fold_stmt(
           body: type_fold_block_in(c.body, scope),
         })
       }
-      Switch(type_fold_expr(e, scope), new_cases)
+      let folded_e = type_fold_expr(e, scope)
+      // Exhaustive-default drop: when the discriminant's static
+      // type is a closed string-literal union, every literal is
+      // covered by a `case`, and the `default:` body is the
+      // unreachable-assertion shape (`[Throw(...)]`), the default
+      // can be dropped — TS guarantees it never fires.
+      let pruned_cases = drop_exhaustive_default(folded_e, new_cases, scope)
+      Switch(folded_e, pruned_cases)
     }
     Try(b, bnd, cb, fb) =>
       Try(
@@ -338,6 +345,19 @@ fn is_useful_type(ty : @ast.TsType) -> Bool {
   match ty {
     Number | Int | String_ | Boolean | BigInt | Symbol => true
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
+    // Closed string-literal unions feed `drop_exhaustive_default`.
+    Union(parts) => {
+      if parts.length() == 0 {
+        return false
+      }
+      for p in parts {
+        match p {
+          Literal(_) => ()
+          _ => return false
+        }
+      }
+      true
+    }
     _ => false
   }
 }
@@ -379,6 +399,79 @@ fn try_typeof_fold(
     BinNe | AbstractNe => Some(not(equal))
     _ => None
   }
+}
+
+///|
+/// Drop the trailing `default:` arm of a `switch` when the
+/// discriminant's static type is a closed string-literal union,
+/// every literal is covered by a `case`, and the default body is
+/// the unreachable-assertion shape (`[Throw(...)]`).
+fn drop_exhaustive_default(
+  disc : @ast.TsExpr,
+  cases : Array[@ast.TsSwitchCase],
+  scope : Map[String, @ast.TsType],
+) -> Array[@ast.TsSwitchCase] {
+  if cases.length() == 0 {
+    return cases
+  }
+  // Default must be the final arm to be a safe drop.
+  let last = cases[cases.length() - 1]
+  let default_block = match last.test_expr {
+    None => last.body
+    Some(_) => return cases
+  }
+  // Default body must be a single `throw <expr>;` to keep this
+  // safe — any other statement could carry observable behavior
+  // we can't preserve.
+  if default_block.stmts.length() != 1 {
+    return cases
+  }
+  match default_block.stmts[0] {
+    Throw(_) => ()
+    _ => return cases
+  }
+  // Discriminant must be a tracked variable carrying a literal-
+  // string union annotation.
+  let name = match disc {
+    Var(n) => n
+    _ => return cases
+  }
+  let ty = match scope.get(name) {
+    Some(t) => t
+    None => return cases
+  }
+  let literals = match ty {
+    Union(parts) => {
+      let out : Array[String] = []
+      for p in parts {
+        match p {
+          Literal(s) => out.push(s)
+          _ => return cases
+        }
+      }
+      out
+    }
+    _ => return cases
+  }
+  // Every literal in the union must be matched by a case.
+  let covered : Map[String, Bool] = {}
+  for c in cases {
+    match c.test_expr {
+      Some(@ast.TsExpr::StringLit(s)) => covered[s] = true
+      _ => ()
+    }
+  }
+  for l in literals {
+    if not(covered.contains(l)) {
+      return cases
+    }
+  }
+  // All literals covered — drop the default.
+  let pruned : Array[@ast.TsSwitchCase] = []
+  for i in 0..<(cases.length() - 1) {
+    pruned.push(cases[i])
+  }
+  pruned
 }
 
 ///|
