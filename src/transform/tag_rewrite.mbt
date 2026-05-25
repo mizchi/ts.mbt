@@ -64,23 +64,35 @@ pub fn tag_rewrite_block(
   type_aliases : Array[@ast.TsTypeAlias],
 ) -> @ast.TsBlock {
   // 1. Gather discriminant property names + literal sets from
-  //    closed string-literal Object-unions.
+  //    closed string-literal Object-unions, and the map
+  //    `alias_name -> K` so we can recognize type-annotated
+  //    bindings later.
   let unions = collect_discriminated_unions(type_aliases)
   if unions.is_empty() {
     return block
   }
-  // 2. Bundle-wide escape sink scan. If ANY are present, no
-  //    rewrite is safe — bail.
-  if block_has_escape_sink(block) {
-    return block
-  }
-  // 3. For each candidate K, verify:
-  //    - every PropAccess(_, K) / IndexAccess(_, StringLit(K))
-  //      is in a safe position
-  //    - every ObjectLit with key K has a StringLit value in L
+  let alias_to_k = collect_alias_to_k(type_aliases)
+  // 2. Per-K escape-sink scan. Instead of one global "any sink
+  //    aborts everything" gate, walk every sink-arg expression and
+  //    check, per K, whether the arg references something we
+  //    believe is a K-tagged value (top-level binding initialized
+  //    to `{ K: <lit-in-L>, ... }`, a binding annotated with an
+  //    alias that resolves to a K-DU, a function parameter so
+  //    annotated, or an inline `ObjectLit` carrying key K).
+  //    When K's bindings don't show up in any sink, K survives.
+  let sink_args = collect_escape_sink_args(block)
+  // 3. For each candidate K, verify the safety gates.
   let candidates : Map[String, Map[String, Int]] = {}
   for entry in unions {
     let (k, literals) = entry
+    let lit_set : Map[String, Bool] = {}
+    for s in literals {
+      lit_set[s] = true
+    }
+    let k_bindings = collect_du_bindings_for_k(block, k, lit_set, alias_to_k)
+    if any_sink_arg_taints_k(sink_args, k, lit_set, k_bindings) {
+      continue
+    }
     if not(check_prop_uses_safe(block, k, literals)) {
       continue
     }
@@ -102,6 +114,672 @@ pub fn tag_rewrite_block(
     new_stmts.push(tag_rewrite_stmt(s, candidates))
   }
   { stmts: new_stmts, stmt_positions: block.stmt_positions }
+}
+
+///|
+/// Build a name -> K map for every type alias whose body is a
+/// closed string-literal discriminated union with discriminant K.
+fn collect_alias_to_k(
+  type_aliases : Array[@ast.TsTypeAlias],
+) -> Map[String, String] {
+  let out : Map[String, String] = {}
+  for ta in type_aliases {
+    match ta.type_ {
+      Union(parts) => {
+        if parts.length() < 2 {
+          continue
+        }
+        match find_common_string_discriminant(parts) {
+          Some((k, _)) => out[ta.name] = k
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+  out
+}
+
+///|
+/// Collect bindings that are statically known to carry a K-DU
+/// value:
+///   * `const x = ObjectLit([..., (K, StringLit(lit)), ...])`
+///     where `lit ∈ literals`.
+///   * `const x: Alias = …` / `let x: Alias = …` where `Alias` is
+///     a known DU alias for `K`.
+///   * Function parameter `(x: Alias)` where `Alias` resolves to K.
+///     These get scoped per-function, but for the conservative
+///     check we treat any such name as globally tainted.
+///
+/// Returns the union of all qualifying names. The pass is
+/// intentionally lossy on scope — a name collision (parameter `s`
+/// in one function, top-level `const s = …` elsewhere) errs on the
+/// side of aborting K.
+fn collect_du_bindings_for_k(
+  block : @ast.TsBlock,
+  k : String,
+  literals : Map[String, Bool],
+  alias_to_k : Map[String, String],
+) -> Map[String, Bool] {
+  let out : Map[String, Bool] = {}
+  collect_du_bindings_block(block, k, literals, alias_to_k, out)
+  out
+}
+
+///|
+fn collect_du_bindings_block(
+  block : @ast.TsBlock,
+  k : String,
+  literals : Map[String, Bool],
+  alias_to_k : Map[String, String],
+  out : Map[String, Bool],
+) -> Unit {
+  for s in block.stmts {
+    collect_du_bindings_stmt(s, k, literals, alias_to_k, out)
+  }
+}
+
+///|
+fn collect_du_bindings_stmt(
+  stmt : @ast.TsStmt,
+  k : String,
+  literals : Map[String, Bool],
+  alias_to_k : Map[String, String],
+  out : Map[String, Bool],
+) -> Unit {
+  match stmt {
+    Var(b, t, e) | Let(b, t, e) | Const(b, t, e) => {
+      match b {
+        @ast.TsBinding::Ident(name) => {
+          if binding_type_is_k_du(t, k, alias_to_k) {
+            out[name] = true
+          }
+          if expr_is_k_du_obj_lit(e, k, literals) {
+            out[name] = true
+          }
+          // Alias propagation: `const y = x` carries the taint.
+          match e {
+            @ast.TsExpr::Var(other) =>
+              if out.contains(other) {
+                out[name] = true
+              }
+            _ => ()
+          }
+        }
+        _ => ()
+      }
+      collect_du_bindings_expr(e, k, literals, alias_to_k, out)
+    }
+    Expr(e) | Assign(_, e) | CompoundAssign(_, _, e) | Throw(e) =>
+      collect_du_bindings_expr(e, k, literals, alias_to_k, out)
+    Return(Some(e)) => collect_du_bindings_expr(e, k, literals, alias_to_k, out)
+    Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
+    IndexAssign(t, idx, v) => {
+      collect_du_bindings_expr(t, k, literals, alias_to_k, out)
+      collect_du_bindings_expr(idx, k, literals, alias_to_k, out)
+      collect_du_bindings_expr(v, k, literals, alias_to_k, out)
+    }
+    PropAssign(t, _, v) => {
+      collect_du_bindings_expr(t, k, literals, alias_to_k, out)
+      collect_du_bindings_expr(v, k, literals, alias_to_k, out)
+    }
+    If(c, t, e) => {
+      collect_du_bindings_expr(c, k, literals, alias_to_k, out)
+      collect_du_bindings_block(t, k, literals, alias_to_k, out)
+      match e {
+        Some(b) => collect_du_bindings_block(b, k, literals, alias_to_k, out)
+        None => ()
+      }
+    }
+    While(c, body) | DoWhile(c, body) | With(c, body) => {
+      collect_du_bindings_expr(c, k, literals, alias_to_k, out)
+      collect_du_bindings_block(body, k, literals, alias_to_k, out)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => collect_du_bindings_stmt(s, k, literals, alias_to_k, out)
+        None => ()
+      }
+      match cond {
+        Some(e) => collect_du_bindings_expr(e, k, literals, alias_to_k, out)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_du_bindings_stmt(s, k, literals, alias_to_k, out)
+        None => ()
+      }
+      collect_du_bindings_block(body, k, literals, alias_to_k, out)
+    }
+    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body)
+    | ForIn(_, _, _, iter, body) => {
+      collect_du_bindings_expr(iter, k, literals, alias_to_k, out)
+      collect_du_bindings_block(body, k, literals, alias_to_k, out)
+    }
+    Switch(e, cases) => {
+      collect_du_bindings_expr(e, k, literals, alias_to_k, out)
+      for c in cases {
+        match c.test_expr {
+          Some(te) =>
+            collect_du_bindings_expr(te, k, literals, alias_to_k, out)
+          None => ()
+        }
+        collect_du_bindings_block(c.body, k, literals, alias_to_k, out)
+      }
+    }
+    Try(b, _, cb, fb) => {
+      collect_du_bindings_block(b, k, literals, alias_to_k, out)
+      match cb {
+        Some(blk) => collect_du_bindings_block(blk, k, literals, alias_to_k, out)
+        None => ()
+      }
+      match fb {
+        Some(blk) => collect_du_bindings_block(blk, k, literals, alias_to_k, out)
+        None => ()
+      }
+    }
+    Label(_, inner) => collect_du_bindings_stmt(inner, k, literals, alias_to_k, out)
+    Block(b) => collect_du_bindings_block(b, k, literals, alias_to_k, out)
+    NativeClassStmt(_, _) => ()
+  }
+}
+
+///|
+fn collect_du_bindings_expr(
+  expr : @ast.TsExpr,
+  k : String,
+  literals : Map[String, Bool],
+  alias_to_k : Map[String, String],
+  out : Map[String, Bool],
+) -> Unit {
+  match expr {
+    FuncExpr(f) => {
+      // Function parameters annotated with a K-DU alias also count.
+      for p in f.params {
+        if binding_type_is_k_du(p.type_, k, alias_to_k) {
+          out[p.name] = true
+        }
+      }
+      collect_du_bindings_block(f.body, k, literals, alias_to_k, out)
+    }
+    ArrowFunc(params, _, body, _) => {
+      for p in params {
+        if binding_type_is_k_du(p.type_, k, alias_to_k) {
+          out[p.name] = true
+        }
+      }
+      match body {
+        ArrowExpr(e) => collect_du_bindings_expr(e, k, literals, alias_to_k, out)
+        ArrowBlock(b) => collect_du_bindings_block(b, k, literals, alias_to_k, out)
+      }
+    }
+    BinOp(_, l, r) | Seq(l, r) => {
+      collect_du_bindings_expr(l, k, literals, alias_to_k, out)
+      collect_du_bindings_expr(r, k, literals, alias_to_k, out)
+    }
+    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
+    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
+      collect_du_bindings_expr(inner, k, literals, alias_to_k, out)
+    Cond(c, t, e) => {
+      collect_du_bindings_expr(c, k, literals, alias_to_k, out)
+      collect_du_bindings_expr(t, k, literals, alias_to_k, out)
+      collect_du_bindings_expr(e, k, literals, alias_to_k, out)
+    }
+    PropAccess(recv, _) =>
+      collect_du_bindings_expr(recv, k, literals, alias_to_k, out)
+    IndexAccess(recv, idx) => {
+      collect_du_bindings_expr(recv, k, literals, alias_to_k, out)
+      collect_du_bindings_expr(idx, k, literals, alias_to_k, out)
+    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_du_bindings_expr(a, k, literals, alias_to_k, out)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_du_bindings_expr(callee, k, literals, alias_to_k, out)
+      for a in args {
+        collect_du_bindings_expr(a, k, literals, alias_to_k, out)
+      }
+    }
+    MethodCall(recv, _, args) => {
+      collect_du_bindings_expr(recv, k, literals, alias_to_k, out)
+      for a in args {
+        collect_du_bindings_expr(a, k, literals, alias_to_k, out)
+      }
+    }
+    ArrayLit(items) =>
+      for i in items {
+        collect_du_bindings_expr(i, k, literals, alias_to_k, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_du_bindings_expr(ent.1, k, literals, alias_to_k, out)
+      }
+    _ => ()
+  }
+}
+
+///|
+/// True when `t` is `Applied(name, _)` (or bare `Named(name)`) with
+/// `name` resolving to a K-DU alias.
+fn binding_type_is_k_du(
+  t : @ast.TsType,
+  k : String,
+  alias_to_k : Map[String, String],
+) -> Bool {
+  match t {
+    Applied(name, _) =>
+      match alias_to_k.get(name) {
+        Some(k2) => k2 == k
+        None => false
+      }
+    _ => false
+  }
+}
+
+///|
+/// True when `e` is `ObjectLit([..., (K, StringLit(lit)), ...])`
+/// with `lit ∈ literals`.
+fn expr_is_k_du_obj_lit(
+  e : @ast.TsExpr,
+  k : String,
+  literals : Map[String, Bool],
+) -> Bool {
+  match e {
+    ObjectLit(entries) => {
+      for ent in entries {
+        if ent.0 == k {
+          match ent.1 {
+            StringLit(s) => return literals.contains(s)
+            _ => return false
+          }
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+///|
+/// Collects every expression that appears as an argument to (or
+/// receiver of) a known escape sink anywhere in the bundle. The
+/// per-K check later inspects these for K-tainted references.
+fn collect_escape_sink_args(block : @ast.TsBlock) -> Array[@ast.TsExpr] {
+  let out : Array[@ast.TsExpr] = []
+  collect_sink_args_block(block, out)
+  out
+}
+
+///|
+fn collect_sink_args_block(
+  block : @ast.TsBlock,
+  out : Array[@ast.TsExpr],
+) -> Unit {
+  for s in block.stmts {
+    collect_sink_args_stmt(s, out)
+  }
+}
+
+///|
+fn collect_sink_args_stmt(
+  stmt : @ast.TsStmt,
+  out : Array[@ast.TsExpr],
+) -> Unit {
+  match stmt {
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
+    | CompoundAssign(_, _, e) | Throw(e) => collect_sink_args_expr(e, out)
+    Return(Some(e)) => collect_sink_args_expr(e, out)
+    Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
+    IndexAssign(t, idx, v) => {
+      collect_sink_args_expr(t, out)
+      collect_sink_args_expr(idx, out)
+      collect_sink_args_expr(v, out)
+    }
+    PropAssign(t, _, v) => {
+      collect_sink_args_expr(t, out)
+      collect_sink_args_expr(v, out)
+    }
+    If(c, t, e) => {
+      collect_sink_args_expr(c, out)
+      collect_sink_args_block(t, out)
+      match e {
+        Some(b) => collect_sink_args_block(b, out)
+        None => ()
+      }
+    }
+    While(c, body) | DoWhile(c, body) | With(c, body) => {
+      collect_sink_args_expr(c, out)
+      collect_sink_args_block(body, out)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => collect_sink_args_stmt(s, out)
+        None => ()
+      }
+      match cond {
+        Some(e) => collect_sink_args_expr(e, out)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_sink_args_stmt(s, out)
+        None => ()
+      }
+      collect_sink_args_block(body, out)
+    }
+    // `for-in` enumerates property names — treat the iterable as
+    // a sink arg (it observes its discriminant property name).
+    ForIn(_, _, _, iter, body) => {
+      out.push(iter)
+      collect_sink_args_block(body, out)
+    }
+    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body) => {
+      collect_sink_args_expr(iter, out)
+      collect_sink_args_block(body, out)
+    }
+    Switch(e, cases) => {
+      collect_sink_args_expr(e, out)
+      for c in cases {
+        match c.test_expr {
+          Some(te) => collect_sink_args_expr(te, out)
+          None => ()
+        }
+        collect_sink_args_block(c.body, out)
+      }
+    }
+    Try(b, _, cb, fb) => {
+      collect_sink_args_block(b, out)
+      match cb {
+        Some(blk) => collect_sink_args_block(blk, out)
+        None => ()
+      }
+      match fb {
+        Some(blk) => collect_sink_args_block(blk, out)
+        None => ()
+      }
+    }
+    Label(_, inner) => collect_sink_args_stmt(inner, out)
+    Block(b) => collect_sink_args_block(b, out)
+    NativeClassStmt(_, _) => ()
+  }
+}
+
+///|
+fn collect_sink_args_expr(
+  expr : @ast.TsExpr,
+  out : Array[@ast.TsExpr],
+) -> Unit {
+  match expr {
+    MethodCall(@ast.TsExpr::Var(recv), m, args) => {
+      let recv_is_dangerous = recv == "JSON" ||
+            recv == "console" ||
+            recv == "Object"
+      if recv_is_dangerous && serializing_method_names.contains(m) {
+        // Treat every arg as escaping.
+        for a in args {
+          out.push(a)
+        }
+        return
+      }
+      for a in args {
+        collect_sink_args_expr(a, out)
+      }
+    }
+    Call(name, args) => {
+      if serializing_callable_names.contains(name) {
+        for a in args {
+          out.push(a)
+        }
+        return
+      }
+      for a in args {
+        collect_sink_args_expr(a, out)
+      }
+    }
+    Spread(inner) => {
+      // Spread of anything: that anything escapes.
+      out.push(inner)
+      collect_sink_args_expr(inner, out)
+    }
+    TaggedTemplate(tag, _, _, exprs) => {
+      collect_sink_args_expr(tag, out)
+      // Every interpolated expression escapes via the tag function.
+      for e in exprs {
+        out.push(e)
+      }
+    }
+    TemplateLiteral(_, exprs) => {
+      if exprs.length() > 0 {
+        for e in exprs {
+          out.push(e)
+        }
+      }
+    }
+    MethodCall(recv, _, args) => {
+      collect_sink_args_expr(recv, out)
+      for a in args {
+        collect_sink_args_expr(a, out)
+      }
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_sink_args_expr(callee, out)
+      for a in args {
+        collect_sink_args_expr(a, out)
+      }
+    }
+    New(_, args) =>
+      for a in args {
+        collect_sink_args_expr(a, out)
+      }
+    BinOp(_, l, r) | Seq(l, r) => {
+      collect_sink_args_expr(l, out)
+      collect_sink_args_expr(r, out)
+    }
+    UnaryOp(_, inner) | Await(inner) | NonNull(inner)
+    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
+      collect_sink_args_expr(inner, out)
+    Cond(c, t, e) => {
+      collect_sink_args_expr(c, out)
+      collect_sink_args_expr(t, out)
+      collect_sink_args_expr(e, out)
+    }
+    PropAccess(recv, _) => collect_sink_args_expr(recv, out)
+    IndexAccess(recv, idx) => {
+      collect_sink_args_expr(recv, out)
+      collect_sink_args_expr(idx, out)
+    }
+    ArrayLit(items) =>
+      for i in items {
+        collect_sink_args_expr(i, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_sink_args_expr(ent.1, out)
+      }
+    ComputedProp(k, v) => {
+      collect_sink_args_expr(k, out)
+      collect_sink_args_expr(v, out)
+    }
+    AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
+      collect_sink_args_expr(v, out)
+    CompoundAssignExpr(t, _, v) => {
+      collect_sink_args_expr(t, out)
+      collect_sink_args_expr(v, out)
+    }
+    IndexAssignExpr(recv, idx, v) => {
+      collect_sink_args_expr(recv, out)
+      collect_sink_args_expr(idx, out)
+      collect_sink_args_expr(v, out)
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => collect_sink_args_expr(e, out)
+        ArrowBlock(b) => collect_sink_args_block(b, out)
+      }
+    FuncExpr(f) => collect_sink_args_block(f.body, out)
+    DynamicImport(spec, opts) => {
+      collect_sink_args_expr(spec, out)
+      match opts {
+        Some(o) => collect_sink_args_expr(o, out)
+        None => ()
+      }
+    }
+    Yield(Some(inner)) => collect_sink_args_expr(inner, out)
+    _ => ()
+  }
+}
+
+///|
+/// Returns true if any of the collected sink-arg expressions
+/// references a K-tagged binding or constructs a K-tagged literal
+/// inline.
+fn any_sink_arg_taints_k(
+  args : Array[@ast.TsExpr],
+  k : String,
+  literals : Map[String, Bool],
+  bindings : Map[String, Bool],
+) -> Bool {
+  for a in args {
+    if expr_mentions_k(a, k, literals, bindings) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn expr_mentions_k(
+  expr : @ast.TsExpr,
+  k : String,
+  literals : Map[String, Bool],
+  bindings : Map[String, Bool],
+) -> Bool {
+  match expr {
+    Var(n) => bindings.contains(n)
+    ObjectLit(entries) => {
+      for ent in entries {
+        if ent.0 == k {
+          match ent.1 {
+            StringLit(s) =>
+              if literals.contains(s) {
+                return true
+              }
+            _ => ()
+          }
+        }
+        if expr_mentions_k(ent.1, k, literals, bindings) {
+          return true
+        }
+      }
+      false
+    }
+    BinOp(_, l, r) | Seq(l, r) =>
+      expr_mentions_k(l, k, literals, bindings) ||
+      expr_mentions_k(r, k, literals, bindings)
+    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
+    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
+      expr_mentions_k(inner, k, literals, bindings)
+    Cond(c, t, e) =>
+      expr_mentions_k(c, k, literals, bindings) ||
+      expr_mentions_k(t, k, literals, bindings) ||
+      expr_mentions_k(e, k, literals, bindings)
+    PropAccess(recv, _) => expr_mentions_k(recv, k, literals, bindings)
+    IndexAccess(recv, idx) =>
+      expr_mentions_k(recv, k, literals, bindings) ||
+      expr_mentions_k(idx, k, literals, bindings)
+    Call(name, args) => {
+      if bindings.contains(name) {
+        return true
+      }
+      for a in args {
+        if expr_mentions_k(a, k, literals, bindings) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      if expr_mentions_k(callee, k, literals, bindings) {
+        return true
+      }
+      for a in args {
+        if expr_mentions_k(a, k, literals, bindings) {
+          return true
+        }
+      }
+      false
+    }
+    MethodCall(recv, _, args) => {
+      if expr_mentions_k(recv, k, literals, bindings) {
+        return true
+      }
+      for a in args {
+        if expr_mentions_k(a, k, literals, bindings) {
+          return true
+        }
+      }
+      false
+    }
+    New(name, args) => {
+      if bindings.contains(name) {
+        return true
+      }
+      for a in args {
+        if expr_mentions_k(a, k, literals, bindings) {
+          return true
+        }
+      }
+      false
+    }
+    ArrayLit(items) => {
+      for i in items {
+        if expr_mentions_k(i, k, literals, bindings) {
+          return true
+        }
+      }
+      false
+    }
+    ComputedProp(kx, v) =>
+      expr_mentions_k(kx, k, literals, bindings) ||
+      expr_mentions_k(v, k, literals, bindings)
+    AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
+      expr_mentions_k(v, k, literals, bindings)
+    CompoundAssignExpr(t, _, v) =>
+      expr_mentions_k(t, k, literals, bindings) ||
+      expr_mentions_k(v, k, literals, bindings)
+    IndexAssignExpr(recv, idx, v) =>
+      expr_mentions_k(recv, k, literals, bindings) ||
+      expr_mentions_k(idx, k, literals, bindings) ||
+      expr_mentions_k(v, k, literals, bindings)
+    As(inner, _) | Satisfies(inner, _) =>
+      expr_mentions_k(inner, k, literals, bindings)
+    Yield(Some(inner)) => expr_mentions_k(inner, k, literals, bindings)
+    TaggedTemplate(tag, _, _, exprs) => {
+      if expr_mentions_k(tag, k, literals, bindings) {
+        return true
+      }
+      for e in exprs {
+        if expr_mentions_k(e, k, literals, bindings) {
+          return true
+        }
+      }
+      false
+    }
+    TemplateLiteral(_, exprs) => {
+      for e in exprs {
+        if expr_mentions_k(e, k, literals, bindings) {
+          return true
+        }
+      }
+      false
+    }
+    // FuncExpr / ArrowFunc bodies: conservatively assume they could
+    // leak the value via their closure. If a sink arg IS a closure
+    // (e.g. `arr.map(x => console.log(x))`), there might be leaks
+    // we miss. The conservative call: a closure-typed sink arg
+    // taints K.
+    FuncExpr(_) | ArrowFunc(_, _, _, _) => true
+    _ => false
+  }
 }
 
 // -- Step 1: discover discriminated unions ----------------------------

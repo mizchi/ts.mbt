@@ -982,8 +982,44 @@ test "tag-rewrite: skipped when console.log mentions the bundle" {
   let opts = BundleOptions::default().with_fold(true)
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) =>
-      // `console.log` is an escape sink — the tag stays a string.
+      // `console.log(s)` would let an outside observer see the
+      // string tag — abort K=kind.
       assert_true(out.js.contains("\"a\""))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "tag-rewrite: unrelated console.log doesn't abort the DU rewrite" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "type Shape = { kind: \"circle\", r: number } | { kind: \"square\", side: number };\n" +
+      "function area(s: Shape): number {\n" +
+      "  switch (s.kind) {\n" +
+      "    case \"circle\": return s.r * s.r;\n" +
+      "    case \"square\": return s.side * s.side;\n" +
+      "  }\n" +
+      "  return 0;\n" +
+      "}\n" +
+      "const c: Shape = { kind: \"circle\", r: 3 };\n" +
+      "const out = area(c);\n" +
+      // Unrelated escape sink — does NOT touch any K=kind binding.
+      "console.log(\"hello world\");\n" +
+      "console.log(out);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The DU rewrite still fires — the strings `"circle"` /
+      // `"square"` are gone, replaced by integers.
+      assert_false(out.js.contains("\"circle\""))
+      assert_false(out.js.contains("\"square\""))
+      assert_true(out.js.contains("case 0:"))
+      // But the unrelated console.log still has its own string.
+      assert_true(out.js.contains("\"hello world\""))
+    }
     Err(e) => fail("bundle error: \{e}")
   }
 }
