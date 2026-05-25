@@ -600,24 +600,55 @@ fn ScopeFrame::bind(
 }
 
 ///|
-/// Generate the `n`th short identifier in lexicographic order:
-///   0 → "a", 1 → "b", … 25 → "z", 26 → "aa", 27 → "ab", … 51 → "az",
-///   52 → "ba", …, 675 → "zz", 676 → "aaa", …
+/// Generate the `n`th short identifier in lexicographic order.
+///
+/// First-character alphabet (52 chars): `a-z` then `A-Z`. Subsequent-
+/// character alphabet (62 chars): the first set + `0-9`. The
+/// encoding is bijective from `n` to a non-empty identifier:
+///
+///   0..52    → single char (`a`, `b`, …, `z`, `A`, …, `Z`)
+///   52..3276 → two chars (`aa`, `ab`, …, `Z9`)
+///   3276..   → three chars (`aaa`, …)
+///
+/// The first character can't be a digit, so the leading position
+/// uses the smaller alphabet. JS reserved keywords (`do`, `if`,
+/// `in`, `as`, …) sit in `mangler_builtin_reserved` and the caller
+/// skips them by bumping the counter — `next_short_name` itself is
+/// pure index-to-name.
 fn next_short_name(n : Int) -> String {
-  let chars : Array[Int] = []
-  let mut k = n
-  while ({
-          chars.push(k % 26)
-          k = k / 26
-          k > 0
-        }) {
-    k = k - 1
+  let first_alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  let subseq_alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  // 1. Find the length L such that n falls in the L-char band:
+  //    capacity(L) = 52 * 62^(L-1).
+  let mut len = 1
+  let mut consumed = 0
+  let mut band = 52
+  while n >= consumed + band {
+    consumed = consumed + band
+    band = band * 62
+    len = len + 1
   }
+  // 2. m = position within this band.
+  let mut m = n - consumed
+  // 3. Decompose m into digits, low-to-high.
+  let digits : Array[Int] = []
+  for _i in 0..<(len - 1) {
+    digits.push(m % 62)
+    m = m / 62
+  }
+  // The high digit picks from the 52-char first-alphabet.
+  digits.push(m)
+  // 4. Emit high → low.
   let buf = StringBuilder::new()
-  let mut i = chars.length() - 1
+  let mut i = digits.length() - 1
+  let n_digits = digits.length()
   while i >= 0 {
-    let c = chars[i]
-    buf.write_char((97 + c : Int).unsafe_to_char())
+    let c = digits[i]
+    if i == n_digits - 1 {
+      buf.write_char(first_alpha[c].to_int().unsafe_to_char())
+    } else {
+      buf.write_char(subseq_alpha[c].to_int().unsafe_to_char())
+    }
     i = i - 1
   }
   buf.to_string()
