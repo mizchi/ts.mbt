@@ -54,6 +54,13 @@ pub struct Parser {
   // names from the published surface.
   internal_marker_positions : Map[Int, Bool]
   collected_internal_names : Map[String, Bool]
+  // Parsed JSDoc block per next-token position. Populated by the
+  // lexer; queried by decl parsers to attach tag info (`@param`,
+  // `@returns`, `@deprecated`, …) to the AST.
+  jsdoc_at_pos : Map[Int, JsdocBlock]
+  // Names with a `@deprecated` tag — fed into the emitted
+  // `TsModuleBlock` so `.d.ts` emit can mark them.
+  collected_deprecations : Map[String, String]
 } derive(Debug)
 
 ///|
@@ -101,6 +108,8 @@ pub fn Parser::new_with_strict_and_jsx(
     pure_marker_positions: {},
     internal_marker_positions: {},
     collected_internal_names: {},
+    jsdoc_at_pos: {},
+    collected_deprecations: {},
   }
 }
 
@@ -146,6 +155,8 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     pure_marker_positions: lexer.pure_marker_positions,
     internal_marker_positions: lexer.internal_marker_positions,
     collected_internal_names: {},
+    jsdoc_at_pos: lexer.jsdoc_at_pos,
+    collected_deprecations: {},
   }
 }
 

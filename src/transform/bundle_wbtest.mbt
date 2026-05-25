@@ -501,7 +501,7 @@ test "dts: emits only entry-exported declarations" {
     "function helper(): Internal { return { tag: \"x\" }; }\n" +
     "export function start(cfg: Config): void { console.log(cfg.host); }\n"
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})
-  let dts = emit_entry_dts(module_, ["Config", "start"])
+  let dts = emit_entry_dts(module_, ["Config", "start"], {})
   // Exported interface survives, including its public field names.
   assert_true(dts.contains("export interface Config"))
   assert_true(dts.contains("host: string"))
@@ -518,7 +518,7 @@ test "dts: prints conditional + union extends + mapped + indexed access" {
   let src = "export type Maybe<T> = T extends null | undefined ? never : T;\n" +
     "export type Pick2<T, K extends keyof T> = { [P in K]: T[P] };\n"
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})
-  let dts = emit_entry_dts(module_, ["Maybe", "Pick2"])
+  let dts = emit_entry_dts(module_, ["Maybe", "Pick2"], {})
   assert_true(dts.contains("T extends (null | undefined)"))
   assert_true(dts.contains("? never : T"))
   assert_true(dts.contains("{ [P in K]: T[P] }"))
@@ -683,7 +683,7 @@ test "@internal: tagged exports vanish from the published .d.ts" {
       local.push(ex.local_name)
     }
   }
-  let dts = emit_entry_dts(module_, local)
+  let dts = emit_entry_dts(module_, local, {})
   // Public surface survives, marked internal disappears.
   assert_true(dts.contains("export interface Public"))
   assert_true(dts.contains("function start"))

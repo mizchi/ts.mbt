@@ -159,8 +159,17 @@ pub struct Lexer {
   // re-scan source text.
   mut pending_pure_marker : Bool
   mut pending_internal_marker : Bool
+  // Pending JSDoc block waiting to be associated with the next
+  // non-comment token. When multiple JSDoc blocks stack up before
+  // a declaration we keep the LAST one — that's the convention
+  // tsc and IDE tooltips follow.
+  mut pending_jsdoc : JsdocBlock?
   pure_marker_positions : Map[Int, Bool]
   internal_marker_positions : Map[Int, Bool]
+  // Per-token-position parsed JSDoc block (when a `/** … */`
+  // comment immediately preceded the token). Parser consults
+  // through `Parser.jsdoc_at_pos`.
+  jsdoc_at_pos : Map[Int, JsdocBlock]
 } derive(Debug)
 
 ///|
@@ -205,8 +214,10 @@ pub fn Lexer::new(src : String) -> Lexer {
     newline_before_next: false,
     pending_pure_marker: false,
     pending_internal_marker: false,
+    pending_jsdoc: None,
     pure_marker_positions: {},
     internal_marker_positions: {},
+    jsdoc_at_pos: {},
   }
 }
 
@@ -376,20 +387,32 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
                 }
               }
             }
-            // Peek inside the comment body for the two annotations
-            // we care about. `@__PURE__` lives in plain block
-            // comments (`/* @__PURE__ */ f(x)`); `@internal` lives
-            // in JSDoc comments (`/** @internal */ export …`). We
-            // match both by simple substring search — strict JSDoc
-            // grammar isn't needed for our use case.
+            // Capture the full comment span. Plain `/* … */`
+            // gets a substring scan (we only care about the
+            // inline `@__PURE__` marker); JSDoc `/** … */` goes
+            // through the structured parser so individual tags
+            // are queryable downstream.
             let comment_text = self.src
               .substring(start=comment_start, end=self.pos)
               .to_string()
+            // Quick-and-cheap markers — these still drive the
+            // existing `pure_marker_positions` /
+            // `internal_marker_positions` tables for callers that
+            // only need a flag.
             if comment_text.contains("@__PURE__") {
               self.pending_pure_marker = true
             }
             if comment_text.contains("@internal") {
               self.pending_internal_marker = true
+            }
+            // Structured JSDoc — only fires for `/** … */`. The
+            // last block wins when multiple stack up before one
+            // declaration.
+            if comment_text.has_prefix("/**") {
+              match parse_jsdoc_block(comment_text) {
+                Some(jb) => self.pending_jsdoc = Some(jb)
+                None => ()
+              }
             }
           }
           _ => break
@@ -2118,6 +2141,13 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
   if self.pending_internal_marker {
     self.internal_marker_positions[pos] = true
     self.pending_internal_marker = false
+  }
+  match self.pending_jsdoc {
+    Some(jb) => {
+      self.jsdoc_at_pos[pos] = jb
+      self.pending_jsdoc = None
+    }
+    None => ()
   }
   match self.advance() {
     None => { kind: Eof, pos, has_newline_before: has_newline }

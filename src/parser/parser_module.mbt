@@ -3197,21 +3197,32 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Export) {
-      // Remember whether the `export` keyword was tagged
-      // `/** @internal */` by a preceding JSDoc block. After
-      // we parse the declaration and record its export
-      // specs, fold the new names into
-      // `collected_internal_names` so `.d.ts` emit can skip
-      // them.
-      let is_internal = self.internal_marker_positions.contains(
-        self.peek().pos,
-      )
+      // Remember which JSDoc tags decorated this `export` token.
+      // `@internal` hides the decl from `.d.ts`; `@deprecated`
+      // gets carried over as a comment in the emitted decl.
+      let export_pos = self.peek().pos
+      let is_internal = self.internal_marker_positions.contains(export_pos)
+      let mut deprecation_msg : String? = None
+      match self.jsdoc_at_pos.get(export_pos) {
+        Some(jb) =>
+          for t in jb.tags {
+            match t {
+              Deprecated(msg) => deprecation_msg = Some(msg)
+              _ => ()
+            }
+          }
+        None => ()
+      }
       match self.parse_export_enum_decl_for_module_block() {
         Some(enum_) => {
           enums.push(enum_)
           exports.push({ local_name: enum_.name, export_name: enum_.name })
           if is_internal {
             self.collected_internal_names[enum_.name] = true
+          }
+          match deprecation_msg {
+            Some(msg) => self.collected_deprecations[enum_.name] = msg
+            None => ()
           }
           continue
         }
@@ -3227,6 +3238,10 @@ fn Parser::parse_module_block_with_const_values(
         exports.push(spec)
         if is_internal {
           self.collected_internal_names[spec.local_name] = true
+        }
+        match deprecation_msg {
+          Some(msg) => self.collected_deprecations[spec.local_name] = msg
+          None => ()
         }
       }
       for spec in reexport_specs {
@@ -3337,6 +3352,7 @@ fn Parser::parse_module_block_with_const_values(
       reexports,
       enums,
       internal_names: self.collected_internal_names,
+      deprecations: self.collected_deprecations,
     },
     const_values,
   )

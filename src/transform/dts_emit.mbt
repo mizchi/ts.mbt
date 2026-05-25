@@ -21,47 +21,72 @@
 pub fn emit_entry_dts(
   module_ : @ast.TsModule,
   exported_local_names : Array[String],
+  deprecations : Map[String, String],
 ) -> String {
   let buf = StringBuilder::new()
   let exported : Map[String, Bool] = {}
   for n in exported_local_names {
     exported[n] = true
   }
-  // Emit declarations in source-ish order: interfaces, type
-  // aliases, enums, classes, functions, values. Mixing all into
-  // one stream would also work but the grouped order is what
-  // hand-written `.d.ts` files look like.
   for i in module_.interfaces {
     if exported.contains(i.name) {
+      emit_deprecation_jsdoc(buf, deprecations, i.name)
       emit_interface_decl(buf, i)
     }
   }
   for a in module_.type_aliases {
     if exported.contains(a.name) {
+      emit_deprecation_jsdoc(buf, deprecations, a.name)
       emit_type_alias_decl(buf, a)
     }
   }
   for e in module_.enums {
     if exported.contains(e.name) {
+      emit_deprecation_jsdoc(buf, deprecations, e.name)
       emit_enum_decl(buf, e)
     }
   }
   for c in module_.classes {
     if exported.contains(c.name) {
+      emit_deprecation_jsdoc(buf, deprecations, c.name)
       emit_class_decl(buf, c)
     }
   }
   for f in module_.funcs {
     if exported.contains(f.name) {
+      emit_deprecation_jsdoc(buf, deprecations, f.name)
       emit_function_decl(buf, f)
     }
   }
   for v in module_.values {
     if exported.contains(v.name) {
+      emit_deprecation_jsdoc(buf, deprecations, v.name)
       emit_value_decl(buf, v)
     }
   }
   buf.to_string()
+}
+
+///|
+/// Write a `/** @deprecated <msg> */` JSDoc preamble when the
+/// name carries a deprecation tag. Consumers' IDEs surface this
+/// to anyone who imports the symbol.
+fn emit_deprecation_jsdoc(
+  buf : StringBuilder,
+  deprecations : Map[String, String],
+  name : String,
+) -> Unit {
+  match deprecations.get(name) {
+    Some(msg) =>
+      if msg == "" {
+        buf.write_string("/** @deprecated */\n")
+      } else {
+        buf.write_string("/** @deprecated ")
+        buf.write_string(msg)
+        buf.write_string(" */\n")
+      }
+    None => ()
+  }
 }
 
 ///|

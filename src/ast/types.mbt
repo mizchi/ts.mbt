@@ -708,6 +708,11 @@ pub(all) struct TsModuleBlock {
   // TypeScript consumers can't `import { x }` them through the
   // declaration, while runtime code in the same package can.
   internal_names : Map[String, Bool]
+  // Names tagged with `@deprecated` along with the (optional)
+  // deprecation message. The `.d.ts` emit renders this as a
+  // JSDoc comment so downstream consumers' IDEs surface the
+  // notice. Empty message means "deprecated but no explanation".
+  deprecations : Map[String, String]
 } derive(Debug)
 
 // ============================================

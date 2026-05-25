@@ -499,6 +499,7 @@ async fn main {
           reexports: [],
           enums: [],
           internal_names: {},
+          deprecations: {},
         })
         let module_ = (try?
           @parser.parse_module_from_source_with_const_values(entry_source, {})).or(
@@ -595,6 +596,7 @@ async fn main {
             reexports: [],
             enums: [],
             internal_names: {},
+          deprecations: {},
           })
           let entry_module = (try?
             @parser.parse_module_from_source_with_const_values(
@@ -622,7 +624,7 @@ async fn main {
               local_names.push(ex.local_name)
             }
           }
-          let dts_text = @transform.emit_entry_dts(entry_module, local_names)
+          let dts_text = @transform.emit_entry_dts(entry_module, local_names, entry_block.deprecations)
           let _ = write_text(dts_path, dts_text)
         }
       }
