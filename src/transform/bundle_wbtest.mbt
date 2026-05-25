@@ -439,3 +439,57 @@ test "bundle: class getter desugars to Object.defineProperty" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: --reserve-entry-exports keeps exported type surface" {
+  // `Config` is exported via `start(cfg: Config)` and via the
+  // explicit `export interface Config`. Both `host` and `port`
+  // belong to the public type surface and must survive
+  // `--mangle-properties`. The internal `Internal` interface's
+  // members can mangle freely.
+  let files = vfs([
+    (
+      "entry.ts",
+      "interface Internal { tag: string; data: number; }\n" +
+      "export interface Config { host: string; port: number; }\n" +
+      "function make(): Internal { return { tag: \"x\", data: 1 }; }\n" +
+      "export function start(cfg: Config) {\n" +
+      "  const i = make();\n" +
+      "  console.log(cfg.host, cfg.port, i.tag);\n" +
+      "}\n",
+    ),
+  ])
+  let source = match files.get("entry.ts") {
+    Some(s) => s
+    None => ""
+  }
+  let module_ = @parser.parse_module_from_source_with_const_values(source, {})
+  let reserved = entry_export_property_names(module_, ["start", "Config"])
+  let r : Map[String, Bool] = {}
+  for n in reserved { r[n] = true }
+  // Exported surface is reserved …
+  assert_true(r.contains("host"))
+  assert_true(r.contains("port"))
+  // … but `Internal`'s members aren't.
+  assert_false(r.contains("tag"))
+  assert_false(r.contains("data"))
+}
+
+///|
+test "bundle: --reserve-entry-exports follows class signatures" {
+  // The exported `Service` class exposes `endpoint`, `port`, and
+  // `call`. All three should land in the reserved set.
+  let src = "export class Service {\n" +
+    "  endpoint: string;\n" +
+    "  port: number;\n" +
+    "  constructor(endpoint: string, port: number) {}\n" +
+    "  call() {}\n" +
+    "}\n"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let reserved = entry_export_property_names(module_, ["Service"])
+  let r : Map[String, Bool] = {}
+  for n in reserved { r[n] = true }
+  assert_true(r.contains("endpoint"))
+  assert_true(r.contains("port"))
+  assert_true(r.contains("call"))
+}

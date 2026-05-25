@@ -1199,7 +1199,24 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     }
     NewExpr(callee, args) => {
       e.write("new ")
-      emit_expr(e, callee, 18)
+      // `new X(args)` requires `X` to be a `MemberExpression`. A
+      // call expression / new expression / arrow doesn't match,
+      // so wrap it in parens — otherwise `new (a())(b)` would
+      // parse as `new a()` followed by `(b)`.
+      let needs_paren = match callee {
+        Call(_, _) | CallExpr(_, _) | New(_, _) | NewExpr(_, _) => true
+        ArrowFunc(_, _, _, _) | FuncExpr(_) => true
+        BinOp(_, _, _) | Cond(_, _, _) | Seq(_, _) => true
+        UnaryOp(_, _) | AssignExpr(_, _) | CompoundAssignExpr(_, _, _) => true
+        _ => false
+      }
+      if needs_paren {
+        e.write("(")
+        emit_expr(e, callee, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, callee, 18)
+      }
       emit_args(e, args)
     }
     MethodCall(recv, method, args) => {

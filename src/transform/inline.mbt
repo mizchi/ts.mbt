@@ -453,13 +453,28 @@ fn substitute_expr(
       }
       MethodCall(substitute_expr(recv, name, rhs), m, new_args)
     }
-    New(n, args) => {
-      let new_args : Array[@ast.TsExpr] = []
-      for a in args {
-        new_args.push(substitute_expr(a, name, rhs))
+    New(n, args) =>
+      if n == name {
+        // The binding being inlined is used as a constructor — emit
+        // `new <rhs>(args)`. When `rhs` is itself a `Var(other)` we
+        // can keep the tighter `New(other, args)` shape; otherwise
+        // fall back to `NewExpr(rhs, args)` which accepts any
+        // expression as the callee.
+        let new_args : Array[@ast.TsExpr] = []
+        for a in args {
+          new_args.push(substitute_expr(a, name, rhs))
+        }
+        match rhs {
+          Var(other) => New(other, new_args)
+          _ => NewExpr(rhs, new_args)
+        }
+      } else {
+        let new_args : Array[@ast.TsExpr] = []
+        for a in args {
+          new_args.push(substitute_expr(a, name, rhs))
+        }
+        New(n, new_args)
       }
-      New(n, new_args)
-    }
     NewExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {

@@ -35,6 +35,14 @@ priv struct MtscOptions {
   // can still type-check against the emitted bundle. Off by
   // default because plain `--bundle` is self-contained.
   mut reserve_typed_props : Bool
+  // Selective library mode: reserve only the property names
+  // reachable from the ENTRY module's `export` declarations.
+  // Internal helper types declared in the entry (or elsewhere)
+  // are still fair game to mangle. External IO surface
+  // (`console`, `fetch`, `JSON`, etc.) stays reserved via the
+  // built-in globals list in `mangle_safety.mbt`. Off by default;
+  // takes precedence over `--reserve-typed-props` when both are set.
+  mut reserve_entry_exports : Bool
   // Bare specifiers the user wants left as `import … from "<spec>"`
   // in the emitted bundle. Anything not on this list is resolved
   // through node_modules / tsconfig paths and inlined when found.
@@ -58,6 +66,7 @@ fn mtsc_options_new() -> MtscOptions {
     fold: false,
     minify: false,
     reserve_typed_props: false,
+    reserve_entry_exports: false,
     externals: {},
     mangle: false,
     mangle_properties: false,
@@ -94,6 +103,9 @@ fn mtsc_print_usage() -> Unit {
   )
   println(
     "  --reserve-typed-props     Reserve every property declared in an interface / type alias / class (library mode)",
+  )
+  println(
+    "  --reserve-entry-exports   Reserve only property names reachable from the entry's exports (library mode, selective)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
   println(
@@ -136,6 +148,7 @@ fn mtsc_parse_args(argv : Array[String]) -> Result[MtscOptions, String] {
         opts.bundle = true
       }
       "--reserve-typed-props" => opts.reserve_typed_props = true
+      "--reserve-entry-exports" => opts.reserve_entry_exports = true
       "--external" => {
         if i + 1 >= argv.length() {
           return Err("missing value for --external")
@@ -445,7 +458,48 @@ async fn main {
     // where the bundle's types DO escape and would type-check
     // against a downstream consumer.
     let extra_reserved : Array[String] = []
-    if opts.reserve_typed_props {
+    if opts.reserve_entry_exports {
+      // Re-parse the entry to walk its `export` declarations + the
+      // type signatures they reach. This is what the user is
+      // actually publishing in the companion `.d.ts`, so everything
+      // else (helper interfaces, internal type aliases) is fair
+      // game for the property mangler.
+      let entry_source = match files.get(input_path) {
+        Some(s) => s
+        None => ""
+      }
+      if entry_source != "" {
+        let block = (try?
+          @parser.parse_module_block_from_source(entry_source)).or({
+          block: { stmts: [], stmt_positions: [] },
+          imports: [],
+          exports: [],
+          reexports: [],
+          enums: [],
+        })
+        let module_ = (try?
+          @parser.parse_module_from_source_with_const_values(entry_source, {})).or(
+          @ast.TsModule::{
+            funcs: [],
+            interfaces: [],
+            type_aliases: [],
+            imports: [],
+            values: [],
+            classes: [],
+            namespaces: [],
+            enums: [],
+            module_augmentations: [],
+          },
+        )
+        let local_names : Array[String] = []
+        for ex in block.exports {
+          local_names.push(ex.local_name)
+        }
+        for n in @transform.entry_export_property_names(module_, local_names) {
+          extra_reserved.push(n)
+        }
+      }
+    } else if opts.reserve_typed_props {
       for n in type_props.keys() {
         extra_reserved.push(n)
       }

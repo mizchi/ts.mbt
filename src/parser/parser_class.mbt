@@ -1145,7 +1145,16 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
                 )
               }
               None => {
-                let prop_key = "@@define:" + method_name
+                // The `@@define:` prefix the desugar used to attach
+                // here was unused downstream — neither the checker
+                // nor any transform actually inspects it, and the
+                // emit-time stripper was a no-op once mangling
+                // renamed the prefixed name. Use the raw method
+                // name so property-mangling treats it like every
+                // other prop and stays consistent across the
+                // `prototype.method = …` assignment and any later
+                // `prototype.method.something = …` chain.
+                let prop_key = method_name
                 // Set __super_proto for both instance and static methods
                 let super_proto = if is_static {
                   // Static: super refers to parent class (or Function.prototype)
@@ -1679,7 +1688,16 @@ fn Parser::parse_class_decl_with_abstract(
                 )
               }
               None => {
-                let prop_key = "@@define:" + method_name
+                // The `@@define:` prefix the desugar used to attach
+                // here was unused downstream — neither the checker
+                // nor any transform actually inspects it, and the
+                // emit-time stripper was a no-op once mangling
+                // renamed the prefixed name. Use the raw method
+                // name so property-mangling treats it like every
+                // other prop and stays consistent across the
+                // `prototype.method = …` assignment and any later
+                // `prototype.method.something = …` chain.
+                let prop_key = method_name
                 // Set __super_proto for both instance and static methods
                 let super_proto = if is_static {
                   // Static: super refers to parent class (or Function.prototype)
