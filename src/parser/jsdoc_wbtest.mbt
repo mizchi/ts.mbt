@@ -160,3 +160,36 @@ test "jsdoc: nested braces in type" {
     _ => fail("expected Param")
   }
 }
+
+///|
+test "jsdoc: @param / @returns overlay onto untyped JS function" {
+  let src = "/**\n" +
+    " * @param {number} x\n" +
+    " * @param {string} name\n" +
+    " * @returns {boolean}\n" +
+    " */\n" +
+    "function check(x, name) { return name.length > x; }\n"
+  let block = parse_block_from_source(src)
+  // Function decl parsed as Let(Ident("check"), Any, FuncExpr(f))
+  match block.stmts[0] {
+    Let(_, _, @ast.TsExpr::FuncExpr(f)) => {
+      assert_eq(f.params.length(), 2)
+      // First param got `number` from the JSDoc overlay.
+      match f.params[0].type_ {
+        @ast.TsType::Number => ()
+        _ => fail("expected Number for x")
+      }
+      // Second param got `string`.
+      match f.params[1].type_ {
+        @ast.TsType::String_ => ()
+        _ => fail("expected String_ for name")
+      }
+      // Return type became `boolean`.
+      match f.return_type {
+        @ast.TsType::Boolean => ()
+        _ => fail("expected Boolean for return")
+      }
+    }
+    _ => fail("expected Let / FuncExpr")
+  }
+}

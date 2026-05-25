@@ -3456,6 +3456,18 @@ pub fn parse_block_from_source_with_positions(
 }
 
 ///|
+/// Parse a TypeScript type expression from a string. Used by the
+/// JSDoc consumption pass to lift `@param {Type}` / `@returns {Type}`
+/// brace contents into proper `TsType` values that downstream passes
+/// can reason about.
+pub fn parse_type_from_source(
+  source : String,
+) -> @ast.TsType raise ParseError {
+  let parser = Parser::from_source(source)
+  parser.parse_type()
+}
+
+///|
 // / eval : statementblock with inherited strict mode
 pub fn parse_block_from_source_strict(
   source : String,
