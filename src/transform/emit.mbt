@@ -462,7 +462,15 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.semi()
     }
     Const(binding, _ty, init) => {
-      e.word("const")
+      // In minify mode, downgrade `const` to `let` — the source
+      // already proved no reassignment (it was `const`), so swapping
+      // the keyword is semantically inert and saves two bytes per
+      // declaration. Pretty mode keeps `const` for human readability.
+      if e.pretty {
+        e.word("const")
+      } else {
+        e.word("let")
+      }
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
       e.space()
@@ -864,7 +872,14 @@ fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
     }
   }
   // Emit `kind name = init, name = init, ...`.
-  e.word(kind)
+  // Downgrade `const` to `let` in minify mode (see `Const` cases
+  // above).
+  let emitted_kind = if kind == "const" && not(e.pretty) {
+    "let"
+  } else {
+    kind
+  }
+  e.word(emitted_kind)
   // The first byte after the kind is the first binding's leading
   // byte (always `?` for identifier-only in our parser path here).
   let first_byte = match block.stmts[0] {
@@ -921,7 +936,11 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, init, 0)
     }
     Const(b, _, init) => {
-      e.word("const")
+      if e.pretty {
+        e.word("const")
+      } else {
+        e.word("let")
+      }
       e.sep_after_word(binding_leading_byte(b))
       emit_binding(e, b)
       e.space()
@@ -953,7 +972,10 @@ fn emit_for_of_kind(e : Emitter, kind : @ast.TsForOfKind) -> Unit {
   match kind {
     Var => e.write("var ")
     Let => e.write("let ")
-    Const => e.write("const ")
+    // Same idea as the statement-level `Const`: in minify mode the
+    // loop binder doesn't need to be `const`, since the original
+    // source already proved no reassignment.
+    Const => if e.pretty { e.write("const ") } else { e.write("let ") }
     Assign => ()
   }
 }

@@ -78,9 +78,12 @@ test "minify emit: case keyword abuts string literal" {
 
 ///|
 test "minify emit: const destructure has no separator" {
+  // In minify mode the emitter downgrades `const` to `let` (two
+  // bytes saved per decl; the source already proved no
+  // reassignment). The "no separator" property still holds.
   let out = minify_one("const { a, b } = obj;\n")
-  assert_true(out.contains("const{"))
-  assert_false(out.contains("const {"))
+  assert_true(out.contains("let{"))
+  assert_false(out.contains("let {"))
 }
 
 ///|
