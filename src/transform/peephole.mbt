@@ -28,7 +28,7 @@ pub fn peephole_block(block : @ast.TsBlock) -> @ast.TsBlock {
   for s in block.stmts {
     stmts.push(peep_stmt(s, ctx))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|
@@ -130,7 +130,7 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   for s in block.stmts {
     stmts.push(peep_stmt(s, ctx))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

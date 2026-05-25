@@ -104,7 +104,7 @@ pub fn inline_predicates(
   for s in block.stmts {
     stmts.push(inline_predicates_stmt(s, table))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|
@@ -230,7 +230,7 @@ fn inline_predicates_block(
   for s in block.stmts {
     stmts.push(inline_predicates_stmt(s, table))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

@@ -42,8 +42,15 @@ pub fn inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   for s in block.stmts {
     stmts.push(inline_into_stmt(s))
   }
-  // Then run the single-use pass on the resulting list.
-  inline_pass(stmts)
+  // Then run the single-use pass on the resulting list. Carry the
+  // parallel positions array so survivors keep their source-map
+  // mapping.
+  let positions = if block.stmt_positions.length() == block.stmts.length() {
+    block.stmt_positions
+  } else {
+    []
+  }
+  inline_pass(stmts, positions)
 }
 
 ///|
@@ -245,7 +252,10 @@ fn inline_into_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
 /// Single-use inlining pass on a flat statement list. Doesn't
 /// recurse into nested blocks — `inline_block` does that first so
 /// each pass sees an already-inlined inner scope.
-fn inline_pass(input : Array[@ast.TsStmt]) -> @ast.TsBlock {
+fn inline_pass(
+  input : Array[@ast.TsStmt],
+  input_positions : Array[Int],
+) -> @ast.TsBlock {
   // Reassignment / closure-capture tracking is per-scope, so we
   // collect once over the entire block. A single name reassigned
   // ANYWHERE (even in a nested function) disqualifies it from
@@ -257,6 +267,8 @@ fn inline_pass(input : Array[@ast.TsStmt]) -> @ast.TsBlock {
     collect_captured_stmt(s, captured)
   }
   let out : Array[@ast.TsStmt] = []
+  let out_positions : Array[Int] = []
+  let has_positions = input_positions.length() == input.length()
   let mut i = 0
   while i < input.length() {
     let stmt = input[i]
@@ -273,7 +285,8 @@ fn inline_pass(input : Array[@ast.TsStmt]) -> @ast.TsBlock {
     match candidate {
       Some(name) => {
         // Replace the single Var(name) in the next stmt with the
-        // rhs, drop the current decl, advance past both.
+        // rhs, drop the current decl, advance past both. Carry the
+        // position of `next` (the surviving stmt) into the output.
         let rhs = match stmt {
           Let(_, _, r) | Const(_, _, r) => r
           _ => abort("unreachable")
@@ -281,15 +294,21 @@ fn inline_pass(input : Array[@ast.TsStmt]) -> @ast.TsBlock {
         let next = input[i + 1]
         let rewritten = substitute_stmt(next, name, rhs)
         out.push(rewritten)
+        if has_positions {
+          out_positions.push(input_positions[i + 1])
+        }
         i = i + 2
       }
       None => {
         out.push(stmt)
+        if has_positions {
+          out_positions.push(input_positions[i])
+        }
         i = i + 1
       }
     }
   }
-  { stmts: out, stmt_positions: [] }
+  { stmts: out, stmt_positions: out_positions }
 }
 
 ///|

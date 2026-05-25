@@ -101,7 +101,7 @@ pub fn tag_rewrite_block(
   for s in block.stmts {
     new_stmts.push(tag_rewrite_stmt(s, candidates))
   }
-  { stmts: new_stmts, stmt_positions: [] }
+  { stmts: new_stmts, stmt_positions: block.stmt_positions }
 }
 
 // -- Step 1: discover discriminated unions ----------------------------
@@ -1316,7 +1316,7 @@ fn tag_rewrite_block_inner(
   for s in block.stmts {
     stmts.push(tag_rewrite_stmt(s, table))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

@@ -91,26 +91,32 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
   }
 
   // Pass 4: re-emit. Keep every root stmt in order; keep declarations
-  // only when their name is live. Statement positions are dropped —
-  // they no longer line up with the original module and source maps
-  // aren't emitted in mangle mode anyway.
+  // only when their name is live. Statement positions for survivors
+  // are carried over so downstream source-map emission can still map
+  // each remaining stmt back to its input position.
   let kept : Array[@ast.TsStmt] = []
+  let kept_positions : Array[Int] = []
+  let has_positions = block.stmt_positions.length() == block.stmts.length()
   for i, stmt in block.stmts {
-    if is_decl[i] {
+    let keep = if is_decl[i] {
       let name = match stmt {
         Let(@ast.TsBinding::Ident(n), _, _)
         | Const(@ast.TsBinding::Ident(n), _, _)
         | Var(@ast.TsBinding::Ident(n), _, _) => n
         _ => ""
       }
-      if live.contains(name) {
-        kept.push(stmt)
-      }
+      live.contains(name)
     } else {
+      true
+    }
+    if keep {
       kept.push(stmt)
+      if has_positions {
+        kept_positions.push(block.stmt_positions[i])
+      }
     }
   }
-  { stmts: kept, stmt_positions: [] }
+  { stmts: kept, stmt_positions: kept_positions }
 }
 
 ///|

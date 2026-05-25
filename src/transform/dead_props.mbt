@@ -28,7 +28,7 @@ pub fn drop_dead_properties_block(
   for s in block.stmts {
     stmts.push(drop_dead_props_stmt(s, reserved, read_props))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|
@@ -417,7 +417,7 @@ fn drop_dead_props_block(
   for s in block.stmts {
     stmts.push(drop_dead_props_stmt(s, reserved, read_props))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

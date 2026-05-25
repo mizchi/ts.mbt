@@ -118,7 +118,7 @@ pub fn inline_const_enums(
   for s in block.stmts {
     stmts.push(inline_const_enums_stmt(s, table))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|
@@ -244,7 +244,7 @@ fn inline_const_enums_block(
   for s in block.stmts {
     stmts.push(inline_const_enums_stmt(s, table))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

@@ -79,7 +79,7 @@ pub fn as_const_inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   for s in block.stmts {
     new_stmts.push(rewrite_stmt(s, survivors))
   }
-  { stmts: new_stmts, stmt_positions: [] }
+  { stmts: new_stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|
@@ -594,7 +594,7 @@ fn rewrite_block(
   for s in block.stmts {
     stmts.push(rewrite_stmt(s, table))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

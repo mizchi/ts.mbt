@@ -40,7 +40,7 @@ fn type_fold_block_in(
   for s in block.stmts {
     stmts.push(type_fold_stmt(s, local))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

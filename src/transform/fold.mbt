@@ -30,10 +30,19 @@
 /// returned block is fresh — the input is not mutated.
 pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
-  for s in block.stmts {
+  let positions : Array[Int] = []
+  let has_positions = block.stmt_positions.length() == block.stmts.length()
+  for i, s in block.stmts {
+    let before_len = stmts.length()
     fold_stmt_into(s, stmts)
+    let added = stmts.length() - before_len
+    if has_positions {
+      for _j in 0..<added {
+        positions.push(block.stmt_positions[i])
+      }
+    }
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: positions }
 }
 
 ///|

@@ -168,7 +168,7 @@ pub fn switch_fold(
   for s in block.stmts {
     stmts.push(switch_fold_stmt(s, table))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|
@@ -180,7 +180,7 @@ fn switch_fold_block(
   for s in block.stmts {
     stmts.push(switch_fold_stmt(s, table))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

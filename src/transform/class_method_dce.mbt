@@ -66,7 +66,7 @@ pub fn class_method_dce_block(block : @ast.TsBlock) -> @ast.TsBlock {
   for s in block.stmts {
     new_stmts.push(dce_stmt(s, accessed))
   }
-  { stmts: new_stmts, stmt_positions: [] }
+  { stmts: new_stmts, stmt_positions: block.stmt_positions }
 }
 
 // -- Step 1: cheap "has any class" check ------------------------------
@@ -921,13 +921,18 @@ fn prune_iife_methods(
   accessed : Map[String, Bool],
 ) -> @ast.TsBlock {
   let new_stmts : Array[@ast.TsStmt] = []
-  for s in body.stmts {
+  let new_positions : Array[Int] = []
+  let has_positions = body.stmt_positions.length() == body.stmts.length()
+  for i, s in body.stmts {
     if iife_method_assignment_is_dead(s, class_name, accessed) {
       continue
     }
     new_stmts.push(s)
+    if has_positions {
+      new_positions.push(body.stmt_positions[i])
+    }
   }
-  { stmts: new_stmts, stmt_positions: [] }
+  { stmts: new_stmts, stmt_positions: new_positions }
 }
 
 ///|
@@ -1141,7 +1146,7 @@ fn dce_block(
   for s in block.stmts {
     stmts.push(dce_stmt(s, accessed))
   }
-  { stmts, stmt_positions: [] }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|
