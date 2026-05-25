@@ -1133,9 +1133,27 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     BinOp(op, l, r) => {
       let prec = binop_precedence(op)
       emit_expr(e, l, prec)
-      e.space()
+      // Word operators (`instanceof`, `in`) start with identifier
+      // bytes, so the optional-whitespace `space()` we use for
+      // punctuator ops would produce illegal output like
+      // `xinstanceofy` in minify mode. Force separators on both
+      // sides for word ops; `space()` is still correct for `+`,
+      // `*`, `===` and the rest.
+      let is_word_op = match op {
+        Instanceof | In => true
+        _ => false
+      }
+      if is_word_op {
+        e.write(" ")
+      } else {
+        e.space()
+      }
       e.write(binop_str(op))
-      e.space()
+      if is_word_op {
+        e.write(" ")
+      } else {
+        e.space()
+      }
       // Right-associative ** uses prec, others prec+1 so left chains.
       let right_prec = match op {
         Pow => prec
@@ -1206,15 +1224,25 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           e.space()
         }
         // JSX-runtime lowering encodes object-spread props as a
-        // sentinel `("...", Spread(expr))` entry. Emit those as the
-        // `...expr` shorthand instead of `"...": expr`.
+        // sentinel `("...", Spread(expr))` entry. Some parser paths
+        // emit `("@@spread:N", expr)` for the same purpose. Both
+        // surface as `...expr` shorthand.
         match entry {
           ("...", Spread(inner)) => {
             e.write("...")
             emit_expr(e, inner, 2)
           }
+          (key, _) if key.has_prefix("@@spread:") => {
+            e.write("...")
+            emit_expr(e, entry.1, 2)
+          }
           _ => {
-            e.write(entry.0)
+            // Non-identifier keys (`"Content-Type"`, `"foo bar"`,
+            // numeric-looking, etc.) MUST stay quoted — otherwise
+            // the emitted `{Content-Type: …}` re-parses as binary
+            // minus. Numeric keys can stay unquoted; everything
+            // else needs the quotes.
+            emit_object_key(e, entry.0)
             e.write(":")
             e.space()
             emit_expr(e, entry.1, 2)
@@ -1658,6 +1686,63 @@ fn is_this_type_annotation_param(p : @ast.TsParam) -> Bool {
 /// decide whether to emit a name on a synthesized function
 /// expression. We only need a coarse rejector — the parser handles
 /// the full Unicode case for real source identifiers.
+///|
+/// Emit an object-literal key. Valid JS identifiers and numeric
+/// literals stay unquoted; everything else (`Content-Type`,
+/// `foo bar`, empty string, identifiers that happen to be reserved
+/// words used as keys are still OK unquoted in modern JS) gets
+/// JSON-string quoting so the surrounding object literal stays
+/// parseable.
+fn emit_object_key(e : Emitter, key : String) -> Unit {
+  if is_valid_js_ident(key) || is_numeric_literal_key(key) {
+    e.write(key)
+  } else {
+    e.write("\"")
+    e.write(escape_string_literal(key))
+    e.write("\"")
+  }
+}
+
+///|
+fn is_numeric_literal_key(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  for i = 0; i < s.length(); i = i + 1 {
+    let c = s[i]
+    if not(c >= '0' && c <= '9') {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Minimal JSON-style escape for strings emitted as object keys.
+/// Covers backslash, double quote, and the control chars JS doesn't
+/// accept verbatim inside double-quoted strings.
+fn escape_string_literal(s : String) -> String {
+  let buf = StringBuilder::new()
+  for i = 0; i < s.length(); i = i + 1 {
+    let c = s[i]
+    if c == '\\' {
+      buf.write_string("\\\\")
+    } else if c == '"' {
+      buf.write_string("\\\"")
+    } else if c == '\n' {
+      buf.write_string("\\n")
+    } else if c == '\r' {
+      buf.write_string("\\r")
+    } else if c == '\t' {
+      buf.write_string("\\t")
+    } else {
+      buf.write_char(c.to_int().unsafe_to_char())
+    }
+  }
+  buf.to_string()
+}
+
+///|
 fn is_valid_js_ident(s : String) -> Bool {
   if s.length() == 0 {
     return false
@@ -1879,7 +1964,9 @@ fn emit_native_class(
     e.write(decl.name)
   }
   if decl.base_names.length() > 0 {
-    e.space()
+    // `extends` is a word keyword; a forced space, not the
+    // optional one — `classextends` / `nameextends` is invalid.
+    e.write(" ")
     e.write("extends")
     e.sep_after_word('A')
     e.write(decl.base_names[0])

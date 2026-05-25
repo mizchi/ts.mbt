@@ -522,6 +522,85 @@ test "dts: prints conditional + union extends + mapped + indexed access" {
   assert_true(dts.contains("T extends (null | undefined)"))
   assert_true(dts.contains("? never : T"))
   assert_true(dts.contains("{ [P in K]: T[P] }"))
+  // Generic param bounds: `K extends keyof T` should round-trip.
+  assert_true(dts.contains("K extends keyof T"))
+}
+
+///|
+test "dts: optional field round-trips to `x?: T` instead of `T | undefined`" {
+  let src = "export interface Config {\n" +
+    "  host: string;\n" +
+    "  port?: number;\n" +
+    "  tags?: string[];\n" +
+    "}\n"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let dts = emit_entry_dts(module_, ["Config"], {})
+  // Required field still emits with `:`.
+  assert_true(dts.contains("host: string"))
+  // Optional fields use `?:` rather than `: T | undefined`.
+  assert_true(dts.contains("port?: number"))
+  assert_true(dts.contains("tags?: string[]"))
+  assert_false(dts.contains("undefined"))
+}
+
+///|
+test "dts: infer marker prints as `infer T` (not `__tsmbt_infer<T>`)" {
+  let src = "export type R<T> = T extends (...args: any) => infer Ret ? Ret : never;\n"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let dts = emit_entry_dts(module_, ["R"], {})
+  // The parser stores `infer T` as `Applied("__tsmbt_infer", …)` —
+  // emit must render it as the TypeScript keyword form.
+  assert_true(dts.contains("infer Ret"))
+  assert_false(dts.contains("__tsmbt_infer"))
+}
+
+///|
+test "sourcemap: mangle path emits per-stmt mappings via encoded positions" {
+  let files = vfs([
+    ("entry.ts", "import { x } from \"./lib\";\nconst y = x + 1;\nconsole.log(y);\n"),
+    ("lib.ts", "export const x = 41;\n"),
+  ])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_mangle(true)
+    .with_sourcemap(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The combined-path emit now decodes per-stmt origins and
+      // records source-map mappings. The map must include both
+      // module slots in `sources` and at least one mapping segment
+      // (the `mappings` string isn't empty).
+      match out.sourcemap {
+        Some(sm) => {
+          assert_true(sm.contains("\"entry.ts\""))
+          assert_true(sm.contains("\"lib.ts\""))
+          // mangle path used to drop positions; now `mappings` is
+          // populated.
+          let mappings_pos = sm.find("\"mappings\":\"")
+          let mappings = match mappings_pos {
+            Some(idx) =>
+              sm.substring(start=idx + "\"mappings\":\"".length(), end=sm.length()).to_string()
+            None => ""
+          }
+          assert_true(mappings.length() > 5)
+        }
+        None => fail("expected sourcemap output, got None")
+      }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "dts: class constructor emits when parser captured it" {
+  let src = "export class Foo {\n" +
+    "  x: number;\n" +
+    "  constructor(x: number, label?: string) { this.x = x; }\n" +
+    "  go(): void { return; }\n" +
+    "}\n"
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let dts = emit_entry_dts(module_, ["Foo"], {})
+  assert_true(dts.contains("export class Foo"))
+  assert_true(dts.contains("constructor(x: number, label?: string)"))
 }
 
 ///|

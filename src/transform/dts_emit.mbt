@@ -121,8 +121,14 @@ fn emit_interface_decl(buf : StringBuilder, i : @ast.TsInterface) -> Unit {
       buf.write_string("readonly ")
     }
     buf.write_string(field.0)
+    // The parser lowers `x?: T` to `x: T | undefined`. Detect that
+    // pattern and round-trip back to `x?: T` for cleaner output.
+    let (is_optional, ty) = unwrap_optional_field_type(field.1)
+    if is_optional {
+      buf.write_string("?")
+    }
     buf.write_string(": ")
-    emit_type(buf, field.1)
+    emit_type(buf, ty)
     buf.write_string(";\n")
   }
   for idx_sig in i.index_signatures {
@@ -139,7 +145,7 @@ fn emit_interface_decl(buf : StringBuilder, i : @ast.TsInterface) -> Unit {
 fn emit_type_alias_decl(buf : StringBuilder, a : @ast.TsTypeAlias) -> Unit {
   buf.write_string("export type ")
   buf.write_string(a.name)
-  emit_type_params(buf, a.type_params)
+  emit_type_params_with_bounds(buf, a.type_params, a.type_param_bounds)
   buf.write_string(" = ")
   emit_type(buf, a.type_)
   buf.write_string(";\n")
@@ -197,6 +203,26 @@ fn emit_class_decl(buf : StringBuilder, c : @ast.TsClassDecl) -> Unit {
     buf.write_string(c.base_names[0])
   }
   buf.write_string(" {\n")
+  // Constructor signature, when the parser captured one.
+  match c.constructor_params {
+    Some(params) => {
+      buf.write_string("  constructor(")
+      for i, p in params {
+        if i > 0 {
+          buf.write_string(", ")
+        }
+        let (is_optional, ty) = unwrap_optional_field_type(p.1)
+        buf.write_string(p.0)
+        if is_optional {
+          buf.write_string("?")
+        }
+        buf.write_string(": ")
+        emit_type(buf, ty)
+      }
+      buf.write_string(");\n")
+    }
+    None => ()
+  }
   for prop in c.properties {
     buf.write_string("  ")
     if prop.is_static {
@@ -206,8 +232,12 @@ fn emit_class_decl(buf : StringBuilder, c : @ast.TsClassDecl) -> Unit {
       buf.write_string("readonly ")
     }
     buf.write_string(prop.name)
+    let (is_optional, ty) = unwrap_optional_field_type(prop.type_)
+    if is_optional {
+      buf.write_string("?")
+    }
     buf.write_string(": ")
-    emit_type(buf, prop.type_)
+    emit_type(buf, ty)
     buf.write_string(";\n")
   }
   for m in c.methods {
@@ -216,18 +246,29 @@ fn emit_class_decl(buf : StringBuilder, c : @ast.TsClassDecl) -> Unit {
       buf.write_string("static ")
     }
     buf.write_string(m.name)
-    emit_type_params(buf, m.type_params)
+    emit_type_params_with_bounds(buf, m.type_params, m.type_param_bounds)
     buf.write_string("(")
     for i, p in m.params {
       if i > 0 {
         buf.write_string(", ")
       }
+      let (is_optional, ty) = unwrap_optional_field_type(p.1)
       buf.write_string(p.0)
+      if is_optional {
+        buf.write_string("?")
+      }
       buf.write_string(": ")
-      emit_type(buf, p.1)
+      emit_type(buf, ty)
     }
     buf.write_string("): ")
     emit_type(buf, m.return_type)
+    buf.write_string(";\n")
+  }
+  for idx_sig in c.index_signatures {
+    buf.write_string("  [k: ")
+    emit_type(buf, idx_sig.0)
+    buf.write_string("]: ")
+    emit_type(buf, idx_sig.1)
     buf.write_string(";\n")
   }
   buf.write_string("}\n")
@@ -246,13 +287,81 @@ fn emit_function_decl(buf : StringBuilder, f : @ast.TsFunc) -> Unit {
     if p.is_rest {
       buf.write_string("...")
     }
+    let (is_optional, ty) = unwrap_optional_field_type(p.type_)
     buf.write_string(p.name)
+    if is_optional && not(p.is_rest) {
+      buf.write_string("?")
+    }
     buf.write_string(": ")
-    emit_type(buf, p.type_)
+    emit_type(buf, ty)
   }
   buf.write_string("): ")
   emit_type(buf, f.return_type)
   buf.write_string(";\n")
+}
+
+///|
+/// When a field / parameter type is `T | undefined`, return
+/// `(true, T)` so the emitter can render it as `x?: T` (the
+/// idiomatic TypeScript shape). For anything else, return
+/// `(false, ty)` unchanged.
+fn unwrap_optional_field_type(ty : @ast.TsType) -> (Bool, @ast.TsType) {
+  match ty {
+    Union(parts) => {
+      // Find an `Undefined` in the union and return the remainder.
+      let mut has_undefined = false
+      let rest : Array[@ast.TsType] = []
+      for p in parts {
+        match p {
+          Undefined => has_undefined = true
+          _ => rest.push(p)
+        }
+      }
+      if not(has_undefined) || rest.length() == 0 {
+        return (false, ty)
+      }
+      if rest.length() == 1 {
+        (true, rest[0])
+      } else {
+        (true, Union(rest))
+      }
+    }
+    _ => (false, ty)
+  }
+}
+
+///|
+/// Variant of `emit_type_params` that also writes per-parameter
+/// `extends Bound` clauses when the binding list carries bounds.
+/// Order in `bounds` mirrors `params`; missing entries mean no
+/// bound was declared.
+fn emit_type_params_with_bounds(
+  buf : StringBuilder,
+  params : Array[String],
+  bounds : Array[(String, @ast.TsType)],
+) -> Unit {
+  if params.length() == 0 {
+    return
+  }
+  let bound_map : Map[String, @ast.TsType] = {}
+  for b in bounds {
+    bound_map[b.0] = b.1
+  }
+  buf.write_string("<")
+  for i, p in params {
+    if i > 0 {
+      buf.write_string(", ")
+    }
+    buf.write_string(p)
+    match bound_map.get(p) {
+      Some(b) => {
+        buf.write_string(" extends ")
+        emit_type(buf, b)
+      }
+      None => ()
+    }
+  }
+  buf.write_string(">")
 }
 
 ///|
@@ -327,23 +436,34 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
       emit_type(buf, inner)
     }
     Object(fields) => {
-      buf.write_string("{ ")
-      for i, f in fields {
-        if i > 0 {
-          buf.write_string("; ")
-        }
-        match f.0 {
-          Literal(name) => buf.write_string(name)
-          _ => {
-            buf.write_string("[k: ")
-            emit_type(buf, f.0)
-            buf.write_string("]")
+      if fields.length() == 0 {
+        buf.write_string("{}")
+      } else {
+        buf.write_string("{ ")
+        for i, f in fields {
+          if i > 0 {
+            buf.write_string("; ")
           }
+          // Track optional even for inline object literal types.
+          let (is_optional, value_ty) = unwrap_optional_field_type(f.1)
+          match f.0 {
+            Literal(name) => {
+              buf.write_string(name)
+              if is_optional {
+                buf.write_string("?")
+              }
+            }
+            _ => {
+              buf.write_string("[k: ")
+              emit_type(buf, f.0)
+              buf.write_string("]")
+            }
+          }
+          buf.write_string(": ")
+          emit_type(buf, value_ty)
         }
-        buf.write_string(": ")
-        emit_type(buf, f.1)
+        buf.write_string(" }")
       }
-      buf.write_string(" }")
     }
     Struct(name, _) => buf.write_string(name)
     Func(params, ret) => {
@@ -404,6 +524,18 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
     }
     Named(name) => buf.write_string(name)
     Applied(name, args) => {
+      // `infer T` and `infer T extends Bound` are stored as the
+      // pseudo-applied form `__tsmbt_infer<…>` so the parser can
+      // round-trip them. Render them with the proper TS keyword.
+      if name == "__tsmbt_infer" && args.length() >= 1 {
+        buf.write_string("infer ")
+        emit_type(buf, args[0])
+        if args.length() >= 2 {
+          buf.write_string(" extends ")
+          emit_type(buf, args[1])
+        }
+        return
+      }
       buf.write_string(name)
       buf.write_string("<")
       for i, a in args {
