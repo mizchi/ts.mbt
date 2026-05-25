@@ -183,6 +183,14 @@ pub(all) enum TsExpr {
   // functionexpression (function() {})
   FuncExpr(TsFunc)
 
+  // `/* @__PURE__ */ f(args)` — terser / rolldown convention for
+  // "this call has no observable side effects". Wraps any call-like
+  // expression (`Call` / `CallExpr` / `MethodCall` / `New` /
+  // `NewExpr`). Treeshake / DCE consult this marker to drop the
+  // call when its result is unused; the emit pass restores the
+  // comment so downstream minifiers preserve the annotation.
+  PureCall(TsExpr)
+
   // Native class expression `class [Name] extends Base { … }`.
   // Used by the parser when the source's class can't safely be
   // lowered to the `(function() { … })()` IIFE because it extends
@@ -695,6 +703,11 @@ pub(all) struct TsModuleBlock {
   exports : Array[TsExportSpec]
   reexports : Array[TsReExportSpec]
   enums : Array[TsEnumDecl]
+  // Names tagged with a `/** @internal */` JSDoc block. These are
+  // exported at JS level but hidden from `.d.ts` emit — downstream
+  // TypeScript consumers can't `import { x }` them through the
+  // declaration, while runtime code in the same package can.
+  internal_names : Map[String, Bool]
 } derive(Debug)
 
 // ============================================

@@ -3197,10 +3197,22 @@ fn Parser::parse_module_block_with_const_values(
       continue
     }
     if self.check(Export) {
+      // Remember whether the `export` keyword was tagged
+      // `/** @internal */` by a preceding JSDoc block. After
+      // we parse the declaration and record its export
+      // specs, fold the new names into
+      // `collected_internal_names` so `.d.ts` emit can skip
+      // them.
+      let is_internal = self.internal_marker_positions.contains(
+        self.peek().pos,
+      )
       match self.parse_export_enum_decl_for_module_block() {
         Some(enum_) => {
           enums.push(enum_)
           exports.push({ local_name: enum_.name, export_name: enum_.name })
+          if is_internal {
+            self.collected_internal_names[enum_.name] = true
+          }
           continue
         }
         None => ()
@@ -3213,6 +3225,9 @@ fn Parser::parse_module_block_with_const_values(
       }
       for spec in export_specs {
         exports.push(spec)
+        if is_internal {
+          self.collected_internal_names[spec.local_name] = true
+        }
       }
       for spec in reexport_specs {
         reexports.push(spec)
@@ -3321,6 +3336,7 @@ fn Parser::parse_module_block_with_const_values(
       exports,
       reexports,
       enums,
+      internal_names: self.collected_internal_names,
     },
     const_values,
   )

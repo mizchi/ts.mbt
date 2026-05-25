@@ -150,6 +150,17 @@ pub struct Lexer {
   mut pending : Array[Token]
   mut pending_index : Int
   mut newline_before_next : Bool // Set when whitespace skipping encounters a newline
+  // JSDoc / annotation tracking. The lexer skips block comments
+  // for parsing purposes, but it also peeks inside each one for a
+  // few annotations the rest of the toolchain cares about. When a
+  // comment contains the marker, the position of the FOLLOWING
+  // non-comment token gets recorded — the parser then asks "was
+  // this token preceded by `/* @__PURE__ */`?" without having to
+  // re-scan source text.
+  mut pending_pure_marker : Bool
+  mut pending_internal_marker : Bool
+  pure_marker_positions : Map[Int, Bool]
+  internal_marker_positions : Map[Int, Bool]
 } derive(Debug)
 
 ///|
@@ -192,6 +203,10 @@ pub fn Lexer::new(src : String) -> Lexer {
     pending: [],
     pending_index: 0,
     newline_before_next: false,
+    pending_pure_marker: false,
+    pending_internal_marker: false,
+    pure_marker_positions: {},
+    internal_marker_positions: {},
   }
 }
 
@@ -337,7 +352,9 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
             }
           }
           Some('*') => {
-            // block
+            // block comment. Record the start so we can slice the
+            // body when scanning for annotations.
+            let comment_start = self.pos
             let _ = self.advance()
             let _ = self.advance()
             while true {
@@ -358,6 +375,21 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
                   let _ = self.advance()
                 }
               }
+            }
+            // Peek inside the comment body for the two annotations
+            // we care about. `@__PURE__` lives in plain block
+            // comments (`/* @__PURE__ */ f(x)`); `@internal` lives
+            // in JSDoc comments (`/** @internal */ export …`). We
+            // match both by simple substring search — strict JSDoc
+            // grammar isn't needed for our use case.
+            let comment_text = self.src
+              .substring(start=comment_start, end=self.pos)
+              .to_string()
+            if comment_text.contains("@__PURE__") {
+              self.pending_pure_marker = true
+            }
+            if comment_text.contains("@internal") {
+              self.pending_internal_marker = true
             }
           }
           _ => break
@@ -2077,6 +2109,16 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
   self.skip_whitespace()
   let has_newline = self.newline_before_next
   let pos = self.pos
+  // Stamp annotation markers onto the upcoming token's position so
+  // the parser can look them up after tokenize() finishes.
+  if self.pending_pure_marker {
+    self.pure_marker_positions[pos] = true
+    self.pending_pure_marker = false
+  }
+  if self.pending_internal_marker {
+    self.internal_marker_positions[pos] = true
+    self.pending_internal_marker = false
+  }
   match self.advance() {
     None => { kind: Eof, pos, has_newline_before: has_newline }
     Some(c) => {

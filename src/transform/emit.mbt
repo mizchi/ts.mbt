@@ -1392,6 +1392,14 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       emit_jsx_element(e, tag, attrs, children)
     NativeClassExpr(decl, ctor_body) =>
       emit_native_class(e, decl, ctor_body)
+    PureCall(inner) => {
+      // Restore the `/* @__PURE__ */` annotation so downstream
+      // minifiers (terser, esbuild, rolldown) keep treating the
+      // call as droppable when the result is unused. The comment
+      // appears immediately before the call body.
+      e.write("/* @__PURE__ */ ")
+      emit_expr_body(e, inner)
+    }
   }
 }
 
@@ -1823,6 +1831,10 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
     // Class expressions sit at the same precedence as function
     // expressions — both are primary atoms.
     NativeClassExpr(_, _) => 19
+    // `PureCall` is a transparent marker — its precedence equals
+    // the wrapped call's so paren-wrapping decisions stay
+    // consistent.
+    PureCall(inner) => expr_precedence(inner)
     // TS-only wrappers — same precedence as their inner expression.
     As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
       expr_precedence(inner)

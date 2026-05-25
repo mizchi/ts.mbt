@@ -498,6 +498,7 @@ async fn main {
           exports: [],
           reexports: [],
           enums: [],
+          internal_names: {},
         })
         let module_ = (try?
           @parser.parse_module_from_source_with_const_values(entry_source, {})).or(
@@ -593,6 +594,7 @@ async fn main {
             exports: [],
             reexports: [],
             enums: [],
+            internal_names: {},
           })
           let entry_module = (try?
             @parser.parse_module_from_source_with_const_values(
@@ -610,9 +612,15 @@ async fn main {
               module_augmentations: [],
             },
           )
+          // Filter exports through the entry's `@internal` set so
+          // anything tagged `/** @internal */` is invisible to
+          // downstream consumers' type-checks even when the JS
+          // bundle still ships the runtime binding.
           let local_names : Array[String] = []
           for ex in entry_block.exports {
-            local_names.push(ex.local_name)
+            if not(entry_block.internal_names.contains(ex.local_name)) {
+              local_names.push(ex.local_name)
+            }
           }
           let dts_text = @transform.emit_entry_dts(entry_module, local_names)
           let _ = write_text(dts_path, dts_text)

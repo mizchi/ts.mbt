@@ -41,6 +41,19 @@ pub struct Parser {
   // before calling `parse_params` for a constructor and pops it
   // afterwards, then emits `this.name = name` for every entry.
   param_property_scopes : Array[Array[String]]
+  // Token-position → "JSDoc `/* @__PURE__ */` annotation seen
+  // just before this token". The lexer populates this when it
+  // skips a block comment whose contents contain the literal
+  // `@__PURE__`. The call-expr parser consults the map to wrap
+  // its result in `TsExpr::PureCall(...)`.
+  pure_marker_positions : Map[Int, Bool]
+  // Same shape for `/** @internal */` JSDoc blocks. The decl
+  // parser flags the next declaration's name into
+  // `collected_internal_names`, which gets attached to the
+  // emitted `TsModuleBlock`. `.d.ts` emit then drops those
+  // names from the published surface.
+  internal_marker_positions : Map[Int, Bool]
+  collected_internal_names : Map[String, Bool]
 } derive(Debug)
 
 ///|
@@ -85,8 +98,15 @@ pub fn Parser::new_with_strict_and_jsx(
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
+    pure_marker_positions: {},
+    internal_marker_positions: {},
+    collected_internal_names: {},
   }
 }
+
+// (`from_source` below picks up the marker maps from the Lexer
+// so the parser can answer "was this token preceded by
+// `/* @__PURE__ */` / `/** @internal */`?").
 
 ///|
 // / create
@@ -123,6 +143,9 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
+    pure_marker_positions: lexer.pure_marker_positions,
+    internal_marker_positions: lexer.internal_marker_positions,
+    collected_internal_names: {},
   }
 }
 

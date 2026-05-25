@@ -1970,6 +1970,7 @@ fn infer_expr(
     // by `check_call_args_in_expr` for diagnostic recursion.
     JsxElement(_, _, _) => @ast.TsType::Any
     NativeClassExpr(_, _) => @ast.TsType::Any
+    PureCall(inner) => infer_expr(env, resolver, inner)
   }
 }
 

@@ -2333,7 +2333,17 @@ fn Parser::skip_jsx_closing_tag(
 ///|
 // / function, array, property, method
 fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
+  // Capture the start position of the callee BEFORE we parse the
+  // primary — that's where the lexer stamped the `@__PURE__`
+  // annotation when it was present in the preceding comment.
+  let pure_call_pos = self.peek().pos
   let mut expr = self.parse_primary()
+  // After this `parse_call` returns, if the call expression
+  // started at a marked position, the result wraps in
+  // `PureCall(...)`. We only set the wrap when an actual call
+  // followed — bare `parse_primary()` results (`x` alone, no
+  // `(args)`) shouldn't be tagged pure.
+  let mut saw_call_in_chain = false
 
   // operatorcheck
   while true {
@@ -2397,6 +2407,7 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       // function or method
       let args = self.parse_args()
       let _ = self.expect(RParen)
+      saw_call_in_chain = true
       match expr {
         Var(name) => expr = Call(name, args)
         PropAccess(receiver, method_name) =>
@@ -2435,7 +2446,15 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       }
     }
   }
-  expr
+  // Apply the `@__PURE__` annotation when the lexer flagged the
+  // callee's start position AND we actually consumed a call /
+  // method-call form. Tagging a non-call (just `x` with no
+  // arguments after) would be misleading.
+  if saw_call_in_chain && self.pure_marker_positions.contains(pure_call_pos) {
+    @ast.TsExpr::PureCall(expr)
+  } else {
+    expr
+  }
 }
 
 ///|

@@ -484,6 +484,12 @@ fn walk_expr_for_purity(
     TemplateLiteral(_, exprs) => for e in exprs {
       walk_expr_for_purity(e, inside_func, yield_)
     }
+    // `/* @__PURE__ */` wrap — by definition the call is pure.
+    // We still walk argument expressions for diagnostic purposes
+    // (a Pure call to `f(g())` where `g()` itself has a side
+    // effect is still observably impure, but the user has
+    // ASSERTED the wrapper is pure, so we honor it).
+    PureCall(_) => ()
     _ => ()
   }
 }

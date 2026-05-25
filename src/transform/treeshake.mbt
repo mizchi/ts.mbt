@@ -147,6 +147,9 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     UnaryOp(_, inner) => is_pure_init(inner)
     BinOp(_, l, r) => is_pure_init(l) && is_pure_init(r)
     Cond(c, t, e) => is_pure_init(c) && is_pure_init(t) && is_pure_init(e)
+    // `/* @__PURE__ */ f(...)` — the user asserted purity, so
+    // treeshake can drop the binding when the result is unused.
+    PureCall(_) => true
     _ => false
   }
 }

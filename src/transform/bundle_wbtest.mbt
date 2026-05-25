@@ -632,3 +632,69 @@ test "const-enum: regular `enum` keeps its runtime var when adjacent" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "@__PURE__: annotation reaches PureCall AST node + emit" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function alloc(): any { return null; }\nconst x = /* @__PURE__ */ alloc();\nconsole.log(x);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The annotation is preserved in the JS output so
+      // downstream minifiers can drop the call too.
+      assert_true(out.js.contains("/* @__PURE__ */ alloc()"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "@__PURE__: treeshake drops unused PureCall binding" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "function alloc(): any { return null; }\nconst _unused = /* @__PURE__ */ alloc();\nconsole.log(\"done\");\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_mangle(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The binding never gets read, so treeshake drops it. The
+      // `alloc()` call disappears too.
+      assert_false(out.js.contains("alloc"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "@internal: tagged exports vanish from the published .d.ts" {
+  let src = "/** @internal */\nexport interface Internal { raw: string }\n" +
+    "export interface Public { name: string }\n" +
+    "/** @internal */\nexport function debugLog(x: any): void {}\n" +
+    "export function start(p: Public): void {}\n"
+  let block = @parser.parse_module_block_from_source(src)
+  let module_ = @parser.parse_module_from_source_with_const_values(src, {})
+  let local : Array[String] = []
+  for ex in block.exports {
+    if not(block.internal_names.contains(ex.local_name)) {
+      local.push(ex.local_name)
+    }
+  }
+  let dts = emit_entry_dts(module_, local)
+  // Public surface survives, marked internal disappears.
+  assert_true(dts.contains("export interface Public"))
+  assert_true(dts.contains("function start"))
+  assert_false(dts.contains("Internal"))
+  assert_false(dts.contains("debugLog"))
+}
+
+///|
+test "@internal: collected_internal_names lists tagged decls" {
+  let src = "/** @internal */\nexport function helper(): void {}\nexport function pub(): void {}\n"
+  let block = @parser.parse_module_block_from_source(src)
+  assert_true(block.internal_names.contains("helper"))
+  assert_false(block.internal_names.contains("pub"))
+}
