@@ -39,8 +39,11 @@ pub(all) struct BundleOptions {
   // module in the bundle.
   with_sourcemap : Bool
   // When `true`, run the identifier-mangling pass on the final
-  // concatenated module block. Source-map positions are skipped in
-  // this mode because the rename pass doesn't carry positions yet.
+  // concatenated module block. `--with-sourcemap` is now compatible
+  // with this path: each combined statement's origin (source-id +
+  // byte offset within that source) is encoded into the position
+  // array, the mangle / treeshake / inline passes preserve it
+  // verbatim, and the emit decodes it for the source-map writer.
   mangle : Bool
   // When `true` (and `mangle == true`), also rename non-reserved
   // property keys via the opt-in property-mangling path.
@@ -355,14 +358,38 @@ pub fn bundle_modules(
   if opts.mangle || opts.treeshake || opts.fold {
     let combined_stmts : Array[@ast.TsStmt] = []
     let combined_type_aliases : Array[@ast.TsTypeAlias] = []
+    // Track each combined-statement's origin so the source-map can
+    // map it back to its module after mangle / treeshake / fold
+    // restructure the AST. Encoding: high 24 bits = source-id (the
+    // module's slot in `sources`), low 8 bits = "" — actually we
+    // pack byte_offset in the high bits and source_id in the low 8
+    // so the existing position-as-int representation survives 1:1
+    // transforms verbatim. `combined_source_count` is the next free
+    // source-id slot.
+    let combined_positions : Array[Int] = []
+    let combined_line_indices : Array[LineIndex] = []
+    let mut combined_source_count = 0
     for path in order {
       let m = match modules.get(path) {
         Some(node) => node
         None => continue
       }
       module_paths.push(path)
-      for s in m.block.stmts {
+      // Allocate a source-id for this module and populate the
+      // top-level sources / sources_content / line-index tables.
+      let source_id = combined_source_count
+      combined_source_count = combined_source_count + 1
+      sources.push(path)
+      sources_content.push(m.source)
+      combined_line_indices.push(LineIndex::new(m.source))
+      let has_positions = m.block.stmt_positions.length() == m.block.stmts.length()
+      for j, s in m.block.stmts {
         combined_stmts.push(s)
+        if has_positions {
+          combined_positions.push(encode_combined_position(m.block.stmt_positions[j], source_id))
+        } else {
+          combined_positions.push(encode_combined_position(0, source_id))
+        }
       }
       for ta in m.type_aliases {
         combined_type_aliases.push(ta)
@@ -370,7 +397,7 @@ pub fn bundle_modules(
     }
     let mut combined : @ast.TsBlock = {
       stmts: combined_stmts,
-      stmt_positions: [],
+      stmt_positions: combined_positions,
     }
     // Type-predicate inline.
     {
@@ -498,7 +525,26 @@ pub fn bundle_modules(
       combined = inline_block(combined)
       combined = peephole_block(combined)
     }
-    for s in combined.stmts {
+    let has_combined_positions = combined.stmt_positions.length() ==
+      combined.stmts.length()
+    for i, s in combined.stmts {
+      // When source-maps are on, decode the per-stmt origin and
+      // switch the emitter's line index to the source the stmt
+      // came from before recording the mapping. Stmts whose origin
+      // was lost (synthesized by a transform) have an out-of-range
+      // source-id and are simply skipped.
+      if opts.with_sourcemap && has_combined_positions {
+        let (offset, source_id) = decode_combined_position(combined.stmt_positions[i])
+        if source_id < combined_line_indices.length() {
+          e.line_index = combined_line_indices[source_id]
+          match e.smap {
+            Some(b) => b.set_current_source(source_id)
+            None => ()
+          }
+          let src_pos = e.line_index.position(offset)
+          e.mark(src_pos)
+        }
+      }
       emit_stmt(e, s)
       e.nl()
     }
@@ -812,4 +858,26 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
     e.write(" }")
   }
   e.write(";")
+}
+
+///|
+/// Encode a (byte_offset, source_id) pair into a single Int so the
+/// combined-block `stmt_positions` array can carry per-stmt origin
+/// info through every transform pass. Low 8 bits are the source-id
+/// (max 256 distinct sources per bundle); high bits are the byte
+/// offset within that source.
+///
+/// 256 sources is plenty for the synthetic / real-world bundles
+/// the bench drives; when a project hits that wall we can switch
+/// to a wider encoding, but a parallel side-array would be the
+/// cleaner answer at that point.
+fn encode_combined_position(offset : Int, source_id : Int) -> Int {
+  (offset * 256) + (source_id % 256)
+}
+
+///|
+fn decode_combined_position(encoded : Int) -> (Int, Int) {
+  let source_id = encoded % 256
+  let offset = encoded / 256
+  (offset, source_id)
 }

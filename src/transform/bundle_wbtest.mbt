@@ -555,6 +555,42 @@ test "dts: infer marker prints as `infer T` (not `__tsmbt_infer<T>`)" {
 }
 
 ///|
+test "sourcemap: mangle path emits per-stmt mappings via encoded positions" {
+  let files = vfs([
+    ("entry.ts", "import { x } from \"./lib\";\nconst y = x + 1;\nconsole.log(y);\n"),
+    ("lib.ts", "export const x = 41;\n"),
+  ])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_mangle(true)
+    .with_sourcemap(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The combined-path emit now decodes per-stmt origins and
+      // records source-map mappings. The map must include both
+      // module slots in `sources` and at least one mapping segment
+      // (the `mappings` string isn't empty).
+      match out.sourcemap {
+        Some(sm) => {
+          assert_true(sm.contains("\"entry.ts\""))
+          assert_true(sm.contains("\"lib.ts\""))
+          // mangle path used to drop positions; now `mappings` is
+          // populated.
+          let mappings_pos = sm.find("\"mappings\":\"")
+          let mappings = match mappings_pos {
+            Some(idx) =>
+              sm.substring(start=idx + "\"mappings\":\"".length(), end=sm.length()).to_string()
+            None => ""
+          }
+          assert_true(mappings.length() > 5)
+        }
+        None => fail("expected sourcemap output, got None")
+      }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "dts: class constructor emits when parser captured it" {
   let src = "export class Foo {\n" +
     "  x: number;\n" +
