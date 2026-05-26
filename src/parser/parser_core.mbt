@@ -23,6 +23,13 @@ pub struct Parser {
   mut in_function : Bool // for return validation
   mut in_iteration : Bool // for continue validation
   mut in_switch : Bool // for break validation (break works in switch too)
+  // Ambient context: when true, `export var X;` / `export let X;` /
+  // `export const X;` style declarations without initializer are
+  // treated as type-only (no runtime emission) — the convention for
+  // `.d.ts` parsing and ambient external module bodies. Runtime
+  // sources (`.js` / `.ts`) flip this off so the declarations emit
+  // a real binding.
+  mut in_ambient_module : Bool
   labels : Array[String] // for labeled break/continue validation
   src : String
   allow_jsx : Bool
@@ -103,6 +110,7 @@ pub fn Parser::new_with_strict_and_jsx(
     in_function: false,
     in_iteration: false,
     in_switch: false,
+    in_ambient_module: false,
     labels: [],
     src: "",
     allow_jsx,
@@ -152,6 +160,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_function: false,
     in_iteration: false,
     in_switch: false,
+    in_ambient_module: false,
     labels: [],
     src,
     allow_jsx,

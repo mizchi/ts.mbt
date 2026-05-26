@@ -2605,6 +2605,23 @@ fn Parser::expect_str_literal(self : Parser) -> String raise ParseError {
 
 ///|
 fn Parser::is_ambient_export_value_decl(self : Parser) -> Bool {
+  // Ambient mode (`.d.ts` / ambient external module body) treats
+  // every `export var/let/const X;` without initializer as type-only.
+  //
+  // Runtime mode (`.ts` / `.js`) must keep the binding, since
+  // `export var X;` is valid JS that creates `var X = undefined;`.
+  // The one exception is `const`: bare `export const X;` is a syntax
+  // error in real JS, but for parser tolerance (and the historical
+  // tests that hand-feed `.d.ts` shapes into `parse_module_block`)
+  // we accept the ambient interpretation for `const` even outside
+  // `.d.ts` mode. `var` / `let` get the runtime path so the actual
+  // declaration emits.
+  if not(self.in_ambient_module) {
+    match self.peek_at(0).kind {
+      Const => ()
+      _ => return false
+    }
+  }
   match self.peek_at(1).kind {
     Ident(_) => ()
     _ => return false
@@ -2945,6 +2962,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   seeded_const_values : Map[String, @ast.TsExpr],
   ambient_decls : Bool,
 ) -> @ast.TsModule raise ParseError {
+  self.in_ambient_module = ambient_decls
   let funcs : Array[@ast.TsFunc] = []
   let interfaces : Array[@ast.TsInterface] = []
   let type_aliases : Array[@ast.TsTypeAlias] = []

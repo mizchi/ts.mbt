@@ -52,6 +52,11 @@ fn link_module_graph(
   // happened — unchanged names stay implicit).
   let taken : Map[String, Bool] = {}
   let rename_per_module : Map[String, Map[String, String]] = {}
+  // namespace_local_renames[path][ns_local] = globally-unique name
+  // used for the synthesized `const <unique> = { ... }` binding.
+  // Built alongside the regular rename so the namespace synthesis
+  // doesn't collide with any other top-level declaration.
+  let namespace_local_renames : Map[String, Map[String, String]] = {}
   let mut suffix_counter = 0
   for path in order {
     let m = match modules.get(path) {
@@ -71,18 +76,53 @@ fn link_module_graph(
         module_renames[name] = renamed
       }
     }
+    // Reserve a unique name for every `import * as ns` namespace
+    // local. The synthesized `const <ns> = {...}` decl uses this
+    // name so it never clashes with another module's bindings.
+    let ns_locals : Map[String, String] = {}
+    for imp in m.import_decls {
+      if imp.type_only || imp.side_effect_only {
+        continue
+      }
+      match imp.namespace_binding {
+        Some(ns_local) => {
+          let final_name = if not(taken.contains(ns_local)) {
+            taken[ns_local] = true
+            ns_local
+          } else {
+            let renamed = mint_unique_name(ns_local, taken, suffix_counter)
+            suffix_counter = suffix_counter + 1
+            taken[renamed] = true
+            renamed
+          }
+          ns_locals[ns_local] = final_name
+        }
+        None => ()
+      }
+    }
+    namespace_local_renames[path] = ns_locals
     rename_per_module[path] = module_renames
   }
   // ---- Phase 2: build per-module import substitution maps ----
   // `import_subs[path][local_alias_in_importer] = renamed_export_in_exporter`.
   // Walked AFTER phase 1 so we read the post-rename target name.
+  // `namespace_subs_per_module[path][ns_local][exported_name] =
+  // resolved_local_in_bundle` is the parallel table for `import *
+  // as ns from "./a"` patterns. It's consumed in Phase 3 by a
+  // dedicated walker that rewrites `ns.X` / `ns["X"]` / `ns.X(...)`
+  // into a bare reference.
   let import_subs : Map[String, Map[String, String]] = {}
+  let namespace_subs_per_module : Map[
+    String,
+    Map[String, Map[String, String]],
+  ] = {}
   for path in order {
     let m = match modules.get(path) {
       Some(node) => node
       None => continue
     }
     let subs : Map[String, String] = {}
+    let namespace_subs : Map[String, Map[String, String]] = {}
     for imp in m.import_decls {
       if imp.type_only || imp.side_effect_only {
         continue
@@ -120,23 +160,57 @@ fn link_module_graph(
           None => ()
         }
       }
-      // Namespace imports are out of scope here — they'd require
-      // synthesizing a fresh object literal of the module's
-      // exports. Leave the original `ns.x` references alone; if
-      // they reach the bundle's free-variable surface, the user
-      // sees the same `ReferenceError` as before the linker.
+      // Namespace import: `import * as ns from "./a"`. Collect the
+      // dependency's full export surface and build a property table
+      // `ns.X -> resolved_local_in_bundle`. The Phase 3 walker uses
+      // it to rewrite `PropAccess(Var(ns), X)` / `IndexAccess(Var(ns),
+      // StringLit(X))` / `MethodCall(Var(ns), X, args)` into a plain
+      // `Var(resolved_local)`. Bare references to `ns` itself (the
+      // namespace escaping into a non-member position) are left alone
+      // — those still ReferenceError, but the error points at the
+      // actual escape site instead of the first member access.
+      match imp.namespace_binding {
+        Some(ns_local) => {
+          let props : Map[String, String] = {}
+          for spec in dep.export_specs {
+            match
+              resolve_export(
+                modules, rename_per_module, dep_path, spec.export_name,
+              ) {
+              Some(resolved) => props[spec.export_name] = resolved
+              None => ()
+            }
+          }
+          // `export * from "./b"` re-exports also flow through the
+          // namespace. The exporter's `resolve_export` handles the
+          // walk, but we need to enumerate the names available via
+          // the wildcard re-export. Walk the dep's `reexport_specs`
+          // for `All` kinds and merge their export surfaces in.
+          enumerate_wildcard_reexports(
+            modules, rename_per_module, dep_path, props, {},
+          )
+          if not(props.is_empty()) {
+            namespace_subs[ns_local] = props
+          }
+        }
+        None => ()
+      }
     }
     import_subs[path] = subs
+    namespace_subs_per_module[path] = namespace_subs
   }
-  // ---- Phase 3: apply both substitution maps to each module's body ----
-  // The per-module rename and the import-substitution maps are
-  // disjoint (local names vs. external alias names), so we merge
-  // them into one map and walk the AST once per module.
+  // ---- Phase 3: apply substitution maps to each module's body ----
+  // The walker takes both the flat rename map (local renames +
+  // named-import alias substitution) and the namespace-access map.
+  // Namespace patterns get rewritten BEFORE the rename lookup
+  // applies, so `ns.X` becomes `Var(resolved)` directly.
   for path in order {
     let m = match modules.get(path) {
       Some(node) => node
       None => continue
     }
+    let ns_subs = namespace_subs_per_module.get(path).unwrap_or({})
+    let ns_locals = namespace_local_renames.get(path).unwrap_or({})
     let combined_map : Map[String, String] = {}
     let renames = rename_per_module.get(path).unwrap_or({})
     for entry in renames {
@@ -146,13 +220,93 @@ fn link_module_graph(
     for entry in subs {
       combined_map[entry.0] = entry.1
     }
-    if combined_map.is_empty() {
+    // Rename in-body references to the namespace local to the
+    // synthesized binding's globally-unique form.
+    for entry in ns_locals {
+      if entry.0 != entry.1 {
+        combined_map[entry.0] = entry.1
+      }
+    }
+    if combined_map.is_empty() && ns_subs.is_empty() {
       continue
     }
-    let new_block = substitute_var_names_in_block(m.block, combined_map)
-    modules[path] = { ..m, block: new_block }
+    let new_block = substitute_var_names_in_block(m.block, combined_map, ns_subs)
+    // For each namespace import, also synthesize a real binding
+    // `const <ns_local> = { <exp_name>: <resolved_local>, ... };` so
+    // patterns the member-access rewrite can't reach — spreads
+    // (`...ns`), identifier escapes (`return ns`), computed access
+    // with runtime keys — still resolve at runtime.
+    //
+    // Synthesis is conditional: only emit the binding when the
+    // namespace local actually escapes (i.e. still appears as a
+    // `Var` after the rewrite pass). The common case is purely
+    // `ns.X` access, which the rewrite converts entirely; emitting
+    // the binding then would create a top-level reference to
+    // every export, which TDZ-breaks circular-import patterns
+    // like Zod's `./classic/iso.js` <-> `./classic/schemas.js`.
+    let escaping_namespaces : Array[String] = []
+    for entry in ns_subs {
+      let original_ns = entry.0
+      let final_ns = ns_locals.get(original_ns).unwrap_or(original_ns)
+      if block_references_var(new_block, final_ns) {
+        escaping_namespaces.push(original_ns)
+      }
+    }
+    let synthesized = synthesize_namespace_bindings_for(
+      escaping_namespaces, ns_subs, ns_locals,
+    )
+    let final_block = if synthesized.is_empty() {
+      new_block
+    } else {
+      let merged_stmts : Array[@ast.TsStmt] = []
+      let merged_positions : Array[Int] = []
+      for s in synthesized {
+        merged_stmts.push(s)
+        merged_positions.push(-1)
+      }
+      for s in new_block.stmts {
+        merged_stmts.push(s)
+      }
+      for p in new_block.stmt_positions {
+        merged_positions.push(p)
+      }
+      { stmts: merged_stmts, stmt_positions: merged_positions }
+    }
+    modules[path] = { ..m, block: final_block }
   }
   rename_per_module
+}
+
+///|
+/// Emit one `const ns_local = { exp1: resolved1, exp2: resolved2, ... };`
+/// per namespace import seen in this module. The resulting binding
+/// stands in for the namespace object at runtime, restoring spread /
+/// escape / computed-access semantics.
+fn synthesize_namespace_bindings_for(
+  escaping_namespaces : Array[String],
+  ns_subs : Map[String, Map[String, String]],
+  ns_locals : Map[String, String],
+) -> Array[@ast.TsStmt] {
+  let out : Array[@ast.TsStmt] = []
+  for ns_local in escaping_namespaces {
+    let props = match ns_subs.get(ns_local) {
+      Some(p) => p
+      None => continue
+    }
+    let binding_name = ns_locals.get(ns_local).unwrap_or(ns_local)
+    let lit_entries : Array[(String, @ast.TsExpr)] = []
+    for p in props {
+      lit_entries.push((p.0, @ast.TsExpr::Var(p.1)))
+    }
+    out.push(
+      @ast.TsStmt::Const(
+        @ast.TsBinding::Ident(binding_name),
+        @ast.TsType::Any,
+        @ast.TsExpr::ObjectLit(lit_entries),
+      ),
+    )
+  }
+  out
 }
 
 ///|
@@ -278,6 +432,77 @@ fn resolve_export_with_visited(
 }
 
 ///|
+/// Recursively enumerate every name reachable through `export * from
+/// "./b"` wildcard re-exports starting at `module_path`, populating
+/// `props` with `exported_name -> resolved_local`. `visited` guards
+/// against re-export cycles.
+fn enumerate_wildcard_reexports(
+  modules : Map[String, ModuleNode],
+  rename_per_module : Map[String, Map[String, String]],
+  module_path : String,
+  props : Map[String, String],
+  visited : Map[String, Bool],
+) -> Unit {
+  if visited.contains(module_path) {
+    return
+  }
+  visited[module_path] = true
+  let m = match modules.get(module_path) {
+    Some(node) => node
+    None => return
+  }
+  for re in m.reexport_specs {
+    if re.type_only {
+      continue
+    }
+    let dep_path = match m.resolved_imports.get(re.module_spec) {
+      Some(p) => p
+      None => continue
+    }
+    match re.kind {
+      All => {
+        let dep = match modules.get(dep_path) {
+          Some(node) => node
+          None => continue
+        }
+        for spec in dep.export_specs {
+          if not(props.contains(spec.export_name)) {
+            match
+              resolve_export(
+                modules, rename_per_module, dep_path, spec.export_name,
+              ) {
+              Some(resolved) => props[spec.export_name] = resolved
+              None => ()
+            }
+          }
+        }
+        enumerate_wildcard_reexports(
+          modules, rename_per_module, dep_path, props, visited,
+        )
+      }
+      Named(items) =>
+        // `export { X as Y, Z } from "./b"` — each `(imported,
+        // exported)` pair becomes one entry in the namespace's
+        // export surface.
+        for it in items {
+          let imported = it.0
+          let exported = it.1
+          if not(props.contains(exported)) {
+            match
+              resolve_export(
+                modules, rename_per_module, dep_path, imported,
+              ) {
+              Some(resolved) => props[exported] = resolved
+              None => ()
+            }
+          }
+        }
+      Namespace(_) => ()
+    }
+  }
+}
+
+///|
 /// If `name` is bound in `m` via one of its `import_decls` (e.g.
 /// `import { X as name } from "./a"`), return the
 /// `(dep_path, original_imported_name)` so the caller can keep
@@ -322,6 +547,27 @@ fn find_export_local(
     }
   }
   None
+}
+
+///|
+/// `ns.X` / `ns["X"]` / `ns.X(args)` patterns: if `recv` is a plain
+/// `Var(name)` and `name` is a namespace import alias, look up the
+/// property in the namespace's export surface and return the
+/// resolved local binding name to substitute in place of the whole
+/// member-access expression.
+fn resolve_namespace_member(
+  recv : @ast.TsExpr,
+  prop : String,
+  ns : Map[String, Map[String, String]],
+) -> String? {
+  match recv {
+    Var(n) =>
+      match ns.get(n) {
+        Some(props) => props.get(prop)
+        None => None
+      }
+    _ => None
+  }
 }
 
 ///|
@@ -388,10 +634,11 @@ fn collect_binding_names_into(
 fn substitute_var_names_in_block(
   block : @ast.TsBlock,
   map : Map[String, String],
+  ns : Map[String, Map[String, String]],
 ) -> @ast.TsBlock {
   let new_stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
-    new_stmts.push(substitute_var_names_in_stmt(s, map))
+    new_stmts.push(substitute_var_names_in_stmt(s, map, ns))
   }
   { stmts: new_stmts, stmt_positions: block.stmt_positions }
 }
@@ -406,131 +653,132 @@ fn substitute_var_names_in_block(
 fn substitute_var_names_in_stmt(
   stmt : @ast.TsStmt,
   map : Map[String, String],
+  ns : Map[String, Map[String, String]],
 ) -> @ast.TsStmt {
   match stmt {
     Var(b, t, e) =>
-      Var(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map))
+      Var(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map, ns))
     Let(b, t, e) =>
-      Let(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map))
+      Let(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map, ns))
     Const(b, t, e) =>
-      Const(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map))
+      Const(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map, ns))
     Assign(name, e) => {
       let new_name = map.get(name).unwrap_or(name)
-      Assign(new_name, substitute_var_names_in_expr(e, map))
+      Assign(new_name, substitute_var_names_in_expr(e, map, ns))
     }
     CompoundAssign(name, op, e) => {
       let new_name = map.get(name).unwrap_or(name)
-      CompoundAssign(new_name, op, substitute_var_names_in_expr(e, map))
+      CompoundAssign(new_name, op, substitute_var_names_in_expr(e, map, ns))
     }
     IndexAssign(t, idx, v) =>
       IndexAssign(
-        substitute_var_names_in_expr(t, map),
-        substitute_var_names_in_expr(idx, map),
-        substitute_var_names_in_expr(v, map),
+        substitute_var_names_in_expr(t, map, ns),
+        substitute_var_names_in_expr(idx, map, ns),
+        substitute_var_names_in_expr(v, map, ns),
       )
     PropAssign(t, p, v) =>
       PropAssign(
-        substitute_var_names_in_expr(t, map),
+        substitute_var_names_in_expr(t, map, ns),
         p,
-        substitute_var_names_in_expr(v, map),
+        substitute_var_names_in_expr(v, map, ns),
       )
-    Expr(e) => Expr(substitute_var_names_in_expr(e, map))
-    Return(Some(e)) => Return(Some(substitute_var_names_in_expr(e, map)))
+    Expr(e) => Expr(substitute_var_names_in_expr(e, map, ns))
+    Return(Some(e)) => Return(Some(substitute_var_names_in_expr(e, map, ns)))
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
-    Throw(e) => Throw(substitute_var_names_in_expr(e, map))
+    Throw(e) => Throw(substitute_var_names_in_expr(e, map, ns))
     If(c, t, e) =>
       If(
-        substitute_var_names_in_expr(c, map),
-        substitute_var_names_in_block(t, map),
+        substitute_var_names_in_expr(c, map, ns),
+        substitute_var_names_in_block(t, map, ns),
         match e {
-          Some(b) => Some(substitute_var_names_in_block(b, map))
+          Some(b) => Some(substitute_var_names_in_block(b, map, ns))
           None => None
         },
       )
     While(c, body) =>
       While(
-        substitute_var_names_in_expr(c, map),
-        substitute_var_names_in_block(body, map),
+        substitute_var_names_in_expr(c, map, ns),
+        substitute_var_names_in_block(body, map, ns),
       )
     DoWhile(c, body) =>
       DoWhile(
-        substitute_var_names_in_expr(c, map),
-        substitute_var_names_in_block(body, map),
+        substitute_var_names_in_expr(c, map, ns),
+        substitute_var_names_in_block(body, map, ns),
       )
     With(c, body) =>
       With(
-        substitute_var_names_in_expr(c, map),
-        substitute_var_names_in_block(body, map),
+        substitute_var_names_in_expr(c, map, ns),
+        substitute_var_names_in_block(body, map, ns),
       )
     For(init, cond, update, body) =>
       For(
         match init {
-          Some(s) => Some(substitute_var_names_in_stmt(s, map))
+          Some(s) => Some(substitute_var_names_in_stmt(s, map, ns))
           None => None
         },
         match cond {
-          Some(e) => Some(substitute_var_names_in_expr(e, map))
+          Some(e) => Some(substitute_var_names_in_expr(e, map, ns))
           None => None
         },
         match update {
-          Some(s) => Some(substitute_var_names_in_stmt(s, map))
+          Some(s) => Some(substitute_var_names_in_stmt(s, map, ns))
           None => None
         },
-        substitute_var_names_in_block(body, map),
+        substitute_var_names_in_block(body, map, ns),
       )
     ForOf(k, b, t, iter, body) =>
       ForOf(
         k,
         link_rename_binding_lhs(b, map),
         t,
-        substitute_var_names_in_expr(iter, map),
-        substitute_var_names_in_block(body, map),
+        substitute_var_names_in_expr(iter, map, ns),
+        substitute_var_names_in_block(body, map, ns),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
         k,
         link_rename_binding_lhs(b, map),
         t,
-        substitute_var_names_in_expr(iter, map),
-        substitute_var_names_in_block(body, map),
+        substitute_var_names_in_expr(iter, map, ns),
+        substitute_var_names_in_block(body, map, ns),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
         k,
         link_rename_binding_lhs(b, map),
         t,
-        substitute_var_names_in_expr(iter, map),
-        substitute_var_names_in_block(body, map),
+        substitute_var_names_in_expr(iter, map, ns),
+        substitute_var_names_in_block(body, map, ns),
       )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
         new_cases.push({
           test_expr: match c.test_expr {
-            Some(te) => Some(substitute_var_names_in_expr(te, map))
+            Some(te) => Some(substitute_var_names_in_expr(te, map, ns))
             None => None
           },
-          body: substitute_var_names_in_block(c.body, map),
+          body: substitute_var_names_in_block(c.body, map, ns),
         })
       }
-      Switch(substitute_var_names_in_expr(e, map), new_cases)
+      Switch(substitute_var_names_in_expr(e, map, ns), new_cases)
     }
     Try(b, bnd, cb, fb) =>
       Try(
-        substitute_var_names_in_block(b, map),
+        substitute_var_names_in_block(b, map, ns),
         bnd,
         match cb {
-          Some(blk) => Some(substitute_var_names_in_block(blk, map))
+          Some(blk) => Some(substitute_var_names_in_block(blk, map, ns))
           None => None
         },
         match fb {
-          Some(blk) => Some(substitute_var_names_in_block(blk, map))
+          Some(blk) => Some(substitute_var_names_in_block(blk, map, ns))
           None => None
         },
       )
     Label(name, inner) =>
-      Label(name, substitute_var_names_in_stmt(inner, map))
-    Block(b) => Block(substitute_var_names_in_block(b, map))
+      Label(name, substitute_var_names_in_stmt(inner, map, ns))
+    Block(b) => Block(substitute_var_names_in_block(b, map, ns))
     NativeClassStmt(decl, ctor_body) => {
       let new_name = map.get(decl.name).unwrap_or(decl.name)
       let new_base_names : Array[String] = []
@@ -540,14 +788,14 @@ fn substitute_var_names_in_stmt(
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for mth in decl.methods {
         let new_body = match mth.body {
-          Some(b) => Some(substitute_var_names_in_block(b, map))
+          Some(b) => Some(substitute_var_names_in_block(b, map, ns))
           None => None
         }
         new_methods.push({ ..mth, body: new_body })
       }
       let new_decorators : Array[@ast.TsExpr] = []
       for d in decl.decorators {
-        new_decorators.push(substitute_var_names_in_expr(d, map))
+        new_decorators.push(substitute_var_names_in_expr(d, map, ns))
       }
       let new_decl : @ast.TsClassDecl = {
         ..decl,
@@ -558,7 +806,7 @@ fn substitute_var_names_in_stmt(
       }
       let new_ctor = match ctor_body {
         Some(f) =>
-          Some({ ..f, body: substitute_var_names_in_block(f.body, map) })
+          Some({ ..f, body: substitute_var_names_in_block(f.body, map, ns) })
         None => None
       }
       NativeClassStmt(new_decl, new_ctor)
@@ -573,6 +821,7 @@ fn substitute_var_names_in_stmt(
 fn substitute_var_names_in_expr(
   expr : @ast.TsExpr,
   map : Map[String, String],
+  ns : Map[String, Map[String, String]],
 ) -> @ast.TsExpr {
   match expr {
     Var(n) => Var(map.get(n).unwrap_or(n))
@@ -580,7 +829,7 @@ fn substitute_var_names_in_expr(
       let new_n = map.get(n).unwrap_or(n)
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(substitute_var_names_in_expr(a, map))
+        new_args.push(substitute_var_names_in_expr(a, map, ns))
       }
       Call(new_n, new_args)
     }
@@ -588,138 +837,157 @@ fn substitute_var_names_in_expr(
       let new_n = map.get(n).unwrap_or(n)
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(substitute_var_names_in_expr(a, map))
+        new_args.push(substitute_var_names_in_expr(a, map, ns))
       }
       New(new_n, new_args)
     }
     AssignExpr(n, v) => {
       let new_n = map.get(n).unwrap_or(n)
-      AssignExpr(new_n, substitute_var_names_in_expr(v, map))
+      AssignExpr(new_n, substitute_var_names_in_expr(v, map, ns))
     }
     BinOp(op, l, r) =>
       BinOp(
         op,
-        substitute_var_names_in_expr(l, map),
-        substitute_var_names_in_expr(r, map),
+        substitute_var_names_in_expr(l, map, ns),
+        substitute_var_names_in_expr(r, map, ns),
       )
     UnaryOp(op, inner) =>
-      UnaryOp(op, substitute_var_names_in_expr(inner, map))
+      UnaryOp(op, substitute_var_names_in_expr(inner, map, ns))
     Cond(c, t, e) =>
       Cond(
-        substitute_var_names_in_expr(c, map),
-        substitute_var_names_in_expr(t, map),
-        substitute_var_names_in_expr(e, map),
+        substitute_var_names_in_expr(c, map, ns),
+        substitute_var_names_in_expr(t, map, ns),
+        substitute_var_names_in_expr(e, map, ns),
       )
     PropAccess(recv, p) =>
-      PropAccess(substitute_var_names_in_expr(recv, map), p)
+      match resolve_namespace_member(recv, p, ns) {
+        Some(resolved) => Var(resolved)
+        None => PropAccess(substitute_var_names_in_expr(recv, map, ns), p)
+      }
     IndexAccess(recv, idx) =>
-      IndexAccess(
-        substitute_var_names_in_expr(recv, map),
-        substitute_var_names_in_expr(idx, map),
-      )
+      match idx {
+        StringLit(p) =>
+          match resolve_namespace_member(recv, p, ns) {
+            Some(resolved) => Var(resolved)
+            None =>
+              IndexAccess(
+                substitute_var_names_in_expr(recv, map, ns),
+                substitute_var_names_in_expr(idx, map, ns),
+              )
+          }
+        _ =>
+          IndexAccess(
+            substitute_var_names_in_expr(recv, map, ns),
+            substitute_var_names_in_expr(idx, map, ns),
+          )
+      }
     CallExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(substitute_var_names_in_expr(a, map))
+        new_args.push(substitute_var_names_in_expr(a, map, ns))
       }
-      CallExpr(substitute_var_names_in_expr(callee, map), new_args)
+      CallExpr(substitute_var_names_in_expr(callee, map, ns), new_args)
     }
     NewExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(substitute_var_names_in_expr(a, map))
+        new_args.push(substitute_var_names_in_expr(a, map, ns))
       }
-      NewExpr(substitute_var_names_in_expr(callee, map), new_args)
+      NewExpr(substitute_var_names_in_expr(callee, map, ns), new_args)
     }
     MethodCall(recv, m, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
-        new_args.push(substitute_var_names_in_expr(a, map))
+        new_args.push(substitute_var_names_in_expr(a, map, ns))
       }
-      MethodCall(substitute_var_names_in_expr(recv, map), m, new_args)
+      match resolve_namespace_member(recv, m, ns) {
+        Some(resolved) => Call(resolved, new_args)
+        None =>
+          MethodCall(substitute_var_names_in_expr(recv, map, ns), m, new_args)
+      }
     }
     ArrayLit(items) => {
       let new_items : Array[@ast.TsExpr] = []
       for i in items {
-        new_items.push(substitute_var_names_in_expr(i, map))
+        new_items.push(substitute_var_names_in_expr(i, map, ns))
       }
       ArrayLit(new_items)
     }
     ObjectLit(entries) => {
       let new_entries : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        new_entries.push((ent.0, substitute_var_names_in_expr(ent.1, map)))
+        new_entries.push((ent.0, substitute_var_names_in_expr(ent.1, map, ns)))
       }
       ObjectLit(new_entries)
     }
-    Spread(inner) => Spread(substitute_var_names_in_expr(inner, map))
-    Await(inner) => Await(substitute_var_names_in_expr(inner, map))
-    NonNull(inner) => NonNull(substitute_var_names_in_expr(inner, map))
+    Spread(inner) => Spread(substitute_var_names_in_expr(inner, map, ns))
+    Await(inner) => Await(substitute_var_names_in_expr(inner, map, ns))
+    NonNull(inner) => NonNull(substitute_var_names_in_expr(inner, map, ns))
     OptionalChain(inner) =>
-      OptionalChain(substitute_var_names_in_expr(inner, map))
-    PureCall(inner) => PureCall(substitute_var_names_in_expr(inner, map))
-    Yield(Some(inner)) => Yield(Some(substitute_var_names_in_expr(inner, map)))
-    YieldStar(inner) => YieldStar(substitute_var_names_in_expr(inner, map))
+      OptionalChain(substitute_var_names_in_expr(inner, map, ns))
+    PureCall(inner) => PureCall(substitute_var_names_in_expr(inner, map, ns))
+    Yield(Some(inner)) => Yield(Some(substitute_var_names_in_expr(inner, map, ns)))
+    YieldStar(inner) => YieldStar(substitute_var_names_in_expr(inner, map, ns))
     Seq(a, b) =>
       Seq(
-        substitute_var_names_in_expr(a, map),
-        substitute_var_names_in_expr(b, map),
+        substitute_var_names_in_expr(a, map, ns),
+        substitute_var_names_in_expr(b, map, ns),
       )
     CompoundAssignExpr(t, op, v) =>
       CompoundAssignExpr(
-        substitute_var_names_in_expr(t, map),
+        substitute_var_names_in_expr(t, map, ns),
         op,
-        substitute_var_names_in_expr(v, map),
+        substitute_var_names_in_expr(v, map, ns),
       )
     AssignPattern(b, v) =>
       AssignPattern(
         link_rename_binding_lhs(b, map),
-        substitute_var_names_in_expr(v, map),
+        substitute_var_names_in_expr(v, map, ns),
       )
     PropAssignExpr(recv, p, v) =>
       PropAssignExpr(
-        substitute_var_names_in_expr(recv, map),
+        substitute_var_names_in_expr(recv, map, ns),
         p,
-        substitute_var_names_in_expr(v, map),
+        substitute_var_names_in_expr(v, map, ns),
       )
     IndexAssignExpr(recv, idx, v) =>
       IndexAssignExpr(
-        substitute_var_names_in_expr(recv, map),
-        substitute_var_names_in_expr(idx, map),
-        substitute_var_names_in_expr(v, map),
+        substitute_var_names_in_expr(recv, map, ns),
+        substitute_var_names_in_expr(idx, map, ns),
+        substitute_var_names_in_expr(v, map, ns),
       )
     ComputedProp(k, v) =>
       ComputedProp(
-        substitute_var_names_in_expr(k, map),
-        substitute_var_names_in_expr(v, map),
+        substitute_var_names_in_expr(k, map, ns),
+        substitute_var_names_in_expr(v, map, ns),
       )
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) =>
-          @ast.TsArrowBody::ArrowExpr(substitute_var_names_in_expr(e, map))
+          @ast.TsArrowBody::ArrowExpr(substitute_var_names_in_expr(e, map, ns))
         ArrowBlock(b) =>
-          @ast.TsArrowBody::ArrowBlock(substitute_var_names_in_block(b, map))
+          @ast.TsArrowBody::ArrowBlock(substitute_var_names_in_block(b, map, ns))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
-      let new_body = substitute_var_names_in_block(f.body, map)
+      let new_body = substitute_var_names_in_block(f.body, map, ns)
       FuncExpr({ ..f, body: new_body })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
-        Some(o) => Some(substitute_var_names_in_expr(o, map))
+        Some(o) => Some(substitute_var_names_in_expr(o, map, ns))
         None => None
       }
-      DynamicImport(substitute_var_names_in_expr(spec, map), opts_f)
+      DynamicImport(substitute_var_names_in_expr(spec, map, ns), opts_f)
     }
     TaggedTemplate(tag, raw, cooked, exprs) => {
       let new_exprs : Array[@ast.TsExpr] = []
       for e in exprs {
-        new_exprs.push(substitute_var_names_in_expr(e, map))
+        new_exprs.push(substitute_var_names_in_expr(e, map, ns))
       }
       TaggedTemplate(
-        substitute_var_names_in_expr(tag, map),
+        substitute_var_names_in_expr(tag, map, ns),
         raw,
         cooked,
         new_exprs,
@@ -728,13 +996,13 @@ fn substitute_var_names_in_expr(
     TemplateLiteral(parts, exprs) => {
       let new_exprs : Array[@ast.TsExpr] = []
       for e in exprs {
-        new_exprs.push(substitute_var_names_in_expr(e, map))
+        new_exprs.push(substitute_var_names_in_expr(e, map, ns))
       }
       TemplateLiteral(parts, new_exprs)
     }
-    As(inner, ty) => As(substitute_var_names_in_expr(inner, map), ty)
+    As(inner, ty) => As(substitute_var_names_in_expr(inner, map, ns), ty)
     Satisfies(inner, ty) =>
-      Satisfies(substitute_var_names_in_expr(inner, map), ty)
+      Satisfies(substitute_var_names_in_expr(inner, map, ns), ty)
     NativeClassExpr(decl, ctor_body) => {
       let new_name = map.get(decl.name).unwrap_or(decl.name)
       let new_base_names : Array[String] = []
@@ -744,14 +1012,14 @@ fn substitute_var_names_in_expr(
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for mth in decl.methods {
         let new_body = match mth.body {
-          Some(b) => Some(substitute_var_names_in_block(b, map))
+          Some(b) => Some(substitute_var_names_in_block(b, map, ns))
           None => None
         }
         new_methods.push({ ..mth, body: new_body })
       }
       let new_decorators : Array[@ast.TsExpr] = []
       for d in decl.decorators {
-        new_decorators.push(substitute_var_names_in_expr(d, map))
+        new_decorators.push(substitute_var_names_in_expr(d, map, ns))
       }
       let new_decl : @ast.TsClassDecl = {
         ..decl,
@@ -762,7 +1030,7 @@ fn substitute_var_names_in_expr(
       }
       let new_ctor = match ctor_body {
         Some(f) =>
-          Some({ ..f, body: substitute_var_names_in_block(f.body, map) })
+          Some({ ..f, body: substitute_var_names_in_block(f.body, map, ns) })
         None => None
       }
       NativeClassExpr(new_decl, new_ctor)
@@ -812,4 +1080,16 @@ fn link_rename_binding_lhs(
     }
     Target(_) => binding
   }
+}
+
+///|
+///|
+/// True when `block` contains a `Var(name)` reference anywhere in any
+/// expression position. Used by the namespace synthesis pass to skip
+/// emitting a binding when the namespace alias is fully consumed by
+/// member-access rewrites (i.e. doesn't escape).
+fn block_references_var(block : @ast.TsBlock, name : String) -> Bool {
+  let refs : Map[String, Bool] = {}
+  collect_var_refs_in_block(block, refs)
+  refs.contains(name)
 }
