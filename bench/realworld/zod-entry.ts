@@ -1,9 +1,16 @@
 import { z } from "zod";
 
-const Schema = z.object({
-  name: z.string(),
-  age: z.number().int().positive(),
+const schema = z.object({
+  name: z.string().min(1),
+  age: z.number().int().nonnegative(),
+  tags: z.array(z.string()).default([]),
 });
 
-const parsed = Schema.safeParse({ name: "Alice", age: 30 });
-console.log("zod parse ok:", parsed.success, parsed.success ? parsed.data : null);
+const ok = schema.safeParse({ name: "ada", age: 36, tags: ["math"] });
+const ng = schema.safeParse({ name: "", age: -1 });
+
+if (ok.success && !ng.success) {
+  console.log("zod ok:", ok.data.name, ok.data.age, ok.data.tags.length);
+} else {
+  console.log("zod fail");
+}

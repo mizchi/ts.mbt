@@ -1283,6 +1283,45 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             e.space()
             emit_expr(e, v_expr, 2)
           }
+          (key, FuncExpr(f)) if key.has_prefix("@@get:") || key.has_prefix("@@set:") => {
+            // Accessor in object literal: parser tags `get foo() {}`
+            // / `set foo(v) {}` with a `@@get:` / `@@set:` sentinel
+            // on the property key. Emit the native ES syntax so the
+            // accessor actually installs as a getter/setter rather
+            // than as a plain string-keyed property.
+            let accessor = if key.has_prefix("@@get:") { "get" } else { "set" }
+            let real_name = key.substring(start=6, end=key.length()).to_string()
+            e.write(accessor)
+            e.write(" ")
+            emit_object_key(e, real_name)
+            e.write("(")
+            emit_runtime_params(e, f.params)
+            e.write(")")
+            e.space()
+            emit_block(e, f.body)
+          }
+          (key, FuncExpr(f)) if f.name == key && key != "" => {
+            // Method shorthand: `key(args) {...}`. The parser stores
+            // method shorthand as `(key, FuncExpr {name: key, ...})`.
+            // Re-emitting as the shorthand avoids introducing a
+            // named-function-expression self-binding that would
+            // shadow rewritten names (e.g. when `core.clone` is
+            // rewritten to `clone` and the method itself is named
+            // `clone` — the inner reference would loop forever
+            // otherwise).
+            if f.is_async {
+              e.write("async ")
+            }
+            if f.is_generator {
+              e.write("*")
+            }
+            emit_object_key(e, key)
+            e.write("(")
+            emit_runtime_params(e, f.params)
+            e.write(")")
+            e.space()
+            emit_block(e, f.body)
+          }
           _ => {
             // Non-identifier keys (`"Content-Type"`, `"foo bar"`,
             // numeric-looking, etc.) MUST stay quoted — otherwise
@@ -1483,17 +1522,26 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           e.write("]")
         }
         MethodCall(recv, method, args) => {
+          // `recv.method?.(args)` — the `?.` is on the CALL, not on
+          // the property access. The parser produces
+          // `OptionalChain(MethodCall(...))` only from this source
+          // shape, so emit the property access without `?.` and put
+          // the `?.` between the property and the call args.
           emit_expr(e, recv, 18)
-          e.write("?.")
+          e.write(".")
           e.write(strip_internal_prop_marker(method))
+          e.write("?.")
           emit_args(e, args)
         }
         Call(name, args) => {
+          // `name?.(args)` — optional call on a plain identifier.
           e.write(name)
           e.write("?.")
           emit_args(e, args)
         }
         CallExpr(callee, args) => {
+          // `(callee)?.(args)` — optional call on an arbitrary
+          // expression. `?.` sits between callee and args.
           emit_expr(e, callee, 18)
           e.write("?.")
           emit_args(e, args)

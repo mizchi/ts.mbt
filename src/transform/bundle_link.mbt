@@ -100,6 +100,33 @@ fn link_module_graph(
         None => ()
       }
     }
+    // `export * as ns from "./X"` re-exports a namespace object. The
+    // exporting module needs a real top-level `const ns = {...}`
+    // binding so a downstream `import { ns }` (named-binding form)
+    // can resolve to a value. Reserve the name here just like the
+    // direct namespace-import case so phase-3 synthesis has a
+    // collision-free local to bind to.
+    for re in m.reexport_specs {
+      if re.type_only {
+        continue
+      }
+      match re.kind {
+        @ast.TsReExportKind::Namespace(ns_local) =>
+          if not(ns_locals.contains(ns_local)) {
+            let final_name = if not(taken.contains(ns_local)) {
+              taken[ns_local] = true
+              ns_local
+            } else {
+              let renamed = mint_unique_name(ns_local, taken, suffix_counter)
+              suffix_counter = suffix_counter + 1
+              taken[renamed] = true
+              renamed
+            }
+            ns_locals[ns_local] = final_name
+          }
+        _ => ()
+      }
+    }
     namespace_local_renames[path] = ns_locals
     rename_per_module[path] = module_renames
   }
@@ -139,7 +166,7 @@ fn link_module_graph(
       // Default import: `import X from "./a"` → A's "default" export.
       match imp.default_binding {
         Some(local_alias) =>
-          match resolve_export(modules, rename_per_module, dep_path, "default") {
+          match resolve_export(modules, rename_per_module, namespace_local_renames, dep_path, "default") {
             Some(resolved) =>
               if resolved != local_alias {
                 subs[local_alias] = resolved
@@ -152,7 +179,7 @@ fn link_module_graph(
       for nb in imp.named_bindings {
         let imported_name = nb.0
         let local_alias = nb.1
-        match resolve_export(modules, rename_per_module, dep_path, imported_name) {
+        match resolve_export(modules, rename_per_module, namespace_local_renames, dep_path, imported_name) {
           Some(resolved) =>
             if resolved != local_alias {
               subs[local_alias] = resolved
@@ -175,7 +202,7 @@ fn link_module_graph(
           for spec in dep.export_specs {
             match
               resolve_export(
-                modules, rename_per_module, dep_path, spec.export_name,
+                modules, rename_per_module, namespace_local_renames, dep_path, spec.export_name,
               ) {
               Some(resolved) => props[spec.export_name] = resolved
               None => ()
@@ -187,7 +214,7 @@ fn link_module_graph(
           // the wildcard re-export. Walk the dep's `reexport_specs`
           // for `All` kinds and merge their export surfaces in.
           enumerate_wildcard_reexports(
-            modules, rename_per_module, dep_path, props, {},
+            modules, rename_per_module, namespace_local_renames, dep_path, props, {},
           )
           if not(props.is_empty()) {
             namespace_subs[ns_local] = props
@@ -195,6 +222,46 @@ fn link_module_graph(
         }
         None => ()
       }
+    }
+    // `export * as ns from "./X"` mirrors the `import * as ns` path:
+    // every named export of `X` (plus its wildcard re-exports) flows
+    // into a synthesized namespace object that this module exports
+    // as `ns`. Populate `namespace_subs` so the phase-3 synthesizer
+    // emits `const ns = {...}` and downstream `import { ns }` can
+    // resolve via the regular named-export path.
+    for re in m.reexport_specs {
+      if re.type_only {
+        continue
+      }
+      let ns_local = match re.kind {
+        @ast.TsReExportKind::Namespace(n) => n
+        _ => continue
+      }
+      let dep_path = match m.resolved_imports.get(re.module_spec) {
+        Some(p) => p
+        None => continue
+      }
+      let dep = match modules.get(dep_path) {
+        Some(node) => node
+        None => continue
+      }
+      let props : Map[String, String] = {}
+      for spec in dep.export_specs {
+        match
+          resolve_export(
+            modules, rename_per_module, namespace_local_renames, dep_path, spec.export_name,
+          ) {
+          Some(resolved) => props[spec.export_name] = resolved
+          None => ()
+        }
+      }
+      enumerate_wildcard_reexports(
+        modules, rename_per_module, namespace_local_renames, dep_path, props, {},
+      )
+      // Always record even when empty — keeps phase-3 synthesizer
+      // in sync with the export-resolution path that treats the name
+      // as "exists in this module".
+      namespace_subs[ns_local] = props
     }
     import_subs[path] = subs
     namespace_subs_per_module[path] = namespace_subs
@@ -230,7 +297,42 @@ fn link_module_graph(
     if combined_map.is_empty() && ns_subs.is_empty() {
       continue
     }
-    let new_block = substitute_var_names_in_block(m.block, combined_map, ns_subs)
+    // Detect `ns.X -> resolved` substitutions whose target `resolved`
+    // collides with a name declared LOCALLY in this module (anywhere
+    // — including nested function bodies). The classic case is
+    // `const isObject = util.isObject;` inside a function: naive
+    // rewriting produces `const isObject = isObject;` which dies
+    // with a TDZ ReferenceError. For each such namespace, drop the
+    // colliding `(name -> resolved)` entries from the substitution
+    // map (so `ns.name` stays un-rewritten) and force the namespace
+    // into the escape list further down — the synthesized
+    // `const ns = { ... }` binding then resolves the access at
+    // runtime.
+    let local_decl_names : Map[String, Bool] = {}
+    collect_local_decl_names_in_block(m.block, local_decl_names)
+    let forced_escape : Map[String, Bool] = {}
+    let filtered_ns_subs : Map[String, Map[String, String]] = {}
+    for entry in ns_subs {
+      let original_ns = entry.0
+      let final_ns = ns_locals.get(original_ns).unwrap_or(original_ns)
+      let props = entry.1
+      let kept : Map[String, String] = {}
+      let mut had_collision = false
+      for p in props {
+        let exp_name = p.0
+        let resolved = p.1
+        if local_decl_names.contains(resolved) && resolved != final_ns {
+          had_collision = true
+        } else {
+          kept[exp_name] = resolved
+        }
+      }
+      if had_collision {
+        forced_escape[original_ns] = true
+      }
+      filtered_ns_subs[original_ns] = kept
+    }
+    let new_block = substitute_var_names_in_block(m.block, combined_map, filtered_ns_subs)
     // For each namespace import, also synthesize a real binding
     // `const <ns_local> = { <exp_name>: <resolved_local>, ... };` so
     // patterns the member-access rewrite can't reach — spreads
@@ -245,10 +347,27 @@ fn link_module_graph(
     // every export, which TDZ-breaks circular-import patterns
     // like Zod's `./classic/iso.js` <-> `./classic/schemas.js`.
     let escaping_namespaces : Array[String] = []
+    // `export * as ns from "./X"` re-exports always need the
+    // synthesized object: downstream modules import `ns` by name and
+    // expect a runtime binding to exist. Collect them up-front so
+    // they bypass the in-module escape check.
+    let reexport_namespaces : Map[String, Bool] = {}
+    for re in m.reexport_specs {
+      if re.type_only {
+        continue
+      }
+      match re.kind {
+        @ast.TsReExportKind::Namespace(ns_name) =>
+          reexport_namespaces[ns_name] = true
+        _ => ()
+      }
+    }
     for entry in ns_subs {
       let original_ns = entry.0
       let final_ns = ns_locals.get(original_ns).unwrap_or(original_ns)
-      if block_references_var(new_block, final_ns) {
+      if reexport_namespaces.contains(original_ns) ||
+        forced_escape.contains(original_ns) ||
+        block_references_var(new_block, final_ns) {
         escaping_namespaces.push(original_ns)
       }
     }
@@ -338,6 +457,7 @@ fn mint_unique_name(
 fn resolve_export(
   modules : Map[String, ModuleNode],
   rename_per_module : Map[String, Map[String, String]],
+  namespace_local_renames : Map[String, Map[String, String]],
   module_path : String,
   export_name : String,
 ) -> String? {
@@ -345,6 +465,7 @@ fn resolve_export(
   resolve_export_with_visited(
     modules,
     rename_per_module,
+    namespace_local_renames,
     module_path,
     export_name,
     visited,
@@ -355,6 +476,7 @@ fn resolve_export(
 fn resolve_export_with_visited(
   modules : Map[String, ModuleNode],
   rename_per_module : Map[String, Map[String, String]],
+  namespace_local_renames : Map[String, Map[String, String]],
   module_path : String,
   export_name : String,
   visited : Map[String, Bool],
@@ -380,7 +502,7 @@ fn resolve_export_with_visited(
       match find_import_source(m, local) {
         Some(srcref) =>
           return resolve_export_with_visited(
-            modules, rename_per_module, srcref.0, srcref.1, visited,
+            modules, rename_per_module, namespace_local_renames, srcref.0, srcref.1, visited,
           )
         None => {
           let renames = rename_per_module.get(module_path).unwrap_or({})
@@ -406,7 +528,7 @@ fn resolve_export_with_visited(
         for it in items {
           if it.1 == export_name {
             return resolve_export_with_visited(
-              modules, rename_per_module, dep_path, it.0, visited,
+              modules, rename_per_module, namespace_local_renames, dep_path, it.0, visited,
             )
           }
         }
@@ -416,16 +538,21 @@ fn resolve_export_with_visited(
         // Try resolving `export_name` from the dependency.
         match
           resolve_export_with_visited(
-            modules, rename_per_module, dep_path, export_name, visited,
+            modules, rename_per_module, namespace_local_renames, dep_path, export_name, visited,
           ) {
           Some(r) => return Some(r)
           None => ()
         }
-      Namespace(_) =>
-        // `export * as ns from "./a"` exports a namespace object.
-        // Out of scope for this linker — the consumer would need to
-        // see a synthesized object literal.
-        ()
+      Namespace(ns_name) =>
+        // `export * as ns from "./a"` exports a namespace object
+        // named `ns`. A downstream `import { ns }` resolves to the
+        // synthesized `const ns = {...}` binding that phase 3 emits.
+        // The reserved local name lives in `namespace_local_renames`
+        // (collision-disambiguated in phase 1).
+        if ns_name == export_name {
+          let ns_locals = namespace_local_renames.get(module_path).unwrap_or({})
+          return Some(ns_locals.get(ns_name).unwrap_or(ns_name))
+        }
     }
   }
   None
@@ -439,6 +566,7 @@ fn resolve_export_with_visited(
 fn enumerate_wildcard_reexports(
   modules : Map[String, ModuleNode],
   rename_per_module : Map[String, Map[String, String]],
+  namespace_local_renames : Map[String, Map[String, String]],
   module_path : String,
   props : Map[String, String],
   visited : Map[String, Bool],
@@ -469,7 +597,7 @@ fn enumerate_wildcard_reexports(
           if not(props.contains(spec.export_name)) {
             match
               resolve_export(
-                modules, rename_per_module, dep_path, spec.export_name,
+                modules, rename_per_module, namespace_local_renames, dep_path, spec.export_name,
               ) {
               Some(resolved) => props[spec.export_name] = resolved
               None => ()
@@ -477,7 +605,7 @@ fn enumerate_wildcard_reexports(
           }
         }
         enumerate_wildcard_reexports(
-          modules, rename_per_module, dep_path, props, visited,
+          modules, rename_per_module, namespace_local_renames, dep_path, props, visited,
         )
       }
       Named(items) =>
@@ -490,14 +618,24 @@ fn enumerate_wildcard_reexports(
           if not(props.contains(exported)) {
             match
               resolve_export(
-                modules, rename_per_module, dep_path, imported,
+                modules, rename_per_module, namespace_local_renames, dep_path, imported,
               ) {
               Some(resolved) => props[exported] = resolved
               None => ()
             }
           }
         }
-      Namespace(_) => ()
+      Namespace(ns_name) =>
+        // `export * as ns from "./X"` inside a wildcard chain
+        // contributes `ns` as a key. Its value is the synthesized
+        // namespace-object binding in the source module.
+        if not(props.contains(ns_name)) {
+          let dep_ns = namespace_local_renames.get(dep_path).unwrap_or({})
+          match dep_ns.get(ns_name) {
+            Some(local) => props[ns_name] = local
+            None => ()
+          }
+        }
     }
   }
 }
@@ -1093,3 +1231,264 @@ fn block_references_var(block : @ast.TsBlock, name : String) -> Bool {
   collect_var_refs_in_block(block, refs)
   refs.contains(name)
 }
+
+///|
+/// Recursively gather every name introduced by a binding declaration
+/// (`let` / `const` / `var` / `function` / `class`) anywhere in the
+/// block tree — including nested function bodies, class methods, and
+/// control-flow bodies. Used by the namespace rewriter to detect
+/// `ns.X -> resolved` substitutions whose target collides with a
+/// locally-bound name (e.g. zod's `const isObject = util.isObject;`).
+fn collect_local_decl_names_in_block(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
+  for s in block.stmts {
+    collect_local_decl_names_in_stmt(s, out)
+  }
+}
+
+///|
+fn collect_local_decl_names_in_stmt(
+  stmt : @ast.TsStmt,
+  out : Map[String, Bool],
+) -> Unit {
+  match stmt {
+    Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
+      let names : Array[String] = []
+      collect_binding_names_into(b, names)
+      for n in names {
+        out[n] = true
+      }
+      collect_local_decl_names_in_expr(init, out)
+    }
+    Expr(e) | Throw(e) => collect_local_decl_names_in_expr(e, out)
+    Return(opt) =>
+      match opt {
+        Some(e) => collect_local_decl_names_in_expr(e, out)
+        None => ()
+      }
+    If(c, t, els) => {
+      collect_local_decl_names_in_expr(c, out)
+      collect_local_decl_names_in_block(t, out)
+      match els {
+        Some(b) => collect_local_decl_names_in_block(b, out)
+        None => ()
+      }
+    }
+    While(c, b) | DoWhile(c, b) => {
+      collect_local_decl_names_in_expr(c, out)
+      collect_local_decl_names_in_block(b, out)
+    }
+    For(init, cond, update, body) => {
+      match init {
+        Some(s) => collect_local_decl_names_in_stmt(s, out)
+        None => ()
+      }
+      match cond {
+        Some(c) => collect_local_decl_names_in_expr(c, out)
+        None => ()
+      }
+      match update {
+        Some(u) => collect_local_decl_names_in_stmt(u, out)
+        None => ()
+      }
+      collect_local_decl_names_in_block(body, out)
+    }
+    ForOf(_, binding, _, iter, body)
+    | ForAwaitOf(_, binding, _, iter, body)
+    | ForIn(_, binding, _, iter, body) => {
+      let names : Array[String] = []
+      collect_binding_names_into(binding, names)
+      for n in names {
+        out[n] = true
+      }
+      collect_local_decl_names_in_expr(iter, out)
+      collect_local_decl_names_in_block(body, out)
+    }
+    Try(t, catch_param, catch_body, finally_) => {
+      collect_local_decl_names_in_block(t, out)
+      match catch_param {
+        Some(b) => {
+          let names : Array[String] = []
+          collect_binding_names_into(b, names)
+          for n in names {
+            out[n] = true
+          }
+        }
+        None => ()
+      }
+      match catch_body {
+        Some(b) => collect_local_decl_names_in_block(b, out)
+        None => ()
+      }
+      match finally_ {
+        Some(b) => collect_local_decl_names_in_block(b, out)
+        None => ()
+      }
+    }
+    Switch(scr, cases) => {
+      collect_local_decl_names_in_expr(scr, out)
+      for c in cases {
+        collect_local_decl_names_in_block(c.body, out)
+      }
+    }
+    With(target, body) => {
+      collect_local_decl_names_in_expr(target, out)
+      collect_local_decl_names_in_block(body, out)
+    }
+    Block(b) => collect_local_decl_names_in_block(b, out)
+    Label(_, inner) => collect_local_decl_names_in_stmt(inner, out)
+    Assign(_, v) | CompoundAssign(_, _, v) =>
+      collect_local_decl_names_in_expr(v, out)
+    IndexAssign(recv, idx, v) => {
+      collect_local_decl_names_in_expr(recv, out)
+      collect_local_decl_names_in_expr(idx, out)
+      collect_local_decl_names_in_expr(v, out)
+    }
+    PropAssign(recv, _, v) => {
+      collect_local_decl_names_in_expr(recv, out)
+      collect_local_decl_names_in_expr(v, out)
+    }
+    NativeClassStmt(decl, ctor_body) => {
+      if decl.name != "" {
+        out[decl.name] = true
+      }
+      for mth in decl.methods {
+        match mth.body {
+          Some(b) => collect_local_decl_names_in_block(b, out)
+          None => ()
+        }
+      }
+      match ctor_body {
+        Some(f) => collect_local_decl_names_in_block(f.body, out)
+        None => ()
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
+fn collect_local_decl_names_in_expr(
+  expr : @ast.TsExpr,
+  out : Map[String, Bool],
+) -> Unit {
+  match expr {
+    FuncExpr(f) => {
+      if f.name != "" {
+        out[f.name] = true
+      }
+      collect_local_decl_names_in_block(f.body, out)
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(e) => collect_local_decl_names_in_expr(e, out)
+        ArrowBlock(b) => collect_local_decl_names_in_block(b, out)
+      }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_local_decl_names_in_expr(a, out)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_local_decl_names_in_expr(callee, out)
+      for a in args {
+        collect_local_decl_names_in_expr(a, out)
+      }
+    }
+    MethodCall(recv, _, args) => {
+      collect_local_decl_names_in_expr(recv, out)
+      for a in args {
+        collect_local_decl_names_in_expr(a, out)
+      }
+    }
+    PropAccess(recv, _) => collect_local_decl_names_in_expr(recv, out)
+    IndexAccess(recv, idx) => {
+      collect_local_decl_names_in_expr(recv, out)
+      collect_local_decl_names_in_expr(idx, out)
+    }
+    AssignExpr(_, v)
+    | Await(v)
+    | NonNull(v)
+    | OptionalChain(v)
+    | PureCall(v)
+    | YieldStar(v)
+    | Spread(v)
+    | UnaryOp(_, v) => collect_local_decl_names_in_expr(v, out)
+    As(v, _) | Satisfies(v, _) => collect_local_decl_names_in_expr(v, out)
+    Yield(opt) =>
+      match opt {
+        Some(v) => collect_local_decl_names_in_expr(v, out)
+        None => ()
+      }
+    BinOp(_, l, r) | Seq(l, r) => {
+      collect_local_decl_names_in_expr(l, out)
+      collect_local_decl_names_in_expr(r, out)
+    }
+    Cond(c, t, els) => {
+      collect_local_decl_names_in_expr(c, out)
+      collect_local_decl_names_in_expr(t, out)
+      collect_local_decl_names_in_expr(els, out)
+    }
+    CompoundAssignExpr(target, _, v) => {
+      collect_local_decl_names_in_expr(target, out)
+      collect_local_decl_names_in_expr(v, out)
+    }
+    AssignPattern(_, v) => collect_local_decl_names_in_expr(v, out)
+    PropAssignExpr(recv, _, v) => {
+      collect_local_decl_names_in_expr(recv, out)
+      collect_local_decl_names_in_expr(v, out)
+    }
+    IndexAssignExpr(recv, idx, v) => {
+      collect_local_decl_names_in_expr(recv, out)
+      collect_local_decl_names_in_expr(idx, out)
+      collect_local_decl_names_in_expr(v, out)
+    }
+    ComputedProp(k, v) => {
+      collect_local_decl_names_in_expr(k, out)
+      collect_local_decl_names_in_expr(v, out)
+    }
+    ArrayLit(items) =>
+      for i in items {
+        collect_local_decl_names_in_expr(i, out)
+      }
+    ObjectLit(entries) =>
+      for e in entries {
+        collect_local_decl_names_in_expr(e.1, out)
+      }
+    TaggedTemplate(tag, _, _, exprs) => {
+      collect_local_decl_names_in_expr(tag, out)
+      for e in exprs {
+        collect_local_decl_names_in_expr(e, out)
+      }
+    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_local_decl_names_in_expr(e, out)
+      }
+    DynamicImport(spec, opts) => {
+      collect_local_decl_names_in_expr(spec, out)
+      match opts {
+        Some(o) => collect_local_decl_names_in_expr(o, out)
+        None => ()
+      }
+    }
+    NativeClassExpr(decl, ctor_body) => {
+      if decl.name != "" {
+        out[decl.name] = true
+      }
+      for mth in decl.methods {
+        match mth.body {
+          Some(b) => collect_local_decl_names_in_block(b, out)
+          None => ()
+        }
+      }
+      match ctor_body {
+        Some(f) => collect_local_decl_names_in_block(f.body, out)
+        None => ()
+      }
+    }
+    _ => ()
+  }
+}
+
