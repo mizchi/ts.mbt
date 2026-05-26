@@ -485,7 +485,7 @@ pub fn bundle_modules(
       // safe to rename. This is what upgrades `--mangle-properties`
       // from "heuristic best-effort" to "type-checked safe": you
       // never get a silently-broken bundle.
-      let mut effective_mangle_props = opts.mangle_properties
+      let effective_mangle_props = opts.mangle_properties
       let extra_reserved : Array[String] = []
       // Caller-supplied type-declared property names (interfaces /
       // type aliases / classes). These are always part of the
@@ -506,9 +506,23 @@ pub fn bundle_modules(
           }
         }
         if wildcard {
-          // Bail out on property mangling — we can't prove
-          // safety. Identifier mangling still runs.
-          effective_mangle_props = false
+          // User-declared property names can't be safely renamed
+          // (dynamic `obj[runtime_key]` access reaches arbitrary
+          // names). But mtsc-synthesized internal markers — the
+          // `__private_brand__N__X` rewrite the parser uses for
+          // `#X` private fields — are unreachable from user code
+          // by definition. Switch to "mangle internals only":
+          // every property name COLLECTED from the bundle goes
+          // into the reserved set except those matching the
+          // internal-marker prefix. The mangle pass then renames
+          // just the markers.
+          let collected : Map[String, Bool] = {}
+          collect_property_names(combined, collected)
+          for n in collected.keys() {
+            if not(is_internal_marker_property(n)) {
+              extra_reserved.push(n)
+            }
+          }
         }
       }
       // Dead-property elimination runs before mangling so the
@@ -1085,4 +1099,15 @@ fn compose_renames(
     }
   }
   out
+}
+
+///|
+/// True when `name` is one of mtsc's internal property markers that
+/// user code can never reach (they're synthesized by the parser).
+/// Used by the wildcard-mangle-property fallback: even when a
+/// `obj[runtime_key]` access disables property mangling for safety,
+/// these still mangle because their access surface is entirely
+/// mtsc-controlled.
+fn is_internal_marker_property(name : String) -> Bool {
+  name.has_prefix("__private_brand__")
 }
