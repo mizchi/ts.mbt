@@ -4975,6 +4975,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     type_params: [],
     base_names: [],
     base_expr: None,
+    static_field_inits: [],
     constructor_params: None,
     properties: [],
     methods: [],

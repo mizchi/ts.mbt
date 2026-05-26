@@ -280,6 +280,22 @@ fn collect_var_refs_in_class_decl(
   for base in decl.base_names {
     out[base] = true
   }
+  // `base_expr` carries the expression form of `extends …` heritage
+  // (`extends declare(args)` / `extends Context.Reference()(…)`).
+  // Without walking it the references it pulls in get dropped as
+  // unused.
+  match decl.base_expr {
+    Some(e) => collect_var_refs_in_expr(e, out)
+    None => ()
+  }
+  // Static field initializers (`static foo = init;`) live on the
+  // class decl directly when the class is in native form. Without
+  // walking them, references that only appear in `static` slots
+  // (effect Schema's `static make = …` / drizzle's
+  // `PgTable.Symbol = { …, EnableRLS }`) get dropped.
+  for entry in decl.static_field_inits {
+    collect_var_refs_in_expr(entry.1, out)
+  }
   for dec in decl.decorators {
     collect_var_refs_in_expr(dec, out)
   }

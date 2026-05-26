@@ -1567,10 +1567,20 @@ fn rename_class_decl_idents(
   for d in decl.decorators {
     new_decorators.push(rename_expr(d, scope))
   }
+  let new_base_expr = match decl.base_expr {
+    Some(e) => Some(rename_expr(e, scope))
+    None => None
+  }
+  let new_static_inits : Array[(String, @ast.TsExpr)] = []
+  for entry in decl.static_field_inits {
+    new_static_inits.push((entry.0, rename_expr(entry.1, scope)))
+  }
   {
     ..decl,
     name: new_name,
     base_names: new_base_names,
+    base_expr: new_base_expr,
+    static_field_inits: new_static_inits,
     methods: new_methods,
     decorators: new_decorators,
   }

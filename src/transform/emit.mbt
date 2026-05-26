@@ -552,8 +552,20 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         } else {
           emit_expr(e, recv, 18)
         }
-        e.write(".")
-        e.write(strip_internal_prop_marker(prop))
+        let stripped = strip_internal_prop_marker(prop)
+        // Non-ident property names (`"~standard"` / `"a-b"` /
+        // `"0"`) require computed-index form — `recv.~standard =
+        // …` is a hard parse error. Reserved words (`return` /
+        // `for` / …) ARE valid in member-access position post-ES5,
+        // so they keep the dotted form.
+        if is_valid_js_ident(stripped) {
+          e.write(".")
+          e.write(stripped)
+        } else {
+          e.write("[")
+          emit_string_literal(e, stripped)
+          e.write("]")
+        }
         e.space()
         e.write("=")
         e.space()
@@ -1453,8 +1465,15 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     }
     PropAccess(recv, name) => {
       emit_expr(e, recv, 18)
-      e.write(".")
-      e.write(strip_internal_prop_marker(name))
+      let stripped = strip_internal_prop_marker(name)
+      if is_valid_js_ident(stripped) {
+        e.write(".")
+        e.write(stripped)
+      } else {
+        e.write("[")
+        emit_string_literal(e, stripped)
+        e.write("]")
+      }
     }
     New(name, args) => {
       e.write("new ")
@@ -1868,7 +1887,18 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   // When the parser captured a method-shorthand key as the
   // function's name and that key is a reserved word, drop the
   // name to keep the emit anonymous.
-  if f.name != "" && is_valid_js_ident(f.name) && not(is_reserved_word(f.name)) {
+  //
+  // Also drop the name when the body references the same name as
+  // a free variable. The named-function-expression binding shadows
+  // the outer reference: `X.toJSON = function toJSON() {
+  //   return toJSON(this.x);
+  // }` recurses forever — the inner `toJSON` resolves to itself,
+  // never to the module-level `toJSON` the source intended. This
+  // surfaces on every IIFE-lowered class method whose name
+  // collides with an imported function (effect's `EffectPrimitive
+  // .toJSON` is the textbook case).
+  if f.name != "" && is_valid_js_ident(f.name) && not(is_reserved_word(f.name)) &&
+    not(func_body_references_name_as_free_var(f, f.name)) {
     e.write(" ")
     e.write(f.name)
   }
@@ -1877,6 +1907,266 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   e.write(")")
   e.space()
   emit_block(e, f.body)
+}
+
+///|
+/// Scan a function body for free references to `name`. Stops short
+/// at nested function / arrow scopes that shadow the name with a
+/// parameter or local binding (those have their own `name` and
+/// can't conflict with the outer named-FuncExpr binding). Used by
+/// `emit_function_expr` to decide whether emitting the function
+/// name would create a self-shadow.
+fn func_body_references_name_as_free_var(
+  f : @ast.TsFunc,
+  name : String,
+) -> Bool {
+  for p in f.params {
+    if p.name == name {
+      return false
+    }
+    match p.binding {
+      Some(b) => if binding_introduces_name(b, name) { return false }
+      None => ()
+    }
+  }
+  block_references_name(f.body, name)
+}
+
+///|
+fn binding_introduces_name(b : @ast.TsBinding, name : String) -> Bool {
+  match b {
+    Ident(n) => n == name
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => if binding_introduces_name(be.binding, name) { return true }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => binding_introduces_name(r, name)
+        None => false
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        if binding_introduces_name(prop.binding, name) { return true }
+      }
+      false
+    }
+    Target(_) => false
+  }
+}
+
+///|
+fn block_references_name(block : @ast.TsBlock, name : String) -> Bool {
+  for s in block.stmts {
+    if stmt_references_name(s, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
+  match stmt {
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
+      if binding_introduces_name(b, name) {
+        return expr_references_name(e, name)
+      }
+      expr_references_name(e, name)
+    }
+    Expr(e) | Throw(e) => expr_references_name(e, name)
+    Return(opt) =>
+      match opt {
+        Some(e) => expr_references_name(e, name)
+        None => false
+      }
+    Assign(n, e) => n == name || expr_references_name(e, name)
+    CompoundAssign(n, _, e) => n == name || expr_references_name(e, name)
+    IndexAssign(t, idx, v) =>
+      expr_references_name(t, name) ||
+      expr_references_name(idx, name) ||
+      expr_references_name(v, name)
+    PropAssign(t, _, v) =>
+      expr_references_name(t, name) || expr_references_name(v, name)
+    If(c, t, els) => {
+      if expr_references_name(c, name) || block_references_name(t, name) {
+        return true
+      }
+      match els {
+        Some(b) => block_references_name(b, name)
+        None => false
+      }
+    }
+    While(c, b) | DoWhile(c, b) =>
+      expr_references_name(c, name) || block_references_name(b, name)
+    For(init, cond, update, body) => {
+      let init_hit = match init {
+        Some(s) => stmt_references_name(s, name)
+        None => false
+      }
+      if init_hit { return true }
+      let cond_hit = match cond {
+        Some(c) => expr_references_name(c, name)
+        None => false
+      }
+      if cond_hit { return true }
+      let update_hit = match update {
+        Some(s) => stmt_references_name(s, name)
+        None => false
+      }
+      update_hit || block_references_name(body, name)
+    }
+    ForOf(_, b, _, iter, body) | ForAwaitOf(_, b, _, iter, body) | ForIn(_, b, _, iter, body) => {
+      if binding_introduces_name(b, name) {
+        return expr_references_name(iter, name)
+      }
+      expr_references_name(iter, name) || block_references_name(body, name)
+    }
+    Try(t, catch_b, catch_body, finally_) => {
+      if block_references_name(t, name) { return true }
+      let catch_hits = match catch_body {
+        Some(b) => {
+          let shadowed = match catch_b {
+            Some(bb) => binding_introduces_name(bb, name)
+            None => false
+          }
+          if shadowed { false } else { block_references_name(b, name) }
+        }
+        None => false
+      }
+      if catch_hits { return true }
+      match finally_ {
+        Some(b) => block_references_name(b, name)
+        None => false
+      }
+    }
+    Switch(scr, cases) => {
+      if expr_references_name(scr, name) { return true }
+      for c in cases {
+        if block_references_name(c.body, name) { return true }
+      }
+      false
+    }
+    Block(b) => block_references_name(b, name)
+    Label(_, inner) => stmt_references_name(inner, name)
+    With(t, b) =>
+      expr_references_name(t, name) || block_references_name(b, name)
+    NativeClassStmt(_, _) => false
+    _ => false
+  }
+}
+
+///|
+fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
+  match e {
+    Var(n) => n == name
+    Call(n, args) | New(n, args) => {
+      if n == name { return true }
+      for a in args {
+        if expr_references_name(a, name) { return true }
+      }
+      false
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      if expr_references_name(callee, name) { return true }
+      for a in args {
+        if expr_references_name(a, name) { return true }
+      }
+      false
+    }
+    MethodCall(recv, _, args) => {
+      if expr_references_name(recv, name) { return true }
+      for a in args {
+        if expr_references_name(a, name) { return true }
+      }
+      false
+    }
+    PropAccess(recv, _) => expr_references_name(recv, name)
+    IndexAccess(recv, idx) =>
+      expr_references_name(recv, name) || expr_references_name(idx, name)
+    BinOp(_, l, r) | Seq(l, r) =>
+      expr_references_name(l, name) || expr_references_name(r, name)
+    Cond(c, t, els) =>
+      expr_references_name(c, name) ||
+      expr_references_name(t, name) ||
+      expr_references_name(els, name)
+    UnaryOp(_, v)
+    | NonNull(v)
+    | OptionalChain(v)
+    | Await(v)
+    | Spread(v)
+    | PureCall(v)
+    | YieldStar(v) => expr_references_name(v, name)
+    Yield(opt) =>
+      match opt {
+        Some(v) => expr_references_name(v, name)
+        None => false
+      }
+    AssignExpr(n, v) => n == name || expr_references_name(v, name)
+    CompoundAssignExpr(t, _, v) =>
+      expr_references_name(t, name) || expr_references_name(v, name)
+    AssignPattern(_, v) => expr_references_name(v, name)
+    PropAssignExpr(recv, _, v) =>
+      expr_references_name(recv, name) || expr_references_name(v, name)
+    IndexAssignExpr(recv, idx, v) =>
+      expr_references_name(recv, name) ||
+      expr_references_name(idx, name) ||
+      expr_references_name(v, name)
+    ComputedProp(k, v) =>
+      expr_references_name(k, name) || expr_references_name(v, name)
+    ArrayLit(items) => {
+      for i in items {
+        if expr_references_name(i, name) { return true }
+      }
+      false
+    }
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_references_name(ent.1, name) { return true }
+      }
+      false
+    }
+    FuncExpr(g) => func_body_references_name_as_free_var(g, name)
+    ArrowFunc(params, _, body, _) => {
+      for p in params {
+        if p.name == name { return false }
+        match p.binding {
+          Some(b) => if binding_introduces_name(b, name) { return false }
+          None => ()
+        }
+      }
+      match body {
+        ArrowExpr(ee) => expr_references_name(ee, name)
+        ArrowBlock(b) => block_references_name(b, name)
+      }
+    }
+    As(v, _) | Satisfies(v, _) => expr_references_name(v, name)
+    TaggedTemplate(tag, _, _, exprs) => {
+      if expr_references_name(tag, name) { return true }
+      for ee in exprs {
+        if expr_references_name(ee, name) { return true }
+      }
+      false
+    }
+    TemplateLiteral(_, exprs) => {
+      for ee in exprs {
+        if expr_references_name(ee, name) { return true }
+      }
+      false
+    }
+    DynamicImport(spec, opts) => {
+      if expr_references_name(spec, name) { return true }
+      match opts {
+        Some(o) => expr_references_name(o, name)
+        None => false
+      }
+    }
+    NativeClassExpr(_, _) => false
+    _ => false
+  }
 }
 
 ///|
@@ -2313,6 +2603,29 @@ fn emit_native_class(
         e.write("}")
       }
     }
+  }
+  // Static field initializers (ES2022 `static foo = init;`). Parser
+  // stashes them on `decl.static_field_inits` for native classes;
+  // emit them in source order so the class is self-contained. Non-
+  // ident names (`"~standard"` / `"a-b"`) need bracket syntax
+  // (`static ["~standard"] = init;`) — `static ~standard = …` is a
+  // hard parse error.
+  for entry in decl.static_field_inits {
+    e.nl()
+    e.word("static")
+    e.sep_after_word('A')
+    if is_valid_js_ident(entry.0) {
+      e.write(entry.0)
+    } else {
+      e.write("[")
+      emit_string_literal(e, entry.0)
+      e.write("]")
+    }
+    e.space()
+    e.write("=")
+    e.space()
+    emit_expr(e, entry.1, 2)
+    e.semi()
   }
   e.close_block()
 }

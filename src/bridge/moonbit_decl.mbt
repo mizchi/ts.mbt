@@ -8863,6 +8863,7 @@ fn clone_exported_class(
     type_params: exported.class_.type_params,
     base_names: [],
     base_expr: None,
+    static_field_inits: [],
     constructor_params,
     properties,
     methods,

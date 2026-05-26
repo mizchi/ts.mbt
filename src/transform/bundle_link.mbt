@@ -930,7 +930,7 @@ fn substitute_var_names_in_stmt(
       let new_name = map.get(decl.name).unwrap_or(decl.name)
       let new_base_names : Array[String] = []
       for b in decl.base_names {
-        new_base_names.push(map.get(b).unwrap_or(b))
+        new_base_names.push(substitute_dotted_name(b, map, ns))
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for mth in decl.methods {
@@ -952,10 +952,20 @@ fn substitute_var_names_in_stmt(
       for d in decl.decorators {
         new_decorators.push(substitute_var_names_in_expr(d, map, ns))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(e) => Some(substitute_var_names_in_expr(e, map, ns))
+        None => None
+      }
+      let new_static_inits : Array[(String, @ast.TsExpr)] = []
+      for entry in decl.static_field_inits {
+        new_static_inits.push((entry.0, substitute_var_names_in_expr(entry.1, map, ns)))
+      }
       let new_decl : @ast.TsClassDecl = {
         ..decl,
         name: new_name,
         base_names: new_base_names,
+        base_expr: new_base_expr,
+        static_field_inits: new_static_inits,
         methods: new_methods,
         decorators: new_decorators,
       }
@@ -1179,7 +1189,7 @@ fn substitute_var_names_in_expr(
       let new_name = map.get(decl.name).unwrap_or(decl.name)
       let new_base_names : Array[String] = []
       for b in decl.base_names {
-        new_base_names.push(map.get(b).unwrap_or(b))
+        new_base_names.push(substitute_dotted_name(b, map, ns))
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for mth in decl.methods {
@@ -1197,10 +1207,20 @@ fn substitute_var_names_in_expr(
       for d in decl.decorators {
         new_decorators.push(substitute_var_names_in_expr(d, map, ns))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(e) => Some(substitute_var_names_in_expr(e, map, ns))
+        None => None
+      }
+      let new_static_inits : Array[(String, @ast.TsExpr)] = []
+      for entry in decl.static_field_inits {
+        new_static_inits.push((entry.0, substitute_var_names_in_expr(entry.1, map, ns)))
+      }
       let new_decl : @ast.TsClassDecl = {
         ..decl,
         name: new_name,
         base_names: new_base_names,
+        base_expr: new_base_expr,
+        static_field_inits: new_static_inits,
         methods: new_methods,
         decorators: new_decorators,
       }
@@ -1484,6 +1504,68 @@ fn link_rename_binding_lhs(
 /// expression position. Used by the namespace synthesis pass to skip
 /// emitting a binding when the namespace alias is fully consumed by
 /// member-access rewrites (i.e. doesn't escape).
+///|
+/// Substitute a possibly-dotted base name (e.g. `"Effectable.Class"`)
+/// through both the regular rename map and the namespace property
+/// table. effect uses `class X extends Effectable.Class {...}` where
+/// `Effectable` is a namespace import; `ns_subs["Effectable"]["Class"]`
+/// resolves to the synthesized property table entry, and the result
+/// emits as the bound local from that table. When the lookup misses
+/// at any level the original dotted name flows through unchanged.
+fn substitute_dotted_name(
+  name : String,
+  map : Map[String, String],
+  ns : Map[String, Map[String, String]],
+) -> String {
+  let dot = find_char_index(name, '.')
+  if dot < 0 {
+    return map.get(name).unwrap_or(name)
+  }
+  let head = name.substring(start=0, end=dot).to_string()
+  let tail = name.substring(start=dot + 1, end=name.length()).to_string()
+  // Multi-segment dotted names: only the first lookup matters for
+  // namespace resolution; further segments stay as property accesses
+  // on the resolved binding. e.g. `A.B.C` with `ns["A"]["B"]` mapping
+  // to `B_local` emits as `B_local.C`.
+  let after_first_dot = find_char_index(tail, '.')
+  let first_prop = if after_first_dot < 0 {
+    tail
+  } else {
+    tail.substring(start=0, end=after_first_dot).to_string()
+  }
+  match ns.get(head) {
+    Some(props) =>
+      match props.get(first_prop) {
+        Some(resolved) =>
+          if after_first_dot < 0 {
+            return resolved
+          } else {
+            return resolved +
+              tail.substring(start=after_first_dot, end=tail.length()).to_string()
+          }
+        None => ()
+      }
+    None => ()
+  }
+  // No namespace match — fall back to renaming the leading identifier
+  // through the regular rename map.
+  let new_head = map.get(head).unwrap_or(head)
+  new_head + "." + tail
+}
+
+///|
+fn find_char_index(s : String, target : Char) -> Int {
+  let mut idx = 0
+  for c in s {
+    if c == target {
+      return idx
+    }
+    idx = idx + 1
+  }
+  -1
+}
+
+///|
 fn block_references_var(block : @ast.TsBlock, name : String) -> Bool {
   let refs : Map[String, Bool] = {}
   collect_var_refs_in_block(block, refs)

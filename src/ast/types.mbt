@@ -592,6 +592,13 @@ pub(all) struct TsClassDecl {
   // `"<expr-base>"` so existing structural code that just counts the
   // number of bases still works. Emitters check `base_expr` first.
   base_expr : TsExpr?
+  // Static-field initializers (`class X { static foo = expr; }`).
+  // Only populated for `NativeClassStmt` / `NativeClassExpr` paths —
+  // the IIFE-class lowering handles them via separate `PropAssign`
+  // statements. Emit restores them as `static <name> = <init>;`
+  // inside the class body so the binding is part of the class
+  // scope rather than a post-declaration assignment.
+  static_field_inits : Array[(String, TsExpr)]
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]

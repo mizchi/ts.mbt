@@ -129,6 +129,7 @@ fn build_runtime_class_decl(
     type_params,
     base_names: [],
     base_expr: None,
+    static_field_inits: [],
     constructor_params,
     properties,
     methods,
@@ -287,6 +288,152 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
 /// have if it appeared in an identifier position (e.g. `Declare` ->
 /// `Some("declare")`). Plain identifiers and non-keyword tokens
 /// return `None`. Used at heritage clause / similar positions where
+/// Wrap a hoisted static-field initializer so its `this` references
+/// resolve to the class (matching ES static-init semantics) once the
+/// initializer evaluates at module scope. Generates
+/// `(function() { return init }).call(class_name)`. Arrow `this`
+/// captures the wrapping function's `this`, so any
+/// `(props) => this.foo` inside the init still sees the class.
+fn wrap_static_field_init_with_this(
+  init : @ast.TsExpr,
+  class_name : String,
+) -> @ast.TsExpr {
+  if not(expr_contains_this(init)) {
+    return init
+  }
+  let inner_func : @ast.TsFunc = {
+    name: "",
+    type_params: [],
+    params: [],
+    return_type: @ast.TsType::Any,
+    body: { stmts: [Return(Some(init))], stmt_positions: [] },
+    const_type_params: [],
+    is_generator: false,
+    is_async: false,
+  }
+  @ast.TsExpr::MethodCall(
+    @ast.TsExpr::FuncExpr(inner_func),
+    "call",
+    [@ast.TsExpr::Var(class_name)],
+  )
+}
+
+///|
+/// Heuristic check: does the expression mention `this` outside a
+/// nested non-arrow function? A `this` inside an arrow counts; a
+/// `this` inside a `function() {…}` doesn't because functions
+/// shadow `this`. Used to skip the static-field wrap when no
+/// rebinding is needed.
+fn expr_contains_this(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("this") => true
+    FuncExpr(_) => false
+    Var(_) => false
+    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_) => false
+    Call(_, args) | New(_, args) => {
+      for a in args {
+        if expr_contains_this(a) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      if expr_contains_this(callee) {
+        return true
+      }
+      for a in args {
+        if expr_contains_this(a) {
+          return true
+        }
+      }
+      false
+    }
+    MethodCall(recv, _, args) => {
+      if expr_contains_this(recv) {
+        return true
+      }
+      for a in args {
+        if expr_contains_this(a) {
+          return true
+        }
+      }
+      false
+    }
+    PropAccess(recv, _) => expr_contains_this(recv)
+    IndexAccess(recv, idx) =>
+      expr_contains_this(recv) || expr_contains_this(idx)
+    BinOp(_, l, r) | Seq(l, r) =>
+      expr_contains_this(l) || expr_contains_this(r)
+    Cond(c, t, els) =>
+      expr_contains_this(c) || expr_contains_this(t) || expr_contains_this(els)
+    UnaryOp(_, v)
+    | NonNull(v)
+    | OptionalChain(v)
+    | Await(v)
+    | Spread(v)
+    | PureCall(v)
+    | YieldStar(v) => expr_contains_this(v)
+    Yield(opt) =>
+      match opt {
+        Some(v) => expr_contains_this(v)
+        None => false
+      }
+    As(v, _) | Satisfies(v, _) => expr_contains_this(v)
+    AssignExpr(_, v) => expr_contains_this(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_contains_this(t) || expr_contains_this(v)
+    AssignPattern(_, v) => expr_contains_this(v)
+    PropAssignExpr(recv, _, v) =>
+      expr_contains_this(recv) || expr_contains_this(v)
+    IndexAssignExpr(recv, idx, v) =>
+      expr_contains_this(recv) || expr_contains_this(idx) || expr_contains_this(v)
+    ComputedProp(k, v) => expr_contains_this(k) || expr_contains_this(v)
+    ArrayLit(items) => {
+      for i in items {
+        if expr_contains_this(i) {
+          return true
+        }
+      }
+      false
+    }
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_contains_this(ent.1) {
+          return true
+        }
+      }
+      false
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(ee) => expr_contains_this(ee)
+        ArrowBlock(_) => true
+      }
+    TaggedTemplate(tag, _, _, exprs) => {
+      if expr_contains_this(tag) {
+        return true
+      }
+      for ee in exprs {
+        if expr_contains_this(ee) {
+          return true
+        }
+      }
+      false
+    }
+    TemplateLiteral(_, exprs) => {
+      for ee in exprs {
+        if expr_contains_this(ee) {
+          return true
+        }
+      }
+      false
+    }
+    _ => true
+  }
+}
+
+///|
 /// the lexer's keyword classification needs to defer to the surface
 /// identifier name.
 fn contextual_ident_token_name(kind : TokenKind) -> String? {
@@ -935,10 +1082,31 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             None
           }
       }
-      return NativeClassExpr(decorated, ctor_func)
+      // Static field initializers: stash them on the AST so emit
+      // restores them as `static foo = init;` inside the class body
+      // (ES2022 native form). Avoids wrapping the class expression
+      // in an IIFE or the surrounding stmt in a `Block` — both of
+      // which previously broke scope: the IIFE's `this` isn't the
+      // class, and the Block trapped the class declaration itself.
+      let static_field_inits : Array[(String, @ast.TsExpr)] = []
+      for element in elements {
+        match element {
+          Field(true, Name(static_name), _, Some(init)) =>
+            static_field_inits.push((static_name, init))
+          _ => ()
+        }
+      }
+      let decorated_with_statics : @ast.TsClassDecl = {
+        ..decorated,
+        static_field_inits,
+      }
+      return NativeClassExpr(decorated_with_statics, ctor_func)
     }
     None => ()
   }
+  // (unused) Legacy synthetic-name + IIFE path retained for context — see
+  // commit history; the active path above stashes static fields on the
+  // AST and lets emit restore them in-body.
   // `<anon>` was the historical sentinel for "this class expression
   // has no source-level name". The angle brackets aren't valid JS
   // identifier syntax, so the emitter rejects them and writes
@@ -964,6 +1132,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     type_params: runtime_decl.type_params,
     base_names: runtime_decl.base_names,
     base_expr: runtime_decl.base_expr,
+    static_field_inits: runtime_decl.static_field_inits,
     constructor_params: runtime_decl.constructor_params,
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
@@ -1515,7 +1684,25 @@ fn Parser::parse_class_decl_with_abstract(
         base_expr: pending_base_expr2,
         decorators: self.take_pending_decorators(),
       }
-      return NativeClassStmt(decorated, ctor_func)
+      // Static field initializers: stash them on the AST so the
+      // emit pass restores them as `static foo = init;` inside the
+      // class body. ES2022 classes accept the native form directly,
+      // which keeps the class declaration at top-level (a wrapping
+      // `Block` would trap the binding in block scope and break
+      // forward references from sibling top-level code).
+      let static_field_inits : Array[(String, @ast.TsExpr)] = []
+      for element in elements {
+        match element {
+          Field(true, Name(static_name), _, Some(init)) =>
+            static_field_inits.push((static_name, init))
+          _ => ()
+        }
+      }
+      let decorated_with_statics : @ast.TsClassDecl = {
+        ..decorated,
+        static_field_inits,
+      }
+      return NativeClassStmt(decorated_with_statics, ctor_func)
     }
     None => ()
   }
