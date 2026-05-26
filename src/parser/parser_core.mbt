@@ -36,6 +36,11 @@ pub struct Parser {
   mut class_id : Int // for private field brand generation
   mut current_class_brand : String? // brand ID of current class being parsed
   mut last_runtime_class_decl : @ast.TsClassDecl?
+  // The expression parsed by `parse_class_base_name` when the
+  // heritage clause was an expression form (`extends declare(...)` /
+  // `extends make(ast)`). Callers drain this immediately after the
+  // call to stash it on the resulting `TsClassDecl.base_expr`.
+  mut pending_class_base_expr : @ast.TsExpr?
   local_type_param_bounds : Array[(String, @ast.TsType)]
   // Decorator expressions parsed at the statement level that should be
   // attached to the next class declaration. The class parsers drain
@@ -117,6 +122,7 @@ pub fn Parser::new_with_strict_and_jsx(
     class_id: 0,
     current_class_brand: None,
     last_runtime_class_decl: None,
+    pending_class_base_expr: None,
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
@@ -167,6 +173,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     class_id: 0,
     current_class_brand: None,
     last_runtime_class_decl: None,
+    pending_class_base_expr: None,
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],

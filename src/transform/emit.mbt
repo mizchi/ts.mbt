@@ -792,7 +792,18 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         Some(l) => e.write("continue " + l + ";")
         None => e.write("continue;")
       }
-    Block(b) => emit_block(e, b)
+    Block(b) =>
+      // Multi-declarator `let a = 1, b = 2;` parses as a `Block`
+      // wrapping individual `Let` stmts. Wrapping that in real
+      // `{…}` braces would change scope semantics — the bindings
+      // become local to a new block instead of staying in the
+      // enclosing scope. Detect the same-kind-decls pattern and
+      // unwrap inline; non-decl blocks keep their braces.
+      if try_emit_multi_decl_inline(e, b) {
+        ()
+      } else {
+        emit_block(e, b)
+      }
     NativeClassStmt(decl, ctor_body) => emit_native_class(e, decl, ctor_body)
     Label(name, inner) => {
       e.write(name + ":")
@@ -890,6 +901,63 @@ fn binding_leading_byte(b : @ast.TsBinding) -> Char {
 /// — a `Block` of same-kind single-ident declarations — and emit
 /// the original comma-separated form. Returns `true` when the
 /// pattern matched.
+///|
+/// Statement-level variant of `try_emit_multi_decl_for_head`. The
+/// parser packs `let a = 1, b = 2;` into a `Block` of two `Let`
+/// stmts so the multi-binder shape survives the AST. Re-emitting
+/// that block with real `{…}` braces breaks scope; emit it as
+/// `let a = 1, b = 2;` instead. Returns true when it handled the
+/// block; the caller falls back to `emit_block` otherwise.
+fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
+  if block.stmts.length() == 0 {
+    return false
+  }
+  let kind = match block.stmts[0] {
+    Var(_, _, _) => "var"
+    Let(_, _, _) => "let"
+    Const(_, _, _) => "const"
+    _ => return false
+  }
+  for s in block.stmts {
+    match s {
+      Var(_, _, _) => if kind != "var" { return false }
+      Let(_, _, _) => if kind != "let" { return false }
+      Const(_, _, _) => if kind != "const" { return false }
+      _ => return false
+    }
+  }
+  let emitted_kind = if kind == "const" && not(e.pretty) {
+    "let"
+  } else {
+    kind
+  }
+  e.word(emitted_kind)
+  let first_byte = match block.stmts[0] {
+    Var(b, _, _) | Let(b, _, _) | Const(b, _, _) => binding_leading_byte(b)
+    _ => '?'
+  }
+  e.sep_after_word(first_byte)
+  for i, s in block.stmts {
+    if i > 0 {
+      e.write(",")
+      e.space()
+    }
+    match s {
+      Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
+        emit_binding(e, b)
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
+      _ => ()
+    }
+  }
+  e.semi()
+  true
+}
+
+///|
 fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
   let block = match stmt {
     Block(b) => b
@@ -2182,7 +2250,15 @@ fn emit_native_class(
     e.write(" ")
     e.write("extends")
     e.sep_after_word('A')
-    e.write(decl.base_names[0])
+    // Expression-shaped heritage (`extends declare(args)` /
+    // `extends make(ast)` / `extends class {…}`) lives in
+    // `base_expr`; `base_names[0]` carries the sentinel
+    // `"<expr-base>"`. Print the parsed expression directly so the
+    // emit round-trips.
+    match decl.base_expr {
+      Some(expr) => emit_expr(e, expr, 18)
+      None => e.write(decl.base_names[0])
+    }
   }
   e.space()
   e.open_block()

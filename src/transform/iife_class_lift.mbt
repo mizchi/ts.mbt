@@ -133,6 +133,7 @@ fn try_lift_iife_value(
     name,
     type_params: [],
     base_names: [],
+    base_expr: None,
     constructor_params: None,
     properties: [],
     methods: all_methods,

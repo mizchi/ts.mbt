@@ -51,6 +51,15 @@ fn link_module_graph(
   // global form (entries are only present when a rename actually
   // happened — unchanged names stay implicit).
   let taken : Map[String, Bool] = {}
+  // Pre-reserve JS globals so a module's local binding (typically a
+  // synthesized namespace object — `export * as Symbol from "…"` →
+  // `const Symbol = {…}`) doesn't TDZ-shadow the runtime global at
+  // earlier code in the bundle. effect's Schema.js exposes
+  // `Symbol`/`Array`/`Number`/etc. namespaces; without this guard
+  // those overwrite globals like `Symbol.for(...)`.
+  for n in js_runtime_global_names() {
+    taken[n] = true
+  }
   let rename_per_module : Map[String, Map[String, String]] = {}
   // namespace_local_renames[path][ns_local] = globally-unique name
   // used for the synthesized `const <unique> = { ... }` binding.
@@ -1479,6 +1488,38 @@ fn block_references_var(block : @ast.TsBlock, name : String) -> Bool {
   let refs : Map[String, Bool] = {}
   collect_var_refs_in_block(block, refs)
   refs.contains(name)
+}
+
+///|
+/// JS host / standard-library globals that user code routinely
+/// references. Pre-seed `taken` with these so the linker's
+/// collision-rename machinery treats them as already-occupied —
+/// otherwise a module's local `Symbol` / `Array` / `Number` (often
+/// synthesized from `export * as Symbol from "…"`) shadows the
+/// real global at every earlier use in the bundle.
+fn js_runtime_global_names() -> Array[String] {
+  [
+    // Built-in constructors
+    "Object", "Array", "Function", "Boolean", "Number", "String", "Symbol",
+    "BigInt", "Date", "RegExp", "Error", "TypeError", "RangeError",
+    "ReferenceError", "SyntaxError", "EvalError", "URIError", "Map", "Set",
+    "WeakMap", "WeakSet", "Promise", "Proxy", "Reflect", "JSON", "Math",
+    "ArrayBuffer", "SharedArrayBuffer", "DataView", "Int8Array", "Uint8Array",
+    "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
+    "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array",
+    "BigUint64Array", "Iterator", "AsyncIterator", "Generator",
+    "AsyncGenerator", "Intl", "URL", "URLSearchParams", "WeakRef",
+    "FinalizationRegistry", "AggregateError",
+    // Globals
+    "globalThis", "undefined", "NaN", "Infinity", "console", "process",
+    "globalThis", "self", "window", "document", "navigator", "location",
+    "fetch", "structuredClone", "queueMicrotask", "setTimeout",
+    "clearTimeout", "setInterval", "clearInterval", "setImmediate",
+    "clearImmediate",
+    // Top-level functions
+    "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI",
+    "encodeURIComponent", "decodeURI", "decodeURIComponent", "eval",
+  ]
 }
 
 ///|

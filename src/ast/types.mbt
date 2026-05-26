@@ -586,6 +586,12 @@ pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
   base_names : Array[String]
+  // Expression-shaped heritage clause (`class X extends declare(args) {…}`
+  // / `class X extends make(ast) {…}`). When present this carries the
+  // parsed expression and `base_names` holds the sentinel marker
+  // `"<expr-base>"` so existing structural code that just counts the
+  // number of bases still works. Emitters check `base_expr` first.
+  base_expr : TsExpr?
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]

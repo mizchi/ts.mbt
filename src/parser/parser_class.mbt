@@ -128,6 +128,7 @@ fn build_runtime_class_decl(
     name,
     type_params,
     base_names: [],
+    base_expr: None,
     constructor_params,
     properties,
     methods,
@@ -204,8 +205,10 @@ fn class_key_expr(key : ClassKey) -> @ast.TsExpr {
 ///|
 fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   let start = self.pos
+  self.pending_class_base_expr = None
   if self.check(LParen) {
-    let _ = self.parse_expr()
+    let expr = self.parse_expr()
+    self.pending_class_base_expr = Some(expr)
     return "<expr-base>"
   }
   // `class C extends null { ... }` is valid TS — it creates a constructor
@@ -213,6 +216,7 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   if self.check(Null) {
     let _ = self.advance()
     let _ = start
+    self.pending_class_base_expr = Some(@ast.TsExpr::Var("null"))
     return "<expr-base>"
   }
   // `class C extends class { ... } { ... }` — anonymous class expression as
@@ -220,7 +224,8 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   // produces collapses to the `<expr-base>` marker since we only need the
   // structural signal that an expression-shaped base was consumed.
   if self.check(Class) {
-    let _ = self.parse_expr()
+    let expr = self.parse_expr()
+    self.pending_class_base_expr = Some(expr)
     let _ = start
     return "<expr-base>"
   }
@@ -270,7 +275,8 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   }
   if is_expr_base {
     self.pos = start
-    let _ = self.parse_expr()
+    let expr = self.parse_expr()
+    self.pending_class_base_expr = Some(expr)
     return "<expr-base>"
   }
   full_name
@@ -867,9 +873,12 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       let runtime_decl = build_runtime_class_decl(
         class_name, class_type_params, ctor_opt, elements, false,
       )
+      let pending_base_expr = self.pending_class_base_expr
+      self.pending_class_base_expr = None
       let decorated : @ast.TsClassDecl = {
         ..runtime_decl,
         base_names: [base_name],
+        base_expr: pending_base_expr,
         decorators: self.take_pending_decorators(),
       }
       self.last_runtime_class_decl = Some(decorated)
@@ -954,6 +963,7 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     name: runtime_decl.name,
     type_params: runtime_decl.type_params,
     base_names: runtime_decl.base_names,
+    base_expr: runtime_decl.base_expr,
     constructor_params: runtime_decl.constructor_params,
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
@@ -1497,9 +1507,12 @@ fn Parser::parse_class_decl_with_abstract(
       } else {
         Some(merged_ctor)
       }
+      let pending_base_expr2 = self.pending_class_base_expr
+      self.pending_class_base_expr = None
       let decorated : @ast.TsClassDecl = {
         ..runtime_decl,
         base_names: [base_name],
+        base_expr: pending_base_expr2,
         decorators: self.take_pending_decorators(),
       }
       return NativeClassStmt(decorated, ctor_func)
