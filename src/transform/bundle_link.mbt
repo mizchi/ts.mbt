@@ -43,7 +43,7 @@
 fn link_module_graph(
   modules : Map[String, ModuleNode],
   order : Array[String],
-) -> Unit {
+) -> Map[String, Map[String, String]] {
   // ---- Phase 1: collect declared names + assign unique renames ----
   // `taken` tracks every name claimed across the bundle so we know
   // when to suffix a later declaration. `rename_per_module[path]`
@@ -152,6 +152,7 @@ fn link_module_graph(
     let new_block = substitute_var_names_in_block(m.block, combined_map)
     modules[path] = { ..m, block: new_block }
   }
+  rename_per_module
 }
 
 ///|
@@ -214,11 +215,24 @@ fn resolve_export_with_visited(
     None => return None
   }
   // 1. Direct named export: `export { X as Y }` (or just `export
-  //    { Y }`, which the parser records as `local_name == Y`).
+  //    { Y }`, which the parser records as `local_name == Y`). The
+  //    exported `local` may itself be an imported name (the pattern
+  //    `import { X } from "./a"; export { X };` — common in
+  //    barrel files), in which case we walk through to the
+  //    source module first. Only when the local doesn't trace back
+  //    to an import do we read the rename map for this module.
   match find_export_local(m.export_specs, export_name) {
     Some(local) => {
-      let renames = rename_per_module.get(module_path).unwrap_or({})
-      return Some(renames.get(local).unwrap_or(local))
+      match find_import_source(m, local) {
+        Some(srcref) =>
+          return resolve_export_with_visited(
+            modules, rename_per_module, srcref.0, srcref.1, visited,
+          )
+        None => {
+          let renames = rename_per_module.get(module_path).unwrap_or({})
+          return Some(renames.get(local).unwrap_or(local))
+        }
+      }
     }
     None => ()
   }
@@ -258,6 +272,40 @@ fn resolve_export_with_visited(
         // Out of scope for this linker — the consumer would need to
         // see a synthesized object literal.
         ()
+    }
+  }
+  None
+}
+
+///|
+/// If `name` is bound in `m` via one of its `import_decls` (e.g.
+/// `import { X as name } from "./a"`), return the
+/// `(dep_path, original_imported_name)` so the caller can keep
+/// chasing. Returns `None` when the name corresponds to a real
+/// local declaration.
+fn find_import_source(
+  m : ModuleNode,
+  name : String,
+) -> (String, String)? {
+  for imp in m.import_decls {
+    if imp.type_only || imp.side_effect_only {
+      continue
+    }
+    let dep_path = match m.resolved_imports.get(imp.module_spec) {
+      Some(p) => p
+      None => continue
+    }
+    match imp.default_binding {
+      Some(d) =>
+        if d == name {
+          return Some((dep_path, "default"))
+        }
+      None => ()
+    }
+    for nb in imp.named_bindings {
+      if nb.1 == name {
+        return Some((dep_path, nb.0))
+      }
     }
   }
   None

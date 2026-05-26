@@ -155,6 +155,16 @@ fn collect_props_on_external_stmt(
     Assign(_, e) | CompoundAssign(_, _, e) =>
       collect_props_on_external_expr(e, externals, out)
     IndexAssign(t, idx, v) => {
+      // `obj[runtime_key] = val` reserves all property names —
+      // we can't tell which is written and renaming would break
+      // the dynamic dispatch. Same rule as `IndexAccess`.
+      let is_static_idx = match idx {
+        StringLit(_) | NumberLit(_) | IntLit(_) => true
+        _ => false
+      }
+      if not(is_static_idx) {
+        out["*"] = true
+      }
       collect_props_on_external_expr(t, externals, out)
       collect_props_on_external_expr(idx, externals, out)
       collect_props_on_external_expr(v, externals, out)
@@ -327,6 +337,13 @@ fn collect_props_on_external_expr(
     }
     AssignPattern(_, v) => collect_props_on_external_expr(v, externals, out)
     IndexAssignExpr(recv, idx, v) => {
+      let is_static_idx = match idx {
+        StringLit(_) | NumberLit(_) | IntLit(_) => true
+        _ => false
+      }
+      if not(is_static_idx) {
+        out["*"] = true
+      }
       collect_props_on_external_expr(recv, externals, out)
       collect_props_on_external_expr(idx, externals, out)
       collect_props_on_external_expr(v, externals, out)

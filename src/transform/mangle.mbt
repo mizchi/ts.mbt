@@ -723,7 +723,33 @@ fn next_short_name(n : Int) -> String {
 /// new `TsBlock` with every function-local name renamed to a short
 /// `a` / `b` / … identifier. Top-level bindings stay put when
 /// `cfg.preserve_top_level` is `true`.
+/// Variant of `mangle_block` that also returns the root scope's
+/// final rename map so callers (typically the bundle layer
+/// emitting `export default <name>` at the tail) can look up the
+/// new short name for a known top-level binding.
+pub fn mangle_block_with_renames(
+  block : @ast.TsBlock,
+  cfg : ManglerConfig,
+) -> (@ast.TsBlock, Map[String, String]) {
+  let (out, root) = mangle_block_impl(block, cfg)
+  let renames : Map[String, String] = {}
+  for entry in root.renames {
+    renames[entry.0] = entry.1
+  }
+  (out, renames)
+}
+
+///|
 pub fn mangle_block(block : @ast.TsBlock, cfg : ManglerConfig) -> @ast.TsBlock {
+  let (out, _) = mangle_block_impl(block, cfg)
+  out
+}
+
+///|
+fn mangle_block_impl(
+  block : @ast.TsBlock,
+  cfg : ManglerConfig,
+) -> (@ast.TsBlock, ScopeFrame) {
   // Reserved set = built-ins ∪ explicit ∪ (top-level decls when
   // `preserve_top_level`).
   let reserved : Map[String, Bool] = {}
@@ -758,7 +784,7 @@ pub fn mangle_block(block : @ast.TsBlock, cfg : ManglerConfig) -> @ast.TsBlock {
     stmt_positions: block.stmt_positions,
   }
   // Optional property-name pass on top of the identifier rename.
-  if cfg.mangle_properties {
+  let final_block = if cfg.mangle_properties {
     let prop_reserved : Map[String, Bool] = {}
     for n in mangler_builtin_reserved_properties {
       prop_reserved[n] = true
@@ -771,6 +797,7 @@ pub fn mangle_block(block : @ast.TsBlock, cfg : ManglerConfig) -> @ast.TsBlock {
   } else {
     renamed
   }
+  (final_block, root)
 }
 
 ///|
@@ -1026,7 +1053,20 @@ fn rename_stmt(
     For(init_opt, cond_opt, update_opt, body) => {
       // `for (let i = 0; …; …) { … }` creates a new lexical scope.
       let inner = ScopeFrame::child(scope)
+      // The parser wraps multi-decl init (`for (let i = 0, n = arr.length;
+      // …)`) as a `Block` of single-binding decls. The generic
+      // `Block(b)` rename would spawn ANOTHER child scope and the
+      // bindings would never make it into `inner` — so `cond` /
+      // `update` would see the original names. Detect that shape
+      // and rename each inner decl directly in `inner`.
       let new_init = match init_opt {
+        Some(Block(b)) => {
+          let new_stmts : Array[@ast.TsStmt] = []
+          for s in b.stmts {
+            new_stmts.push(rename_stmt(s, inner, reserved))
+          }
+          Some(@ast.TsStmt::Block({ stmts: new_stmts, stmt_positions: b.stmt_positions }))
+        }
         Some(s) => Some(rename_stmt(s, inner, reserved))
         None => None
       }

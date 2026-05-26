@@ -317,7 +317,8 @@ pub fn bundle_modules(
   // into one binding and `import { HonoBase } from "./hono-base"`
   // (which re-exports `Hono as HonoBase`) leaves `HonoBase` as a
   // free variable in the consumer.
-  link_module_graph(modules, order)
+  let link_renames = link_module_graph(modules, order)
+  let mut mangle_export_renames : Map[String, String] = {}
   let e = Emitter::new(pretty=not(opts.minify))
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
@@ -533,7 +534,15 @@ pub fn bundle_modules(
         // becomes internal once we glue modules together, so the
         // top-level can be renamed freely.
         .with_preserve_top_level(false)
-      combined = mangle_block(combined, mangler_cfg)
+      let (mangled_block, mangle_renames) = mangle_block_with_renames(
+        combined, mangler_cfg,
+      )
+      combined = mangled_block
+      // Carry the mangle pass's rename map forward so the
+      // entry-export emit at the bottom can write the right short
+      // name for `export default app` even after `app` was
+      // renamed to e.g. `aq`.
+      mangle_export_renames = mangle_renames
     }
     if opts.minify {
       // Inline runs before peephole so `const X = expr; return X`
@@ -566,6 +575,30 @@ pub fn bundle_modules(
       emit_stmt(e, s)
       e.nl()
     }
+    // After the combined emit, surface the entry module's exports
+    // so the bundle is consumable as an ES module. The mangle path
+    // doesn't track its own short-name renames here, so the
+    // entry export's `local_name` falls back through link_renames
+    // — bindings the mangle pass renamed end up referenced by
+    // their pre-mangle (post-link) name and the mangle pass takes
+    // care of substituting them since the export ref counts as a
+    // use.
+    match modules.get(entry) {
+      Some(em) =>
+        if em.export_specs.length() > 0 {
+          // Chain link-renames then mangle-renames: link first
+          // (`app` -> `app`) then mangle (`app` -> `aq`). The
+          // bundle output's `export default <name>` must use the
+          // POST-mangle short form because that's what survives in
+          // the body.
+          let entry_renames = compose_renames(
+            link_renames.get(entry).unwrap_or({}),
+            mangle_export_renames,
+          )
+          emit_entry_exports(e, em, entry_renames)
+        }
+      None => ()
+    }
   } else {
     for i, path in order {
       let m = match modules.get(path) {
@@ -596,6 +629,14 @@ pub fn bundle_modules(
         }
         emit_stmt(e, stmt)
         e.nl()
+      }
+      // Per-module emit path: surface the entry module's exports
+      // at the tail (mirror of the combined-emit branch above).
+      if path == entry {
+        if m.export_specs.length() > 0 {
+          let entry_renames = link_renames.get(entry).unwrap_or({})
+          emit_entry_exports(e, m, entry_renames)
+        }
       }
     }
   }
@@ -956,4 +997,92 @@ fn decode_combined_position(encoded : Int) -> (Int, Int) {
   let source_id = encoded % 256
   let offset = encoded / 256
   (offset, source_id)
+}
+
+///|
+/// Emit the entry module's `export …` statements at the tail of
+/// the bundle so a consumer that imports the result can find
+/// the symbols the source declared as public. The linker's
+/// per-module rename map turns each `local_name` into its final
+/// post-link form.
+fn emit_entry_exports(
+  e : Emitter,
+  m : ModuleNode,
+  renames : Map[String, String],
+) -> Unit {
+  // Group default vs named.
+  let default_local : String? = {
+    let mut found : String? = None
+    for spec in m.export_specs {
+      if spec.export_name == "default" {
+        found = Some(renames.get(spec.local_name).unwrap_or(spec.local_name))
+        break
+      }
+    }
+    found
+  }
+  let named : Array[(String, String)] = []
+  for spec in m.export_specs {
+    if spec.export_name == "default" {
+      continue
+    }
+    let local = renames.get(spec.local_name).unwrap_or(spec.local_name)
+    named.push((local, spec.export_name))
+  }
+  match default_local {
+    Some(local) => {
+      e.write("export default ")
+      e.write(local)
+      e.semi()
+      e.nl()
+    }
+    None => ()
+  }
+  if named.length() > 0 {
+    e.write("export ")
+    e.write("{ ")
+    for i, pair in named {
+      if i > 0 {
+        e.write(", ")
+      }
+      if pair.0 == pair.1 {
+        e.write(pair.0)
+      } else {
+        e.write(pair.0)
+        e.write(" as ")
+        e.write(pair.1)
+      }
+    }
+    e.write(" }")
+    e.semi()
+    e.nl()
+  }
+}
+
+///|
+/// Chain two rename maps: `first` is applied to the original name,
+/// then `second` is applied to the result. Output is a fresh map
+/// where each key from `first` (or that survives the chain) maps
+/// to the final name post-`second`.
+fn compose_renames(
+  first : Map[String, String],
+  second : Map[String, String],
+) -> Map[String, String] {
+  let out : Map[String, String] = {}
+  // Walk every input that either map touched.
+  let seen : Map[String, Bool] = {}
+  for k in first.keys() {
+    seen[k] = true
+  }
+  for k in second.keys() {
+    seen[k] = true
+  }
+  for k in seen.keys() {
+    let after_first = first.get(k).unwrap_or(k)
+    let after_second = second.get(after_first).unwrap_or(after_first)
+    if after_second != k {
+      out[k] = after_second
+    }
+  }
+  out
 }
