@@ -244,9 +244,63 @@ fn mtsc_build_jsx_config(opts : MtscOptions) -> @transform.JsxConfig {
 
 ///|
 fn string_to_utf8_bytes(s : String) -> Bytes {
+  // MoonBit's `String` is a sequence of UTF-16 code units. Real
+  // UTF-8 encoding has to:
+  //   * 1 byte for ASCII (< 0x80)
+  //   * 2 bytes for U+0080..U+07FF
+  //   * 3 bytes for U+0800..U+FFFF (BMP), excluding the surrogate
+  //     range
+  //   * 4 bytes for U+10000..U+10FFFF (built from a surrogate
+  //     pair: high in U+D800..U+DBFF, low in U+DC00..U+DFFF)
+  //
+  // The previous implementation kept only the low byte of each
+  // unit, which truncated everything ≥ U+0080 and produced
+  // mojibake for non-ASCII strings ("regulární" -> "regul�rn�").
   let arr : Array[Byte] = []
-  for i = 0; i < s.length(); i = i + 1 {
-    arr.push((s[i].to_int() & 0xFF).to_byte())
+  let mut i = 0
+  while i < s.length() {
+    let unit = s[i].to_int()
+    if unit < 0x80 {
+      arr.push(unit.to_byte())
+      i = i + 1
+    } else if unit < 0x800 {
+      arr.push(((unit >> 6) | 0xC0).to_byte())
+      arr.push(((unit & 0x3F) | 0x80).to_byte())
+      i = i + 1
+    } else if unit >= 0xD800 && unit < 0xDC00 {
+      // High surrogate: combine with the next low surrogate.
+      let mut done = false
+      if i + 1 < s.length() {
+        let lo = s[i + 1].to_int()
+        if lo >= 0xDC00 && lo < 0xE000 {
+          let cp = (((unit - 0xD800) << 10) | (lo - 0xDC00)) + 0x10000
+          arr.push(((cp >> 18) | 0xF0).to_byte())
+          arr.push((((cp >> 12) & 0x3F) | 0x80).to_byte())
+          arr.push((((cp >> 6) & 0x3F) | 0x80).to_byte())
+          arr.push(((cp & 0x3F) | 0x80).to_byte())
+          i = i + 2
+          done = true
+        }
+      }
+      if not(done) {
+        // Unpaired high surrogate → U+FFFD replacement (`EF BF BD`).
+        arr.push((0xEF : Int).to_byte())
+        arr.push((0xBF : Int).to_byte())
+        arr.push((0xBD : Int).to_byte())
+        i = i + 1
+      }
+    } else if unit >= 0xDC00 && unit < 0xE000 {
+      // Stray low surrogate → U+FFFD.
+      arr.push((0xEF : Int).to_byte())
+      arr.push((0xBF : Int).to_byte())
+      arr.push((0xBD : Int).to_byte())
+      i = i + 1
+    } else {
+      arr.push(((unit >> 12) | 0xE0).to_byte())
+      arr.push((((unit >> 6) & 0x3F) | 0x80).to_byte())
+      arr.push(((unit & 0x3F) | 0x80).to_byte())
+      i = i + 1
+    }
   }
   Bytes::from_array(arr)
 }
@@ -365,6 +419,36 @@ async fn mtsc_load_bundle_files(
         continue
       }
       let spec = imp.module_spec
+      if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
+        let combined = if spec.has_prefix("/") {
+          mtsc_normalize(spec)
+        } else {
+          mtsc_normalize(mtsc_join_path(mtsc_dirname(resolved), spec))
+        }
+        queue.push(combined)
+        continue
+      }
+      if externals.contains(spec) {
+        continue
+      }
+      if aliases.contains(spec) {
+        continue
+      }
+      match @parser.resolve_runtime_module_specifier(resolved, spec) {
+        Some(found) => {
+          aliases[spec] = found
+          queue.push(found)
+        }
+        None => ()
+      }
+    }
+    // Re-exports (`export * from "./a"`, `export { X } from "./a"`)
+    // also pull `./a` into the bundle. Mirror the import loop.
+    for re in mb.reexports {
+      if re.type_only {
+        continue
+      }
+      let spec = re.module_spec
       if spec.has_prefix("./") || spec.has_prefix("../") || spec.has_prefix("/") {
         let combined = if spec.has_prefix("/") {
           mtsc_normalize(spec)

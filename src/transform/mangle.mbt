@@ -773,6 +773,23 @@ fn mangle_block_impl(
   // resolve once block-scoped frames take over inside `if` / `while`
   // / `try` bodies.
   hoist_var_decls_into_scope(block, root, reserved)
+  // Pre-bind top-level function declarations so a forward
+  // reference (a call site that precedes the `function f() {}`
+  // declaration in source order) resolves to the SAME rename as
+  // the declaration. The same logic already runs inside
+  // `rename_block_inline_in` for nested blocks, but the top-level
+  // walk below uses `rename_stmt` directly, bypassing it.
+  for s in block.stmts {
+    match s {
+      Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
+      | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
+      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_)) =>
+        if not(root.renames.contains(name)) {
+          let _ = root.bind(name, reserved)
+        }
+      _ => ()
+    }
+  }
   // Identifier-mangling pass first (so any synthesized identifiers
   // can't collide with property names we're about to rename).
   let new_stmts : Array[@ast.TsStmt] = []

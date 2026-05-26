@@ -1067,7 +1067,10 @@ fn emit_binding(e : Emitter, binding : @ast.TsBinding) -> Unit {
             true
           }
           None => {
-            e.write(prop.key)
+            // Same quoting rule as object literals: non-identifier
+            // keys (`"~standard"`, `"foo-bar"`, etc.) MUST stay
+            // quoted or the destructure parses as a bare token.
+            emit_object_key(e, prop.key)
             false
           }
         }
@@ -1403,7 +1406,23 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       e.write("=>")
       e.space()
       match body {
-        ArrowExpr(inner) => emit_expr(e, inner, 2)
+        ArrowExpr(inner) => {
+          // `() => { … }` parses as a block body, not an arrow
+          // returning an object literal. Wrap an ObjectLit-shaped
+          // expression in parens to keep the JS parser on the
+          // expression branch.
+          let needs_paren_for_obj = match inner {
+            ObjectLit(_) => true
+            _ => false
+          }
+          if needs_paren_for_obj {
+            e.write("(")
+            emit_expr(e, inner, 0)
+            e.write(")")
+          } else {
+            emit_expr(e, inner, 2)
+          }
+        }
         ArrowBlock(block) => emit_block(e, block)
       }
     }
@@ -1662,7 +1681,14 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   // Synthesized class-desugar nodes carry a placeholder `<class>` /
   // `<anon>` name. Those aren't valid JS identifiers, so emit the
   // expression in its anonymous form (`function () {…}`).
-  if f.name != "" && is_valid_js_ident(f.name) {
+  //
+  // Reserved keyword names (`with`, `if`, `do`, `return`, …) ARE
+  // allowed as object-method shorthand keys, but NOT as function
+  // expression names — `function with() {}` is a hard parse error.
+  // When the parser captured a method-shorthand key as the
+  // function's name and that key is a reserved word, drop the
+  // name to keep the emit anonymous.
+  if f.name != "" && is_valid_js_ident(f.name) && not(is_reserved_word(f.name)) {
     e.write(" ")
     e.write(f.name)
   }
@@ -2089,4 +2115,23 @@ fn emit_native_class(
     }
   }
   e.close_block()
+}
+
+///|
+/// JS reserved-word check used by `emit_function_expr` to suppress
+/// the function name when it would re-purpose a keyword as an
+/// identifier (`function with() {}` is invalid). The list mirrors
+/// the strict-mode reserved set plus the always-reserved keywords
+/// from the ES spec.
+fn is_reserved_word(s : String) -> Bool {
+  match s {
+    "break" | "case" | "catch" | "class" | "const" | "continue" | "debugger"
+    | "default" | "delete" | "do" | "else" | "export" | "extends" | "false"
+    | "finally" | "for" | "function" | "if" | "import" | "in" | "instanceof"
+    | "let" | "new" | "null" | "return" | "super" | "switch" | "this" | "throw"
+    | "true" | "try" | "typeof" | "var" | "void" | "while" | "with" | "yield"
+    | "enum" | "await" | "implements" | "interface" | "package" | "private"
+    | "protected" | "public" | "static" | "arguments" | "eval" => true
+    _ => false
+  }
 }
