@@ -250,7 +250,36 @@ fn collect_var_refs_in_stmt(
     }
     Label(_, inner) => collect_var_refs_in_stmt(inner, out)
     Block(b) => collect_var_refs_in_block(b, out)
-    NativeClassStmt(_, _) => ()
+    NativeClassStmt(decl, ctor_body) => {
+      collect_var_refs_in_class_decl(decl, out)
+      match ctor_body {
+        Some(f) => collect_var_refs_in_block(f.body, out)
+        None => ()
+      }
+    }
+  }
+}
+
+///|
+/// A NativeClassStmt / NativeClassExpr references its base classes
+/// (`extends Base`), its decorators, and every name used inside
+/// methods / constructor. Treeshake needs to follow all of these so
+/// the bases / call-targets don't get dropped as unused.
+fn collect_var_refs_in_class_decl(
+  decl : @ast.TsClassDecl,
+  out : Map[String, Bool],
+) -> Unit {
+  for base in decl.base_names {
+    out[base] = true
+  }
+  for dec in decl.decorators {
+    collect_var_refs_in_expr(dec, out)
+  }
+  for m in decl.methods {
+    match m.body {
+      Some(b) => collect_var_refs_in_block(b, out)
+      None => ()
+    }
   }
 }
 
@@ -386,6 +415,14 @@ fn collect_var_refs_in_expr(
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner) => collect_var_refs_in_expr(inner, out)
+    NativeClassExpr(decl, ctor_body) => {
+      collect_var_refs_in_class_decl(decl, out)
+      match ctor_body {
+        Some(f) => collect_var_refs_in_block(f.body, out)
+        None => ()
+      }
+    }
+    PureCall(inner) => collect_var_refs_in_expr(inner, out)
     _ => ()
   }
 }

@@ -1236,6 +1236,19 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             e.write("...")
             emit_expr(e, entry.1, 2)
           }
+          (key, ComputedProp(k_expr, v_expr)) if key.has_prefix("@@computed:") => {
+            // The parser tags computed-key entries with this
+            // sentinel and stores the actual `[expr]: value` as a
+            // `ComputedProp(expr, value)` payload. Emit them as
+            // the JS shorthand directly — without this branch the
+            // sentinel key would print verbatim and produce a
+            // double-colon `"@@computed:0":[expr]:value`.
+            e.write("[")
+            emit_expr(e, k_expr, 0)
+            e.write("]:")
+            e.space()
+            emit_expr(e, v_expr, 2)
+          }
           _ => {
             // Non-identifier keys (`"Content-Type"`, `"foo bar"`,
             // numeric-looking, etc.) MUST stay quoted — otherwise

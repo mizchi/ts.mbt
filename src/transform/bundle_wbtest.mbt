@@ -555,6 +555,82 @@ test "dts: infer marker prints as `infer T` (not `__tsmbt_infer<T>`)" {
 }
 
 ///|
+test "parser: private field reference inside template literal stays mangled" {
+  // Regression for a bug found while bundling Hono: the template-
+  // literal sub-parser was created via `Parser::from_source` which
+  // initialises `current_class_brand` to `None`, so `${this.#x}`
+  // inside a class body emitted the original `#x` syntax outside
+  // the class body, breaking Node's parser.
+  let files = vfs([
+    (
+      "entry.ts",
+      "var Node = class _Node {\n" +
+      "  #index;\n" +
+      "  describe() { return `#${this.#index}`; }\n" +
+      "};\n" +
+      "const n = new Node();\n" +
+      "console.log(n.describe());\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // After lowering, `#index` should be mangled to a brand-
+      // suffixed identifier everywhere — INCLUDING inside the
+      // template-literal interpolation. Output must not contain
+      // a `#index` token outside of a class body.
+      assert_false(out.js.contains("this.#index"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "emit: object literal with computed key (`{[expr]: value}`)" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "const KEY = \"name\";\n" +
+      "const obj = { [KEY]: 42, other: 1 };\n" +
+      "console.log(obj);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true).with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The parser stores computed keys as a `("@@computed:N",
+      // ComputedProp(key, value))` sentinel. Emit must produce
+      // the proper `[key]:value` shorthand instead of leaking
+      // the sentinel and the wrapper.
+      assert_false(out.js.contains("@@computed"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "treeshake: class extends keeps the base class alive" {
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Base { greet() { return \"hi\"; } }\n" +
+      "class Greeter extends Base {}\n" +
+      "const g = new Greeter();\n" +
+      "console.log(g.greet());\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Treeshake previously didn't walk class bodies / `extends`
+      // names, so `Base` got dropped despite being referenced by
+      // `Greeter`'s extends clause. The bundle is invalid at
+      // runtime in that case.
+      assert_true(out.js.contains("Base"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "sourcemap: mangle path emits per-stmt mappings via encoded positions" {
   let files = vfs([
     ("entry.ts", "import { x } from \"./lib\";\nconst y = x + 1;\nconsole.log(y);\n"),

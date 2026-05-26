@@ -2430,10 +2430,13 @@ fn Parser::parse_call(self : Parser) -> @ast.TsExpr raise ParseError {
       match self.peek().kind {
         Template(cooked_parts, raw_parts, expr_sources) => {
           let _ = self.advance()
-          // Parse expression sources into AST expressions
+          // Parse expression sources into AST expressions. Inherit
+          // `current_class_brand` so `#x` accesses in a tagged
+          // template inside a class body keep their brand mangling.
           let exprs : Array[@ast.TsExpr] = []
           for src in expr_sources {
             let sub_parser = Parser::from_source(src)
+            sub_parser.current_class_brand = self.current_class_brand
             let sub_expr = sub_parser.parse_expr()
             exprs.push(sub_expr)
           }
@@ -2754,10 +2757,21 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
     }
     Template(cooked_parts, _, expr_sources) => {
       let _ = self.advance()
-      // Parse expression sources into AST expressions
+      // Parse expression sources into AST expressions. Each `${…}`
+      // interpolation is captured as a raw source string by the
+      // lexer and parsed here via a fresh sub-parser. The sub-
+      // parser needs to inherit context that affects how
+      // identifiers / private names are interpreted — most
+      // critically `current_class_brand`, so that `#x` inside the
+      // template still mangles to the surrounding class's brand.
+      // Without this, `\`${this.#x}\`` would emit the original
+      // private syntax outside its class body, which Node rejects
+      // as "Private field '#x' must be declared in an enclosing
+      // class".
       let exprs : Array[@ast.TsExpr] = []
       for src in expr_sources {
         let sub_parser = Parser::from_source(src)
+        sub_parser.current_class_brand = self.current_class_brand
         let expr = sub_parser.parse_expr()
         exprs.push(expr)
       }
