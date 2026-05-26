@@ -1448,6 +1448,7 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     Satisfies(inner, ty) => Satisfies(rename_expr(inner, scope), ty)
     NonNull(inner) => NonNull(rename_expr(inner, scope))
     OptionalChain(inner) => OptionalChain(rename_expr(inner, scope))
+    PureCall(inner) => PureCall(rename_expr(inner, scope))
     JsxElement(_, _, _) => expr // JSX should be lowered before mangling
     NativeClassExpr(decl, ctor_body) =>
       NativeClassExpr(

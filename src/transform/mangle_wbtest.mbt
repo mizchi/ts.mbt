@@ -616,6 +616,23 @@ test "mangle: var inside nested blocks still hoists to the function" {
 }
 
 ///|
+test "mangle: PureCall wrapper does not hide identifier references" {
+  // Regression: rename_expr must walk into `PureCall(inner)`,
+  // otherwise references inside `/* @__PURE__ */ f(x)` keep the
+  // original name while the binding gets renamed.
+  let cfg = ManglerConfig::default().with_preserve_top_level(false)
+  let src = "const original = (e) => e;\nconst wrapped = /* @__PURE__ */ original(123);"
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Both binding and reference must rename together.
+      assert_false(js.contains("original"))
+      assert_false(js.contains("wrapped"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
 test "mangle: name short-name generator avoids reserved single-letter clashes" {
   // The mangler should skip `a` if it conflicts. Force the issue
   // by reserving `a`.
