@@ -1121,7 +1121,14 @@ fn rename_stmt(
       )
     }
     Break(_) | Continue(_) | Empty | Debugger => stmt
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor_body) =>
+      NativeClassStmt(
+        rename_class_decl_idents(decl, scope),
+        match ctor_body {
+          Some(f) => Some(rename_function_expr(f, scope))
+          None => None
+        },
+      )
   }
 }
 
@@ -1385,6 +1392,14 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     NonNull(inner) => NonNull(rename_expr(inner, scope))
     OptionalChain(inner) => OptionalChain(rename_expr(inner, scope))
     JsxElement(_, _, _) => expr // JSX should be lowered before mangling
+    NativeClassExpr(decl, ctor_body) =>
+      NativeClassExpr(
+        rename_class_decl_idents(decl, scope),
+        match ctor_body {
+          Some(f) => Some(rename_function_expr(f, scope))
+          None => None
+        },
+      )
     _ => expr
   }
 }
@@ -1443,6 +1458,42 @@ fn rename_binding_lhs(
       Object({ props: new_props, rest: new_rest })
     }
     Target(e) => Target(rename_expr(e, scope))
+  }
+}
+
+///|
+/// Identifier-mangle a class declaration: rename `base_names`
+/// through the scope chain, walk each method's body, and walk
+/// decorators. Property names are not touched here — that's the
+/// job of `rename_properties_in_class_decl`.
+fn rename_class_decl_idents(
+  decl : @ast.TsClassDecl,
+  scope : ScopeFrame,
+) -> @ast.TsClassDecl {
+  let new_base_names : Array[String] = []
+  for b in decl.base_names {
+    new_base_names.push(scope.resolve(b))
+  }
+  let new_methods : Array[@ast.TsClassMethodDecl] = []
+  for m in decl.methods {
+    let new_body = match m.body {
+      Some(b) => {
+        let inner = ScopeFrame::child(scope)
+        Some(rename_block_inline_in(b, inner, inner.reserved))
+      }
+      None => None
+    }
+    new_methods.push({ ..m, body: new_body })
+  }
+  let new_decorators : Array[@ast.TsExpr] = []
+  for d in decl.decorators {
+    new_decorators.push(rename_expr(d, scope))
+  }
+  {
+    ..decl,
+    base_names: new_base_names,
+    methods: new_methods,
+    decorators: new_decorators,
   }
 }
 

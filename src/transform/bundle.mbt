@@ -180,6 +180,15 @@ priv struct ModuleNode {
   // (specifier, default_binding?, named_bindings, namespace_binding?,
   // type_only).
   import_decls : Array[@ast.TsImportDecl]
+  // Named exports surfaced by this module, used by the linker to
+  // resolve `import { X as Y } from "./this"` references in other
+  // modules back to this module's renamed local binding.
+  export_specs : Array[@ast.TsExportSpec]
+  // `export { X } from "./a"` / `export * from "./a"` re-exports.
+  // The linker walks the chain so an `import { Hono } from "./hono"`
+  // can resolve through `index.js` (which re-exports from
+  // `./hono.js`) all the way to the actual declaration.
+  reexport_specs : Array[@ast.TsReExportSpec]
   // Names this module declared with a `@__PURE__` /
   // `@__NO_SIDE_EFFECTS__` JSDoc tag. Union across modules
   // becomes the assumed-pure set fed into purity analysis.
@@ -300,6 +309,15 @@ pub fn bundle_modules(
     Err(e) => return Err(e)
   }
   let order = topological_order(modules, entry)
+  // Run the cross-module linker before any pass that operates on
+  // the combined block. Phase 1 gives each module's top-level
+  // bindings a globally-unique name when they collide; phase 2
+  // rewrites imported references to point at the renamed export.
+  // Without this, two modules each declaring `var Hono` collapse
+  // into one binding and `import { HonoBase } from "./hono-base"`
+  // (which re-exports `Hono as HonoBase`) leaves `HonoBase` as a
+  // free variable in the consumer.
+  link_module_graph(modules, order)
   let e = Emitter::new(pretty=not(opts.minify))
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
@@ -666,6 +684,8 @@ fn load_module_graph(
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
+    export_specs: mb.exports,
+    reexport_specs: mb.reexports,
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
   let resolved : Map[String, String] = {}
@@ -733,6 +753,60 @@ fn load_module_graph(
         }
     }
   }
+  // Re-exports (`export { X } from "./a"`, `export * from "./a"`)
+  // also pull `./a` into the bundle. The graph loader previously
+  // walked only `mb.imports`, so re-exported dependencies fell out
+  // of the graph entirely. Mirror the loop above for each re-export
+  // whose specifier is relative; bare-specifier re-exports become
+  // external imports just like bare imports.
+  for re in mb.reexports {
+    if re.type_only {
+      continue
+    }
+    match resolve_relative(path, re.module_spec) {
+      Some(base_dep) => {
+        let dep_path = resolve_with_extensions(files, base_dep)
+        resolved[re.module_spec] = dep_path
+        match
+          load_module_graph(
+            files, dep_path, modules, external_imports, external_seen, aliases,
+          ) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      None =>
+        match aliases.get(re.module_spec) {
+          Some(dep_path) => {
+            resolved[re.module_spec] = dep_path
+            match
+              load_module_graph(
+                files, dep_path, modules, external_imports, external_seen,
+                aliases,
+              ) {
+              Ok(_) => ()
+              Err(e) => return Err(e)
+            }
+          }
+          None =>
+            if files.contains(re.module_spec) {
+              let dep_path = resolve_with_extensions(files, re.module_spec)
+              resolved[re.module_spec] = dep_path
+              match
+                load_module_graph(
+                  files, dep_path, modules, external_imports, external_seen,
+                  aliases,
+                ) {
+                Ok(_) => ()
+                Err(e) => return Err(e)
+              }
+            }
+            // Bare re-export targets aren't tracked as external —
+            // the consumer's runtime won't see them unless they
+            // also become a direct import. v0 limitation.
+        }
+    }
+  }
   // Finalize the entry with the resolved-imports map populated.
   modules[path] = {
     path,
@@ -742,6 +816,8 @@ fn load_module_graph(
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
+    export_specs: mb.exports,
+    reexport_specs: mb.reexports,
   }
   Ok(())
 }

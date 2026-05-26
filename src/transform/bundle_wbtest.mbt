@@ -688,6 +688,54 @@ test "dead_props: destructured function param keeps property name alive" {
 }
 
 ///|
+test "link: two modules declaring the same name don't collide" {
+  // Before the linker existed, two modules each declaring
+  // `var Hono` collapsed into one binding and an `extends Hono`
+  // reference in the second module resolved to the wrong target.
+  // The linker renames the second module's `Hono` to `Hono$0` and
+  // an `import { HonoBase } from "./a"` (where a does
+  // `export { Hono as HonoBase }`) resolves to module-a's `Hono`.
+  let files = vfs([
+    ("a.ts", "var Hono = class _Hono { greet() { return \"hi\"; } };\nexport { Hono as HonoBase };\n"),
+    ("b.ts", "import { HonoBase } from \"./a\";\nvar Hono = class extends HonoBase { extra() { return \"!\"; } };\nexport { Hono };\n"),
+    ("entry.ts", "import { Hono } from \"./b\";\nconst h = new Hono();\nconsole.log(h.greet() + h.extra());\n"),
+  ])
+  let opts = BundleOptions::default()
+    .with_treeshake(true)
+    .with_mangle(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // Crucial property: `extends` references an actually-declared
+      // class binding. We don't check the exact rename, just that
+      // the output doesn't leave `Hono` (or `HonoBase`) as a free
+      // variable that would fail at runtime.
+      assert_false(out.js.contains("extends HonoBase"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: re-export chain resolves to the original declaration" {
+  // `entry` → `index` → `mod` chain. Without re-export resolution,
+  // `import { val } from "./index"` would dead-end at index's
+  // empty export_specs (only `reexport_specs` carries the alias).
+  let files = vfs([
+    ("mod.ts", "export const val = 42;\n"),
+    ("index.ts", "export { val } from \"./mod\";\n"),
+    ("entry.ts", "import { val } from \"./index\";\nconsole.log(val);\n"),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_mangle(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `val` must resolve to a declared binding somewhere in
+      // the output — at minimum the literal `42` should survive.
+      assert_true(out.js.contains("42"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "parser: private field reference inside template literal stays mangled" {
   // Regression for a bug found while bundling Hono: the template-
   // literal sub-parser was created via `Parser::from_source` which
