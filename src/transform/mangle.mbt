@@ -215,6 +215,26 @@ let mangler_builtin_reserved_properties : Array[String] = [
   "version", "versions", "readFile", "writeFile", "readFileSync", "writeFileSync",
   "exists", "existsSync", "mkdir", "mkdirSync", "rmdir", "unlink", "stat", "statSync",
   "createReadStream", "createWriteStream",
+  // RegExp instance methods + properties
+  "test", "exec", "source", "flags", "global", "ignoreCase", "multiline",
+  "sticky", "unicode", "unicodeSets", "dotAll", "hasIndices", "lastIndex",
+  // Error / standard exception members
+  "message", "cause", "stack", "fileName", "lineNumber", "columnNumber",
+  // Async / generator iterator protocol (`Symbol.asyncIterator` access too)
+  "asyncIterator",
+  // Date instance methods
+  "getDate", "getDay", "getFullYear", "getHours", "getMilliseconds",
+  "getMinutes", "getMonth", "getSeconds", "getTime", "getTimezoneOffset",
+  "getUTCDate", "getUTCDay", "getUTCFullYear", "getUTCHours",
+  "getUTCMilliseconds", "getUTCMinutes", "getUTCMonth", "getUTCSeconds",
+  "getYear", "setDate", "setFullYear", "setHours", "setMilliseconds",
+  "setMinutes", "setMonth", "setSeconds", "setTime", "setUTCDate",
+  "setUTCFullYear", "setUTCHours", "setUTCMilliseconds", "setUTCMinutes",
+  "setUTCMonth", "setUTCSeconds", "setYear", "toDateString", "toISOString",
+  "toJSON", "toTimeString", "toUTCString",
+  // Console / Hono / common Web APIs
+  "log", "info", "warn", "error", "debug", "trace", "table", "group",
+  "groupEnd", "dir", "count", "time", "timeEnd", "assert",
   // Common reserved
    "default",
 ]
@@ -489,6 +509,16 @@ fn build_property_rename_map(
   for entry in names {
     let n = entry.0
     if reserved.contains(n) {
+      continue
+    }
+    // Internal parser sentinels (`@@spread:N`, `@@computed:N`,
+    // `@@get:NAME`, `@@set:NAME`) are NOT property names — they
+    // tag where the emit should produce spread / computed-key /
+    // accessor shorthand. Renaming them to short keys turns the
+    // sentinel into a regular key and the emit's pattern match
+    // misses it, producing invalid output like
+    // `{a:[a]:42}` for `{[s]: 42}`.
+    if n.has_prefix("@@") {
       continue
     }
     candidates.push(n)
@@ -1642,8 +1672,47 @@ fn rename_properties_in_stmt(
         rename_properties_in_block(body, prop_map),
       )
     Break(_) | Continue(_) | Empty | Debugger => stmt
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor_body) =>
+      NativeClassStmt(
+        rename_properties_in_class_decl(decl, prop_map),
+        match ctor_body {
+          Some(f) =>
+            Some({ ..f, body: rename_properties_in_block(f.body, prop_map) })
+          None => None
+        },
+      )
   }
+}
+
+///|
+/// Property-mangle a class declaration: rename method names + walk
+/// method bodies, rename property declaration names, and walk the
+/// constructor body (called separately for the IIFE-class shape).
+fn rename_properties_in_class_decl(
+  decl : @ast.TsClassDecl,
+  prop_map : Map[String, String],
+) -> @ast.TsClassDecl {
+  let new_methods : Array[@ast.TsClassMethodDecl] = []
+  for m in decl.methods {
+    let renamed_name = match prop_map.get(m.name) {
+      Some(short) => short
+      None => m.name
+    }
+    let new_body = match m.body {
+      Some(b) => Some(rename_properties_in_block(b, prop_map))
+      None => None
+    }
+    new_methods.push({ ..m, name: renamed_name, body: new_body })
+  }
+  let new_props : Array[@ast.TsClassPropertyDecl] = []
+  for p in decl.properties {
+    let renamed_name = match prop_map.get(p.name) {
+      Some(short) => short
+      None => p.name
+    }
+    new_props.push({ ..p, name: renamed_name })
+  }
+  { ..decl, methods: new_methods, properties: new_props }
 }
 
 ///|
@@ -1862,6 +1931,16 @@ fn rename_properties_in_expr(
     NonNull(inner) => NonNull(rename_properties_in_expr(inner, prop_map))
     OptionalChain(inner) =>
       OptionalChain(rename_properties_in_expr(inner, prop_map))
+    NativeClassExpr(decl, ctor_body) =>
+      NativeClassExpr(
+        rename_properties_in_class_decl(decl, prop_map),
+        match ctor_body {
+          Some(f) =>
+            Some({ ..f, body: rename_properties_in_block(f.body, prop_map) })
+          None => None
+        },
+      )
+    PureCall(inner) => PureCall(rename_properties_in_expr(inner, prop_map))
     _ => expr
   }
 }

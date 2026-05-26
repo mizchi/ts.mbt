@@ -496,7 +496,13 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.semi()
     }
     IndexAssign(recv, idx, value) => {
-      emit_expr(e, recv, 18)
+      if expr_stmt_needs_paren(recv) {
+        e.write("(")
+        emit_expr(e, recv, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, recv, 18)
+      }
       e.write("[")
       emit_expr(e, idx, 0)
       e.write("]")
@@ -534,7 +540,18 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.write("})")
         e.semi()
       } else {
-        emit_expr(e, recv, 18)
+        // Same statement-start ambiguity as in the `Expr(...)` path:
+        // a `FuncExpr` / class / object-literal at the head of a
+        // statement parses as the declaration / block form, not as
+        // an expression. Wrap the receiver when it starts with one
+        // of those.
+        if expr_stmt_needs_paren(recv) {
+          e.write("(")
+          emit_expr(e, recv, 0)
+          e.write(")")
+        } else {
+          emit_expr(e, recv, 18)
+        }
         e.write(".")
         e.write(strip_internal_prop_marker(prop))
         e.space()
@@ -545,7 +562,21 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       }
     }
     Expr(expr) => {
-      emit_expr(e, expr, 0)
+      // Expression-statement start sentinel: JS parses `function …`
+      // / `class …` / `{ … }` at the head of a statement as a
+      // declaration / block, NOT as an expression. When an inline
+      // pass collapses `let x = function () {…}; x.foo = y` into
+      // `(function () {…}).foo = y`, the LHS recv is a FuncExpr —
+      // but if we emit it bare we get `function () {…}.foo = y`
+      // which the parser rejects. Wrap such expression statements
+      // in parens.
+      if expr_stmt_needs_paren(expr) {
+        e.write("(")
+        emit_expr(e, expr, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, expr, 0)
+      }
       e.semi()
     }
     Empty => e.semi()
@@ -1621,6 +1652,9 @@ fn try_emit_function_decl(e : Emitter, stmt : @ast.TsStmt) -> Bool {
 
 ///|
 fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
+  if f.is_async {
+    e.write("async ")
+  }
   e.write("function")
   if f.is_generator {
     e.write("*")
@@ -1637,7 +1671,35 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   e.write(")")
   e.space()
   emit_block(e, f.body)
-  let _ = f.is_async
+}
+
+///|
+/// Predicate for the `Expr(expr)` statement: returns true when the
+/// expression's leading token would make the statement parse as
+/// something else (function / class declaration, object-literal
+/// destructure, etc.) without surrounding parens.
+fn expr_stmt_needs_paren(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    FuncExpr(_) => true
+    ArrowFunc(_, _, _, _) => false
+    ObjectLit(_) => true
+    NativeClassExpr(_, _) => true
+    // Recurse into shapes where the leading token sits inside.
+    AssignExpr(_, _) => false
+    PropAssignExpr(recv, _, _) => expr_stmt_needs_paren(recv)
+    IndexAssignExpr(recv, _, _) => expr_stmt_needs_paren(recv)
+    CompoundAssignExpr(recv, _, _) => expr_stmt_needs_paren(recv)
+    PropAccess(recv, _) => expr_stmt_needs_paren(recv)
+    IndexAccess(recv, _) => expr_stmt_needs_paren(recv)
+    CallExpr(callee, _) => expr_stmt_needs_paren(callee)
+    MethodCall(recv, _, _) => expr_stmt_needs_paren(recv)
+    BinOp(_, l, _) => expr_stmt_needs_paren(l)
+    Cond(c, _, _) => expr_stmt_needs_paren(c)
+    Seq(l, _) => expr_stmt_needs_paren(l)
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner)
+    | OptionalChain(inner) => expr_stmt_needs_paren(inner)
+    _ => false
+  }
 }
 
 ///|

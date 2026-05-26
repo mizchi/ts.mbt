@@ -286,16 +286,26 @@ fn collect_props_on_external_expr(
       collect_props_on_external_expr(e, externals, out)
     }
     IndexAccess(recv, idx) => {
-      // Dynamic indexing into an external chain reserves *all*
-      // property names — we can't tell which one is read at
-      // runtime. Mark the property index expression's string
-      // literal (if any), and fall back to a "give up" marker
-      // that the mangler also checks.
+      // Dynamic indexing reserves *all* property names — even on
+      // local bindings, since `obj[runtime_key]` can read any
+      // property and the mangler has no way to know which name
+      // matches the runtime value.
+      //
+      // For external chains we already marked the "give up" *
+      // wildcard. Local-binding dynamic access falls under the
+      // same rule: emit the wildcard so the bundler disables
+      // property mangling for the whole bundle.
+      let is_static_idx = match idx {
+        StringLit(_) | NumberLit(_) | IntLit(_) => true
+        _ => false
+      }
       if is_external_chain(recv, externals) {
         match idx {
           StringLit(s) => out[s] = true
           _ => out["*"] = true
         }
+      } else if not(is_static_idx) {
+        out["*"] = true
       }
       collect_props_on_external_expr(recv, externals, out)
       collect_props_on_external_expr(idx, externals, out)

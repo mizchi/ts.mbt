@@ -258,12 +258,38 @@ fn collect_read_property_names_expr(
       collect_read_property_names_expr(a, out)
       collect_read_property_names_expr(b, out)
     }
-    ArrowFunc(_, _, body, _) =>
+    ArrowFunc(params, _, body, _) => {
+      // Destructured parameter bindings READ the property names
+      // from the caller's argument — walk them so a destructured
+      // `({ a, b })` doesn't make `a` / `b` look unused.
+      for p in params {
+        match p.binding {
+          Some(b) => collect_read_property_names_binding(b, out)
+          None => ()
+        }
+        match p.default {
+          Some(d) => collect_read_property_names_expr(d, out)
+          None => ()
+        }
+      }
       match body {
         ArrowExpr(e) => collect_read_property_names_expr(e, out)
         ArrowBlock(b) => collect_read_property_names_block(b, out)
       }
-    FuncExpr(f) => collect_read_property_names_block(f.body, out)
+    }
+    FuncExpr(f) => {
+      for p in f.params {
+        match p.binding {
+          Some(b) => collect_read_property_names_binding(b, out)
+          None => ()
+        }
+        match p.default {
+          Some(d) => collect_read_property_names_expr(d, out)
+          None => ()
+        }
+      }
+      collect_read_property_names_block(f.body, out)
+    }
     DynamicImport(spec, opts) => {
       collect_read_property_names_expr(spec, out)
       match opts {

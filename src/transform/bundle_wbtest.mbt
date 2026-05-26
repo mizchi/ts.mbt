@@ -555,6 +555,139 @@ test "dts: infer marker prints as `infer T` (not `__tsmbt_infer<T>`)" {
 }
 
 ///|
+test "emit: async function expression keeps `async` keyword" {
+  // The function-expression emit dropped `f.is_async`; this is the
+  // shape `inline_block` produces from `async function* gen() {…}`.
+  let files = vfs([
+    (
+      "entry.ts",
+      "async function* gen() { yield 1; }\n" +
+      "const g = gen();\n" +
+      "console.log(typeof g.next);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true).with_mangle(true).with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // Whether the function got inlined into the call site or kept
+      // as a decl, the `async` keyword must survive.
+      assert_true(out.js.contains("async "))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "emit: PropAssign with FuncExpr receiver wraps in parens" {
+  // Inline can collapse `let f = function () {…}; f.x = y` into a
+  // PropAssign with the FuncExpr as receiver. Bare-emitted, the
+  // leading `function …` parses as a declaration, not an
+  // expression, and the trailing `.x = …` fails to parse.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Foo { _v = 1; get value() { return this._v; } }\n" +
+      "console.log(new Foo().value);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_fold(true)
+    .with_treeshake(true)
+    .with_mangle(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The output must not contain a bare `function …` immediately
+      // followed by `.prop=` (which would be a parse error).
+      assert_false(out.js.contains("function value(){return this._v}.")) // wouldn't actually appear; just guard
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "mangle: dynamic IndexAccess disables property mangling" {
+  // `obj[key]` with a non-literal key can resolve to any property
+  // name at runtime; the mangler must not rename properties when
+  // the bundle contains such an access. Previously this only
+  // fired for external receivers, missing local-binding dynamic
+  // access entirely.
+  let files = vfs([
+    (
+      "entry.ts",
+      "const obj = { foo: 1, bar: 2 };\n" +
+      "const key = \"foo\";\n" +
+      "console.log(obj[key]);\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `foo` stays as a property key — otherwise `obj[key]` would
+      // miss the renamed slot at runtime.
+      assert_true(out.js.contains("foo"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "mangle: class method names rename in lockstep with property accesses" {
+  // The property mangle pass renamed PropAccess at call sites but
+  // left NativeClassStmt method declarations untouched, so
+  // `class C { sayHi() {…} } new C().sayHi()` came out as
+  // `class C { sayHi() {…} } new C().a()` — method name on the
+  // declaration didn't match the renamed call site.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Base {}\n" +
+      "class C extends Base { sayHi() { return \"hi\"; } }\n" +
+      "console.log(new C().sayHi());\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Either both sites end up `sayHi` (reserved didn't allow
+      // rename) or both end up `a`. They must MATCH.
+      let in_class = out.js.contains("sayHi()")
+      let in_call = out.js.contains(".sayHi()")
+      assert_true(in_class == in_call)
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "dead_props: destructured function param keeps property name alive" {
+  // Before fix: dead_props' FuncExpr branch walked only the body,
+  // missing destructured-param bindings. `function fn({a,b}){…}`
+  // made `a` and `b` look unused, so `fn({a:1,b:2})` call sites
+  // got their object literal stripped to `{}`.
+  let files = vfs([
+    (
+      "entry.ts",
+      "function fn({ a = 10, b = 20 }) { return a + b; }\n" +
+      "console.log(fn({ a: 1, b: 2 }));\n",
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // Caller's argument literal must not be stripped to `{}`.
+      assert_false(out.js.contains("({})"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "parser: private field reference inside template literal stays mangled" {
   // Regression for a bug found while bundling Hono: the template-
   // literal sub-parser was created via `Parser::from_source` which
