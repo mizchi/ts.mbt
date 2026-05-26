@@ -1261,7 +1261,19 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     Var(name) => e.write(name)
     BinOp(op, l, r) => {
       let prec = binop_precedence(op)
-      emit_expr(e, l, prec)
+      // `??` cannot be mixed with `||` / `&&` without explicit
+      // parentheses — even when the precedence numbers suggest no
+      // wrap is needed (`??` is precedence 4, `||` is 5, so
+      // `a ?? b || c` would normally not wrap `b || c`), JS spec
+      // explicitly bans the unparenthesised mix as a SyntaxError.
+      // Force parens on either side.
+      if coalesce_mix_needs_paren(op, l) {
+        e.write("(")
+        emit_expr(e, l, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, l, prec)
+      }
       // Word operators (`instanceof`, `in`) start with identifier
       // bytes, so the optional-whitespace `space()` we use for
       // punctuator ops would produce illegal output like
@@ -1278,7 +1290,15 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         e.space()
       }
       e.write(binop_str(op))
+      // Token-boundary protection on the right: avoid `+ +x` →
+      // `""++x` (read as `""++ x`, postfix-increment on a literal,
+      // SyntaxError) and the same for `- -x`. Inserts a forced
+      // space when the binary operator and the right operand's
+      // leading operator would merge into `++` / `--`. Same idea
+      // for `< <x`, `> >x` — those merge into shift tokens.
       if is_word_op {
+        e.write(" ")
+      } else if right_needs_token_separator(op, r) {
         e.write(" ")
       } else {
         e.space()
@@ -1288,7 +1308,13 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         Pow => prec
         _ => prec + 1
       }
-      emit_expr(e, r, right_prec)
+      if coalesce_mix_needs_paren(op, r) {
+        e.write("(")
+        emit_expr(e, r, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, r, right_prec)
+      }
     }
     UnaryOp(op, inner) =>
       match op {
@@ -2180,6 +2206,17 @@ fn expr_stmt_needs_paren(expr : @ast.TsExpr) -> Bool {
     ArrowFunc(_, _, _, _) => false
     ObjectLit(_) => true
     NativeClassExpr(_, _) => true
+    // `({a, b} = rhs)` / `([a, b] = rhs)` — destructuring assignment
+    // at the head of a statement. JS parses a leading `{` as a
+    // block and a leading `[` as the start of an array literal /
+    // call (which is ambiguous in this position); the assign form
+    // must be parenthesised so the parser commits to the
+    // expression interpretation.
+    AssignPattern(b, _) =>
+      match b {
+        Object(_) | Array(_) => true
+        _ => false
+      }
     // Recurse into shapes where the leading token sits inside.
     AssignExpr(_, _) => false
     PropAssignExpr(recv, _, _) => expr_stmt_needs_paren(recv)
@@ -2401,6 +2438,48 @@ fn binop_str(op : @ast.TsBinOp) -> String {
     And => "&&"
     Or => "||"
     Coalesce => "??"
+  }
+}
+
+///|
+/// Detect mixed `??` / `||` / `&&` operators that JS forbids
+/// without explicit parens. Spec: a `CoalesceExpression` cannot
+/// contain a LogicalOR/AND without `()`. The parser preserves
+/// source-level parens through structure, but emit-side rewrites
+/// (fold / inline / mangle) can produce the bare mix.
+/// Detect operator-character merges that would happen if the
+/// minifier dropped the optional whitespace between a binary
+/// operator and the right operand's leading token. `"" + +x`
+/// must keep a space — otherwise `""++x` reads as a postfix
+/// increment on the empty string, a SyntaxError. Same for
+/// `- -x` / `< <x` / `> >x`.
+fn right_needs_token_separator(op : @ast.TsBinOp, right : @ast.TsExpr) -> Bool {
+  let right_leader = match right {
+    UnaryOp(o, _) =>
+      match o {
+        Plus | PreInc => '+'
+        Neg | PreDec => '-'
+        Not => '!'
+        BitwiseNot => '~'
+        _ => '?'
+      }
+    _ => '?'
+  }
+  match op {
+    Add => right_leader == '+'
+    Sub => right_leader == '-'
+    _ => false
+  }
+}
+
+///|
+fn coalesce_mix_needs_paren(op : @ast.TsBinOp, operand : @ast.TsExpr) -> Bool {
+  match (op, operand) {
+    (Coalesce, BinOp(Or, _, _))
+    | (Coalesce, BinOp(And, _, _))
+    | (Or, BinOp(Coalesce, _, _))
+    | (And, BinOp(Coalesce, _, _)) => true
+    _ => false
   }
 }
 

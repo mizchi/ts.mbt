@@ -1133,12 +1133,18 @@ fn rename_stmt(
     Switch(scrutinee, cases) => {
       let new_scrutinee = rename_expr(scrutinee, scope)
       let new_cases : Array[@ast.TsSwitchCase] = []
+      // All case bodies share the same lexical scope when the
+      // `case` labels aren't individually wrapped in `{…}` braces.
+      // TypeScript's own compiler source has `case A: const x = …;
+      // case B: const y = …;` patterns — each `const` is a fresh
+      // source name but shares the switch's scope. Use ONE shared
+      // child frame for the cases so the renames don't collide.
+      let inner = ScopeFrame::child(scope)
       for c in cases {
         let new_test = match c.test_expr {
           Some(t) => Some(rename_expr(t, scope))
           None => None
         }
-        let inner = ScopeFrame::child(scope)
         new_cases.push({
           test_expr: new_test,
           body: rename_block_inline_in(c.body, inner, reserved),
@@ -1261,13 +1267,31 @@ fn rename_block_inline_in(
   // declaration. Pre-bind every `<kind>(Ident(name), _, FuncExpr)`
   // before the recursive walk so the call site and the declaration
   // both pick up the same short name.
+  //
+  // Also pre-bind every other top-level `Let` / `Const` / `Var` /
+  // `NativeClassStmt`. Closures inside an earlier-evaluated object
+  // literal can reference a later declaration — TypeScript's
+  // `transpileWorker` builds `compilerHost = { getSourceFile: …
+  // inputFileName … }` before declaring `const inputFileName = …`.
+  // The closure call only runs after the function returns, so the
+  // forward ref is fine at runtime; the rename must agree at
+  // both sites.
+  // `var` decls are NOT pre-bound here — they hoist to the enclosing
+  // function frame via `hoist_var_decls_into_scope`. Adding a fresh
+  // bind here at the block level would shadow that function-frame
+  // binding and split the var name into two renames (e.g. the var
+  // body becomes `var a = 1` but post-block `return counter` looks
+  // up the function-frame name `b` instead).
   for s in block.stmts {
     match s {
-      Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
-      | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
-      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_)) =>
+      Let(@ast.TsBinding::Ident(name), _, _)
+      | Const(@ast.TsBinding::Ident(name), _, _) =>
         if not(scope.renames.contains(name)) {
           let _ = scope.bind(name, reserved)
+        }
+      NativeClassStmt(decl, _) =>
+        if decl.name != "" && not(scope.renames.contains(decl.name)) {
+          let _ = scope.bind(decl.name, reserved)
         }
       _ => ()
     }
