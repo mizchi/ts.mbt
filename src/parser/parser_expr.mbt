@@ -2859,10 +2859,14 @@ fn Parser::parse_primary(self : Parser) -> @ast.TsExpr raise ParseError {
         let _ = self.advance()
         Var("let")
       }
-    As => {
-      let _ = self.advance()
-      Var("as")
-    }
+    As =>
+      if self.peek_at(1).kind == Arrow {
+        let _ = self.advance()
+        self.parse_single_param_arrow("as")
+      } else {
+        let _ = self.advance()
+        Var("as")
+      }
     PrivateIdent(name) => {
       let _ = self.advance()
       let private_name = "#" + name

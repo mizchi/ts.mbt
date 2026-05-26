@@ -1298,6 +1298,24 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             e.space()
             emit_expr(e, v_expr, 2)
           }
+          (key, ComputedProp(k_expr, FuncExpr(f))) if key.has_prefix("@@get:@@computed:") || key.has_prefix("@@set:@@computed:") => {
+            // Computed-key accessor: `get [expr]() {…}` /
+            // `set [expr](v) {…}`. Parser stacks the `@@get:` /
+            // `@@set:` sentinel on top of the `@@computed:N` key,
+            // wrapping the function in a `ComputedProp(k_expr, …)`.
+            // Without this branch the emit produced
+            // `"@@get:@@computed:N": [expr]: function() {…}` —
+            // syntactically invalid object literal.
+            let accessor = if key.has_prefix("@@get:") { "get" } else { "set" }
+            e.write(accessor)
+            e.write(" [")
+            emit_expr(e, k_expr, 0)
+            e.write("](")
+            emit_runtime_params(e, f.params)
+            e.write(")")
+            e.space()
+            emit_block(e, f.body)
+          }
           (key, FuncExpr(f)) if key.has_prefix("@@get:") || key.has_prefix("@@set:") => {
             // Accessor in object literal: parser tags `get foo() {}`
             // / `set foo(v) {}` with a `@@get:` / `@@set:` sentinel

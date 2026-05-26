@@ -224,15 +224,34 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
     let _ = start
     return "<expr-base>"
   }
-  let mut full_name = match self.advance().kind {
-    Ident(n) => n
-    k => raise ParseError("Expected base class name, got \{k}")
+  // Some contextual keywords (`declare`, `type`, `from`, `as`, `of`,
+  // `in`) double as valid identifier names — `class X extends
+  // declare(args) {}` in effect's Schema.js is the standard case.
+  // Accept them at the heritage clause's leading name slot.
+  let lead = match contextual_ident_token_name(self.peek().kind) {
+    Some(n) => {
+      let _ = self.advance()
+      n
+    }
+    None =>
+      match self.advance().kind {
+        Ident(n) => n
+        k => raise ParseError("Expected base class name, got \{k}")
+      }
   }
+  let mut full_name = lead
   while self.check(Dot) {
     let _ = self.advance()
-    match self.advance().kind {
-      Ident(n) => full_name = full_name + "." + n
-      k => raise ParseError("Expected base class name, got \{k}")
+    match contextual_ident_token_name(self.peek().kind) {
+      Some(n) => {
+        let _ = self.advance()
+        full_name = full_name + "." + n
+      }
+      None =>
+        match self.advance().kind {
+          Ident(n) => full_name = full_name + "." + n
+          k => raise ParseError("Expected base class name, got \{k}")
+        }
     }
   }
   // `class C extends A?.B { ... }` — optional-chain in the heritage clause.
@@ -255,6 +274,25 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
     return "<expr-base>"
   }
   full_name
+}
+
+///|
+/// Map a contextual-keyword token to the identifier name it would
+/// have if it appeared in an identifier position (e.g. `Declare` ->
+/// `Some("declare")`). Plain identifiers and non-keyword tokens
+/// return `None`. Used at heritage clause / similar positions where
+/// the lexer's keyword classification needs to defer to the surface
+/// identifier name.
+fn contextual_ident_token_name(kind : TokenKind) -> String? {
+  match kind {
+    Declare => Some("declare")
+    Type => Some("type")
+    From => Some("from")
+    As => Some("as")
+    Of => Some("of")
+    In => Some("in")
+    _ => None
+  }
 }
 
 ///|
