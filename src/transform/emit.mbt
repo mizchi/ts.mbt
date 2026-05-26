@@ -2585,7 +2585,17 @@ fn emit_native_class(
       e.word("set")
       e.sep_after_word('A')
     }
-    e.write(m.name)
+    match m.key_expr {
+      Some(k) => {
+        // Computed-key method: `[expr](args) {…}`. Parser stores
+        // the expression on `key_expr`; `m.name` is the sentinel
+        // `<computed>` and is unused by emit here.
+        e.write("[")
+        emit_expr(e, k, 0)
+        e.write("]")
+      }
+      None => e.write(m.name)
+    }
     e.write("(")
     for i, p in m.params {
       if i > 0 {

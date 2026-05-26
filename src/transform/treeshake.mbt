@@ -304,6 +304,13 @@ fn collect_var_refs_in_class_decl(
       Some(b) => collect_var_refs_in_block(b, out)
       None => ()
     }
+    // Computed-key methods (`[OpCodes.OP_ON_SUCCESS](op) {…}`) have
+    // their key expression on `m.key_expr`. Walk it so the
+    // referenced bindings stay alive.
+    match m.key_expr {
+      Some(e) => collect_var_refs_in_expr(e, out)
+      None => ()
+    }
   }
 }
 

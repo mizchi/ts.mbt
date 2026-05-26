@@ -2383,6 +2383,7 @@ fn Parser::parse_declare_class(
                   // body — leave it as `None`.
                   body: None,
                   accessor: "",
+    key_expr: None,
                 })
               }
           }

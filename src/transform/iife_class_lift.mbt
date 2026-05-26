@@ -271,5 +271,6 @@ fn method_decl_from_func(
     is_static,
     body: Some(f.body),
     accessor: "",
+    key_expr: None,
   }
 }

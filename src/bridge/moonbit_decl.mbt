@@ -8560,6 +8560,7 @@ fn clone_class_method_in_scope(
     is_static: class_method.is_static,
     body: class_method.body,
     accessor: class_method.accessor,
+    key_expr: class_method.key_expr,
   }
 }
 
@@ -8614,6 +8615,7 @@ fn callable_method_from_func_type(
     is_static,
     body: None,
     accessor: "",
+    key_expr: None,
   }
 }
 

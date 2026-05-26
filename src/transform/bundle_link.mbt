@@ -946,7 +946,11 @@ fn substitute_var_names_in_stmt(
           }
           None => None
         }
-        new_methods.push({ ..mth, body: new_body })
+        let new_key_expr = match mth.key_expr {
+          Some(e) => Some(substitute_var_names_in_expr(e, map, ns))
+          None => None
+        }
+        new_methods.push({ ..mth, body: new_body, key_expr: new_key_expr })
       }
       let new_decorators : Array[@ast.TsExpr] = []
       for d in decl.decorators {

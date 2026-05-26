@@ -4995,6 +4995,7 @@ test "bridge: FFI class methods unwrap optional arguments" {
     is_static: false,
     body: None,
     accessor: "",
+    key_expr: None,
   }
   let actual = ffi_class_method_decl_to_moonbit(state, class_, class_method)
   assert_true(

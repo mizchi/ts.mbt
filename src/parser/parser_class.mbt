@@ -94,6 +94,7 @@ fn build_runtime_class_decl(
               Some(func.body)
             },
             accessor: accessor_tag,
+            key_expr: None,
           })
           match accessor_kind {
             Some("get") =>
@@ -121,6 +122,40 @@ fn build_runtime_class_decl(
             _ => ()
           }
         }
+      // Computed-key method (`class X { [Sym.iterator]() {…} }` /
+      // `[OpCodes.OP_ON_SUCCESS](op) {…}`). Record it on the
+      // `methods` list with the sentinel name `<computed>` and the
+      // parsed key expression on `key_expr` so emit can restore
+      // `[<expr>](…)` inside the class body. Effect's FiberRuntime
+      // dispatches `this[cur._op](cur)` on these; dropping them
+      // (which the previous code did) made `_op === "OnSuccess"`
+      // resolve to `undefined` and runLoop ran forever.
+      Method(is_static, Computed(key_expr), accessor_kind, func) => {
+        let params : Array[(String, @ast.TsType)] = []
+        for index, param in func.params {
+          params.push((runtime_class_param_name(param, index), param.type_))
+        }
+        let accessor_tag = match accessor_kind {
+          Some("get") => "get"
+          Some("set") => "set"
+          _ => ""
+        }
+        methods.push({
+          name: "<computed>",
+          type_params: [],
+          type_param_bounds: [],
+          params,
+          return_type: func.return_type,
+          is_static,
+          body: if func.body.stmts.length() == 0 {
+            None
+          } else {
+            Some(func.body)
+          },
+          accessor: accessor_tag,
+          key_expr: Some(key_expr),
+        })
+      }
       _ => ()
     }
   }

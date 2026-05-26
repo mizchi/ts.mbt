@@ -1173,10 +1173,22 @@ fn rename_stmt(
       }
       Try(new_try, new_bind, new_catch, new_finally)
     }
-    Block(b) => {
-      let inner = ScopeFrame::child(scope)
-      Block(rename_block_inline_in(b, inner, reserved))
-    }
+    Block(b) =>
+      // Parser packs multi-declarator `let a = 1, b = 2;` into a
+      // synthetic `Block([Let(a, …), Let(b, …)])` — the binders
+      // share the surrounding scope, not a new block scope. When
+      // every stmt is the same lexical decl kind, treat the block
+      // as transparent (rename in the outer scope) so subsequent
+      // `let` / `const` in the same scope can't collide with the
+      // multi-decl names. Without this, the inner scope drops the
+      // `i` / `g` renames at block exit and the next `const out`
+      // re-uses `i`'s slot — invalid duplicate declaration.
+      if is_synthetic_multi_decl_block(b) {
+        Block(rename_block_inline_in(b, scope, reserved))
+      } else {
+        let inner = ScopeFrame::child(scope)
+        Block(rename_block_inline_in(b, inner, reserved))
+      }
     Label(name, inner) => Label(name, rename_stmt(inner, scope, reserved))
     With(target, body) => {
       // `with` extends the scope chain dynamically; the static rename
@@ -1207,6 +1219,28 @@ fn rename_stmt(
 /// `rename_block_inline_in` directly — this helper is kept for the
 /// rare callers where the caller already represents the scope they
 /// want the body to inhabit (e.g. the function-body root frame).
+fn is_synthetic_multi_decl_block(b : @ast.TsBlock) -> Bool {
+  if b.stmts.length() < 2 {
+    return false
+  }
+  let kind = match b.stmts[0] {
+    Let(_, _, _) => "let"
+    Const(_, _, _) => "const"
+    Var(_, _, _) => "var"
+    _ => return false
+  }
+  for s in b.stmts {
+    match s {
+      Let(_, _, _) => if kind != "let" { return false }
+      Const(_, _, _) => if kind != "const" { return false }
+      Var(_, _, _) => if kind != "var" { return false }
+      _ => return false
+    }
+  }
+  true
+}
+
+///|
 fn rename_block_inline(
   block : @ast.TsBlock,
   scope : ScopeFrame,
@@ -1556,12 +1590,31 @@ fn rename_class_decl_idents(
   for m in decl.methods {
     let new_body = match m.body {
       Some(b) => {
+        // Method params introduce bindings into the body's scope.
+        // Without flagging them in the inner frame, a `fiber`
+        // parameter inside `shouldYield(fiber) { fiber.foo() }`
+        // resolves up the chain to whatever the outer scope mangled
+        // `fiber` to (effect's FiberRuntime keeps a top-level
+        // binding with the same name). Pin each param to its
+        // identity in the inner frame so body references resolve
+        // back to the parameter — emit prints params verbatim,
+        // so the names must not change.
         let inner = ScopeFrame::child(scope)
+        for p in m.params {
+          if p.0 != "" && not(inner.renames.contains(p.0)) {
+            inner.renames[p.0] = p.0
+            inner.used[p.0] = true
+          }
+        }
         Some(rename_block_inline_in(b, inner, inner.reserved))
       }
       None => None
     }
-    new_methods.push({ ..m, body: new_body })
+    let new_key_expr = match m.key_expr {
+      Some(e) => Some(rename_expr(e, scope))
+      None => None
+    }
+    new_methods.push({ ..m, body: new_body, key_expr: new_key_expr })
   }
   let new_decorators : Array[@ast.TsExpr] = []
   for d in decl.decorators {

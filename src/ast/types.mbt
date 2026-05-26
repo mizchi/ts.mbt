@@ -578,6 +578,12 @@ pub(all) struct TsClassMethodDecl {
   // The emitter uses this to restore native `get foo()` / `set foo(v)`
   // syntax on `NativeClassStmt` / `NativeClassExpr` outputs.
   accessor : String
+  // Computed method key (`class X { [Symbol.iterator]() {…} }`).
+  // When `Some`, emit prints `[<expr>](...)` instead of `<name>(...)` —
+  // `name` carries the sentinel `"<computed>"` and is informational
+  // only. Effect's FiberRuntime relies on `[OpCodes.OP_ON_SUCCESS]
+  // (op) {…}` style runtime dispatch.
+  key_expr : TsExpr?
 } derive(Debug)
 
 ///|
