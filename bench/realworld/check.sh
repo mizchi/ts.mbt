@@ -28,6 +28,7 @@ fixture() {
 fixture "preact"  bench/realworld/preact-entry.ts  "preact vnode: object div x"
 fixture "drizzle" bench/realworld/drizzle-entry.ts "drizzle ok: true"
 fixture "zod"     bench/realworld/zod-entry.ts     "zod ok: ada 36 1"
+fixture "datefns" bench/realworld/datefns-entry.ts "date-fns ok: 2026-04-11 100"
 
 # Hono is loaded via dynamic import (default export pattern) — wrap it.
 cat > /tmp/_hono_run.mjs << 'JS'

@@ -1585,7 +1585,7 @@ fn emit_template_literal(
 ) -> Unit {
   e.write("`")
   for i, part in parts {
-    e.write(part)
+    e.write(escape_template_part(part))
     if i < exprs.length() {
       e.write("${")
       emit_expr(e, exprs[i], 0)
@@ -1593,6 +1593,37 @@ fn emit_template_literal(
     }
   }
   e.write("`")
+}
+
+///|
+/// Re-escape a "cooked" template literal segment so it round-trips
+/// safely as JS source. The parser stores parts with escape sequences
+/// already decoded (`\\\`` → literal backtick), so unescaped emit
+/// produces invalid syntax. Re-escape the three chars that have
+/// special meaning inside a template literal: `\\` → `\\\\`, `` ` ``
+/// → `\\\``, and `$` immediately before `{` → `\\${`. Other escape
+/// forms (`\\n`, `\\u0041`) decoded to their actual characters and
+/// stay as-is — JS template literals accept the raw characters.
+fn escape_template_part(s : String) -> String {
+  let buf = StringBuilder::new()
+  let chars = s.to_array()
+  let n = chars.length()
+  let mut i = 0
+  while i < n {
+    let c = chars[i]
+    if c == '\\' {
+      buf.write_string("\\\\")
+    } else if c == '`' {
+      buf.write_string("\\`")
+    } else if c == '$' && i + 1 < n && chars[i + 1] == '{' {
+      buf.write_string("\\${")
+      i = i + 1
+    } else {
+      buf.write_char(c)
+    }
+    i = i + 1
+  }
+  buf.to_string()
 }
 
 ///|
