@@ -779,13 +779,24 @@ fn mangle_block_impl(
   // the declaration. The same logic already runs inside
   // `rename_block_inline_in` for nested blocks, but the top-level
   // walk below uses `rename_stmt` directly, bypassing it.
+  //
+  // Also pre-bind every other top-level `Let` / `Const` / `Var`
+  // / `NativeClassStmt` binding so cross-IIFE forward references
+  // (a method body inside an earlier class IIFE that names a
+  // class declared later in the source — common pattern in
+  // drizzle-orm's circular sql<->column refs) resolve to the
+  // same rename as the eventual declaration site.
   for s in block.stmts {
     match s {
-      Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
-      | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
-      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_)) =>
+      Let(@ast.TsBinding::Ident(name), _, _)
+      | Const(@ast.TsBinding::Ident(name), _, _)
+      | Var(@ast.TsBinding::Ident(name), _, _) =>
         if not(root.renames.contains(name)) {
           let _ = root.bind(name, reserved)
+        }
+      NativeClassStmt(decl, _) =>
+        if decl.name != "" && not(root.renames.contains(decl.name)) {
+          let _ = root.bind(decl.name, reserved)
         }
       _ => ()
     }
@@ -1528,6 +1539,15 @@ fn rename_class_decl_idents(
   decl : @ast.TsClassDecl,
   scope : ScopeFrame,
 ) -> @ast.TsClassDecl {
+  // The class declaration's own name participates in the scope's
+  // value namespace just like a `let` / `function` binding. Resolve
+  // through the chain — the top-level pre-bind pass already
+  // allocated a rename for it, so this picks up that decision.
+  let new_name = if decl.name != "" {
+    scope.resolve(decl.name)
+  } else {
+    decl.name
+  }
   let new_base_names : Array[String] = []
   for b in decl.base_names {
     new_base_names.push(scope.resolve(b))
@@ -1549,6 +1569,7 @@ fn rename_class_decl_idents(
   }
   {
     ..decl,
+    name: new_name,
     base_names: new_base_names,
     methods: new_methods,
     decorators: new_decorators,
