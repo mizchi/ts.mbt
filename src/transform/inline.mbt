@@ -390,7 +390,21 @@ fn substitute_stmt(
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(substitute_expr(e, name, rhs))
     If(c, t, e) =>
-      If(substitute_expr(c, name, rhs), t, e)
+      // Recurse into then/else bodies too — the use site we
+      // verified is unique might live there, and the previous
+      // "rewrite condition only, leave bodies alone" emitted a
+      // bare reference with the declaration already dropped.
+      // Safe for `if` because the body runs at most once
+      // (single-evaluation invariant preserved). Loops still
+      // bail out via `count_var_uses_stmt`'s nested-tagging.
+      If(
+        substitute_expr(c, name, rhs),
+        substitute_block(t, name, rhs),
+        match e {
+          Some(b) => Some(substitute_block(b, name, rhs))
+          None => None
+        },
+      )
     While(c, body) => While(substitute_expr(c, name, rhs), body)
     DoWhile(c, body) => DoWhile(substitute_expr(c, name, rhs), body)
     For(init, cond, update, body) =>
@@ -419,6 +433,23 @@ fn substitute_stmt(
     Label(lname, inner) => Label(lname, substitute_stmt(inner, name, rhs))
     _ => stmt
   }
+}
+
+///|
+/// Recurse `substitute_stmt` over an entire block, returning a
+/// rebuilt block. Used by branch bodies (`if` / `else`) where the
+/// `count_var_uses` machinery already proved the rhs may safely
+/// move inside the body (single evaluation).
+fn substitute_block(
+  block : @ast.TsBlock,
+  name : String,
+  rhs : @ast.TsExpr,
+) -> @ast.TsBlock {
+  let stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    stmts.push(substitute_stmt(s, name, rhs))
+  }
+  { stmts, stmt_positions: block.stmt_positions }
 }
 
 ///|

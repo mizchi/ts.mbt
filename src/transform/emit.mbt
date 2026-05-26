@@ -413,6 +413,38 @@ fn emit_branch_body(e : Emitter, block : @ast.TsBlock) -> Unit {
 /// `if (cond) let x = 1;` is a syntax error: lexical declarations
 /// can't be the direct child of a control flow head. `function`
 /// declarations have the same restriction.
+/// Walk to the end of a block and check whether its terminal stmt
+/// is an `if` that would swallow a following `else`. The de-brace
+/// optimisation can't apply when that's true — emit must keep the
+/// surrounding `{…}` so the `else` binds to the outer `if`.
+fn block_ends_in_dangling_if(b : @ast.TsBlock) -> Bool {
+  if b.stmts.length() == 0 {
+    return false
+  }
+  stmt_ends_in_dangling_if(b.stmts[b.stmts.length() - 1])
+}
+
+///|
+fn stmt_ends_in_dangling_if(s : @ast.TsStmt) -> Bool {
+  match s {
+    // `if (...) X` with no else — swallows a following `else`.
+    If(_, _, None) => true
+    // `if (...) X else Y` — the recursion follows `else` because
+    // that's the branch where a *new* trailing else would attach.
+    If(_, _, Some(else_b)) => block_ends_in_dangling_if(else_b)
+    // Loop / labelled / with stmts whose body is a single bare-if
+    // also re-expose the dangling-else risk on the way out.
+    While(_, body) | DoWhile(_, body) => block_ends_in_dangling_if(body)
+    For(_, _, _, body) => block_ends_in_dangling_if(body)
+    ForOf(_, _, _, _, body) | ForAwaitOf(_, _, _, _, body) | ForIn(_, _, _, _, body) =>
+      block_ends_in_dangling_if(body)
+    With(_, body) => block_ends_in_dangling_if(body)
+    Label(_, inner) => stmt_ends_in_dangling_if(inner)
+    _ => false
+  }
+}
+
+///|
 fn can_braceless(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Let(_, _, _) | Const(_, _, _) => false
@@ -622,7 +654,24 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, cond, 0)
       e.write(")")
       e.space()
-      emit_branch_body(e, then_b)
+      // Dangling-else hazard: when this `if` has an `else` AND the
+      // then-body's last stmt is a bare `if` without `else`, the
+      // optional minify de-brace turns `if A { if B X } else Y`
+      // into `if A if B X else Y` — the else then binds to the
+      // INNER if, silently re-routing control flow. TypeScript's
+      // `tryParseModifier` (a deeply nested if/else chain inside
+      // an outer `if (cond) { if (!try) return; }`) is the
+      // textbook case. Force braces on the then-body whenever an
+      // else follows AND the body could swallow it.
+      let then_needs_braces = match else_opt {
+        Some(_) => block_ends_in_dangling_if(then_b)
+        None => false
+      }
+      if then_needs_braces {
+        emit_block(e, then_b)
+      } else {
+        emit_branch_body(e, then_b)
+      }
       match else_opt {
         Some(else_b) => {
           e.space()

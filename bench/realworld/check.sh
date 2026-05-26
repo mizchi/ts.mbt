@@ -8,8 +8,8 @@ cd "$(dirname "$0")/../.."
 MTSC=_build/native/release/build/cmd/mtsc/mtsc.exe
 
 fixture() {
-  local name="$1" entry="$2" expected="$3" flags="${4:---bundle --fold --treeshake --mangle --mangle-properties --minify}"
-  $MTSC "$entry" $flags -o "/tmp/rw_${name}.js" 2>/dev/null
+  local name="$1" entry="$2" expected="$3"
+  $MTSC "$entry" --bundle --fold --treeshake --mangle --mangle-properties --minify -o "/tmp/rw_${name}.js" 2>/dev/null
   if [ ! -s "/tmp/rw_${name}.js" ]; then
     echo "[$name] BUNDLER CRASH"; return 1
   fi
@@ -31,12 +31,7 @@ fixture "zod"     bench/realworld/zod-entry.ts     "zod ok: ada 36 1"
 fixture "datefns" bench/realworld/datefns-entry.ts "date-fns ok: 2026-04-11 100"
 fixture "yjs"     bench/realworld/yjs-entry.ts     "yjs ok: 3 42 6"
 fixture "effect"  bench/realworld/effect-entry.ts  "effect ok: 21"
-# TypeScript ships only as CJS — bundles cleanly through `import "typescript"`
-# (side-effect) and references the runtime `ts` global. Full minify still
-# hangs at runtime on the 4MB output, so use the mangle-but-not-minify
-# variant which exercises every linker / mangle / treeshake path.
-fixture "typescript" bench/realworld/typescript-side.ts "typescript ok:" \
-  "--bundle --fold --treeshake --mangle --mangle-properties"
+fixture "typescript" bench/realworld/typescript-side.ts "typescript ok:"
 
 # Hono is loaded via dynamic import (default export pattern) — wrap it.
 cat > /tmp/_hono_run.mjs << 'JS'
