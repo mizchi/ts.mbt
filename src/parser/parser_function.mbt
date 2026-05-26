@@ -2382,6 +2382,7 @@ fn Parser::parse_declare_class(
                   // interface-style method signatures don't carry a
                   // body — leave it as `None`.
                   body: None,
+                  accessor: "",
                 })
               }
           }

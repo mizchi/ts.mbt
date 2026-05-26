@@ -574,6 +574,10 @@ pub(all) struct TsClassMethodDecl {
   // signatures. The expression checker walks the body when present so
   // method internals get the same coverage as top-level functions.
   body : TsBlock?
+  // `"get"` / `"set"` for accessor methods, `""` for regular methods.
+  // The emitter uses this to restore native `get foo()` / `set foo(v)`
+  // syntax on `NativeClassStmt` / `NativeClassExpr` outputs.
+  accessor : String
 } derive(Debug)
 
 ///|

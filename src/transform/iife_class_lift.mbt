@@ -268,5 +268,6 @@ fn method_decl_from_func(
     return_type: f.return_type,
     is_static,
     body: Some(f.body),
+    accessor: "",
   }
 }

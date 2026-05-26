@@ -637,8 +637,19 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_branch_body(e, body)
     }
     DoWhile(cond, body) => {
-      e.write("do")
-      e.space()
+      // `do` is a keyword token; the next token must either be
+      // separated by a non-ident char (`{` of a block body) or by
+      // whitespace, otherwise `do <ident>=…` re-tokenizes as a
+      // single identifier (`dogS=…` instead of `do gS=…`).
+      e.word("do")
+      let body_first = if e.pretty || body.stmts.length() != 1 {
+        '{'
+      } else if can_braceless(body.stmts[0]) {
+        stmt_leading_byte(body.stmts[0])
+      } else {
+        '{'
+      }
+      e.sep_after_word(body_first)
       emit_branch_body(e, body)
       e.space()
       e.write("while")
@@ -884,10 +895,14 @@ fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
     Block(b) => b
     _ => return false
   }
-  if block.stmts.length() < 2 {
+  if block.stmts.length() == 0 {
     return false
   }
-  // All stmts must be the same lexical kind.
+  // All stmts must be the same lexical kind. Even a single-stmt
+  // block needs unwrapping — if treeshake / fold removed the other
+  // declarations the remaining one must still emit as `let x = …`
+  // (not `{ let x = …; }`), otherwise the `for` head re-parses as
+  // a block expression and the loop bindings disappear.
   let kind = match block.stmts[0] {
     Var(_, _, _) => "var"
     Let(_, _, _) => "let"
@@ -2172,6 +2187,18 @@ fn emit_native_class(
     e.nl()
     if m.is_static {
       e.word("static")
+      e.sep_after_word('A')
+    }
+    // Accessor methods (`get foo()` / `set foo(v)`) get the keyword
+    // prefix; without it the emitted property is a plain method and
+    // the runtime never installs the getter/setter — Yjs's
+    // `AbstractStruct.deleted` getter, for example, regresses to a
+    // throwing stub on every access.
+    if m.accessor == "get" {
+      e.word("get")
+      e.sep_after_word('A')
+    } else if m.accessor == "set" {
+      e.word("set")
       e.sep_after_word('A')
     }
     e.write(m.name)

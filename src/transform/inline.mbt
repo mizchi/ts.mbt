@@ -648,7 +648,13 @@ fn count_var_uses_stmt(
       let (l2, n2) = count_var_uses_expr(c, name, 0, 0, inside_func)
       l = l + l2
       n = n + n2
-      let (l3, n3) = count_var_uses_block(body, name, inside_func)
+      // Loop body uses are counted as "nested" so single-use
+      // inlining refuses to fold a declaration's rhs into a body
+      // that would re-evaluate it each iteration. The semantics of
+      // `const X = expr; while (…) { use(X) }` keep `expr` evaluated
+      // exactly once; collapsing X into the body would lift that to
+      // N evaluations.
+      let (l3, n3) = count_var_uses_block(body, name, true)
       l = l + l3
       n = n + n3
     }
@@ -677,7 +683,9 @@ fn count_var_uses_stmt(
         }
         None => ()
       }
-      let (l2, n2) = count_var_uses_block(body, name, inside_func)
+      // Same loop-body protection as `While` / `DoWhile`: refuse
+      // inlining when the use sits inside the iterated body.
+      let (l2, n2) = count_var_uses_block(body, name, true)
       l = l + l2
       n = n + n2
     }
@@ -687,7 +695,7 @@ fn count_var_uses_stmt(
       let (l2, n2) = count_var_uses_expr(iter, name, 0, 0, inside_func)
       l = l + l2
       n = n + n2
-      let (l3, n3) = count_var_uses_block(body, name, inside_func)
+      let (l3, n3) = count_var_uses_block(body, name, true)
       l = l + l3
       n = n + n3
     }

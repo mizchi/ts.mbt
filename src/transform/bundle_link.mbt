@@ -926,7 +926,15 @@ fn substitute_var_names_in_stmt(
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for mth in decl.methods {
         let new_body = match mth.body {
-          Some(b) => Some(substitute_var_names_in_block(b, map, ns))
+          Some(b) => {
+            // Method params shadow the linker's substitution map
+            // the same way function params do — a parameter named
+            // `f` must not be rewritten to a synthesized namespace
+            // local that happens to also be called `f`.
+            let inner_map = shadow_map_for_method_params(mth.params, map)
+            let inner_ns = shadow_ns_for_method_params(mth.params, ns)
+            Some(substitute_var_names_in_block(b, inner_map, inner_ns))
+          }
           None => None
         }
         new_methods.push({ ..mth, body: new_body })
@@ -943,8 +951,15 @@ fn substitute_var_names_in_stmt(
         decorators: new_decorators,
       }
       let new_ctor = match ctor_body {
-        Some(f) =>
-          Some({ ..f, body: substitute_var_names_in_block(f.body, map, ns) })
+        Some(f) => {
+          let inner_map = shadow_map_for_params(f.params, map)
+          let inner_ns = shadow_ns_for_params(f.params, ns)
+          Some({
+            ..f,
+            params: substitute_var_names_in_params(f.params, map, ns),
+            body: substitute_var_names_in_block(f.body, inner_map, inner_ns),
+          })
+        }
         None => None
       }
       NativeClassStmt(new_decl, new_ctor)
@@ -1100,17 +1115,27 @@ fn substitute_var_names_in_expr(
         substitute_var_names_in_expr(v, map, ns),
       )
     ArrowFunc(params, ret, body, is_async) => {
+      let new_params = substitute_var_names_in_params(params, map, ns)
+      let inner_map = shadow_map_for_params(params, map)
+      let inner_ns = shadow_ns_for_params(params, ns)
       let new_body = match body {
         ArrowExpr(e) =>
-          @ast.TsArrowBody::ArrowExpr(substitute_var_names_in_expr(e, map, ns))
+          @ast.TsArrowBody::ArrowExpr(
+            substitute_var_names_in_expr(e, inner_map, inner_ns),
+          )
         ArrowBlock(b) =>
-          @ast.TsArrowBody::ArrowBlock(substitute_var_names_in_block(b, map, ns))
+          @ast.TsArrowBody::ArrowBlock(
+            substitute_var_names_in_block(b, inner_map, inner_ns),
+          )
       }
-      ArrowFunc(params, ret, new_body, is_async)
+      ArrowFunc(new_params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
-      let new_body = substitute_var_names_in_block(f.body, map, ns)
-      FuncExpr({ ..f, body: new_body })
+      let new_params = substitute_var_names_in_params(f.params, map, ns)
+      let inner_map = shadow_map_for_params(f.params, map)
+      let inner_ns = shadow_ns_for_params(f.params, ns)
+      let new_body = substitute_var_names_in_block(f.body, inner_map, inner_ns)
+      FuncExpr({ ..f, params: new_params, body: new_body })
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
@@ -1150,7 +1175,11 @@ fn substitute_var_names_in_expr(
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for mth in decl.methods {
         let new_body = match mth.body {
-          Some(b) => Some(substitute_var_names_in_block(b, map, ns))
+          Some(b) => {
+            let inner_map = shadow_map_for_method_params(mth.params, map)
+            let inner_ns = shadow_ns_for_method_params(mth.params, ns)
+            Some(substitute_var_names_in_block(b, inner_map, inner_ns))
+          }
           None => None
         }
         new_methods.push({ ..mth, body: new_body })
@@ -1167,13 +1196,233 @@ fn substitute_var_names_in_expr(
         decorators: new_decorators,
       }
       let new_ctor = match ctor_body {
-        Some(f) =>
-          Some({ ..f, body: substitute_var_names_in_block(f.body, map, ns) })
+        Some(f) => {
+          let inner_map = shadow_map_for_params(f.params, map)
+          let inner_ns = shadow_ns_for_params(f.params, ns)
+          Some({
+            ..f,
+            params: substitute_var_names_in_params(f.params, map, ns),
+            body: substitute_var_names_in_block(f.body, inner_map, inner_ns),
+          })
+        }
         None => None
       }
       NativeClassExpr(new_decl, new_ctor)
     }
     _ => expr
+  }
+}
+
+///|
+/// Strip entries from the linker substitution map whose KEY (the
+/// original name being rewritten) collides with a name introduced
+/// by the given parameter list. Inside a function body the parameter
+/// shadows whatever the top-level rename meant, so we must not
+/// rewrite a `Var(f)` reference to the namespace alias `f$N` when
+/// `f` is the function's own parameter.
+fn shadow_map_for_params(
+  params : Array[@ast.TsParam],
+  map : Map[String, String],
+) -> Map[String, String] {
+  if map.is_empty() {
+    return map
+  }
+  let names : Map[String, Bool] = {}
+  collect_param_binding_names(params, names)
+  if names.is_empty() {
+    return map
+  }
+  let out : Map[String, String] = {}
+  for entry in map {
+    if not(names.contains(entry.0)) {
+      out[entry.0] = entry.1
+    }
+  }
+  out
+}
+
+///|
+/// Same shadowing logic for the namespace-substitution map used by
+/// `ns.X` rewrites. If the function parameter is named after a
+/// namespace alias (`f`, `map`, …), references inside the body
+/// belong to the parameter, not to the namespace's exported member.
+fn shadow_ns_for_params(
+  params : Array[@ast.TsParam],
+  ns : Map[String, Map[String, String]],
+) -> Map[String, Map[String, String]] {
+  if ns.is_empty() {
+    return ns
+  }
+  let names : Map[String, Bool] = {}
+  collect_param_binding_names(params, names)
+  if names.is_empty() {
+    return ns
+  }
+  let out : Map[String, Map[String, String]] = {}
+  for entry in ns {
+    if not(names.contains(entry.0)) {
+      out[entry.0] = entry.1
+    }
+  }
+  out
+}
+
+///|
+fn shadow_map_for_method_params(
+  params : Array[(String, @ast.TsType)],
+  map : Map[String, String],
+) -> Map[String, String] {
+  if map.is_empty() {
+    return map
+  }
+  let names : Map[String, Bool] = {}
+  for p in params {
+    if p.0 != "" {
+      names[p.0] = true
+    }
+  }
+  if names.is_empty() {
+    return map
+  }
+  let out : Map[String, String] = {}
+  for entry in map {
+    if not(names.contains(entry.0)) {
+      out[entry.0] = entry.1
+    }
+  }
+  out
+}
+
+///|
+fn shadow_ns_for_method_params(
+  params : Array[(String, @ast.TsType)],
+  ns : Map[String, Map[String, String]],
+) -> Map[String, Map[String, String]] {
+  if ns.is_empty() {
+    return ns
+  }
+  let names : Map[String, Bool] = {}
+  for p in params {
+    if p.0 != "" {
+      names[p.0] = true
+    }
+  }
+  if names.is_empty() {
+    return ns
+  }
+  let out : Map[String, Map[String, String]] = {}
+  for entry in ns {
+    if not(names.contains(entry.0)) {
+      out[entry.0] = entry.1
+    }
+  }
+  out
+}
+
+///|
+fn collect_param_binding_names(
+  params : Array[@ast.TsParam],
+  out : Map[String, Bool],
+) -> Unit {
+  for p in params {
+    if p.name != "" {
+      out[p.name] = true
+    }
+    match p.binding {
+      Some(b) => {
+        let names : Array[String] = []
+        collect_binding_names_into(b, names)
+        for n in names {
+          out[n] = true
+        }
+      }
+      None => ()
+    }
+  }
+}
+
+///|
+/// Walk a function parameter list and substitute identifiers inside
+/// every default expression — including destructuring defaults
+/// (`{a = expr} = {}` / `[x = expr]`). Without this, namespace
+/// rewrites like `import * as random` -> `random.uuidv4()` get lost
+/// on constructor defaults such as Yjs's
+/// `constructor({guid = random.uuidv4(), ...} = {})`.
+fn substitute_var_names_in_params(
+  params : Array[@ast.TsParam],
+  map : Map[String, String],
+  ns : Map[String, Map[String, String]],
+) -> Array[@ast.TsParam] {
+  let out : Array[@ast.TsParam] = []
+  for p in params {
+    let new_default = match p.default {
+      Some(d) => Some(substitute_var_names_in_expr(d, map, ns))
+      None => None
+    }
+    let new_binding = match p.binding {
+      Some(b) => Some(substitute_var_names_in_binding(b, map, ns))
+      None => None
+    }
+    out.push({ ..p, default: new_default, binding: new_binding })
+  }
+  out
+}
+
+///|
+/// Recursively walk a destructuring binding pattern, substituting
+/// inside every default-value expression and inside nested patterns.
+/// Binding identifier names themselves are *not* rewritten — those
+/// are local bindings introduced by the destructure, not references.
+fn substitute_var_names_in_binding(
+  binding : @ast.TsBinding,
+  map : Map[String, String],
+  ns : Map[String, Map[String, String]],
+) -> @ast.TsBinding {
+  match binding {
+    Ident(_) => binding
+    Array(ab) => {
+      let new_items : Array[@ast.TsBindingElem?] = []
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            let new_inner = substitute_var_names_in_binding(be.binding, map, ns)
+            let new_default = match be.default {
+              Some(d) => Some(substitute_var_names_in_expr(d, map, ns))
+              None => None
+            }
+            new_items.push(Some({ binding: new_inner, default: new_default }))
+          }
+          None => new_items.push(None)
+        }
+      }
+      let new_rest = match ab.rest {
+        Some(r) => Some(substitute_var_names_in_binding(r, map, ns))
+        None => None
+      }
+      Array({ items: new_items, rest: new_rest })
+    }
+    Object(ob) => {
+      let new_props : Array[@ast.TsObjectBindingProp] = []
+      for prop in ob.props {
+        let new_inner = substitute_var_names_in_binding(prop.binding, map, ns)
+        let new_default = match prop.default {
+          Some(d) => Some(substitute_var_names_in_expr(d, map, ns))
+          None => None
+        }
+        let new_key_expr = match prop.key_expr {
+          Some(k) => Some(substitute_var_names_in_expr(k, map, ns))
+          None => None
+        }
+        new_props.push({
+          key: prop.key,
+          key_expr: new_key_expr,
+          binding: new_inner,
+          default: new_default,
+        })
+      }
+      Object({ props: new_props, rest: ob.rest })
+    }
+    Target(e) => Target(substitute_var_names_in_expr(e, map, ns))
   }
 }
 

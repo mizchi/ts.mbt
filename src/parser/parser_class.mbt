@@ -69,6 +69,32 @@ fn build_runtime_class_decl(
         }
       Method(is_static, Name(method_name), accessor_kind, func) =>
         if is_public_runtime_class_member_name(method_name) {
+          // Always record the method (so getters/setters keep their
+          // bodies for emit); the `accessor` tag tells the emitter
+          // whether to restore `get foo()` / `set foo(v)` syntax.
+          let params : Array[(String, @ast.TsType)] = []
+          for index, param in func.params {
+            params.push((runtime_class_param_name(param, index), param.type_))
+          }
+          let accessor_tag = match accessor_kind {
+            Some("get") => "get"
+            Some("set") => "set"
+            _ => ""
+          }
+          methods.push({
+            name: method_name,
+            type_params: [],
+            type_param_bounds: [],
+            params,
+            return_type: func.return_type,
+            is_static,
+            body: if func.body.stmts.length() == 0 {
+              None
+            } else {
+              Some(func.body)
+            },
+            accessor: accessor_tag,
+          })
           match accessor_kind {
             Some("get") =>
               upsert_class_property(properties, {
@@ -92,27 +118,7 @@ fn build_runtime_class_decl(
                 is_accessor: false,
               })
             }
-            _ => {
-              let params : Array[(String, @ast.TsType)] = []
-              for index, param in func.params {
-                params.push(
-                  (runtime_class_param_name(param, index), param.type_),
-                )
-              }
-              methods.push({
-                name: method_name,
-                type_params: [],
-                type_param_bounds: [],
-                params,
-                return_type: func.return_type,
-                is_static,
-                body: if func.body.stmts.length() == 0 {
-                  None
-                } else {
-                  Some(func.body)
-                },
-              })
-            }
+            _ => ()
           }
         }
       _ => ()

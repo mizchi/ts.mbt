@@ -253,7 +253,15 @@ fn collect_var_refs_in_stmt(
     NativeClassStmt(decl, ctor_body) => {
       collect_var_refs_in_class_decl(decl, out)
       match ctor_body {
-        Some(f) => collect_var_refs_in_block(f.body, out)
+        Some(f) => {
+          // Constructor parameter defaults can carry the only
+          // reference to a top-level binding (e.g. Yjs's `Doc`
+          // ctor: `{guid = uuidv4(), ...} = {}`). Walk every
+          // default expression — including the inner destructure
+          // defaults — so treeshake doesn't drop those bindings.
+          collect_var_refs_in_params(f.params, out)
+          collect_var_refs_in_block(f.body, out)
+        }
         None => ()
       }
     }
@@ -374,24 +382,14 @@ fn collect_var_refs_in_expr(
       collect_var_refs_in_expr(b, out)
     }
     ArrowFunc(params, _, body, _) => {
-      for p in params {
-        match p.default {
-          Some(d) => collect_var_refs_in_expr(d, out)
-          None => ()
-        }
-      }
+      collect_var_refs_in_params(params, out)
       match body {
         ArrowExpr(e) => collect_var_refs_in_expr(e, out)
         ArrowBlock(b) => collect_var_refs_in_block(b, out)
       }
     }
     FuncExpr(f) => {
-      for p in f.params {
-        match p.default {
-          Some(d) => collect_var_refs_in_expr(d, out)
-          None => ()
-        }
-      }
+      collect_var_refs_in_params(f.params, out)
       collect_var_refs_in_block(f.body, out)
     }
     DynamicImport(spec, opts) => {
@@ -418,11 +416,79 @@ fn collect_var_refs_in_expr(
     NativeClassExpr(decl, ctor_body) => {
       collect_var_refs_in_class_decl(decl, out)
       match ctor_body {
-        Some(f) => collect_var_refs_in_block(f.body, out)
+        Some(f) => {
+          collect_var_refs_in_params(f.params, out)
+          collect_var_refs_in_block(f.body, out)
+        }
         None => ()
       }
     }
     PureCall(inner) => collect_var_refs_in_expr(inner, out)
     _ => ()
+  }
+}
+
+///|
+/// Walk every default expression reachable from a parameter list,
+/// including nested destructure-element defaults. `Param.default`
+/// covers the top-level `(x = expr)` shape; `Param.binding`'s tree
+/// covers `({a = expr} = {})` and `([x = expr])` shapes. Both must
+/// be walked so treeshake / linker passes don't lose references
+/// that only appear inside destructuring defaults.
+fn collect_var_refs_in_params(
+  params : Array[@ast.TsParam],
+  out : Map[String, Bool],
+) -> Unit {
+  for p in params {
+    match p.default {
+      Some(d) => collect_var_refs_in_expr(d, out)
+      None => ()
+    }
+    match p.binding {
+      Some(b) => collect_var_refs_in_binding(b, out)
+      None => ()
+    }
+  }
+}
+
+///|
+fn collect_var_refs_in_binding(
+  binding : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match binding {
+    Ident(_) => ()
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            collect_var_refs_in_binding(be.binding, out)
+            match be.default {
+              Some(d) => collect_var_refs_in_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_var_refs_in_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        collect_var_refs_in_binding(prop.binding, out)
+        match prop.default {
+          Some(d) => collect_var_refs_in_expr(d, out)
+          None => ()
+        }
+        match prop.key_expr {
+          Some(k) => collect_var_refs_in_expr(k, out)
+          None => ()
+        }
+      }
+    }
+    Target(e) => collect_var_refs_in_expr(e, out)
   }
 }
