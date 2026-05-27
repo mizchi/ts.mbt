@@ -351,17 +351,17 @@ pub fn reserved_props_from_observability(
       DirectProps => collect_direct_props(sym, out)
       RecursiveProps => collect_direct_props(sym, out)
       External =>
-        // Conservative wildcard for external escapes. We tried
-        // relaxing this to accessed-props-only in Phase 5, but
-        // it surfaced gaps in `mangler_builtin_reserved_properties`
-        // (Math.min / Math.max etc. aren't listed, so they got
-        // renamed when wildcard stopped propping them up). Until
-        // the builtin reserved list is extended to cover the
-        // numeric / date / regexp methods, keep the wildcard
-        // here. The Const+ObjectLit pre-pass above already
-        // captures the linker-synthesised namespace case so the
-        // common observable shape doesn't depend on this
-        // fallback.
+        // Conservative wildcard for external escapes. Phase 5
+        // tried relaxing this with the expanded builtin
+        // reserved list, but zod still trips on bindings whose
+        // prop surface isn't fully covered by PropReceiver
+        // uses + literal-init keys (function parameters that
+        // re-flow through `Object.defineProperty(kg, "q", …)`
+        // and similar dynamic patterns). Until a sharper
+        // taint walk lands, keep the wildcard here. The
+        // Const+ObjectLit pre-pass still catches the linker
+        // synthesised namespace case so most observable shapes
+        // don't depend on this fallback.
         out["*"] = true
     }
   }

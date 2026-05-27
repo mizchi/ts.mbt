@@ -171,6 +171,39 @@ let mangler_builtin_reserved_properties : Array[String] = [
   "matchAll", "search", "substring", "substr", "repeat", "normalize", "raw",
   // Number / Math
    "toFixed", "toPrecision", "toExponential", "toLocaleString",
+  // Math statics — every method on the global `Math` object.
+  // Phase 5 retires the External-binding wildcard fallback;
+  // without these listed, bundles that call `Math.floor(...)` /
+  // `Math.min(...)` ended up renaming the method down to one
+  // letter and crashing at runtime.
+  "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh",
+  "cbrt", "ceil", "clz32", "cos", "cosh", "exp", "expm1", "floor",
+  "fround", "hypot", "imul", "log", "log10", "log1p", "log2",
+  "max", "min", "pow", "random", "round", "sign", "sin", "sinh",
+  "sqrt", "tan", "tanh", "trunc",
+  // Math constants
+  "E", "LN2", "LN10", "LOG2E", "LOG10E", "PI", "SQRT1_2", "SQRT2",
+  // Number statics
+  "isInteger", "isFinite", "isNaN", "isSafeInteger", "parseFloat",
+  "parseInt", "EPSILON", "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER",
+  "MAX_VALUE", "MIN_VALUE", "POSITIVE_INFINITY", "NEGATIVE_INFINITY",
+  "NaN",
+  // Object statics (the ones not already covered above)
+  "assign", "create", "defineProperty", "defineProperties", "freeze",
+  "fromEntries", "getOwnPropertyDescriptor", "getOwnPropertyDescriptors",
+  "getOwnPropertyNames", "getOwnPropertySymbols", "getPrototypeOf",
+  "is", "isExtensible", "isFrozen", "isSealed", "preventExtensions",
+  "seal", "setPrototypeOf",
+  // Array statics
+  "from", "isArray", "of",
+  // Date statics
+  "now", "UTC",
+  // String statics
+  "fromCharCode", "fromCodePoint",
+  // Symbol well-knowns the runtime reads off Symbol itself
+  "for", "keyFor", "hasInstance", "isConcatSpreadable", "match",
+  "matchAll", "replace", "search", "species", "split", "toPrimitive",
+  "toStringTag", "unscopables", "dispose", "asyncDispose",
   // Function
    "call", "apply", "bind", "name", "arguments", "caller",
   // Promise
