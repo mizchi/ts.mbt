@@ -323,6 +323,26 @@ pub fn reserved_props_from_observability(
   obs_map : Map[SymbolId, Observability],
 ) -> Map[String, Bool] {
   let out : Map[String, Bool] = {}
+  // Linker-synthesised namespace stand-ins (`const ns = { exp1:
+  // resolved1, … }`, emitted by `synthesize_namespace_bindings_for`
+  // in `bundle_link.mbt`) carry their entire member surface in
+  // an ObjectLit initializer. Even when no observation sink seeds
+  // them, calls like `ns.exp1()` and references like `ns.exp2`
+  // need the exported names to stay reserved — otherwise the
+  // ObjectLit keys get renamed but the linker's individual
+  // export bindings don't (they live as separate top-level
+  // symbols), and the namespace stops resolving its members.
+  //
+  // We can't tell user-written `const config = {…}` from a
+  // synthesised namespace structurally, so apply the rule to
+  // every Const-with-ObjectLit binding. The cost is reserving a
+  // few extra literal-key names; the win is "import * as ns"
+  // patterns survive property mangling correctly.
+  for sym in g.symbols {
+    if sym.kind is Const && is_linker_synthesized_namespace(sym) {
+      collect_direct_props(sym, out)
+    }
+  }
   for entry in obs_map {
     let (sym_id, obs) = entry
     let sym = g.symbols[sym_id]
@@ -331,18 +351,17 @@ pub fn reserved_props_from_observability(
       DirectProps => collect_direct_props(sym, out)
       RecursiveProps => collect_direct_props(sym, out)
       External =>
-        // The binding escapes through an external call / prop
-        // assignment, OR through one of the linker's synthesised
-        // namespace objects (the `import * as util from
-        // "./mod"` pattern, where `util` is built up at link
-        // time and the per-prop assignments aren't visible as
-        // source-level `util.foo = …` writes). Without
-        // distinguishing those, fall back to `*` — preserving
-        // the conservative behaviour the older
-        // collect-reflection-sinks path used. (Phase 5+:
-        // thread the linker's namespace synthesis into the
-        // graph so the safe-to-rename External cases can be
-        // refined.)
+        // Conservative wildcard for external escapes. We tried
+        // relaxing this to accessed-props-only in Phase 5, but
+        // it surfaced gaps in `mangler_builtin_reserved_properties`
+        // (Math.min / Math.max etc. aren't listed, so they got
+        // renamed when wildcard stopped propping them up). Until
+        // the builtin reserved list is extended to cover the
+        // numeric / date / regexp methods, keep the wildcard
+        // here. The Const+ObjectLit pre-pass above already
+        // captures the linker-synthesised namespace case so the
+        // common observable shape doesn't depend on this
+        // fallback.
         out["*"] = true
     }
   }
@@ -407,4 +426,65 @@ fn is_leaf_value(expr : @ast.TsExpr) -> Bool {
     | StringLit(_) | NullLit | ArrayHole => true
     _ => false
   }
+}
+
+///|
+/// True when the binding's declaration site initialises it from an
+/// object literal — the shape `bundle_link.synthesize_namespace_bindings_for`
+/// emits for `import * as ns` namespace stand-ins. Used by the
+/// observability reservation to distinguish "this External value
+/// was actually a linker-synthesised namespace whose member set
+/// we can see" from "this External value came from outside the
+/// bundle and could expose any property name".
+fn binding_has_object_literal_init(sym : Symbol) -> Bool {
+  for d in sym.defs {
+    match d.init {
+      Some(@ast.TsExpr::ObjectLit(_)) => return true
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+/// Recognise the linker's synthesised-namespace shape:
+///
+///     const ns = { exp1: resolved1, exp2: resolved2, … };
+///
+/// where every value is a `Var(...)` referring to another
+/// top-level binding (the resolved imported export). User-
+/// authored object literals typically include at least one
+/// scalar / call / nested-object value, so the "all values are
+/// bare Var refs" shape is a strong heuristic for the linker's
+/// `synthesize_namespace_bindings_for` output. Distinguishing
+/// the two matters: synthesised namespaces NEED their literal
+/// keys reserved (consumers will read them by name), but
+/// user-written `const config = { y: 1 }` needs `y` to stay
+/// drop-eligible for `drop_dead_properties` when no one reads
+/// it.
+fn is_linker_synthesized_namespace(sym : Symbol) -> Bool {
+  for d in sym.defs {
+    match d.init {
+      Some(@ast.TsExpr::ObjectLit(entries)) => {
+        if entries.length() == 0 {
+          continue
+        }
+        let mut all_var_refs = true
+        for ent in entries {
+          match ent.1 {
+            @ast.TsExpr::Var(_) => ()
+            _ => {
+              all_var_refs = false
+              break
+            }
+          }
+        }
+        if all_var_refs {
+          return true
+        }
+      }
+      _ => ()
+    }
+  }
+  false
 }
