@@ -35,6 +35,7 @@ fixture "typescript" bench/realworld/typescript-side.ts "typescript ok:"
 fixture "typescript_apis" bench/realworld/typescript-apis.ts "typescript ok: 13 passed, 0 failed"
 fixture "typescript_deep" bench/realworld/typescript-deep.ts "typescript deep: 13 passed, 0 failed"
 fixture "typescript_program" bench/realworld/typescript-program.ts "program ok: diagnostics = 2"
+fixture "prettier" bench/realworld/prettier-entry.ts "prettier ok:"
 
 # Hono is loaded via dynamic import (default export pattern) — wrap it.
 cat > /tmp/_hono_run.mjs << 'JS'

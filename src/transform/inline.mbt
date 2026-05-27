@@ -42,15 +42,75 @@ pub fn inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
   for s in block.stmts {
     stmts.push(inline_into_stmt(s))
   }
-  // Then run the single-use pass on the resulting list. Carry the
-  // parallel positions array so survivors keep their source-map
-  // mapping.
   let positions = if block.stmt_positions.length() == block.stmts.length() {
     block.stmt_positions
   } else {
     []
   }
-  inline_pass(stmts, positions)
+  // Multi-declarator `let a = 1, b = 2;` parses as
+  // `Block({stmts:[Let(a, …), Let(b, …)]})` because
+  // `merge_decl_stmts` wraps the list. Emit unwraps it back to a
+  // single chained `let` (the bindings stay in the parent scope),
+  // but `inline_pass` only sees the inner block — so a `let e =
+  // …, s = …;` followed by `if (!s) { …e… }` looks like `e` is
+  // used exactly once (inside the same Block) and inline drops the
+  // binding, leaving `if (!s) { …e… }` with `e` undefined. Flatten
+  // these multi-decl Blocks into the parent's stmt list before the
+  // single-use pass runs.
+  let flattened : Array[@ast.TsStmt] = []
+  let flat_positions : Array[Int] = []
+  let has_positions = positions.length() == stmts.length()
+  for i, s in stmts {
+    match s {
+      Block(inner) =>
+        if is_multi_decl_block(inner) {
+          for inner_s in inner.stmts {
+            flattened.push(inner_s)
+            if has_positions {
+              flat_positions.push(positions[i])
+            }
+          }
+        } else {
+          flattened.push(s)
+          if has_positions {
+            flat_positions.push(positions[i])
+          }
+        }
+      _ => {
+        flattened.push(s)
+        if has_positions {
+          flat_positions.push(positions[i])
+        }
+      }
+    }
+  }
+  inline_pass(flattened, flat_positions)
+}
+
+///|
+/// Mirror of `try_emit_multi_decl_inline`'s shape check: a block whose
+/// stmts are ALL `Var` / ALL `Let` / ALL `Const`, matching the
+/// chained-declarator pattern that `parse_var_like` wraps in
+/// `Block(…)`.
+fn is_multi_decl_block(block : @ast.TsBlock) -> Bool {
+  if block.stmts.length() == 0 {
+    return false
+  }
+  let kind = match block.stmts[0] {
+    Var(_, _, _) => 0
+    Let(_, _, _) => 1
+    Const(_, _, _) => 2
+    _ => return false
+  }
+  for s in block.stmts {
+    match s {
+      Var(_, _, _) => if kind != 0 { return false }
+      Let(_, _, _) => if kind != 1 { return false }
+      Const(_, _, _) => if kind != 2 { return false }
+      _ => return false
+    }
+  }
+  true
 }
 
 ///|
@@ -126,7 +186,23 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
         None => None
       })
     Label(name, inner) => Label(name, inline_into_stmt(inner))
-    Block(b) => Block(inline_block(b))
+    Block(b) =>
+      // The parser wraps `let a = 1, b = 2;` as
+      // `Block({stmts:[Let(a, …), Let(b, …)]})` but emit unwraps
+      // those bindings back into the parent scope. Running
+      // `inline_block` on the wrapper would treat the wrapper as a
+      // fresh scope, see only the inner two stmts, and inline the
+      // first declarator into the second — even when the binding
+      // is also referenced LATER in the parent (`if (!s) { …e… }`),
+      // because the parent's stmts aren't visible from inside the
+      // wrapper. Skip the recursive pass for multi-decl wrappers;
+      // the parent `inline_block` flattens them just before its
+      // own pass so the cross-statement use-counts come out right.
+      if is_multi_decl_block(b) {
+        Block(b)
+      } else {
+        Block(inline_block(b))
+      }
     NativeClassStmt(_, _) => stmt
   }
 }
@@ -1122,6 +1198,38 @@ fn collect_reassigned_block(
 }
 
 ///|
+fn collect_reassigned_binding(
+  binding : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match binding {
+    Ident(n) => out[n] = true
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => collect_reassigned_binding(be.binding, out)
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_reassigned_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        collect_reassigned_binding(prop.binding, out)
+      }
+      match ob.rest {
+        Some(r) => out[r] = true
+        None => ()
+      }
+    }
+    Target(_) => ()
+  }
+}
+
+///|
 fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
   match expr {
     AssignExpr(n, v) => {
@@ -1191,7 +1299,15 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
       collect_reassigned_expr(a, out)
       collect_reassigned_expr(b, out)
     }
-    AssignPattern(_, v) => collect_reassigned_expr(v, out)
+    AssignPattern(b, v) => {
+      // Destructuring assignment `[r, n] = i` reassigns every
+      // `Ident` in the binding — that's the whole point of the
+      // expression. Skipping the binding lets inline drop the
+      // declaration of `n` thinking it's never written, breaking
+      // the assignment site.
+      collect_reassigned_binding(b, out)
+      collect_reassigned_expr(v, out)
+    }
     PropAssignExpr(recv, _, v) => {
       collect_reassigned_expr(recv, out)
       collect_reassigned_expr(v, out)
