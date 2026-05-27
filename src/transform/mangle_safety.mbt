@@ -44,8 +44,15 @@ pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
 ) -> Array[String] {
+  // Phase 1 + 2 of the observability analysis: build the symbol
+  // graph, infer which bindings hold numeric values, and project
+  // down to a name set the IndexAccess fallback can consult
+  // without threading the whole graph through every helper.
+  let graph = build_symbol_graph(block, external_bindings)
+  let numeric = infer_numeric_symbols(graph)
+  let numeric_names = numeric_name_set(graph, numeric)
   let reserved : Map[String, Bool] = {}
-  collect_props_on_external_block(block, external_bindings, reserved)
+  collect_props_on_external_block(block, external_bindings, reserved, numeric_names)
   collect_reflection_sinks_block(block, reserved)
   let out : Array[String] = []
   for k in reserved.keys() {
@@ -137,9 +144,10 @@ fn collect_props_on_external_block(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
   out : Map[String, Bool],
+  numeric_names : Map[String, Bool],
 ) -> Unit {
   for s in block.stmts {
-    collect_props_on_external_stmt(s, external_bindings, out)
+    collect_props_on_external_stmt(s, external_bindings, out, numeric_names)
   }
 }
 
@@ -148,92 +156,96 @@ fn collect_props_on_external_stmt(
   stmt : @ast.TsStmt,
   externals : Map[String, Bool],
   out : Map[String, Bool],
+  numeric_names : Map[String, Bool],
 ) -> Unit {
   match stmt {
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Throw(e) =>
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
     Assign(_, e) | CompoundAssign(_, _, e) =>
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
     IndexAssign(t, idx, v) => {
       // `obj[runtime_key] = val` reserves all property names —
       // we can't tell which is written and renaming would break
-      // the dynamic dispatch. Same rule as `IndexAccess`.
+      // the dynamic dispatch. EXCEPT when the index is provably
+      // numeric (literal, `i + 1`, `arr.length - 1`, `i++`, or a
+      // `Var(n)` resolved to a numeric symbol via the graph): an
+      // integer-keyed slot write doesn't expose a string property.
       let is_static_idx = match idx {
         StringLit(_) | NumberLit(_) | IntLit(_) => true
-        _ => false
+        _ => is_index_numeric_with_names(idx, numeric_names)
       }
       if not(is_static_idx) {
         out["*"] = true
       }
-      collect_props_on_external_expr(t, externals, out)
-      collect_props_on_external_expr(idx, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(t, externals, out, numeric_names)
+      collect_props_on_external_expr(idx, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
     PropAssign(t, prop, v) => {
       // `external.foo = ...` reserves `foo`.
       if is_external_chain(t, externals) {
         out[prop] = true
       }
-      collect_props_on_external_expr(t, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(t, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
-    Return(Some(e)) => collect_props_on_external_expr(e, externals, out)
+    Return(Some(e)) => collect_props_on_external_expr(e, externals, out, numeric_names)
     If(c, t, e) => {
-      collect_props_on_external_expr(c, externals, out)
-      collect_props_on_external_block(t, externals, out)
+      collect_props_on_external_expr(c, externals, out, numeric_names)
+      collect_props_on_external_block(t, externals, out, numeric_names)
       match e {
-        Some(b) => collect_props_on_external_block(b, externals, out)
+        Some(b) => collect_props_on_external_block(b, externals, out, numeric_names)
         None => ()
       }
     }
     While(c, b) | DoWhile(c, b) | With(c, b) => {
-      collect_props_on_external_expr(c, externals, out)
-      collect_props_on_external_block(b, externals, out)
+      collect_props_on_external_expr(c, externals, out, numeric_names)
+      collect_props_on_external_block(b, externals, out, numeric_names)
     }
     For(init, cond, update, body) => {
       match init {
-        Some(s) => collect_props_on_external_stmt(s, externals, out)
+        Some(s) => collect_props_on_external_stmt(s, externals, out, numeric_names)
         None => ()
       }
       match cond {
-        Some(e) => collect_props_on_external_expr(e, externals, out)
+        Some(e) => collect_props_on_external_expr(e, externals, out, numeric_names)
         None => ()
       }
       match update {
-        Some(s) => collect_props_on_external_stmt(s, externals, out)
+        Some(s) => collect_props_on_external_stmt(s, externals, out, numeric_names)
         None => ()
       }
-      collect_props_on_external_block(body, externals, out)
+      collect_props_on_external_block(body, externals, out, numeric_names)
     }
     ForOf(_, _, _, iter, body)
     | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) => {
-      collect_props_on_external_expr(iter, externals, out)
-      collect_props_on_external_block(body, externals, out)
+      collect_props_on_external_expr(iter, externals, out, numeric_names)
+      collect_props_on_external_block(body, externals, out, numeric_names)
     }
     Switch(e, cases) => {
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
       for c in cases {
         match c.test_expr {
-          Some(te) => collect_props_on_external_expr(te, externals, out)
+          Some(te) => collect_props_on_external_expr(te, externals, out, numeric_names)
           None => ()
         }
-        collect_props_on_external_block(c.body, externals, out)
+        collect_props_on_external_block(c.body, externals, out, numeric_names)
       }
     }
     Try(b, _, cb, fb) => {
-      collect_props_on_external_block(b, externals, out)
+      collect_props_on_external_block(b, externals, out, numeric_names)
       match cb {
-        Some(blk) => collect_props_on_external_block(blk, externals, out)
+        Some(blk) => collect_props_on_external_block(blk, externals, out, numeric_names)
         None => ()
       }
       match fb {
-        Some(blk) => collect_props_on_external_block(blk, externals, out)
+        Some(blk) => collect_props_on_external_block(blk, externals, out, numeric_names)
         None => ()
       }
     }
-    Label(_, inner) => collect_props_on_external_stmt(inner, externals, out)
-    Block(b) => collect_props_on_external_block(b, externals, out)
+    Label(_, inner) => collect_props_on_external_stmt(inner, externals, out, numeric_names)
+    Block(b) => collect_props_on_external_block(b, externals, out, numeric_names)
     _ => ()
   }
 }
@@ -243,42 +255,43 @@ fn collect_props_on_external_expr(
   expr : @ast.TsExpr,
   externals : Map[String, Bool],
   out : Map[String, Bool],
+  numeric_names : Map[String, Bool],
 ) -> Unit {
   match expr {
     PropAccess(recv, prop) => {
       if is_external_chain(recv, externals) {
         out[prop] = true
       }
-      collect_props_on_external_expr(recv, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
     }
     MethodCall(recv, m, args) => {
       if is_external_chain(recv, externals) {
         out[m] = true
       }
-      collect_props_on_external_expr(recv, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
       for a in args {
-        collect_props_on_external_expr(a, externals, out)
+        collect_props_on_external_expr(a, externals, out, numeric_names)
       }
     }
     PropAssignExpr(recv, prop, v) => {
       if is_external_chain(recv, externals) {
         out[prop] = true
       }
-      collect_props_on_external_expr(recv, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
     Call(_, args) | New(_, args) => for a in args {
-      collect_props_on_external_expr(a, externals, out)
+      collect_props_on_external_expr(a, externals, out, numeric_names)
     }
     CallExpr(callee, args) | NewExpr(callee, args) => {
-      collect_props_on_external_expr(callee, externals, out)
+      collect_props_on_external_expr(callee, externals, out, numeric_names)
       for a in args {
-        collect_props_on_external_expr(a, externals, out)
+        collect_props_on_external_expr(a, externals, out, numeric_names)
       }
     }
     BinOp(_, l, r) => {
-      collect_props_on_external_expr(l, externals, out)
-      collect_props_on_external_expr(r, externals, out)
+      collect_props_on_external_expr(l, externals, out, numeric_names)
+      collect_props_on_external_expr(r, externals, out, numeric_names)
     }
     UnaryOp(_, inner)
     | Spread(inner)
@@ -288,91 +301,97 @@ fn collect_props_on_external_expr(
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner) =>
-      collect_props_on_external_expr(inner, externals, out)
-    Yield(Some(inner)) => collect_props_on_external_expr(inner, externals, out)
+      collect_props_on_external_expr(inner, externals, out, numeric_names)
+    Yield(Some(inner)) => collect_props_on_external_expr(inner, externals, out, numeric_names)
     Cond(c, t, e) => {
-      collect_props_on_external_expr(c, externals, out)
-      collect_props_on_external_expr(t, externals, out)
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(c, externals, out, numeric_names)
+      collect_props_on_external_expr(t, externals, out, numeric_names)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
     }
     IndexAccess(recv, idx) => {
       // Dynamic indexing reserves *all* property names — even on
       // local bindings, since `obj[runtime_key]` can read any
       // property and the mangler has no way to know which name
-      // matches the runtime value.
+      // matches the runtime value. UNLESS the index is provably
+      // numeric (literal, `i + 1`, `arr.length - 1`, `i++`, or a
+      // `Var(n)` resolved to a numeric symbol via the graph): a
+      // numeric index reads an integer-keyed slot, not a named
+      // property, so no string property name escapes here.
       //
       // For external chains we already marked the "give up" *
       // wildcard. Local-binding dynamic access falls under the
-      // same rule: emit the wildcard so the bundler disables
-      // property mangling for the whole bundle.
+      // same rule.
+      let is_known_numeric = is_index_numeric_with_names(idx, numeric_names)
       let is_static_idx = match idx {
         StringLit(_) | NumberLit(_) | IntLit(_) => true
-        _ => false
+        _ => is_known_numeric
       }
       if is_external_chain(recv, externals) {
         match idx {
           StringLit(s) => out[s] = true
-          _ => out["*"] = true
+          _ => if not(is_known_numeric) { out["*"] = true }
         }
       } else if not(is_static_idx) {
         out["*"] = true
       }
-      collect_props_on_external_expr(recv, externals, out)
-      collect_props_on_external_expr(idx, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
+      collect_props_on_external_expr(idx, externals, out, numeric_names)
     }
     ArrayLit(items) => for it in items {
-      collect_props_on_external_expr(it, externals, out)
+      collect_props_on_external_expr(it, externals, out, numeric_names)
     }
     ObjectLit(entries) => for ent in entries {
-      collect_props_on_external_expr(ent.1, externals, out)
+      collect_props_on_external_expr(ent.1, externals, out, numeric_names)
     }
     ComputedProp(k, v) => {
-      collect_props_on_external_expr(k, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(k, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
-    AssignExpr(_, v) => collect_props_on_external_expr(v, externals, out)
+    AssignExpr(_, v) => collect_props_on_external_expr(v, externals, out, numeric_names)
     CompoundAssignExpr(t, _, v) => {
-      collect_props_on_external_expr(t, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(t, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
-    AssignPattern(_, v) => collect_props_on_external_expr(v, externals, out)
+    AssignPattern(_, v) => collect_props_on_external_expr(v, externals, out, numeric_names)
     IndexAssignExpr(recv, idx, v) => {
+      // Same numeric-index exception as the IndexAccess /
+      // IndexAssign cases above.
       let is_static_idx = match idx {
         StringLit(_) | NumberLit(_) | IntLit(_) => true
-        _ => false
+        _ => is_index_numeric_with_names(idx, numeric_names)
       }
       if not(is_static_idx) {
         out["*"] = true
       }
-      collect_props_on_external_expr(recv, externals, out)
-      collect_props_on_external_expr(idx, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
+      collect_props_on_external_expr(idx, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
     Seq(a, b) => {
-      collect_props_on_external_expr(a, externals, out)
-      collect_props_on_external_expr(b, externals, out)
+      collect_props_on_external_expr(a, externals, out, numeric_names)
+      collect_props_on_external_expr(b, externals, out, numeric_names)
     }
     ArrowFunc(_, _, body, _) =>
       match body {
-        ArrowExpr(e) => collect_props_on_external_expr(e, externals, out)
-        ArrowBlock(b) => collect_props_on_external_block(b, externals, out)
+        ArrowExpr(e) => collect_props_on_external_expr(e, externals, out, numeric_names)
+        ArrowBlock(b) => collect_props_on_external_block(b, externals, out, numeric_names)
       }
-    FuncExpr(f) => collect_props_on_external_block(f.body, externals, out)
+    FuncExpr(f) => collect_props_on_external_block(f.body, externals, out, numeric_names)
     DynamicImport(spec, opts) => {
-      collect_props_on_external_expr(spec, externals, out)
+      collect_props_on_external_expr(spec, externals, out, numeric_names)
       match opts {
-        Some(o) => collect_props_on_external_expr(o, externals, out)
+        Some(o) => collect_props_on_external_expr(o, externals, out, numeric_names)
         None => ()
       }
     }
     TaggedTemplate(tag, _, _, exprs) => {
-      collect_props_on_external_expr(tag, externals, out)
+      collect_props_on_external_expr(tag, externals, out, numeric_names)
       for e in exprs {
-        collect_props_on_external_expr(e, externals, out)
+        collect_props_on_external_expr(e, externals, out, numeric_names)
       }
     }
     TemplateLiteral(_, exprs) => for e in exprs {
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
     }
     _ => ()
   }

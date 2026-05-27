@@ -93,7 +93,11 @@ pub fn inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
 /// chained-declarator pattern that `parse_var_like` wraps in
 /// `Block(…)`.
 fn is_multi_decl_block(block : @ast.TsBlock) -> Bool {
-  if block.stmts.length() == 0 {
+  // `merge_decl_stmts` only wraps when there are 2+ declarators —
+  // a real `{ let a = 1; }` block has exactly one stmt and must
+  // keep its own scope. Flattening a length-1 Block would lift the
+  // binding into the parent scope and change runtime semantics.
+  if block.stmts.length() < 2 {
     return false
   }
   let kind = match block.stmts[0] {
