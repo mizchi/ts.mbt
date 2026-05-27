@@ -44,36 +44,35 @@ pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
 ) -> Array[String] {
-  // Phase 1-3 of the observability analysis: build the symbol
+  // Phase 1-4 of the observability analysis: build the symbol
   // graph (also collecting reflection / I/O sinks tagged with
-  // their containing scope), infer numeric bindings for the
-  // IndexAccess fallback, and reserve sink-observable property
-  // names per binding rather than via the old wildcard fallback.
+  // scope), infer numeric bindings for the IndexAccess fallback,
+  // run the backward-flow observability propagation, and reserve
+  // only the property names actually visible from the resulting
+  // observable bindings.
   let (graph, scoped_sinks) = build_symbol_graph_with_sinks(
     block, external_bindings,
   )
   let numeric = infer_numeric_symbols(graph)
   let numeric_names = numeric_name_set(graph, numeric)
   let reserved_external : Map[String, Bool] = {}
-  // External prop accesses (`extImport.foo`, `extImport[idx]`) still
-  // need their direct prop names reserved.
   collect_props_on_external_block(
     block, external_bindings, reserved_external, numeric_names,
   )
-  // Phase 3 v1: each sink resolves its argument through the scope
-  // it was observed in, and reserves only the property names that
-  // appear on that binding.
-  let reserved_sink : Map[String, Bool] = {}
-  for entry in scoped_sinks {
-    reserve_props_from_sink(
-      entry.0, entry.1, graph, external_bindings, reserved_sink,
-    )
-  }
+  // Phase 4: backward-propagate observability from sinks through
+  // FuncReturn / FuncArg edges so a value reaching a sink via a
+  // function parameter or return still tracks back to its
+  // originating bindings. The result subsumes Phase 3's sink
+  // reservation (which used to run alongside) because every
+  // resolved sink-arg ends up as a seeded observable symbol
+  // here.
+  let obs_map = analyze_observability(graph, scoped_sinks)
+  let reserved_obs = reserved_props_from_observability(graph, obs_map)
   let reserved : Map[String, Bool] = {}
   for k in reserved_external.keys() {
     reserved[k] = true
   }
-  for k in reserved_sink.keys() {
+  for k in reserved_obs.keys() {
     reserved[k] = true
   }
   let out : Array[String] = []
@@ -186,18 +185,15 @@ fn collect_props_on_external_stmt(
     Assign(_, e) | CompoundAssign(_, _, e) =>
       collect_props_on_external_expr(e, externals, out, numeric_names)
     IndexAssign(t, idx, v) => {
-      // `obj[runtime_key] = val` reserves all property names —
-      // we can't tell which is written and renaming would break
-      // the dynamic dispatch. EXCEPT when the index is provably
-      // numeric (literal, `i + 1`, `arr.length - 1`, `i++`, or a
-      // `Var(n)` resolved to a numeric symbol via the graph): an
-      // integer-keyed slot write doesn't expose a string property.
-      let is_static_idx = match idx {
-        StringLit(_) | NumberLit(_) | IntLit(_) => true
-        _ => is_index_numeric_with_names(idx, numeric_names)
-      }
-      if not(is_static_idx) {
-        out["*"] = true
+      // Local-binding dynamic write: Phase 3+4 handle the
+      // reservation, no wildcard from here. External-chain
+      // writes still trip the wildcard.
+      let is_known_numeric = is_index_numeric_with_names(idx, numeric_names)
+      if is_external_chain(t, externals) {
+        match idx {
+          StringLit(s) => out[s] = true
+          _ => if not(is_known_numeric) { out["*"] = true }
+        }
       }
       collect_props_on_external_expr(t, externals, out, numeric_names)
       collect_props_on_external_expr(idx, externals, out, numeric_names)
@@ -331,30 +327,22 @@ fn collect_props_on_external_expr(
       collect_props_on_external_expr(e, externals, out, numeric_names)
     }
     IndexAccess(recv, idx) => {
-      // Dynamic indexing reserves *all* property names — even on
-      // local bindings, since `obj[runtime_key]` can read any
-      // property and the mangler has no way to know which name
-      // matches the runtime value. UNLESS the index is provably
-      // numeric (literal, `i + 1`, `arr.length - 1`, `i++`, or a
-      // `Var(n)` resolved to a numeric symbol via the graph): a
-      // numeric index reads an integer-keyed slot, not a named
-      // property, so no string property name escapes here.
-      //
-      // For external chains we already marked the "give up" *
-      // wildcard. Local-binding dynamic access falls under the
-      // same rule.
+      // Dynamic indexing on an EXTERNAL chain still has to fall
+      // back to `*` — the consumer module's API surface isn't
+      // bounded by anything we can see in the bundle. For LOCAL
+      // bindings, though, `obj[runtime_key]` can only resolve to
+      // properties that were actually written into `obj`
+      // somewhere in the bundle (via `obj.foo = …` or
+      // `obj = {foo, …}`); Phase 3+4's observability analysis
+      // catches the names that escape to a sink and we let
+      // `dead_props` drop the rest. So we DON'T emit the
+      // wildcard for local-binding dynamic access anymore.
       let is_known_numeric = is_index_numeric_with_names(idx, numeric_names)
-      let is_static_idx = match idx {
-        StringLit(_) | NumberLit(_) | IntLit(_) => true
-        _ => is_known_numeric
-      }
       if is_external_chain(recv, externals) {
         match idx {
           StringLit(s) => out[s] = true
           _ => if not(is_known_numeric) { out["*"] = true }
         }
-      } else if not(is_static_idx) {
-        out["*"] = true
       }
       collect_props_on_external_expr(recv, externals, out, numeric_names)
       collect_props_on_external_expr(idx, externals, out, numeric_names)
@@ -376,14 +364,14 @@ fn collect_props_on_external_expr(
     }
     AssignPattern(_, v) => collect_props_on_external_expr(v, externals, out, numeric_names)
     IndexAssignExpr(recv, idx, v) => {
-      // Same numeric-index exception as the IndexAccess /
-      // IndexAssign cases above.
-      let is_static_idx = match idx {
-        StringLit(_) | NumberLit(_) | IntLit(_) => true
-        _ => is_index_numeric_with_names(idx, numeric_names)
-      }
-      if not(is_static_idx) {
-        out["*"] = true
+      // Local-binding dynamic write — same handling as the
+      // statement-level IndexAssign above.
+      let is_known_numeric = is_index_numeric_with_names(idx, numeric_names)
+      if is_external_chain(recv, externals) {
+        match idx {
+          StringLit(s) => out[s] = true
+          _ => if not(is_known_numeric) { out["*"] = true }
+        }
       }
       collect_props_on_external_expr(recv, externals, out, numeric_names)
       collect_props_on_external_expr(idx, externals, out, numeric_names)

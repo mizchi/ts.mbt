@@ -1601,6 +1601,16 @@ fn rename_dotted_base_name(name : String, scope : ScopeFrame) -> String {
 }
 
 ///|
+fn is_define_prop_call(recv : @ast.TsExpr, method : String) -> Bool {
+  match recv {
+    @ast.TsExpr::Var("Object") =>
+      method == "defineProperty" || method == "defineProperties"
+    @ast.TsExpr::Var("Reflect") => method == "defineProperty"
+    _ => false
+  }
+}
+
+///|
 fn rename_class_decl_idents(
   decl : @ast.TsClassDecl,
   scope : ScopeFrame,
@@ -1971,8 +1981,26 @@ fn rename_properties_in_expr(
       )
     MethodCall(recv, method, args) => {
       let new_args : Array[@ast.TsExpr] = []
-      for a in args {
-        new_args.push(rename_properties_in_expr(a, prop_map))
+      // `Object.defineProperty(obj, "key", desc)` / `Reflect.defineProperty(obj, "key", desc)`:
+      // the second argument names a property that the runtime
+      // writes onto `obj`. The mangler renames every `obj.key`
+      // / `obj["key"]` access, so the string literal here MUST
+      // be renamed in lockstep — otherwise the property is
+      // stored under its original name but read under the mangled
+      // one, surfacing as `Cannot read properties of undefined`
+      // in `_zod`-style instance brands.
+      let renames_define_prop_key =
+        is_define_prop_call(recv, method) && args.length() >= 2
+      for i, a in args {
+        if i == 1 && renames_define_prop_key {
+          match a {
+            @ast.TsExpr::StringLit(s) =>
+              new_args.push(@ast.TsExpr::StringLit(rename_prop_key(s, prop_map)))
+            _ => new_args.push(rename_properties_in_expr(a, prop_map))
+          }
+        } else {
+          new_args.push(rename_properties_in_expr(a, prop_map))
+        }
       }
       MethodCall(
         rename_properties_in_expr(recv, prop_map),

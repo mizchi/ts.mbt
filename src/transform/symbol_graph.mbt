@@ -51,13 +51,33 @@ pub(all) struct SymbolGraph {
   // caller's responsibility.
   by_name : Map[String, SymbolId]
   // Data-flow edges. Each edge says "the value of `from` reaches
-  // `to`" — used by Phase 3's backward propagation.
+  // `to`" — used by Phase 3 / 4's backward propagation.
   flow_edges : Array[FlowEdge]
   // Bindings whose initializer crosses the bundle boundary
   // (`import x from "lib"` and friends). Phase 3 starts every
   // observability seed at one of these.
   external_bindings : Map[SymbolId, Bool]
+  // Per-function metadata, keyed by the function's own SymbolId
+  // (= the binding name of a named `function f() {...}` or the
+  // `Let(...)` declarator that wraps a `FuncExpr`). Anonymous
+  // function expressions get no entry — Phase 4 falls back to
+  // wildcard when their return value reaches an observation
+  // point because the callee can't be statically identified.
+  funcs : Map[SymbolId, FuncInfo]
 }
+
+///|
+pub(all) struct FuncInfo {
+  // The function's parameter symbol ids in declaration order.
+  // Phase 4 uses this to walk from `FuncArg(fid, i)` flow
+  // landings back to the i-th parameter binding.
+  params : Array[SymbolId]
+  // Source-side flow nodes for every `return <expr>` and every
+  // `throw <expr>` in the function body. Phase 4 propagates
+  // observability landing on this function's return value back
+  // to these sources.
+  returns : Array[FlowNode]
+} derive(Show)
 
 ///|
 pub(all) struct Scope {
@@ -240,6 +260,7 @@ pub fn build_symbol_graph_with_sinks(
     by_name: {},
     flow_edges: [],
     external_bindings: {},
+    funcs: {},
   }
   // Module scope (id 0).
   let module_scope = sg_new_scope(g, None, Module)
@@ -575,8 +596,16 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       sg_visit_expr(w, idx)
       sg_visit_expr(w, val)
     }
-    PropAssign(target, _prop, val) => {
-      sg_visit_expr(w, target)
+    PropAssign(target, prop, val) => {
+      // Treat `obj.prop = val` as a `PropReceiver(prop)` use of
+      // `obj` — Phase 4's prop-name reservation only walks
+      // `Symbol.uses`, so without this the write side gets
+      // dropped and `mergeDefs` etc. that were ASSIGNED (but not
+      // READ in the same module) fall out of the reserved set.
+      match target {
+        @ast.TsExpr::Var(n) => sg_record_use(w, n, PropReceiver(prop))
+        _ => sg_visit_expr(w, target)
+      }
       sg_visit_expr(w, val)
     }
     Expr(e) => sg_visit_expr(w, e)
@@ -589,10 +618,22 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
     Return(Some(e)) => {
       sg_visit_expr(w, e)
       match w.enclosing_func {
-        Some(fid) =>
-          for src in expr_immediate_sources(w, e) {
+        Some(fid) => {
+          let srcs = expr_immediate_sources(w, e)
+          for src in srcs {
             w.g.flow_edges.push({ from: src, to: FuncReturn(fid) })
           }
+          // Also record on `FuncInfo.returns` so Phase 4 can walk
+          // the actual source nodes without re-iterating
+          // `flow_edges` for every observable function.
+          match w.g.funcs.get(fid) {
+            Some(info) =>
+              for src in srcs {
+                info.returns.push(src)
+              }
+            None => ()
+          }
+        }
         None => ()
       }
     }
@@ -768,6 +809,28 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
   // THIS node only (no recursion — the surrounding `sg_visit_expr`
   // descends into children itself).
   match expr {
+    IndexAccess(_, idx) =>
+      // `obj[runtime_key]` widens the receiver's observable
+      // surface to "every property name the bundle ever writes
+      // here" — the runtime can pick any of them. Record the
+      // receiver as a DirectKeys sink unless the key is provably
+      // numeric (the IndexAccess wildcard fallback in
+      // `mangle_safety` already short-circuits the numeric case;
+      // here we only need to widen string-keyed cases). We don't
+      // know yet if `idx` is numeric from the AST shape alone —
+      // record unconditionally; Phase 4 only reserves the
+      // bindings' actually-accessed names anyway, so a redundant
+      // sink is harmless.
+      match idx {
+        NumberLit(_) | IntLit(_) => ()
+        _ => {
+          let recv = match expr {
+            @ast.TsExpr::IndexAccess(r, _) => r
+            _ => abort("unreachable")
+          }
+          w.scoped_sinks.push(({ expr: recv, observation: DirectKeys }, w.current_scope))
+        }
+      }
     MethodCall(recv, m, args) =>
       match recv {
         @ast.TsExpr::Var(name) =>
@@ -781,6 +844,24 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
                 for i, a in args {
                   if i > 0 {
                     w.scoped_sinks.push(({ expr: a, observation: DirectKeys }, w.current_scope))
+                  }
+                }
+              // `Object.defineProperty(obj, "name", desc)` /
+              // `Object.defineProperties(obj, {…})` write a
+              // property whose key is the second argument. When
+              // the key is a string literal we already reserve
+              // it; when it's a non-literal expression we mark
+              // `obj` as DirectKeys-observable so its existing
+              // surface stays renamed consistently.
+              "defineProperty" =>
+                if args.length() >= 2 {
+                  match args[1] {
+                    @ast.TsExpr::StringLit(_) | @ast.TsExpr::NumberLit(_) => ()
+                    _ =>
+                      w.scoped_sinks.push((
+                        { expr: args[0], observation: DirectKeys },
+                        w.current_scope,
+                      ))
                   }
                 }
               _ => ()
@@ -871,8 +952,14 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
         _ => sg_visit_expr(w, recv)
       }
     }
-    MethodCall(recv, _m, args) => {
-      sg_visit_expr(w, recv)
+    MethodCall(recv, m, args) => {
+      // `obj.method(args)` reads `obj.method` then calls it. The
+      // receiver becomes a PropReceiver(method) use so Phase 4's
+      // observability reserves `method` when the binding escapes.
+      match recv {
+        @ast.TsExpr::Var(n) => sg_record_use(w, n, PropReceiver(m))
+        _ => sg_visit_expr(w, recv)
+      }
       for a in args {
         sg_visit_expr(w, a)
       }
@@ -944,8 +1031,11 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       sg_visit_expr(w, target)
       sg_visit_expr(w, rhs)
     }
-    PropAssignExpr(target, _prop, rhs) => {
-      sg_visit_expr(w, target)
+    PropAssignExpr(target, prop, rhs) => {
+      match target {
+        @ast.TsExpr::Var(n) => sg_record_use(w, n, PropReceiver(prop))
+        _ => sg_visit_expr(w, target)
+      }
       sg_visit_expr(w, rhs)
     }
     IndexAssignExpr(target, idx, rhs) => {
@@ -1073,9 +1163,20 @@ fn sg_visit_function_body(w : SgWalker, f : @ast.TsFunc) -> Unit {
     None
   }
   w.enclosing_func = self_id
+  // Declare params and remember their ids so `FuncInfo` can map
+  // `FuncArg(fid, i)` → param symbol on the backward walk.
+  let param_ids : Array[SymbolId] = []
   for p in f.params {
-    let _ = sg_declare(w.g, w.current_scope, p.name, Param, false)
-
+    let pid = sg_declare(w.g, w.current_scope, p.name, Param, false)
+    param_ids.push(pid)
+  }
+  // Pre-register the FuncInfo entry so `Return(Some(e))` inside
+  // the body can append to `returns` directly. Anonymous
+  // functions (no `self_id`) get no entry and Phase 4 treats
+  // their return as Unknown.
+  match self_id {
+    Some(fid) => w.g.funcs[fid] = { params: param_ids, returns: [] }
+    None => ()
   }
   sg_declare_block_bindings(w.g, f.body, w.current_scope, {})
   for s in f.body.stmts {
