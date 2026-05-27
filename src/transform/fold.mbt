@@ -87,7 +87,8 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     Let(b, t, rhs) => out.push(Let(b, t, fold_expr(rhs)))
     Const(b, t, rhs) => out.push(Const(b, t, fold_expr(rhs)))
     Assign(n, rhs) => out.push(Assign(n, fold_expr(rhs)))
-    CompoundAssign(n, op, rhs) => out.push(CompoundAssign(n, op, fold_expr(rhs)))
+    CompoundAssign(n, op, rhs) =>
+      out.push(CompoundAssign(n, op, fold_expr(rhs)))
     IndexAssign(target, idx, val) =>
       out.push(IndexAssign(fold_expr(target), fold_expr(idx), fold_expr(val)))
     PropAssign(target, prop, val) =>
@@ -173,9 +174,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         // `label: { ...; ... }` — fall back to wrapping the spliced
         // stmts in a block so the label still targets exactly one
         // statement.
-        out.push(
-          Label(name, Block({ stmts: tmp, stmt_positions: [] })),
-        )
+        out.push(Label(name, Block({ stmts: tmp, stmt_positions: [] })))
       }
     }
     Block(b) => out.push(Block(fold_block(b)))
@@ -271,7 +270,8 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     CompoundAssignExpr(t, op, v) =>
       CompoundAssignExpr(fold_expr(t), op, fold_expr(v))
     AssignPattern(b, v) => AssignPattern(b, fold_expr(v))
-    PropAssignExpr(recv, p, v) => PropAssignExpr(fold_expr(recv), p, fold_expr(v))
+    PropAssignExpr(recv, p, v) =>
+      PropAssignExpr(fold_expr(recv), p, fold_expr(v))
     IndexAssignExpr(recv, idx, v) =>
       IndexAssignExpr(fold_expr(recv), fold_expr(idx), fold_expr(v))
     ArrowFunc(params, ret, body, is_async) => {

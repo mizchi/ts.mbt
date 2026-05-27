@@ -107,17 +107,26 @@ pub fn BundleOptions::with_aliases(
 }
 
 ///|
-pub fn BundleOptions::with_minify(self : BundleOptions, m : Bool) -> BundleOptions {
+pub fn BundleOptions::with_minify(
+  self : BundleOptions,
+  m : Bool,
+) -> BundleOptions {
   { ..self, minify: m }
 }
 
 ///|
-pub fn BundleOptions::with_fold(self : BundleOptions, f : Bool) -> BundleOptions {
+pub fn BundleOptions::with_fold(
+  self : BundleOptions,
+  f : Bool,
+) -> BundleOptions {
   { ..self, fold: f }
 }
 
 ///|
-pub fn BundleOptions::with_mangle(self : BundleOptions, m : Bool) -> BundleOptions {
+pub fn BundleOptions::with_mangle(
+  self : BundleOptions,
+  m : Bool,
+) -> BundleOptions {
   { ..self, mangle: m }
 }
 
@@ -303,7 +312,12 @@ pub fn bundle_modules(
   let external_seen : Map[String, Bool] = {}
   match
     load_module_graph(
-      files, entry, modules, external_imports, external_seen, opts.aliases,
+      files,
+      entry,
+      modules,
+      external_imports,
+      external_seen,
+      opts.aliases,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -401,11 +415,14 @@ pub fn bundle_modules(
       sources.push(path)
       sources_content.push(m.source)
       combined_line_indices.push(LineIndex::new(m.source))
-      let has_positions = m.block.stmt_positions.length() == m.block.stmts.length()
+      let has_positions = m.block.stmt_positions.length() ==
+        m.block.stmts.length()
       for j, s in m.block.stmts {
         combined_stmts.push(s)
         if has_positions {
-          combined_positions.push(encode_combined_position(m.block.stmt_positions[j], source_id))
+          combined_positions.push(
+            encode_combined_position(m.block.stmt_positions[j], source_id),
+          )
         } else {
           combined_positions.push(encode_combined_position(0, source_id))
         }
@@ -586,7 +603,9 @@ pub fn bundle_modules(
       // was lost (synthesized by a transform) have an out-of-range
       // source-id and are simply skipped.
       if opts.with_sourcemap && has_combined_positions {
-        let (offset, source_id) = decode_combined_position(combined.stmt_positions[i])
+        let (offset, source_id) = decode_combined_position(
+          combined.stmt_positions[i],
+        )
         if source_id < combined_line_indices.length() {
           e.line_index = combined_line_indices[source_id]
           match e.smap {
@@ -678,12 +697,7 @@ pub fn bundle_modules(
       Some(b.to_json_multi(sources, sources_content, output_path="bundle.js"))
     None => None
   }
-  Ok({
-    js: e.to_string(),
-    sourcemap: sm_json,
-    modules: module_paths,
-    warnings,
-  })
+  Ok({ js: e.to_string(), sourcemap: sm_json, modules: module_paths, warnings })
 }
 
 ///|
@@ -793,8 +807,7 @@ fn load_module_graph(
             resolved[imp.module_spec] = dep_path
             match
               load_module_graph(
-                files, dep_path, modules, external_imports, external_seen,
-                aliases,
+                files, dep_path, modules, external_imports, external_seen, aliases,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -806,8 +819,7 @@ fn load_module_graph(
               resolved[imp.module_spec] = dep_path
               match
                 load_module_graph(
-                  files, dep_path, modules, external_imports, external_seen,
-                  aliases,
+                  files, dep_path, modules, external_imports, external_seen, aliases,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
@@ -855,8 +867,7 @@ fn load_module_graph(
             resolved[re.module_spec] = dep_path
             match
               load_module_graph(
-                files, dep_path, modules, external_imports, external_seen,
-                aliases,
+                files, dep_path, modules, external_imports, external_seen, aliases,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -868,16 +879,15 @@ fn load_module_graph(
               resolved[re.module_spec] = dep_path
               match
                 load_module_graph(
-                  files, dep_path, modules, external_imports, external_seen,
-                  aliases,
+                  files, dep_path, modules, external_imports, external_seen, aliases,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
               }
             }
-            // Bare re-export targets aren't tracked as external —
-            // the consumer's runtime won't see them unless they
-            // also become a direct import. v0 limitation.
+          // Bare re-export targets aren't tracked as external —
+          // the consumer's runtime won't see them unless they
+          // also become a direct import. v0 limitation.
         }
     }
   }
@@ -1022,7 +1032,7 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
 /// to a wider encoding, but a parallel side-array would be the
 /// cleaner answer at that point.
 fn encode_combined_position(offset : Int, source_id : Int) -> Int {
-  (offset * 256) + (source_id % 256)
+  offset * 256 + source_id % 256
 }
 
 ///|

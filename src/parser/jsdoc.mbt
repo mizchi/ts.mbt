@@ -96,7 +96,10 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
       // Flush whatever we were collecting.
       if not(in_description) {
         tags.push(
-          interpret_tag(current_tag_name, current_tag_content.join("\n").trim_end().to_string()),
+          interpret_tag(
+            current_tag_name,
+            current_tag_content.join("\n").trim_end().to_string(),
+          ),
         )
       } else if description != "" {
         description = description.trim_end().to_string()
@@ -105,7 +108,9 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
       // Split into tag name + rest. Tag name is `[a-zA-Z_]+` or
       // the special `__PURE__` / `__NO_SIDE_EFFECTS__` marker.
       let trimmed_str = trimmed.to_string()
-      let rest = trimmed_str.substring(start=1, end=trimmed_str.length()).to_string()
+      let rest = trimmed_str
+        .substring(start=1, end=trimmed_str.length())
+        .to_string()
       let (name, body) = split_tag_head(rest)
       current_tag_name = name
       current_tag_content = [body]
@@ -121,13 +126,13 @@ pub fn parse_jsdoc_block(text : String) -> JsdocBlock? {
   // Flush the trailing tag.
   if not(in_description) {
     tags.push(
-      interpret_tag(current_tag_name, current_tag_content.join("\n").trim_end().to_string()),
+      interpret_tag(
+        current_tag_name,
+        current_tag_content.join("\n").trim_end().to_string(),
+      ),
     )
   }
-  let block : JsdocBlock = {
-    description: description.trim().to_string(),
-    tags,
-  }
+  let block : JsdocBlock = { description: description.trim().to_string(), tags }
   if block.is_empty() {
     None
   } else {
@@ -173,7 +178,11 @@ fn split_tag_head(s : String) -> (String, String) {
     return ("", s)
   }
   let name = s.substring(start=0, end=i).to_string()
-  let rest = s.substring(start=i, end=s.length()).to_string().trim_start().to_string()
+  let rest = s
+    .substring(start=i, end=s.length())
+    .to_string()
+    .trim_start()
+    .to_string()
   (name, rest)
 }
 
@@ -237,7 +246,11 @@ fn extract_brace_type(s : String) -> (String?, String) {
     } else if c == '}' {
       depth = depth - 1
       if depth == 0 {
-        let inner = trimmed.substring(start=1, end=i).to_string().trim().to_string()
+        let inner = trimmed
+          .substring(start=1, end=i)
+          .to_string()
+          .trim()
+          .to_string()
         let rest = trimmed
           .substring(start=i + 1, end=trimmed.length())
           .to_string()
@@ -268,12 +281,20 @@ fn split_first_word(s : String) -> (String, String) {
     return ("", trimmed)
   }
   let head = trimmed.substring(start=0, end=i).to_string()
-  let mut rest = trimmed.substring(start=i, end=trimmed.length()).to_string().trim_start().to_string()
+  let mut rest = trimmed
+    .substring(start=i, end=trimmed.length())
+    .to_string()
+    .trim_start()
+    .to_string()
   // The convention `@param name - description` uses a leading `-`
   // between the name and the description — strip it so the
   // description doesn't end up with a stray dash.
   if rest.has_prefix("-") {
-    rest = rest.substring(start=1, end=rest.length()).to_string().trim_start().to_string()
+    rest = rest
+      .substring(start=1, end=rest.length())
+      .to_string()
+      .trim_start()
+      .to_string()
   }
   (head, rest)
 }

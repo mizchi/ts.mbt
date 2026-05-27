@@ -45,16 +45,20 @@ fn block_needs_type_fold(block : @ast.TsBlock) -> Bool {
 ///|
 fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
-    | CompoundAssign(_, _, e) | Throw(e) => expr_needs_type_fold(e)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => expr_needs_type_fold(e)
     Return(Some(e)) => expr_needs_type_fold(e)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => false
     IndexAssign(t, idx, v) =>
       expr_needs_type_fold(t) ||
-          expr_needs_type_fold(idx) ||
-          expr_needs_type_fold(v)
-    PropAssign(t, _, v) =>
-      expr_needs_type_fold(t) || expr_needs_type_fold(v)
+      expr_needs_type_fold(idx) ||
+      expr_needs_type_fold(v)
+    PropAssign(t, _, v) => expr_needs_type_fold(t) || expr_needs_type_fold(v)
     If(c, t, e) => {
       if expr_needs_type_fold(c) {
         return true
@@ -93,7 +97,8 @@ fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
       }
       block_needs_type_fold(body)
     }
-    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body)
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) =>
       expr_needs_type_fold(iter) || block_needs_type_fold(body)
     // Switch with an exhaustive default-drop target counts.
@@ -111,10 +116,7 @@ fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
                 _ => ()
               }
             }
-          Some(te) =>
-            if expr_needs_type_fold(te) {
-              return true
-            }
+          Some(te) => if expr_needs_type_fold(te) { return true }
         }
         if block_needs_type_fold(c.body) {
           return true
@@ -143,10 +145,7 @@ fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
     NativeClassStmt(decl, ctor_body) => {
       for m in decl.methods {
         match m.body {
-          Some(b) =>
-            if block_needs_type_fold(b) {
-              return true
-            }
+          Some(b) => if block_needs_type_fold(b) { return true }
           None => ()
         }
       }
@@ -169,9 +168,14 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
       }
       if is_eq_op {
         match (l, r) {
-          (@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _), @ast.TsExpr::StringLit(_))
-          | (@ast.TsExpr::StringLit(_), @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _)) =>
-            return true
+          (
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _),
+            @ast.TsExpr::StringLit(_),
+          )
+          | (
+            @ast.TsExpr::StringLit(_),
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Typeof, _),
+          ) => return true
           // `x === null` / `x === undefined`.
           (@ast.TsExpr::Var(_), @ast.TsExpr::NullLit)
           | (@ast.TsExpr::NullLit, @ast.TsExpr::Var(_)) => return true
@@ -182,13 +186,17 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
       }
       expr_needs_type_fold(l) || expr_needs_type_fold(r)
     }
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      expr_needs_type_fold(inner)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => expr_needs_type_fold(inner)
     Cond(c, t, e) =>
       expr_needs_type_fold(c) ||
-          expr_needs_type_fold(t) ||
-          expr_needs_type_fold(e)
+      expr_needs_type_fold(t) ||
+      expr_needs_type_fold(e)
     Seq(l, r) => expr_needs_type_fold(l) || expr_needs_type_fold(r)
     PropAccess(recv, _) => expr_needs_type_fold(recv)
     IndexAccess(recv, idx) =>
@@ -251,10 +259,9 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
       expr_needs_type_fold(t) || expr_needs_type_fold(v)
     IndexAssignExpr(recv, idx, v) =>
       expr_needs_type_fold(recv) ||
-          expr_needs_type_fold(idx) ||
-          expr_needs_type_fold(v)
-    ComputedProp(k, v) =>
-      expr_needs_type_fold(k) || expr_needs_type_fold(v)
+      expr_needs_type_fold(idx) ||
+      expr_needs_type_fold(v)
+    ComputedProp(k, v) => expr_needs_type_fold(k) || expr_needs_type_fold(v)
     As(inner, _) | Satisfies(inner, _) => expr_needs_type_fold(inner)
     Yield(Some(inner)) => expr_needs_type_fold(inner)
     TaggedTemplate(tag, _, _, exprs) => {
@@ -319,10 +326,7 @@ fn type_fold_stmt(
       // Record the binding's type if it's a simple identifier
       // and the annotation is one we can reason about.
       match b {
-        @ast.TsBinding::Ident(name) =>
-          if is_useful_type(t) {
-            scope[name] = t
-          }
+        @ast.TsBinding::Ident(name) => if is_useful_type(t) { scope[name] = t }
         _ => ()
       }
       match stmt {
@@ -333,8 +337,7 @@ fn type_fold_stmt(
       }
     }
     Assign(n, e) => Assign(n, type_fold_expr(e, scope))
-    CompoundAssign(n, op, e) =>
-      CompoundAssign(n, op, type_fold_expr(e, scope))
+    CompoundAssign(n, op, e) => CompoundAssign(n, op, type_fold_expr(e, scope))
     IndexAssign(t, idx, v) =>
       IndexAssign(
         type_fold_expr(t, scope),
@@ -379,13 +382,29 @@ fn type_fold_stmt(
         type_fold_block_in(body, scope),
       )
     ForOf(k, b, t, iter, body) =>
-      ForOf(k, b, t, type_fold_expr(iter, scope), type_fold_block_in(body, scope))
+      ForOf(
+        k,
+        b,
+        t,
+        type_fold_expr(iter, scope),
+        type_fold_block_in(body, scope),
+      )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
-        k, b, t, type_fold_expr(iter, scope), type_fold_block_in(body, scope),
+        k,
+        b,
+        t,
+        type_fold_expr(iter, scope),
+        type_fold_block_in(body, scope),
       )
     ForIn(k, b, t, iter, body) =>
-      ForIn(k, b, t, type_fold_expr(iter, scope), type_fold_block_in(body, scope))
+      ForIn(
+        k,
+        b,
+        t,
+        type_fold_expr(iter, scope),
+        type_fold_block_in(body, scope),
+      )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
@@ -555,7 +574,8 @@ fn type_fold_expr(
       }
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(type_fold_expr(e, local))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(type_fold_block_in(b, local))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(type_fold_block_in(b, local))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
@@ -758,7 +778,8 @@ fn try_null_check_fold(
   let _ = rhs_kind
   let can_be_null = match ty {
     Number | Int | String_ | Boolean | BigInt | Symbol => false
-    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => false
+    Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
+      false
     _ => return None
   }
   // `x === null` for non-nullable x → false; `x !== null` → true.

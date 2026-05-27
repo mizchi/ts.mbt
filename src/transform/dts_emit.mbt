@@ -435,7 +435,7 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
       buf.write_string("...")
       emit_type(buf, inner)
     }
-    Object(fields) => {
+    Object(fields) =>
       if fields.length() == 0 {
         buf.write_string("{}")
       } else {
@@ -464,7 +464,6 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
         }
         buf.write_string(" }")
       }
-    }
     Struct(name, _) => buf.write_string(name)
     Func(params, ret) => {
       buf.write_string("(")
@@ -497,22 +496,20 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
       buf.write_string(") => ")
       emit_type(buf, ret)
     }
-    Union(items) => {
+    Union(items) =>
       for i, it in items {
         if i > 0 {
           buf.write_string(" | ")
         }
         emit_type_atom(buf, it)
       }
-    }
-    Intersection(items) => {
+    Intersection(items) =>
       for i, it in items {
         if i > 0 {
           buf.write_string(" & ")
         }
         emit_type_atom(buf, it)
       }
-    }
     Conditional(check, ext, t, f) => {
       emit_type_atom(buf, check)
       buf.write_string(" extends ")
@@ -629,7 +626,10 @@ fn emit_type(buf : StringBuilder, ty : @ast.TsType) -> Unit {
 /// the precedence-aware variant.
 fn emit_type_atom(buf : StringBuilder, ty : @ast.TsType) -> Unit {
   match ty {
-    Union(_) | Intersection(_) | Conditional(_, _, _, _) | Func(_, _)
+    Union(_)
+    | Intersection(_)
+    | Conditional(_, _, _, _)
+    | Func(_, _)
     | Constructor(_, _, _) => {
       buf.write_string("(")
       emit_type(buf, ty)

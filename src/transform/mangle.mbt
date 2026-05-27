@@ -176,34 +176,31 @@ let mangler_builtin_reserved_properties : Array[String] = [
   // without these listed, bundles that call `Math.floor(...)` /
   // `Math.min(...)` ended up renaming the method down to one
   // letter and crashing at runtime.
-  "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh",
-  "cbrt", "ceil", "clz32", "cos", "cosh", "exp", "expm1", "floor",
-  "fround", "hypot", "imul", "log", "log10", "log1p", "log2",
-  "max", "min", "pow", "random", "round", "sign", "sin", "sinh",
-  "sqrt", "tan", "tanh", "trunc",
+   "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil",
+  "clz32", "cos", "cosh", "exp", "expm1", "floor", "fround", "hypot", "imul", "log",
+  "log10", "log1p", "log2", "max", "min", "pow", "random", "round", "sign", "sin",
+  "sinh", "sqrt", "tan", "tanh", "trunc",
   // Math constants
-  "E", "LN2", "LN10", "LOG2E", "LOG10E", "PI", "SQRT1_2", "SQRT2",
+   "E", "LN2", "LN10", "LOG2E", "LOG10E", "PI", "SQRT1_2", "SQRT2",
   // Number statics
-  "isInteger", "isFinite", "isNaN", "isSafeInteger", "parseFloat",
-  "parseInt", "EPSILON", "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER",
-  "MAX_VALUE", "MIN_VALUE", "POSITIVE_INFINITY", "NEGATIVE_INFINITY",
-  "NaN",
+   "isInteger", "isFinite", "isNaN", "isSafeInteger", "parseFloat", "parseInt", "EPSILON",
+  "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER", "MAX_VALUE", "MIN_VALUE", "POSITIVE_INFINITY",
+  "NEGATIVE_INFINITY", "NaN",
   // Object statics (the ones not already covered above)
-  "assign", "create", "defineProperty", "defineProperties", "freeze",
-  "fromEntries", "getOwnPropertyDescriptor", "getOwnPropertyDescriptors",
-  "getOwnPropertyNames", "getOwnPropertySymbols", "getPrototypeOf",
-  "is", "isExtensible", "isFrozen", "isSealed", "preventExtensions",
-  "seal", "setPrototypeOf",
+   "assign", "create", "defineProperty", "defineProperties", "freeze", "fromEntries",
+  "getOwnPropertyDescriptor", "getOwnPropertyDescriptors", "getOwnPropertyNames",
+  "getOwnPropertySymbols", "getPrototypeOf", "is", "isExtensible", "isFrozen", "isSealed",
+  "preventExtensions", "seal", "setPrototypeOf",
   // Array statics
-  "from", "isArray", "of",
+   "from", "isArray", "of",
   // Date statics
-  "now", "UTC",
+   "now", "UTC",
   // String statics
-  "fromCharCode", "fromCodePoint",
+   "fromCharCode", "fromCodePoint",
   // Symbol well-knowns the runtime reads off Symbol itself
-  "for", "keyFor", "hasInstance", "isConcatSpreadable", "match",
-  "matchAll", "replace", "search", "species", "split", "toPrimitive",
-  "toStringTag", "unscopables", "dispose", "asyncDispose",
+   "for", "keyFor", "hasInstance", "isConcatSpreadable", "match", "matchAll", "replace",
+  "search", "species", "split", "toPrimitive", "toStringTag", "unscopables", "dispose",
+  "asyncDispose",
   // Function
    "call", "apply", "bind", "name", "arguments", "caller",
   // Promise
@@ -249,25 +246,23 @@ let mangler_builtin_reserved_properties : Array[String] = [
   "exists", "existsSync", "mkdir", "mkdirSync", "rmdir", "unlink", "stat", "statSync",
   "createReadStream", "createWriteStream",
   // RegExp instance methods + properties
-  "test", "exec", "source", "flags", "global", "ignoreCase", "multiline",
-  "sticky", "unicode", "unicodeSets", "dotAll", "hasIndices", "lastIndex",
+   "test", "exec", "source", "flags", "global", "ignoreCase", "multiline", "sticky",
+  "unicode", "unicodeSets", "dotAll", "hasIndices", "lastIndex",
   // Error / standard exception members
-  "message", "cause", "stack", "fileName", "lineNumber", "columnNumber",
+   "message", "cause", "stack", "fileName", "lineNumber", "columnNumber",
   // Async / generator iterator protocol (`Symbol.asyncIterator` access too)
-  "asyncIterator",
+   "asyncIterator",
   // Date instance methods
-  "getDate", "getDay", "getFullYear", "getHours", "getMilliseconds",
-  "getMinutes", "getMonth", "getSeconds", "getTime", "getTimezoneOffset",
-  "getUTCDate", "getUTCDay", "getUTCFullYear", "getUTCHours",
-  "getUTCMilliseconds", "getUTCMinutes", "getUTCMonth", "getUTCSeconds",
-  "getYear", "setDate", "setFullYear", "setHours", "setMilliseconds",
-  "setMinutes", "setMonth", "setSeconds", "setTime", "setUTCDate",
-  "setUTCFullYear", "setUTCHours", "setUTCMilliseconds", "setUTCMinutes",
-  "setUTCMonth", "setUTCSeconds", "setYear", "toDateString", "toISOString",
-  "toJSON", "toTimeString", "toUTCString",
+   "getDate", "getDay", "getFullYear", "getHours", "getMilliseconds", "getMinutes",
+  "getMonth", "getSeconds", "getTime", "getTimezoneOffset", "getUTCDate", "getUTCDay",
+  "getUTCFullYear", "getUTCHours", "getUTCMilliseconds", "getUTCMinutes", "getUTCMonth",
+  "getUTCSeconds", "getYear", "setDate", "setFullYear", "setHours", "setMilliseconds",
+  "setMinutes", "setMonth", "setSeconds", "setTime", "setUTCDate", "setUTCFullYear",
+  "setUTCHours", "setUTCMilliseconds", "setUTCMinutes", "setUTCMonth", "setUTCSeconds",
+  "setYear", "toDateString", "toISOString", "toJSON", "toTimeString", "toUTCString",
   // Console / Hono / common Web APIs
-  "log", "info", "warn", "error", "debug", "trace", "table", "group",
-  "groupEnd", "dir", "count", "time", "timeEnd", "assert",
+   "log", "info", "warn", "error", "debug", "trace", "table", "group", "groupEnd",
+  "dir", "count", "time", "timeEnd", "assert",
   // Common reserved
    "default",
 ]
@@ -1126,7 +1121,12 @@ fn rename_stmt(
           for s in b.stmts {
             new_stmts.push(rename_stmt(s, inner, reserved))
           }
-          Some(@ast.TsStmt::Block({ stmts: new_stmts, stmt_positions: b.stmt_positions }))
+          Some(
+            @ast.TsStmt::Block({
+              stmts: new_stmts,
+              stmt_positions: b.stmt_positions,
+            }),
+          )
         }
         Some(s) => Some(rename_stmt(s, inner, reserved))
         None => None
@@ -2022,13 +2022,15 @@ fn rename_properties_in_expr(
       // stored under its original name but read under the mangled
       // one, surfacing as `Cannot read properties of undefined`
       // in `_zod`-style instance brands.
-      let renames_define_prop_key =
-        is_define_prop_call(recv, method) && args.length() >= 2
+      let renames_define_prop_key = is_define_prop_call(recv, method) &&
+        args.length() >= 2
       for i, a in args {
         if i == 1 && renames_define_prop_key {
           match a {
             @ast.TsExpr::StringLit(s) =>
-              new_args.push(@ast.TsExpr::StringLit(rename_prop_key(s, prop_map)))
+              new_args.push(
+                @ast.TsExpr::StringLit(rename_prop_key(s, prop_map)),
+              )
             _ => new_args.push(rename_properties_in_expr(a, prop_map))
           }
         } else {

@@ -48,12 +48,13 @@ test "symbol_graph: var hoists into the enclosing function scope" {
   // not the if-block frame, so a reference after the if still
   // resolves.
   let g = build_graph(
-    #|function f() {
-    #|  if (true) { var inner = 1; }
-    #|  return inner;
-    #|}
-    #|
-    ,
+    (
+      #|function f() {
+      #|  if (true) { var inner = 1; }
+      #|  return inner;
+      #|}
+      #|
+    ),
   )
   // function `f` introduces a Function scope; `var inner` hoists
   // there and `return inner` resolves to the same symbol.
@@ -65,15 +66,15 @@ test "symbol_graph: var hoists into the enclosing function scope" {
   // The `return inner` is a Read use.
   assert_true(inner.uses.length() >= 1)
   let _ = f
-
 }
 
 ///|
 test "symbol_graph: let stays block-scoped" {
   let g = build_graph(
-    #|{ let a = 1; }
-    #|
-    ,
+    (
+      #|{ let a = 1; }
+      #|
+    ),
   )
   // `a` lives in the inner Block scope, NOT module.
   assert_true(symbol_by_name(g, 0, "a") is None)
@@ -91,17 +92,20 @@ test "symbol_graph: reassignment marks the binding" {
 ///|
 test "symbol_graph: closure capture flags cross-function refs" {
   let g = build_graph(
-    #|function outer() {
-    #|  let captured = 1;
-    #|  return function() { return captured; };
-    #|}
-    #|
-    ,
+    (
+      #|function outer() {
+      #|  let captured = 1;
+      #|  return function() { return captured; };
+      #|}
+      #|
+    ),
   )
   // Find `captured` in the outer function scope.
   let mut found : Symbol? = None
   for s in g.symbols {
-    if s.name == "captured" { found = Some(s) }
+    if s.name == "captured" {
+      found = Some(s)
+    }
   }
   let captured = found.unwrap()
   assert_true(captured.captured_by_closure)
@@ -109,18 +113,14 @@ test "symbol_graph: closure capture flags cross-function refs" {
 
 ///|
 test "symbol_graph: external imports go in external_bindings" {
-  let g = build_graph_with_external(
-    "let x = 1; x + 2;",
-    ["format", "babelPlugin"],
-  )
+  let g = build_graph_with_external("let x = 1; x + 2;", [
+    "format", "babelPlugin",
+  ])
   // The names aren't actually declared in the snippet above, but
   // the helper just tracks the set — declaring `let format = …`
   // would mark `format` as external.
   let _ = g
-  let g2 = build_graph_with_external(
-    "let format = 1; format();",
-    ["format"],
-  )
+  let g2 = build_graph_with_external("let format = 1; format();", ["format"])
   let fmt = symbol_by_name(g2, 0, "format").unwrap()
   assert_true(g2.external_bindings.contains(fmt.id))
 }
@@ -150,10 +150,14 @@ test "symbol_graph: IndexReceiver / IndexKey separate the two roles" {
   let mut arr_idx_recv = false
   let mut i_idx_key = false
   for u in arr.uses {
-    if u.context is IndexReceiver { arr_idx_recv = true }
+    if u.context is IndexReceiver {
+      arr_idx_recv = true
+    }
   }
   for u in i.uses {
-    if u.context is IndexKey { i_idx_key = true }
+    if u.context is IndexKey {
+      i_idx_key = true
+    }
   }
   assert_true(arr_idx_recv)
   assert_true(i_idx_key)
@@ -162,11 +166,12 @@ test "symbol_graph: IndexReceiver / IndexKey separate the two roles" {
 ///|
 test "symbol_graph: CallArg flow edge from arg expr to callee param slot" {
   let g = build_graph(
-    #|function f(p) { return p; }
-    #|let x = 1;
-    #|f(x);
-    #|
-    ,
+    (
+      #|function f(p) { return p; }
+      #|let x = 1;
+      #|f(x);
+      #|
+    ),
   )
   let f = symbol_by_name(g, 0, "f").unwrap()
   let x = symbol_by_name(g, 0, "x").unwrap()
@@ -185,15 +190,18 @@ test "symbol_graph: CallArg flow edge from arg expr to callee param slot" {
 ///|
 test "symbol_graph: return statement adds a FuncReturn edge" {
   let g = build_graph(
-    #|function f() { let r = 42; return r; }
-    #|
-    ,
+    (
+      #|function f() { let r = 42; return r; }
+      #|
+    ),
   )
   let f = symbol_by_name(g, 0, "f").unwrap()
   // Find r in the function frame.
   let mut r : Symbol? = None
   for s in g.symbols {
-    if s.name == "r" { r = Some(s) }
+    if s.name == "r" {
+      r = Some(s)
+    }
   }
   let rsym = r.unwrap()
   let mut hit = false

@@ -98,7 +98,6 @@ pub fn infer_numeric_symbols(g : SymbolGraph) -> Map[SymbolId, Bool] {
             // Drop the speculative entry so we don't poison
             // other symbols' analyses later in the round.
             let _ = numeric.remove(sym.id)
-
           }
           all_numeric = false
         }
@@ -184,10 +183,7 @@ fn lookup_unique_symbol(g : SymbolGraph, name : String) -> SymbolId? {
 }
 
 ///|
-fn is_flow_node_numeric(
-  node : FlowNode,
-  numeric : Map[SymbolId, Bool],
-) -> Bool {
+fn is_flow_node_numeric(node : FlowNode, numeric : Map[SymbolId, Bool]) -> Bool {
   match node {
     Literal(LitNumeric) => true
     Literal(_) => false

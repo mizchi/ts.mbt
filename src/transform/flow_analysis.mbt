@@ -55,7 +55,11 @@ pub(all) enum Observability {
 fn obs_join(a : Observability, b : Observability) -> Observability {
   let av = obs_rank(a)
   let bv = obs_rank(b)
-  if av >= bv { a } else { b }
+  if av >= bv {
+    a
+  } else {
+    b
+  }
 }
 
 ///|
@@ -149,9 +153,7 @@ pub fn analyze_observability(
     // to the source.
     for edge in g.flow_edges {
       if edge.to is SymVal(s) && s == sym {
-        propagate_to_flow_source(
-          edge.from, target, g, result, worklist,
-        )
+        propagate_to_flow_source(edge.from, target, g, result, worklist)
       }
     }
     // If sym is a parameter, every call-site argument also
@@ -186,8 +188,7 @@ fn seed_from_expr(
         Some(id) => bump_obs(id, obs, result, worklist)
         None => ()
       }
-    PropAccess(recv, _) =>
-      seed_from_expr(recv, scope, obs, g, result, worklist)
+    PropAccess(recv, _) => seed_from_expr(recv, scope, obs, g, result, worklist)
     MethodCall(recv, _, _) =>
       seed_from_expr(recv, scope, obs, g, result, worklist)
     IndexAccess(recv, _) =>
@@ -225,11 +226,13 @@ fn seed_from_expr(
       seed_from_expr(t, scope, obs, g, result, worklist)
       seed_from_expr(e, scope, obs, g, result, worklist)
     }
-    BinOp(_, _, r) =>
-      seed_from_expr(r, scope, obs, g, result, worklist)
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | Await(inner) =>
-      seed_from_expr(inner, scope, obs, g, result, worklist)
+    BinOp(_, _, r) => seed_from_expr(r, scope, obs, g, result, worklist)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | Await(inner) => seed_from_expr(inner, scope, obs, g, result, worklist)
     _ => ()
   }
 }
@@ -422,8 +425,13 @@ fn binding_carries_nested_values(sym : Symbol) -> Bool {
 ///|
 fn is_leaf_value(expr : @ast.TsExpr) -> Bool {
   match expr {
-    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_)
-    | StringLit(_) | NullLit | ArrayHole => true
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayHole => true
     _ => false
   }
 }

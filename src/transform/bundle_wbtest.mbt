@@ -55,8 +55,7 @@ test "bundle: two-file dependency emits deepest module first" {
 test "bundle: bare-specifier imports are re-emitted at the top" {
   let files = vfs([
     (
-      "entry.ts",
-      "import React from \"react\";\nimport { useState } from \"react\";\nconst el = React.createElement(\"div\");\n",
+      "entry.ts", "import React from \"react\";\nimport { useState } from \"react\";\nconst el = React.createElement(\"div\");\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -74,10 +73,7 @@ test "bundle: bare-specifier imports are re-emitted at the top" {
 test "bundle: type-only imports are dropped from the output" {
   let files = vfs([
     ("types.ts", "export type T = number;\n"),
-    (
-      "entry.ts",
-      "import type { T } from \"./types\";\nconst v: T = 1;\n",
-    ),
+    ("entry.ts", "import type { T } from \"./types\";\nconst v: T = 1;\n"),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
@@ -97,11 +93,14 @@ test "bundle: diamond dependency visits the shared module once" {
   // entry.ts -> a.ts and b.ts
   let files = vfs([
     (
-      "entry.ts",
-      "import { a } from \"./a\";\nimport { b } from \"./b\";\nconst v = a + b;\n",
+      "entry.ts", "import { a } from \"./a\";\nimport { b } from \"./b\";\nconst v = a + b;\n",
     ),
-    ("a.ts", "import { shared } from \"./shared\";\nexport const a = shared + 1;\n"),
-    ("b.ts", "import { shared } from \"./shared\";\nexport const b = shared + 2;\n"),
+    (
+      "a.ts", "import { shared } from \"./shared\";\nexport const a = shared + 1;\n",
+    ),
+    (
+      "b.ts", "import { shared } from \"./shared\";\nexport const b = shared + 2;\n",
+    ),
     ("shared.ts", "export const shared = 42;\n"),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -109,8 +108,8 @@ test "bundle: diamond dependency visits the shared module once" {
       assert_eq(out.modules.length(), 4)
       assert_eq(out.modules[0], "shared.ts")
       assert_true(
-        out.modules[1] == "a.ts" && out.modules[2] == "b.ts" ||
-        out.modules[1] == "b.ts" && out.modules[2] == "a.ts",
+        (out.modules[1] == "a.ts" && out.modules[2] == "b.ts") ||
+        (out.modules[1] == "b.ts" && out.modules[2] == "a.ts"),
       )
       assert_eq(out.modules[3], "entry.ts")
       // The shared module body must appear exactly once.
@@ -155,8 +154,7 @@ test "bundle: relative paths resolve through ./ and ../" {
   // `entry.ts` lives in `src/`, depends on `./lib.ts` and `../shared.ts`.
   let files = vfs([
     (
-      "src/entry.ts",
-      "import { lib } from \"./lib\";\nimport { shared } from \"../shared\";\nconst v = lib + shared;\n",
+      "src/entry.ts", "import { lib } from \"./lib\";\nimport { shared } from \"../shared\";\nconst v = lib + shared;\n",
     ),
     ("src/lib.ts", "export const lib = 1;\n"),
     ("shared.ts", "export const shared = 2;\n"),
@@ -206,12 +204,10 @@ test "bundle: mangle folds modules into one scope and renames everything" {
   // every binding gets a short name.
   let files = vfs([
     (
-      "entry.ts",
-      "import { compute } from \"./lib\";\nconst out = compute(7);\nconsole.log(out);\n",
+      "entry.ts", "import { compute } from \"./lib\";\nconst out = compute(7);\nconsole.log(out);\n",
     ),
     (
-      "lib.ts",
-      "export function compute(seed: number): number {\n  const offset = 3;\n  return seed + offset;\n}\n",
+      "lib.ts", "export function compute(seed: number): number {\n  const offset = 3;\n  return seed + offset;\n}\n",
     ),
   ])
   let opts = BundleOptions::default().with_mangle(true)
@@ -238,8 +234,7 @@ test "bundle: mangle keeps the shared call site consistent across modules" {
   // declaration's outer binding.
   let files = vfs([
     (
-      "entry.ts",
-      "import { helper } from \"./lib\";\nconst v = helper(2);\nconsole.log(v);\n",
+      "entry.ts", "import { helper } from \"./lib\";\nconst v = helper(2);\nconsole.log(v);\n",
     ),
     (
       "lib.ts", "export function helper(n: number): number {\n  return n * 2;\n}\n",
@@ -268,6 +263,7 @@ test "bundle: mangle keeps the shared call site consistent across modules" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
 ///|
 test "bundle: cyclic imports don't stack-overflow" {
   // `a.js` <-> `b.js` form a 2-cycle. Without the cycle-break
@@ -275,8 +271,7 @@ test "bundle: cyclic imports don't stack-overflow" {
   // infinitely until SIGSEGV.
   let files = vfs([
     (
-      "a.js",
-      "import { B } from \"./b.js\";\nexport const A = 1;\nconsole.log(A + B);\n",
+      "a.js", "import { B } from \"./b.js\";\nexport const A = 1;\nconsole.log(A + B);\n",
     ),
     ("b.js", "import { A } from \"./a.js\";\nexport const B = 2;\n"),
   ])
@@ -294,15 +289,9 @@ test "bundle: cyclic imports don't stack-overflow" {
 ///|
 test "bundle: longer cycle through three modules" {
   let files = vfs([
-    (
-      "a.js", "import { B } from \"./b.js\";\nexport const A = 1;\n",
-    ),
-    (
-      "b.js", "import { C } from \"./c.js\";\nexport const B = 2;\n",
-    ),
-    (
-      "c.js", "import { A } from \"./a.js\";\nexport const C = 3;\n",
-    ),
+    ("a.js", "import { B } from \"./b.js\";\nexport const A = 1;\n"),
+    ("b.js", "import { C } from \"./c.js\";\nexport const B = 2;\n"),
+    ("c.js", "import { A } from \"./a.js\";\nexport const C = 3;\n"),
   ])
   match bundle_modules(files, "a.js", BundleOptions::default()) {
     Ok(out) => assert_eq(out.modules.length(), 3)
@@ -314,8 +303,7 @@ test "bundle: longer cycle through three modules" {
 test "bundle: class extends emits native syntax with working super()" {
   let files = vfs([
     (
-      "entry.ts",
-      "class MyError extends Error {\n  res: number;\n  constructor(m: string, r: number) { super(m); this.res = r; }\n}\nconsole.log(new MyError(\"x\", 1).message);\n",
+      "entry.ts", "class MyError extends Error {\n  res: number;\n  constructor(m: string, r: number) { super(m); this.res = r; }\n}\nconsole.log(new MyError(\"x\", 1).message);\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -337,8 +325,7 @@ test "bundle: class extends emits native syntax with working super()" {
 test "bundle: for-loop comma-separated init unfolds correctly" {
   let files = vfs([
     (
-      "entry.ts",
-      "function sum(arr: number[]): number {\n  let total = 0;\n  for (let i = 0, n = arr.length; i < n; i++) {\n    total += arr[i];\n  }\n  return total;\n}\n",
+      "entry.ts", "function sum(arr: number[]): number {\n  let total = 0;\n  for (let i = 0, n = arr.length; i < n; i++) {\n    total += arr[i];\n  }\n  return total;\n}\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -358,8 +345,7 @@ test "bundle: for-loop comma-separated init unfolds correctly" {
 test "bundle: optional chaining emits ?. tokens" {
   let files = vfs([
     (
-      "entry.ts",
-      "const obj: any = { foo: 1 };\nconst arr: any = null;\nconsole.log(obj?.foo, arr?.[0], obj?.method?.());\n",
+      "entry.ts", "const obj: any = { foo: 1 };\nconst arr: any = null;\nconsole.log(obj?.foo, arr?.[0], obj?.method?.());\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -379,8 +365,7 @@ test "bundle: optional chaining emits ?. tokens" {
 test "bundle: constructor parameter properties become this.x = x" {
   let files = vfs([
     (
-      "entry.ts",
-      "class Point {\n  constructor(public x: number, private y: number, readonly z: number = 99) {}\n  sum() { return this.x + this.y + this.z; }\n}\n",
+      "entry.ts", "class Point {\n  constructor(public x: number, private y: number, readonly z: number = 99) {}\n  sum() { return this.x + this.y + this.z; }\n}\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -399,8 +384,7 @@ test "bundle: constructor parameter properties become this.x = x" {
 test "bundle: private fields strip the `#` after brand mangling" {
   let files = vfs([
     (
-      "entry.ts",
-      "class Counter {\n  #count = 0;\n  inc() { this.#count++; return this.#count; }\n  get value() { return this.#count; }\n}\nconst c = new Counter();\n",
+      "entry.ts", "class Counter {\n  #count = 0;\n  inc() { this.#count++; return this.#count; }\n  get value() { return this.#count; }\n}\nconst c = new Counter();\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -421,10 +405,7 @@ test "bundle: private fields strip the `#` after brand mangling" {
 ///|
 test "bundle: class getter desugars to Object.defineProperty" {
   let files = vfs([
-    (
-      "entry.ts",
-      "class Box {\n  v = 7;\n  get value() { return this.v; }\n}\n",
-    ),
+    ("entry.ts", "class Box {\n  v = 7;\n  get value() { return this.v; }\n}\n"),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
@@ -466,7 +447,9 @@ test "bundle: --reserve-entry-exports keeps exported type surface" {
   let module_ = @parser.parse_module_from_source_with_const_values(source, {})
   let reserved = entry_export_property_names(module_, ["start", "Config"])
   let r : Map[String, Bool] = {}
-  for n in reserved { r[n] = true }
+  for n in reserved {
+    r[n] = true
+  }
   // Exported surface is reserved …
   assert_true(r.contains("host"))
   assert_true(r.contains("port"))
@@ -488,7 +471,9 @@ test "bundle: --reserve-entry-exports follows class signatures" {
   let module_ = @parser.parse_module_from_source_with_const_values(src, {})
   let reserved = entry_export_property_names(module_, ["Service"])
   let r : Map[String, Bool] = {}
-  for n in reserved { r[n] = true }
+  for n in reserved {
+    r[n] = true
+  }
   assert_true(r.contains("endpoint"))
   assert_true(r.contains("port"))
   assert_true(r.contains("call"))
@@ -566,7 +551,10 @@ test "emit: async function expression keeps `async` keyword" {
       "console.log(typeof g.next);\n",
     ),
   ])
-  let opts = BundleOptions::default().with_fold(true).with_mangle(true).with_minify(true)
+  let opts = BundleOptions::default()
+    .with_fold(true)
+    .with_mangle(true)
+    .with_minify(true)
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) =>
       // Whether the function got inlined into the call site or kept
@@ -696,9 +684,15 @@ test "link: two modules declaring the same name don't collide" {
   // an `import { HonoBase } from "./a"` (where a does
   // `export { Hono as HonoBase }`) resolves to module-a's `Hono`.
   let files = vfs([
-    ("a.ts", "var Hono = class _Hono { greet() { return \"hi\"; } };\nexport { Hono as HonoBase };\n"),
-    ("b.ts", "import { HonoBase } from \"./a\";\nvar Hono = class extends HonoBase { extra() { return \"!\"; } };\nexport { Hono };\n"),
-    ("entry.ts", "import { Hono } from \"./b\";\nconst h = new Hono();\nconsole.log(h.greet() + h.extra());\n"),
+    (
+      "a.ts", "var Hono = class _Hono { greet() { return \"hi\"; } };\nexport { Hono as HonoBase };\n",
+    ),
+    (
+      "b.ts", "import { HonoBase } from \"./a\";\nvar Hono = class extends HonoBase { extra() { return \"!\"; } };\nexport { Hono };\n",
+    ),
+    (
+      "entry.ts", "import { Hono } from \"./b\";\nconst h = new Hono();\nconsole.log(h.greet() + h.extra());\n",
+    ),
   ])
   let opts = BundleOptions::default()
     .with_treeshake(true)
@@ -800,13 +794,12 @@ test "treeshake: class extends keeps the base class alive" {
   ])
   let opts = BundleOptions::default().with_treeshake(true)
   match bundle_modules(files, "entry.ts", opts) {
-    Ok(out) => {
+    Ok(out) =>
       // Treeshake previously didn't walk class bodies / `extends`
       // names, so `Base` got dropped despite being referenced by
       // `Greeter`'s extends clause. The bundle is invalid at
       // runtime in that case.
       assert_true(out.js.contains("Base"))
-    }
     Err(e) => fail("bundle error: \{e}")
   }
 }
@@ -814,7 +807,9 @@ test "treeshake: class extends keeps the base class alive" {
 ///|
 test "sourcemap: mangle path emits per-stmt mappings via encoded positions" {
   let files = vfs([
-    ("entry.ts", "import { x } from \"./lib\";\nconst y = x + 1;\nconsole.log(y);\n"),
+    (
+      "entry.ts", "import { x } from \"./lib\";\nconst y = x + 1;\nconsole.log(y);\n",
+    ),
     ("lib.ts", "export const x = 41;\n"),
   ])
   let opts = BundleOptions::default()
@@ -836,7 +831,12 @@ test "sourcemap: mangle path emits per-stmt mappings via encoded positions" {
           let mappings_pos = sm.find("\"mappings\":\"")
           let mappings = match mappings_pos {
             Some(idx) =>
-              sm.substring(start=idx + "\"mappings\":\"".length(), end=sm.length()).to_string()
+              sm
+              .substring(
+                start=idx + "\"mappings\":\"".length(),
+                end=sm.length(),
+              )
+              .to_string()
             None => ""
           }
           assert_true(mappings.length() > 5)
@@ -863,9 +863,7 @@ test "dts: class constructor emits when parser captured it" {
 ///|
 test "enum lowering: numeric enum picks up reverse mapping" {
   let files = vfs([
-    (
-      "entry.ts", "enum Color { Red, Green, Blue }\nconsole.log(Color.Red);\n",
-    ),
+    ("entry.ts", "enum Color { Red, Green, Blue }\nconsole.log(Color.Red);\n"),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
@@ -882,8 +880,7 @@ test "enum lowering: numeric enum picks up reverse mapping" {
 test "enum lowering: string enum omits reverse mapping" {
   let files = vfs([
     (
-      "entry.ts",
-      "enum Size { Small = \"s\", Medium = \"m\" }\nconsole.log(Size.Small);\n",
+      "entry.ts", "enum Size { Small = \"s\", Medium = \"m\" }\nconsole.log(Size.Small);\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -900,8 +897,7 @@ test "enum lowering: string enum omits reverse mapping" {
 test "const-enum: numeric values inline at use sites, no runtime var" {
   let files = vfs([
     (
-      "entry.ts",
-      "const enum Status { OK = 200, NotFound = 404 }\nconsole.log(Status.OK, Status.NotFound);\n",
+      "entry.ts", "const enum Status { OK = 200, NotFound = 404 }\nconsole.log(Status.OK, Status.NotFound);\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -920,8 +916,7 @@ test "const-enum: numeric values inline at use sites, no runtime var" {
 test "const-enum: string values inline as string literals" {
   let files = vfs([
     (
-      "entry.ts",
-      "const enum Mode { R = \"r\", W = \"w\" }\nconsole.log(Mode.R, Mode.W);\n",
+      "entry.ts", "const enum Mode { R = \"r\", W = \"w\" }\nconsole.log(Mode.R, Mode.W);\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -936,10 +931,7 @@ test "const-enum: string values inline as string literals" {
 ///|
 test "const-enum: auto-increment after explicit numeric anchor" {
   let files = vfs([
-    (
-      "entry.ts",
-      "const enum E { A = 10, B, C }\nconsole.log(E.A, E.B, E.C);\n",
-    ),
+    ("entry.ts", "const enum E { A = 10, B, C }\nconsole.log(E.A, E.B, E.C);\n"),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) =>
@@ -953,8 +945,7 @@ test "const-enum: auto-increment after explicit numeric anchor" {
 test "const-enum: regular `enum` keeps its runtime var when adjacent" {
   let files = vfs([
     (
-      "entry.ts",
-      "const enum Inline { X = 10 }\nenum Regular { A, B }\nconsole.log(Inline.X + Regular.A);\n",
+      "entry.ts", "const enum Inline { X = 10 }\nenum Regular { A, B }\nconsole.log(Inline.X + Regular.A);\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -975,16 +966,14 @@ test "const-enum: regular `enum` keeps its runtime var when adjacent" {
 test "@__PURE__: annotation reaches PureCall AST node + emit" {
   let files = vfs([
     (
-      "entry.ts",
-      "function alloc(): any { return null; }\nconst x = /* @__PURE__ */ alloc();\nconsole.log(x);\n",
+      "entry.ts", "function alloc(): any { return null; }\nconst x = /* @__PURE__ */ alloc();\nconsole.log(x);\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
-    Ok(out) => {
+    Ok(out) =>
       // The annotation is preserved in the JS output so
       // downstream minifiers can drop the call too.
       assert_true(out.js.contains("/* @__PURE__ */ alloc()"))
-    }
     Err(e) => fail("bundle error: \{e}")
   }
 }
@@ -993,8 +982,7 @@ test "@__PURE__: annotation reaches PureCall AST node + emit" {
 test "@__PURE__: treeshake drops unused PureCall binding" {
   let files = vfs([
     (
-      "entry.ts",
-      "function alloc(): any { return null; }\nconst _unused = /* @__PURE__ */ alloc();\nconsole.log(\"done\");\n",
+      "entry.ts", "function alloc(): any { return null; }\nconst _unused = /* @__PURE__ */ alloc();\nconsole.log(\"done\");\n",
     ),
   ])
   let opts = BundleOptions::default().with_treeshake(true).with_mangle(true)
@@ -1057,8 +1045,7 @@ test "@__NO_SIDE_EFFECTS__: suppresses impure-getter diagnostic for annotated ca
 test "enum: regular numeric enum members inline at use sites" {
   let files = vfs([
     (
-      "entry.ts",
-      "enum Status { OK = 200, NotFound = 404 }\nconsole.log(Status.OK, Status.NotFound);\n",
+      "entry.ts", "enum Status { OK = 200, NotFound = 404 }\nconsole.log(Status.OK, Status.NotFound);\n",
     ),
   ])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
@@ -1098,8 +1085,7 @@ test "predicate-inline: `function isX(): x is T { return cond }` body substitute
 test "type-fold: typeof check on typed parameter folds to bool" {
   let files = vfs([
     (
-      "entry.ts",
-      "function f(x: number) { if (typeof x === \"number\") return 1; return 0; }\n",
+      "entry.ts", "function f(x: number) { if (typeof x === \"number\") return 1; return 0; }\n",
     ),
   ])
   let opts = BundleOptions::default().with_fold(true)
@@ -1463,8 +1449,7 @@ test "class-method-dce: kept under reflection-sink presence" {
 test "type-fold: null check on non-nullable primitive folds to false" {
   let files = vfs([
     (
-      "entry.ts",
-      "function f(x: number) { if (x === null) return 1; return 0; }\n",
+      "entry.ts", "function f(x: number) { if (x === null) return 1; return 0; }\n",
     ),
   ])
   let opts = BundleOptions::default().with_fold(true)

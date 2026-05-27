@@ -4875,89 +4875,99 @@ test "expr_check: deliberate type violations are detected" {
   let cases : Array[(String, String)] = [
     (
       "wrong-return-primitive",
-      #|function f(): number {
-      #|  return "hello";
-      #|}
-      ,
+      (
+        #|function f(): number {
+        #|  return "hello";
+        #|}
+      ),
     ),
     (
       "wrong-return-tagged-union",
-      #|interface A { kind: "a"; a: number }
-      #|interface B { kind: "b"; b: string }
-      #|function f(s: A | B): string {
-      #|  return s.a;
-      #|}
-      ,
+      (
+        #|interface A { kind: "a"; a: number }
+        #|interface B { kind: "b"; b: string }
+        #|function f(s: A | B): string {
+        #|  return s.a;
+        #|}
+      ),
     ),
     (
       "wrong-call-arg-arity",
-      #|function add(x: number, y: number): number { return x + y; }
-      #|function f(): number {
-      #|  return add(1);
-      #|}
-      ,
+      (
+        #|function add(x: number, y: number): number { return x + y; }
+        #|function f(): number {
+        #|  return add(1);
+        #|}
+      ),
     ),
     (
       "wrong-call-arg-type",
-      #|function add(x: number, y: number): number { return x + y; }
-      #|function f(): number {
-      #|  return add(1, "two");
-      #|}
-      ,
+      (
+        #|function add(x: number, y: number): number { return x + y; }
+        #|function f(): number {
+        #|  return add(1, "two");
+        #|}
+      ),
     ),
     (
       "missing-required-prop",
-      #|interface Props { name: string; age: number }
-      #|function Comp(props: Props): void {}
-      #|function f(): void {
-      #|  const _ = <Comp name="x" />;
-      #|}
-      ,
+      (
+        #|interface Props { name: string; age: number }
+        #|function Comp(props: Props): void {}
+        #|function f(): void {
+        #|  const _ = <Comp name="x" />;
+        #|}
+      ),
     ),
     (
       "wrong-jsx-attr-type",
-      #|interface Props { count: number }
-      #|function Comp(props: Props): void {}
-      #|function f(): void {
-      #|  const _ = <Comp count="not a number" />;
-      #|}
-      ,
+      (
+        #|interface Props { count: number }
+        #|function Comp(props: Props): void {}
+        #|function f(): void {
+        #|  const _ = <Comp count="not a number" />;
+        #|}
+      ),
     ),
     (
       "unknown-prop",
-      #|interface Props { name: string }
-      #|function Comp(props: Props): void {}
-      #|function f(): void {
-      #|  const _ = <Comp name="x" age={1} />;
-      #|}
-      ,
+      (
+        #|interface Props { name: string }
+        #|function Comp(props: Props): void {}
+        #|function f(): void {
+        #|  const _ = <Comp name="x" age={1} />;
+        #|}
+      ),
     ),
     (
       "assignment-wrong-type",
-      #|function f(): void {
-      #|  let x: number = 1;
-      #|  x = "string";
-      #|}
-      ,
+      (
+        #|function f(): void {
+        #|  let x: number = 1;
+        #|  x = "string";
+        #|}
+      ),
     ),
     (
       "switch-non-exhaustive-after-default",
-      #|interface A { kind: "a" }
-      #|interface B { kind: "b" }
-      #|function f(s: A | B): number {
-      #|  switch (s.kind) {
-      #|    case "a": return 1;
-      #|  }
-      #|}
-      ,
+      (
+        #|interface A { kind: "a" }
+        #|interface B { kind: "b" }
+        #|function f(s: A | B): number {
+        #|  switch (s.kind) {
+        #|    case "a": return 1;
+        #|  }
+        #|}
+      ),
     ),
     (
       "satisfies-violation",
-      #|interface Layout { x: number; y: number }
-      #|function f(): void {
-      #|  const _ = ({ x: 1, y: "wrong" } satisfies Layout);
-      #|}
-      ,
+      (
+        #|interface Layout { x: number; y: number }
+        #|function f(): void {
+        #|  const _ = ({ x: 1, y: "wrong" } satisfies Layout);
+        #|}
+      ),
     ),
   ]
   let mut misses = 0

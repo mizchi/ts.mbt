@@ -201,9 +201,10 @@ fn collect_read_property_names_expr(
       collect_read_property_names_expr(idx, out)
       collect_read_property_names_expr(v, out)
     }
-    Call(_, args) | New(_, args) => for a in args {
-      collect_read_property_names_expr(a, out)
-    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_read_property_names_expr(a, out)
+      }
     CallExpr(callee, args) | NewExpr(callee, args) => {
       collect_read_property_names_expr(callee, out)
       for a in args {
@@ -228,12 +229,14 @@ fn collect_read_property_names_expr(
       collect_read_property_names_expr(t, out)
       collect_read_property_names_expr(e, out)
     }
-    ArrayLit(items) => for it in items {
-      collect_read_property_names_expr(it, out)
-    }
-    ObjectLit(entries) => for ent in entries {
-      collect_read_property_names_expr(ent.1, out)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_read_property_names_expr(it, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_read_property_names_expr(ent.1, out)
+      }
     ComputedProp(k, v) => {
       // `{[k]: v}` keys are dynamic; we can't analyse what they
       // map to. The safety analysis upstream already escapes such
@@ -303,9 +306,10 @@ fn collect_read_property_names_expr(
         collect_read_property_names_expr(e, out)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      collect_read_property_names_expr(e, out)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_read_property_names_expr(e, out)
+      }
     _ => ()
   }
 }
@@ -384,19 +388,25 @@ fn drop_dead_props_stmt(
       )
     ForOf(k, b, t, iter, body) =>
       ForOf(
-        k, b, t,
+        k,
+        b,
+        t,
         drop_dead_props_expr(iter, reserved, read_props),
         drop_dead_props_block(body, reserved, read_props),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
-        k, b, t,
+        k,
+        b,
+        t,
         drop_dead_props_expr(iter, reserved, read_props),
         drop_dead_props_block(body, reserved, read_props),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
-        k, b, t,
+        k,
+        b,
+        t,
         drop_dead_props_expr(iter, reserved, read_props),
         drop_dead_props_block(body, reserved, read_props),
       )
@@ -459,11 +469,15 @@ fn drop_dead_props_expr(
         let key = ent.0
         if key == "..." {
           // Spread — keep it.
-          new_entries.push((key, drop_dead_props_expr(ent.1, reserved, read_props)))
+          new_entries.push(
+            (key, drop_dead_props_expr(ent.1, reserved, read_props)),
+          )
           continue
         }
         if reserved.contains(key) || read_props.contains(key) {
-          new_entries.push((key, drop_dead_props_expr(ent.1, reserved, read_props)))
+          new_entries.push(
+            (key, drop_dead_props_expr(ent.1, reserved, read_props)),
+          )
           continue
         }
         // Dead key — preserve only if the rhs has side effects.
@@ -471,7 +485,9 @@ fn drop_dead_props_expr(
           continue
         }
         // Keep but recurse anyway.
-        new_entries.push((key, drop_dead_props_expr(ent.1, reserved, read_props)))
+        new_entries.push(
+          (key, drop_dead_props_expr(ent.1, reserved, read_props)),
+        )
       }
       ObjectLit(new_entries)
     }
@@ -524,7 +540,8 @@ fn drop_dead_props_expr(
       }
       MethodCall(drop_dead_props_expr(recv, reserved, read_props), m, new_args)
     }
-    PropAccess(recv, p) => PropAccess(drop_dead_props_expr(recv, reserved, read_props), p)
+    PropAccess(recv, p) =>
+      PropAccess(drop_dead_props_expr(recv, reserved, read_props), p)
     IndexAccess(recv, idx) =>
       IndexAccess(
         drop_dead_props_expr(recv, reserved, read_props),
@@ -553,7 +570,8 @@ fn drop_dead_props_expr(
         drop_dead_props_expr(a, reserved, read_props),
         drop_dead_props_expr(b, reserved, read_props),
       )
-    AssignExpr(n, v) => AssignExpr(n, drop_dead_props_expr(v, reserved, read_props))
+    AssignExpr(n, v) =>
+      AssignExpr(n, drop_dead_props_expr(v, reserved, read_props))
     CompoundAssignExpr(t, op, v) =>
       CompoundAssignExpr(
         drop_dead_props_expr(t, reserved, read_props),
@@ -576,8 +594,14 @@ fn drop_dead_props_expr(
       )
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
-        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(drop_dead_props_expr(e, reserved, read_props))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(drop_dead_props_block(b, reserved, read_props))
+        ArrowExpr(e) =>
+          @ast.TsArrowBody::ArrowExpr(
+            drop_dead_props_expr(e, reserved, read_props),
+          )
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(
+            drop_dead_props_block(b, reserved, read_props),
+          )
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
@@ -597,7 +621,12 @@ fn drop_dead_props_expr(
       for e in exprs {
         new_exprs.push(drop_dead_props_expr(e, reserved, read_props))
       }
-      TaggedTemplate(drop_dead_props_expr(tag, reserved, read_props), raw, cooked, new_exprs)
+      TaggedTemplate(
+        drop_dead_props_expr(tag, reserved, read_props),
+        raw,
+        cooked,
+        new_exprs,
+      )
     }
     TemplateLiteral(parts, exprs) => {
       let new_exprs : Array[@ast.TsExpr] = []
@@ -610,7 +639,8 @@ fn drop_dead_props_expr(
     Satisfies(inner, ty) =>
       Satisfies(drop_dead_props_expr(inner, reserved, read_props), ty)
     NonNull(inner) => NonNull(drop_dead_props_expr(inner, reserved, read_props))
-    OptionalChain(inner) => OptionalChain(drop_dead_props_expr(inner, reserved, read_props))
+    OptionalChain(inner) =>
+      OptionalChain(drop_dead_props_expr(inner, reserved, read_props))
     _ => expr
   }
 }

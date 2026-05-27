@@ -505,7 +505,7 @@ fn collect_var_refs_in_binding(
         None => ()
       }
     }
-    Object(ob) => {
+    Object(ob) =>
       for prop in ob.props {
         collect_var_refs_in_binding(prop.binding, out)
         match prop.default {
@@ -517,7 +517,6 @@ fn collect_var_refs_in_binding(
           None => ()
         }
       }
-    }
     Target(e) => collect_var_refs_in_expr(e, out)
   }
 }

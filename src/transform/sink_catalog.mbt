@@ -47,7 +47,7 @@ pub(all) enum SinkObservation {
 
 ///|
 pub(all) struct Sink {
-  expr : @ast.TsExpr        // the value being observed
+  expr : @ast.TsExpr // the value being observed
   observation : SinkObservation
 }
 
@@ -136,8 +136,7 @@ fn collect_sinks_stmt(
       }
       collect_sinks_block(body, externals, out)
     }
-    ForOf(_, _, _, iter, body)
-    | ForAwaitOf(_, _, _, iter, body) => {
+    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body) => {
       collect_sinks_expr(iter, externals, out)
       collect_sinks_block(body, externals, out)
     }
@@ -197,7 +196,7 @@ fn collect_sinks_expr(
                 for a in args {
                   out.push({ expr: a, observation: DirectKeys })
                 }
-              "assign" => {
+              "assign" =>
                 // Object.assign(target, ...sources) — every source
                 // contributes its direct props onto target. Mark
                 // each source as DirectKeys; the target's prop
@@ -207,7 +206,6 @@ fn collect_sinks_expr(
                     out.push({ expr: a, observation: DirectKeys })
                   }
                 }
-              }
               _ => ()
             }
           } else if name == "JSON" && m == "stringify" {
@@ -294,8 +292,7 @@ fn collect_sinks_expr(
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner)
-    | PureCall(inner) =>
-      collect_sinks_expr(inner, externals, out)
+    | PureCall(inner) => collect_sinks_expr(inner, externals, out)
     Yield(Some(inner)) => collect_sinks_expr(inner, externals, out)
     Yield(None) => ()
     Cond(c, t, e) => {
@@ -330,12 +327,14 @@ fn collect_sinks_expr(
       collect_sinks_expr(idx, externals, out)
       collect_sinks_expr(rhs, externals, out)
     }
-    ArrayLit(items) => for it in items {
-      collect_sinks_expr(it, externals, out)
-    }
-    ObjectLit(entries) => for ent in entries {
-      collect_sinks_expr(ent.1, externals, out)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_sinks_expr(it, externals, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_sinks_expr(ent.1, externals, out)
+      }
     ComputedProp(k, v) => {
       collect_sinks_expr(k, externals, out)
       collect_sinks_expr(v, externals, out)
@@ -359,9 +358,10 @@ fn collect_sinks_expr(
         collect_sinks_expr(e, externals, out)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      collect_sinks_expr(e, externals, out)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_sinks_expr(e, externals, out)
+      }
     NativeClassExpr(_, ctor) =>
       match ctor {
         Some(f) => collect_sinks_block(f.body, externals, out)
@@ -387,8 +387,10 @@ fn is_external_receiver(
     IndexAccess(recv, _) => is_external_receiver(recv, externals)
     Call(n, _) => externals.contains(n)
     CallExpr(callee, _) => is_external_receiver(callee, externals)
-    NonNull(inner) | OptionalChain(inner) | As(inner, _) | Satisfies(inner, _) =>
-      is_external_receiver(inner, externals)
+    NonNull(inner)
+    | OptionalChain(inner)
+    | As(inner, _)
+    | Satisfies(inner, _) => is_external_receiver(inner, externals)
     _ => false
   }
 }
@@ -480,8 +482,13 @@ pub fn reserve_props_from_sink(
         None => out["*"] = true
       }
     }
-    StringLit(_) | NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_)
-    | NullLit | TemplateLiteral(_, _) =>
+    StringLit(_)
+    | NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | NullLit
+    | TemplateLiteral(_, _) =>
       // A literal value can't carry user properties beyond what
       // its own prototype already exposes (built-ins, already
       // reserved). Nothing extra to record.
@@ -522,8 +529,11 @@ pub fn reserve_props_from_sink(
         external_bindings,
         out,
       )
-    Call(_, _) | CallExpr(_, _) | MethodCall(_, _, _)
-    | New(_, _) | NewExpr(_, _) =>
+    Call(_, _)
+    | CallExpr(_, _)
+    | MethodCall(_, _, _)
+    | New(_, _)
+    | NewExpr(_, _) =>
       // The sink consumes a call result; we don't yet propagate
       // return-value flow into the callee's body. Conservatively
       // mark wildcard — Phase 4's backward flow will refine this.
@@ -556,8 +566,12 @@ pub fn reserve_props_from_sink(
         external_bindings,
         out,
       )
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | Await(inner) =>
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | Await(inner) =>
       reserve_props_from_sink(
         { expr: inner, observation: sink.observation },
         scope,
@@ -607,10 +621,7 @@ fn unique_symbol_by_name(g : SymbolGraph, name : String) -> SymbolId? {
 /// We still bail on:
 ///   - closure-captured bindings (an outer function frame could
 ///     mutate them after the sink fires, exposing extra props).
-fn is_sink_arg_locally_observable(
-  sym : Symbol,
-  g : SymbolGraph,
-) -> Bool {
+fn is_sink_arg_locally_observable(sym : Symbol, g : SymbolGraph) -> Bool {
   let _ = g
   if sym.captured_by_closure {
     return false
@@ -663,8 +674,13 @@ fn binding_exposes_nested_objects(sym : Symbol) -> Bool {
 ///|
 fn is_pure_scalar_literal(expr : @ast.TsExpr) -> Bool {
   match expr {
-    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_)
-    | NullLit | ArrayHole => true
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayHole => true
     _ => false
   }
 }

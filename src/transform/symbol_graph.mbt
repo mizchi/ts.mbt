@@ -216,12 +216,12 @@ pub(all) enum FlowNode {
 
 ///|
 pub(all) enum LiteralKind {
-  LitNumeric    // NumberLit / IntLit / BigIntLit / Number-typed arithmetic
-  LitString     // StringLit / TemplateLiteral
-  LitBool       // BoolLit
-  LitNull       // NullLit / Undefined
-  LitObject     // ObjectLit / ArrayLit / function expression
-  LitOther      // anything else we don't classify
+  LitNumeric // NumberLit / IntLit / BigIntLit / Number-typed arithmetic
+  LitString // StringLit / TemplateLiteral
+  LitBool // BoolLit
+  LitNull // NullLit / Undefined
+  LitObject // ObjectLit / ArrayLit / function expression
+  LitOther // anything else we don't classify
 } derive(Eq, Show)
 
 // ---------------------------------------------------------------------------
@@ -318,11 +318,7 @@ fn sg_new_scope(
 }
 
 ///|
-fn sg_lookup(
-  g : SymbolGraph,
-  from_scope : ScopeId,
-  name : String,
-) -> SymbolId? {
+fn sg_lookup(g : SymbolGraph, from_scope : ScopeId, name : String) -> SymbolId? {
   let mut cur : ScopeId? = Some(from_scope)
   while cur is Some(s) {
     match g.by_name.get(scope_name_key(s, name)) {
@@ -359,11 +355,7 @@ fn sg_declare(
   external : Bool,
 ) -> SymbolId {
   // `var` hoists to the nearest enclosing Function / Module frame.
-  let target_scope = if kind == Var {
-    var_host_scope(g, scope)
-  } else {
-    scope
-  }
+  let target_scope = if kind == Var { var_host_scope(g, scope) } else { scope }
   let key = scope_name_key(target_scope, name)
   match g.by_name.get(key) {
     // Already declared in this scope — keep the existing symbol
@@ -464,7 +456,6 @@ fn sg_declare_stmt_bindings(
     NativeClassStmt(decl, _) =>
       if decl.name != "" {
         let _ = sg_declare(g, scope, decl.name, ClassDecl, false)
-
       }
     // Same-kind multi-decl wrapper produced by `parse_var_like`.
     // The block leaks its bindings to the enclosing scope (emit
@@ -519,7 +510,6 @@ fn sg_declare_binding(
       let is_external = external_local_names.contains(n)
       let import_kind = if is_external { ImportNamed } else { kind }
       let _ = sg_declare(g, scope, n, import_kind, is_external)
-
     }
     Array(ab) => {
       for elem in ab.items {
@@ -541,7 +531,6 @@ fn sg_declare_binding(
       match ob.rest {
         Some(n) => {
           let _ = sg_declare(g, scope, n, kind, false)
-
         }
         None => ()
       }
@@ -612,7 +601,9 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
     Throw(e) => {
       // `throw x` — caller sees the value; any property
       // (.message / .stack / .code) could be inspected.
-      w.scoped_sinks.push(({ expr: e, observation: Recursive }, w.current_scope))
+      w.scoped_sinks.push(
+        ({ expr: e, observation: Recursive }, w.current_scope),
+      )
       sg_visit_expr(w, e)
     }
     Return(Some(e)) => {
@@ -675,8 +666,7 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       sg_visit_block_in_new_scope(w, body, Block)
       w.current_scope = outer
     }
-    ForOf(_, b, _, iter, body)
-    | ForAwaitOf(_, b, _, iter, body) => {
+    ForOf(_, b, _, iter, body) | ForAwaitOf(_, b, _, iter, body) => {
       sg_visit_expr(w, iter)
       let outer = w.current_scope
       w.current_scope = sg_new_scope(w.g, Some(outer), Block)
@@ -688,7 +678,9 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       // `for-in iter` enumerates iter's property names — record
       // it as a DirectKeys sink in the enclosing scope (before
       // we open the per-iteration block).
-      w.scoped_sinks.push(({ expr: iter, observation: DirectKeys }, w.current_scope))
+      w.scoped_sinks.push(
+        ({ expr: iter, observation: DirectKeys }, w.current_scope),
+      )
       sg_visit_expr(w, iter)
       let outer = w.current_scope
       w.current_scope = sg_new_scope(w.g, Some(outer), Block)
@@ -713,8 +705,7 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
           let outer = w.current_scope
           w.current_scope = sg_new_scope(w.g, Some(outer), Catch)
           match catch_bnd {
-            Some(b) =>
-              sg_declare_binding(w.g, b, w.current_scope, Catch, {})
+            Some(b) => sg_declare_binding(w.g, b, w.current_scope, Catch, {})
             None => ()
           }
           for s in cb.stmts {
@@ -764,11 +755,7 @@ fn sg_visit_block_in_new_scope(
 }
 
 ///|
-fn sg_visit_decl(
-  w : SgWalker,
-  b : @ast.TsBinding,
-  init : @ast.TsExpr,
-) -> Unit {
+fn sg_visit_decl(w : SgWalker, b : @ast.TsBinding, init : @ast.TsExpr) -> Unit {
   // Walk the initializer expression. Use `enclosing_def` to add
   // RHS->LHS flow edges.
   let lhs_id = binding_simple_ident(w, b)
@@ -784,10 +771,9 @@ fn sg_visit_decl(
         w.g.flow_edges.push({ from: src, to: SymVal(id) })
       }
     }
-    None => {
+    None =>
       // Destructuring binding — refinement is Phase 3's job.
       sg_visit_expr(w, init)
-    }
   }
 }
 
@@ -828,7 +814,9 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
             @ast.TsExpr::IndexAccess(r, _) => r
             _ => abort("unreachable")
           }
-          w.scoped_sinks.push(({ expr: recv, observation: DirectKeys }, w.current_scope))
+          w.scoped_sinks.push(
+            ({ expr: recv, observation: DirectKeys }, w.current_scope),
+          )
         }
       }
     MethodCall(recv, m, args) =>
@@ -838,12 +826,16 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
             match m {
               "keys" | "values" | "entries" | "fromEntries" =>
                 for a in args {
-                  w.scoped_sinks.push(({ expr: a, observation: DirectKeys }, w.current_scope))
+                  w.scoped_sinks.push(
+                    ({ expr: a, observation: DirectKeys }, w.current_scope),
+                  )
                 }
               "assign" =>
                 for i, a in args {
                   if i > 0 {
-                    w.scoped_sinks.push(({ expr: a, observation: DirectKeys }, w.current_scope))
+                    w.scoped_sinks.push(
+                      ({ expr: a, observation: DirectKeys }, w.current_scope),
+                    )
                   }
                 }
               // `Object.defineProperty(obj, "name", desc)` /
@@ -858,21 +850,27 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
                   match args[1] {
                     @ast.TsExpr::StringLit(_) | @ast.TsExpr::NumberLit(_) => ()
                     _ =>
-                      w.scoped_sinks.push((
-                        { expr: args[0], observation: DirectKeys },
-                        w.current_scope,
-                      ))
+                      w.scoped_sinks.push(
+                        (
+                          { expr: args[0], observation: DirectKeys },
+                          w.current_scope,
+                        ),
+                      )
                   }
                 }
               _ => ()
             }
           } else if name == "JSON" && m == "stringify" {
             for a in args {
-              w.scoped_sinks.push(({ expr: a, observation: Recursive }, w.current_scope))
+              w.scoped_sinks.push(
+                ({ expr: a, observation: Recursive }, w.current_scope),
+              )
             }
           } else if name == "console" {
             for a in args {
-              w.scoped_sinks.push(({ expr: a, observation: Recursive }, w.current_scope))
+              w.scoped_sinks.push(
+                ({ expr: a, observation: Recursive }, w.current_scope),
+              )
             }
           }
         _ => ()
@@ -880,7 +878,9 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
     Call(callee, args) =>
       if w.externals.contains(callee) {
         for a in args {
-          w.scoped_sinks.push(({ expr: a, observation: ExternalCallArg }, w.current_scope))
+          w.scoped_sinks.push(
+            ({ expr: a, observation: ExternalCallArg }, w.current_scope),
+          )
         }
       }
     CallExpr(callee, args) => {
@@ -890,14 +890,18 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       }
       if is_external {
         for a in args {
-          w.scoped_sinks.push(({ expr: a, observation: ExternalCallArg }, w.current_scope))
+          w.scoped_sinks.push(
+            ({ expr: a, observation: ExternalCallArg }, w.current_scope),
+          )
         }
       }
     }
     New(name, args) =>
       if w.externals.contains(name) {
         for a in args {
-          w.scoped_sinks.push(({ expr: a, observation: ExternalCallArg }, w.current_scope))
+          w.scoped_sinks.push(
+            ({ expr: a, observation: ExternalCallArg }, w.current_scope),
+          )
         }
       }
     NewExpr(callee, args) => {
@@ -907,13 +911,17 @@ fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       }
       if is_external {
         for a in args {
-          w.scoped_sinks.push(({ expr: a, observation: ExternalCallArg }, w.current_scope))
+          w.scoped_sinks.push(
+            ({ expr: a, observation: ExternalCallArg }, w.current_scope),
+          )
         }
       }
     }
     PropAssignExpr(target, _prop, rhs) =>
       if is_external_chain_for_sink(target, w.externals) {
-        w.scoped_sinks.push(({ expr: rhs, observation: ExternalPropWrite }, w.current_scope))
+        w.scoped_sinks.push(
+          ({ expr: rhs, observation: ExternalPropWrite }, w.current_scope),
+        )
       }
     _ => ()
   }
@@ -931,8 +939,10 @@ fn is_external_chain_for_sink(
     IndexAccess(recv, _) => is_external_chain_for_sink(recv, externals)
     Call(n, _) => externals.contains(n)
     CallExpr(callee, _) => is_external_chain_for_sink(callee, externals)
-    NonNull(inner) | OptionalChain(inner) | As(inner, _) | Satisfies(inner, _) =>
-      is_external_chain_for_sink(inner, externals)
+    NonNull(inner)
+    | OptionalChain(inner)
+    | As(inner, _)
+    | Satisfies(inner, _) => is_external_chain_for_sink(inner, externals)
     _ => false
   }
 }
@@ -944,14 +954,13 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
   sg_record_sinks_in_expr(w, expr)
   match expr {
     @ast.TsExpr::Var(n) => sg_record_use(w, n, Read)
-    PropAccess(recv, prop) => {
+    PropAccess(recv, prop) =>
       // `recv.prop` — if recv is `Var(name)`, treat as PropReceiver.
       // Otherwise recurse so deeper accesses still register.
       match recv {
         @ast.TsExpr::Var(n) => sg_record_use(w, n, PropReceiver(prop))
         _ => sg_visit_expr(w, recv)
       }
-    }
     MethodCall(recv, m, args) => {
       // `obj.method(args)` reads `obj.method` then calls it. The
       // receiver becomes a PropReceiver(method) use so Phase 4's
@@ -1055,8 +1064,7 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner)
-    | PureCall(inner) =>
-      sg_visit_expr(w, inner)
+    | PureCall(inner) => sg_visit_expr(w, inner)
     Yield(Some(inner)) => sg_visit_expr(w, inner)
     Yield(None) => ()
     Cond(c, t, e) => {
@@ -1068,12 +1076,14 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       sg_visit_expr(w, a)
       sg_visit_expr(w, b)
     }
-    ArrayLit(items) => for it in items {
-      sg_visit_expr(w, it)
-    }
-    ObjectLit(entries) => for ent in entries {
-      sg_visit_expr(w, ent.1)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        sg_visit_expr(w, it)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        sg_visit_expr(w, ent.1)
+      }
     ComputedProp(k, v) => {
       sg_visit_expr(w, k)
       sg_visit_expr(w, v)
@@ -1088,7 +1098,6 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
       w.enclosing_func = None
       for p in params {
         let _ = sg_declare(w.g, w.current_scope, p.name, Param, false)
-
       }
       match body {
         ArrowExpr(e) => sg_visit_expr(w, e)
@@ -1117,9 +1126,10 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
         sg_visit_expr(w, e)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      sg_visit_expr(w, e)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        sg_visit_expr(w, e)
+      }
     NativeClassExpr(_, ctor) =>
       match ctor {
         Some(f) => sg_visit_function_body(w, f)
@@ -1188,11 +1198,7 @@ fn sg_visit_function_body(w : SgWalker, f : @ast.TsFunc) -> Unit {
 }
 
 ///|
-fn sg_record_use(
-  w : SgWalker,
-  name : String,
-  context : UseContext,
-) -> Unit {
+fn sg_record_use(w : SgWalker, name : String, context : UseContext) -> Unit {
   match sg_lookup(w.g, w.current_scope, name) {
     Some(id) => {
       w.g.symbols[id].uses.push({ scope_id: w.current_scope, context })
@@ -1246,10 +1252,7 @@ fn scope_crosses_function_boundary(
 /// come from. For `a` it's `[SymVal(a)]`; for `f()` it's the
 /// callee's `FuncReturn`; for a literal it's `[Literal]`. Phase 3
 /// uses this to draw the right inbound edges for assignments.
-fn expr_immediate_sources(
-  w : SgWalker,
-  expr : @ast.TsExpr,
-) -> Array[FlowNode] {
+fn expr_immediate_sources(w : SgWalker, expr : @ast.TsExpr) -> Array[FlowNode] {
   let out : Array[FlowNode] = []
   collect_immediate_sources(w, expr, out)
   out
@@ -1321,13 +1324,28 @@ fn collect_immediate_sources(
         // The arithmetic / bitwise binary operators always
         // produce a number (`+` is the trap — both operands may
         // be strings, so leave its result as Other).
-        Sub | Mul | Div | Mod | Pow
-        | BitAnd | BitOr | BitXor | Shl | Shr | UShr =>
-          out.push(Literal(LitNumeric))
+        Sub
+        | Mul
+        | Div
+        | Mod
+        | Pow
+        | BitAnd
+        | BitOr
+        | BitXor
+        | Shl
+        | Shr
+        | UShr => out.push(Literal(LitNumeric))
         // Comparison / instanceof yields a boolean.
-        BinEq | BinNe | AbstractEq | AbstractNe
-        | BinLt | BinLe | BinGt | BinGe | Instanceof | In =>
-          out.push(Literal(LitBool))
+        BinEq
+        | BinNe
+        | AbstractEq
+        | AbstractNe
+        | BinLt
+        | BinLe
+        | BinGt
+        | BinGe
+        | Instanceof
+        | In => out.push(Literal(LitBool))
         // `+` could be string concat or numeric — leave to the
         // numeric-vars pass which inspects the AST directly.
         Add => out.push(Literal(LitOther))
@@ -1341,9 +1359,12 @@ fn collect_immediate_sources(
         Void => out.push(Literal(LitNull))
         Delete => out.push(Literal(LitBool))
       }
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | Await(inner) =>
-      collect_immediate_sources(w, inner, out)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | Await(inner) => collect_immediate_sources(w, inner, out)
     Yield(_) | YieldStar(_) => out.push(Unknown)
     PropAccess(_, _) | IndexAccess(_, _) =>
       // Reading a property of some value — the resulting value's

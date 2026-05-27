@@ -39,7 +39,7 @@ pub fn build_const_enum_table(
 /// members is a TS error anyway in the non-const case.
 pub fn build_enum_inline_table(
   enums : Array[@ast.TsEnumDecl],
-  include_non_const~ : Bool = false,
+  include_non_const? : Bool = false,
 ) -> Map[String, @ast.TsExpr] {
   let out : Map[String, @ast.TsExpr] = {}
   for decl in enums {
@@ -150,10 +150,14 @@ fn inline_const_enums_stmt(
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(inline_const_enums_expr(e, table))
     If(c, t, e) =>
-      If(inline_const_enums_expr(c, table), inline_const_enums_block(t, table), match e {
-        Some(b) => Some(inline_const_enums_block(b, table))
-        None => None
-      })
+      If(
+        inline_const_enums_expr(c, table),
+        inline_const_enums_block(t, table),
+        match e {
+          Some(b) => Some(inline_const_enums_block(b, table))
+          None => None
+        },
+      )
     While(c, body) =>
       While(
         inline_const_enums_expr(c, table),
@@ -187,19 +191,25 @@ fn inline_const_enums_stmt(
       )
     ForOf(k, b, t, iter, body) =>
       ForOf(
-        k, b, t,
+        k,
+        b,
+        t,
         inline_const_enums_expr(iter, table),
         inline_const_enums_block(body, table),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
-        k, b, t,
+        k,
+        b,
+        t,
         inline_const_enums_expr(iter, table),
         inline_const_enums_block(body, table),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
-        k, b, t,
+        k,
+        b,
+        t,
         inline_const_enums_expr(iter, table),
         inline_const_enums_block(body, table),
       )
@@ -262,7 +272,10 @@ fn inline_const_enums_expr(
       match table.get(enum_name + "." + member) {
         Some(v) => v
         None =>
-          IndexAccess(@ast.TsExpr::Var(enum_name), @ast.TsExpr::StringLit(member))
+          IndexAccess(
+            @ast.TsExpr::Var(enum_name),
+            @ast.TsExpr::StringLit(member),
+          )
       }
     PropAccess(recv, name) =>
       PropAccess(inline_const_enums_expr(recv, table), name)
@@ -343,10 +356,7 @@ fn inline_const_enums_expr(
     YieldStar(inner) => YieldStar(inline_const_enums_expr(inner, table))
     Await(inner) => Await(inline_const_enums_expr(inner, table))
     Seq(a, b) =>
-      Seq(
-        inline_const_enums_expr(a, table),
-        inline_const_enums_expr(b, table),
-      )
+      Seq(inline_const_enums_expr(a, table), inline_const_enums_expr(b, table))
     AssignExpr(n, v) => AssignExpr(n, inline_const_enums_expr(v, table))
     CompoundAssignExpr(t, op, v) =>
       CompoundAssignExpr(
@@ -369,8 +379,10 @@ fn inline_const_enums_expr(
       )
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
-        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(inline_const_enums_expr(e, table))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(inline_const_enums_block(b, table))
+        ArrowExpr(e) =>
+          @ast.TsArrowBody::ArrowExpr(inline_const_enums_expr(e, table))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(inline_const_enums_block(b, table))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
@@ -390,7 +402,12 @@ fn inline_const_enums_expr(
       for e in exprs {
         new_exprs.push(inline_const_enums_expr(e, table))
       }
-      TaggedTemplate(inline_const_enums_expr(tag, table), raw, cooked, new_exprs)
+      TaggedTemplate(
+        inline_const_enums_expr(tag, table),
+        raw,
+        cooked,
+        new_exprs,
+      )
     }
     TemplateLiteral(parts, exprs) => {
       let new_exprs : Array[@ast.TsExpr] = []
@@ -400,8 +417,7 @@ fn inline_const_enums_expr(
       TemplateLiteral(parts, new_exprs)
     }
     As(inner, ty) => As(inline_const_enums_expr(inner, table), ty)
-    Satisfies(inner, ty) =>
-      Satisfies(inline_const_enums_expr(inner, table), ty)
+    Satisfies(inner, ty) => Satisfies(inline_const_enums_expr(inner, table), ty)
     NonNull(inner) => NonNull(inline_const_enums_expr(inner, table))
     OptionalChain(inner) => OptionalChain(inline_const_enums_expr(inner, table))
     _ => expr

@@ -12,13 +12,9 @@ fn ts_vfs(entries : Array[(String, String)]) -> Map[String, String] {
 ///|
 test "treeshake: drops a never-referenced pure declaration" {
   let files = ts_vfs([
+    ("entry.ts", "import { used } from \"./lib\";\nconsole.log(used(1));\n"),
     (
-      "entry.ts",
-      "import { used } from \"./lib\";\nconsole.log(used(1));\n",
-    ),
-    (
-      "lib.ts",
-      "export function used(n: number): number { return n + 1; }\nexport function unused(n: number): number { return n + 2; }\n",
+      "lib.ts", "export function used(n: number): number { return n + 1; }\nexport function unused(n: number): number { return n + 2; }\n",
     ),
   ])
   let opts = BundleOptions::default().with_treeshake(true)
@@ -37,13 +33,9 @@ test "treeshake: keeps an impure const even when nothing references it" {
   // classified as a side-effect root and survives even without an
   // incoming reference. This is the conservative-by-design behavior.
   let files = ts_vfs([
+    ("entry.ts", "import { used } from \"./lib\";\nconsole.log(used(1));\n"),
     (
-      "entry.ts",
-      "import { used } from \"./lib\";\nconsole.log(used(1));\n",
-    ),
-    (
-      "lib.ts",
-      "export function used(n: number): number { return n + 1; }\nexport const REGISTERED = \"x\".repeat(3);\n",
+      "lib.ts", "export function used(n: number): number { return n + 1; }\nexport const REGISTERED = \"x\".repeat(3);\n",
     ),
   ])
   let opts = BundleOptions::default().with_treeshake(true)
@@ -56,13 +48,9 @@ test "treeshake: keeps an impure const even when nothing references it" {
 ///|
 test "treeshake: pulls in transitive declarations from a live function body" {
   let files = ts_vfs([
+    ("entry.ts", "import { outer } from \"./lib\";\nconsole.log(outer(2));\n"),
     (
-      "entry.ts",
-      "import { outer } from \"./lib\";\nconsole.log(outer(2));\n",
-    ),
-    (
-      "lib.ts",
-      "function helper(n: number): number { return n + 1; }\nexport function outer(n: number): number { return helper(n) * 2; }\nfunction never_used(n: number): number { return n + 999; }\n",
+      "lib.ts", "function helper(n: number): number { return n + 1; }\nexport function outer(n: number): number { return helper(n) * 2; }\nfunction never_used(n: number): number { return n + 999; }\n",
     ),
   ])
   let opts = BundleOptions::default().with_treeshake(true)
@@ -79,13 +67,9 @@ test "treeshake: pulls in transitive declarations from a live function body" {
 ///|
 test "treeshake + mangle compose into a smaller bundle than mangle alone" {
   let files = ts_vfs([
+    ("entry.ts", "import { used } from \"./lib\";\nconsole.log(used(1));\n"),
     (
-      "entry.ts",
-      "import { used } from \"./lib\";\nconsole.log(used(1));\n",
-    ),
-    (
-      "lib.ts",
-      "export function used(n: number): number { return n + 1; }\nexport function dead_a(n: number): number { return n + 2; }\nexport function dead_b(n: number): number { return n + 3; }\nexport function dead_c(n: number): number { return n + 4; }\n",
+      "lib.ts", "export function used(n: number): number { return n + 1; }\nexport function dead_a(n: number): number { return n + 2; }\nexport function dead_b(n: number): number { return n + 3; }\nexport function dead_c(n: number): number { return n + 4; }\n",
     ),
   ])
   let mangle_only = BundleOptions::default().with_mangle(true)

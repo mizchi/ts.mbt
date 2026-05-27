@@ -167,10 +167,7 @@ fn link_module_graph(
   // dedicated walker that rewrites `ns.X` / `ns["X"]` / `ns.X(...)`
   // into a bare reference.
   let import_subs : Map[String, Map[String, String]] = {}
-  let namespace_subs_per_module : Map[
-    String,
-    Map[String, Map[String, String]],
-  ] = {}
+  let namespace_subs_per_module : Map[String, Map[String, Map[String, String]]] = {}
   for path in order {
     let m = match modules.get(path) {
       Some(node) => node
@@ -194,7 +191,10 @@ fn link_module_graph(
       // Default import: `import X from "./a"` → A's "default" export.
       match imp.default_binding {
         Some(local_alias) =>
-          match resolve_export(modules, rename_per_module, namespace_local_renames, dep_path, "default") {
+          match
+            resolve_export(
+              modules, rename_per_module, namespace_local_renames, dep_path, "default",
+            ) {
             Some(resolved) =>
               if resolved != local_alias {
                 subs[local_alias] = resolved
@@ -207,7 +207,10 @@ fn link_module_graph(
       for nb in imp.named_bindings {
         let imported_name = nb.0
         let local_alias = nb.1
-        match resolve_export(modules, rename_per_module, namespace_local_renames, dep_path, imported_name) {
+        match
+          resolve_export(
+            modules, rename_per_module, namespace_local_renames, dep_path, imported_name,
+          ) {
           Some(resolved) =>
             if resolved != local_alias {
               subs[local_alias] = resolved
@@ -230,7 +233,11 @@ fn link_module_graph(
           for spec in dep.export_specs {
             match
               resolve_export(
-                modules, rename_per_module, namespace_local_renames, dep_path, spec.export_name,
+                modules,
+                rename_per_module,
+                namespace_local_renames,
+                dep_path,
+                spec.export_name,
               ) {
               Some(resolved) => props[spec.export_name] = resolved
               None => ()
@@ -242,7 +249,12 @@ fn link_module_graph(
           // the wildcard re-export. Walk the dep's `reexport_specs`
           // for `All` kinds and merge their export surfaces in.
           enumerate_wildcard_reexports(
-            modules, rename_per_module, namespace_local_renames, dep_path, props, {},
+            modules,
+            rename_per_module,
+            namespace_local_renames,
+            dep_path,
+            props,
+            {},
           )
           if not(props.is_empty()) {
             namespace_subs[ns_local] = props
@@ -277,14 +289,23 @@ fn link_module_graph(
       for spec in dep.export_specs {
         match
           resolve_export(
-            modules, rename_per_module, namespace_local_renames, dep_path, spec.export_name,
+            modules,
+            rename_per_module,
+            namespace_local_renames,
+            dep_path,
+            spec.export_name,
           ) {
           Some(resolved) => props[spec.export_name] = resolved
           None => ()
         }
       }
       enumerate_wildcard_reexports(
-        modules, rename_per_module, namespace_local_renames, dep_path, props, {},
+        modules,
+        rename_per_module,
+        namespace_local_renames,
+        dep_path,
+        props,
+        {},
       )
       // Always record even when empty — keeps phase-3 synthesizer
       // in sync with the export-resolution path that treats the name
@@ -360,7 +381,11 @@ fn link_module_graph(
       }
       filtered_ns_subs[original_ns] = kept
     }
-    let new_block = substitute_var_names_in_block(m.block, combined_map, filtered_ns_subs)
+    let new_block = substitute_var_names_in_block(
+      m.block,
+      combined_map,
+      filtered_ns_subs,
+    )
     // For each namespace import, also synthesize a real binding
     // `const <ns_local> = { <exp_name>: <resolved_local>, ... };` so
     // patterns the member-access rewrite can't reach — spreads
@@ -491,11 +516,7 @@ fn resolve_export(
 ) -> String? {
   let visited : Map[String, Bool] = {}
   resolve_export_with_visited(
-    modules,
-    rename_per_module,
-    namespace_local_renames,
-    module_path,
-    export_name,
+    modules, rename_per_module, namespace_local_renames, module_path, export_name,
     visited,
   )
 }
@@ -526,18 +547,22 @@ fn resolve_export_with_visited(
   //    source module first. Only when the local doesn't trace back
   //    to an import do we read the rename map for this module.
   match find_export_local(m.export_specs, export_name) {
-    Some(local) => {
+    Some(local) =>
       match find_import_source(m, local) {
         Some(srcref) =>
           return resolve_export_with_visited(
-            modules, rename_per_module, namespace_local_renames, srcref.0, srcref.1, visited,
+            modules,
+            rename_per_module,
+            namespace_local_renames,
+            srcref.0,
+            srcref.1,
+            visited,
           )
         None => {
           let renames = rename_per_module.get(module_path).unwrap_or({})
           return Some(renames.get(local).unwrap_or(local))
         }
       }
-    }
     None => ()
   }
   // 2. Re-exports: `export { X } from "./a"` and
@@ -551,22 +576,27 @@ fn resolve_export_with_visited(
       None => continue
     }
     match re.kind {
-      Named(items) => {
+      Named(items) =>
         // items is `[(imported, exported)]`.
         for it in items {
           if it.1 == export_name {
             return resolve_export_with_visited(
-              modules, rename_per_module, namespace_local_renames, dep_path, it.0, visited,
+              modules,
+              rename_per_module,
+              namespace_local_renames,
+              dep_path,
+              it.0,
+              visited,
             )
           }
         }
-      }
       All =>
         // `export * from "./a"` re-exports every NAMED export of A.
         // Try resolving `export_name` from the dependency.
         match
           resolve_export_with_visited(
-            modules, rename_per_module, namespace_local_renames, dep_path, export_name, visited,
+            modules, rename_per_module, namespace_local_renames, dep_path, export_name,
+            visited,
           ) {
           Some(r) => return Some(r)
           None => ()
@@ -625,7 +655,11 @@ fn enumerate_wildcard_reexports(
           if not(props.contains(spec.export_name)) {
             match
               resolve_export(
-                modules, rename_per_module, namespace_local_renames, dep_path, spec.export_name,
+                modules,
+                rename_per_module,
+                namespace_local_renames,
+                dep_path,
+                spec.export_name,
               ) {
               Some(resolved) => props[spec.export_name] = resolved
               None => ()
@@ -674,10 +708,7 @@ fn enumerate_wildcard_reexports(
 /// `(dep_path, original_imported_name)` so the caller can keep
 /// chasing. Returns `None` when the name corresponds to a real
 /// local declaration.
-fn find_import_source(
-  m : ModuleNode,
-  name : String,
-) -> (String, String)? {
+fn find_import_source(m : ModuleNode, name : String) -> (String, String)? {
   for imp in m.import_decls {
     if imp.type_only || imp.side_effect_only {
       continue
@@ -687,10 +718,7 @@ fn find_import_source(
       None => continue
     }
     match imp.default_binding {
-      Some(d) =>
-        if d == name {
-          return Some((dep_path, "default"))
-        }
+      Some(d) => if d == name { return Some((dep_path, "default")) }
       None => ()
     }
     for nb in imp.named_bindings {
@@ -838,11 +866,23 @@ fn substitute_var_names_in_stmt(
 ) -> @ast.TsStmt {
   match stmt {
     Var(b, t, e) =>
-      Var(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map, ns))
+      Var(
+        link_rename_binding_lhs(b, map),
+        t,
+        substitute_var_names_in_expr(e, map, ns),
+      )
     Let(b, t, e) =>
-      Let(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map, ns))
+      Let(
+        link_rename_binding_lhs(b, map),
+        t,
+        substitute_var_names_in_expr(e, map, ns),
+      )
     Const(b, t, e) =>
-      Const(link_rename_binding_lhs(b, map), t, substitute_var_names_in_expr(e, map, ns))
+      Const(
+        link_rename_binding_lhs(b, map),
+        t,
+        substitute_var_names_in_expr(e, map, ns),
+      )
     Assign(name, e) => {
       let new_name = map.get(name).unwrap_or(name)
       Assign(new_name, substitute_var_names_in_expr(e, map, ns))
@@ -996,7 +1036,9 @@ fn substitute_var_names_in_stmt(
       }
       let new_static_inits : Array[(String, @ast.TsExpr)] = []
       for entry in decl.static_field_inits {
-        new_static_inits.push((entry.0, substitute_var_names_in_expr(entry.1, map, ns)))
+        new_static_inits.push(
+          (entry.0, substitute_var_names_in_expr(entry.1, map, ns)),
+        )
       }
       let new_decl : @ast.TsClassDecl = {
         ..decl,
@@ -1136,7 +1178,8 @@ fn substitute_var_names_in_expr(
     OptionalChain(inner) =>
       OptionalChain(substitute_var_names_in_expr(inner, map, ns))
     PureCall(inner) => PureCall(substitute_var_names_in_expr(inner, map, ns))
-    Yield(Some(inner)) => Yield(Some(substitute_var_names_in_expr(inner, map, ns)))
+    Yield(Some(inner)) =>
+      Yield(Some(substitute_var_names_in_expr(inner, map, ns)))
     YieldStar(inner) => YieldStar(substitute_var_names_in_expr(inner, map, ns))
     Seq(a, b) =>
       Seq(
@@ -1251,7 +1294,9 @@ fn substitute_var_names_in_expr(
       }
       let new_static_inits : Array[(String, @ast.TsExpr)] = []
       for entry in decl.static_field_inits {
-        new_static_inits.push((entry.0, substitute_var_names_in_expr(entry.1, map, ns)))
+        new_static_inits.push(
+          (entry.0, substitute_var_names_in_expr(entry.1, map, ns)),
+        )
       }
       let new_decl : @ast.TsClassDecl = {
         ..decl,
@@ -1537,11 +1582,13 @@ fn link_rename_binding_lhs(
 }
 
 ///|
+
 ///|
 /// True when `block` contains a `Var(name)` reference anywhere in any
 /// expression position. Used by the namespace synthesis pass to skip
 /// emitting a binding when the namespace alias is fully consumed by
 /// member-access rewrites (i.e. doesn't escape).
+
 ///|
 /// Substitute a possibly-dotted base name (e.g. `"Effectable.Class"`)
 /// through both the regular rename map and the namespace property
@@ -1579,7 +1626,9 @@ fn substitute_dotted_name(
             return resolved
           } else {
             return resolved +
-              tail.substring(start=after_first_dot, end=tail.length()).to_string()
+              tail
+              .substring(start=after_first_dot, end=tail.length())
+              .to_string()
           }
         None => ()
       }
@@ -1620,25 +1669,22 @@ fn block_references_var(block : @ast.TsBlock, name : String) -> Bool {
 fn js_runtime_global_names() -> Array[String] {
   [
     // Built-in constructors
-    "Object", "Array", "Function", "Boolean", "Number", "String", "Symbol",
-    "BigInt", "Date", "RegExp", "Error", "TypeError", "RangeError",
-    "ReferenceError", "SyntaxError", "EvalError", "URIError", "Map", "Set",
-    "WeakMap", "WeakSet", "Promise", "Proxy", "Reflect", "JSON", "Math",
-    "ArrayBuffer", "SharedArrayBuffer", "DataView", "Int8Array", "Uint8Array",
-    "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
-    "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array",
-    "BigUint64Array", "Iterator", "AsyncIterator", "Generator",
-    "AsyncGenerator", "Intl", "URL", "URLSearchParams", "WeakRef",
-    "FinalizationRegistry", "AggregateError",
+    "Object", "Array", "Function", "Boolean", "Number", "String", "Symbol", "BigInt",
+    "Date", "RegExp", "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError",
+    "EvalError", "URIError", "Map", "Set", "WeakMap", "WeakSet", "Promise", "Proxy",
+    "Reflect", "JSON", "Math", "ArrayBuffer", "SharedArrayBuffer", "DataView", "Int8Array",
+    "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
+    "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
+    "Iterator", "AsyncIterator", "Generator", "AsyncGenerator", "Intl", "URL", "URLSearchParams",
+    "WeakRef", "FinalizationRegistry", "AggregateError",
     // Globals
-    "globalThis", "undefined", "NaN", "Infinity", "console", "process",
-    "globalThis", "self", "window", "document", "navigator", "location",
-    "fetch", "structuredClone", "queueMicrotask", "setTimeout",
-    "clearTimeout", "setInterval", "clearInterval", "setImmediate",
-    "clearImmediate",
+     "globalThis", "undefined", "NaN", "Infinity", "console", "process", "globalThis",
+    "self", "window", "document", "navigator", "location", "fetch", "structuredClone",
+    "queueMicrotask", "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+    "setImmediate", "clearImmediate",
     // Top-level functions
-    "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI",
-    "encodeURIComponent", "decodeURI", "decodeURIComponent", "eval",
+     "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI", "encodeURIComponent",
+    "decodeURI", "decodeURIComponent", "eval",
   ]
 }
 
@@ -1901,4 +1947,3 @@ fn collect_local_decl_names_in_expr(
     _ => ()
   }
 }
-

@@ -139,10 +139,14 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(inline_into_expr(e))
     If(c, t, e) =>
-      If(inline_into_expr(c), inline_block(t), match e {
-        Some(b) => Some(inline_block(b))
-        None => None
-      })
+      If(
+        inline_into_expr(c),
+        inline_block(t),
+        match e {
+          Some(b) => Some(inline_block(b))
+          None => None
+        },
+      )
     While(c, body) => While(inline_into_expr(c), inline_block(body))
     DoWhile(c, body) => DoWhile(inline_into_expr(c), inline_block(body))
     With(c, body) => With(inline_into_expr(c), inline_block(body))
@@ -182,13 +186,18 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
       Switch(inline_into_expr(e), new_cases)
     }
     Try(b, bnd, cb, fb) =>
-      Try(inline_block(b), bnd, match cb {
-        Some(blk) => Some(inline_block(blk))
-        None => None
-      }, match fb {
-        Some(blk) => Some(inline_block(blk))
-        None => None
-      })
+      Try(
+        inline_block(b),
+        bnd,
+        match cb {
+          Some(blk) => Some(inline_block(blk))
+          None => None
+        },
+        match fb {
+          Some(blk) => Some(inline_block(blk))
+          None => None
+        },
+      )
     Label(name, inner) => Label(name, inline_into_stmt(inner))
     Block(b) =>
       // The parser wraps `let a = 1, b = 2;` as
@@ -422,7 +431,11 @@ fn try_inline(
     return false
   }
   let (uses_in_next, captures_in_next) = count_var_uses_stmt(
-    input[i + 1], name, 0, 0, false,
+    input[i + 1],
+    name,
+    0,
+    0,
+    false,
   )
   if uses_in_next != 1 || captures_in_next != 0 {
     return false
@@ -464,7 +477,11 @@ fn substitute_stmt(
         substitute_expr(val, name, rhs),
       )
     PropAssign(target, prop, val) =>
-      PropAssign(substitute_expr(target, name, rhs), prop, substitute_expr(val, name, rhs))
+      PropAssign(
+        substitute_expr(target, name, rhs),
+        prop,
+        substitute_expr(val, name, rhs),
+      )
     Expr(e) => Expr(substitute_expr(e, name, rhs))
     Return(Some(e)) => Return(Some(substitute_expr(e, name, rhs)))
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
@@ -614,7 +631,10 @@ fn substitute_expr(
     }
     PropAccess(recv, p) => PropAccess(substitute_expr(recv, name, rhs), p)
     IndexAccess(recv, idx) =>
-      IndexAccess(substitute_expr(recv, name, rhs), substitute_expr(idx, name, rhs))
+      IndexAccess(
+        substitute_expr(recv, name, rhs),
+        substitute_expr(idx, name, rhs),
+      )
     ArrayLit(items) => {
       let new_items : Array[@ast.TsExpr] = []
       for i in items {
@@ -635,7 +655,8 @@ fn substitute_expr(
     Await(inner) => Await(substitute_expr(inner, name, rhs))
     YieldStar(inner) => YieldStar(substitute_expr(inner, name, rhs))
     Yield(Some(inner)) => Yield(Some(substitute_expr(inner, name, rhs)))
-    Seq(a, b) => Seq(substitute_expr(a, name, rhs), substitute_expr(b, name, rhs))
+    Seq(a, b) =>
+      Seq(substitute_expr(a, name, rhs), substitute_expr(b, name, rhs))
     AssignExpr(n, v) => AssignExpr(n, substitute_expr(v, name, rhs))
     CompoundAssignExpr(t, op, v) =>
       CompoundAssignExpr(
@@ -645,7 +666,11 @@ fn substitute_expr(
       )
     AssignPattern(b, v) => AssignPattern(b, substitute_expr(v, name, rhs))
     PropAssignExpr(recv, p, v) =>
-      PropAssignExpr(substitute_expr(recv, name, rhs), p, substitute_expr(v, name, rhs))
+      PropAssignExpr(
+        substitute_expr(recv, name, rhs),
+        p,
+        substitute_expr(v, name, rhs),
+      )
     IndexAssignExpr(recv, idx, v) =>
       IndexAssignExpr(
         substitute_expr(recv, name, rhs),
@@ -891,13 +916,7 @@ fn count_var_uses_expr(
   let mut l = local
   let mut n = nested
   match expr {
-    Var(v) => if v == name {
-      if inside_func {
-        n = n + 1
-      } else {
-        l = l + 1
-      }
-    }
+    Var(v) => if v == name { if inside_func { n = n + 1 } else { l = l + 1 } }
     Call(v, args) => {
       if v == name {
         if inside_func {
@@ -964,8 +983,14 @@ fn count_var_uses_expr(
       l = l + l3
       n = n + n3
     }
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | YieldStar(inner)
-    | As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) => {
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | YieldStar(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => {
       let (l2, n2) = count_var_uses_expr(inner, name, 0, 0, inside_func)
       l = l + l2
       n = n + n2
@@ -986,16 +1011,18 @@ fn count_var_uses_expr(
       l = l + l4
       n = n + n4
     }
-    ArrayLit(items) => for it in items {
-      let (l2, n2) = count_var_uses_expr(it, name, 0, 0, inside_func)
-      l = l + l2
-      n = n + n2
-    }
-    ObjectLit(entries) => for ent in entries {
-      let (l2, n2) = count_var_uses_expr(ent.1, name, 0, 0, inside_func)
-      l = l + l2
-      n = n + n2
-    }
+    ArrayLit(items) =>
+      for it in items {
+        let (l2, n2) = count_var_uses_expr(it, name, 0, 0, inside_func)
+        l = l + l2
+        n = n + n2
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        let (l2, n2) = count_var_uses_expr(ent.1, name, 0, 0, inside_func)
+        l = l + l2
+        n = n + n2
+      }
     ComputedProp(k, v) => {
       let (l2, n2) = count_var_uses_expr(k, name, 0, 0, inside_func)
       l = l + l2
@@ -1069,7 +1096,7 @@ fn count_var_uses_expr(
       l = l + l3
       n = n + n3
     }
-    ArrowFunc(_, _, body, _) => {
+    ArrowFunc(_, _, body, _) =>
       // Crossing a function boundary: refs inside count as nested
       // (closure capture).
       match body {
@@ -1084,7 +1111,6 @@ fn count_var_uses_expr(
           n = n + n2
         }
       }
-    }
     FuncExpr(f) => {
       let (l2, n2) = count_var_uses_block(f.body, name, true)
       l = l + l2
@@ -1113,11 +1139,12 @@ fn count_var_uses_expr(
         n = n + n3
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      let (l2, n2) = count_var_uses_expr(e, name, 0, 0, inside_func)
-      l = l + l2
-      n = n + n2
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        let (l2, n2) = count_var_uses_expr(e, name, 0, 0, inside_func)
+        l = l + l2
+        n = n + n2
+      }
     _ => ()
   }
   (l, n)
@@ -1242,8 +1269,10 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
     }
     UnaryOp(op, inner) => {
       match (op, inner) {
-        (PreInc, Var(n)) | (PreDec, Var(n)) | (PostInc, Var(n)) | (PostDec, Var(n)) =>
-          out[n] = true
+        (PreInc, Var(n))
+        | (PreDec, Var(n))
+        | (PostInc, Var(n))
+        | (PostDec, Var(n)) => out[n] = true
         _ => ()
       }
       collect_reassigned_expr(inner, out)
@@ -1265,9 +1294,10 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
       collect_reassigned_expr(t, out)
       collect_reassigned_expr(e, out)
     }
-    Call(_, args) | New(_, args) => for a in args {
-      collect_reassigned_expr(a, out)
-    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_reassigned_expr(a, out)
+      }
     CallExpr(callee, args) | NewExpr(callee, args) => {
       collect_reassigned_expr(callee, out)
       for a in args {
@@ -1285,19 +1315,25 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
       collect_reassigned_expr(recv, out)
       collect_reassigned_expr(idx, out)
     }
-    ArrayLit(items) => for it in items {
-      collect_reassigned_expr(it, out)
-    }
-    ObjectLit(entries) => for ent in entries {
-      collect_reassigned_expr(ent.1, out)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_reassigned_expr(it, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_reassigned_expr(ent.1, out)
+      }
     ComputedProp(k, v) => {
       collect_reassigned_expr(k, out)
       collect_reassigned_expr(v, out)
     }
-    Spread(inner) | Await(inner) | YieldStar(inner) | As(inner, _)
-    | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      collect_reassigned_expr(inner, out)
+    Spread(inner)
+    | Await(inner)
+    | YieldStar(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => collect_reassigned_expr(inner, out)
     Yield(Some(inner)) => collect_reassigned_expr(inner, out)
     Seq(a, b) => {
       collect_reassigned_expr(a, out)
@@ -1340,9 +1376,10 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
         collect_reassigned_expr(e, out)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      collect_reassigned_expr(e, out)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_reassigned_expr(e, out)
+      }
     _ => ()
   }
 }
@@ -1356,7 +1393,8 @@ fn collect_captured_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
   match stmt {
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Throw(e) =>
       collect_captured_expr(e, out, false)
-    Assign(_, e) | CompoundAssign(_, _, e) => collect_captured_expr(e, out, false)
+    Assign(_, e) | CompoundAssign(_, _, e) =>
+      collect_captured_expr(e, out, false)
     Return(Some(e)) => collect_captured_expr(e, out, false)
     If(c, t, e) => {
       collect_captured_expr(c, out, false)
@@ -1518,9 +1556,7 @@ fn collect_captured_expr(
   inside_func : Bool,
 ) -> Unit {
   match expr {
-    Var(n) => if inside_func {
-      out[n] = true
-    }
+    Var(n) => if inside_func { out[n] = true }
     Call(n, args) => {
       if inside_func {
         out[n] = true
@@ -1559,21 +1595,28 @@ fn collect_captured_expr(
       collect_captured_expr(l, out, inside_func)
       collect_captured_expr(r, out, inside_func)
     }
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | YieldStar(inner)
-    | As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      collect_captured_expr(inner, out, inside_func)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | YieldStar(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => collect_captured_expr(inner, out, inside_func)
     Yield(Some(inner)) => collect_captured_expr(inner, out, inside_func)
     Cond(c, t, e) => {
       collect_captured_expr(c, out, inside_func)
       collect_captured_expr(t, out, inside_func)
       collect_captured_expr(e, out, inside_func)
     }
-    ArrayLit(items) => for it in items {
-      collect_captured_expr(it, out, inside_func)
-    }
-    ObjectLit(entries) => for ent in entries {
-      collect_captured_expr(ent.1, out, inside_func)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_captured_expr(it, out, inside_func)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_captured_expr(ent.1, out, inside_func)
+      }
     ComputedProp(k, v) => {
       collect_captured_expr(k, out, inside_func)
       collect_captured_expr(v, out, inside_func)
@@ -1626,9 +1669,10 @@ fn collect_captured_expr(
         collect_captured_expr(e, out, inside_func)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      collect_captured_expr(e, out, inside_func)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_captured_expr(e, out, inside_func)
+      }
     _ => ()
   }
 }
@@ -1678,21 +1722,28 @@ fn collect_var_refs_in_expr_local(
       collect_var_refs_in_expr_local(l, out)
       collect_var_refs_in_expr_local(r, out)
     }
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | YieldStar(inner)
-    | As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      collect_var_refs_in_expr_local(inner, out)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | YieldStar(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => collect_var_refs_in_expr_local(inner, out)
     Yield(Some(inner)) => collect_var_refs_in_expr_local(inner, out)
     Cond(c, t, e) => {
       collect_var_refs_in_expr_local(c, out)
       collect_var_refs_in_expr_local(t, out)
       collect_var_refs_in_expr_local(e, out)
     }
-    ArrayLit(items) => for it in items {
-      collect_var_refs_in_expr_local(it, out)
-    }
-    ObjectLit(entries) => for ent in entries {
-      collect_var_refs_in_expr_local(ent.1, out)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_var_refs_in_expr_local(it, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_var_refs_in_expr_local(ent.1, out)
+      }
     ComputedProp(k, v) => {
       collect_var_refs_in_expr_local(k, out)
       collect_var_refs_in_expr_local(v, out)
@@ -1741,9 +1792,10 @@ fn collect_var_refs_in_expr_local(
         collect_var_refs_in_expr_local(e, out)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      collect_var_refs_in_expr_local(e, out)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_var_refs_in_expr_local(e, out)
+      }
     _ => ()
   }
 }

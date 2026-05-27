@@ -34,9 +34,7 @@ pub fn auto_reserve_from_module(
   for spec in block.exports {
     exported_names[spec.local_name] = true
     exported_names[spec.export_name] = true
-    walk_exported_name(
-      spec.local_name, module_, reachable, reserved_props,
-    )
+    walk_exported_name(spec.local_name, module_, reachable, reserved_props)
   }
   // Re-exports of named bindings (`export { Foo } from "./bar"`)
   // also keep `Foo` visible — its members count as external.
@@ -88,8 +86,8 @@ pub fn auto_reserve_from_module(
     reserved_props_arr.push(entry.0)
   }
   base
-    .with_reserved(reserved_names_arr)
-    .with_reserved_properties(reserved_props_arr)
+  .with_reserved(reserved_names_arr)
+  .with_reserved_properties(reserved_props_arr)
 }
 
 // ---------------------------------------------------------------------------

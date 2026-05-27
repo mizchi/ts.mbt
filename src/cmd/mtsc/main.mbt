@@ -125,9 +125,7 @@ fn mtsc_print_usage() -> Unit {
     "  --warn-impure-getters     Warn when a class getter body has a direct side effect (assign, call, mutation)",
   )
   println("  --mangle                  Rename non-exported local identifiers")
-  println(
-    "  --mangle-properties       Also rename non-reserved property keys",
-  )
+  println("  --mangle-properties       Also rename non-reserved property keys")
   println("  --sourcemap               Emit <out>.map alongside the JS output")
   println("  --jsx-runtime <mode>      `automatic` (default) or `classic`")
   println("  --jsx-import-source <pkg> Override the jsx-runtime import source")
@@ -399,17 +397,18 @@ async fn mtsc_load_bundle_files(
     // set so the property mangler never renames a name that's
     // part of any module's public type surface.
     let module_ = @parser.Parser::from_source(source).parse_module() catch {
-      _ => @ast.TsModule::{
-        funcs: [],
-        interfaces: [],
-        type_aliases: [],
-        imports: [],
-        values: [],
-        classes: [],
-        namespaces: [],
-        enums: [],
-        module_augmentations: [],
-      }
+      _ =>
+        @ast.TsModule::{
+          funcs: [],
+          interfaces: [],
+          type_aliases: [],
+          imports: [],
+          values: [],
+          classes: [],
+          namespaces: [],
+          enums: [],
+          module_augmentations: [],
+        }
     }
     for n in @transform.type_declared_property_names(module_) {
       type_props[n] = true
@@ -546,7 +545,11 @@ async fn main {
     let type_props : Map[String, Bool] = {}
     match
       mtsc_load_bundle_files(
-        input_path, files, aliases, opts.externals, type_props,
+        input_path,
+        files,
+        aliases,
+        opts.externals,
+        type_props,
       ) {
       Ok(_) => ()
       Err(e) => {
@@ -575,32 +578,32 @@ async fn main {
         None => ""
       }
       if entry_source != "" {
-        let block = (try?
-          @parser.parse_module_block_from_source(entry_source)).or({
-          block: { stmts: [], stmt_positions: [] },
-          imports: [],
-          exports: [],
-          reexports: [],
-          enums: [],
-          internal_names: {},
-          deprecations: {},
-          pure_declarations: {},
-          type_aliases: [],
-        })
-        let module_ = (try?
-          @parser.parse_module_from_source_with_const_values(entry_source, {})).or(
-          @ast.TsModule::{
-            funcs: [],
-            interfaces: [],
-            type_aliases: [],
+        let block = (try? @parser.parse_module_block_from_source(entry_source)).or({
+            block: { stmts: [], stmt_positions: [] },
             imports: [],
-            values: [],
-            classes: [],
-            namespaces: [],
+            exports: [],
+            reexports: [],
             enums: [],
-            module_augmentations: [],
+            internal_names: {},
+            deprecations: {},
+            pure_declarations: {},
+            type_aliases: [],
           },
         )
+        let module_ = (try? @parser.parse_module_from_source_with_const_values(
+          entry_source,
+          {},
+        )).or(@ast.TsModule::{
+          funcs: [],
+          interfaces: [],
+          type_aliases: [],
+          imports: [],
+          values: [],
+          classes: [],
+          namespaces: [],
+          enums: [],
+          module_augmentations: [],
+        })
         let local_names : Array[String] = []
         for ex in block.exports {
           local_names.push(ex.local_name)
@@ -655,7 +658,6 @@ async fn main {
         match out.sourcemap {
           Some(map_json) => {
             let _ = write_text(path + ".map", map_json)
-
           }
           None => ()
         }
@@ -665,8 +667,7 @@ async fn main {
           // `.d.ts` so `bundle.js` becomes `bundle.d.ts` rather
           // than `bundle.js.d.ts`.
           let dts_path = if path.has_suffix(".js") {
-            path.substring(start=0, end=path.length() - 3).to_string() +
-            ".d.ts"
+            path.substring(start=0, end=path.length() - 3).to_string() + ".d.ts"
           } else {
             path + ".d.ts"
           }
@@ -674,34 +675,33 @@ async fn main {
             Some(s) => s
             None => ""
           }
-          let entry_block = (try?
-            @parser.parse_module_block_from_source(entry_source)).or({
+          let entry_block = (try? @parser.parse_module_block_from_source(
+            entry_source,
+          )).or({
             block: { stmts: [], stmt_positions: [] },
             imports: [],
             exports: [],
             reexports: [],
             enums: [],
             internal_names: {},
-          deprecations: {},
-          pure_declarations: {},
-          type_aliases: [],
+            deprecations: {},
+            pure_declarations: {},
+            type_aliases: [],
           })
-          let entry_module = (try?
-            @parser.parse_module_from_source_with_const_values(
-              entry_source, {},
-            )).or(
-            @ast.TsModule::{
-              funcs: [],
-              interfaces: [],
-              type_aliases: [],
-              imports: [],
-              values: [],
-              classes: [],
-              namespaces: [],
-              enums: [],
-              module_augmentations: [],
-            },
-          )
+          let entry_module = (try? @parser.parse_module_from_source_with_const_values(
+            entry_source,
+            {},
+          )).or(@ast.TsModule::{
+            funcs: [],
+            interfaces: [],
+            type_aliases: [],
+            imports: [],
+            values: [],
+            classes: [],
+            namespaces: [],
+            enums: [],
+            module_augmentations: [],
+          })
           // Filter exports through the entry's `@internal` set so
           // anything tagged `/** @internal */` is invisible to
           // downstream consumers' type-checks even when the JS
@@ -712,7 +712,11 @@ async fn main {
               local_names.push(ex.local_name)
             }
           }
-          let dts_text = @transform.emit_entry_dts(entry_module, local_names, entry_block.deprecations)
+          let dts_text = @transform.emit_entry_dts(
+            entry_module,
+            local_names,
+            entry_block.deprecations,
+          )
           let _ = write_text(dts_path, dts_text)
         }
       }
@@ -761,7 +765,6 @@ async fn main {
       match out.sourcemap {
         Some(map_json) => {
           let _ = write_text(path + ".map", map_json)
-
         }
         None => ()
       }

@@ -360,11 +360,9 @@ fn wrap_static_field_init_with_this(
     is_generator: false,
     is_async: false,
   }
-  @ast.TsExpr::MethodCall(
-    @ast.TsExpr::FuncExpr(inner_func),
-    "call",
-    [@ast.TsExpr::Var(class_name)],
-  )
+  @ast.TsExpr::MethodCall(@ast.TsExpr::FuncExpr(inner_func), "call", [
+    @ast.TsExpr::Var(class_name),
+  ])
 }
 
 ///|
@@ -412,8 +410,7 @@ fn expr_contains_this(e : @ast.TsExpr) -> Bool {
     PropAccess(recv, _) => expr_contains_this(recv)
     IndexAccess(recv, idx) =>
       expr_contains_this(recv) || expr_contains_this(idx)
-    BinOp(_, l, r) | Seq(l, r) =>
-      expr_contains_this(l) || expr_contains_this(r)
+    BinOp(_, l, r) | Seq(l, r) => expr_contains_this(l) || expr_contains_this(r)
     Cond(c, t, els) =>
       expr_contains_this(c) || expr_contains_this(t) || expr_contains_this(els)
     UnaryOp(_, v)
@@ -436,7 +433,9 @@ fn expr_contains_this(e : @ast.TsExpr) -> Bool {
     PropAssignExpr(recv, _, v) =>
       expr_contains_this(recv) || expr_contains_this(v)
     IndexAssignExpr(recv, idx, v) =>
-      expr_contains_this(recv) || expr_contains_this(idx) || expr_contains_this(v)
+      expr_contains_this(recv) ||
+      expr_contains_this(idx) ||
+      expr_contains_this(v)
     ComputedProp(k, v) => expr_contains_this(k) || expr_contains_this(v)
     ArrayLit(items) => {
       for i in items {
@@ -709,9 +708,7 @@ fn Parser::skip_decorator(self : Parser) -> Unit {
 /// discarding tokens. Returns `None` when the `@` isn't followed by a
 /// recognized decorator head — keeps the existing permissive
 /// recovery.
-fn Parser::parse_decorator_expr(
-  self : Parser,
-) -> @ast.TsExpr? raise ParseError {
+fn Parser::parse_decorator_expr(self : Parser) -> @ast.TsExpr? raise ParseError {
   let _ = self.match_(At)
   let head : @ast.TsExpr = match self.peek().kind {
     LParen => {
@@ -1101,7 +1098,10 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     Some(base_name) =>
       if class_name.length() > 0 && base_name == class_name {
         let throw_expr = @ast.TsExpr::Call("ReferenceError", [])
-        let throw_body : @ast.TsBlock = { stmts: [Throw(throw_expr)], stmt_positions: [] }
+        let throw_body : @ast.TsBlock = {
+          stmts: [Throw(throw_expr)],
+          stmt_positions: [],
+        }
         return CallExpr(
           @ast.TsExpr::FuncExpr(@ast.TsFunc::{
             type_params: [],
@@ -1153,7 +1153,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       let ctor_func : @ast.TsFunc? = match ctor_opt {
         Some(func) =>
           if field_assigns.length() > 0 {
-            Some(self.inject_instance_field_assigns(func, field_assigns, Some(base_name)))
+            Some(
+              self.inject_instance_field_assigns(
+                func,
+                field_assigns,
+                Some(base_name),
+              ),
+            )
           } else {
             Some(func)
           }
@@ -1161,7 +1167,9 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           if field_assigns.length() > 0 {
             let rest_name = "__super_args__"
             let body_stmts : Array[@ast.TsStmt] = [
-              Expr(Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))])),
+              Expr(
+                Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))]),
+              ),
             ]
             for a in field_assigns {
               body_stmts.push(a)
@@ -1728,7 +1736,11 @@ fn Parser::parse_class_decl_with_abstract(
       let merged_ctor = match ctor_opt {
         Some(func) =>
           if field_assigns.length() > 0 {
-            self.inject_instance_field_assigns(func, field_assigns, Some(base_name))
+            self.inject_instance_field_assigns(
+              func,
+              field_assigns,
+              Some(base_name),
+            )
           } else {
             func
           }
@@ -1738,7 +1750,9 @@ fn Parser::parse_class_decl_with_abstract(
             // to `super(...)` and then runs the field assigns.
             let rest_name = "__super_args__"
             let body_stmts : Array[@ast.TsStmt] = [
-              Expr(Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))])),
+              Expr(
+                Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))]),
+              ),
             ]
             for a in field_assigns {
               body_stmts.push(a)
@@ -1777,7 +1791,8 @@ fn Parser::parse_class_decl_with_abstract(
             }
           }
       }
-      let ctor_func : @ast.TsFunc? = if ctor_opt is None && field_assigns.length() == 0 {
+      let ctor_func : @ast.TsFunc? = if ctor_opt is None &&
+        field_assigns.length() == 0 {
         None
       } else {
         Some(merged_ctor)

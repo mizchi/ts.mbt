@@ -89,12 +89,7 @@ pub fn standard_utility_types() -> Map[String, AliasBinding] {
   // requires a follow-up at the parser level.
   table["ThisParameterType"] = {
     type_params: ["F"],
-    body: Conditional(
-      Named("F"),
-      Func([Array(Any)], Any),
-      Any,
-      Any,
-    ),
+    body: Conditional(Named("F"), Func([Array(Any)], Any), Any, Any),
   }
 
   // type OmitThisParameter<F> = F extends (this: any, ...args: infer A) => infer R

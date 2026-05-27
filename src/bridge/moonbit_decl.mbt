@@ -3335,8 +3335,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     // purposes of suffix naming; inside a Tuple it's handled by the
     // tuple-walker.
     Rest(inner) => "RestOf" + utility_record_type_suffix(inner)
-    Constructor(_, ret, _) =>
-      "CtorOf" + utility_record_type_suffix(ret)
+    Constructor(_, ret, _) => "CtorOf" + utility_record_type_suffix(ret)
     UniqueSymbol(_) => "Symbol"
   }
 }

@@ -92,8 +92,7 @@ pub fn LineIndex::position(self : LineIndex, offset : Int) -> Position {
 // ---------------------------------------------------------------------------
 
 ///|
-let vlq_base64_chars : String =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+let vlq_base64_chars : String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 ///|
 /// Encode a single signed integer as a base64 VLQ string. This is the

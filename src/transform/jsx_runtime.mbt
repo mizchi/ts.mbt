@@ -124,7 +124,7 @@ pub fn extract_jsx_pragmas(source : String, base : JsxConfig) -> JsxConfig {
         while end < len && source[end] != '\n' {
           end = end + 1
         }
-        let body = source.substring(start=start, end=end).to_string()
+        let body = source.substring(start~, end~).to_string()
         cfg = apply_pragmas_from_text(body, cfg)
         i = end
         continue
@@ -139,7 +139,7 @@ pub fn extract_jsx_pragmas(source : String, base : JsxConfig) -> JsxConfig {
           }
           end = end + 1
         }
-        let body = source.substring(start=start, end=end).to_string()
+        let body = source.substring(start~, end~).to_string()
         cfg = apply_pragmas_from_text(body, cfg)
         i = end + 2
         continue
@@ -202,7 +202,9 @@ fn read_pragma(line : String, pragma_name : String) -> String? {
   if !line.has_prefix(pragma_name) {
     return None
   }
-  let rest = line.substring(start=pragma_name.length(), end=line.length()).to_string()
+  let rest = line
+    .substring(start=pragma_name.length(), end=line.length())
+    .to_string()
   if rest.length() == 0 {
     return None
   }
@@ -501,10 +503,14 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
       }
     Throw(e) => Throw(lower_jsx_in_expr(cfg, e))
     If(c, t, e_opt) =>
-      If(lower_jsx_in_expr(cfg, c), lower_jsx_in_block(cfg, t), match e_opt {
-        Some(b) => Some(lower_jsx_in_block(cfg, b))
-        None => None
-      })
+      If(
+        lower_jsx_in_expr(cfg, c),
+        lower_jsx_in_block(cfg, t),
+        match e_opt {
+          Some(b) => Some(lower_jsx_in_block(cfg, b))
+          None => None
+        },
+      )
     While(c, body) =>
       While(lower_jsx_in_expr(cfg, c), lower_jsx_in_block(cfg, body))
     DoWhile(c, body) =>
@@ -526,15 +532,27 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
     }
     ForOf(kind, b, t, iter, body) =>
       ForOf(
-        kind, b, t, lower_jsx_in_expr(cfg, iter), lower_jsx_in_block(cfg, body),
+        kind,
+        b,
+        t,
+        lower_jsx_in_expr(cfg, iter),
+        lower_jsx_in_block(cfg, body),
       )
     ForAwaitOf(kind, b, t, iter, body) =>
       ForAwaitOf(
-        kind, b, t, lower_jsx_in_expr(cfg, iter), lower_jsx_in_block(cfg, body),
+        kind,
+        b,
+        t,
+        lower_jsx_in_expr(cfg, iter),
+        lower_jsx_in_block(cfg, body),
       )
     ForIn(kind, b, t, iter, body) =>
       ForIn(
-        kind, b, t, lower_jsx_in_expr(cfg, iter), lower_jsx_in_block(cfg, body),
+        kind,
+        b,
+        t,
+        lower_jsx_in_expr(cfg, iter),
+        lower_jsx_in_block(cfg, body),
       )
     Switch(scrutinee, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
@@ -551,22 +569,30 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
       Switch(lower_jsx_in_expr(cfg, scrutinee), new_cases)
     }
     Try(t, cb, c, f) =>
-      Try(lower_jsx_in_block(cfg, t), cb, match c {
-        Some(b) => Some(lower_jsx_in_block(cfg, b))
-        None => None
-      }, match f {
-        Some(b) => Some(lower_jsx_in_block(cfg, b))
-        None => None
-      })
+      Try(
+        lower_jsx_in_block(cfg, t),
+        cb,
+        match c {
+          Some(b) => Some(lower_jsx_in_block(cfg, b))
+          None => None
+        },
+        match f {
+          Some(b) => Some(lower_jsx_in_block(cfg, b))
+          None => None
+        },
+      )
     Block(b) => Block(lower_jsx_in_block(cfg, b))
     Label(name, inner) => Label(name, lower_jsx_in_stmt(cfg, inner))
     With(target, body) =>
       With(lower_jsx_in_expr(cfg, target), lower_jsx_in_block(cfg, body))
     Assign(name, e) => Assign(name, lower_jsx_in_expr(cfg, e))
-    CompoundAssign(name, op, e) => CompoundAssign(name, op, lower_jsx_in_expr(cfg, e))
+    CompoundAssign(name, op, e) =>
+      CompoundAssign(name, op, lower_jsx_in_expr(cfg, e))
     PropAssign(recv, prop, value) =>
       PropAssign(
-        lower_jsx_in_expr(cfg, recv), prop, lower_jsx_in_expr(cfg, value),
+        lower_jsx_in_expr(cfg, recv),
+        prop,
+        lower_jsx_in_expr(cfg, value),
       )
     IndexAssign(recv, idx, value) =>
       IndexAssign(
@@ -580,7 +606,10 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
 }
 
 ///|
-pub fn lower_jsx_in_block(cfg : JsxConfig, block : @ast.TsBlock) -> @ast.TsBlock {
+pub fn lower_jsx_in_block(
+  cfg : JsxConfig,
+  block : @ast.TsBlock,
+) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(lower_jsx_in_stmt(cfg, s))
@@ -644,12 +673,12 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
     AssignPattern(b, v) => AssignPattern(b, lower_jsx_in_expr(cfg, v))
     CompoundAssignExpr(t, op, v) =>
       CompoundAssignExpr(
-        lower_jsx_in_expr(cfg, t), op, lower_jsx_in_expr(cfg, v),
+        lower_jsx_in_expr(cfg, t),
+        op,
+        lower_jsx_in_expr(cfg, v),
       )
     PropAssignExpr(recv, p, v) =>
-      PropAssignExpr(
-        lower_jsx_in_expr(cfg, recv), p, lower_jsx_in_expr(cfg, v),
-      )
+      PropAssignExpr(lower_jsx_in_expr(cfg, recv), p, lower_jsx_in_expr(cfg, v))
     IndexAssignExpr(recv, idx, v) =>
       IndexAssignExpr(
         lower_jsx_in_expr(cfg, recv),
@@ -660,7 +689,8 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(lower_jsx_in_expr(cfg, e))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(lower_jsx_in_block(cfg, b))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(lower_jsx_in_block(cfg, b))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
@@ -672,10 +702,13 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
     YieldStar(inner) => YieldStar(lower_jsx_in_expr(cfg, inner))
     Await(inner) => Await(lower_jsx_in_expr(cfg, inner))
     DynamicImport(spec, opts) =>
-      DynamicImport(lower_jsx_in_expr(cfg, spec), match opts {
-        Some(o) => Some(lower_jsx_in_expr(cfg, o))
-        None => None
-      })
+      DynamicImport(
+        lower_jsx_in_expr(cfg, spec),
+        match opts {
+          Some(o) => Some(lower_jsx_in_expr(cfg, o))
+          None => None
+        },
+      )
     TaggedTemplate(tag, parts, raw, exprs) =>
       TaggedTemplate(
         lower_jsx_in_expr(cfg, tag),
@@ -722,19 +755,16 @@ pub fn lower_block_with_runtime_imports(
   let mut needs_jsx_dev = false
   let mut needs_jsxs_dev = false
   let mut needs_fragment = false
-  collect_runtime_refs(
-    walked,
-    fn(name) {
-      match name {
-        "jsx" => needs_jsx = true
-        "jsxs" => needs_jsxs = true
-        "jsxDEV" => needs_jsx_dev = true
-        "jsxsDEV" => needs_jsxs_dev = true
-        "Fragment" => needs_fragment = true
-        _ => ()
-      }
-    },
-  )
+  collect_runtime_refs(walked, fn(name) {
+    match name {
+      "jsx" => needs_jsx = true
+      "jsxs" => needs_jsxs = true
+      "jsxDEV" => needs_jsx_dev = true
+      "jsxsDEV" => needs_jsxs_dev = true
+      "Fragment" => needs_fragment = true
+      _ => ()
+    }
+  })
   if needs_jsx {
     needed.push("jsx")
   }
@@ -754,10 +784,7 @@ pub fn lower_block_with_runtime_imports(
 }
 
 ///|
-fn collect_runtime_refs(
-  block : @ast.TsBlock,
-  mark : (String) -> Unit,
-) -> Unit {
+fn collect_runtime_refs(block : @ast.TsBlock, mark : (String) -> Unit) -> Unit {
   for s in block.stmts {
     collect_refs_stmt(s, mark)
   }
@@ -835,7 +862,8 @@ fn collect_refs_expr(expr : @ast.TsExpr, mark : (String) -> Unit) -> Unit {
       collect_refs_expr(e, mark)
     }
     UnaryOp(_, inner) => collect_refs_expr(inner, mark)
-    Spread(inner) | Await(inner) | YieldStar(inner) => collect_refs_expr(inner, mark)
+    Spread(inner) | Await(inner) | YieldStar(inner) =>
+      collect_refs_expr(inner, mark)
     Yield(opt) =>
       match opt {
         Some(e) => collect_refs_expr(e, mark)

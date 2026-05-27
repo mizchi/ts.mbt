@@ -456,13 +456,15 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
                 }
                 'a' | 'b' | 'c' | 'd' | 'e' | 'f' => {
                   let _ = self.advance()
-                  value = value * 16.0 + (c.to_int() - 'a'.to_int() + 10).to_double()
+                  value = value * 16.0 +
+                    (c.to_int() - 'a'.to_int() + 10).to_double()
                   digits.write_char(c)
                   has_digit = true
                 }
                 'A' | 'B' | 'C' | 'D' | 'E' | 'F' => {
                   let _ = self.advance()
-                  value = value * 16.0 + (c.to_int() - 'A'.to_int() + 10).to_double()
+                  value = value * 16.0 +
+                    (c.to_int() - 'A'.to_int() + 10).to_double()
                   digits.write_char(c)
                   has_digit = true
                 }

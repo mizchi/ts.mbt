@@ -119,7 +119,11 @@ fn extract_as_const_shape(expr : @ast.TsExpr) -> AsConstShape? {
 ///|
 fn is_scalar_literal(e : @ast.TsExpr) -> Bool {
   match e {
-    StringLit(_) | NumberLit(_) | IntLit(_) | BoolLit(_) | NullLit
+    StringLit(_)
+    | NumberLit(_)
+    | IntLit(_)
+    | BoolLit(_)
+    | NullLit
     | BigIntLit(_) => true
     _ => false
   }
@@ -135,9 +139,13 @@ fn scan_stmt_for_unsafe_uses(
   candidates : Map[String, AsConstCandidate],
 ) -> Unit {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e)
-    | Assign(_, e) | CompoundAssign(_, _, e) | Throw(e) =>
-      scan_expr_for_unsafe_uses(e, candidates)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => scan_expr_for_unsafe_uses(e, candidates)
     Return(Some(e)) => scan_expr_for_unsafe_uses(e, candidates)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
     IndexAssign(t, idx, v) => {
@@ -185,7 +193,8 @@ fn scan_stmt_for_unsafe_uses(
         scan_stmt_for_unsafe_uses(s, candidates)
       }
     }
-    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body)
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) => {
       // The iterable position counts as a bare-identifier use:
       // `for (const x of NAME)` would observe NAME's identity.
@@ -261,9 +270,13 @@ fn flag_all_candidate_refs(
       flag_all_candidate_refs(l, candidates)
       flag_all_candidate_refs(r, candidates)
     }
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      flag_all_candidate_refs(inner, candidates)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => flag_all_candidate_refs(inner, candidates)
     Cond(c, t, e) => {
       flag_all_candidate_refs(c, candidates)
       flag_all_candidate_refs(t, candidates)
@@ -392,9 +405,13 @@ fn scan_expr_for_unsafe_uses(
       scan_expr_for_unsafe_uses(l, candidates)
       scan_expr_for_unsafe_uses(r, candidates)
     }
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      scan_expr_for_unsafe_uses(inner, candidates)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => scan_expr_for_unsafe_uses(inner, candidates)
     Cond(c, t, e) => {
       scan_expr_for_unsafe_uses(c, candidates)
       scan_expr_for_unsafe_uses(t, candidates)
@@ -405,11 +422,10 @@ fn scan_expr_for_unsafe_uses(
       scan_expr_for_unsafe_uses(recv, candidates)
       scan_expr_for_unsafe_uses(idx, candidates)
     }
-    Call(_, args) => {
+    Call(_, args) =>
       for a in args {
         scan_expr_for_unsafe_uses(a, candidates)
       }
-    }
     CallExpr(callee, args) | NewExpr(callee, args) => {
       scan_expr_for_unsafe_uses(callee, candidates)
       for a in args {
@@ -517,19 +533,29 @@ fn rewrite_stmt(
     Assign(n, e) => Assign(n, rewrite_expr(e, table))
     CompoundAssign(n, op, e) => CompoundAssign(n, op, rewrite_expr(e, table))
     IndexAssign(t, idx, v) =>
-      IndexAssign(rewrite_expr(t, table), rewrite_expr(idx, table), rewrite_expr(v, table))
-    PropAssign(t, p, v) => PropAssign(rewrite_expr(t, table), p, rewrite_expr(v, table))
+      IndexAssign(
+        rewrite_expr(t, table),
+        rewrite_expr(idx, table),
+        rewrite_expr(v, table),
+      )
+    PropAssign(t, p, v) =>
+      PropAssign(rewrite_expr(t, table), p, rewrite_expr(v, table))
     Expr(e) => Expr(rewrite_expr(e, table))
     Return(Some(e)) => Return(Some(rewrite_expr(e, table)))
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(rewrite_expr(e, table))
     If(c, t, e) =>
-      If(rewrite_expr(c, table), rewrite_block(t, table), match e {
-        Some(b) => Some(rewrite_block(b, table))
-        None => None
-      })
+      If(
+        rewrite_expr(c, table),
+        rewrite_block(t, table),
+        match e {
+          Some(b) => Some(rewrite_block(b, table))
+          None => None
+        },
+      )
     While(c, body) => While(rewrite_expr(c, table), rewrite_block(body, table))
-    DoWhile(c, body) => DoWhile(rewrite_expr(c, table), rewrite_block(body, table))
+    DoWhile(c, body) =>
+      DoWhile(rewrite_expr(c, table), rewrite_block(body, table))
     With(c, body) => With(rewrite_expr(c, table), rewrite_block(body, table))
     For(init, cond, update, body) =>
       For(
@@ -620,7 +646,8 @@ fn rewrite_expr(
               let k = d.to_string()
               match m.get(k) {
                 Some(v) => v
-                None => IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
+                None =>
+                  IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
               }
             }
           }
@@ -635,7 +662,8 @@ fn rewrite_expr(
             ObjShape(m) =>
               match m.get(i.to_string()) {
                 Some(v) => v
-                None => IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
+                None =>
+                  IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
               }
           }
         (Some(c), StringLit(k)) =>
@@ -643,13 +671,13 @@ fn rewrite_expr(
             ObjShape(m) =>
               match m.get(k) {
                 Some(v) => v
-                None => IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
+                None =>
+                  IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
               }
             ArrShape(_) =>
               IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
           }
-        _ =>
-          IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
+        _ => IndexAccess(@ast.TsExpr::Var(n), rewrite_expr(idx, table))
       }
     PropAccess(@ast.TsExpr::Var(n), p) =>
       match table.get(n) {
@@ -672,7 +700,11 @@ fn rewrite_expr(
     BinOp(op, l, r) => BinOp(op, rewrite_expr(l, table), rewrite_expr(r, table))
     UnaryOp(op, inner) => UnaryOp(op, rewrite_expr(inner, table))
     Cond(c, t, e) =>
-      Cond(rewrite_expr(c, table), rewrite_expr(t, table), rewrite_expr(e, table))
+      Cond(
+        rewrite_expr(c, table),
+        rewrite_expr(t, table),
+        rewrite_expr(e, table),
+      )
     PropAccess(recv, p) => PropAccess(rewrite_expr(recv, table), p)
     IndexAccess(recv, idx) =>
       IndexAccess(rewrite_expr(recv, table), rewrite_expr(idx, table))
@@ -737,8 +769,13 @@ fn rewrite_expr(
     PropAssignExpr(recv, p, v) =>
       PropAssignExpr(rewrite_expr(recv, table), p, rewrite_expr(v, table))
     IndexAssignExpr(recv, idx, v) =>
-      IndexAssignExpr(rewrite_expr(recv, table), rewrite_expr(idx, table), rewrite_expr(v, table))
-    ComputedProp(k, v) => ComputedProp(rewrite_expr(k, table), rewrite_expr(v, table))
+      IndexAssignExpr(
+        rewrite_expr(recv, table),
+        rewrite_expr(idx, table),
+        rewrite_expr(v, table),
+      )
+    ComputedProp(k, v) =>
+      ComputedProp(rewrite_expr(k, table), rewrite_expr(v, table))
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(rewrite_expr(e, table))

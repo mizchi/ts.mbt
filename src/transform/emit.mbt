@@ -63,7 +63,7 @@ priv enum LastTok {
 } derive(Eq)
 
 ///|
-fn Emitter::new(pretty~ : Bool = true) -> Emitter {
+fn Emitter::new(pretty? : Bool = true) -> Emitter {
   {
     buf: StringBuilder::new(),
     indent: 0,
@@ -277,12 +277,12 @@ pub(all) struct TransformOutput {
 pub fn transform_source_full(
   source : String,
   base : JsxConfig,
-  with_sourcemap~ : Bool = false,
-  source_path~ : String = "input.ts",
-  output_path~ : String = "output.js",
-  mangle~ : Bool = false,
-  mangle_properties~ : Bool = false,
-  minify~ : Bool = false,
+  with_sourcemap? : Bool = false,
+  source_path? : String = "input.ts",
+  output_path? : String = "output.js",
+  mangle? : Bool = false,
+  mangle_properties? : Bool = false,
+  minify? : Bool = false,
 ) -> Result[TransformOutput, String] {
   // Parse via the module-block entry so we can inline `const enum`
   // use sites — the side list `mb.enums` carries the original
@@ -349,7 +349,7 @@ pub fn transform_source_full(
   // need to be updated in lockstep. For now, skip per-statement
   // mappings when mangling is on; consumers asking for both should
   // file a follow-up.
-  let emit_positions = (not(mangle)) && with_sourcemap
+  let emit_positions = not(mangle) && with_sourcemap
   for i, stmt in mangled.stmts {
     if emit_positions && i < positions.length() {
       let src_pos = e.line_index.position(positions[i])
@@ -436,8 +436,9 @@ fn stmt_ends_in_dangling_if(s : @ast.TsStmt) -> Bool {
     // also re-expose the dangling-else risk on the way out.
     While(_, body) | DoWhile(_, body) => block_ends_in_dangling_if(body)
     For(_, _, _, body) => block_ends_in_dangling_if(body)
-    ForOf(_, _, _, _, body) | ForAwaitOf(_, _, _, _, body) | ForIn(_, _, _, _, body) =>
-      block_ends_in_dangling_if(body)
+    ForOf(_, _, _, _, body)
+    | ForAwaitOf(_, _, _, _, body)
+    | ForIn(_, _, _, _, body) => block_ends_in_dangling_if(body)
     With(_, body) => block_ends_in_dangling_if(body)
     Label(_, inner) => stmt_ends_in_dangling_if(inner)
     _ => false
@@ -544,7 +545,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, value, 0)
       e.semi()
     }
-    PropAssign(recv, prop, value) => {
+    PropAssign(recv, prop, value) =>
       // `@@get:name` / `@@set:name` are internal markers from the
       // class-desugar pass meaning "install a getter/setter on
       // the prototype". Emit them as `Object.defineProperty(...)`
@@ -604,7 +605,6 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         emit_expr(e, value, 0)
         e.semi()
       }
-    }
     Expr(expr) => {
       // Expression-statement start sentinel: JS parses `function …`
       // / `class …` / `{ … }` at the head of a statement as a
@@ -887,6 +887,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
 ///|
 /// Inside the head of a `for(init; cond; update)`, statements emit
 /// without a trailing semicolon (the loop syntax supplies the `;`).
+
 ///|
 /// Guess the first byte the emitter will write for `expr`. Used by
 /// `sep_after_word` to decide whether the optional whitespace
@@ -930,6 +931,7 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
 }
 
 ///|
+
 ///|
 /// First byte a top-level statement will emit, for the purpose of
 /// deciding whether an `else` keyword must be separated from its
@@ -969,6 +971,7 @@ fn binding_leading_byte(b : @ast.TsBinding) -> Char {
 /// — a `Block` of same-kind single-ident declarations — and emit
 /// the original comma-separated form. Returns `true` when the
 /// pattern matched.
+
 ///|
 /// Statement-level variant of `try_emit_multi_decl_for_head`. The
 /// parser packs `let a = 1, b = 2;` into a `Block` of two `Let`
@@ -994,11 +997,7 @@ fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
       _ => return false
     }
   }
-  let emitted_kind = if kind == "const" && not(e.pretty) {
-    "let"
-  } else {
-    kind
-  }
+  let emitted_kind = if kind == "const" && not(e.pretty) { "let" } else { kind }
   e.word(emitted_kind)
   let first_byte = match block.stmts[0] {
     Var(b, _, _) | Let(b, _, _) | Const(b, _, _) => binding_leading_byte(b)
@@ -1056,11 +1055,7 @@ fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
   // Emit `kind name = init, name = init, ...`.
   // Downgrade `const` to `let` in minify mode (see `Const` cases
   // above).
-  let emitted_kind = if kind == "const" && not(e.pretty) {
-    "let"
-  } else {
-    kind
-  }
+  let emitted_kind = if kind == "const" && not(e.pretty) { "let" } else { kind }
   e.word(emitted_kind)
   // The first byte after the kind is the first binding's leading
   // byte (always `?` for identifier-only in our parser path here).
@@ -1460,7 +1455,10 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             e.space()
             emit_expr(e, v_expr, 2)
           }
-          (key, ComputedProp(k_expr, FuncExpr(f))) if key.has_prefix("@@get:@@computed:") || key.has_prefix("@@set:@@computed:") => {
+          (key, ComputedProp(k_expr, FuncExpr(f))) if key.has_prefix(
+              "@@get:@@computed:",
+            ) ||
+            key.has_prefix("@@set:@@computed:") => {
             // Computed-key accessor: `get [expr]() {…}` /
             // `set [expr](v) {…}`. Parser stacks the `@@get:` /
             // `@@set:` sentinel on top of the `@@computed:N` key,
@@ -1478,7 +1476,8 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             e.space()
             emit_block(e, f.body)
           }
-          (key, FuncExpr(f)) if key.has_prefix("@@get:") || key.has_prefix("@@set:") => {
+          (key, FuncExpr(f)) if key.has_prefix("@@get:") ||
+            key.has_prefix("@@set:") => {
             // Accessor in object literal: parser tags `get foo() {}`
             // / `set foo(v) {}` with a `@@get:` / `@@set:` sentinel
             // on the property key. Emit the native ES syntax so the
@@ -1706,7 +1705,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     // TS-only wrappers — strip and emit the inner expression.
     As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
       emit_expr_body(e, inner)
-    OptionalChain(inner) => {
+    OptionalChain(inner) =>
       // The wrapped inner expression encodes the access shape; we
       // restore the `?.` separator here. Each `?.` step in the
       // original source produces one OptionalChain wrap, so
@@ -1750,11 +1749,9 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         }
         _ => emit_expr_body(e, inner)
       }
-    }
     JsxElement(tag, attrs, children) =>
       emit_jsx_element(e, tag, attrs, children)
-    NativeClassExpr(decl, ctor_body) =>
-      emit_native_class(e, decl, ctor_body)
+    NativeClassExpr(decl, ctor_body) => emit_native_class(e, decl, ctor_body)
     PureCall(inner) => {
       // Restore the `/* @__PURE__ */` annotation so downstream
       // minifiers (terser, esbuild, rolldown) keep treating the
@@ -1907,6 +1904,7 @@ fn emit_jsx_child(e : Emitter, child : @ast.TsExpr) -> Unit {
 }
 
 ///|
+
 ///|
 /// Recognize the `Let / Const / Var(Ident(N), _, FuncExpr(f))`
 /// pattern the parser produces for `function foo() {…}` and emit a
@@ -1979,7 +1977,9 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   // surfaces on every IIFE-lowered class method whose name
   // collides with an imported function (effect's `EffectPrimitive
   // .toJSON` is the textbook case).
-  if f.name != "" && is_valid_js_ident(f.name) && not(is_reserved_word(f.name)) &&
+  if f.name != "" &&
+    is_valid_js_ident(f.name) &&
+    not(is_reserved_word(f.name)) &&
     not(func_body_references_name_as_free_var(f, f.name)) {
     e.write(" ")
     e.write(f.name)
@@ -2021,7 +2021,10 @@ fn binding_introduces_name(b : @ast.TsBinding, name : String) -> Bool {
     Array(ab) => {
       for elem in ab.items {
         match elem {
-          Some(be) => if binding_introduces_name(be.binding, name) { return true }
+          Some(be) =>
+            if binding_introduces_name(be.binding, name) {
+              return true
+            }
           None => ()
         }
       }
@@ -2032,7 +2035,9 @@ fn binding_introduces_name(b : @ast.TsBinding, name : String) -> Bool {
     }
     Object(ob) => {
       for prop in ob.props {
-        if binding_introduces_name(prop.binding, name) { return true }
+        if binding_introduces_name(prop.binding, name) {
+          return true
+        }
       }
       false
     }
@@ -2089,46 +2094,64 @@ fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
         Some(s) => stmt_references_name(s, name)
         None => false
       }
-      if init_hit { return true }
+      if init_hit {
+        return true
+      }
       let cond_hit = match cond {
         Some(c) => expr_references_name(c, name)
         None => false
       }
-      if cond_hit { return true }
+      if cond_hit {
+        return true
+      }
       let update_hit = match update {
         Some(s) => stmt_references_name(s, name)
         None => false
       }
       update_hit || block_references_name(body, name)
     }
-    ForOf(_, b, _, iter, body) | ForAwaitOf(_, b, _, iter, body) | ForIn(_, b, _, iter, body) => {
+    ForOf(_, b, _, iter, body)
+    | ForAwaitOf(_, b, _, iter, body)
+    | ForIn(_, b, _, iter, body) => {
       if binding_introduces_name(b, name) {
         return expr_references_name(iter, name)
       }
       expr_references_name(iter, name) || block_references_name(body, name)
     }
     Try(t, catch_b, catch_body, finally_) => {
-      if block_references_name(t, name) { return true }
+      if block_references_name(t, name) {
+        return true
+      }
       let catch_hits = match catch_body {
         Some(b) => {
           let shadowed = match catch_b {
             Some(bb) => binding_introduces_name(bb, name)
             None => false
           }
-          if shadowed { false } else { block_references_name(b, name) }
+          if shadowed {
+            false
+          } else {
+            block_references_name(b, name)
+          }
         }
         None => false
       }
-      if catch_hits { return true }
+      if catch_hits {
+        return true
+      }
       match finally_ {
         Some(b) => block_references_name(b, name)
         None => false
       }
     }
     Switch(scr, cases) => {
-      if expr_references_name(scr, name) { return true }
+      if expr_references_name(scr, name) {
+        return true
+      }
       for c in cases {
-        if block_references_name(c.body, name) { return true }
+        if block_references_name(c.body, name) {
+          return true
+        }
       }
       false
     }
@@ -2146,23 +2169,35 @@ fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
   match e {
     Var(n) => n == name
     Call(n, args) | New(n, args) => {
-      if n == name { return true }
+      if n == name {
+        return true
+      }
       for a in args {
-        if expr_references_name(a, name) { return true }
+        if expr_references_name(a, name) {
+          return true
+        }
       }
       false
     }
     CallExpr(callee, args) | NewExpr(callee, args) => {
-      if expr_references_name(callee, name) { return true }
+      if expr_references_name(callee, name) {
+        return true
+      }
       for a in args {
-        if expr_references_name(a, name) { return true }
+        if expr_references_name(a, name) {
+          return true
+        }
       }
       false
     }
     MethodCall(recv, _, args) => {
-      if expr_references_name(recv, name) { return true }
+      if expr_references_name(recv, name) {
+        return true
+      }
       for a in args {
-        if expr_references_name(a, name) { return true }
+        if expr_references_name(a, name) {
+          return true
+        }
       }
       false
     }
@@ -2201,20 +2236,26 @@ fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
       expr_references_name(k, name) || expr_references_name(v, name)
     ArrayLit(items) => {
       for i in items {
-        if expr_references_name(i, name) { return true }
+        if expr_references_name(i, name) {
+          return true
+        }
       }
       false
     }
     ObjectLit(entries) => {
       for ent in entries {
-        if expr_references_name(ent.1, name) { return true }
+        if expr_references_name(ent.1, name) {
+          return true
+        }
       }
       false
     }
     FuncExpr(g) => func_body_references_name_as_free_var(g, name)
     ArrowFunc(params, _, body, _) => {
       for p in params {
-        if p.name == name { return false }
+        if p.name == name {
+          return false
+        }
         match p.binding {
           Some(b) => if binding_introduces_name(b, name) { return false }
           None => ()
@@ -2227,20 +2268,28 @@ fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
     }
     As(v, _) | Satisfies(v, _) => expr_references_name(v, name)
     TaggedTemplate(tag, _, _, exprs) => {
-      if expr_references_name(tag, name) { return true }
+      if expr_references_name(tag, name) {
+        return true
+      }
       for ee in exprs {
-        if expr_references_name(ee, name) { return true }
+        if expr_references_name(ee, name) {
+          return true
+        }
       }
       false
     }
     TemplateLiteral(_, exprs) => {
       for ee in exprs {
-        if expr_references_name(ee, name) { return true }
+        if expr_references_name(ee, name) {
+          return true
+        }
       }
       false
     }
     DynamicImport(spec, opts) => {
-      if expr_references_name(spec, name) { return true }
+      if expr_references_name(spec, name) {
+        return true
+      }
       match opts {
         Some(o) => expr_references_name(o, name)
         None => false
@@ -2285,7 +2334,9 @@ fn expr_stmt_needs_paren(expr : @ast.TsExpr) -> Bool {
     BinOp(_, l, _) => expr_stmt_needs_paren(l)
     Cond(c, _, _) => expr_stmt_needs_paren(c)
     Seq(l, _) => expr_stmt_needs_paren(l)
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
     | OptionalChain(inner) => expr_stmt_needs_paren(inner)
     _ => false
   }
@@ -2350,6 +2401,7 @@ fn is_this_type_annotation_param(p : @ast.TsParam) -> Bool {
 /// decide whether to emit a name on a synthesized function
 /// expression. We only need a coarse rejector — the parser handles
 /// the full Unicode case for real source identifiers.
+
 ///|
 /// Emit an object-literal key. Valid JS identifiers and numeric
 /// literals stay unquoted; everything else (`Content-Type`,
@@ -2649,8 +2701,10 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
     // consistent.
     PureCall(inner) => expr_precedence(inner)
     // TS-only wrappers — same precedence as their inner expression.
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      expr_precedence(inner)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => expr_precedence(inner)
   }
 }
 
@@ -2812,13 +2866,54 @@ fn emit_native_class(
 /// from the ES spec.
 fn is_reserved_word(s : String) -> Bool {
   match s {
-    "break" | "case" | "catch" | "class" | "const" | "continue" | "debugger"
-    | "default" | "delete" | "do" | "else" | "export" | "extends" | "false"
-    | "finally" | "for" | "function" | "if" | "import" | "in" | "instanceof"
-    | "let" | "new" | "null" | "return" | "super" | "switch" | "this" | "throw"
-    | "true" | "try" | "typeof" | "var" | "void" | "while" | "with" | "yield"
-    | "enum" | "await" | "implements" | "interface" | "package" | "private"
-    | "protected" | "public" | "static" | "arguments" | "eval" => true
+    "break"
+    | "case"
+    | "catch"
+    | "class"
+    | "const"
+    | "continue"
+    | "debugger"
+    | "default"
+    | "delete"
+    | "do"
+    | "else"
+    | "export"
+    | "extends"
+    | "false"
+    | "finally"
+    | "for"
+    | "function"
+    | "if"
+    | "import"
+    | "in"
+    | "instanceof"
+    | "let"
+    | "new"
+    | "null"
+    | "return"
+    | "super"
+    | "switch"
+    | "this"
+    | "throw"
+    | "true"
+    | "try"
+    | "typeof"
+    | "var"
+    | "void"
+    | "while"
+    | "with"
+    | "yield"
+    | "enum"
+    | "await"
+    | "implements"
+    | "interface"
+    | "package"
+    | "private"
+    | "protected"
+    | "public"
+    | "static"
+    | "arguments"
+    | "eval" => true
     _ => false
   }
 }

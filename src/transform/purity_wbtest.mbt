@@ -1,3 +1,4 @@
+///|
 test "purity: pure helper detected" {
   let src = "function pureHelper(x) { return x * 2; }\nfunction impureLog(x) { console.log(x); }\nfunction callsPure(x) { return pureHelper(x) + 1; }\nfunction callsImpure(x) { impureLog(x); return x; }\n"
   let block = @parser.parse_block_from_source(src)
@@ -10,6 +11,7 @@ test "purity: pure helper detected" {
   assert_false(report.pure_functions.contains("callsImpure"))
 }
 
+///|
 test "purity: impure getter warning lists class + getter" {
   let src = "class Counter {\n  count = 0;\n  get value() { this.count++; return this.count; }\n}\n"
   let block = @parser.parse_block_from_source(src)
@@ -20,6 +22,7 @@ test "purity: impure getter warning lists class + getter" {
   assert_eq(g.getter_name, "value")
 }
 
+///|
 test "purity: pure getter produces no warning" {
   let src = "class Box {\n  v = 42;\n  get value() { return this.v; }\n}\n"
   let block = @parser.parse_block_from_source(src)
@@ -27,6 +30,7 @@ test "purity: pure getter produces no warning" {
   assert_eq(report.impure_getters.length(), 0)
 }
 
+///|
 test "purity: pure_global_methods recognized" {
   let src = "function compute(x) { return Math.floor(x * 0.5); }\n"
   let block = @parser.parse_block_from_source(src)
@@ -35,6 +39,7 @@ test "purity: pure_global_methods recognized" {
   assert_true(report.pure_functions.contains("compute"))
 }
 
+///|
 test "purity: signature-pure inferred from primitive params" {
   // No `@__PURE__` annotation, but every parameter is a primitive
   // and the body is pure arithmetic. Signature-based inference

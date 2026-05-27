@@ -1710,4 +1710,3 @@ fn Parser::try_skip_type_args(self : Parser) -> Bool {
   }
   depth <= 0
 }
-

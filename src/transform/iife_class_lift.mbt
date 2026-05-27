@@ -76,10 +76,7 @@ fn try_lift_iife_class(stmt : @ast.TsStmt) -> @ast.TsStmt {
 }
 
 ///|
-fn try_lift_iife_value(
-  b : @ast.TsBinding,
-  e : @ast.TsExpr,
-) -> @ast.TsStmt? {
+fn try_lift_iife_value(b : @ast.TsBinding, e : @ast.TsExpr) -> @ast.TsStmt? {
   let name = match b {
     @ast.TsBinding::Ident(n) => n
     _ => return None
@@ -175,10 +172,7 @@ fn classify_iife_body_stmt(
       if n == class_name {
         // Promote the function expression to a constructor candidate.
         // Rename to "constructor" so emit produces the correct keyword.
-        Ctor({
-          ..f,
-          name: "constructor",
-        })
+        Ctor({ ..f, name: "constructor" })
       } else {
         Unknown
       }
@@ -187,7 +181,7 @@ fn classify_iife_body_stmt(
     PropAssign(
       @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
       method_name,
-      @ast.TsExpr::FuncExpr(f),
+      @ast.TsExpr::FuncExpr(f)
     ) =>
       if n == class_name {
         Method(method_decl_from_func(method_name, f, false))
@@ -197,11 +191,7 @@ fn classify_iife_body_stmt(
     // `ClassName.METHOD = function METHOD() {…};` — static method.
     // Filtered to exclude metadata keys (`__super_proto`,
     // `__brand__`, etc.).
-    PropAssign(
-      @ast.TsExpr::Var(n),
-      prop_name,
-      @ast.TsExpr::FuncExpr(f),
-    ) =>
+    PropAssign(@ast.TsExpr::Var(n), prop_name, @ast.TsExpr::FuncExpr(f)) =>
       if n == class_name && not(is_class_metadata_key(prop_name)) {
         StaticMethod(method_decl_from_func(prop_name, f, true))
       } else if n == class_name {
@@ -213,17 +203,18 @@ fn classify_iife_body_stmt(
     PropAssign(
       @ast.TsExpr::PropAccess(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-        _,
+        _
       ),
       _,
-      _,
+      _
     ) => if n == class_name { Skipped } else { Unknown }
     // `ClassName.METHOD.<meta> = …;` (chained static metadata).
-    PropAssign(
-      @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), _),
-      _,
-      _,
-    ) => if n == class_name { Skipped } else { Unknown }
+    PropAssign(@ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), _), _, _) =>
+      if n == class_name {
+        Skipped
+      } else {
+        Unknown
+      }
     // `ClassName.<meta> = …;` — top-level class metadata that isn't
     // a static method (e.g. `__super_proto`).
     PropAssign(@ast.TsExpr::Var(n), prop_name, _) =>

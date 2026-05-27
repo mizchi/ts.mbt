@@ -302,6 +302,7 @@ fn Parser::parse_enum_decl_after_enum_keyword(
 }
 
 ///|
+
 ///|
 /// Lower a parsed `enum` declaration to the equivalent runtime
 /// statements:
@@ -609,7 +610,8 @@ fn Parser::parse_namespace_decl_with_mode(
         // breaking .d.ts files that route through here via `parse_export`
         // helpers.
         let runtime_parser = Parser::from_source_with_jsx(
-          body_source, self.allow_jsx,
+          body_source,
+          self.allow_jsx,
         )
         match
           (try? runtime_parser.parse_module_with_seeded_const_values_internal(
@@ -619,7 +621,8 @@ fn Parser::parse_namespace_decl_with_mode(
           Ok(module_) => module_
           Err(_) => {
             let ambient_parser = Parser::from_source_with_jsx(
-              body_source, self.allow_jsx,
+              body_source,
+              self.allow_jsx,
             )
             ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
@@ -2057,7 +2060,6 @@ fn Parser::parse_import_decl(
 ///|
 fn Parser::skip_import_attributes(self : Parser) -> Unit {
   let _ = self.parse_import_attributes()
-
 }
 
 ///|
@@ -2066,9 +2068,7 @@ fn Parser::skip_import_attributes(self : Parser) -> Unit {
 /// `(key, string_value)` pair in source order. Non-string values are
 /// silently dropped — the spec only defines string-valued attributes
 /// today.
-fn Parser::parse_import_attributes(
-  self : Parser,
-) -> Array[(String, String)] {
+fn Parser::parse_import_attributes(self : Parser) -> Array[(String, String)] {
   let out : Array[(String, String)] = []
   if !(self.match_(With) || self.match_ident("assert")) {
     return out
@@ -2945,7 +2945,8 @@ fn Parser::parse_export_stmt(
   // ES2023 `using` / `await using` declarations at the module export
   // position. The body parses via the regular statement-level
   // `using` path (which builds an effective `Let(...)` binding).
-  if self.is_using_declaration_start() || self.is_await_using_declaration_start() {
+  if self.is_using_declaration_start() ||
+    self.is_await_using_declaration_start() {
     let stmt = self.parse_stmt()
     collect_static_const_exprs_from_stmt(stmt, const_values)
     collect_value_decls_from_stmt(stmt, values, const_values)
@@ -3483,9 +3484,7 @@ pub fn parse_block_from_source_with_positions(
 /// JSDoc consumption pass to lift `@param {Type}` / `@returns {Type}`
 /// brace contents into proper `TsType` values that downstream passes
 /// can reason about.
-pub fn parse_type_from_source(
-  source : String,
-) -> @ast.TsType raise ParseError {
+pub fn parse_type_from_source(source : String) -> @ast.TsType raise ParseError {
   let parser = Parser::from_source(source)
   parser.parse_type()
 }
