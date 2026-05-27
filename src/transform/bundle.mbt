@@ -630,10 +630,18 @@ pub fn bundle_modules(
         Some(node) => node
         None => continue
       }
-      e.write("// ===== ")
-      e.write(path)
-      e.write(" =====")
-      e.nl()
+      // Skip the module banner entirely in minify mode: `e.nl()` is
+      // a no-op there and the `//` comment would swallow every
+      // following statement until the next real newline (typically
+      // dozens of KB later, inside the first multi-line template
+      // literal) — turning the rest of the module's parse into
+      // dead text.
+      if not(opts.minify) {
+        e.write("// ===== ")
+        e.write(path)
+        e.write(" =====")
+        e.nl()
+      }
       let _ = i
       sources.push(path)
       sources_content.push(m.source)
