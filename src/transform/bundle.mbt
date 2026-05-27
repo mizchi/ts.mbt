@@ -1128,5 +1128,15 @@ fn compose_renames(
 /// these still mangle because their access surface is entirely
 /// mtsc-controlled.
 fn is_internal_marker_property(name : String) -> Bool {
+  // Keep this in lockstep with `is_class_metadata_key` in
+  // `iife_class_lift.mbt`: every metadata name the parser
+  // synthesizes on the IIFE-lowered class shape (`__super_proto`,
+  // `__brand__`, `__private_brand__N__X`) is private to mtsc — no
+  // user code can reach it, so it stays safe to rename even in the
+  // wildcard / dynamic-access fallback. Without this, prettier's
+  // bundle keeps 236+ raw `__super_proto` strings because the IIFE
+  // form survives whenever lift declines.
+  name == "__super_proto" ||
+  name == "__brand__" ||
   name.has_prefix("__private_brand__")
 }

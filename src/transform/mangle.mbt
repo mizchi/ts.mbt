@@ -1680,10 +1680,21 @@ fn rename_class_decl_idents(
 
 ///|
 fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
-  // `function name(…)` introduces `name` into the parent scope's
-  // value namespace. v0 keeps the function name verbatim — the
-  // bundle layer can't predict whether the function is referenced
-  // by name elsewhere yet (without checker symbol-graph analysis).
+  // `function name(…)` as a function EXPRESSION (e.g.
+  // `module.exports = function isExtglob(s) {…}`) binds `name`
+  // only inside the body — outside callers see the value via the
+  // enclosing assignment / binding. If the body never references
+  // its own name, drop it so emit prints `function(s) {…}` and
+  // the long source-derived name stops surviving into the
+  // minified bundle. `try_emit_function_decl` (the
+  // `Let(Ident, _, FuncExpr)` → real `function X() {}` shape)
+  // bypasses the FuncExpr name entirely, so this rewrite is safe
+  // there too.
+  let new_name = if f.name == "" || block_references_name(f.body, f.name) {
+    f.name
+  } else {
+    ""
+  }
   let inner = ScopeFrame::child(scope)
   let new_params = rename_param_list(f.params, inner, inner.reserved)
   // Hoist `var` names from the body into the function frame so
@@ -1691,7 +1702,7 @@ fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
   hoist_var_decls_into_scope(f.body, inner, inner.reserved)
   let new_body = rename_block_inline_in(f.body, inner, inner.reserved)
   {
-    name: f.name,
+    name: new_name,
     type_params: f.type_params,
     const_type_params: f.const_type_params,
     params: new_params,
