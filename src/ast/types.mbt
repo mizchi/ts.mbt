@@ -584,6 +584,12 @@ pub(all) struct TsClassMethodDecl {
   // only. Effect's FiberRuntime relies on `[OpCodes.OP_ON_SUCCESS]
   // (op) {…}` style runtime dispatch.
   key_expr : TsExpr?
+  // `async foo()` / `*foo()` / `async *foo()` modifiers — without
+  // these the emit drops the `async` keyword, and a method body
+  // that uses `await` re-parses as plain `await x` which is a
+  // SyntaxError in non-async functions.
+  is_async : Bool
+  is_generator : Bool
 } derive(Debug)
 
 ///|

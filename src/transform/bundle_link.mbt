@@ -43,6 +43,7 @@
 fn link_module_graph(
   modules : Map[String, ModuleNode],
   order : Array[String],
+  external_imports : Array[@ast.TsImportDecl],
 ) -> Map[String, Map[String, String]] {
   // ---- Phase 1: collect declared names + assign unique renames ----
   // `taken` tracks every name claimed across the bundle so we know
@@ -59,6 +60,24 @@ fn link_module_graph(
   // those overwrite globals like `Symbol.for(...)`.
   for n in js_runtime_global_names() {
     taken[n] = true
+  }
+  // External import bindings (`import os from "os"`, `import { x } from
+  // "lib"`, `import * as ns from "lib"`) live in the same scope as the
+  // merged module top-levels. Without reserving them up front, a
+  // bundled module that happens to export a symbol named `os` aliases
+  // it as `var os = …` and collides with the import.
+  for ext in external_imports {
+    match ext.default_binding {
+      Some(n) => taken[n] = true
+      None => ()
+    }
+    match ext.namespace_binding {
+      Some(n) => taken[n] = true
+      None => ()
+    }
+    for nb in ext.named_bindings {
+      taken[nb.1] = true
+    }
   }
   let rename_per_module : Map[String, Map[String, String]] = {}
   // namespace_local_renames[path][ns_local] = globally-unique name
@@ -724,6 +743,15 @@ fn resolve_namespace_member(
 /// `NativeClassStmt`.
 fn collect_top_level_decl_names(block : @ast.TsBlock) -> Array[String] {
   let out : Array[String] = []
+  collect_top_level_decl_names_into(block, out)
+  out
+}
+
+///|
+fn collect_top_level_decl_names_into(
+  block : @ast.TsBlock,
+  out : Array[String],
+) -> Unit {
   for s in block.stmts {
     match s {
       Var(@ast.TsBinding::Ident(n), _, _)
@@ -732,10 +760,16 @@ fn collect_top_level_decl_names(block : @ast.TsBlock) -> Array[String] {
       Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
         collect_binding_names_into(b, out)
       NativeClassStmt(decl, _) => out.push(decl.name)
+      // A chained `var a = 1, b = 2;` is parsed as
+      // `Block({stmts: [Var(a, …), Var(b, …)]})`. Without this
+      // recursion the link pass only sees `a` (the lifted first
+      // declarator) and misses `b`, letting a second module declare
+      // a top-level `b` without renaming — `Identifier 'b' has
+      // already been declared` at runtime.
+      Block(inner) => collect_top_level_decl_names_into(inner, out)
       _ => ()
     }
   }
-  out
 }
 
 ///|

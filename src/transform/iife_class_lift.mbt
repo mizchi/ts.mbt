@@ -272,5 +272,7 @@ fn method_decl_from_func(
     body: Some(f.body),
     accessor: "",
     key_expr: None,
+    is_async: f.is_async,
+    is_generator: f.is_generator,
   }
 }

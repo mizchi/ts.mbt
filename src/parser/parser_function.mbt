@@ -2384,6 +2384,8 @@ fn Parser::parse_declare_class(
                   body: None,
                   accessor: "",
     key_expr: None,
+    is_async: false,
+    is_generator: false,
                 })
               }
           }

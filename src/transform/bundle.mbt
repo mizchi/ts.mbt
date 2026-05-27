@@ -317,7 +317,7 @@ pub fn bundle_modules(
   // into one binding and `import { HonoBase } from "./hono-base"`
   // (which re-exports `Hono as HonoBase`) leaves `HonoBase` as a
   // free variable in the consumer.
-  let link_renames = link_module_graph(modules, order)
+  let link_renames = link_module_graph(modules, order, external_imports)
   let mut mangle_export_renames : Map[String, String] = {}
   let e = Emitter::new(pretty=not(opts.minify))
   if opts.with_sourcemap {
@@ -541,9 +541,20 @@ pub fn bundle_modules(
         }
         combined = drop_dead_properties_block(combined, reserved_set)
       }
+      // External `import` headers (`import os from "os"`, etc.)
+      // sit OUTSIDE `combined` and are emitted by the linker around
+      // the merged block. The mangler never sees them, so without
+      // this reservation it can hand the short name `os` to a
+      // renamed CJS helper inside the bundle and produce
+      // `SyntaxError: Identifier 'os' has already been declared`.
+      let external_reserved : Array[String] = []
+      for n in external_import_bindings(external_imports).keys() {
+        external_reserved.push(n)
+      }
       let mangler_cfg = ManglerConfig::default()
         .with_mangle_properties(effective_mangle_props)
         .with_reserved_properties(extra_reserved)
+        .with_reserved(external_reserved)
         // The bundle has no public ABI of its own — every binding
         // becomes internal once we glue modules together, so the
         // top-level can be renamed freely.

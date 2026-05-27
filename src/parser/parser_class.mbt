@@ -95,6 +95,8 @@ fn build_runtime_class_decl(
             },
             accessor: accessor_tag,
             key_expr: None,
+            is_async: func.is_async,
+            is_generator: func.is_generator,
           })
           match accessor_kind {
             Some("get") =>
@@ -154,6 +156,8 @@ fn build_runtime_class_decl(
           },
           accessor: accessor_tag,
           key_expr: Some(key_expr),
+          is_async: func.is_async,
+          is_generator: func.is_generator,
         })
       }
       _ => ()
@@ -283,7 +287,11 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   let mut full_name = lead
   while self.check(Dot) {
     let _ = self.advance()
-    match contextual_ident_token_name(self.peek().kind) {
+    // After `.`, JS allows ANY reserved word as the property name
+    // (post-ES5). `class X extends ns.default {…}` / `extends
+    // obj.case {…}` is valid. Accept the reserved-word tokens
+    // that the method-key parser already recognises.
+    match member_access_token_name(self.peek().kind) {
       Some(n) => {
         let _ = self.advance()
         full_name = full_name + "." + n
@@ -479,6 +487,63 @@ fn contextual_ident_token_name(kind : TokenKind) -> String? {
     As => Some("as")
     Of => Some("of")
     In => Some("in")
+    _ => None
+  }
+}
+
+///|
+/// Token names allowed in member-access position (`obj.<name>`).
+/// JS lets any IdentifierName — including reserved words — sit
+/// after `.`. Prettier ships `class X extends reader_1.default {…}`
+/// as the canonical case. Mirrors the broader keyword set already
+/// accepted in `parse_class_method_key`.
+fn member_access_token_name(kind : TokenKind) -> String? {
+  match kind {
+    Declare => Some("declare")
+    Type => Some("type")
+    From => Some("from")
+    As => Some("as")
+    Of => Some("of")
+    In => Some("in")
+    Default => Some("default")
+    Return => Some("return")
+    If => Some("if")
+    Else => Some("else")
+    For => Some("for")
+    While => Some("while")
+    Do => Some("do")
+    Break => Some("break")
+    Continue => Some("continue")
+    Function => Some("function")
+    Try => Some("try")
+    Catch => Some("catch")
+    Finally => Some("finally")
+    Throw => Some("throw")
+    Yield => Some("yield")
+    Let => Some("let")
+    Const => Some("const")
+    Var => Some("var")
+    Class => Some("class")
+    New => Some("new")
+    Case => Some("case")
+    VoidType => Some("void")
+    With => Some("with")
+    Switch => Some("switch")
+    Typeof => Some("typeof")
+    Delete => Some("delete")
+    Export => Some("export")
+    Import => Some("import")
+    Debugger => Some("debugger")
+    Interface => Some("interface")
+    Instanceof => Some("instanceof")
+    Extends => Some("extends")
+    NumberType => Some("number")
+    BooleanType => Some("boolean")
+    StringType => Some("string")
+    IntType => Some("int")
+    Bool(true) => Some("true")
+    Bool(false) => Some("false")
+    Null => Some("null")
     _ => None
   }
 }

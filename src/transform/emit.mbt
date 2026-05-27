@@ -2701,6 +2701,18 @@ fn emit_native_class(
       e.word("static")
       e.sep_after_word('A')
     }
+    // `async` / `*` modifiers — without these the emit prints the
+    // method as plain sync, and any `await` inside the body becomes
+    // a SyntaxError (prettier's `class { async read(task) { …
+    // await … } }` was the trigger). Order matches source syntax:
+    // `async` first, then `*` (or both for async generators).
+    if m.is_async {
+      e.word("async")
+      e.sep_after_word('A')
+    }
+    if m.is_generator {
+      e.write("*")
+    }
     // Accessor methods (`get foo()` / `set foo(v)`) get the keyword
     // prefix; without it the emitted property is a plain method and
     // the runtime never installs the getter/setter — Yjs's

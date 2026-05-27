@@ -8561,6 +8561,8 @@ fn clone_class_method_in_scope(
     body: class_method.body,
     accessor: class_method.accessor,
     key_expr: class_method.key_expr,
+    is_async: class_method.is_async,
+    is_generator: class_method.is_generator,
   }
 }
 
@@ -8616,6 +8618,8 @@ fn callable_method_from_func_type(
     body: None,
     accessor: "",
     key_expr: None,
+    is_async: false,
+    is_generator: false,
   }
 }
 
