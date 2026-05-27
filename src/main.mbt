@@ -304,8 +304,16 @@ fn hash_glue_dir_part(source : String) -> String {
 async fn find_nearest_moon_mod_dir(start_dir : String) -> String? {
   let mut current = start_dir
   while true {
-    let moon_mod = main_join_path(current, "moon.mod.json")
+    // Accept either the new TOML manifest (`moon.mod`) or the
+    // legacy JSON one — `moon fmt` migrates from the latter to
+    // the former, so a fresh `_build` directory after the
+    // migration would otherwise lose the consumer module root.
+    let moon_mod = main_join_path(current, "moon.mod")
     if @fs.exists(moon_mod) {
+      return Some(current)
+    }
+    let moon_mod_json = main_join_path(current, "moon.mod.json")
+    if @fs.exists(moon_mod_json) {
       return Some(current)
     }
     let parent = main_dirname(current)
