@@ -1021,7 +1021,14 @@ fn Parser::try_skip_call_type_args(self : Parser, expr : @ast.TsExpr) -> Bool {
     return false
   }
   let saved_pos = self.pos
-  self.skip_type_args()
+  // Require a balanced `<...>` — otherwise `S<N;…` happily scans to
+  // EOF, the caller treats it as a successful generic-instantiation,
+  // and everything after the misread `<` disappears. (Real cases:
+  // for-cond `S<N;++S`, ternary `S<N?a:b`.)
+  if !self.try_skip_type_args() {
+    self.pos = saved_pos
+    return false
+  }
   if self.check(LParen) {
     return true
   }

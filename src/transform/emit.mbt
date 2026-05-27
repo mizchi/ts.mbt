@@ -2743,6 +2743,23 @@ fn emit_native_class(
         e.space()
       }
       e.write(p.0)
+      // Default-value initializer (`x = 5`) when the parser captured
+      // one — `param_defaults` is positionally aligned with `params`
+      // (or shorter when there are no defaults at all). Without this
+      // the native-class emitter drops `=140` from babel parser's
+      // `parseProgram(t, e=140, s=…)` and the loop end marker never
+      // matches, hanging the parser on every input.
+      if i < m.param_defaults.length() {
+        match m.param_defaults[i] {
+          Some(d) => {
+            e.space()
+            e.write("=")
+            e.space()
+            emit_expr(e, d, 2)
+          }
+          None => ()
+        }
+      }
     }
     e.write(")")
     e.space()

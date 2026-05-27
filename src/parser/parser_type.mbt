@@ -1666,8 +1666,22 @@ fn Parser::skip_typeof_operand(self : Parser) -> Unit raise ParseError {
 ///|
 /// Skip type arguments: <T, U>
 fn Parser::skip_type_args(self : Parser) -> Unit {
+  let _ = self.try_skip_type_args()
+}
+
+///|
+/// Same as `skip_type_args` but returns `true` only when a balanced
+/// closing `>` was reached. Callers that are speculatively trying to
+/// parse `S<...>` as a generic-instantiation expression (rather than
+/// a `<` comparison) MUST check the return value — otherwise input
+/// like `S<N;` happily scans to EOF, the caller treats it as a
+/// successful skip, and the rest of the source disappears into the
+/// "type arguments". This used to misparse
+/// `for (let S = 0, N = …; S < N; ++S)` because the for-cond saw
+/// `S<N;` as `S<N>` (instantiation) and dropped `<N` entirely.
+fn Parser::try_skip_type_args(self : Parser) -> Bool {
   if !self.check(Lt) {
-    return
+    return false
   }
   let _ = self.advance() // consume <
   let mut depth = 1
@@ -1682,12 +1696,10 @@ fn Parser::skip_type_args(self : Parser) -> Unit {
         let _ = self.advance()
       }
       GtGt => {
-        // >> counts as two >
         depth -= 2
         let _ = self.advance()
       }
       GtGtGt => {
-        // >>> counts as three >
         depth -= 3
         let _ = self.advance()
       }
@@ -1696,5 +1708,6 @@ fn Parser::skip_type_args(self : Parser) -> Unit {
       }
     }
   }
+  depth <= 0
 }
 

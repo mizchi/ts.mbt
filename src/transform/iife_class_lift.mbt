@@ -259,14 +259,17 @@ fn method_decl_from_func(
   // Map TsParam list back into the class-method shape
   // (Array[(String, TsType)]).
   let params : Array[(String, @ast.TsType)] = []
+  let param_defaults : Array[@ast.TsExpr?] = []
   for p in f.params {
     params.push((p.name, p.type_))
+    param_defaults.push(p.default)
   }
   {
     name,
     type_params: f.type_params,
     type_param_bounds: [],
     params,
+    param_defaults,
     return_type: f.return_type,
     is_static,
     body: Some(f.body),
