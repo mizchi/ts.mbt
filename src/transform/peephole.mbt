@@ -60,7 +60,11 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     Const(b, t, rhs) => Const(b, t, peep_expr(rhs, ctx))
     CompoundAssign(n, op, rhs) => CompoundAssign(n, op, peep_expr(rhs, ctx))
     IndexAssign(target, idx, val) =>
-      IndexAssign(peep_expr(target, ctx), peep_expr(idx, ctx), peep_expr(val, ctx))
+      IndexAssign(
+        peep_expr(target, ctx),
+        peep_expr(idx, ctx),
+        peep_expr(val, ctx),
+      )
     PropAssign(target, prop, val) =>
       PropAssign(peep_expr(target, ctx), prop, peep_expr(val, ctx))
     Expr(e) => Expr(peep_expr(e, ctx))
@@ -68,10 +72,14 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(peep_expr(e, ctx))
     If(c, t, e) =>
-      If(peep_expr(c, ctx), peep_block(t, ctx), match e {
-        Some(b) => Some(peep_block(b, ctx))
-        None => None
-      })
+      If(
+        peep_expr(c, ctx),
+        peep_block(t, ctx),
+        match e {
+          Some(b) => Some(peep_block(b, ctx))
+          None => None
+        },
+      )
     While(c, body) => While(peep_expr(c, ctx), peep_block(body, ctx))
     DoWhile(c, body) => DoWhile(peep_expr(c, ctx), peep_block(body, ctx))
     With(c, body) => With(peep_expr(c, ctx), peep_block(body, ctx))
@@ -111,13 +119,18 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       Switch(peep_expr(e, ctx), new_cases)
     }
     Try(b, bnd, cb, fb) =>
-      Try(peep_block(b, ctx), bnd, match cb {
-        Some(blk) => Some(peep_block(blk, ctx))
-        None => None
-      }, match fb {
-        Some(blk) => Some(peep_block(blk, ctx))
-        None => None
-      })
+      Try(
+        peep_block(b, ctx),
+        bnd,
+        match cb {
+          Some(blk) => Some(peep_block(blk, ctx))
+          None => None
+        },
+        match fb {
+          Some(blk) => Some(peep_block(blk, ctx))
+          None => None
+        },
+      )
     Label(name, inner) => Label(name, peep_stmt(inner, ctx))
     Block(b) => Block(peep_block(b, ctx))
     NativeClassStmt(_, _) => stmt
@@ -163,7 +176,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     }
     BinOp(op, l, r) => BinOp(op, peep_expr(l, ctx), peep_expr(r, ctx))
     UnaryOp(op, inner) => UnaryOp(op, peep_expr(inner, ctx))
-    Cond(c, t, e) => Cond(peep_expr(c, ctx), peep_expr(t, ctx), peep_expr(e, ctx))
+    Cond(c, t, e) =>
+      Cond(peep_expr(c, ctx), peep_expr(t, ctx), peep_expr(e, ctx))
     Call(name, args) => {
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
@@ -200,7 +214,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       MethodCall(peep_expr(recv, ctx), m, new_args)
     }
     PropAccess(recv, p) => PropAccess(peep_expr(recv, ctx), p)
-    IndexAccess(recv, idx) => IndexAccess(peep_expr(recv, ctx), peep_expr(idx, ctx))
+    IndexAccess(recv, idx) =>
+      IndexAccess(peep_expr(recv, ctx), peep_expr(idx, ctx))
     ArrayLit(items) => {
       let new_items : Array[@ast.TsExpr] = []
       for i in items {
@@ -221,12 +236,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     YieldStar(inner) => YieldStar(peep_expr(inner, ctx))
     Await(inner) => Await(peep_expr(inner, ctx))
     Seq(a, b) => Seq(peep_expr(a, ctx), peep_expr(b, ctx))
-    CompoundAssignExpr(t, op, v) => CompoundAssignExpr(peep_expr(t, ctx), op, peep_expr(v, ctx))
+    CompoundAssignExpr(t, op, v) =>
+      CompoundAssignExpr(peep_expr(t, ctx), op, peep_expr(v, ctx))
     AssignPattern(b, v) => AssignPattern(b, peep_expr(v, ctx))
     PropAssignExpr(recv, p, v) =>
       PropAssignExpr(peep_expr(recv, ctx), p, peep_expr(v, ctx))
     IndexAssignExpr(recv, idx, v) =>
-      IndexAssignExpr(peep_expr(recv, ctx), peep_expr(idx, ctx), peep_expr(v, ctx))
+      IndexAssignExpr(
+        peep_expr(recv, ctx),
+        peep_expr(idx, ctx),
+        peep_expr(v, ctx),
+      )
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(peep_expr(e, ctx))

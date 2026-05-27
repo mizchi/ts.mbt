@@ -432,8 +432,15 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
       Some('x') | Some('X') => {
         let _ = self.advance()
         let _ = self.advance()
-        let mut value = 0
+        // Accumulate as `Double` so values above `Int.MAX_VALUE`
+        // (such as `0xffffffff`, used widely as a 32-bit-wide bit
+        // mask) survive without overflow. JS Numbers are 64-bit
+        // floats with 53 bits of integer precision — fits up to
+        // `2^53`. BigInt literal storage (`0xffffffff_ffffffffn`)
+        // still uses the string path below.
+        let mut value : Double = 0.0
         let mut has_digit = false
+        let digits = StringBuilder::new()
         while true {
           match self.peek() {
             Some('_') => {
@@ -441,84 +448,24 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
             }
             Some(c) =>
               match c {
-                '0' => {
+                '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
                   let _ = self.advance()
-                  value = value * 16 + 0
+                  value = value * 16.0 + (c.to_int() - '0'.to_int()).to_double()
+                  digits.write_char(c)
                   has_digit = true
                 }
-                '1' => {
+                'a' | 'b' | 'c' | 'd' | 'e' | 'f' => {
                   let _ = self.advance()
-                  value = value * 16 + 1
+                  value = value * 16.0 +
+                    (c.to_int() - 'a'.to_int() + 10).to_double()
+                  digits.write_char(c)
                   has_digit = true
                 }
-                '2' => {
+                'A' | 'B' | 'C' | 'D' | 'E' | 'F' => {
                   let _ = self.advance()
-                  value = value * 16 + 2
-                  has_digit = true
-                }
-                '3' => {
-                  let _ = self.advance()
-                  value = value * 16 + 3
-                  has_digit = true
-                }
-                '4' => {
-                  let _ = self.advance()
-                  value = value * 16 + 4
-                  has_digit = true
-                }
-                '5' => {
-                  let _ = self.advance()
-                  value = value * 16 + 5
-                  has_digit = true
-                }
-                '6' => {
-                  let _ = self.advance()
-                  value = value * 16 + 6
-                  has_digit = true
-                }
-                '7' => {
-                  let _ = self.advance()
-                  value = value * 16 + 7
-                  has_digit = true
-                }
-                '8' => {
-                  let _ = self.advance()
-                  value = value * 16 + 8
-                  has_digit = true
-                }
-                '9' => {
-                  let _ = self.advance()
-                  value = value * 16 + 9
-                  has_digit = true
-                }
-                'a' | 'A' => {
-                  let _ = self.advance()
-                  value = value * 16 + 10
-                  has_digit = true
-                }
-                'b' | 'B' => {
-                  let _ = self.advance()
-                  value = value * 16 + 11
-                  has_digit = true
-                }
-                'c' | 'C' => {
-                  let _ = self.advance()
-                  value = value * 16 + 12
-                  has_digit = true
-                }
-                'd' | 'D' => {
-                  let _ = self.advance()
-                  value = value * 16 + 13
-                  has_digit = true
-                }
-                'e' | 'E' => {
-                  let _ = self.advance()
-                  value = value * 16 + 14
-                  has_digit = true
-                }
-                'f' | 'F' => {
-                  let _ = self.advance()
-                  value = value * 16 + 15
+                  value = value * 16.0 +
+                    (c.to_int() - 'A'.to_int() + 10).to_double()
+                  digits.write_char(c)
                   has_digit = true
                 }
                 _ => break
@@ -527,7 +474,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           }
         }
         if !has_digit {
-          value = 0
+          value = 0.0
         }
         let mut is_bigint = false
         if self.peek() == Some('n') {
@@ -535,9 +482,24 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           let _ = self.advance()
         }
         if is_bigint {
-          return BigInt(value.to_string())
+          // Decimal-string form so downstream BigInt consumers can
+          // parse it without re-implementing the hex reader. For
+          // values that exceed `Double` integer precision (>=2^53),
+          // fall back to a synthesized `0x…n` form so the BigInt
+          // literal stays exact through `BigInt(str)`.
+          return if value < 9007199254740992.0 {
+            BigInt(value.to_int64().to_string())
+          } else {
+            BigInt("0x" + digits.to_string() + "n")
+          }
         } else {
-          return Int(value)
+          // Values that fit in a 31-bit signed Int can still emit
+          // as `Int(...)` so downstream passes (which often
+          // pattern-match `IntLit(...)`) stay on the fast path.
+          if value >= 0.0 && value <= 2147483647.0 && value.floor() == value {
+            return Int(value.to_int())
+          }
+          return Number(value)
         }
       }
       Some('b') | Some('B') => {

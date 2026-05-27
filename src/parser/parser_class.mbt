@@ -69,6 +69,38 @@ fn build_runtime_class_decl(
         }
       Method(is_static, Name(method_name), accessor_kind, func) =>
         if is_public_runtime_class_member_name(method_name) {
+          // Always record the method (so getters/setters keep their
+          // bodies for emit); the `accessor` tag tells the emitter
+          // whether to restore `get foo()` / `set foo(v)` syntax.
+          let params : Array[(String, @ast.TsType)] = []
+          let param_defaults : Array[@ast.TsExpr?] = []
+          for index, param in func.params {
+            params.push((runtime_class_param_name(param, index), param.type_))
+            param_defaults.push(param.default)
+          }
+          let accessor_tag = match accessor_kind {
+            Some("get") => "get"
+            Some("set") => "set"
+            _ => ""
+          }
+          methods.push({
+            name: method_name,
+            type_params: [],
+            type_param_bounds: [],
+            params,
+            param_defaults,
+            return_type: func.return_type,
+            is_static,
+            body: if func.body.stmts.length() == 0 {
+              None
+            } else {
+              Some(func.body)
+            },
+            accessor: accessor_tag,
+            key_expr: None,
+            is_async: func.is_async,
+            is_generator: func.is_generator,
+          })
           match accessor_kind {
             Some("get") =>
               upsert_class_property(properties, {
@@ -92,29 +124,48 @@ fn build_runtime_class_decl(
                 is_accessor: false,
               })
             }
-            _ => {
-              let params : Array[(String, @ast.TsType)] = []
-              for index, param in func.params {
-                params.push(
-                  (runtime_class_param_name(param, index), param.type_),
-                )
-              }
-              methods.push({
-                name: method_name,
-                type_params: [],
-                type_param_bounds: [],
-                params,
-                return_type: func.return_type,
-                is_static,
-                body: if func.body.stmts.length() == 0 {
-                  None
-                } else {
-                  Some(func.body)
-                },
-              })
-            }
+            _ => ()
           }
         }
+      // Computed-key method (`class X { [Sym.iterator]() {…} }` /
+      // `[OpCodes.OP_ON_SUCCESS](op) {…}`). Record it on the
+      // `methods` list with the sentinel name `<computed>` and the
+      // parsed key expression on `key_expr` so emit can restore
+      // `[<expr>](…)` inside the class body. Effect's FiberRuntime
+      // dispatches `this[cur._op](cur)` on these; dropping them
+      // (which the previous code did) made `_op === "OnSuccess"`
+      // resolve to `undefined` and runLoop ran forever.
+      Method(is_static, Computed(key_expr), accessor_kind, func) => {
+        let params : Array[(String, @ast.TsType)] = []
+        let param_defaults : Array[@ast.TsExpr?] = []
+        for index, param in func.params {
+          params.push((runtime_class_param_name(param, index), param.type_))
+          param_defaults.push(param.default)
+        }
+        let accessor_tag = match accessor_kind {
+          Some("get") => "get"
+          Some("set") => "set"
+          _ => ""
+        }
+        methods.push({
+          name: "<computed>",
+          type_params: [],
+          type_param_bounds: [],
+          params,
+          param_defaults,
+          return_type: func.return_type,
+          is_static,
+          body: if func.body.stmts.length() == 0 {
+            None
+          } else {
+            Some(func.body)
+          },
+          accessor: accessor_tag,
+          key_expr: Some(key_expr),
+          is_async: func.is_async,
+          is_generator: func.is_generator,
+        })
+      }
       _ => ()
     }
   }
@@ -122,6 +173,8 @@ fn build_runtime_class_decl(
     name,
     type_params,
     base_names: [],
+    base_expr: None,
+    static_field_inits: [],
     constructor_params,
     properties,
     methods,
@@ -198,8 +251,10 @@ fn class_key_expr(key : ClassKey) -> @ast.TsExpr {
 ///|
 fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   let start = self.pos
+  self.pending_class_base_expr = None
   if self.check(LParen) {
-    let _ = self.parse_expr()
+    let expr = self.parse_expr()
+    self.pending_class_base_expr = Some(expr)
     return "<expr-base>"
   }
   // `class C extends null { ... }` is valid TS — it creates a constructor
@@ -207,6 +262,7 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   if self.check(Null) {
     let _ = self.advance()
     let _ = start
+    self.pending_class_base_expr = Some(@ast.TsExpr::Var("null"))
     return "<expr-base>"
   }
   // `class C extends class { ... } { ... }` — anonymous class expression as
@@ -214,19 +270,43 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   // produces collapses to the `<expr-base>` marker since we only need the
   // structural signal that an expression-shaped base was consumed.
   if self.check(Class) {
-    let _ = self.parse_expr()
+    let expr = self.parse_expr()
+    self.pending_class_base_expr = Some(expr)
     let _ = start
     return "<expr-base>"
   }
-  let mut full_name = match self.advance().kind {
-    Ident(n) => n
-    k => raise ParseError("Expected base class name, got \{k}")
+  // Some contextual keywords (`declare`, `type`, `from`, `as`, `of`,
+  // `in`) double as valid identifier names — `class X extends
+  // declare(args) {}` in effect's Schema.js is the standard case.
+  // Accept them at the heritage clause's leading name slot.
+  let lead = match contextual_ident_token_name(self.peek().kind) {
+    Some(n) => {
+      let _ = self.advance()
+      n
+    }
+    None =>
+      match self.advance().kind {
+        Ident(n) => n
+        k => raise ParseError("Expected base class name, got \{k}")
+      }
   }
+  let mut full_name = lead
   while self.check(Dot) {
     let _ = self.advance()
-    match self.advance().kind {
-      Ident(n) => full_name = full_name + "." + n
-      k => raise ParseError("Expected base class name, got \{k}")
+    // After `.`, JS allows ANY reserved word as the property name
+    // (post-ES5). `class X extends ns.default {…}` / `extends
+    // obj.case {…}` is valid. Accept the reserved-word tokens
+    // that the method-key parser already recognises.
+    match member_access_token_name(self.peek().kind) {
+      Some(n) => {
+        let _ = self.advance()
+        full_name = full_name + "." + n
+      }
+      None =>
+        match self.advance().kind {
+          Ident(n) => full_name = full_name + "." + n
+          k => raise ParseError("Expected base class name, got \{k}")
+        }
     }
   }
   // `class C extends A?.B { ... }` — optional-chain in the heritage clause.
@@ -245,10 +325,232 @@ fn Parser::parse_class_base_name(self : Parser) -> String raise ParseError {
   }
   if is_expr_base {
     self.pos = start
-    let _ = self.parse_expr()
+    let expr = self.parse_expr()
+    self.pending_class_base_expr = Some(expr)
     return "<expr-base>"
   }
   full_name
+}
+
+///|
+/// Map a contextual-keyword token to the identifier name it would
+/// have if it appeared in an identifier position (e.g. `Declare` ->
+/// `Some("declare")`). Plain identifiers and non-keyword tokens
+/// return `None`. Used at heritage clause / similar positions where
+/// Wrap a hoisted static-field initializer so its `this` references
+/// resolve to the class (matching ES static-init semantics) once the
+/// initializer evaluates at module scope. Generates
+/// `(function() { return init }).call(class_name)`. Arrow `this`
+/// captures the wrapping function's `this`, so any
+/// `(props) => this.foo` inside the init still sees the class.
+fn wrap_static_field_init_with_this(
+  init : @ast.TsExpr,
+  class_name : String,
+) -> @ast.TsExpr {
+  if not(expr_contains_this(init)) {
+    return init
+  }
+  let inner_func : @ast.TsFunc = {
+    name: "",
+    type_params: [],
+    params: [],
+    return_type: @ast.TsType::Any,
+    body: { stmts: [Return(Some(init))], stmt_positions: [] },
+    const_type_params: [],
+    is_generator: false,
+    is_async: false,
+  }
+  @ast.TsExpr::MethodCall(@ast.TsExpr::FuncExpr(inner_func), "call", [
+    @ast.TsExpr::Var(class_name),
+  ])
+}
+
+///|
+/// Heuristic check: does the expression mention `this` outside a
+/// nested non-arrow function? A `this` inside an arrow counts; a
+/// `this` inside a `function() {…}` doesn't because functions
+/// shadow `this`. Used to skip the static-field wrap when no
+/// rebinding is needed.
+fn expr_contains_this(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("this") => true
+    FuncExpr(_) => false
+    Var(_) => false
+    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_) => false
+    Call(_, args) | New(_, args) => {
+      for a in args {
+        if expr_contains_this(a) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      if expr_contains_this(callee) {
+        return true
+      }
+      for a in args {
+        if expr_contains_this(a) {
+          return true
+        }
+      }
+      false
+    }
+    MethodCall(recv, _, args) => {
+      if expr_contains_this(recv) {
+        return true
+      }
+      for a in args {
+        if expr_contains_this(a) {
+          return true
+        }
+      }
+      false
+    }
+    PropAccess(recv, _) => expr_contains_this(recv)
+    IndexAccess(recv, idx) =>
+      expr_contains_this(recv) || expr_contains_this(idx)
+    BinOp(_, l, r) | Seq(l, r) => expr_contains_this(l) || expr_contains_this(r)
+    Cond(c, t, els) =>
+      expr_contains_this(c) || expr_contains_this(t) || expr_contains_this(els)
+    UnaryOp(_, v)
+    | NonNull(v)
+    | OptionalChain(v)
+    | Await(v)
+    | Spread(v)
+    | PureCall(v)
+    | YieldStar(v) => expr_contains_this(v)
+    Yield(opt) =>
+      match opt {
+        Some(v) => expr_contains_this(v)
+        None => false
+      }
+    As(v, _) | Satisfies(v, _) => expr_contains_this(v)
+    AssignExpr(_, v) => expr_contains_this(v)
+    CompoundAssignExpr(t, _, v) =>
+      expr_contains_this(t) || expr_contains_this(v)
+    AssignPattern(_, v) => expr_contains_this(v)
+    PropAssignExpr(recv, _, v) =>
+      expr_contains_this(recv) || expr_contains_this(v)
+    IndexAssignExpr(recv, idx, v) =>
+      expr_contains_this(recv) ||
+      expr_contains_this(idx) ||
+      expr_contains_this(v)
+    ComputedProp(k, v) => expr_contains_this(k) || expr_contains_this(v)
+    ArrayLit(items) => {
+      for i in items {
+        if expr_contains_this(i) {
+          return true
+        }
+      }
+      false
+    }
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_contains_this(ent.1) {
+          return true
+        }
+      }
+      false
+    }
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        ArrowExpr(ee) => expr_contains_this(ee)
+        ArrowBlock(_) => true
+      }
+    TaggedTemplate(tag, _, _, exprs) => {
+      if expr_contains_this(tag) {
+        return true
+      }
+      for ee in exprs {
+        if expr_contains_this(ee) {
+          return true
+        }
+      }
+      false
+    }
+    TemplateLiteral(_, exprs) => {
+      for ee in exprs {
+        if expr_contains_this(ee) {
+          return true
+        }
+      }
+      false
+    }
+    _ => true
+  }
+}
+
+///|
+/// the lexer's keyword classification needs to defer to the surface
+/// identifier name.
+fn contextual_ident_token_name(kind : TokenKind) -> String? {
+  match kind {
+    Declare => Some("declare")
+    Type => Some("type")
+    From => Some("from")
+    As => Some("as")
+    Of => Some("of")
+    In => Some("in")
+    _ => None
+  }
+}
+
+///|
+/// Token names allowed in member-access position (`obj.<name>`).
+/// JS lets any IdentifierName — including reserved words — sit
+/// after `.`. Prettier ships `class X extends reader_1.default {…}`
+/// as the canonical case. Mirrors the broader keyword set already
+/// accepted in `parse_class_method_key`.
+fn member_access_token_name(kind : TokenKind) -> String? {
+  match kind {
+    Declare => Some("declare")
+    Type => Some("type")
+    From => Some("from")
+    As => Some("as")
+    Of => Some("of")
+    In => Some("in")
+    Default => Some("default")
+    Return => Some("return")
+    If => Some("if")
+    Else => Some("else")
+    For => Some("for")
+    While => Some("while")
+    Do => Some("do")
+    Break => Some("break")
+    Continue => Some("continue")
+    Function => Some("function")
+    Try => Some("try")
+    Catch => Some("catch")
+    Finally => Some("finally")
+    Throw => Some("throw")
+    Yield => Some("yield")
+    Let => Some("let")
+    Const => Some("const")
+    Var => Some("var")
+    Class => Some("class")
+    New => Some("new")
+    Case => Some("case")
+    VoidType => Some("void")
+    With => Some("with")
+    Switch => Some("switch")
+    Typeof => Some("typeof")
+    Delete => Some("delete")
+    Export => Some("export")
+    Import => Some("import")
+    Debugger => Some("debugger")
+    Interface => Some("interface")
+    Instanceof => Some("instanceof")
+    Extends => Some("extends")
+    NumberType => Some("number")
+    BooleanType => Some("boolean")
+    StringType => Some("string")
+    IntType => Some("int")
+    Bool(true) => Some("true")
+    Bool(false) => Some("false")
+    Null => Some("null")
+    _ => None
+  }
 }
 
 ///|
@@ -406,9 +708,7 @@ fn Parser::skip_decorator(self : Parser) -> Unit {
 /// discarding tokens. Returns `None` when the `@` isn't followed by a
 /// recognized decorator head — keeps the existing permissive
 /// recovery.
-fn Parser::parse_decorator_expr(
-  self : Parser,
-) -> @ast.TsExpr? raise ParseError {
+fn Parser::parse_decorator_expr(self : Parser) -> @ast.TsExpr? raise ParseError {
   let _ = self.match_(At)
   let head : @ast.TsExpr = match self.peek().kind {
     LParen => {
@@ -798,7 +1098,10 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     Some(base_name) =>
       if class_name.length() > 0 && base_name == class_name {
         let throw_expr = @ast.TsExpr::Call("ReferenceError", [])
-        let throw_body : @ast.TsBlock = { stmts: [Throw(throw_expr)], stmt_positions: [] }
+        let throw_body : @ast.TsBlock = {
+          stmts: [Throw(throw_expr)],
+          stmt_positions: [],
+        }
         return CallExpr(
           @ast.TsExpr::FuncExpr(@ast.TsFunc::{
             type_params: [],
@@ -823,9 +1126,12 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       let runtime_decl = build_runtime_class_decl(
         class_name, class_type_params, ctor_opt, elements, false,
       )
+      let pending_base_expr = self.pending_class_base_expr
+      self.pending_class_base_expr = None
       let decorated : @ast.TsClassDecl = {
         ..runtime_decl,
         base_names: [base_name],
+        base_expr: pending_base_expr,
         decorators: self.take_pending_decorators(),
       }
       self.last_runtime_class_decl = Some(decorated)
@@ -847,7 +1153,13 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
       let ctor_func : @ast.TsFunc? = match ctor_opt {
         Some(func) =>
           if field_assigns.length() > 0 {
-            Some(self.inject_instance_field_assigns(func, field_assigns, Some(base_name)))
+            Some(
+              self.inject_instance_field_assigns(
+                func,
+                field_assigns,
+                Some(base_name),
+              ),
+            )
           } else {
             Some(func)
           }
@@ -855,7 +1167,9 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
           if field_assigns.length() > 0 {
             let rest_name = "__super_args__"
             let body_stmts : Array[@ast.TsStmt] = [
-              Expr(Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))])),
+              Expr(
+                Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))]),
+              ),
             ]
             for a in field_assigns {
               body_stmts.push(a)
@@ -882,10 +1196,31 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
             None
           }
       }
-      return NativeClassExpr(decorated, ctor_func)
+      // Static field initializers: stash them on the AST so emit
+      // restores them as `static foo = init;` inside the class body
+      // (ES2022 native form). Avoids wrapping the class expression
+      // in an IIFE or the surrounding stmt in a `Block` — both of
+      // which previously broke scope: the IIFE's `this` isn't the
+      // class, and the Block trapped the class declaration itself.
+      let static_field_inits : Array[(String, @ast.TsExpr)] = []
+      for element in elements {
+        match element {
+          Field(true, Name(static_name), _, Some(init)) =>
+            static_field_inits.push((static_name, init))
+          _ => ()
+        }
+      }
+      let decorated_with_statics : @ast.TsClassDecl = {
+        ..decorated,
+        static_field_inits,
+      }
+      return NativeClassExpr(decorated_with_statics, ctor_func)
     }
     None => ()
   }
+  // (unused) Legacy synthetic-name + IIFE path retained for context — see
+  // commit history; the active path above stashes static fields on the
+  // AST and lets emit restore them in-body.
   // `<anon>` was the historical sentinel for "this class expression
   // has no source-level name". The angle brackets aren't valid JS
   // identifier syntax, so the emitter rejects them and writes
@@ -910,6 +1245,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
     name: runtime_decl.name,
     type_params: runtime_decl.type_params,
     base_names: runtime_decl.base_names,
+    base_expr: runtime_decl.base_expr,
+    static_field_inits: runtime_decl.static_field_inits,
     constructor_params: runtime_decl.constructor_params,
     properties: runtime_decl.properties,
     methods: runtime_decl.methods,
@@ -1399,7 +1736,11 @@ fn Parser::parse_class_decl_with_abstract(
       let merged_ctor = match ctor_opt {
         Some(func) =>
           if field_assigns.length() > 0 {
-            self.inject_instance_field_assigns(func, field_assigns, Some(base_name))
+            self.inject_instance_field_assigns(
+              func,
+              field_assigns,
+              Some(base_name),
+            )
           } else {
             func
           }
@@ -1409,7 +1750,9 @@ fn Parser::parse_class_decl_with_abstract(
             // to `super(...)` and then runs the field assigns.
             let rest_name = "__super_args__"
             let body_stmts : Array[@ast.TsStmt] = [
-              Expr(Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))])),
+              Expr(
+                Call("super", [@ast.TsExpr::Spread(@ast.TsExpr::Var(rest_name))]),
+              ),
             ]
             for a in field_assigns {
               body_stmts.push(a)
@@ -1448,17 +1791,39 @@ fn Parser::parse_class_decl_with_abstract(
             }
           }
       }
-      let ctor_func : @ast.TsFunc? = if ctor_opt is None && field_assigns.length() == 0 {
+      let ctor_func : @ast.TsFunc? = if ctor_opt is None &&
+        field_assigns.length() == 0 {
         None
       } else {
         Some(merged_ctor)
       }
+      let pending_base_expr2 = self.pending_class_base_expr
+      self.pending_class_base_expr = None
       let decorated : @ast.TsClassDecl = {
         ..runtime_decl,
         base_names: [base_name],
+        base_expr: pending_base_expr2,
         decorators: self.take_pending_decorators(),
       }
-      return NativeClassStmt(decorated, ctor_func)
+      // Static field initializers: stash them on the AST so the
+      // emit pass restores them as `static foo = init;` inside the
+      // class body. ES2022 classes accept the native form directly,
+      // which keeps the class declaration at top-level (a wrapping
+      // `Block` would trap the binding in block scope and break
+      // forward references from sibling top-level code).
+      let static_field_inits : Array[(String, @ast.TsExpr)] = []
+      for element in elements {
+        match element {
+          Field(true, Name(static_name), _, Some(init)) =>
+            static_field_inits.push((static_name, init))
+          _ => ()
+        }
+      }
+      let decorated_with_statics : @ast.TsClassDecl = {
+        ..decorated,
+        static_field_inits,
+      }
+      return NativeClassStmt(decorated_with_statics, ctor_func)
     }
     None => ()
   }

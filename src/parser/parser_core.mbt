@@ -23,12 +23,24 @@ pub struct Parser {
   mut in_function : Bool // for return validation
   mut in_iteration : Bool // for continue validation
   mut in_switch : Bool // for break validation (break works in switch too)
+  // Ambient context: when true, `export var X;` / `export let X;` /
+  // `export const X;` style declarations without initializer are
+  // treated as type-only (no runtime emission) — the convention for
+  // `.d.ts` parsing and ambient external module bodies. Runtime
+  // sources (`.js` / `.ts`) flip this off so the declarations emit
+  // a real binding.
+  mut in_ambient_module : Bool
   labels : Array[String] // for labeled break/continue validation
   src : String
   allow_jsx : Bool
   mut class_id : Int // for private field brand generation
   mut current_class_brand : String? // brand ID of current class being parsed
   mut last_runtime_class_decl : @ast.TsClassDecl?
+  // The expression parsed by `parse_class_base_name` when the
+  // heritage clause was an expression form (`extends declare(...)` /
+  // `extends make(ast)`). Callers drain this immediately after the
+  // call to stash it on the resulting `TsClassDecl.base_expr`.
+  mut pending_class_base_expr : @ast.TsExpr?
   local_type_param_bounds : Array[(String, @ast.TsType)]
   // Decorator expressions parsed at the statement level that should be
   // attached to the next class declaration. The class parsers drain
@@ -103,12 +115,14 @@ pub fn Parser::new_with_strict_and_jsx(
     in_function: false,
     in_iteration: false,
     in_switch: false,
+    in_ambient_module: false,
     labels: [],
     src: "",
     allow_jsx,
     class_id: 0,
     current_class_brand: None,
     last_runtime_class_decl: None,
+    pending_class_base_expr: None,
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],
@@ -152,12 +166,14 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     in_function: false,
     in_iteration: false,
     in_switch: false,
+    in_ambient_module: false,
     labels: [],
     src,
     allow_jsx,
     class_id: 0,
     current_class_brand: None,
     last_runtime_class_decl: None,
+    pending_class_base_expr: None,
     local_type_param_bounds: [],
     pending_decorators: [],
     param_property_scopes: [],

@@ -149,7 +149,8 @@ fn collect_property_names_from_type(
         collect_property_names_from_type(a, out)
       }
     TypePredicate(_, inner) => collect_property_names_from_type(inner, out)
-    AssertsPredicate(_, Some(inner)) => collect_property_names_from_type(inner, out)
+    AssertsPredicate(_, Some(inner)) =>
+      collect_property_names_from_type(inner, out)
     _ => ()
   }
 }
@@ -214,14 +215,24 @@ pub fn entry_export_property_names(
   for a in module_.type_aliases {
     if exported.contains(a.name) {
       walk_type_for_props(
-        a.type_, out, interfaces, aliases, classes, visited_names,
+        a.type_,
+        out,
+        interfaces,
+        aliases,
+        classes,
+        visited_names,
       )
     }
   }
   for v in module_.values {
     if exported.contains(v.name) {
       walk_type_for_props(
-        v.type_, out, interfaces, aliases, classes, visited_names,
+        v.type_,
+        out,
+        interfaces,
+        aliases,
+        classes,
+        visited_names,
       )
     }
   }
@@ -244,9 +255,7 @@ fn walk_func_for_props(
   for p in f.params {
     walk_type_for_props(p.type_, out, interfaces, aliases, classes, visited)
   }
-  walk_type_for_props(
-    f.return_type, out, interfaces, aliases, classes, visited,
-  )
+  walk_type_for_props(f.return_type, out, interfaces, aliases, classes, visited)
 }
 
 ///|
@@ -268,7 +277,12 @@ fn walk_class_for_props(
       walk_type_for_props(p.1, out, interfaces, aliases, classes, visited)
     }
     walk_type_for_props(
-      m.return_type, out, interfaces, aliases, classes, visited,
+      m.return_type,
+      out,
+      interfaces,
+      aliases,
+      classes,
+      visited,
     )
   }
   match c.constructor_params {
@@ -415,16 +429,12 @@ fn visit_named_type_for_props(
   visited[name] = true
   match interfaces.get(name) {
     Some(i) =>
-      walk_interface_for_props(
-        i, out, interfaces, aliases, classes, visited,
-      )
+      walk_interface_for_props(i, out, interfaces, aliases, classes, visited)
     None => ()
   }
   match aliases.get(name) {
     Some(a) =>
-      walk_type_for_props(
-        a.type_, out, interfaces, aliases, classes, visited,
-      )
+      walk_type_for_props(a.type_, out, interfaces, aliases, classes, visited)
     None => ()
   }
   match classes.get(name) {

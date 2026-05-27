@@ -171,6 +171,36 @@ let mangler_builtin_reserved_properties : Array[String] = [
   "matchAll", "search", "substring", "substr", "repeat", "normalize", "raw",
   // Number / Math
    "toFixed", "toPrecision", "toExponential", "toLocaleString",
+  // Math statics — every method on the global `Math` object.
+  // Phase 5 retires the External-binding wildcard fallback;
+  // without these listed, bundles that call `Math.floor(...)` /
+  // `Math.min(...)` ended up renaming the method down to one
+  // letter and crashing at runtime.
+   "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil",
+  "clz32", "cos", "cosh", "exp", "expm1", "floor", "fround", "hypot", "imul", "log",
+  "log10", "log1p", "log2", "max", "min", "pow", "random", "round", "sign", "sin",
+  "sinh", "sqrt", "tan", "tanh", "trunc",
+  // Math constants
+   "E", "LN2", "LN10", "LOG2E", "LOG10E", "PI", "SQRT1_2", "SQRT2",
+  // Number statics
+   "isInteger", "isFinite", "isNaN", "isSafeInteger", "parseFloat", "parseInt", "EPSILON",
+  "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER", "MAX_VALUE", "MIN_VALUE", "POSITIVE_INFINITY",
+  "NEGATIVE_INFINITY", "NaN",
+  // Object statics (the ones not already covered above)
+   "assign", "create", "defineProperty", "defineProperties", "freeze", "fromEntries",
+  "getOwnPropertyDescriptor", "getOwnPropertyDescriptors", "getOwnPropertyNames",
+  "getOwnPropertySymbols", "getPrototypeOf", "is", "isExtensible", "isFrozen", "isSealed",
+  "preventExtensions", "seal", "setPrototypeOf",
+  // Array statics
+   "from", "isArray", "of",
+  // Date statics
+   "now", "UTC",
+  // String statics
+   "fromCharCode", "fromCodePoint",
+  // Symbol well-knowns the runtime reads off Symbol itself
+   "for", "keyFor", "hasInstance", "isConcatSpreadable", "match", "matchAll", "replace",
+  "search", "species", "split", "toPrimitive", "toStringTag", "unscopables", "dispose",
+  "asyncDispose",
   // Function
    "call", "apply", "bind", "name", "arguments", "caller",
   // Promise
@@ -215,6 +245,24 @@ let mangler_builtin_reserved_properties : Array[String] = [
   "version", "versions", "readFile", "writeFile", "readFileSync", "writeFileSync",
   "exists", "existsSync", "mkdir", "mkdirSync", "rmdir", "unlink", "stat", "statSync",
   "createReadStream", "createWriteStream",
+  // RegExp instance methods + properties
+   "test", "exec", "source", "flags", "global", "ignoreCase", "multiline", "sticky",
+  "unicode", "unicodeSets", "dotAll", "hasIndices", "lastIndex",
+  // Error / standard exception members
+   "message", "cause", "stack", "fileName", "lineNumber", "columnNumber",
+  // Async / generator iterator protocol (`Symbol.asyncIterator` access too)
+   "asyncIterator",
+  // Date instance methods
+   "getDate", "getDay", "getFullYear", "getHours", "getMilliseconds", "getMinutes",
+  "getMonth", "getSeconds", "getTime", "getTimezoneOffset", "getUTCDate", "getUTCDay",
+  "getUTCFullYear", "getUTCHours", "getUTCMilliseconds", "getUTCMinutes", "getUTCMonth",
+  "getUTCSeconds", "getYear", "setDate", "setFullYear", "setHours", "setMilliseconds",
+  "setMinutes", "setMonth", "setSeconds", "setTime", "setUTCDate", "setUTCFullYear",
+  "setUTCHours", "setUTCMilliseconds", "setUTCMinutes", "setUTCMonth", "setUTCSeconds",
+  "setYear", "toDateString", "toISOString", "toJSON", "toTimeString", "toUTCString",
+  // Console / Hono / common Web APIs
+   "log", "info", "warn", "error", "debug", "trace", "table", "group", "groupEnd",
+  "dir", "count", "time", "timeEnd", "assert",
   // Common reserved
    "default",
 ]
@@ -491,6 +539,16 @@ fn build_property_rename_map(
     if reserved.contains(n) {
       continue
     }
+    // Internal parser sentinels (`@@spread:N`, `@@computed:N`,
+    // `@@get:NAME`, `@@set:NAME`) are NOT property names — they
+    // tag where the emit should produce spread / computed-key /
+    // accessor shorthand. Renaming them to short keys turns the
+    // sentinel into a regular key and the emit's pattern match
+    // misses it, producing invalid output like
+    // `{a:[a]:42}` for `{[s]: 42}`.
+    if n.has_prefix("@@") {
+      continue
+    }
     candidates.push(n)
   }
   candidates.sort()
@@ -693,7 +751,33 @@ fn next_short_name(n : Int) -> String {
 /// new `TsBlock` with every function-local name renamed to a short
 /// `a` / `b` / … identifier. Top-level bindings stay put when
 /// `cfg.preserve_top_level` is `true`.
+/// Variant of `mangle_block` that also returns the root scope's
+/// final rename map so callers (typically the bundle layer
+/// emitting `export default <name>` at the tail) can look up the
+/// new short name for a known top-level binding.
+pub fn mangle_block_with_renames(
+  block : @ast.TsBlock,
+  cfg : ManglerConfig,
+) -> (@ast.TsBlock, Map[String, String]) {
+  let (out, root) = mangle_block_impl(block, cfg)
+  let renames : Map[String, String] = {}
+  for entry in root.renames {
+    renames[entry.0] = entry.1
+  }
+  (out, renames)
+}
+
+///|
 pub fn mangle_block(block : @ast.TsBlock, cfg : ManglerConfig) -> @ast.TsBlock {
+  let (out, _) = mangle_block_impl(block, cfg)
+  out
+}
+
+///|
+fn mangle_block_impl(
+  block : @ast.TsBlock,
+  cfg : ManglerConfig,
+) -> (@ast.TsBlock, ScopeFrame) {
   // Reserved set = built-ins ∪ explicit ∪ (top-level decls when
   // `preserve_top_level`).
   let reserved : Map[String, Bool] = {}
@@ -717,6 +801,34 @@ pub fn mangle_block(block : @ast.TsBlock, cfg : ManglerConfig) -> @ast.TsBlock {
   // resolve once block-scoped frames take over inside `if` / `while`
   // / `try` bodies.
   hoist_var_decls_into_scope(block, root, reserved)
+  // Pre-bind top-level function declarations so a forward
+  // reference (a call site that precedes the `function f() {}`
+  // declaration in source order) resolves to the SAME rename as
+  // the declaration. The same logic already runs inside
+  // `rename_block_inline_in` for nested blocks, but the top-level
+  // walk below uses `rename_stmt` directly, bypassing it.
+  //
+  // Also pre-bind every other top-level `Let` / `Const` / `Var`
+  // / `NativeClassStmt` binding so cross-IIFE forward references
+  // (a method body inside an earlier class IIFE that names a
+  // class declared later in the source — common pattern in
+  // drizzle-orm's circular sql<->column refs) resolve to the
+  // same rename as the eventual declaration site.
+  for s in block.stmts {
+    match s {
+      Let(@ast.TsBinding::Ident(name), _, _)
+      | Const(@ast.TsBinding::Ident(name), _, _)
+      | Var(@ast.TsBinding::Ident(name), _, _) =>
+        if not(root.renames.contains(name)) {
+          let _ = root.bind(name, reserved)
+        }
+      NativeClassStmt(decl, _) =>
+        if decl.name != "" && not(root.renames.contains(decl.name)) {
+          let _ = root.bind(decl.name, reserved)
+        }
+      _ => ()
+    }
+  }
   // Identifier-mangling pass first (so any synthesized identifiers
   // can't collide with property names we're about to rename).
   let new_stmts : Array[@ast.TsStmt] = []
@@ -728,7 +840,7 @@ pub fn mangle_block(block : @ast.TsBlock, cfg : ManglerConfig) -> @ast.TsBlock {
     stmt_positions: block.stmt_positions,
   }
   // Optional property-name pass on top of the identifier rename.
-  if cfg.mangle_properties {
+  let final_block = if cfg.mangle_properties {
     let prop_reserved : Map[String, Bool] = {}
     for n in mangler_builtin_reserved_properties {
       prop_reserved[n] = true
@@ -741,6 +853,7 @@ pub fn mangle_block(block : @ast.TsBlock, cfg : ManglerConfig) -> @ast.TsBlock {
   } else {
     renamed
   }
+  (final_block, root)
 }
 
 ///|
@@ -996,7 +1109,25 @@ fn rename_stmt(
     For(init_opt, cond_opt, update_opt, body) => {
       // `for (let i = 0; …; …) { … }` creates a new lexical scope.
       let inner = ScopeFrame::child(scope)
+      // The parser wraps multi-decl init (`for (let i = 0, n = arr.length;
+      // …)`) as a `Block` of single-binding decls. The generic
+      // `Block(b)` rename would spawn ANOTHER child scope and the
+      // bindings would never make it into `inner` — so `cond` /
+      // `update` would see the original names. Detect that shape
+      // and rename each inner decl directly in `inner`.
       let new_init = match init_opt {
+        Some(Block(b)) => {
+          let new_stmts : Array[@ast.TsStmt] = []
+          for s in b.stmts {
+            new_stmts.push(rename_stmt(s, inner, reserved))
+          }
+          Some(
+            @ast.TsStmt::Block({
+              stmts: new_stmts,
+              stmt_positions: b.stmt_positions,
+            }),
+          )
+        }
         Some(s) => Some(rename_stmt(s, inner, reserved))
         None => None
       }
@@ -1035,12 +1166,18 @@ fn rename_stmt(
     Switch(scrutinee, cases) => {
       let new_scrutinee = rename_expr(scrutinee, scope)
       let new_cases : Array[@ast.TsSwitchCase] = []
+      // All case bodies share the same lexical scope when the
+      // `case` labels aren't individually wrapped in `{…}` braces.
+      // TypeScript's own compiler source has `case A: const x = …;
+      // case B: const y = …;` patterns — each `const` is a fresh
+      // source name but shares the switch's scope. Use ONE shared
+      // child frame for the cases so the renames don't collide.
+      let inner = ScopeFrame::child(scope)
       for c in cases {
         let new_test = match c.test_expr {
           Some(t) => Some(rename_expr(t, scope))
           None => None
         }
-        let inner = ScopeFrame::child(scope)
         new_cases.push({
           test_expr: new_test,
           body: rename_block_inline_in(c.body, inner, reserved),
@@ -1075,10 +1212,22 @@ fn rename_stmt(
       }
       Try(new_try, new_bind, new_catch, new_finally)
     }
-    Block(b) => {
-      let inner = ScopeFrame::child(scope)
-      Block(rename_block_inline_in(b, inner, reserved))
-    }
+    Block(b) =>
+      // Parser packs multi-declarator `let a = 1, b = 2;` into a
+      // synthetic `Block([Let(a, …), Let(b, …)])` — the binders
+      // share the surrounding scope, not a new block scope. When
+      // every stmt is the same lexical decl kind, treat the block
+      // as transparent (rename in the outer scope) so subsequent
+      // `let` / `const` in the same scope can't collide with the
+      // multi-decl names. Without this, the inner scope drops the
+      // `i` / `g` renames at block exit and the next `const out`
+      // re-uses `i`'s slot — invalid duplicate declaration.
+      if is_synthetic_multi_decl_block(b) {
+        Block(rename_block_inline_in(b, scope, reserved))
+      } else {
+        let inner = ScopeFrame::child(scope)
+        Block(rename_block_inline_in(b, inner, reserved))
+      }
     Label(name, inner) => Label(name, rename_stmt(inner, scope, reserved))
     With(target, body) => {
       // `with` extends the scope chain dynamically; the static rename
@@ -1091,7 +1240,14 @@ fn rename_stmt(
       )
     }
     Break(_) | Continue(_) | Empty | Debugger => stmt
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor_body) =>
+      NativeClassStmt(
+        rename_class_decl_idents(decl, scope),
+        match ctor_body {
+          Some(f) => Some(rename_function_expr(f, scope))
+          None => None
+        },
+      )
   }
 }
 
@@ -1102,6 +1258,28 @@ fn rename_stmt(
 /// `rename_block_inline_in` directly — this helper is kept for the
 /// rare callers where the caller already represents the scope they
 /// want the body to inhabit (e.g. the function-body root frame).
+fn is_synthetic_multi_decl_block(b : @ast.TsBlock) -> Bool {
+  if b.stmts.length() < 2 {
+    return false
+  }
+  let kind = match b.stmts[0] {
+    Let(_, _, _) => "let"
+    Const(_, _, _) => "const"
+    Var(_, _, _) => "var"
+    _ => return false
+  }
+  for s in b.stmts {
+    match s {
+      Let(_, _, _) => if kind != "let" { return false }
+      Const(_, _, _) => if kind != "const" { return false }
+      Var(_, _, _) => if kind != "var" { return false }
+      _ => return false
+    }
+  }
+  true
+}
+
+///|
 fn rename_block_inline(
   block : @ast.TsBlock,
   scope : ScopeFrame,
@@ -1122,13 +1300,31 @@ fn rename_block_inline_in(
   // declaration. Pre-bind every `<kind>(Ident(name), _, FuncExpr)`
   // before the recursive walk so the call site and the declaration
   // both pick up the same short name.
+  //
+  // Also pre-bind every other top-level `Let` / `Const` / `Var` /
+  // `NativeClassStmt`. Closures inside an earlier-evaluated object
+  // literal can reference a later declaration — TypeScript's
+  // `transpileWorker` builds `compilerHost = { getSourceFile: …
+  // inputFileName … }` before declaring `const inputFileName = …`.
+  // The closure call only runs after the function returns, so the
+  // forward ref is fine at runtime; the rename must agree at
+  // both sites.
+  // `var` decls are NOT pre-bound here — they hoist to the enclosing
+  // function frame via `hoist_var_decls_into_scope`. Adding a fresh
+  // bind here at the block level would shadow that function-frame
+  // binding and split the var name into two renames (e.g. the var
+  // body becomes `var a = 1` but post-block `return counter` looks
+  // up the function-frame name `b` instead).
   for s in block.stmts {
     match s {
-      Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
-      | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_))
-      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(_)) =>
+      Let(@ast.TsBinding::Ident(name), _, _)
+      | Const(@ast.TsBinding::Ident(name), _, _) =>
         if not(scope.renames.contains(name)) {
           let _ = scope.bind(name, reserved)
+        }
+      NativeClassStmt(decl, _) =>
+        if decl.name != "" && not(scope.renames.contains(decl.name)) {
+          let _ = scope.bind(decl.name, reserved)
         }
       _ => ()
     }
@@ -1354,7 +1550,16 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
     Satisfies(inner, ty) => Satisfies(rename_expr(inner, scope), ty)
     NonNull(inner) => NonNull(rename_expr(inner, scope))
     OptionalChain(inner) => OptionalChain(rename_expr(inner, scope))
+    PureCall(inner) => PureCall(rename_expr(inner, scope))
     JsxElement(_, _, _) => expr // JSX should be lowered before mangling
+    NativeClassExpr(decl, ctor_body) =>
+      NativeClassExpr(
+        rename_class_decl_idents(decl, scope),
+        match ctor_body {
+          Some(f) => Some(rename_function_expr(f, scope))
+          None => None
+        },
+      )
     _ => expr
   }
 }
@@ -1417,11 +1622,122 @@ fn rename_binding_lhs(
 }
 
 ///|
+/// Identifier-mangle a class declaration: rename `base_names`
+/// through the scope chain, walk each method's body, and walk
+/// decorators. Property names are not touched here — that's the
+/// job of `rename_properties_in_class_decl`.
+fn rename_dotted_base_name(name : String, scope : ScopeFrame) -> String {
+  match name.find(".") {
+    Some(i) => scope.resolve(name.substring(end=i)) + name.substring(start=i)
+    None => scope.resolve(name)
+  }
+}
+
+///|
+fn is_define_prop_call(recv : @ast.TsExpr, method : String) -> Bool {
+  match recv {
+    @ast.TsExpr::Var("Object") =>
+      method == "defineProperty" || method == "defineProperties"
+    @ast.TsExpr::Var("Reflect") => method == "defineProperty"
+    _ => false
+  }
+}
+
+///|
+fn rename_class_decl_idents(
+  decl : @ast.TsClassDecl,
+  scope : ScopeFrame,
+) -> @ast.TsClassDecl {
+  // The class declaration's own name participates in the scope's
+  // value namespace just like a `let` / `function` binding. Resolve
+  // through the chain — the top-level pre-bind pass already
+  // allocated a rename for it, so this picks up that decision.
+  let new_name = if decl.name != "" {
+    scope.resolve(decl.name)
+  } else {
+    decl.name
+  }
+  let new_base_names : Array[String] = []
+  for b in decl.base_names {
+    // `extends ns.default` is stored as the dotted string
+    // `"ns.default"` in `base_names`; `scope.resolve` doesn't know
+    // to split on `.` — it would look up `"ns.default"` as a whole
+    // name, miss the rename for `ns`, and emit
+    // `class X extends reader_1.default {}` against a renamed
+    // `var Cv = require_reader()` binding. Resolve only the leading
+    // segment.
+    new_base_names.push(rename_dotted_base_name(b, scope))
+  }
+  let new_methods : Array[@ast.TsClassMethodDecl] = []
+  for m in decl.methods {
+    let new_body = match m.body {
+      Some(b) => {
+        // Method params introduce bindings into the body's scope.
+        // Without flagging them in the inner frame, a `fiber`
+        // parameter inside `shouldYield(fiber) { fiber.foo() }`
+        // resolves up the chain to whatever the outer scope mangled
+        // `fiber` to (effect's FiberRuntime keeps a top-level
+        // binding with the same name). Pin each param to its
+        // identity in the inner frame so body references resolve
+        // back to the parameter — emit prints params verbatim,
+        // so the names must not change.
+        let inner = ScopeFrame::child(scope)
+        for p in m.params {
+          if p.0 != "" && not(inner.renames.contains(p.0)) {
+            inner.renames[p.0] = p.0
+            inner.used[p.0] = true
+          }
+        }
+        Some(rename_block_inline_in(b, inner, inner.reserved))
+      }
+      None => None
+    }
+    let new_key_expr = match m.key_expr {
+      Some(e) => Some(rename_expr(e, scope))
+      None => None
+    }
+    new_methods.push({ ..m, body: new_body, key_expr: new_key_expr })
+  }
+  let new_decorators : Array[@ast.TsExpr] = []
+  for d in decl.decorators {
+    new_decorators.push(rename_expr(d, scope))
+  }
+  let new_base_expr = match decl.base_expr {
+    Some(e) => Some(rename_expr(e, scope))
+    None => None
+  }
+  let new_static_inits : Array[(String, @ast.TsExpr)] = []
+  for entry in decl.static_field_inits {
+    new_static_inits.push((entry.0, rename_expr(entry.1, scope)))
+  }
+  {
+    ..decl,
+    name: new_name,
+    base_names: new_base_names,
+    base_expr: new_base_expr,
+    static_field_inits: new_static_inits,
+    methods: new_methods,
+    decorators: new_decorators,
+  }
+}
+
+///|
 fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
-  // `function name(…)` introduces `name` into the parent scope's
-  // value namespace. v0 keeps the function name verbatim — the
-  // bundle layer can't predict whether the function is referenced
-  // by name elsewhere yet (without checker symbol-graph analysis).
+  // `function name(…)` as a function EXPRESSION (e.g.
+  // `module.exports = function isExtglob(s) {…}`) binds `name`
+  // only inside the body — outside callers see the value via the
+  // enclosing assignment / binding. If the body never references
+  // its own name, drop it so emit prints `function(s) {…}` and
+  // the long source-derived name stops surviving into the
+  // minified bundle. `try_emit_function_decl` (the
+  // `Let(Ident, _, FuncExpr)` → real `function X() {}` shape)
+  // bypasses the FuncExpr name entirely, so this rewrite is safe
+  // there too.
+  let new_name = if f.name == "" || block_references_name(f.body, f.name) {
+    f.name
+  } else {
+    ""
+  }
   let inner = ScopeFrame::child(scope)
   let new_params = rename_param_list(f.params, inner, inner.reserved)
   // Hoist `var` names from the body into the function frame so
@@ -1429,7 +1745,7 @@ fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
   hoist_var_decls_into_scope(f.body, inner, inner.reserved)
   let new_body = rename_block_inline_in(f.body, inner, inner.reserved)
   {
-    name: f.name,
+    name: new_name,
     type_params: f.type_params,
     const_type_params: f.const_type_params,
     params: new_params,
@@ -1642,8 +1958,47 @@ fn rename_properties_in_stmt(
         rename_properties_in_block(body, prop_map),
       )
     Break(_) | Continue(_) | Empty | Debugger => stmt
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor_body) =>
+      NativeClassStmt(
+        rename_properties_in_class_decl(decl, prop_map),
+        match ctor_body {
+          Some(f) =>
+            Some({ ..f, body: rename_properties_in_block(f.body, prop_map) })
+          None => None
+        },
+      )
   }
+}
+
+///|
+/// Property-mangle a class declaration: rename method names + walk
+/// method bodies, rename property declaration names, and walk the
+/// constructor body (called separately for the IIFE-class shape).
+fn rename_properties_in_class_decl(
+  decl : @ast.TsClassDecl,
+  prop_map : Map[String, String],
+) -> @ast.TsClassDecl {
+  let new_methods : Array[@ast.TsClassMethodDecl] = []
+  for m in decl.methods {
+    let renamed_name = match prop_map.get(m.name) {
+      Some(short) => short
+      None => m.name
+    }
+    let new_body = match m.body {
+      Some(b) => Some(rename_properties_in_block(b, prop_map))
+      None => None
+    }
+    new_methods.push({ ..m, name: renamed_name, body: new_body })
+  }
+  let new_props : Array[@ast.TsClassPropertyDecl] = []
+  for p in decl.properties {
+    let renamed_name = match prop_map.get(p.name) {
+      Some(short) => short
+      None => p.name
+    }
+    new_props.push({ ..p, name: renamed_name })
+  }
+  { ..decl, methods: new_methods, properties: new_props }
 }
 
 ///|
@@ -1659,8 +2014,28 @@ fn rename_properties_in_expr(
       )
     MethodCall(recv, method, args) => {
       let new_args : Array[@ast.TsExpr] = []
-      for a in args {
-        new_args.push(rename_properties_in_expr(a, prop_map))
+      // `Object.defineProperty(obj, "key", desc)` / `Reflect.defineProperty(obj, "key", desc)`:
+      // the second argument names a property that the runtime
+      // writes onto `obj`. The mangler renames every `obj.key`
+      // / `obj["key"]` access, so the string literal here MUST
+      // be renamed in lockstep — otherwise the property is
+      // stored under its original name but read under the mangled
+      // one, surfacing as `Cannot read properties of undefined`
+      // in `_zod`-style instance brands.
+      let renames_define_prop_key = is_define_prop_call(recv, method) &&
+        args.length() >= 2
+      for i, a in args {
+        if i == 1 && renames_define_prop_key {
+          match a {
+            @ast.TsExpr::StringLit(s) =>
+              new_args.push(
+                @ast.TsExpr::StringLit(rename_prop_key(s, prop_map)),
+              )
+            _ => new_args.push(rename_properties_in_expr(a, prop_map))
+          }
+        } else {
+          new_args.push(rename_properties_in_expr(a, prop_map))
+        }
       }
       MethodCall(
         rename_properties_in_expr(recv, prop_map),
@@ -1862,6 +2237,16 @@ fn rename_properties_in_expr(
     NonNull(inner) => NonNull(rename_properties_in_expr(inner, prop_map))
     OptionalChain(inner) =>
       OptionalChain(rename_properties_in_expr(inner, prop_map))
+    NativeClassExpr(decl, ctor_body) =>
+      NativeClassExpr(
+        rename_properties_in_class_decl(decl, prop_map),
+        match ctor_body {
+          Some(f) =>
+            Some({ ..f, body: rename_properties_in_block(f.body, prop_map) })
+          None => None
+        },
+      )
+    PureCall(inner) => PureCall(rename_properties_in_expr(inner, prop_map))
     _ => expr
   }
 }

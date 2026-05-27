@@ -63,7 +63,7 @@ priv enum LastTok {
 } derive(Eq)
 
 ///|
-fn Emitter::new(pretty~ : Bool = true) -> Emitter {
+fn Emitter::new(pretty? : Bool = true) -> Emitter {
   {
     buf: StringBuilder::new(),
     indent: 0,
@@ -277,12 +277,12 @@ pub(all) struct TransformOutput {
 pub fn transform_source_full(
   source : String,
   base : JsxConfig,
-  with_sourcemap~ : Bool = false,
-  source_path~ : String = "input.ts",
-  output_path~ : String = "output.js",
-  mangle~ : Bool = false,
-  mangle_properties~ : Bool = false,
-  minify~ : Bool = false,
+  with_sourcemap? : Bool = false,
+  source_path? : String = "input.ts",
+  output_path? : String = "output.js",
+  mangle? : Bool = false,
+  mangle_properties? : Bool = false,
+  minify? : Bool = false,
 ) -> Result[TransformOutput, String] {
   // Parse via the module-block entry so we can inline `const enum`
   // use sites — the side list `mb.enums` carries the original
@@ -349,7 +349,7 @@ pub fn transform_source_full(
   // need to be updated in lockstep. For now, skip per-statement
   // mappings when mangling is on; consumers asking for both should
   // file a follow-up.
-  let emit_positions = (not(mangle)) && with_sourcemap
+  let emit_positions = not(mangle) && with_sourcemap
   for i, stmt in mangled.stmts {
     if emit_positions && i < positions.length() {
       let src_pos = e.line_index.position(positions[i])
@@ -413,6 +413,39 @@ fn emit_branch_body(e : Emitter, block : @ast.TsBlock) -> Unit {
 /// `if (cond) let x = 1;` is a syntax error: lexical declarations
 /// can't be the direct child of a control flow head. `function`
 /// declarations have the same restriction.
+/// Walk to the end of a block and check whether its terminal stmt
+/// is an `if` that would swallow a following `else`. The de-brace
+/// optimisation can't apply when that's true — emit must keep the
+/// surrounding `{…}` so the `else` binds to the outer `if`.
+fn block_ends_in_dangling_if(b : @ast.TsBlock) -> Bool {
+  if b.stmts.length() == 0 {
+    return false
+  }
+  stmt_ends_in_dangling_if(b.stmts[b.stmts.length() - 1])
+}
+
+///|
+fn stmt_ends_in_dangling_if(s : @ast.TsStmt) -> Bool {
+  match s {
+    // `if (...) X` with no else — swallows a following `else`.
+    If(_, _, None) => true
+    // `if (...) X else Y` — the recursion follows `else` because
+    // that's the branch where a *new* trailing else would attach.
+    If(_, _, Some(else_b)) => block_ends_in_dangling_if(else_b)
+    // Loop / labelled / with stmts whose body is a single bare-if
+    // also re-expose the dangling-else risk on the way out.
+    While(_, body) | DoWhile(_, body) => block_ends_in_dangling_if(body)
+    For(_, _, _, body) => block_ends_in_dangling_if(body)
+    ForOf(_, _, _, _, body)
+    | ForAwaitOf(_, _, _, _, body)
+    | ForIn(_, _, _, _, body) => block_ends_in_dangling_if(body)
+    With(_, body) => block_ends_in_dangling_if(body)
+    Label(_, inner) => stmt_ends_in_dangling_if(inner)
+    _ => false
+  }
+}
+
+///|
 fn can_braceless(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     Let(_, _, _) | Const(_, _, _) => false
@@ -496,7 +529,13 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.semi()
     }
     IndexAssign(recv, idx, value) => {
-      emit_expr(e, recv, 18)
+      if expr_stmt_needs_paren(recv) {
+        e.write("(")
+        emit_expr(e, recv, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, recv, 18)
+      }
       e.write("[")
       emit_expr(e, idx, 0)
       e.write("]")
@@ -506,7 +545,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, value, 0)
       e.semi()
     }
-    PropAssign(recv, prop, value) => {
+    PropAssign(recv, prop, value) =>
       // `@@get:name` / `@@set:name` are internal markers from the
       // class-desugar pass meaning "install a getter/setter on
       // the prototype". Emit them as `Object.defineProperty(...)`
@@ -534,18 +573,54 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         e.write("})")
         e.semi()
       } else {
-        emit_expr(e, recv, 18)
-        e.write(".")
-        e.write(strip_internal_prop_marker(prop))
+        // Same statement-start ambiguity as in the `Expr(...)` path:
+        // a `FuncExpr` / class / object-literal at the head of a
+        // statement parses as the declaration / block form, not as
+        // an expression. Wrap the receiver when it starts with one
+        // of those.
+        if expr_stmt_needs_paren(recv) {
+          e.write("(")
+          emit_expr(e, recv, 0)
+          e.write(")")
+        } else {
+          emit_expr(e, recv, 18)
+        }
+        let stripped = strip_internal_prop_marker(prop)
+        // Non-ident property names (`"~standard"` / `"a-b"` /
+        // `"0"`) require computed-index form — `recv.~standard =
+        // …` is a hard parse error. Reserved words (`return` /
+        // `for` / …) ARE valid in member-access position post-ES5,
+        // so they keep the dotted form.
+        if is_valid_js_ident(stripped) {
+          e.write(".")
+          e.write(stripped)
+        } else {
+          e.write("[")
+          emit_string_literal(e, stripped)
+          e.write("]")
+        }
         e.space()
         e.write("=")
         e.space()
         emit_expr(e, value, 0)
         e.semi()
       }
-    }
     Expr(expr) => {
-      emit_expr(e, expr, 0)
+      // Expression-statement start sentinel: JS parses `function …`
+      // / `class …` / `{ … }` at the head of a statement as a
+      // declaration / block, NOT as an expression. When an inline
+      // pass collapses `let x = function () {…}; x.foo = y` into
+      // `(function () {…}).foo = y`, the LHS recv is a FuncExpr —
+      // but if we emit it bare we get `function () {…}.foo = y`
+      // which the parser rejects. Wrap such expression statements
+      // in parens.
+      if expr_stmt_needs_paren(expr) {
+        e.write("(")
+        emit_expr(e, expr, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, expr, 0)
+      }
       e.semi()
     }
     Empty => e.semi()
@@ -579,7 +654,24 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_expr(e, cond, 0)
       e.write(")")
       e.space()
-      emit_branch_body(e, then_b)
+      // Dangling-else hazard: when this `if` has an `else` AND the
+      // then-body's last stmt is a bare `if` without `else`, the
+      // optional minify de-brace turns `if A { if B X } else Y`
+      // into `if A if B X else Y` — the else then binds to the
+      // INNER if, silently re-routing control flow. TypeScript's
+      // `tryParseModifier` (a deeply nested if/else chain inside
+      // an outer `if (cond) { if (!try) return; }`) is the
+      // textbook case. Force braces on the then-body whenever an
+      // else follows AND the body could swallow it.
+      let then_needs_braces = match else_opt {
+        Some(_) => block_ends_in_dangling_if(then_b)
+        None => false
+      }
+      if then_needs_braces {
+        emit_block(e, then_b)
+      } else {
+        emit_branch_body(e, then_b)
+      }
       match else_opt {
         Some(else_b) => {
           e.space()
@@ -606,8 +698,19 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       emit_branch_body(e, body)
     }
     DoWhile(cond, body) => {
-      e.write("do")
-      e.space()
+      // `do` is a keyword token; the next token must either be
+      // separated by a non-ident char (`{` of a block body) or by
+      // whitespace, otherwise `do <ident>=…` re-tokenizes as a
+      // single identifier (`dogS=…` instead of `do gS=…`).
+      e.word("do")
+      let body_first = if e.pretty || body.stmts.length() != 1 {
+        '{'
+      } else if can_braceless(body.stmts[0]) {
+        stmt_leading_byte(body.stmts[0])
+      } else {
+        '{'
+      }
+      e.sep_after_word(body_first)
       emit_branch_body(e, body)
       e.space()
       e.write("while")
@@ -750,7 +853,18 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
         Some(l) => e.write("continue " + l + ";")
         None => e.write("continue;")
       }
-    Block(b) => emit_block(e, b)
+    Block(b) =>
+      // Multi-declarator `let a = 1, b = 2;` parses as a `Block`
+      // wrapping individual `Let` stmts. Wrapping that in real
+      // `{…}` braces would change scope semantics — the bindings
+      // become local to a new block instead of staying in the
+      // enclosing scope. Detect the same-kind-decls pattern and
+      // unwrap inline; non-decl blocks keep their braces.
+      if try_emit_multi_decl_inline(e, b) {
+        ()
+      } else {
+        emit_block(e, b)
+      }
     NativeClassStmt(decl, ctor_body) => emit_native_class(e, decl, ctor_body)
     Label(name, inner) => {
       e.write(name + ":")
@@ -773,6 +887,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
 ///|
 /// Inside the head of a `for(init; cond; update)`, statements emit
 /// without a trailing semicolon (the loop syntax supplies the `;`).
+
 ///|
 /// Guess the first byte the emitter will write for `expr`. Used by
 /// `sep_after_word` to decide whether the optional whitespace
@@ -802,13 +917,21 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     CallExpr(callee, _) | NewExpr(callee, _) => expr_leading_byte(callee)
     MethodCall(recv, _, _) | PropAccess(recv, _) | IndexAccess(recv, _) =>
       expr_leading_byte(recv)
-    ArrowFunc(_, _, _, _) => '('
+    // ArrowFunc's 4th field is `is_async`. When set, the arrow
+    // emits as `async (…) => …` — the leading byte is `'a'`, NOT
+    // `'('`. Reporting `'('` here lets `sep_after_word` skip the
+    // space after `return`/`throw`/`yield`, producing
+    // `returnasync (...) => …` which V8 parses as a call to the
+    // identifier `returnasync` with `(...)` as arrow params and
+    // throws `Malformed arrow function parameter list`.
+    ArrowFunc(_, _, _, is_async) => if is_async { 'a' } else { '(' }
     FuncExpr(_) => '?'
     _ => '?'
   }
 }
 
 ///|
+
 ///|
 /// First byte a top-level statement will emit, for the purpose of
 /// deciding whether an `else` keyword must be separated from its
@@ -848,15 +971,73 @@ fn binding_leading_byte(b : @ast.TsBinding) -> Char {
 /// — a `Block` of same-kind single-ident declarations — and emit
 /// the original comma-separated form. Returns `true` when the
 /// pattern matched.
+
+///|
+/// Statement-level variant of `try_emit_multi_decl_for_head`. The
+/// parser packs `let a = 1, b = 2;` into a `Block` of two `Let`
+/// stmts so the multi-binder shape survives the AST. Re-emitting
+/// that block with real `{…}` braces breaks scope; emit it as
+/// `let a = 1, b = 2;` instead. Returns true when it handled the
+/// block; the caller falls back to `emit_block` otherwise.
+fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
+  if block.stmts.length() == 0 {
+    return false
+  }
+  let kind = match block.stmts[0] {
+    Var(_, _, _) => "var"
+    Let(_, _, _) => "let"
+    Const(_, _, _) => "const"
+    _ => return false
+  }
+  for s in block.stmts {
+    match s {
+      Var(_, _, _) => if kind != "var" { return false }
+      Let(_, _, _) => if kind != "let" { return false }
+      Const(_, _, _) => if kind != "const" { return false }
+      _ => return false
+    }
+  }
+  let emitted_kind = if kind == "const" && not(e.pretty) { "let" } else { kind }
+  e.word(emitted_kind)
+  let first_byte = match block.stmts[0] {
+    Var(b, _, _) | Let(b, _, _) | Const(b, _, _) => binding_leading_byte(b)
+    _ => '?'
+  }
+  e.sep_after_word(first_byte)
+  for i, s in block.stmts {
+    if i > 0 {
+      e.write(",")
+      e.space()
+    }
+    match s {
+      Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
+        emit_binding(e, b)
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
+      _ => ()
+    }
+  }
+  e.semi()
+  true
+}
+
+///|
 fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
   let block = match stmt {
     Block(b) => b
     _ => return false
   }
-  if block.stmts.length() < 2 {
+  if block.stmts.length() == 0 {
     return false
   }
-  // All stmts must be the same lexical kind.
+  // All stmts must be the same lexical kind. Even a single-stmt
+  // block needs unwrapping — if treeshake / fold removed the other
+  // declarations the remaining one must still emit as `let x = …`
+  // (not `{ let x = …; }`), otherwise the `for` head re-parses as
+  // a block expression and the loop bindings disappear.
   let kind = match block.stmts[0] {
     Var(_, _, _) => "var"
     Let(_, _, _) => "let"
@@ -874,11 +1055,7 @@ fn try_emit_multi_decl_for_head(e : Emitter, stmt : @ast.TsStmt) -> Bool {
   // Emit `kind name = init, name = init, ...`.
   // Downgrade `const` to `let` in minify mode (see `Const` cases
   // above).
-  let emitted_kind = if kind == "const" && not(e.pretty) {
-    "let"
-  } else {
-    kind
-  }
+  let emitted_kind = if kind == "const" && not(e.pretty) { "let" } else { kind }
   e.word(emitted_kind)
   // The first byte after the kind is the first binding's leading
   // byte (always `?` for identifier-only in our parser path here).
@@ -1036,7 +1213,10 @@ fn emit_binding(e : Emitter, binding : @ast.TsBinding) -> Unit {
             true
           }
           None => {
-            e.write(prop.key)
+            // Same quoting rule as object literals: non-identifier
+            // keys (`"~standard"`, `"foo-bar"`, etc.) MUST stay
+            // quoted or the destructure parses as a bare token.
+            emit_object_key(e, prop.key)
             false
           }
         }
@@ -1132,7 +1312,19 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     Var(name) => e.write(name)
     BinOp(op, l, r) => {
       let prec = binop_precedence(op)
-      emit_expr(e, l, prec)
+      // `??` cannot be mixed with `||` / `&&` without explicit
+      // parentheses — even when the precedence numbers suggest no
+      // wrap is needed (`??` is precedence 4, `||` is 5, so
+      // `a ?? b || c` would normally not wrap `b || c`), JS spec
+      // explicitly bans the unparenthesised mix as a SyntaxError.
+      // Force parens on either side.
+      if coalesce_mix_needs_paren(op, l) {
+        e.write("(")
+        emit_expr(e, l, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, l, prec)
+      }
       // Word operators (`instanceof`, `in`) start with identifier
       // bytes, so the optional-whitespace `space()` we use for
       // punctuator ops would produce illegal output like
@@ -1149,7 +1341,15 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         e.space()
       }
       e.write(binop_str(op))
+      // Token-boundary protection on the right: avoid `+ +x` →
+      // `""++x` (read as `""++ x`, postfix-increment on a literal,
+      // SyntaxError) and the same for `- -x`. Inserts a forced
+      // space when the binary operator and the right operand's
+      // leading operator would merge into `++` / `--`. Same idea
+      // for `< <x`, `> >x` — those merge into shift tokens.
       if is_word_op {
+        e.write(" ")
+      } else if right_needs_token_separator(op, r) {
         e.write(" ")
       } else {
         e.space()
@@ -1159,7 +1359,13 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         Pow => prec
         _ => prec + 1
       }
-      emit_expr(e, r, right_prec)
+      if coalesce_mix_needs_paren(op, r) {
+        e.write("(")
+        emit_expr(e, r, 0)
+        e.write(")")
+      } else {
+        emit_expr(e, r, right_prec)
+      }
     }
     UnaryOp(op, inner) =>
       match op {
@@ -1236,6 +1442,80 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             e.write("...")
             emit_expr(e, entry.1, 2)
           }
+          (key, ComputedProp(k_expr, v_expr)) if key.has_prefix("@@computed:") => {
+            // The parser tags computed-key entries with this
+            // sentinel and stores the actual `[expr]: value` as a
+            // `ComputedProp(expr, value)` payload. Emit them as
+            // the JS shorthand directly — without this branch the
+            // sentinel key would print verbatim and produce a
+            // double-colon `"@@computed:0":[expr]:value`.
+            e.write("[")
+            emit_expr(e, k_expr, 0)
+            e.write("]:")
+            e.space()
+            emit_expr(e, v_expr, 2)
+          }
+          (key, ComputedProp(k_expr, FuncExpr(f))) if key.has_prefix(
+              "@@get:@@computed:",
+            ) ||
+            key.has_prefix("@@set:@@computed:") => {
+            // Computed-key accessor: `get [expr]() {…}` /
+            // `set [expr](v) {…}`. Parser stacks the `@@get:` /
+            // `@@set:` sentinel on top of the `@@computed:N` key,
+            // wrapping the function in a `ComputedProp(k_expr, …)`.
+            // Without this branch the emit produced
+            // `"@@get:@@computed:N": [expr]: function() {…}` —
+            // syntactically invalid object literal.
+            let accessor = if key.has_prefix("@@get:") { "get" } else { "set" }
+            e.write(accessor)
+            e.write(" [")
+            emit_expr(e, k_expr, 0)
+            e.write("](")
+            emit_runtime_params(e, f.params)
+            e.write(")")
+            e.space()
+            emit_block(e, f.body)
+          }
+          (key, FuncExpr(f)) if key.has_prefix("@@get:") ||
+            key.has_prefix("@@set:") => {
+            // Accessor in object literal: parser tags `get foo() {}`
+            // / `set foo(v) {}` with a `@@get:` / `@@set:` sentinel
+            // on the property key. Emit the native ES syntax so the
+            // accessor actually installs as a getter/setter rather
+            // than as a plain string-keyed property.
+            let accessor = if key.has_prefix("@@get:") { "get" } else { "set" }
+            let real_name = key.substring(start=6, end=key.length()).to_string()
+            e.write(accessor)
+            e.write(" ")
+            emit_object_key(e, real_name)
+            e.write("(")
+            emit_runtime_params(e, f.params)
+            e.write(")")
+            e.space()
+            emit_block(e, f.body)
+          }
+          (key, FuncExpr(f)) if f.name == key && key != "" => {
+            // Method shorthand: `key(args) {...}`. The parser stores
+            // method shorthand as `(key, FuncExpr {name: key, ...})`.
+            // Re-emitting as the shorthand avoids introducing a
+            // named-function-expression self-binding that would
+            // shadow rewritten names (e.g. when `core.clone` is
+            // rewritten to `clone` and the method itself is named
+            // `clone` — the inner reference would loop forever
+            // otherwise).
+            if f.is_async {
+              e.write("async ")
+            }
+            if f.is_generator {
+              e.write("*")
+            }
+            emit_object_key(e, key)
+            e.write("(")
+            emit_runtime_params(e, f.params)
+            e.write(")")
+            e.space()
+            emit_block(e, f.body)
+          }
           _ => {
             // Non-identifier keys (`"Content-Type"`, `"foo bar"`,
             // numeric-looking, etc.) MUST stay quoted — otherwise
@@ -1266,8 +1546,15 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     }
     PropAccess(recv, name) => {
       emit_expr(e, recv, 18)
-      e.write(".")
-      e.write(strip_internal_prop_marker(name))
+      let stripped = strip_internal_prop_marker(name)
+      if is_valid_js_ident(stripped) {
+        e.write(".")
+        e.write(stripped)
+      } else {
+        e.write("[")
+        emit_string_literal(e, stripped)
+        e.write("]")
+      }
     }
     New(name, args) => {
       e.write("new ")
@@ -1359,7 +1646,23 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       e.write("=>")
       e.space()
       match body {
-        ArrowExpr(inner) => emit_expr(e, inner, 2)
+        ArrowExpr(inner) => {
+          // `() => { … }` parses as a block body, not an arrow
+          // returning an object literal. Wrap an ObjectLit-shaped
+          // expression in parens to keep the JS parser on the
+          // expression branch.
+          let needs_paren_for_obj = match inner {
+            ObjectLit(_) => true
+            _ => false
+          }
+          if needs_paren_for_obj {
+            e.write("(")
+            emit_expr(e, inner, 0)
+            e.write(")")
+          } else {
+            emit_expr(e, inner, 2)
+          }
+        }
         ArrowBlock(block) => emit_block(e, block)
       }
     }
@@ -1402,7 +1705,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     // TS-only wrappers — strip and emit the inner expression.
     As(inner, _) | Satisfies(inner, _) | NonNull(inner) =>
       emit_expr_body(e, inner)
-    OptionalChain(inner) => {
+    OptionalChain(inner) =>
       // The wrapped inner expression encodes the access shape; we
       // restore the `?.` separator here. Each `?.` step in the
       // original source produces one OptionalChain wrap, so
@@ -1420,28 +1723,35 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           e.write("]")
         }
         MethodCall(recv, method, args) => {
+          // `recv.method?.(args)` — the `?.` is on the CALL, not on
+          // the property access. The parser produces
+          // `OptionalChain(MethodCall(...))` only from this source
+          // shape, so emit the property access without `?.` and put
+          // the `?.` between the property and the call args.
           emit_expr(e, recv, 18)
-          e.write("?.")
+          e.write(".")
           e.write(strip_internal_prop_marker(method))
+          e.write("?.")
           emit_args(e, args)
         }
         Call(name, args) => {
+          // `name?.(args)` — optional call on a plain identifier.
           e.write(name)
           e.write("?.")
           emit_args(e, args)
         }
         CallExpr(callee, args) => {
+          // `(callee)?.(args)` — optional call on an arbitrary
+          // expression. `?.` sits between callee and args.
           emit_expr(e, callee, 18)
           e.write("?.")
           emit_args(e, args)
         }
         _ => emit_expr_body(e, inner)
       }
-    }
     JsxElement(tag, attrs, children) =>
       emit_jsx_element(e, tag, attrs, children)
-    NativeClassExpr(decl, ctor_body) =>
-      emit_native_class(e, decl, ctor_body)
+    NativeClassExpr(decl, ctor_body) => emit_native_class(e, decl, ctor_body)
     PureCall(inner) => {
       // Restore the `/* @__PURE__ */` annotation so downstream
       // minifiers (terser, esbuild, rolldown) keep treating the
@@ -1474,7 +1784,7 @@ fn emit_template_literal(
 ) -> Unit {
   e.write("`")
   for i, part in parts {
-    e.write(part)
+    e.write(escape_template_part(part))
     if i < exprs.length() {
       e.write("${")
       emit_expr(e, exprs[i], 0)
@@ -1482,6 +1792,37 @@ fn emit_template_literal(
     }
   }
   e.write("`")
+}
+
+///|
+/// Re-escape a "cooked" template literal segment so it round-trips
+/// safely as JS source. The parser stores parts with escape sequences
+/// already decoded (`\\\`` → literal backtick), so unescaped emit
+/// produces invalid syntax. Re-escape the three chars that have
+/// special meaning inside a template literal: `\\` → `\\\\`, `` ` ``
+/// → `\\\``, and `$` immediately before `{` → `\\${`. Other escape
+/// forms (`\\n`, `\\u0041`) decoded to their actual characters and
+/// stay as-is — JS template literals accept the raw characters.
+fn escape_template_part(s : String) -> String {
+  let buf = StringBuilder::new()
+  let chars = s.to_array()
+  let n = chars.length()
+  let mut i = 0
+  while i < n {
+    let c = chars[i]
+    if c == '\\' {
+      buf.write_string("\\\\")
+    } else if c == '`' {
+      buf.write_string("\\`")
+    } else if c == '$' && i + 1 < n && chars[i + 1] == '{' {
+      buf.write_string("\\${")
+      i = i + 1
+    } else {
+      buf.write_char(c)
+    }
+    i = i + 1
+  }
+  buf.to_string()
 }
 
 ///|
@@ -1563,6 +1904,7 @@ fn emit_jsx_child(e : Emitter, child : @ast.TsExpr) -> Unit {
 }
 
 ///|
+
 ///|
 /// Recognize the `Let / Const / Var(Ident(N), _, FuncExpr(f))`
 /// pattern the parser produces for `function foo() {…}` and emit a
@@ -1608,6 +1950,9 @@ fn try_emit_function_decl(e : Emitter, stmt : @ast.TsStmt) -> Bool {
 
 ///|
 fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
+  if f.is_async {
+    e.write("async ")
+  }
   e.write("function")
   if f.is_generator {
     e.write("*")
@@ -1615,7 +1960,27 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   // Synthesized class-desugar nodes carry a placeholder `<class>` /
   // `<anon>` name. Those aren't valid JS identifiers, so emit the
   // expression in its anonymous form (`function () {…}`).
-  if f.name != "" && is_valid_js_ident(f.name) {
+  //
+  // Reserved keyword names (`with`, `if`, `do`, `return`, …) ARE
+  // allowed as object-method shorthand keys, but NOT as function
+  // expression names — `function with() {}` is a hard parse error.
+  // When the parser captured a method-shorthand key as the
+  // function's name and that key is a reserved word, drop the
+  // name to keep the emit anonymous.
+  //
+  // Also drop the name when the body references the same name as
+  // a free variable. The named-function-expression binding shadows
+  // the outer reference: `X.toJSON = function toJSON() {
+  //   return toJSON(this.x);
+  // }` recurses forever — the inner `toJSON` resolves to itself,
+  // never to the module-level `toJSON` the source intended. This
+  // surfaces on every IIFE-lowered class method whose name
+  // collides with an imported function (effect's `EffectPrimitive
+  // .toJSON` is the textbook case).
+  if f.name != "" &&
+    is_valid_js_ident(f.name) &&
+    not(is_reserved_word(f.name)) &&
+    not(func_body_references_name_as_free_var(f, f.name)) {
     e.write(" ")
     e.write(f.name)
   }
@@ -1624,7 +1989,357 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   e.write(")")
   e.space()
   emit_block(e, f.body)
-  let _ = f.is_async
+}
+
+///|
+/// Scan a function body for free references to `name`. Stops short
+/// at nested function / arrow scopes that shadow the name with a
+/// parameter or local binding (those have their own `name` and
+/// can't conflict with the outer named-FuncExpr binding). Used by
+/// `emit_function_expr` to decide whether emitting the function
+/// name would create a self-shadow.
+fn func_body_references_name_as_free_var(
+  f : @ast.TsFunc,
+  name : String,
+) -> Bool {
+  for p in f.params {
+    if p.name == name {
+      return false
+    }
+    match p.binding {
+      Some(b) => if binding_introduces_name(b, name) { return false }
+      None => ()
+    }
+  }
+  block_references_name(f.body, name)
+}
+
+///|
+fn binding_introduces_name(b : @ast.TsBinding, name : String) -> Bool {
+  match b {
+    Ident(n) => n == name
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) =>
+            if binding_introduces_name(be.binding, name) {
+              return true
+            }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => binding_introduces_name(r, name)
+        None => false
+      }
+    }
+    Object(ob) => {
+      for prop in ob.props {
+        if binding_introduces_name(prop.binding, name) {
+          return true
+        }
+      }
+      false
+    }
+    Target(_) => false
+  }
+}
+
+///|
+fn block_references_name(block : @ast.TsBlock, name : String) -> Bool {
+  for s in block.stmts {
+    if stmt_references_name(s, name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_references_name(stmt : @ast.TsStmt, name : String) -> Bool {
+  match stmt {
+    Var(b, _, e) | Let(b, _, e) | Const(b, _, e) => {
+      if binding_introduces_name(b, name) {
+        return expr_references_name(e, name)
+      }
+      expr_references_name(e, name)
+    }
+    Expr(e) | Throw(e) => expr_references_name(e, name)
+    Return(opt) =>
+      match opt {
+        Some(e) => expr_references_name(e, name)
+        None => false
+      }
+    Assign(n, e) => n == name || expr_references_name(e, name)
+    CompoundAssign(n, _, e) => n == name || expr_references_name(e, name)
+    IndexAssign(t, idx, v) =>
+      expr_references_name(t, name) ||
+      expr_references_name(idx, name) ||
+      expr_references_name(v, name)
+    PropAssign(t, _, v) =>
+      expr_references_name(t, name) || expr_references_name(v, name)
+    If(c, t, els) => {
+      if expr_references_name(c, name) || block_references_name(t, name) {
+        return true
+      }
+      match els {
+        Some(b) => block_references_name(b, name)
+        None => false
+      }
+    }
+    While(c, b) | DoWhile(c, b) =>
+      expr_references_name(c, name) || block_references_name(b, name)
+    For(init, cond, update, body) => {
+      let init_hit = match init {
+        Some(s) => stmt_references_name(s, name)
+        None => false
+      }
+      if init_hit {
+        return true
+      }
+      let cond_hit = match cond {
+        Some(c) => expr_references_name(c, name)
+        None => false
+      }
+      if cond_hit {
+        return true
+      }
+      let update_hit = match update {
+        Some(s) => stmt_references_name(s, name)
+        None => false
+      }
+      update_hit || block_references_name(body, name)
+    }
+    ForOf(_, b, _, iter, body)
+    | ForAwaitOf(_, b, _, iter, body)
+    | ForIn(_, b, _, iter, body) => {
+      if binding_introduces_name(b, name) {
+        return expr_references_name(iter, name)
+      }
+      expr_references_name(iter, name) || block_references_name(body, name)
+    }
+    Try(t, catch_b, catch_body, finally_) => {
+      if block_references_name(t, name) {
+        return true
+      }
+      let catch_hits = match catch_body {
+        Some(b) => {
+          let shadowed = match catch_b {
+            Some(bb) => binding_introduces_name(bb, name)
+            None => false
+          }
+          if shadowed {
+            false
+          } else {
+            block_references_name(b, name)
+          }
+        }
+        None => false
+      }
+      if catch_hits {
+        return true
+      }
+      match finally_ {
+        Some(b) => block_references_name(b, name)
+        None => false
+      }
+    }
+    Switch(scr, cases) => {
+      if expr_references_name(scr, name) {
+        return true
+      }
+      for c in cases {
+        if block_references_name(c.body, name) {
+          return true
+        }
+      }
+      false
+    }
+    Block(b) => block_references_name(b, name)
+    Label(_, inner) => stmt_references_name(inner, name)
+    With(t, b) =>
+      expr_references_name(t, name) || block_references_name(b, name)
+    NativeClassStmt(_, _) => false
+    _ => false
+  }
+}
+
+///|
+fn expr_references_name(e : @ast.TsExpr, name : String) -> Bool {
+  match e {
+    Var(n) => n == name
+    Call(n, args) | New(n, args) => {
+      if n == name {
+        return true
+      }
+      for a in args {
+        if expr_references_name(a, name) {
+          return true
+        }
+      }
+      false
+    }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      if expr_references_name(callee, name) {
+        return true
+      }
+      for a in args {
+        if expr_references_name(a, name) {
+          return true
+        }
+      }
+      false
+    }
+    MethodCall(recv, _, args) => {
+      if expr_references_name(recv, name) {
+        return true
+      }
+      for a in args {
+        if expr_references_name(a, name) {
+          return true
+        }
+      }
+      false
+    }
+    PropAccess(recv, _) => expr_references_name(recv, name)
+    IndexAccess(recv, idx) =>
+      expr_references_name(recv, name) || expr_references_name(idx, name)
+    BinOp(_, l, r) | Seq(l, r) =>
+      expr_references_name(l, name) || expr_references_name(r, name)
+    Cond(c, t, els) =>
+      expr_references_name(c, name) ||
+      expr_references_name(t, name) ||
+      expr_references_name(els, name)
+    UnaryOp(_, v)
+    | NonNull(v)
+    | OptionalChain(v)
+    | Await(v)
+    | Spread(v)
+    | PureCall(v)
+    | YieldStar(v) => expr_references_name(v, name)
+    Yield(opt) =>
+      match opt {
+        Some(v) => expr_references_name(v, name)
+        None => false
+      }
+    AssignExpr(n, v) => n == name || expr_references_name(v, name)
+    CompoundAssignExpr(t, _, v) =>
+      expr_references_name(t, name) || expr_references_name(v, name)
+    AssignPattern(_, v) => expr_references_name(v, name)
+    PropAssignExpr(recv, _, v) =>
+      expr_references_name(recv, name) || expr_references_name(v, name)
+    IndexAssignExpr(recv, idx, v) =>
+      expr_references_name(recv, name) ||
+      expr_references_name(idx, name) ||
+      expr_references_name(v, name)
+    ComputedProp(k, v) =>
+      expr_references_name(k, name) || expr_references_name(v, name)
+    ArrayLit(items) => {
+      for i in items {
+        if expr_references_name(i, name) {
+          return true
+        }
+      }
+      false
+    }
+    ObjectLit(entries) => {
+      for ent in entries {
+        if expr_references_name(ent.1, name) {
+          return true
+        }
+      }
+      false
+    }
+    FuncExpr(g) => func_body_references_name_as_free_var(g, name)
+    ArrowFunc(params, _, body, _) => {
+      for p in params {
+        if p.name == name {
+          return false
+        }
+        match p.binding {
+          Some(b) => if binding_introduces_name(b, name) { return false }
+          None => ()
+        }
+      }
+      match body {
+        ArrowExpr(ee) => expr_references_name(ee, name)
+        ArrowBlock(b) => block_references_name(b, name)
+      }
+    }
+    As(v, _) | Satisfies(v, _) => expr_references_name(v, name)
+    TaggedTemplate(tag, _, _, exprs) => {
+      if expr_references_name(tag, name) {
+        return true
+      }
+      for ee in exprs {
+        if expr_references_name(ee, name) {
+          return true
+        }
+      }
+      false
+    }
+    TemplateLiteral(_, exprs) => {
+      for ee in exprs {
+        if expr_references_name(ee, name) {
+          return true
+        }
+      }
+      false
+    }
+    DynamicImport(spec, opts) => {
+      if expr_references_name(spec, name) {
+        return true
+      }
+      match opts {
+        Some(o) => expr_references_name(o, name)
+        None => false
+      }
+    }
+    NativeClassExpr(_, _) => false
+    _ => false
+  }
+}
+
+///|
+/// Predicate for the `Expr(expr)` statement: returns true when the
+/// expression's leading token would make the statement parse as
+/// something else (function / class declaration, object-literal
+/// destructure, etc.) without surrounding parens.
+fn expr_stmt_needs_paren(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    FuncExpr(_) => true
+    ArrowFunc(_, _, _, _) => false
+    ObjectLit(_) => true
+    NativeClassExpr(_, _) => true
+    // `({a, b} = rhs)` / `([a, b] = rhs)` — destructuring assignment
+    // at the head of a statement. JS parses a leading `{` as a
+    // block and a leading `[` as the start of an array literal /
+    // call (which is ambiguous in this position); the assign form
+    // must be parenthesised so the parser commits to the
+    // expression interpretation.
+    AssignPattern(b, _) =>
+      match b {
+        Object(_) | Array(_) => true
+        _ => false
+      }
+    // Recurse into shapes where the leading token sits inside.
+    AssignExpr(_, _) => false
+    PropAssignExpr(recv, _, _) => expr_stmt_needs_paren(recv)
+    IndexAssignExpr(recv, _, _) => expr_stmt_needs_paren(recv)
+    CompoundAssignExpr(recv, _, _) => expr_stmt_needs_paren(recv)
+    PropAccess(recv, _) => expr_stmt_needs_paren(recv)
+    IndexAccess(recv, _) => expr_stmt_needs_paren(recv)
+    CallExpr(callee, _) => expr_stmt_needs_paren(callee)
+    MethodCall(recv, _, _) => expr_stmt_needs_paren(recv)
+    BinOp(_, l, _) => expr_stmt_needs_paren(l)
+    Cond(c, _, _) => expr_stmt_needs_paren(c)
+    Seq(l, _) => expr_stmt_needs_paren(l)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => expr_stmt_needs_paren(inner)
+    _ => false
+  }
 }
 
 ///|
@@ -1686,6 +2401,7 @@ fn is_this_type_annotation_param(p : @ast.TsParam) -> Bool {
 /// decide whether to emit a name on a synthesized function
 /// expression. We only need a coarse rejector — the parser handles
 /// the full Unicode case for real source identifiers.
+
 ///|
 /// Emit an object-literal key. Valid JS identifiers and numeric
 /// literals stay unquoted; everything else (`Content-Type`,
@@ -1834,6 +2550,48 @@ fn binop_str(op : @ast.TsBinOp) -> String {
 }
 
 ///|
+/// Detect mixed `??` / `||` / `&&` operators that JS forbids
+/// without explicit parens. Spec: a `CoalesceExpression` cannot
+/// contain a LogicalOR/AND without `()`. The parser preserves
+/// source-level parens through structure, but emit-side rewrites
+/// (fold / inline / mangle) can produce the bare mix.
+/// Detect operator-character merges that would happen if the
+/// minifier dropped the optional whitespace between a binary
+/// operator and the right operand's leading token. `"" + +x`
+/// must keep a space — otherwise `""++x` reads as a postfix
+/// increment on the empty string, a SyntaxError. Same for
+/// `- -x` / `< <x` / `> >x`.
+fn right_needs_token_separator(op : @ast.TsBinOp, right : @ast.TsExpr) -> Bool {
+  let right_leader = match right {
+    UnaryOp(o, _) =>
+      match o {
+        Plus | PreInc => '+'
+        Neg | PreDec => '-'
+        Not => '!'
+        BitwiseNot => '~'
+        _ => '?'
+      }
+    _ => '?'
+  }
+  match op {
+    Add => right_leader == '+'
+    Sub => right_leader == '-'
+    _ => false
+  }
+}
+
+///|
+fn coalesce_mix_needs_paren(op : @ast.TsBinOp, operand : @ast.TsExpr) -> Bool {
+  match (op, operand) {
+    (Coalesce, BinOp(Or, _, _))
+    | (Coalesce, BinOp(And, _, _))
+    | (Or, BinOp(Coalesce, _, _))
+    | (And, BinOp(Coalesce, _, _)) => true
+    _ => false
+  }
+}
+
+///|
 fn binop_precedence(op : @ast.TsBinOp) -> Int {
   match op {
     Coalesce => 4
@@ -1943,8 +2701,10 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
     // consistent.
     PureCall(inner) => expr_precedence(inner)
     // TS-only wrappers — same precedence as their inner expression.
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      expr_precedence(inner)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => expr_precedence(inner)
   }
 }
 
@@ -1969,7 +2729,15 @@ fn emit_native_class(
     e.write(" ")
     e.write("extends")
     e.sep_after_word('A')
-    e.write(decl.base_names[0])
+    // Expression-shaped heritage (`extends declare(args)` /
+    // `extends make(ast)` / `extends class {…}`) lives in
+    // `base_expr`; `base_names[0]` carries the sentinel
+    // `"<expr-base>"`. Print the parsed expression directly so the
+    // emit round-trips.
+    match decl.base_expr {
+      Some(expr) => emit_expr(e, expr, 18)
+      None => e.write(decl.base_names[0])
+    }
   }
   e.space()
   e.open_block()
@@ -1994,7 +2762,41 @@ fn emit_native_class(
       e.word("static")
       e.sep_after_word('A')
     }
-    e.write(m.name)
+    // `async` / `*` modifiers — without these the emit prints the
+    // method as plain sync, and any `await` inside the body becomes
+    // a SyntaxError (prettier's `class { async read(task) { …
+    // await … } }` was the trigger). Order matches source syntax:
+    // `async` first, then `*` (or both for async generators).
+    if m.is_async {
+      e.word("async")
+      e.sep_after_word('A')
+    }
+    if m.is_generator {
+      e.write("*")
+    }
+    // Accessor methods (`get foo()` / `set foo(v)`) get the keyword
+    // prefix; without it the emitted property is a plain method and
+    // the runtime never installs the getter/setter — Yjs's
+    // `AbstractStruct.deleted` getter, for example, regresses to a
+    // throwing stub on every access.
+    if m.accessor == "get" {
+      e.word("get")
+      e.sep_after_word('A')
+    } else if m.accessor == "set" {
+      e.word("set")
+      e.sep_after_word('A')
+    }
+    match m.key_expr {
+      Some(k) => {
+        // Computed-key method: `[expr](args) {…}`. Parser stores
+        // the expression on `key_expr`; `m.name` is the sentinel
+        // `<computed>` and is unused by emit here.
+        e.write("[")
+        emit_expr(e, k, 0)
+        e.write("]")
+      }
+      None => e.write(m.name)
+    }
     e.write("(")
     for i, p in m.params {
       if i > 0 {
@@ -2002,6 +2804,23 @@ fn emit_native_class(
         e.space()
       }
       e.write(p.0)
+      // Default-value initializer (`x = 5`) when the parser captured
+      // one — `param_defaults` is positionally aligned with `params`
+      // (or shorter when there are no defaults at all). Without this
+      // the native-class emitter drops `=140` from babel parser's
+      // `parseProgram(t, e=140, s=…)` and the loop end marker never
+      // matches, hanging the parser on every input.
+      if i < m.param_defaults.length() {
+        match m.param_defaults[i] {
+          Some(d) => {
+            e.space()
+            e.write("=")
+            e.space()
+            emit_expr(e, d, 2)
+          }
+          None => ()
+        }
+      }
     }
     e.write(")")
     e.space()
@@ -2013,5 +2832,88 @@ fn emit_native_class(
       }
     }
   }
+  // Static field initializers (ES2022 `static foo = init;`). Parser
+  // stashes them on `decl.static_field_inits` for native classes;
+  // emit them in source order so the class is self-contained. Non-
+  // ident names (`"~standard"` / `"a-b"`) need bracket syntax
+  // (`static ["~standard"] = init;`) — `static ~standard = …` is a
+  // hard parse error.
+  for entry in decl.static_field_inits {
+    e.nl()
+    e.word("static")
+    e.sep_after_word('A')
+    if is_valid_js_ident(entry.0) {
+      e.write(entry.0)
+    } else {
+      e.write("[")
+      emit_string_literal(e, entry.0)
+      e.write("]")
+    }
+    e.space()
+    e.write("=")
+    e.space()
+    emit_expr(e, entry.1, 2)
+    e.semi()
+  }
   e.close_block()
+}
+
+///|
+/// JS reserved-word check used by `emit_function_expr` to suppress
+/// the function name when it would re-purpose a keyword as an
+/// identifier (`function with() {}` is invalid). The list mirrors
+/// the strict-mode reserved set plus the always-reserved keywords
+/// from the ES spec.
+fn is_reserved_word(s : String) -> Bool {
+  match s {
+    "break"
+    | "case"
+    | "catch"
+    | "class"
+    | "const"
+    | "continue"
+    | "debugger"
+    | "default"
+    | "delete"
+    | "do"
+    | "else"
+    | "export"
+    | "extends"
+    | "false"
+    | "finally"
+    | "for"
+    | "function"
+    | "if"
+    | "import"
+    | "in"
+    | "instanceof"
+    | "let"
+    | "new"
+    | "null"
+    | "return"
+    | "super"
+    | "switch"
+    | "this"
+    | "throw"
+    | "true"
+    | "try"
+    | "typeof"
+    | "var"
+    | "void"
+    | "while"
+    | "with"
+    | "yield"
+    | "enum"
+    | "await"
+    | "implements"
+    | "interface"
+    | "package"
+    | "private"
+    | "protected"
+    | "public"
+    | "static"
+    | "arguments"
+    | "eval" => true
+    _ => false
+  }
 }

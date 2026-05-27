@@ -51,9 +51,7 @@ test "inline: pure literal rhs folds even with multiple stmts between" {
 test "inline: skipped when binding is captured by a nested function" {
   // The arrow captures `y` by reference; inlining would change
   // when the rhs evaluates relative to the closure.
-  let out = inline_one(
-    "function f(x) { const y = x + 1; return () => y; }\n",
-  )
+  let out = inline_one("function f(x) { const y = x + 1; return () => y; }\n")
   assert_true(out.contains("const y"))
 }
 

@@ -107,17 +107,26 @@ pub fn BundleOptions::with_aliases(
 }
 
 ///|
-pub fn BundleOptions::with_minify(self : BundleOptions, m : Bool) -> BundleOptions {
+pub fn BundleOptions::with_minify(
+  self : BundleOptions,
+  m : Bool,
+) -> BundleOptions {
   { ..self, minify: m }
 }
 
 ///|
-pub fn BundleOptions::with_fold(self : BundleOptions, f : Bool) -> BundleOptions {
+pub fn BundleOptions::with_fold(
+  self : BundleOptions,
+  f : Bool,
+) -> BundleOptions {
   { ..self, fold: f }
 }
 
 ///|
-pub fn BundleOptions::with_mangle(self : BundleOptions, m : Bool) -> BundleOptions {
+pub fn BundleOptions::with_mangle(
+  self : BundleOptions,
+  m : Bool,
+) -> BundleOptions {
   { ..self, mangle: m }
 }
 
@@ -180,6 +189,15 @@ priv struct ModuleNode {
   // (specifier, default_binding?, named_bindings, namespace_binding?,
   // type_only).
   import_decls : Array[@ast.TsImportDecl]
+  // Named exports surfaced by this module, used by the linker to
+  // resolve `import { X as Y } from "./this"` references in other
+  // modules back to this module's renamed local binding.
+  export_specs : Array[@ast.TsExportSpec]
+  // `export { X } from "./a"` / `export * from "./a"` re-exports.
+  // The linker walks the chain so an `import { Hono } from "./hono"`
+  // can resolve through `index.js` (which re-exports from
+  // `./hono.js`) all the way to the actual declaration.
+  reexport_specs : Array[@ast.TsReExportSpec]
   // Names this module declared with a `@__PURE__` /
   // `@__NO_SIDE_EFFECTS__` JSDoc tag. Union across modules
   // becomes the assumed-pure set fed into purity analysis.
@@ -294,12 +312,27 @@ pub fn bundle_modules(
   let external_seen : Map[String, Bool] = {}
   match
     load_module_graph(
-      files, entry, modules, external_imports, external_seen, opts.aliases,
+      files,
+      entry,
+      modules,
+      external_imports,
+      external_seen,
+      opts.aliases,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
   let order = topological_order(modules, entry)
+  // Run the cross-module linker before any pass that operates on
+  // the combined block. Phase 1 gives each module's top-level
+  // bindings a globally-unique name when they collide; phase 2
+  // rewrites imported references to point at the renamed export.
+  // Without this, two modules each declaring `var Hono` collapse
+  // into one binding and `import { HonoBase } from "./hono-base"`
+  // (which re-exports `Hono as HonoBase`) leaves `HonoBase` as a
+  // free variable in the consumer.
+  let link_renames = link_module_graph(modules, order, external_imports)
+  let mut mangle_export_renames : Map[String, String] = {}
   let e = Emitter::new(pretty=not(opts.minify))
   if opts.with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
@@ -382,11 +415,14 @@ pub fn bundle_modules(
       sources.push(path)
       sources_content.push(m.source)
       combined_line_indices.push(LineIndex::new(m.source))
-      let has_positions = m.block.stmt_positions.length() == m.block.stmts.length()
+      let has_positions = m.block.stmt_positions.length() ==
+        m.block.stmts.length()
       for j, s in m.block.stmts {
         combined_stmts.push(s)
         if has_positions {
-          combined_positions.push(encode_combined_position(m.block.stmt_positions[j], source_id))
+          combined_positions.push(
+            encode_combined_position(m.block.stmt_positions[j], source_id),
+          )
         } else {
           combined_positions.push(encode_combined_position(0, source_id))
         }
@@ -466,7 +502,7 @@ pub fn bundle_modules(
       // safe to rename. This is what upgrades `--mangle-properties`
       // from "heuristic best-effort" to "type-checked safe": you
       // never get a silently-broken bundle.
-      let mut effective_mangle_props = opts.mangle_properties
+      let effective_mangle_props = opts.mangle_properties
       let extra_reserved : Array[String] = []
       // Caller-supplied type-declared property names (interfaces /
       // type aliases / classes). These are always part of the
@@ -487,9 +523,23 @@ pub fn bundle_modules(
           }
         }
         if wildcard {
-          // Bail out on property mangling — we can't prove
-          // safety. Identifier mangling still runs.
-          effective_mangle_props = false
+          // User-declared property names can't be safely renamed
+          // (dynamic `obj[runtime_key]` access reaches arbitrary
+          // names). But mtsc-synthesized internal markers — the
+          // `__private_brand__N__X` rewrite the parser uses for
+          // `#X` private fields — are unreachable from user code
+          // by definition. Switch to "mangle internals only":
+          // every property name COLLECTED from the bundle goes
+          // into the reserved set except those matching the
+          // internal-marker prefix. The mangle pass then renames
+          // just the markers.
+          let collected : Map[String, Bool] = {}
+          collect_property_names(combined, collected)
+          for n in collected.keys() {
+            if not(is_internal_marker_property(n)) {
+              extra_reserved.push(n)
+            }
+          }
         }
       }
       // Dead-property elimination runs before mangling so the
@@ -508,14 +558,33 @@ pub fn bundle_modules(
         }
         combined = drop_dead_properties_block(combined, reserved_set)
       }
+      // External `import` headers (`import os from "os"`, etc.)
+      // sit OUTSIDE `combined` and are emitted by the linker around
+      // the merged block. The mangler never sees them, so without
+      // this reservation it can hand the short name `os` to a
+      // renamed CJS helper inside the bundle and produce
+      // `SyntaxError: Identifier 'os' has already been declared`.
+      let external_reserved : Array[String] = []
+      for n in external_import_bindings(external_imports).keys() {
+        external_reserved.push(n)
+      }
       let mangler_cfg = ManglerConfig::default()
         .with_mangle_properties(effective_mangle_props)
         .with_reserved_properties(extra_reserved)
+        .with_reserved(external_reserved)
         // The bundle has no public ABI of its own — every binding
         // becomes internal once we glue modules together, so the
         // top-level can be renamed freely.
         .with_preserve_top_level(false)
-      combined = mangle_block(combined, mangler_cfg)
+      let (mangled_block, mangle_renames) = mangle_block_with_renames(
+        combined, mangler_cfg,
+      )
+      combined = mangled_block
+      // Carry the mangle pass's rename map forward so the
+      // entry-export emit at the bottom can write the right short
+      // name for `export default app` even after `app` was
+      // renamed to e.g. `aq`.
+      mangle_export_renames = mangle_renames
     }
     if opts.minify {
       // Inline runs before peephole so `const X = expr; return X`
@@ -534,7 +603,9 @@ pub fn bundle_modules(
       // was lost (synthesized by a transform) have an out-of-range
       // source-id and are simply skipped.
       if opts.with_sourcemap && has_combined_positions {
-        let (offset, source_id) = decode_combined_position(combined.stmt_positions[i])
+        let (offset, source_id) = decode_combined_position(
+          combined.stmt_positions[i],
+        )
         if source_id < combined_line_indices.length() {
           e.line_index = combined_line_indices[source_id]
           match e.smap {
@@ -548,16 +619,48 @@ pub fn bundle_modules(
       emit_stmt(e, s)
       e.nl()
     }
+    // After the combined emit, surface the entry module's exports
+    // so the bundle is consumable as an ES module. The mangle path
+    // doesn't track its own short-name renames here, so the
+    // entry export's `local_name` falls back through link_renames
+    // — bindings the mangle pass renamed end up referenced by
+    // their pre-mangle (post-link) name and the mangle pass takes
+    // care of substituting them since the export ref counts as a
+    // use.
+    match modules.get(entry) {
+      Some(em) =>
+        if em.export_specs.length() > 0 {
+          // Chain link-renames then mangle-renames: link first
+          // (`app` -> `app`) then mangle (`app` -> `aq`). The
+          // bundle output's `export default <name>` must use the
+          // POST-mangle short form because that's what survives in
+          // the body.
+          let entry_renames = compose_renames(
+            link_renames.get(entry).unwrap_or({}),
+            mangle_export_renames,
+          )
+          emit_entry_exports(e, em, entry_renames)
+        }
+      None => ()
+    }
   } else {
     for i, path in order {
       let m = match modules.get(path) {
         Some(node) => node
         None => continue
       }
-      e.write("// ===== ")
-      e.write(path)
-      e.write(" =====")
-      e.nl()
+      // Skip the module banner entirely in minify mode: `e.nl()` is
+      // a no-op there and the `//` comment would swallow every
+      // following statement until the next real newline (typically
+      // dozens of KB later, inside the first multi-line template
+      // literal) — turning the rest of the module's parse into
+      // dead text.
+      if not(opts.minify) {
+        e.write("// ===== ")
+        e.write(path)
+        e.write(" =====")
+        e.nl()
+      }
       let _ = i
       sources.push(path)
       sources_content.push(m.source)
@@ -579,6 +682,14 @@ pub fn bundle_modules(
         emit_stmt(e, stmt)
         e.nl()
       }
+      // Per-module emit path: surface the entry module's exports
+      // at the tail (mirror of the combined-emit branch above).
+      if path == entry {
+        if m.export_specs.length() > 0 {
+          let entry_renames = link_renames.get(entry).unwrap_or({})
+          emit_entry_exports(e, m, entry_renames)
+        }
+      }
     }
   }
   let sm_json : String? = match e.smap {
@@ -586,12 +697,7 @@ pub fn bundle_modules(
       Some(b.to_json_multi(sources, sources_content, output_path="bundle.js"))
     None => None
   }
-  Ok({
-    js: e.to_string(),
-    sourcemap: sm_json,
-    modules: module_paths,
-    warnings,
-  })
+  Ok({ js: e.to_string(), sourcemap: sm_json, modules: module_paths, warnings })
 }
 
 ///|
@@ -666,6 +772,8 @@ fn load_module_graph(
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
+    export_specs: mb.exports,
+    reexport_specs: mb.reexports,
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
   let resolved : Map[String, String] = {}
@@ -699,8 +807,7 @@ fn load_module_graph(
             resolved[imp.module_spec] = dep_path
             match
               load_module_graph(
-                files, dep_path, modules, external_imports, external_seen,
-                aliases,
+                files, dep_path, modules, external_imports, external_seen, aliases,
               ) {
               Ok(_) => ()
               Err(e) => return Err(e)
@@ -712,8 +819,7 @@ fn load_module_graph(
               resolved[imp.module_spec] = dep_path
               match
                 load_module_graph(
-                  files, dep_path, modules, external_imports, external_seen,
-                  aliases,
+                  files, dep_path, modules, external_imports, external_seen, aliases,
                 ) {
                 Ok(_) => ()
                 Err(e) => return Err(e)
@@ -733,6 +839,58 @@ fn load_module_graph(
         }
     }
   }
+  // Re-exports (`export { X } from "./a"`, `export * from "./a"`)
+  // also pull `./a` into the bundle. The graph loader previously
+  // walked only `mb.imports`, so re-exported dependencies fell out
+  // of the graph entirely. Mirror the loop above for each re-export
+  // whose specifier is relative; bare-specifier re-exports become
+  // external imports just like bare imports.
+  for re in mb.reexports {
+    if re.type_only {
+      continue
+    }
+    match resolve_relative(path, re.module_spec) {
+      Some(base_dep) => {
+        let dep_path = resolve_with_extensions(files, base_dep)
+        resolved[re.module_spec] = dep_path
+        match
+          load_module_graph(
+            files, dep_path, modules, external_imports, external_seen, aliases,
+          ) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      None =>
+        match aliases.get(re.module_spec) {
+          Some(dep_path) => {
+            resolved[re.module_spec] = dep_path
+            match
+              load_module_graph(
+                files, dep_path, modules, external_imports, external_seen, aliases,
+              ) {
+              Ok(_) => ()
+              Err(e) => return Err(e)
+            }
+          }
+          None =>
+            if files.contains(re.module_spec) {
+              let dep_path = resolve_with_extensions(files, re.module_spec)
+              resolved[re.module_spec] = dep_path
+              match
+                load_module_graph(
+                  files, dep_path, modules, external_imports, external_seen, aliases,
+                ) {
+                Ok(_) => ()
+                Err(e) => return Err(e)
+              }
+            }
+          // Bare re-export targets aren't tracked as external —
+          // the consumer's runtime won't see them unless they
+          // also become a direct import. v0 limitation.
+        }
+    }
+  }
   // Finalize the entry with the resolved-imports map populated.
   modules[path] = {
     path,
@@ -742,6 +900,8 @@ fn load_module_graph(
     import_decls: mb.imports,
     pure_declarations: mb.pure_declarations,
     type_aliases: mb.type_aliases,
+    export_specs: mb.exports,
+    reexport_specs: mb.reexports,
   }
   Ok(())
 }
@@ -872,7 +1032,7 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
 /// to a wider encoding, but a parallel side-array would be the
 /// cleaner answer at that point.
 fn encode_combined_position(offset : Int, source_id : Int) -> Int {
-  (offset * 256) + (source_id % 256)
+  offset * 256 + source_id % 256
 }
 
 ///|
@@ -880,4 +1040,113 @@ fn decode_combined_position(encoded : Int) -> (Int, Int) {
   let source_id = encoded % 256
   let offset = encoded / 256
   (offset, source_id)
+}
+
+///|
+/// Emit the entry module's `export …` statements at the tail of
+/// the bundle so a consumer that imports the result can find
+/// the symbols the source declared as public. The linker's
+/// per-module rename map turns each `local_name` into its final
+/// post-link form.
+fn emit_entry_exports(
+  e : Emitter,
+  m : ModuleNode,
+  renames : Map[String, String],
+) -> Unit {
+  // Group default vs named.
+  let default_local : String? = {
+    let mut found : String? = None
+    for spec in m.export_specs {
+      if spec.export_name == "default" {
+        found = Some(renames.get(spec.local_name).unwrap_or(spec.local_name))
+        break
+      }
+    }
+    found
+  }
+  let named : Array[(String, String)] = []
+  for spec in m.export_specs {
+    if spec.export_name == "default" {
+      continue
+    }
+    let local = renames.get(spec.local_name).unwrap_or(spec.local_name)
+    named.push((local, spec.export_name))
+  }
+  match default_local {
+    Some(local) => {
+      e.write("export default ")
+      e.write(local)
+      e.semi()
+      e.nl()
+    }
+    None => ()
+  }
+  if named.length() > 0 {
+    e.write("export ")
+    e.write("{ ")
+    for i, pair in named {
+      if i > 0 {
+        e.write(", ")
+      }
+      if pair.0 == pair.1 {
+        e.write(pair.0)
+      } else {
+        e.write(pair.0)
+        e.write(" as ")
+        e.write(pair.1)
+      }
+    }
+    e.write(" }")
+    e.semi()
+    e.nl()
+  }
+}
+
+///|
+/// Chain two rename maps: `first` is applied to the original name,
+/// then `second` is applied to the result. Output is a fresh map
+/// where each key from `first` (or that survives the chain) maps
+/// to the final name post-`second`.
+fn compose_renames(
+  first : Map[String, String],
+  second : Map[String, String],
+) -> Map[String, String] {
+  let out : Map[String, String] = {}
+  // Walk every input that either map touched.
+  let seen : Map[String, Bool] = {}
+  for k in first.keys() {
+    seen[k] = true
+  }
+  for k in second.keys() {
+    seen[k] = true
+  }
+  for k in seen.keys() {
+    let after_first = first.get(k).unwrap_or(k)
+    let after_second = second.get(after_first).unwrap_or(after_first)
+    if after_second != k {
+      out[k] = after_second
+    }
+  }
+  out
+}
+
+///|
+/// True when `name` is one of mtsc's internal property markers that
+/// user code can never reach (they're synthesized by the parser).
+/// Used by the wildcard-mangle-property fallback: even when a
+/// `obj[runtime_key]` access disables property mangling for safety,
+/// these still mangle because their access surface is entirely
+/// mtsc-controlled.
+fn is_internal_marker_property(name : String) -> Bool {
+  // Keep this in lockstep with `is_class_metadata_key` in
+  // `iife_class_lift.mbt`: every metadata name the parser
+  // synthesizes on the IIFE-lowered class shape (`__super_proto`,
+  // `__brand__`, `__private_brand__N__X`) is private to mtsc — no
+  // user code can reach it, so it stays safe to rename even in the
+  // wildcard / dynamic-access fallback. Without this, prettier's
+  // bundle keeps 236+ raw `__super_proto` strings because the IIFE
+  // form survives whenever lift declines.
+  name == "__super_proto" ||
+  name == "__brand__" ||
+  name.has_prefix("__private_brand__")
 }

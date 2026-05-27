@@ -28,11 +28,12 @@ test "jsdoc: description-only block" {
 ///|
 test "jsdoc: multiline description with leading stars" {
   let r = parse_jsdoc_block(
-    #|/**
-    #| * First line.
-    #| * Second line.
-    #| */
-    ,
+    (
+      #|/**
+      #| * First line.
+      #| * Second line.
+      #| */
+    ),
   ).unwrap()
   assert_true(r.description.contains("First line"))
   assert_true(r.description.contains("Second line"))
@@ -60,10 +61,11 @@ test "jsdoc: @deprecated with message" {
 ///|
 test "jsdoc: @param with type + name + description" {
   let r = parse_jsdoc_block(
-    #|/**
-    #| * @param {string} name - The user's name.
-    #| */
-    ,
+    (
+      #|/**
+      #| * @param {string} name - The user's name.
+      #| */
+    ),
   ).unwrap()
   match r.tags[0] {
     Param(name, ty, desc) => {
@@ -110,14 +112,15 @@ test "jsdoc: @__NO_SIDE_EFFECTS__ tag" {
 ///|
 test "jsdoc: mixed tags + description" {
   let r = parse_jsdoc_block(
-    #|/**
-    #| * Compute the sum.
-    #| * @param {number} a
-    #| * @param {number} b
-    #| * @returns {number}
-    #| * @deprecated Use add2 instead.
-    #| */
-    ,
+    (
+      #|/**
+      #| * Compute the sum.
+      #| * @param {number} a
+      #| * @param {number} b
+      #| * @returns {number}
+      #| * @deprecated Use add2 instead.
+      #| */
+    ),
   ).unwrap()
   assert_true(r.description.contains("Compute the sum"))
   // Tag order is preserved.
@@ -149,9 +152,7 @@ test "jsdoc: unknown tags fall through to Other" {
 
 ///|
 test "jsdoc: nested braces in type" {
-  let r = parse_jsdoc_block(
-    "/** @param {{ x: number, y: number }} pt */",
-  ).unwrap()
+  let r = parse_jsdoc_block("/** @param {{ x: number, y: number }} pt */").unwrap()
   match r.tags[0] {
     Param(name, ty, _) => {
       assert_eq(name, "pt")

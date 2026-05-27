@@ -220,7 +220,10 @@ test "bench checker: small mixed declarations (~7 decls)" (it : @bench.T) {
 test "bench checker: medium tagged-union + asserts (~6 funcs, ~3 ifaces)" (
   it : @bench.T,
 ) {
-  let module_ = @parser.parse_module_from_source_with_const_values(bench_medium_source, {}) catch {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_medium_source,
+    {},
+  ) catch {
     _ => return
   }
   it.bench(fn() {
@@ -233,7 +236,10 @@ test "bench checker: medium tagged-union + asserts (~6 funcs, ~3 ifaces)" (
 test "bench checker: advanced types (conditional/mapped/template-literal)" (
   it : @bench.T,
 ) {
-  let module_ = @parser.parse_module_from_source_with_const_values(bench_advanced_source, {}) catch {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_advanced_source,
+    {},
+  ) catch {
     _ => return
   }
   it.bench(fn() {
@@ -244,7 +250,10 @@ test "bench checker: advanced types (conditional/mapped/template-literal)" (
 
 ///|
 test "bench checker: 100 interfaces with cross-references" (it : @bench.T) {
-  let module_ = @parser.parse_module_from_source_with_const_values(bench_wide_100, {}) catch {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_wide_100,
+    {},
+  ) catch {
     _ => return
   }
   it.bench(fn() {
@@ -255,7 +264,10 @@ test "bench checker: 100 interfaces with cross-references" (it : @bench.T) {
 
 ///|
 test "bench checker: 500 interfaces with cross-references" (it : @bench.T) {
-  let module_ = @parser.parse_module_from_source_with_const_values(bench_wide_500, {}) catch {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_wide_500,
+    {},
+  ) catch {
     _ => return
   }
   it.bench(fn() {
@@ -266,7 +278,10 @@ test "bench checker: 500 interfaces with cross-references" (it : @bench.T) {
 
 ///|
 test "bench checker: 2000 interfaces (scale point)" (it : @bench.T) {
-  let module_ = @parser.parse_module_from_source_with_const_values(bench_wide_2000, {}) catch {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_wide_2000,
+    {},
+  ) catch {
     _ => return
   }
   it.bench(fn() {
@@ -277,7 +292,10 @@ test "bench checker: 2000 interfaces (scale point)" (it : @bench.T) {
 
 ///|
 test "bench checker: 5000 interfaces (scale point)" (it : @bench.T) {
-  let module_ = @parser.parse_module_from_source_with_const_values(bench_wide_5000, {}) catch {
+  let module_ = @parser.parse_module_from_source_with_const_values(
+    bench_wide_5000,
+    {},
+  ) catch {
     _ => return
   }
   it.bench(fn() {
@@ -306,9 +324,7 @@ test "bench checker: generic-heavy (100 helpers, 100 call sites)" (
 
 ///|
 /// JSX-heavy: 20 components + 100 call sites against `check_jsx_attrs`.
-test "bench checker: JSX-heavy (20 components, 100 call sites)" (
-  it : @bench.T,
-) {
+test "bench checker: JSX-heavy (20 components, 100 call sites)" (it : @bench.T) {
   let module_ = @parser.parse_module_from_source_with_const_values(
     bench_jsx_heavy,
     {},
@@ -369,11 +385,8 @@ test "bench checker: function-body walk only (500 interfaces)" (it : @bench.T) {
 ///   moon test --target native -p checker --filter "bench checker: TypeScript"
 async test "bench checker: TypeScript compiler source (file IO)" {
   let candidates = [
-    "typescript/src/lib/es5.d.ts",
-    "typescript/src/lib/dom.generated.d.ts",
-    "typescript/src/compiler/scanner.ts",
-    "typescript/src/compiler/parser.ts",
-    "typescript/src/compiler/checker.ts",
+    "typescript/src/lib/es5.d.ts", "typescript/src/lib/dom.generated.d.ts", "typescript/src/compiler/scanner.ts",
+    "typescript/src/compiler/parser.ts", "typescript/src/compiler/checker.ts",
   ]
   // Parse each candidate once, then time only the checker pass over
   // the resulting `TsModule`. Capture the input character count so we
@@ -432,7 +445,6 @@ async test "bench checker: TypeScript compiler source (file IO)" {
     let start = @bench.monotonic_clock_start()
     for _ in 0..<iters {
       let _ = check_module_function_bodies(module_)
-
     }
     let total_us = @bench.monotonic_clock_end(start)
     if total_us > 0.0 {

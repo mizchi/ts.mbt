@@ -85,7 +85,11 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
       let _ = self.parse_interface()
       Empty
     }
-    Type => {
+    Type if self.peek_at(1).kind is Ident(_) => {
+      // `type Foo = …` / `type Foo<…> = …` — type alias decl.
+      // Other follow-ups (`type.foo = …`, `type[i] = …`, `type()`,
+      // `type;`) leave `type` as a plain identifier so the
+      // expression-statement parser below picks it up.
       self.skip_type_alias()
       Empty
     }

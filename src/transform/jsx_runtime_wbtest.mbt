@@ -45,17 +45,9 @@ fn assert_emit_lacks(
 ///|
 test "jsx: automatic runtime — single component lowers to `jsx(...)`" {
   let cfg = JsxConfig::default()
-  assert_emit_contains(
-    "auto-single",
-    "const el = <Foo bar={1} />;",
-    cfg,
-    [
-      "import { jsx } from \"react/jsx-runtime\";",
-      "jsx(Foo,",
-      "bar:",
-      "1",
-    ],
-  )
+  assert_emit_contains("auto-single", "const el = <Foo bar={1} />;", cfg, [
+    "import { jsx } from \"react/jsx-runtime\";", "jsx(Foo,", "bar:", "1",
+  ])
 }
 
 ///|
@@ -67,10 +59,7 @@ test "jsx: automatic runtime — multiple children lower to `jsxs(...)`" {
     cfg,
     [
       // Both helpers should be imported when both are used.
-      "import { jsx, jsxs }",
-      "jsxs(\"ul\",",
-      "children:",
-      "[",
+      "import { jsx, jsxs }", "jsxs(\"ul\",", "children:", "[",
     ],
   )
 }
@@ -78,16 +67,9 @@ test "jsx: automatic runtime — multiple children lower to `jsxs(...)`" {
 ///|
 test "jsx: automatic runtime — fragment uses imported `Fragment`" {
   let cfg = JsxConfig::default()
-  assert_emit_contains(
-    "auto-fragment",
-    "const el = <>{x}{y}</>;",
-    cfg,
-    [
-      "Fragment",
-      "from \"react/jsx-runtime\"",
-      "jsxs(Fragment,",
-    ],
-  )
+  assert_emit_contains("auto-fragment", "const el = <>{x}{y}</>;", cfg, [
+    "Fragment", "from \"react/jsx-runtime\"", "jsxs(Fragment,",
+  ])
 }
 
 ///|
@@ -95,8 +77,9 @@ test "jsx: automatic runtime — `key` is positional, not a prop" {
   let cfg = JsxConfig::default()
   assert_emit_contains(
     "auto-key",
-    #|const el = <Foo key="k" value={1} />;
-    ,
+    (
+      #|const el = <Foo key="k" value={1} />;
+    ),
     cfg,
     ["jsx(Foo,", "value:", "1", "}, \"k\")"],
   )
@@ -108,14 +91,12 @@ test "jsx: automatic runtime respects `@jsxImportSource` pragma" {
   let cfg = JsxConfig::default()
   assert_emit_contains(
     "pragma import-source",
-    #|/** @jsxImportSource preact */
-    #|const el = <Foo />;
-    ,
+    (
+      #|/** @jsxImportSource preact */
+      #|const el = <Foo />;
+    ),
     cfg,
-    [
-      "from \"preact/jsx-runtime\"",
-      "jsx(Foo,",
-    ],
+    ["from \"preact/jsx-runtime\"", "jsx(Foo,"],
   )
 }
 
@@ -126,18 +107,20 @@ test "jsx: automatic runtime respects `@jsxRuntime classic`" {
   let cfg = JsxConfig::default()
   assert_emit_contains(
     "pragma classic",
-    #|/** @jsxRuntime classic */
-    #|const el = <Foo bar={1} />;
-    ,
+    (
+      #|/** @jsxRuntime classic */
+      #|const el = <Foo bar={1} />;
+    ),
     cfg,
     ["React.createElement(Foo,", "bar:", "1"],
   )
   // No jsx-runtime import in classic mode.
   assert_emit_lacks(
     "pragma classic — no import",
-    #|/** @jsxRuntime classic */
-    #|const el = <Foo />;
-    ,
+    (
+      #|/** @jsxRuntime classic */
+      #|const el = <Foo />;
+    ),
     cfg,
     ["from \"react/jsx-runtime\""],
   )
@@ -149,21 +132,23 @@ test "jsx: classic runtime with `@jsx h` / `@jsxFrag Fragment`" {
   let cfg = JsxConfig::default().with_runtime("classic")
   assert_emit_contains(
     "classic custom",
-    #|/** @jsxRuntime classic */
-    #|/** @jsx h */
-    #|/** @jsxFrag Fragment */
-    #|const el = <Foo>hello</Foo>;
-    ,
+    (
+      #|/** @jsxRuntime classic */
+      #|/** @jsx h */
+      #|/** @jsxFrag Fragment */
+      #|const el = <Foo>hello</Foo>;
+    ),
     cfg,
     ["h(Foo,", "hello"],
   )
   assert_emit_contains(
     "classic frag",
-    #|/** @jsxRuntime classic */
-    #|/** @jsx h */
-    #|/** @jsxFrag Fragment */
-    #|const el = <>a</>;
-    ,
+    (
+      #|/** @jsxRuntime classic */
+      #|/** @jsx h */
+      #|/** @jsxFrag Fragment */
+      #|const el = <>a</>;
+    ),
     cfg,
     ["h(Fragment,", "a"],
   )
@@ -172,18 +157,12 @@ test "jsx: classic runtime with `@jsx h` / `@jsxFrag Fragment`" {
 ///|
 test "jsx: dev runtime uses `jsxDEV` / `jsxsDEV`" {
   let cfg = JsxConfig::default().with_dev(true)
-  assert_emit_contains(
-    "dev-single",
-    "const el = <Foo />;",
-    cfg,
-    ["import { jsxDEV", "jsxDEV(Foo,"],
-  )
-  assert_emit_contains(
-    "dev-multi",
-    "const el = <ul><li/><li/></ul>;",
-    cfg,
-    ["jsxsDEV", "import { jsxDEV, jsxsDEV }"],
-  )
+  assert_emit_contains("dev-single", "const el = <Foo />;", cfg, [
+    "import { jsxDEV", "jsxDEV(Foo,",
+  ])
+  assert_emit_contains("dev-multi", "const el = <ul><li/><li/></ul>;", cfg, [
+    "jsxsDEV", "import { jsxDEV, jsxsDEV }",
+  ])
 }
 
 ///|
@@ -211,12 +190,9 @@ test "jsx: intrinsic (lowercase) tag passes through as a string" {
 ///|
 test "jsx: dotted member tag like `<Foo.Bar/>` resolves to a member access" {
   let cfg = JsxConfig::default()
-  assert_emit_contains(
-    "member tag",
-    "const el = <Foo.Bar prop={1} />;",
-    cfg,
-    ["jsx(Foo.Bar,", "prop:"],
-  )
+  assert_emit_contains("member tag", "const el = <Foo.Bar prop={1} />;", cfg, [
+    "jsx(Foo.Bar,", "prop:",
+  ])
 }
 
 ///|
@@ -226,12 +202,7 @@ test "jsx: lowering walks nested JSX (children get lowered too)" {
     "nested",
     "const el = <Outer><Inner x={1}/></Outer>;",
     cfg,
-    [
-      "jsx(Outer,",
-      "jsx(Inner,",
-      "x:",
-      "1",
-    ],
+    ["jsx(Outer,", "jsx(Inner,", "x:", "1"],
   )
   // Inner JSX should NOT leak through as source-form `<Inner …`.
   assert_emit_lacks(

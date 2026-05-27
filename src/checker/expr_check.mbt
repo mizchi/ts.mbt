@@ -63,7 +63,10 @@ fn Resolver::empty() -> Resolver {
 /// override earlier ones (TS itself rejects conflicting overrides at
 /// declaration time, but the checker doesn't enforce that — last writer
 /// wins for the lookup).
-fn merge_interfaces(a : @ast.TsInterface, b : @ast.TsInterface) -> @ast.TsInterface {
+fn merge_interfaces(
+  a : @ast.TsInterface,
+  b : @ast.TsInterface,
+) -> @ast.TsInterface {
   let fields : Array[(String, @ast.TsType)] = []
   let seen : Map[String, Int] = {}
   // Take `a`'s fields first, then let `b` override / extend.
@@ -4843,7 +4846,11 @@ fn check_stmt(env : ExprEnv, stmt : @ast.TsStmt, ctx : CheckCtx) -> Unit {
         match (scrutinee_disc, case_.test_expr) {
           (Some((obj_name, prop)), None) =>
             apply_switch_disc_default_narrowing(
-              env, ctx.resolver, obj_name, prop, cases,
+              env,
+              ctx.resolver,
+              obj_name,
+              prop,
+              cases,
             )
           _ => ()
         }
@@ -5380,8 +5387,8 @@ fn check_function_body_with(
   // unannotated bodies short-circuit the yield check.
   let yield_type : @ast.TsType = if func.is_generator {
     match func.return_type {
-      Applied("Generator", args)
-      | Applied("AsyncGenerator", args) if args.length() >= 1 => args[0]
+      Applied("Generator", args) | Applied("AsyncGenerator", args) if args.length() >=
+        1 => args[0]
       Applied("Iterable", [t])
       | Applied("IterableIterator", [t])
       | Applied("Iterator", [t])

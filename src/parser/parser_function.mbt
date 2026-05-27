@@ -301,9 +301,15 @@ pub fn Parser::parse_function(self : Parser) -> @ast.TsFunc raise ParseError {
   // block precedes the `function` keyword, lift `@param {Type}` /
   // `@returns {Type}` brace contents into the AST so downstream
   // type-driven passes can reason about them.
-  let final_params = apply_jsdoc_param_overlay(self.jsdoc_at_pos, func_kw_pos, params)
+  let final_params = apply_jsdoc_param_overlay(
+    self.jsdoc_at_pos,
+    func_kw_pos,
+    params,
+  )
   let final_return = apply_jsdoc_return_overlay(
-    self.jsdoc_at_pos, func_kw_pos, return_type,
+    self.jsdoc_at_pos,
+    func_kw_pos,
+    return_type,
   )
   {
     name,
@@ -415,7 +421,11 @@ fn translate_jsdoc_type(raw : String) -> String {
   }
   // `?T` → `T | null` for the simple identifier case.
   if s.has_prefix("?") {
-    let inner = s.substring(start=1, end=s.length()).to_string().trim().to_string()
+    let inner = s
+      .substring(start=1, end=s.length())
+      .to_string()
+      .trim()
+      .to_string()
     if is_simple_type_ident(inner) {
       return "(\{inner} | null)"
     }
@@ -423,13 +433,16 @@ fn translate_jsdoc_type(raw : String) -> String {
   // `!T` → `T` (strip the non-null marker; TS lacks a 1:1 syntax
   // and `NonNullable<T>` is more invasive than warranted here).
   if s.has_prefix("!") {
-    let inner = s.substring(start=1, end=s.length()).to_string().trim().to_string()
+    let inner = s
+      .substring(start=1, end=s.length())
+      .to_string()
+      .trim()
+      .to_string()
     return inner
   }
   // `Object<K, V>` → `Record<K, V>`.
   if s.has_prefix("Object<") {
-    return "Record" +
-      s.substring(start=6, end=s.length()).to_string()
+    return "Record" + s.substring(start=6, end=s.length()).to_string()
   }
   s
 }
@@ -444,7 +457,8 @@ fn is_simple_type_ident(s : String) -> Bool {
     let ok = (c >= 'a' && c <= 'z') ||
       (c >= 'A' && c <= 'Z') ||
       (c >= '0' && c <= '9') ||
-      c == '_' || c == '$'
+      c == '_' ||
+      c == '$'
     if not(ok) {
       return false
     }
@@ -526,7 +540,16 @@ fn Parser::parse_function_expr(self : Parser) -> @ast.TsFunc raise ParseError {
   for label in prev_labels {
     self.labels.push(label)
   }
-  { name, type_params, const_type_params, params, return_type, body, is_generator, is_async }
+  {
+    name,
+    type_params,
+    const_type_params,
+    params,
+    return_type,
+    body,
+    is_generator,
+    is_async,
+  }
 }
 
 ///|
@@ -1940,6 +1963,7 @@ fn Parser::parse_declare_signature_params(
 }
 
 ///|
+
 ///|
 /// Cheap shape check: confirms the token stream starts with `[ Ident :`,
 /// the canonical opening of a TS index signature inside a class /
@@ -1991,6 +2015,7 @@ fn Parser::try_parse_class_index_signature(
   Some((key_type, value_type))
 }
 
+///|
 fn Parser::parse_declare_class_member_name(
   self : Parser,
 ) -> String? raise ParseError {
@@ -2237,8 +2262,7 @@ fn Parser::parse_declare_class(
     // modifier consumption so the shape isn't lost when the body opens
     // with `[`. Stale-pattern bail-out: revert to the original skip
     // path if the syntax doesn't match.
-    if self.check(LBracket) &&
-      self.is_index_signature_shape_after_lbracket() {
+    if self.check(LBracket) && self.is_index_signature_shape_after_lbracket() {
       match self.try_parse_class_index_signature() {
         Some(sig) => {
           index_signatures.push(sig)
@@ -2382,6 +2406,11 @@ fn Parser::parse_declare_class(
                   // interface-style method signatures don't carry a
                   // body — leave it as `None`.
                   body: None,
+                  accessor: "",
+                  key_expr: None,
+                  is_async: false,
+                  is_generator: false,
+                  param_defaults: [],
                 })
               }
           }
@@ -2424,6 +2453,8 @@ fn Parser::parse_declare_class(
     name,
     type_params: class_type_params,
     base_names,
+    base_expr: None,
+    static_field_inits: [],
     constructor_params,
     properties,
     methods,

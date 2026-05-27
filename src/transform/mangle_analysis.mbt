@@ -34,9 +34,7 @@ pub fn auto_reserve_from_module(
   for spec in block.exports {
     exported_names[spec.local_name] = true
     exported_names[spec.export_name] = true
-    walk_exported_name(
-      spec.local_name, module_, reachable, reserved_props,
-    )
+    walk_exported_name(spec.local_name, module_, reachable, reserved_props)
   }
   // Re-exports of named bindings (`export { Foo } from "./bar"`)
   // also keep `Foo` visible — its members count as external.
@@ -64,13 +62,32 @@ pub fn auto_reserve_from_module(
   for entry in reachable {
     reserved_names_arr.push(entry.0)
   }
+  // Top-level `import` bindings name the same slot in the module
+  // scope that the mangler is about to allocate short names from.
+  // Without this guard the mangler can hand the short name `os`
+  // to a renamed CJS helper while `import os from "os"` already
+  // owns that slot, producing `SyntaxError: Identifier 'os' has
+  // already been declared`.
+  for imp in block.imports {
+    match imp.default_binding {
+      Some(n) => reserved_names_arr.push(n)
+      None => ()
+    }
+    match imp.namespace_binding {
+      Some(n) => reserved_names_arr.push(n)
+      None => ()
+    }
+    for nb in imp.named_bindings {
+      reserved_names_arr.push(nb.1)
+    }
+  }
   let reserved_props_arr : Array[String] = []
   for entry in reserved_props {
     reserved_props_arr.push(entry.0)
   }
   base
-    .with_reserved(reserved_names_arr)
-    .with_reserved_properties(reserved_props_arr)
+  .with_reserved(reserved_names_arr)
+  .with_reserved_properties(reserved_props_arr)
 }
 
 // ---------------------------------------------------------------------------

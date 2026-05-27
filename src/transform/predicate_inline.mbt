@@ -47,12 +47,11 @@ pub fn build_predicate_table(block : @ast.TsBlock) -> PredicateTable {
     match stmt {
       Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
       | Const(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f))
-      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f)) => {
+      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::FuncExpr(f)) =>
         match try_extract_predicate(f) {
           Some(entry) => entries[name] = entry
           None => ()
         }
-      }
       _ => ()
     }
   }
@@ -136,10 +135,14 @@ fn inline_predicates_stmt(
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(inline_predicates_expr(e, table))
     If(c, t, e) =>
-      If(inline_predicates_expr(c, table), inline_predicates_block(t, table), match e {
-        Some(b) => Some(inline_predicates_block(b, table))
-        None => None
-      })
+      If(
+        inline_predicates_expr(c, table),
+        inline_predicates_block(t, table),
+        match e {
+          Some(b) => Some(inline_predicates_block(b, table))
+          None => None
+        },
+      )
     While(c, body) =>
       While(
         inline_predicates_expr(c, table),
@@ -173,19 +176,25 @@ fn inline_predicates_stmt(
       )
     ForOf(k, b, t, iter, body) =>
       ForOf(
-        k, b, t,
+        k,
+        b,
+        t,
         inline_predicates_expr(iter, table),
         inline_predicates_block(body, table),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
-        k, b, t,
+        k,
+        b,
+        t,
         inline_predicates_expr(iter, table),
         inline_predicates_block(body, table),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
-        k, b, t,
+        k,
+        b,
+        t,
         inline_predicates_expr(iter, table),
         inline_predicates_block(body, table),
       )
@@ -245,7 +254,11 @@ fn inline_predicates_expr(
       match table.entries.get(name) {
         Some(entry) =>
           if args.length() == 1 {
-            substitute_param_with_arg(entry.body_expr, entry.param_name, args[0])
+            substitute_param_with_arg(
+              entry.body_expr,
+              entry.param_name,
+              args[0],
+            )
           } else {
             // Different arity than expected — fall back to the
             // original Call. (Type-guards always take one arg in
@@ -358,8 +371,10 @@ fn inline_predicates_expr(
       )
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
-        ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(inline_predicates_expr(e, table))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(inline_predicates_block(b, table))
+        ArrowExpr(e) =>
+          @ast.TsArrowBody::ArrowExpr(inline_predicates_expr(e, table))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(inline_predicates_block(b, table))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
@@ -486,7 +501,9 @@ fn substitute_param_with_arg(
     ObjectLit(entries) => {
       let new_entries : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        new_entries.push((ent.0, substitute_param_with_arg(ent.1, param_name, arg)))
+        new_entries.push(
+          (ent.0, substitute_param_with_arg(ent.1, param_name, arg)),
+        )
       }
       ObjectLit(new_entries)
     }

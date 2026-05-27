@@ -184,10 +184,7 @@ fn switch_fold_block(
 }
 
 ///|
-fn switch_fold_stmt(
-  stmt : @ast.TsStmt,
-  table : SwitchFoldTable,
-) -> @ast.TsStmt {
+fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt {
   match stmt {
     Var(b, t, e) => Var(b, t, switch_fold_expr(e, table))
     Let(b, t, e) => Let(b, t, switch_fold_expr(e, table))
@@ -240,15 +237,27 @@ fn switch_fold_stmt(
       )
     ForOf(k, b, t, iter, body) =>
       ForOf(
-        k, b, t, switch_fold_expr(iter, table), switch_fold_block(body, table),
+        k,
+        b,
+        t,
+        switch_fold_expr(iter, table),
+        switch_fold_block(body, table),
       )
     ForAwaitOf(k, b, t, iter, body) =>
       ForAwaitOf(
-        k, b, t, switch_fold_expr(iter, table), switch_fold_block(body, table),
+        k,
+        b,
+        t,
+        switch_fold_expr(iter, table),
+        switch_fold_block(body, table),
       )
     ForIn(k, b, t, iter, body) =>
       ForIn(
-        k, b, t, switch_fold_expr(iter, table), switch_fold_block(body, table),
+        k,
+        b,
+        t,
+        switch_fold_expr(iter, table),
+        switch_fold_block(body, table),
       )
     Switch(e, cases) => {
       let new_cases : Array[@ast.TsSwitchCase] = []
@@ -283,10 +292,7 @@ fn switch_fold_stmt(
 }
 
 ///|
-fn switch_fold_expr(
-  expr : @ast.TsExpr,
-  table : SwitchFoldTable,
-) -> @ast.TsExpr {
+fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr {
   match expr {
     Call(name, args) => {
       // First try the switch-fold rewrite.
@@ -372,7 +378,11 @@ fn switch_fold_expr(
       )
     AssignPattern(b, v) => AssignPattern(b, switch_fold_expr(v, table))
     PropAssignExpr(recv, p, v) =>
-      PropAssignExpr(switch_fold_expr(recv, table), p, switch_fold_expr(v, table))
+      PropAssignExpr(
+        switch_fold_expr(recv, table),
+        p,
+        switch_fold_expr(v, table),
+      )
     IndexAssignExpr(recv, idx, v) =>
       IndexAssignExpr(
         switch_fold_expr(recv, table),
@@ -384,7 +394,8 @@ fn switch_fold_expr(
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(switch_fold_expr(e, table))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(switch_fold_block(b, table))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(switch_fold_block(b, table))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
@@ -466,8 +477,13 @@ fn try_fold_call(
 /// primitive literals and bare identifier references.
 fn is_trivially_substitutable(e : @ast.TsExpr) -> Bool {
   match e {
-    StringLit(_) | NumberLit(_) | IntLit(_) | BoolLit(_) | NullLit
-    | BigIntLit(_) | Var(_) => true
+    StringLit(_)
+    | NumberLit(_)
+    | IntLit(_)
+    | BoolLit(_)
+    | NullLit
+    | BigIntLit(_)
+    | Var(_) => true
     _ => false
   }
 }

@@ -567,6 +567,15 @@ pub(all) struct TsClassMethodDecl {
   type_params : Array[String]
   type_param_bounds : Array[(String, TsType)]
   params : Array[(String, TsType)]
+  // Default-value initializers paired positionally with `params`, when the
+  // source supplied them (`bar(x, y = 5)`). Empty array (or shorter than
+  // `params`) means "no defaults"; `None` entries are non-default params.
+  // Without this the native-class emitter drops `=5` and `parseProgram(t,
+  // e=140, s=…)` (babel's parser) becomes `parseProgram(t, e, s)`, so
+  // calls with one argument leave `e`/`s` undefined and the loop end
+  // marker never matches — `match(undefined)` is always false and the
+  // top-level statement loop never terminates.
+  param_defaults : Array[TsExpr?]
   return_type : TsType
   is_static : Bool
   // Method body, when the source supplied one. `None` for ambient class
@@ -574,6 +583,22 @@ pub(all) struct TsClassMethodDecl {
   // signatures. The expression checker walks the body when present so
   // method internals get the same coverage as top-level functions.
   body : TsBlock?
+  // `"get"` / `"set"` for accessor methods, `""` for regular methods.
+  // The emitter uses this to restore native `get foo()` / `set foo(v)`
+  // syntax on `NativeClassStmt` / `NativeClassExpr` outputs.
+  accessor : String
+  // Computed method key (`class X { [Symbol.iterator]() {…} }`).
+  // When `Some`, emit prints `[<expr>](...)` instead of `<name>(...)` —
+  // `name` carries the sentinel `"<computed>"` and is informational
+  // only. Effect's FiberRuntime relies on `[OpCodes.OP_ON_SUCCESS]
+  // (op) {…}` style runtime dispatch.
+  key_expr : TsExpr?
+  // `async foo()` / `*foo()` / `async *foo()` modifiers — without
+  // these the emit drops the `async` keyword, and a method body
+  // that uses `await` re-parses as plain `await x` which is a
+  // SyntaxError in non-async functions.
+  is_async : Bool
+  is_generator : Bool
 } derive(Debug)
 
 ///|
@@ -582,6 +607,19 @@ pub(all) struct TsClassDecl {
   name : String
   type_params : Array[String]
   base_names : Array[String]
+  // Expression-shaped heritage clause (`class X extends declare(args) {…}`
+  // / `class X extends make(ast) {…}`). When present this carries the
+  // parsed expression and `base_names` holds the sentinel marker
+  // `"<expr-base>"` so existing structural code that just counts the
+  // number of bases still works. Emitters check `base_expr` first.
+  base_expr : TsExpr?
+  // Static-field initializers (`class X { static foo = expr; }`).
+  // Only populated for `NativeClassStmt` / `NativeClassExpr` paths —
+  // the IIFE-class lowering handles them via separate `PropAssign`
+  // statements. Emit restores them as `static <name> = <init>;`
+  // inside the class body so the binding is part of the class
+  // scope rather than a post-declaration assignment.
+  static_field_inits : Array[(String, TsExpr)]
   constructor_params : Array[(String, TsType)]?
   properties : Array[TsClassPropertyDecl]
   methods : Array[TsClassMethodDecl]

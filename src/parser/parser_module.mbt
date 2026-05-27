@@ -302,6 +302,7 @@ fn Parser::parse_enum_decl_after_enum_keyword(
 }
 
 ///|
+
 ///|
 /// Lower a parsed `enum` declaration to the equivalent runtime
 /// statements:
@@ -609,7 +610,8 @@ fn Parser::parse_namespace_decl_with_mode(
         // breaking .d.ts files that route through here via `parse_export`
         // helpers.
         let runtime_parser = Parser::from_source_with_jsx(
-          body_source, self.allow_jsx,
+          body_source,
+          self.allow_jsx,
         )
         match
           (try? runtime_parser.parse_module_with_seeded_const_values_internal(
@@ -619,7 +621,8 @@ fn Parser::parse_namespace_decl_with_mode(
           Ok(module_) => module_
           Err(_) => {
             let ambient_parser = Parser::from_source_with_jsx(
-              body_source, self.allow_jsx,
+              body_source,
+              self.allow_jsx,
             )
             ambient_parser.parse_module_with_seeded_const_values_internal(
               {},
@@ -2057,7 +2060,6 @@ fn Parser::parse_import_decl(
 ///|
 fn Parser::skip_import_attributes(self : Parser) -> Unit {
   let _ = self.parse_import_attributes()
-
 }
 
 ///|
@@ -2066,9 +2068,7 @@ fn Parser::skip_import_attributes(self : Parser) -> Unit {
 /// `(key, string_value)` pair in source order. Non-string values are
 /// silently dropped — the spec only defines string-valued attributes
 /// today.
-fn Parser::parse_import_attributes(
-  self : Parser,
-) -> Array[(String, String)] {
+fn Parser::parse_import_attributes(self : Parser) -> Array[(String, String)] {
   let out : Array[(String, String)] = []
   if !(self.match_(With) || self.match_ident("assert")) {
     return out
@@ -2605,6 +2605,23 @@ fn Parser::expect_str_literal(self : Parser) -> String raise ParseError {
 
 ///|
 fn Parser::is_ambient_export_value_decl(self : Parser) -> Bool {
+  // Ambient mode (`.d.ts` / ambient external module body) treats
+  // every `export var/let/const X;` without initializer as type-only.
+  //
+  // Runtime mode (`.ts` / `.js`) must keep the binding, since
+  // `export var X;` is valid JS that creates `var X = undefined;`.
+  // The one exception is `const`: bare `export const X;` is a syntax
+  // error in real JS, but for parser tolerance (and the historical
+  // tests that hand-feed `.d.ts` shapes into `parse_module_block`)
+  // we accept the ambient interpretation for `const` even outside
+  // `.d.ts` mode. `var` / `let` get the runtime path so the actual
+  // declaration emits.
+  if not(self.in_ambient_module) {
+    match self.peek_at(0).kind {
+      Const => ()
+      _ => return false
+    }
+  }
   match self.peek_at(1).kind {
     Ident(_) => ()
     _ => return false
@@ -2928,7 +2945,8 @@ fn Parser::parse_export_stmt(
   // ES2023 `using` / `await using` declarations at the module export
   // position. The body parses via the regular statement-level
   // `using` path (which builds an effective `Let(...)` binding).
-  if self.is_using_declaration_start() || self.is_await_using_declaration_start() {
+  if self.is_using_declaration_start() ||
+    self.is_await_using_declaration_start() {
     let stmt = self.parse_stmt()
     collect_static_const_exprs_from_stmt(stmt, const_values)
     collect_value_decls_from_stmt(stmt, values, const_values)
@@ -2945,6 +2963,7 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   seeded_const_values : Map[String, @ast.TsExpr],
   ambient_decls : Bool,
 ) -> @ast.TsModule raise ParseError {
+  self.in_ambient_module = ambient_decls
   let funcs : Array[@ast.TsFunc] = []
   let interfaces : Array[@ast.TsInterface] = []
   let type_aliases : Array[@ast.TsTypeAlias] = []
@@ -3465,9 +3484,7 @@ pub fn parse_block_from_source_with_positions(
 /// JSDoc consumption pass to lift `@param {Type}` / `@returns {Type}`
 /// brace contents into proper `TsType` values that downstream passes
 /// can reason about.
-pub fn parse_type_from_source(
-  source : String,
-) -> @ast.TsType raise ParseError {
+pub fn parse_type_from_source(source : String) -> @ast.TsType raise ParseError {
   let parser = Parser::from_source(source)
   parser.parse_type()
 }

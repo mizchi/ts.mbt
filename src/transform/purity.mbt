@@ -37,20 +37,19 @@ pub(all) struct ImpureGetter {
 /// than impurity. Functions and properties on these globals
 /// don't have side effects on the surrounding program.
 let pure_global_methods : Array[String] = [
-  "Math", "JSON", "Object", "Array", "String", "Number", "Boolean", "Symbol",
-  "BigInt", "Date", "RegExp", "Int8Array", "Uint8Array", "Int16Array",
-  "Uint16Array", "Int32Array", "Uint32Array", "Float32Array", "Float64Array",
-  "BigInt64Array", "BigUint64Array", "Map", "Set", "WeakMap", "WeakSet",
-  "Promise", "Reflect", "Proxy",
+  "Math", "JSON", "Object", "Array", "String", "Number", "Boolean", "Symbol", "BigInt",
+  "Date", "RegExp", "Int8Array", "Uint8Array", "Int16Array", "Uint16Array", "Int32Array",
+  "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
+  "Map", "Set", "WeakMap", "WeakSet", "Promise", "Reflect", "Proxy",
 ]
 
 ///|
 /// Names of pure top-level functions the JS runtime ships with —
 /// these are bare `Call(name, args)` references, not method calls.
 let pure_global_functions : Array[String] = [
-  "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI",
-  "encodeURIComponent", "decodeURI", "decodeURIComponent", "structuredClone",
-  "BigInt", "Number", "String", "Boolean", "Array", "Object",
+  "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI", "encodeURIComponent",
+  "decodeURI", "decodeURIComponent", "structuredClone", "BigInt", "Number", "String",
+  "Boolean", "Array", "Object",
 ]
 
 ///|
@@ -109,20 +108,21 @@ pub fn analyze_purity_with(
         funcs[name] = f.body
       Let(@ast.TsBinding::Ident(name), _, @ast.TsExpr::ArrowFunc(_, _, body, _))
       | Const(
-          @ast.TsBinding::Ident(name),
-          _,
-          @ast.TsExpr::ArrowFunc(_, _, body, _),
-        )
-      | Var(@ast.TsBinding::Ident(name), _, @ast.TsExpr::ArrowFunc(_, _, body, _)) =>
+        @ast.TsBinding::Ident(name),
+        _,
+        @ast.TsExpr::ArrowFunc(_, _, body, _)
+      )
+      | Var(
+        @ast.TsBinding::Ident(name),
+        _,
+        @ast.TsExpr::ArrowFunc(_, _, body, _)
+      ) =>
         match body {
           ArrowBlock(b) => funcs[name] = b
           ArrowExpr(e) =>
             // Wrap the single-expression body so the same
             // analysis walks both forms.
-            funcs[name] = {
-              stmts: [Return(Some(e))],
-              stmt_positions: [],
-            }
+            funcs[name] = { stmts: [Return(Some(e))], stmt_positions: [] }
         }
       _ => ()
     }
@@ -476,12 +476,14 @@ fn walk_expr_for_purity(
       walk_expr_for_purity(t, inside_func, yield_)
       walk_expr_for_purity(e, inside_func, yield_)
     }
-    ArrayLit(items) => for it in items {
-      walk_expr_for_purity(it, inside_func, yield_)
-    }
-    ObjectLit(entries) => for ent in entries {
-      walk_expr_for_purity(ent.1, inside_func, yield_)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        walk_expr_for_purity(it, inside_func, yield_)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        walk_expr_for_purity(ent.1, inside_func, yield_)
+      }
     ComputedProp(k, v) => {
       walk_expr_for_purity(k, inside_func, yield_)
       walk_expr_for_purity(v, inside_func, yield_)
@@ -491,9 +493,11 @@ fn walk_expr_for_purity(
       walk_expr_for_purity(recv, inside_func, yield_)
       walk_expr_for_purity(idx, inside_func, yield_)
     }
-    Spread(inner) | As(inner, _) | Satisfies(inner, _) | NonNull(inner)
-    | OptionalChain(inner) =>
-      walk_expr_for_purity(inner, inside_func, yield_)
+    Spread(inner)
+    | As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => walk_expr_for_purity(inner, inside_func, yield_)
     Seq(a, b) => {
       walk_expr_for_purity(a, inside_func, yield_)
       walk_expr_for_purity(b, inside_func, yield_)
@@ -529,9 +533,10 @@ fn walk_expr_for_purity(
         walk_expr_for_purity(e, inside_func, yield_)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      walk_expr_for_purity(e, inside_func, yield_)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        walk_expr_for_purity(e, inside_func, yield_)
+      }
     // `/* @__PURE__ */` wrap — by definition the call is pure.
     // We still walk argument expressions for diagnostic purposes
     // (a Pure call to `f(g())` where `g()` itself has a side
@@ -576,7 +581,9 @@ fn scan_stmt_for_impure_getters(
         match inner {
           PropAssign(_, prop, value) =>
             if prop.has_prefix("@@get:") {
-              let getter_name = prop.substring(start=6, end=prop.length()).to_string()
+              let getter_name = prop
+                .substring(start=6, end=prop.length())
+                .to_string()
               let unwrapped = match value {
                 Var(_) =>
                   // The getter function landed in a temp let
@@ -591,11 +598,7 @@ fn scan_stmt_for_impure_getters(
                   let reason = check_getter_purity(getter_fn, assumed_pure)
                   match reason {
                     Some(r) =>
-                      out.push({
-                        class_name: name,
-                        getter_name,
-                        reason: r,
-                      })
+                      out.push({ class_name: name, getter_name, reason: r })
                     None => ()
                   }
                 }
@@ -674,10 +677,8 @@ fn check_getter_purity(
   let body = match fn_expr {
     FuncExpr(f) => f.body
     ArrowFunc(_, _, @ast.TsArrowBody::ArrowBlock(b), _) => b
-    ArrowFunc(_, _, @ast.TsArrowBody::ArrowExpr(e), _) => {
-      stmts: [Return(Some(e))],
-      stmt_positions: [],
-    }
+    ArrowFunc(_, _, @ast.TsArrowBody::ArrowExpr(e), _) =>
+      { stmts: [Return(Some(e))], stmt_positions: [] }
     _ => return None
   }
   let mut reason : String? = None
@@ -766,10 +767,7 @@ fn signature_pure_block(
 }
 
 ///|
-fn signature_pure_stmt(
-  stmt : @ast.TsStmt,
-  locals : Map[String, Bool],
-) -> Bool {
+fn signature_pure_stmt(stmt : @ast.TsStmt, locals : Map[String, Bool]) -> Bool {
   match stmt {
     Var(@ast.TsBinding::Ident(name), _, e)
     | Let(@ast.TsBinding::Ident(name), _, e)
@@ -848,10 +846,7 @@ fn signature_pure_stmt(
       }
       for c in cases {
         match c.test_expr {
-          Some(te) =>
-            if not(signature_pure_expr(te, locals)) {
-              return false
-            }
+          Some(te) => if not(signature_pure_expr(te, locals)) { return false }
           None => ()
         }
         if not(signature_pure_block(c.body, locals)) {
@@ -865,13 +860,15 @@ fn signature_pure_stmt(
 }
 
 ///|
-fn signature_pure_expr(
-  expr : @ast.TsExpr,
-  locals : Map[String, Bool],
-) -> Bool {
+fn signature_pure_expr(expr : @ast.TsExpr, locals : Map[String, Bool]) -> Bool {
   match expr {
-    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_)
-    | NullLit | ArrayHole => true
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayHole => true
     Var(_) => true
     BinOp(_, l, r) | Seq(l, r) =>
       signature_pure_expr(l, locals) && signature_pure_expr(r, locals)
@@ -941,13 +938,17 @@ fn signature_pure_expr(
       true
     }
     TaggedTemplate(_, _, _, _) => false
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      signature_pure_expr(inner, locals)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => signature_pure_expr(inner, locals)
     PureCall(inner) => signature_pure_expr(inner, locals)
     AssignExpr(name, v) | CompoundAssignExpr(@ast.TsExpr::Var(name), _, v) =>
       locals.contains(name) && signature_pure_expr(v, locals)
-    CompoundAssignExpr(_, _, _) | PropAssignExpr(_, _, _)
-    | IndexAssignExpr(_, _, _) | AssignPattern(_, _) => false
+    CompoundAssignExpr(_, _, _)
+    | PropAssignExpr(_, _, _)
+    | IndexAssignExpr(_, _, _)
+    | AssignPattern(_, _) => false
     Yield(_) | YieldStar(_) | Await(_) => false
     ArrowFunc(_, _, _, _) | FuncExpr(_) =>
       // Nested closures can capture and have arbitrary effects when

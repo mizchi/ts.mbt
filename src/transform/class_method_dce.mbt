@@ -78,12 +78,21 @@ fn collect_iife_class_names(block : @ast.TsBlock) -> Map[String, Bool] {
   let out : Map[String, Bool] = {}
   for s in block.stmts {
     match s {
-      Var(@ast.TsBinding::Ident(n), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args))
-      | Let(@ast.TsBinding::Ident(n), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args))
-      | Const(@ast.TsBinding::Ident(n), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)) =>
-        if args.length() == 0 {
-          out[n] = true
-        }
+      Var(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+      )
+      | Let(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+      )
+      | Const(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+      ) => if args.length() == 0 { out[n] = true }
       _ => ()
     }
   }
@@ -102,9 +111,21 @@ fn collect_static_accesses_block_skipping_iife(
 ) -> Unit {
   for s in block.stmts {
     match s {
-      Var(@ast.TsBinding::Ident(n), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args))
-      | Let(@ast.TsBinding::Ident(n), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args))
-      | Const(@ast.TsBinding::Ident(n), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)) =>
+      Var(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      )
+      | Let(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      )
+      | Const(
+        @ast.TsBinding::Ident(n),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+      ) =>
         if args.length() == 0 && iife_classes.contains(n) {
           // IIFE class body: skip prototype-assignment LHS reads.
           collect_iife_body_accesses(f.body, n, out)
@@ -132,7 +153,7 @@ fn collect_iife_body_accesses(
       PropAssign(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
         _,
-        v,
+        v
       ) =>
         if n == class_name {
           collect_static_accesses_expr(v, out)
@@ -143,10 +164,10 @@ fn collect_iife_body_accesses(
       PropAssign(
         @ast.TsExpr::PropAccess(
           @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-          _,
+          _
         ),
         _,
-        v,
+        v
       ) =>
         if n == class_name {
           collect_static_accesses_expr(v, out)
@@ -164,12 +185,21 @@ fn collect_iife_body_accesses(
 fn has_any_iife_class(block : @ast.TsBlock) -> Bool {
   for s in block.stmts {
     match s {
-      Var(@ast.TsBinding::Ident(_), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args))
-      | Let(@ast.TsBinding::Ident(_), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args))
-      | Const(@ast.TsBinding::Ident(_), _, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)) =>
-        if args.length() == 0 {
-          return true
-        }
+      Var(
+        @ast.TsBinding::Ident(_),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+      )
+      | Let(
+        @ast.TsBinding::Ident(_),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+      )
+      | Const(
+        @ast.TsBinding::Ident(_),
+        _,
+        @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(_), args)
+      ) => if args.length() == 0 { return true }
       _ => ()
     }
   }
@@ -190,16 +220,20 @@ fn has_any_native_class(block : @ast.TsBlock) -> Bool {
 fn stmt_has_native_class(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     NativeClassStmt(_, _) => true
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
-    | CompoundAssign(_, _, e) | Throw(e) => expr_has_native_class(e)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => expr_has_native_class(e)
     Return(Some(e)) => expr_has_native_class(e)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => false
     IndexAssign(t, idx, v) =>
       expr_has_native_class(t) ||
       expr_has_native_class(idx) ||
       expr_has_native_class(v)
-    PropAssign(t, _, v) =>
-      expr_has_native_class(t) || expr_has_native_class(v)
+    PropAssign(t, _, v) => expr_has_native_class(t) || expr_has_native_class(v)
     If(c, t, e) => {
       if expr_has_native_class(c) {
         return true
@@ -238,7 +272,8 @@ fn stmt_has_native_class(stmt : @ast.TsStmt) -> Bool {
       }
       has_any_native_class(body)
     }
-    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body)
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) =>
       expr_has_native_class(iter) || has_any_native_class(body)
     Switch(e, cases) => {
@@ -247,10 +282,7 @@ fn stmt_has_native_class(stmt : @ast.TsStmt) -> Bool {
       }
       for c in cases {
         match c.test_expr {
-          Some(te) =>
-            if expr_has_native_class(te) {
-              return true
-            }
+          Some(te) => if expr_has_native_class(te) { return true }
           None => ()
         }
         if has_any_native_class(c.body) {
@@ -292,9 +324,13 @@ fn expr_has_native_class(expr : @ast.TsExpr) -> Bool {
       }
     BinOp(_, l, r) | Seq(l, r) =>
       expr_has_native_class(l) || expr_has_native_class(r)
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      expr_has_native_class(inner)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => expr_has_native_class(inner)
     Cond(c, t, e) =>
       expr_has_native_class(c) ||
       expr_has_native_class(t) ||
@@ -357,11 +393,10 @@ fn expr_has_native_class(expr : @ast.TsExpr) -> Bool {
 ///|
 let method_sniff_methods : Array[String] = [
   // Reflective method-name observation.
-  "getOwnPropertyNames", "getOwnPropertyDescriptors", "ownKeys",
-  "getOwnPropertyDescriptor",
+  "getOwnPropertyNames", "getOwnPropertyDescriptors", "ownKeys", "getOwnPropertyDescriptor",
   // Property enumeration (likely fine for class methods, but the
   // analyzer can't always distinguish instances from plain objects).
-  "keys", "entries", "values", "assign", "fromEntries",
+   "keys", "entries", "values", "assign", "fromEntries",
 ]
 
 ///|
@@ -379,8 +414,13 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
   match stmt {
     // for-in iterates property names — sink.
     ForIn(_, _, _, _, _) => true
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
-    | CompoundAssign(_, _, e) | Throw(e) => expr_has_method_sniff(e)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => expr_has_method_sniff(e)
     Return(Some(e)) => expr_has_method_sniff(e)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => false
     IndexAssign(t, idx, v) => {
@@ -389,11 +429,10 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
         return true
       }
       expr_has_method_sniff(t) ||
-          expr_has_method_sniff(idx) ||
-          expr_has_method_sniff(v)
+      expr_has_method_sniff(idx) ||
+      expr_has_method_sniff(v)
     }
-    PropAssign(t, _, v) =>
-      expr_has_method_sniff(t) || expr_has_method_sniff(v)
+    PropAssign(t, _, v) => expr_has_method_sniff(t) || expr_has_method_sniff(v)
     If(c, t, e) => {
       if expr_has_method_sniff(c) {
         return true
@@ -440,10 +479,7 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
       }
       for c in cases {
         match c.test_expr {
-          Some(te) =>
-            if expr_has_method_sniff(te) {
-              return true
-            }
+          Some(te) => if expr_has_method_sniff(te) { return true }
           None => ()
         }
         if block_has_method_sniff(c.body) {
@@ -475,10 +511,7 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
       // `this` (e.g. `Object.keys(this)`) counts as a sink.
       for m in decl.methods {
         match m.body {
-          Some(b) =>
-            if block_has_method_sniff(b) {
-              return true
-            }
+          Some(b) => if block_has_method_sniff(b) { return true }
           None => ()
         }
       }
@@ -573,9 +606,12 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     }
     BinOp(_, l, r) | Seq(l, r) =>
       expr_has_method_sniff(l) || expr_has_method_sniff(r)
-    UnaryOp(_, inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      expr_has_method_sniff(inner)
+    UnaryOp(_, inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => expr_has_method_sniff(inner)
     Cond(c, t, e) =>
       expr_has_method_sniff(c) ||
       expr_has_method_sniff(t) ||
@@ -597,8 +633,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
       }
       false
     }
-    ComputedProp(k, v) =>
-      expr_has_method_sniff(k) || expr_has_method_sniff(v)
+    ComputedProp(k, v) => expr_has_method_sniff(k) || expr_has_method_sniff(v)
     AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
       expr_has_method_sniff(v)
     CompoundAssignExpr(t, _, v) =>
@@ -642,10 +677,7 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     NativeClassExpr(decl, ctor_body) => {
       for m in decl.methods {
         match m.body {
-          Some(b) =>
-            if block_has_method_sniff(b) {
-              return true
-            }
+          Some(b) => if block_has_method_sniff(b) { return true }
           None => ()
         }
       }
@@ -684,8 +716,13 @@ fn collect_static_accesses_stmt(
   out : Map[String, Bool],
 ) -> Unit {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
-    | CompoundAssign(_, _, e) | Throw(e) => collect_static_accesses_expr(e, out)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => collect_static_accesses_expr(e, out)
     Return(Some(e)) => collect_static_accesses_expr(e, out)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
     IndexAssign(t, idx, v) => {
@@ -726,7 +763,8 @@ fn collect_static_accesses_stmt(
       }
       collect_static_accesses_block(body, out)
     }
-    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body)
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) => {
       collect_static_accesses_expr(iter, out)
       collect_static_accesses_block(body, out)
@@ -811,11 +849,10 @@ fn collect_static_accesses_expr(
       collect_static_accesses_expr(idx, out)
       collect_static_accesses_expr(v, out)
     }
-    Call(_, args) | New(_, args) => {
+    Call(_, args) | New(_, args) =>
       for a in args {
         collect_static_accesses_expr(a, out)
       }
-    }
     CallExpr(callee, args) | NewExpr(callee, args) => {
       collect_static_accesses_expr(callee, out)
       for a in args {
@@ -826,9 +863,13 @@ fn collect_static_accesses_expr(
       collect_static_accesses_expr(l, out)
       collect_static_accesses_expr(r, out)
     }
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      collect_static_accesses_expr(inner, out)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => collect_static_accesses_expr(inner, out)
     Cond(c, t, e) => {
       collect_static_accesses_expr(c, out)
       collect_static_accesses_expr(t, out)
@@ -838,12 +879,11 @@ fn collect_static_accesses_expr(
       for i in items {
         collect_static_accesses_expr(i, out)
       }
-    ObjectLit(entries) => {
+    ObjectLit(entries) =>
       for ent in entries {
         // Object-literal key names don't count as method accesses.
         collect_static_accesses_expr(ent.1, out)
       }
-    }
     ComputedProp(k, v) => {
       collect_static_accesses_expr(k, out)
       collect_static_accesses_expr(v, out)
@@ -899,6 +939,7 @@ fn collect_static_accesses_expr(
 // -- Step 4: rewrite native classes, filtering methods ----------------
 
 ///|
+
 ///|
 /// IIFE-lowered class shape:
 ///
@@ -947,10 +988,14 @@ fn iife_method_assignment_is_dead(
 ) -> Bool {
   match stmt {
     // `Foo.prototype.METHOD = …;`
-    PropAssign(@ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"), method_name, _) =>
+    PropAssign(
+      @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
+      method_name,
+      _
+    ) =>
       if n == class_name &&
-            method_name != "constructor" &&
-            not(accessed.contains(method_name)) {
+        method_name != "constructor" &&
+        not(accessed.contains(method_name)) {
         true
       } else {
         false
@@ -960,38 +1005,46 @@ fn iife_method_assignment_is_dead(
     PropAssign(
       @ast.TsExpr::PropAccess(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-        method_name,
+        method_name
       ),
       _,
-      _,
+      _
     ) =>
       if n == class_name &&
-            method_name != "constructor" &&
-            not(accessed.contains(method_name)) {
+        method_name != "constructor" &&
+        not(accessed.contains(method_name)) {
         true
       } else {
         false
       }
     // `Foo.prototype.METHOD = …;` in expression-statement form.
-    Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"), method_name, _)) =>
+    Expr(
+      @ast.TsExpr::PropAssignExpr(
+        @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
+        method_name,
+        _
+      )
+    ) =>
       if n == class_name &&
-            method_name != "constructor" &&
-            not(accessed.contains(method_name)) {
+        method_name != "constructor" &&
+        not(accessed.contains(method_name)) {
         true
       } else {
         false
       }
-    Expr(@ast.TsExpr::PropAssignExpr(
-      @ast.TsExpr::PropAccess(
-        @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
-        method_name,
-      ),
-      _,
-      _,
-    )) =>
+    Expr(
+      @ast.TsExpr::PropAssignExpr(
+        @ast.TsExpr::PropAccess(
+          @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
+          method_name
+        ),
+        _,
+        _
+      )
+    ) =>
       if n == class_name &&
-            method_name != "constructor" &&
-            not(accessed.contains(method_name)) {
+        method_name != "constructor" &&
+        not(accessed.contains(method_name)) {
         true
       } else {
         false
@@ -1001,10 +1054,7 @@ fn iife_method_assignment_is_dead(
 }
 
 ///|
-fn dce_stmt(
-  stmt : @ast.TsStmt,
-  accessed : Map[String, Bool],
-) -> @ast.TsStmt {
+fn dce_stmt(stmt : @ast.TsStmt, accessed : Map[String, Bool]) -> @ast.TsStmt {
   match stmt {
     NativeClassStmt(decl, ctor_body) => {
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -1068,7 +1118,11 @@ fn dce_stmt(
     Assign(n, e) => Assign(n, dce_expr(e, accessed))
     CompoundAssign(n, op, e) => CompoundAssign(n, op, dce_expr(e, accessed))
     IndexAssign(t, idx, v) =>
-      IndexAssign(dce_expr(t, accessed), dce_expr(idx, accessed), dce_expr(v, accessed))
+      IndexAssign(
+        dce_expr(t, accessed),
+        dce_expr(idx, accessed),
+        dce_expr(v, accessed),
+      )
     PropAssign(t, p, v) =>
       PropAssign(dce_expr(t, accessed), p, dce_expr(v, accessed))
     Expr(e) => Expr(dce_expr(e, accessed))
@@ -1076,10 +1130,14 @@ fn dce_stmt(
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(dce_expr(e, accessed))
     If(c, t, e) =>
-      If(dce_expr(c, accessed), dce_block(t, accessed), match e {
-        Some(b) => Some(dce_block(b, accessed))
-        None => None
-      })
+      If(
+        dce_expr(c, accessed),
+        dce_block(t, accessed),
+        match e {
+          Some(b) => Some(dce_block(b, accessed))
+          None => None
+        },
+      )
     While(c, body) => While(dce_expr(c, accessed), dce_block(body, accessed))
     DoWhile(c, body) =>
       DoWhile(dce_expr(c, accessed), dce_block(body, accessed))

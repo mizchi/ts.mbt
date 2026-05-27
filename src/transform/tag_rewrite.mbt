@@ -250,7 +250,8 @@ fn collect_du_bindings_stmt(
       }
       collect_du_bindings_block(body, k, literals, alias_to_k, out)
     }
-    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body)
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) => {
       collect_du_bindings_expr(iter, k, literals, alias_to_k, out)
       collect_du_bindings_block(body, k, literals, alias_to_k, out)
@@ -259,8 +260,7 @@ fn collect_du_bindings_stmt(
       collect_du_bindings_expr(e, k, literals, alias_to_k, out)
       for c in cases {
         match c.test_expr {
-          Some(te) =>
-            collect_du_bindings_expr(te, k, literals, alias_to_k, out)
+          Some(te) => collect_du_bindings_expr(te, k, literals, alias_to_k, out)
           None => ()
         }
         collect_du_bindings_block(c.body, k, literals, alias_to_k, out)
@@ -269,15 +269,18 @@ fn collect_du_bindings_stmt(
     Try(b, _, cb, fb) => {
       collect_du_bindings_block(b, k, literals, alias_to_k, out)
       match cb {
-        Some(blk) => collect_du_bindings_block(blk, k, literals, alias_to_k, out)
+        Some(blk) =>
+          collect_du_bindings_block(blk, k, literals, alias_to_k, out)
         None => ()
       }
       match fb {
-        Some(blk) => collect_du_bindings_block(blk, k, literals, alias_to_k, out)
+        Some(blk) =>
+          collect_du_bindings_block(blk, k, literals, alias_to_k, out)
         None => ()
       }
     }
-    Label(_, inner) => collect_du_bindings_stmt(inner, k, literals, alias_to_k, out)
+    Label(_, inner) =>
+      collect_du_bindings_stmt(inner, k, literals, alias_to_k, out)
     Block(b) => collect_du_bindings_block(b, k, literals, alias_to_k, out)
     NativeClassStmt(_, _) => ()
   }
@@ -308,16 +311,23 @@ fn collect_du_bindings_expr(
         }
       }
       match body {
-        ArrowExpr(e) => collect_du_bindings_expr(e, k, literals, alias_to_k, out)
-        ArrowBlock(b) => collect_du_bindings_block(b, k, literals, alias_to_k, out)
+        ArrowExpr(e) =>
+          collect_du_bindings_expr(e, k, literals, alias_to_k, out)
+        ArrowBlock(b) =>
+          collect_du_bindings_block(b, k, literals, alias_to_k, out)
       }
     }
     BinOp(_, l, r) | Seq(l, r) => {
       collect_du_bindings_expr(l, k, literals, alias_to_k, out)
       collect_du_bindings_expr(r, k, literals, alias_to_k, out)
     }
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) =>
       collect_du_bindings_expr(inner, k, literals, alias_to_k, out)
     Cond(c, t, e) => {
       collect_du_bindings_expr(c, k, literals, alias_to_k, out)
@@ -421,13 +431,15 @@ fn collect_sink_args_block(
 }
 
 ///|
-fn collect_sink_args_stmt(
-  stmt : @ast.TsStmt,
-  out : Array[@ast.TsExpr],
-) -> Unit {
+fn collect_sink_args_stmt(stmt : @ast.TsStmt, out : Array[@ast.TsExpr]) -> Unit {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
-    | CompoundAssign(_, _, e) | Throw(e) => collect_sink_args_expr(e, out)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => collect_sink_args_expr(e, out)
     Return(Some(e)) => collect_sink_args_expr(e, out)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => ()
     IndexAssign(t, idx, v) => {
@@ -504,15 +516,12 @@ fn collect_sink_args_stmt(
 }
 
 ///|
-fn collect_sink_args_expr(
-  expr : @ast.TsExpr,
-  out : Array[@ast.TsExpr],
-) -> Unit {
+fn collect_sink_args_expr(expr : @ast.TsExpr, out : Array[@ast.TsExpr]) -> Unit {
   match expr {
     MethodCall(@ast.TsExpr::Var(recv), m, args) => {
       let recv_is_dangerous = recv == "JSON" ||
-            recv == "console" ||
-            recv == "Object"
+        recv == "console" ||
+        recv == "Object"
       if recv_is_dangerous && serializing_method_names.contains(m) {
         // Treat every arg as escaping.
         for a in args {
@@ -547,13 +556,12 @@ fn collect_sink_args_expr(
         out.push(e)
       }
     }
-    TemplateLiteral(_, exprs) => {
+    TemplateLiteral(_, exprs) =>
       if exprs.length() > 0 {
         for e in exprs {
           out.push(e)
         }
       }
-    }
     MethodCall(recv, _, args) => {
       collect_sink_args_expr(recv, out)
       for a in args {
@@ -574,9 +582,12 @@ fn collect_sink_args_expr(
       collect_sink_args_expr(l, out)
       collect_sink_args_expr(r, out)
     }
-    UnaryOp(_, inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      collect_sink_args_expr(inner, out)
+    UnaryOp(_, inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => collect_sink_args_expr(inner, out)
     Cond(c, t, e) => {
       collect_sink_args_expr(c, out)
       collect_sink_args_expr(t, out)
@@ -659,10 +670,7 @@ fn expr_mentions_k(
       for ent in entries {
         if ent.0 == k {
           match ent.1 {
-            StringLit(s) =>
-              if literals.contains(s) {
-                return true
-              }
+            StringLit(s) => if literals.contains(s) { return true }
             _ => ()
           }
         }
@@ -675,9 +683,13 @@ fn expr_mentions_k(
     BinOp(_, l, r) | Seq(l, r) =>
       expr_mentions_k(l, k, literals, bindings) ||
       expr_mentions_k(r, k, literals, bindings)
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      expr_mentions_k(inner, k, literals, bindings)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => expr_mentions_k(inner, k, literals, bindings)
     Cond(c, t, e) =>
       expr_mentions_k(c, k, literals, bindings) ||
       expr_mentions_k(t, k, literals, bindings) ||
@@ -920,8 +932,8 @@ fn object_string_literal_fields(ty : @ast.TsType) -> Map[String, String]? {
 /// any of them could observe a discriminant tag as a string at
 /// runtime.
 let serializing_method_names : Array[String] = [
-  "stringify", "parse", "log", "info", "warn", "error", "debug", "trace",
-  "keys", "values", "entries", "assign", "fromEntries",
+  "stringify", "parse", "log", "info", "warn", "error", "debug", "trace", "keys",
+  "values", "entries", "assign", "fromEntries",
 ]
 
 ///|
@@ -940,16 +952,20 @@ fn block_has_escape_sink(block : @ast.TsBlock) -> Bool {
 ///|
 fn stmt_has_escape_sink(stmt : @ast.TsStmt) -> Bool {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
-    | CompoundAssign(_, _, e) | Throw(e) => expr_has_escape_sink(e)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => expr_has_escape_sink(e)
     Return(Some(e)) => expr_has_escape_sink(e)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => false
     IndexAssign(t, idx, v) =>
       expr_has_escape_sink(t) ||
-          expr_has_escape_sink(idx) ||
-          expr_has_escape_sink(v)
-    PropAssign(t, _, v) =>
-      expr_has_escape_sink(t) || expr_has_escape_sink(v)
+      expr_has_escape_sink(idx) ||
+      expr_has_escape_sink(v)
+    PropAssign(t, _, v) => expr_has_escape_sink(t) || expr_has_escape_sink(v)
     If(c, t, e) => {
       if expr_has_escape_sink(c) {
         return true
@@ -998,10 +1014,7 @@ fn stmt_has_escape_sink(stmt : @ast.TsStmt) -> Bool {
       }
       for c in cases {
         match c.test_expr {
-          Some(te) =>
-            if expr_has_escape_sink(te) {
-              return true
-            }
+          Some(te) => if expr_has_escape_sink(te) { return true }
           None => ()
         }
         if block_has_escape_sink(c.body) {
@@ -1038,8 +1051,8 @@ fn expr_has_escape_sink(expr : @ast.TsExpr) -> Bool {
     // `JSON.foo(...)` / `console.foo(...)` / `Object.foo(...)`.
     MethodCall(@ast.TsExpr::Var(recv), m, args) => {
       let recv_is_dangerous = recv == "JSON" ||
-            recv == "console" ||
-            recv == "Object"
+        recv == "console" ||
+        recv == "Object"
       if recv_is_dangerous && serializing_method_names.contains(m) {
         return true
       }
@@ -1102,13 +1115,16 @@ fn expr_has_escape_sink(expr : @ast.TsExpr) -> Bool {
     TaggedTemplate(_, _, _, _) => true
     BinOp(_, l, r) | Seq(l, r) =>
       expr_has_escape_sink(l) || expr_has_escape_sink(r)
-    UnaryOp(_, inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      expr_has_escape_sink(inner)
+    UnaryOp(_, inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => expr_has_escape_sink(inner)
     Cond(c, t, e) =>
       expr_has_escape_sink(c) ||
-          expr_has_escape_sink(t) ||
-          expr_has_escape_sink(e)
+      expr_has_escape_sink(t) ||
+      expr_has_escape_sink(e)
     PropAccess(recv, _) => expr_has_escape_sink(recv)
     IndexAccess(recv, idx) =>
       expr_has_escape_sink(recv) || expr_has_escape_sink(idx)
@@ -1128,16 +1144,15 @@ fn expr_has_escape_sink(expr : @ast.TsExpr) -> Bool {
       }
       false
     }
-    ComputedProp(k, v) =>
-      expr_has_escape_sink(k) || expr_has_escape_sink(v)
+    ComputedProp(k, v) => expr_has_escape_sink(k) || expr_has_escape_sink(v)
     AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
       expr_has_escape_sink(v)
     CompoundAssignExpr(t, _, v) =>
       expr_has_escape_sink(t) || expr_has_escape_sink(v)
     IndexAssignExpr(recv, idx, v) =>
       expr_has_escape_sink(recv) ||
-          expr_has_escape_sink(idx) ||
-          expr_has_escape_sink(v)
+      expr_has_escape_sink(idx) ||
+      expr_has_escape_sink(v)
     ArrowFunc(_, _, body, _) =>
       match body {
         ArrowExpr(e) => expr_has_escape_sink(e)
@@ -1189,17 +1204,22 @@ fn prop_uses_safe_stmt(
 ) -> Bool {
   let _ = in_safe_pos
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
-    | CompoundAssign(_, _, e) | Throw(e) => prop_uses_safe_expr(e, k, lits, false)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => prop_uses_safe_expr(e, k, lits, false)
     Return(Some(e)) => prop_uses_safe_expr(e, k, lits, false)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => true
     IndexAssign(t, idx, v) =>
       prop_uses_safe_expr(t, k, lits, false) &&
-         prop_uses_safe_expr(idx, k, lits, false) &&
-         prop_uses_safe_expr(v, k, lits, false)
+      prop_uses_safe_expr(idx, k, lits, false) &&
+      prop_uses_safe_expr(v, k, lits, false)
     PropAssign(t, _, v) =>
       prop_uses_safe_expr(t, k, lits, false) &&
-         prop_uses_safe_expr(v, k, lits, false)
+      prop_uses_safe_expr(v, k, lits, false)
     If(c, t, e) => {
       if not(prop_uses_safe_expr(c, k, lits, false)) {
         return false
@@ -1370,7 +1390,7 @@ fn prop_uses_safe_stmt(
         if not(prop_uses_safe_stmt(s, k, lits, false)) {
           return false
         }
-      } else {
+      } nobreak {
         true
       }
     NativeClassStmt(_, _) => true
@@ -1403,7 +1423,7 @@ fn prop_uses_safe_expr(
       }
     IndexAccess(recv, idx) =>
       prop_uses_safe_expr(recv, k, lits, false) &&
-         prop_uses_safe_expr(idx, k, lits, false)
+      prop_uses_safe_expr(idx, k, lits, false)
     // Equality comparisons: when one side is `e.K` and the other is
     // a string literal in `lits`, the `.K` access is in a safe
     // position. Still walk the receiver (it shouldn't mention K
@@ -1424,18 +1444,21 @@ fn prop_uses_safe_expr(
         }
       }
       prop_uses_safe_expr(l, k, lits, false) &&
-         prop_uses_safe_expr(r, k, lits, false)
+      prop_uses_safe_expr(r, k, lits, false)
     }
     Seq(l, r) =>
       prop_uses_safe_expr(l, k, lits, false) &&
-         prop_uses_safe_expr(r, k, lits, false)
-    UnaryOp(_, inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      prop_uses_safe_expr(inner, k, lits, false)
+      prop_uses_safe_expr(r, k, lits, false)
+    UnaryOp(_, inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => prop_uses_safe_expr(inner, k, lits, false)
     Cond(c, t, e) =>
       prop_uses_safe_expr(c, k, lits, false) &&
-         prop_uses_safe_expr(t, k, lits, false) &&
-         prop_uses_safe_expr(e, k, lits, false)
+      prop_uses_safe_expr(t, k, lits, false) &&
+      prop_uses_safe_expr(e, k, lits, false)
     Call(_, args) | New(_, args) => {
       for a in args {
         if not(prop_uses_safe_expr(a, k, lits, false)) {
@@ -1487,14 +1510,14 @@ fn prop_uses_safe_expr(
       prop_uses_safe_expr(v, k, lits, false)
     CompoundAssignExpr(t, _, v) =>
       prop_uses_safe_expr(t, k, lits, false) &&
-         prop_uses_safe_expr(v, k, lits, false)
+      prop_uses_safe_expr(v, k, lits, false)
     IndexAssignExpr(recv, idx, v) =>
       prop_uses_safe_expr(recv, k, lits, false) &&
-         prop_uses_safe_expr(idx, k, lits, false) &&
-         prop_uses_safe_expr(v, k, lits, false)
+      prop_uses_safe_expr(idx, k, lits, false) &&
+      prop_uses_safe_expr(v, k, lits, false)
     ComputedProp(kx, v) =>
       prop_uses_safe_expr(kx, k, lits, false) &&
-         prop_uses_safe_expr(v, k, lits, false)
+      prop_uses_safe_expr(v, k, lits, false)
     ArrowFunc(_, _, body, _) =>
       match body {
         ArrowExpr(e) => prop_uses_safe_expr(e, k, lits, false)
@@ -1512,7 +1535,7 @@ fn prop_uses_safe_expr(
         if not(prop_uses_safe_stmt(s, k, lits, false)) {
           return false
         }
-      } else {
+      } nobreak {
         true
       }
     DynamicImport(spec, opts) => {
@@ -1584,17 +1607,22 @@ fn object_literals_safe_stmt(
   lits : Map[String, Bool],
 ) -> Bool {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Assign(_, e)
-    | CompoundAssign(_, _, e) | Throw(e) => object_literals_safe_expr(e, k, lits)
+    Var(_, _, e)
+    | Let(_, _, e)
+    | Const(_, _, e)
+    | Expr(e)
+    | Assign(_, e)
+    | CompoundAssign(_, _, e)
+    | Throw(e) => object_literals_safe_expr(e, k, lits)
     Return(Some(e)) => object_literals_safe_expr(e, k, lits)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => true
     IndexAssign(t, idx, v) =>
       object_literals_safe_expr(t, k, lits) &&
-         object_literals_safe_expr(idx, k, lits) &&
-         object_literals_safe_expr(v, k, lits)
+      object_literals_safe_expr(idx, k, lits) &&
+      object_literals_safe_expr(v, k, lits)
     PropAssign(t, _, v) =>
       object_literals_safe_expr(t, k, lits) &&
-         object_literals_safe_expr(v, k, lits)
+      object_literals_safe_expr(v, k, lits)
     If(c, t, e) => {
       if not(object_literals_safe_expr(c, k, lits)) {
         return false
@@ -1655,7 +1683,8 @@ fn object_literals_safe_stmt(
       }
       true
     }
-    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body)
+    ForOf(_, _, _, iter, body)
+    | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) => {
       if not(object_literals_safe_expr(iter, k, lits)) {
         return false
@@ -1725,7 +1754,7 @@ fn object_literals_safe_stmt(
         if not(object_literals_safe_stmt(s, k, lits)) {
           return false
         }
-      } else {
+      } nobreak {
         true
       }
     NativeClassStmt(_, _) => true
@@ -1744,10 +1773,7 @@ fn object_literals_safe_expr(
         if ent.0 == k {
           // Must be a string literal in the union's set.
           match ent.1 {
-            StringLit(s) =>
-              if not(lits.contains(s)) {
-                return false
-              }
+            StringLit(s) => if not(lits.contains(s)) { return false }
             // Existing int form is idempotent.
             IntLit(_) | NumberLit(_) => ()
             _ => return false
@@ -1761,18 +1787,22 @@ fn object_literals_safe_expr(
     }
     BinOp(_, l, r) | Seq(l, r) =>
       object_literals_safe_expr(l, k, lits) &&
-         object_literals_safe_expr(r, k, lits)
-    UnaryOp(_, inner) | Spread(inner) | Await(inner) | NonNull(inner)
-    | OptionalChain(inner) | PureCall(inner) | YieldStar(inner) =>
-      object_literals_safe_expr(inner, k, lits)
+      object_literals_safe_expr(r, k, lits)
+    UnaryOp(_, inner)
+    | Spread(inner)
+    | Await(inner)
+    | NonNull(inner)
+    | OptionalChain(inner)
+    | PureCall(inner)
+    | YieldStar(inner) => object_literals_safe_expr(inner, k, lits)
     Cond(c, t, e) =>
       object_literals_safe_expr(c, k, lits) &&
-         object_literals_safe_expr(t, k, lits) &&
-         object_literals_safe_expr(e, k, lits)
+      object_literals_safe_expr(t, k, lits) &&
+      object_literals_safe_expr(e, k, lits)
     PropAccess(recv, _) => object_literals_safe_expr(recv, k, lits)
     IndexAccess(recv, idx) =>
       object_literals_safe_expr(recv, k, lits) &&
-         object_literals_safe_expr(idx, k, lits)
+      object_literals_safe_expr(idx, k, lits)
     Call(_, args) | New(_, args) => {
       for a in args {
         if not(object_literals_safe_expr(a, k, lits)) {
@@ -1813,16 +1843,16 @@ fn object_literals_safe_expr(
     }
     ComputedProp(kx, v) =>
       object_literals_safe_expr(kx, k, lits) &&
-         object_literals_safe_expr(v, k, lits)
+      object_literals_safe_expr(v, k, lits)
     AssignExpr(_, v) | AssignPattern(_, v) | PropAssignExpr(_, _, v) =>
       object_literals_safe_expr(v, k, lits)
     CompoundAssignExpr(t, _, v) =>
       object_literals_safe_expr(t, k, lits) &&
-         object_literals_safe_expr(v, k, lits)
+      object_literals_safe_expr(v, k, lits)
     IndexAssignExpr(recv, idx, v) =>
       object_literals_safe_expr(recv, k, lits) &&
-         object_literals_safe_expr(idx, k, lits) &&
-         object_literals_safe_expr(v, k, lits)
+      object_literals_safe_expr(idx, k, lits) &&
+      object_literals_safe_expr(v, k, lits)
     ArrowFunc(_, _, body, _) =>
       match body {
         ArrowExpr(e) => object_literals_safe_expr(e, k, lits)
@@ -1840,7 +1870,7 @@ fn object_literals_safe_expr(
         if not(object_literals_safe_stmt(s, k, lits)) {
           return false
         }
-      } else {
+      } nobreak {
         true
       }
     DynamicImport(spec, opts) => {
@@ -1890,7 +1920,8 @@ fn tag_rewrite_stmt(
     Let(b, t, e) => Let(b, t, tag_rewrite_expr(e, table))
     Const(b, t, e) => Const(b, t, tag_rewrite_expr(e, table))
     Assign(n, e) => Assign(n, tag_rewrite_expr(e, table))
-    CompoundAssign(n, op, e) => CompoundAssign(n, op, tag_rewrite_expr(e, table))
+    CompoundAssign(n, op, e) =>
+      CompoundAssign(n, op, tag_rewrite_expr(e, table))
     IndexAssign(t, idx, v) =>
       IndexAssign(
         tag_rewrite_expr(t, table),
@@ -1904,14 +1935,20 @@ fn tag_rewrite_stmt(
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(tag_rewrite_expr(e, table))
     If(c, t, e) =>
-      If(tag_rewrite_expr(c, table), tag_rewrite_block_inner(t, table), match e {
-        Some(b) => Some(tag_rewrite_block_inner(b, table))
-        None => None
-      })
-    While(c, body) => While(tag_rewrite_expr(c, table), tag_rewrite_block_inner(body, table))
+      If(
+        tag_rewrite_expr(c, table),
+        tag_rewrite_block_inner(t, table),
+        match e {
+          Some(b) => Some(tag_rewrite_block_inner(b, table))
+          None => None
+        },
+      )
+    While(c, body) =>
+      While(tag_rewrite_expr(c, table), tag_rewrite_block_inner(body, table))
     DoWhile(c, body) =>
       DoWhile(tag_rewrite_expr(c, table), tag_rewrite_block_inner(body, table))
-    With(c, body) => With(tag_rewrite_expr(c, table), tag_rewrite_block_inner(body, table))
+    With(c, body) =>
+      With(tag_rewrite_expr(c, table), tag_rewrite_block_inner(body, table))
     For(init, cond, update, body) =>
       For(
         match init {
@@ -1929,19 +1966,46 @@ fn tag_rewrite_stmt(
         tag_rewrite_block_inner(body, table),
       )
     ForOf(k, b, t, iter, body) =>
-      ForOf(k, b, t, tag_rewrite_expr(iter, table), tag_rewrite_block_inner(body, table))
+      ForOf(
+        k,
+        b,
+        t,
+        tag_rewrite_expr(iter, table),
+        tag_rewrite_block_inner(body, table),
+      )
     ForAwaitOf(k, b, t, iter, body) =>
-      ForAwaitOf(k, b, t, tag_rewrite_expr(iter, table), tag_rewrite_block_inner(body, table))
+      ForAwaitOf(
+        k,
+        b,
+        t,
+        tag_rewrite_expr(iter, table),
+        tag_rewrite_block_inner(body, table),
+      )
     ForIn(k, b, t, iter, body) =>
-      ForIn(k, b, t, tag_rewrite_expr(iter, table), tag_rewrite_block_inner(body, table))
+      ForIn(
+        k,
+        b,
+        t,
+        tag_rewrite_expr(iter, table),
+        tag_rewrite_block_inner(body, table),
+      )
     Switch(e, cases) => {
       // Identify the K (if any) being switched on. For each
       // `case "lit":` whose K is in the table, rewrite to
       // `case <id>:`.
       let switched_on : String? = match e {
-        PropAccess(_, name) => if table.contains(name) { Some(name) } else { None }
+        PropAccess(_, name) =>
+          if table.contains(name) {
+            Some(name)
+          } else {
+            None
+          }
         IndexAccess(_, @ast.TsExpr::StringLit(name)) =>
-          if table.contains(name) { Some(name) } else { None }
+          if table.contains(name) {
+            Some(name)
+          } else {
+            None
+          }
         _ => None
       }
       let new_cases : Array[@ast.TsSwitchCase] = []
@@ -2035,7 +2099,11 @@ fn tag_rewrite_expr(
     }
     UnaryOp(op, inner) => UnaryOp(op, tag_rewrite_expr(inner, table))
     Cond(c, t, e) =>
-      Cond(tag_rewrite_expr(c, table), tag_rewrite_expr(t, table), tag_rewrite_expr(e, table))
+      Cond(
+        tag_rewrite_expr(c, table),
+        tag_rewrite_expr(t, table),
+        tag_rewrite_expr(e, table),
+      )
     PropAccess(recv, p) => PropAccess(tag_rewrite_expr(recv, table), p)
     IndexAccess(recv, idx) =>
       IndexAccess(tag_rewrite_expr(recv, table), tag_rewrite_expr(idx, table))
@@ -2088,10 +2156,18 @@ fn tag_rewrite_expr(
     Seq(a, b) => Seq(tag_rewrite_expr(a, table), tag_rewrite_expr(b, table))
     AssignExpr(n, v) => AssignExpr(n, tag_rewrite_expr(v, table))
     CompoundAssignExpr(t, op, v) =>
-      CompoundAssignExpr(tag_rewrite_expr(t, table), op, tag_rewrite_expr(v, table))
+      CompoundAssignExpr(
+        tag_rewrite_expr(t, table),
+        op,
+        tag_rewrite_expr(v, table),
+      )
     AssignPattern(b, v) => AssignPattern(b, tag_rewrite_expr(v, table))
     PropAssignExpr(recv, p, v) =>
-      PropAssignExpr(tag_rewrite_expr(recv, table), p, tag_rewrite_expr(v, table))
+      PropAssignExpr(
+        tag_rewrite_expr(recv, table),
+        p,
+        tag_rewrite_expr(v, table),
+      )
     IndexAssignExpr(recv, idx, v) =>
       IndexAssignExpr(
         tag_rewrite_expr(recv, table),
@@ -2103,11 +2179,13 @@ fn tag_rewrite_expr(
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(tag_rewrite_expr(e, table))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(tag_rewrite_block_inner(b, table))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(tag_rewrite_block_inner(b, table))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
-    FuncExpr(f) => FuncExpr({ ..f, body: tag_rewrite_block_inner(f.body, table) })
+    FuncExpr(f) =>
+      FuncExpr({ ..f, body: tag_rewrite_block_inner(f.body, table) })
     DynamicImport(spec, opts) =>
       DynamicImport(
         tag_rewrite_expr(spec, table),

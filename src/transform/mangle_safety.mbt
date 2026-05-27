@@ -44,9 +44,37 @@ pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
 ) -> Array[String] {
+  // Phase 1-4 of the observability analysis: build the symbol
+  // graph (also collecting reflection / I/O sinks tagged with
+  // scope), infer numeric bindings for the IndexAccess fallback,
+  // run the backward-flow observability propagation, and reserve
+  // only the property names actually visible from the resulting
+  // observable bindings.
+  let (graph, scoped_sinks) = build_symbol_graph_with_sinks(
+    block, external_bindings,
+  )
+  let numeric = infer_numeric_symbols(graph)
+  let numeric_names = numeric_name_set(graph, numeric)
+  let reserved_external : Map[String, Bool] = {}
+  collect_props_on_external_block(
+    block, external_bindings, reserved_external, numeric_names,
+  )
+  // Phase 4: backward-propagate observability from sinks through
+  // FuncReturn / FuncArg edges so a value reaching a sink via a
+  // function parameter or return still tracks back to its
+  // originating bindings. The result subsumes Phase 3's sink
+  // reservation (which used to run alongside) because every
+  // resolved sink-arg ends up as a seeded observable symbol
+  // here.
+  let obs_map = analyze_observability(graph, scoped_sinks)
+  let reserved_obs = reserved_props_from_observability(graph, obs_map)
   let reserved : Map[String, Bool] = {}
-  collect_props_on_external_block(block, external_bindings, reserved)
-  collect_reflection_sinks_block(block, reserved)
+  for k in reserved_external.keys() {
+    reserved[k] = true
+  }
+  for k in reserved_obs.keys() {
+    reserved[k] = true
+  }
   let out : Array[String] = []
   for k in reserved.keys() {
     out.push(k)
@@ -95,36 +123,30 @@ pub fn external_import_bindings(
 /// through the underlying host implementation.
 let known_global_bindings : Array[String] = [
   // JS standard
-  "console", "Math", "JSON", "Object", "Array", "String", "Number",
-  "Boolean", "Symbol", "BigInt", "Date", "RegExp", "Error", "TypeError",
-  "RangeError", "SyntaxError", "ReferenceError", "Promise", "Proxy",
-  "Reflect", "Map", "Set", "WeakMap", "WeakSet", "WeakRef", "ArrayBuffer",
-  "SharedArrayBuffer", "DataView", "Int8Array", "Uint8Array",
-  "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
-  "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array",
-  "BigUint64Array", "Intl", "globalThis", "Function", "Iterator",
-  "AsyncIterator",
+  "console", "Math", "JSON", "Object", "Array", "String", "Number", "Boolean", "Symbol",
+  "BigInt", "Date", "RegExp", "Error", "TypeError", "RangeError", "SyntaxError",
+  "ReferenceError", "Promise", "Proxy", "Reflect", "Map", "Set", "WeakMap", "WeakSet",
+  "WeakRef", "ArrayBuffer", "SharedArrayBuffer", "DataView", "Int8Array", "Uint8Array",
+  "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+  "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array", "Intl", "globalThis",
+  "Function", "Iterator", "AsyncIterator",
   // Standard free functions / values
-  "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI",
-  "encodeURIComponent", "decodeURI", "decodeURIComponent", "NaN",
-  "Infinity", "undefined", "eval", "structuredClone",
+   "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI", "encodeURIComponent",
+  "decodeURI", "decodeURIComponent", "NaN", "Infinity", "undefined", "eval", "structuredClone",
   // Async / timers
-  "setTimeout", "clearTimeout", "setInterval", "clearInterval",
-  "queueMicrotask", "requestAnimationFrame", "cancelAnimationFrame",
-  "setImmediate", "clearImmediate",
+   "setTimeout", "clearTimeout", "setInterval", "clearInterval", "queueMicrotask",
+  "requestAnimationFrame", "cancelAnimationFrame", "setImmediate", "clearImmediate",
   // Browser
-  "window", "document", "navigator", "location", "history", "screen",
-  "localStorage", "sessionStorage", "indexedDB", "fetch", "Request",
-  "Response", "Headers", "URL", "URLSearchParams", "FormData", "Blob",
-  "File", "FileReader", "WebSocket", "EventTarget", "Event", "CustomEvent",
-  "MutationObserver", "ResizeObserver", "IntersectionObserver",
-  "AbortController", "AbortSignal", "TextEncoder", "TextDecoder", "atob",
-  "btoa", "crypto", "performance",
+   "window", "document", "navigator", "location", "history", "screen", "localStorage",
+  "sessionStorage", "indexedDB", "fetch", "Request", "Response", "Headers", "URL",
+  "URLSearchParams", "FormData", "Blob", "File", "FileReader", "WebSocket", "EventTarget",
+  "Event", "CustomEvent", "MutationObserver", "ResizeObserver", "IntersectionObserver",
+  "AbortController", "AbortSignal", "TextEncoder", "TextDecoder", "atob", "btoa",
+  "crypto", "performance",
   // Node.js
-  "process", "Buffer", "global", "require", "module", "exports", "__dirname",
-  "__filename",
+   "process", "Buffer", "global", "require", "module", "exports", "__dirname", "__filename",
   // React conventions (when present)
-  "React",
+   "React",
 ]
 
 ///|
@@ -137,9 +159,10 @@ fn collect_props_on_external_block(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
   out : Map[String, Bool],
+  numeric_names : Map[String, Bool],
 ) -> Unit {
   for s in block.stmts {
-    collect_props_on_external_stmt(s, external_bindings, out)
+    collect_props_on_external_stmt(s, external_bindings, out, numeric_names)
   }
 }
 
@@ -148,82 +171,103 @@ fn collect_props_on_external_stmt(
   stmt : @ast.TsStmt,
   externals : Map[String, Bool],
   out : Map[String, Bool],
+  numeric_names : Map[String, Bool],
 ) -> Unit {
   match stmt {
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Throw(e) =>
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
     Assign(_, e) | CompoundAssign(_, _, e) =>
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
     IndexAssign(t, idx, v) => {
-      collect_props_on_external_expr(t, externals, out)
-      collect_props_on_external_expr(idx, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      // Local-binding dynamic write: Phase 3+4 handle the
+      // reservation, no wildcard from here. External-chain
+      // writes still trip the wildcard.
+      let is_known_numeric = is_index_numeric_with_names(idx, numeric_names)
+      if is_external_chain(t, externals) {
+        match idx {
+          StringLit(s) => out[s] = true
+          _ => if not(is_known_numeric) { out["*"] = true }
+        }
+      }
+      collect_props_on_external_expr(t, externals, out, numeric_names)
+      collect_props_on_external_expr(idx, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
     PropAssign(t, prop, v) => {
       // `external.foo = ...` reserves `foo`.
       if is_external_chain(t, externals) {
         out[prop] = true
       }
-      collect_props_on_external_expr(t, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(t, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
-    Return(Some(e)) => collect_props_on_external_expr(e, externals, out)
+    Return(Some(e)) =>
+      collect_props_on_external_expr(e, externals, out, numeric_names)
     If(c, t, e) => {
-      collect_props_on_external_expr(c, externals, out)
-      collect_props_on_external_block(t, externals, out)
+      collect_props_on_external_expr(c, externals, out, numeric_names)
+      collect_props_on_external_block(t, externals, out, numeric_names)
       match e {
-        Some(b) => collect_props_on_external_block(b, externals, out)
+        Some(b) =>
+          collect_props_on_external_block(b, externals, out, numeric_names)
         None => ()
       }
     }
     While(c, b) | DoWhile(c, b) | With(c, b) => {
-      collect_props_on_external_expr(c, externals, out)
-      collect_props_on_external_block(b, externals, out)
+      collect_props_on_external_expr(c, externals, out, numeric_names)
+      collect_props_on_external_block(b, externals, out, numeric_names)
     }
     For(init, cond, update, body) => {
       match init {
-        Some(s) => collect_props_on_external_stmt(s, externals, out)
+        Some(s) =>
+          collect_props_on_external_stmt(s, externals, out, numeric_names)
         None => ()
       }
       match cond {
-        Some(e) => collect_props_on_external_expr(e, externals, out)
+        Some(e) =>
+          collect_props_on_external_expr(e, externals, out, numeric_names)
         None => ()
       }
       match update {
-        Some(s) => collect_props_on_external_stmt(s, externals, out)
+        Some(s) =>
+          collect_props_on_external_stmt(s, externals, out, numeric_names)
         None => ()
       }
-      collect_props_on_external_block(body, externals, out)
+      collect_props_on_external_block(body, externals, out, numeric_names)
     }
     ForOf(_, _, _, iter, body)
     | ForAwaitOf(_, _, _, iter, body)
     | ForIn(_, _, _, iter, body) => {
-      collect_props_on_external_expr(iter, externals, out)
-      collect_props_on_external_block(body, externals, out)
+      collect_props_on_external_expr(iter, externals, out, numeric_names)
+      collect_props_on_external_block(body, externals, out, numeric_names)
     }
     Switch(e, cases) => {
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
       for c in cases {
         match c.test_expr {
-          Some(te) => collect_props_on_external_expr(te, externals, out)
+          Some(te) =>
+            collect_props_on_external_expr(te, externals, out, numeric_names)
           None => ()
         }
-        collect_props_on_external_block(c.body, externals, out)
+        collect_props_on_external_block(c.body, externals, out, numeric_names)
       }
     }
     Try(b, _, cb, fb) => {
-      collect_props_on_external_block(b, externals, out)
+      collect_props_on_external_block(b, externals, out, numeric_names)
       match cb {
-        Some(blk) => collect_props_on_external_block(blk, externals, out)
+        Some(blk) =>
+          collect_props_on_external_block(blk, externals, out, numeric_names)
         None => ()
       }
       match fb {
-        Some(blk) => collect_props_on_external_block(blk, externals, out)
+        Some(blk) =>
+          collect_props_on_external_block(blk, externals, out, numeric_names)
         None => ()
       }
     }
-    Label(_, inner) => collect_props_on_external_stmt(inner, externals, out)
-    Block(b) => collect_props_on_external_block(b, externals, out)
+    Label(_, inner) =>
+      collect_props_on_external_stmt(inner, externals, out, numeric_names)
+    Block(b) =>
+      collect_props_on_external_block(b, externals, out, numeric_names)
     _ => ()
   }
 }
@@ -233,42 +277,44 @@ fn collect_props_on_external_expr(
   expr : @ast.TsExpr,
   externals : Map[String, Bool],
   out : Map[String, Bool],
+  numeric_names : Map[String, Bool],
 ) -> Unit {
   match expr {
     PropAccess(recv, prop) => {
       if is_external_chain(recv, externals) {
         out[prop] = true
       }
-      collect_props_on_external_expr(recv, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
     }
     MethodCall(recv, m, args) => {
       if is_external_chain(recv, externals) {
         out[m] = true
       }
-      collect_props_on_external_expr(recv, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
       for a in args {
-        collect_props_on_external_expr(a, externals, out)
+        collect_props_on_external_expr(a, externals, out, numeric_names)
       }
     }
     PropAssignExpr(recv, prop, v) => {
       if is_external_chain(recv, externals) {
         out[prop] = true
       }
-      collect_props_on_external_expr(recv, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
-    Call(_, args) | New(_, args) => for a in args {
-      collect_props_on_external_expr(a, externals, out)
-    }
-    CallExpr(callee, args) | NewExpr(callee, args) => {
-      collect_props_on_external_expr(callee, externals, out)
+    Call(_, args) | New(_, args) =>
       for a in args {
-        collect_props_on_external_expr(a, externals, out)
+        collect_props_on_external_expr(a, externals, out, numeric_names)
+      }
+    CallExpr(callee, args) | NewExpr(callee, args) => {
+      collect_props_on_external_expr(callee, externals, out, numeric_names)
+      for a in args {
+        collect_props_on_external_expr(a, externals, out, numeric_names)
       }
     }
     BinOp(_, l, r) => {
-      collect_props_on_external_expr(l, externals, out)
-      collect_props_on_external_expr(r, externals, out)
+      collect_props_on_external_expr(l, externals, out, numeric_names)
+      collect_props_on_external_expr(r, externals, out, numeric_names)
     }
     UnaryOp(_, inner)
     | Spread(inner)
@@ -278,75 +324,100 @@ fn collect_props_on_external_expr(
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner) =>
-      collect_props_on_external_expr(inner, externals, out)
-    Yield(Some(inner)) => collect_props_on_external_expr(inner, externals, out)
+      collect_props_on_external_expr(inner, externals, out, numeric_names)
+    Yield(Some(inner)) =>
+      collect_props_on_external_expr(inner, externals, out, numeric_names)
     Cond(c, t, e) => {
-      collect_props_on_external_expr(c, externals, out)
-      collect_props_on_external_expr(t, externals, out)
-      collect_props_on_external_expr(e, externals, out)
+      collect_props_on_external_expr(c, externals, out, numeric_names)
+      collect_props_on_external_expr(t, externals, out, numeric_names)
+      collect_props_on_external_expr(e, externals, out, numeric_names)
     }
     IndexAccess(recv, idx) => {
-      // Dynamic indexing into an external chain reserves *all*
-      // property names — we can't tell which one is read at
-      // runtime. Mark the property index expression's string
-      // literal (if any), and fall back to a "give up" marker
-      // that the mangler also checks.
+      // Dynamic indexing on an EXTERNAL chain still has to fall
+      // back to `*` — the consumer module's API surface isn't
+      // bounded by anything we can see in the bundle. For LOCAL
+      // bindings, though, `obj[runtime_key]` can only resolve to
+      // properties that were actually written into `obj`
+      // somewhere in the bundle (via `obj.foo = …` or
+      // `obj = {foo, …}`); Phase 3+4's observability analysis
+      // catches the names that escape to a sink and we let
+      // `dead_props` drop the rest. So we DON'T emit the
+      // wildcard for local-binding dynamic access anymore.
+      let is_known_numeric = is_index_numeric_with_names(idx, numeric_names)
       if is_external_chain(recv, externals) {
         match idx {
           StringLit(s) => out[s] = true
-          _ => out["*"] = true
+          _ => if not(is_known_numeric) { out["*"] = true }
         }
       }
-      collect_props_on_external_expr(recv, externals, out)
-      collect_props_on_external_expr(idx, externals, out)
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
+      collect_props_on_external_expr(idx, externals, out, numeric_names)
     }
-    ArrayLit(items) => for it in items {
-      collect_props_on_external_expr(it, externals, out)
-    }
-    ObjectLit(entries) => for ent in entries {
-      collect_props_on_external_expr(ent.1, externals, out)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_props_on_external_expr(it, externals, out, numeric_names)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_props_on_external_expr(ent.1, externals, out, numeric_names)
+      }
     ComputedProp(k, v) => {
-      collect_props_on_external_expr(k, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(k, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
-    AssignExpr(_, v) => collect_props_on_external_expr(v, externals, out)
+    AssignExpr(_, v) =>
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     CompoundAssignExpr(t, _, v) => {
-      collect_props_on_external_expr(t, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      collect_props_on_external_expr(t, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
-    AssignPattern(_, v) => collect_props_on_external_expr(v, externals, out)
+    AssignPattern(_, v) =>
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     IndexAssignExpr(recv, idx, v) => {
-      collect_props_on_external_expr(recv, externals, out)
-      collect_props_on_external_expr(idx, externals, out)
-      collect_props_on_external_expr(v, externals, out)
+      // Local-binding dynamic write — same handling as the
+      // statement-level IndexAssign above.
+      let is_known_numeric = is_index_numeric_with_names(idx, numeric_names)
+      if is_external_chain(recv, externals) {
+        match idx {
+          StringLit(s) => out[s] = true
+          _ => if not(is_known_numeric) { out["*"] = true }
+        }
+      }
+      collect_props_on_external_expr(recv, externals, out, numeric_names)
+      collect_props_on_external_expr(idx, externals, out, numeric_names)
+      collect_props_on_external_expr(v, externals, out, numeric_names)
     }
     Seq(a, b) => {
-      collect_props_on_external_expr(a, externals, out)
-      collect_props_on_external_expr(b, externals, out)
+      collect_props_on_external_expr(a, externals, out, numeric_names)
+      collect_props_on_external_expr(b, externals, out, numeric_names)
     }
     ArrowFunc(_, _, body, _) =>
       match body {
-        ArrowExpr(e) => collect_props_on_external_expr(e, externals, out)
-        ArrowBlock(b) => collect_props_on_external_block(b, externals, out)
+        ArrowExpr(e) =>
+          collect_props_on_external_expr(e, externals, out, numeric_names)
+        ArrowBlock(b) =>
+          collect_props_on_external_block(b, externals, out, numeric_names)
       }
-    FuncExpr(f) => collect_props_on_external_block(f.body, externals, out)
+    FuncExpr(f) =>
+      collect_props_on_external_block(f.body, externals, out, numeric_names)
     DynamicImport(spec, opts) => {
-      collect_props_on_external_expr(spec, externals, out)
+      collect_props_on_external_expr(spec, externals, out, numeric_names)
       match opts {
-        Some(o) => collect_props_on_external_expr(o, externals, out)
+        Some(o) =>
+          collect_props_on_external_expr(o, externals, out, numeric_names)
         None => ()
       }
     }
     TaggedTemplate(tag, _, _, exprs) => {
-      collect_props_on_external_expr(tag, externals, out)
+      collect_props_on_external_expr(tag, externals, out, numeric_names)
       for e in exprs {
-        collect_props_on_external_expr(e, externals, out)
+        collect_props_on_external_expr(e, externals, out, numeric_names)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      collect_props_on_external_expr(e, externals, out)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_props_on_external_expr(e, externals, out, numeric_names)
+      }
     _ => ()
   }
 }
@@ -355,10 +426,7 @@ fn collect_props_on_external_expr(
 /// Does this expression "originate" in an external binding?
 /// Recurses through PropAccess / MethodCall chains so
 /// `external.foo.bar(...).baz` still classifies as external.
-fn is_external_chain(
-  expr : @ast.TsExpr,
-  externals : Map[String, Bool],
-) -> Bool {
+fn is_external_chain(expr : @ast.TsExpr, externals : Map[String, Bool]) -> Bool {
   match expr {
     Var(n) => externals.contains(n)
     PropAccess(recv, _) => is_external_chain(recv, externals)
@@ -368,8 +436,10 @@ fn is_external_chain(
     New(n, _) => externals.contains(n)
     NewExpr(callee, _) => is_external_chain(callee, externals)
     IndexAccess(recv, _) => is_external_chain(recv, externals)
-    NonNull(inner) | OptionalChain(inner) | As(inner, _) | Satisfies(inner, _) =>
-      is_external_chain(inner, externals)
+    NonNull(inner)
+    | OptionalChain(inner)
+    | As(inner, _)
+    | Satisfies(inner, _) => is_external_chain(inner, externals)
     _ => false
   }
 }
@@ -397,7 +467,8 @@ fn collect_reflection_sinks_stmt(
   match stmt {
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) | Expr(e) | Throw(e) =>
       collect_reflection_sinks_expr(e, out)
-    Assign(_, e) | CompoundAssign(_, _, e) => collect_reflection_sinks_expr(e, out)
+    Assign(_, e) | CompoundAssign(_, _, e) =>
+      collect_reflection_sinks_expr(e, out)
     IndexAssign(t, idx, v) => {
       collect_reflection_sinks_expr(t, out)
       collect_reflection_sinks_expr(idx, out)
@@ -435,8 +506,7 @@ fn collect_reflection_sinks_stmt(
       }
       collect_reflection_sinks_block(body, out)
     }
-    ForOf(_, _, _, iter, body)
-    | ForAwaitOf(_, _, _, iter, body) => {
+    ForOf(_, _, _, iter, body) | ForAwaitOf(_, _, _, iter, body) => {
       collect_reflection_sinks_expr(iter, out)
       collect_reflection_sinks_block(body, out)
     }
@@ -490,9 +560,16 @@ fn collect_reflection_sinks_expr(
       match recv {
         Var(name) =>
           if (name == "JSON" && m == "stringify") ||
-             (name == "Object" &&
-              (m == "keys" || m == "entries" || m == "values" ||
-               m == "assign" || m == "fromEntries")) {
+            (
+              name == "Object" &&
+              (
+                m == "keys" ||
+                m == "entries" ||
+                m == "values" ||
+                m == "assign" ||
+                m == "fromEntries"
+              )
+            ) {
             // Mark every literal property on the argument object,
             // and use the wildcard for anything dynamic.
             for a in args {
@@ -520,17 +597,17 @@ fn collect_reflection_sinks_expr(
     | As(inner, _)
     | Satisfies(inner, _)
     | NonNull(inner)
-    | OptionalChain(inner) =>
-      collect_reflection_sinks_expr(inner, out)
+    | OptionalChain(inner) => collect_reflection_sinks_expr(inner, out)
     Yield(Some(inner)) => collect_reflection_sinks_expr(inner, out)
     Cond(c, t, e) => {
       collect_reflection_sinks_expr(c, out)
       collect_reflection_sinks_expr(t, out)
       collect_reflection_sinks_expr(e, out)
     }
-    Call(_, args) | New(_, args) => for a in args {
-      collect_reflection_sinks_expr(a, out)
-    }
+    Call(_, args) | New(_, args) =>
+      for a in args {
+        collect_reflection_sinks_expr(a, out)
+      }
     CallExpr(callee, args) | NewExpr(callee, args) => {
       collect_reflection_sinks_expr(callee, out)
       for a in args {
@@ -542,12 +619,14 @@ fn collect_reflection_sinks_expr(
       collect_reflection_sinks_expr(recv, out)
       collect_reflection_sinks_expr(idx, out)
     }
-    ArrayLit(items) => for it in items {
-      collect_reflection_sinks_expr(it, out)
-    }
-    ObjectLit(entries) => for ent in entries {
-      collect_reflection_sinks_expr(ent.1, out)
-    }
+    ArrayLit(items) =>
+      for it in items {
+        collect_reflection_sinks_expr(it, out)
+      }
+    ObjectLit(entries) =>
+      for ent in entries {
+        collect_reflection_sinks_expr(ent.1, out)
+      }
     ComputedProp(k, v) => {
       collect_reflection_sinks_expr(k, out)
       collect_reflection_sinks_expr(v, out)
@@ -590,9 +669,10 @@ fn collect_reflection_sinks_expr(
         collect_reflection_sinks_expr(e, out)
       }
     }
-    TemplateLiteral(_, exprs) => for e in exprs {
-      collect_reflection_sinks_expr(e, out)
-    }
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_reflection_sinks_expr(e, out)
+      }
     _ => ()
   }
 }
@@ -622,8 +702,13 @@ fn collect_object_literal_keys(
 /// fall back to the wildcard reservation.
 fn arg_is_literal_or_known(expr : @ast.TsExpr) -> Bool {
   match expr {
-    ObjectLit(_) | ArrayLit(_) | StringLit(_) | NumberLit(_) | IntLit(_)
-    | BoolLit(_) | NullLit => true
+    ObjectLit(_)
+    | ArrayLit(_)
+    | StringLit(_)
+    | NumberLit(_)
+    | IntLit(_)
+    | BoolLit(_)
+    | NullLit => true
     _ => false
   }
 }

@@ -171,7 +171,13 @@ fn collect_var_refs_in_stmt(
 ) -> Unit {
   match stmt {
     Var(b, _, rhs) | Let(b, _, rhs) | Const(b, _, rhs) => {
-      let _ = b
+      // Destructuring defaults can carry the only reference to a
+      // top-level helper —
+      // `const { invalid = defaultInvalidHandler } = opts` is the
+      // only use of `defaultInvalidHandler` in prettier's
+      // options.js. Without walking the binding tree, treeshake
+      // drops the helper and the call site throws at runtime.
+      collect_var_refs_in_binding(b, out)
       collect_var_refs_in_expr(rhs, out)
     }
     Assign(name, rhs) => {
@@ -250,7 +256,67 @@ fn collect_var_refs_in_stmt(
     }
     Label(_, inner) => collect_var_refs_in_stmt(inner, out)
     Block(b) => collect_var_refs_in_block(b, out)
-    NativeClassStmt(_, _) => ()
+    NativeClassStmt(decl, ctor_body) => {
+      collect_var_refs_in_class_decl(decl, out)
+      match ctor_body {
+        Some(f) => {
+          // Constructor parameter defaults can carry the only
+          // reference to a top-level binding (e.g. Yjs's `Doc`
+          // ctor: `{guid = uuidv4(), ...} = {}`). Walk every
+          // default expression — including the inner destructure
+          // defaults — so treeshake doesn't drop those bindings.
+          collect_var_refs_in_params(f.params, out)
+          collect_var_refs_in_block(f.body, out)
+        }
+        None => ()
+      }
+    }
+  }
+}
+
+///|
+/// A NativeClassStmt / NativeClassExpr references its base classes
+/// (`extends Base`), its decorators, and every name used inside
+/// methods / constructor. Treeshake needs to follow all of these so
+/// the bases / call-targets don't get dropped as unused.
+fn collect_var_refs_in_class_decl(
+  decl : @ast.TsClassDecl,
+  out : Map[String, Bool],
+) -> Unit {
+  for base in decl.base_names {
+    out[base] = true
+  }
+  // `base_expr` carries the expression form of `extends …` heritage
+  // (`extends declare(args)` / `extends Context.Reference()(…)`).
+  // Without walking it the references it pulls in get dropped as
+  // unused.
+  match decl.base_expr {
+    Some(e) => collect_var_refs_in_expr(e, out)
+    None => ()
+  }
+  // Static field initializers (`static foo = init;`) live on the
+  // class decl directly when the class is in native form. Without
+  // walking them, references that only appear in `static` slots
+  // (effect Schema's `static make = …` / drizzle's
+  // `PgTable.Symbol = { …, EnableRLS }`) get dropped.
+  for entry in decl.static_field_inits {
+    collect_var_refs_in_expr(entry.1, out)
+  }
+  for dec in decl.decorators {
+    collect_var_refs_in_expr(dec, out)
+  }
+  for m in decl.methods {
+    match m.body {
+      Some(b) => collect_var_refs_in_block(b, out)
+      None => ()
+    }
+    // Computed-key methods (`[OpCodes.OP_ON_SUCCESS](op) {…}`) have
+    // their key expression on `m.key_expr`. Walk it so the
+    // referenced bindings stay alive.
+    match m.key_expr {
+      Some(e) => collect_var_refs_in_expr(e, out)
+      None => ()
+    }
   }
 }
 
@@ -345,24 +411,14 @@ fn collect_var_refs_in_expr(
       collect_var_refs_in_expr(b, out)
     }
     ArrowFunc(params, _, body, _) => {
-      for p in params {
-        match p.default {
-          Some(d) => collect_var_refs_in_expr(d, out)
-          None => ()
-        }
-      }
+      collect_var_refs_in_params(params, out)
       match body {
         ArrowExpr(e) => collect_var_refs_in_expr(e, out)
         ArrowBlock(b) => collect_var_refs_in_block(b, out)
       }
     }
     FuncExpr(f) => {
-      for p in f.params {
-        match p.default {
-          Some(d) => collect_var_refs_in_expr(d, out)
-          None => ()
-        }
-      }
+      collect_var_refs_in_params(f.params, out)
       collect_var_refs_in_block(f.body, out)
     }
     DynamicImport(spec, opts) => {
@@ -386,6 +442,81 @@ fn collect_var_refs_in_expr(
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner) => collect_var_refs_in_expr(inner, out)
+    NativeClassExpr(decl, ctor_body) => {
+      collect_var_refs_in_class_decl(decl, out)
+      match ctor_body {
+        Some(f) => {
+          collect_var_refs_in_params(f.params, out)
+          collect_var_refs_in_block(f.body, out)
+        }
+        None => ()
+      }
+    }
+    PureCall(inner) => collect_var_refs_in_expr(inner, out)
     _ => ()
+  }
+}
+
+///|
+/// Walk every default expression reachable from a parameter list,
+/// including nested destructure-element defaults. `Param.default`
+/// covers the top-level `(x = expr)` shape; `Param.binding`'s tree
+/// covers `({a = expr} = {})` and `([x = expr])` shapes. Both must
+/// be walked so treeshake / linker passes don't lose references
+/// that only appear inside destructuring defaults.
+fn collect_var_refs_in_params(
+  params : Array[@ast.TsParam],
+  out : Map[String, Bool],
+) -> Unit {
+  for p in params {
+    match p.default {
+      Some(d) => collect_var_refs_in_expr(d, out)
+      None => ()
+    }
+    match p.binding {
+      Some(b) => collect_var_refs_in_binding(b, out)
+      None => ()
+    }
+  }
+}
+
+///|
+fn collect_var_refs_in_binding(
+  binding : @ast.TsBinding,
+  out : Map[String, Bool],
+) -> Unit {
+  match binding {
+    Ident(_) => ()
+    Array(ab) => {
+      for elem in ab.items {
+        match elem {
+          Some(be) => {
+            collect_var_refs_in_binding(be.binding, out)
+            match be.default {
+              Some(d) => collect_var_refs_in_expr(d, out)
+              None => ()
+            }
+          }
+          None => ()
+        }
+      }
+      match ab.rest {
+        Some(r) => collect_var_refs_in_binding(r, out)
+        None => ()
+      }
+    }
+    Object(ob) =>
+      for prop in ob.props {
+        collect_var_refs_in_binding(prop.binding, out)
+        match prop.default {
+          Some(d) => collect_var_refs_in_expr(d, out)
+          None => ()
+        }
+        match prop.key_expr {
+          Some(k) => collect_var_refs_in_expr(k, out)
+          None => ()
+        }
+      }
+    Target(e) => collect_var_refs_in_expr(e, out)
   }
 }

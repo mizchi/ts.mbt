@@ -663,37 +663,25 @@ test "parser: parse literal-key mapped object type as fields" {
 ///|
 test "parser: parse constructor type `new (...) => T`" {
   let parser = Parser::from_source("new (x: string) => Foo")
-  assert_eq(
-    parser.parse_type(),
-    Constructor([String_], Named("Foo"), false),
-  )
+  assert_eq(parser.parse_type(), Constructor([String_], Named("Foo"), false))
 }
 
 ///|
 test "parser: parse abstract constructor type" {
   let parser = Parser::from_source("abstract new (x: string) => Foo")
-  assert_eq(
-    parser.parse_type(),
-    Constructor([String_], Named("Foo"), true),
-  )
+  assert_eq(parser.parse_type(), Constructor([String_], Named("Foo"), true))
 }
 
 ///|
 test "parser: parse variadic tuple type with rest element" {
   let parser = Parser::from_source("[string, ...number[]]")
-  assert_eq(
-    parser.parse_type(),
-    Tuple([String_, Rest(Array(Number))]),
-  )
+  assert_eq(parser.parse_type(), Tuple([String_, Rest(Array(Number))]))
 }
 
 ///|
 test "parser: parse leading rest variadic tuple" {
   let parser = Parser::from_source("[...string[], number]")
-  assert_eq(
-    parser.parse_type(),
-    Tuple([Rest(Array(String_)), Number]),
-  )
+  assert_eq(parser.parse_type(), Tuple([Rest(Array(String_)), Number]))
 }
 
 ///|
@@ -2275,8 +2263,7 @@ test "parser: parse asserts predicate functions" {
   // `asserts value is string` — typed assertion.
   match module_.imports[0].return_type {
     AssertsPredicate("value", Some(String_)) => ()
-    other =>
-      fail("expected `asserts value is string`, got \{other}")
+    other => fail("expected `asserts value is string`, got \{other}")
   }
   // `asserts value` — truthy assertion, no type payload.
   match module_.imports[1].return_type {
@@ -2345,8 +2332,9 @@ test "parser: parse dynamic import with options retains the second arg" {
   // `import("./data.json", { with: { type: "json" } })` should parse
   // with both arguments captured.
   let parser = Parser::from_source(
-    #|import("./data.json", { with: { type: "json" } })
-    ,
+    (
+      #|import("./data.json", { with: { type: "json" } })
+    ),
   )
   let expr = parser.parse_expr()
   match expr {
@@ -6894,6 +6882,7 @@ test "parser: export namespace with runtime class body" {
   assert_eq(module_.interfaces.length(), 1)
   assert_eq(module_.interfaces[0].name, "PreProcessed")
 }
+
 ///|
 test "parser: numeric property name in interface body" {
   let src =
@@ -6967,8 +6956,9 @@ test "parser: `declare` accepted as soft keyword in value positions" {
     "const f = (declare) => declare;",
     "const [declare] = args;",
     "type T = [declare: AmdModuleDeclaration];",
-    #|interface F { register(declare: SystemModuleRegisterCallback): void; }
-    ,
+    (
+      #|interface F { register(declare: SystemModuleRegisterCallback): void; }
+    ),
   ]
   for src in cases {
     let _ = Parser::from_source(src).parse_module() catch {

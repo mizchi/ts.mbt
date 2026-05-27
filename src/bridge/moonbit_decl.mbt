@@ -3335,8 +3335,7 @@ fn utility_record_type_suffix(type_ : @ast.TsType) -> String {
     // purposes of suffix naming; inside a Tuple it's handled by the
     // tuple-walker.
     Rest(inner) => "RestOf" + utility_record_type_suffix(inner)
-    Constructor(_, ret, _) =>
-      "CtorOf" + utility_record_type_suffix(ret)
+    Constructor(_, ret, _) => "CtorOf" + utility_record_type_suffix(ret)
     UniqueSymbol(_) => "Symbol"
   }
 }
@@ -8559,6 +8558,11 @@ fn clone_class_method_in_scope(
     ),
     is_static: class_method.is_static,
     body: class_method.body,
+    accessor: class_method.accessor,
+    key_expr: class_method.key_expr,
+    is_async: class_method.is_async,
+    is_generator: class_method.is_generator,
+    param_defaults: class_method.param_defaults,
   }
 }
 
@@ -8612,6 +8616,11 @@ fn callable_method_from_func_type(
     ),
     is_static,
     body: None,
+    accessor: "",
+    key_expr: None,
+    is_async: false,
+    is_generator: false,
+    param_defaults: [],
   }
 }
 
@@ -8860,6 +8869,8 @@ fn clone_exported_class(
     name: exported.export_name,
     type_params: exported.class_.type_params,
     base_names: [],
+    base_expr: None,
+    static_field_inits: [],
     constructor_params,
     properties,
     methods,

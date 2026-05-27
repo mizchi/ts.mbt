@@ -13,10 +13,7 @@ fn dp_vfs(entries : Array[(String, String)]) -> Map[String, String] {
 ///|
 test "dead-prop: unused object literal key is dropped (pure value)" {
   let files = dp_vfs([
-    (
-      "entry.ts",
-      "const point = { x: 1, y: 2 };\nconsole.log(point.x);\n",
-    ),
+    ("entry.ts", "const point = { x: 1, y: 2 };\nconsole.log(point.x);\n"),
   ])
   let opts = BundleOptions::default()
     .with_mangle(true)
@@ -39,8 +36,7 @@ test "dead-prop: unused key with side-effectful value is kept" {
   // read, dropping the entry would lose the side effect.
   let files = dp_vfs([
     (
-      "entry.ts",
-      "function f() { console.log(\"f\"); return 1; }\nconst point = { x: 1, y: f() };\nconsole.log(point.x);\n",
+      "entry.ts", "function f() { console.log(\"f\"); return 1; }\nconst point = { x: 1, y: f() };\nconsole.log(point.x);\n",
     ),
   ])
   let opts = BundleOptions::default()
@@ -62,10 +58,7 @@ test "dead-prop: extra_reserved_props keeps a key alive" {
   // it explicitly. The dead-prop pass must honor that even
   // though `y` is never read in the bundle.
   let files = dp_vfs([
-    (
-      "entry.ts",
-      "const point = { x: 1, y: 2 };\nconsole.log(point.x);\n",
-    ),
+    ("entry.ts", "const point = { x: 1, y: 2 };\nconsole.log(point.x);\n"),
   ])
   let opts = BundleOptions::default()
     .with_mangle(true)
@@ -88,8 +81,7 @@ test "dead-prop: suppressed when safety analysis emits wildcard" {
   // Property mangling AND dead-prop pruning are both suppressed.
   let files = dp_vfs([
     (
-      "entry.ts",
-      "const point = { x: 1, y: 2 };\nconsole.log(JSON.stringify(point));\n",
+      "entry.ts", "const point = { x: 1, y: 2 };\nconsole.log(JSON.stringify(point));\n",
     ),
   ])
   let opts = BundleOptions::default()
