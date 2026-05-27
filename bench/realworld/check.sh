@@ -32,6 +32,9 @@ fixture "datefns" bench/realworld/datefns-entry.ts "date-fns ok: 2026-04-11 100"
 fixture "yjs"     bench/realworld/yjs-entry.ts     "yjs ok: 3 42 6"
 fixture "effect"  bench/realworld/effect-entry.ts  "effect ok: 21"
 fixture "typescript" bench/realworld/typescript-side.ts "typescript ok:"
+fixture "typescript_apis" bench/realworld/typescript-apis.ts "typescript ok: 13 passed, 0 failed"
+fixture "typescript_deep" bench/realworld/typescript-deep.ts "typescript deep: 13 passed, 0 failed"
+fixture "typescript_program" bench/realworld/typescript-program.ts "program ok: diagnostics = 2"
 
 # Hono is loaded via dynamic import (default export pattern) — wrap it.
 cat > /tmp/_hono_run.mjs << 'JS'
