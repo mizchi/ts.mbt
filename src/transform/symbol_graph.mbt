@@ -220,6 +220,20 @@ pub fn build_symbol_graph(
   block : @ast.TsBlock,
   external_local_names : Map[String, Bool],
 ) -> SymbolGraph {
+  let (g, _) = build_symbol_graph_with_sinks(block, external_local_names)
+  g
+}
+
+///|
+/// Same as `build_symbol_graph` but also returns the list of
+/// observation sinks (reflection calls, throws, external arg
+/// passing, etc.) discovered during the walk, each tagged with
+/// the scope they were found in so callers can do scope-aware
+/// `Var(...)` lookup when classifying them.
+pub fn build_symbol_graph_with_sinks(
+  block : @ast.TsBlock,
+  external_local_names : Map[String, Bool],
+) -> (SymbolGraph, Array[(Sink, ScopeId)]) {
   let g : SymbolGraph = {
     scopes: [],
     symbols: [],
@@ -240,11 +254,13 @@ pub fn build_symbol_graph(
     in_closure_depth: 0,
     enclosing_func: None,
     enclosing_def: None,
+    externals: external_local_names,
+    scoped_sinks: [],
   }
   for s in block.stmts {
     sg_visit_stmt(walker, s)
   }
-  g
+  (g, walker.scoped_sinks)
 }
 
 ///|
@@ -261,6 +277,12 @@ priv struct SgWalker {
   // SymbolId of the binding whose initializer we're currently
   // walking — used to add `RHS → binding` flow edges.
   mut enclosing_def : SymbolId?
+  // External binding name set carried for sink classification.
+  externals : Map[String, Bool]
+  // Collected sinks, paired with the scope they were observed in
+  // so `reserve_props_from_sink` can resolve `Var(...)` arguments
+  // through the right name lookup chain.
+  scoped_sinks : Array[(Sink, ScopeId)]
 }
 
 ///|
@@ -288,6 +310,18 @@ fn sg_lookup(
     }
   }
   None
+}
+
+///|
+/// Same as `sg_lookup` but pub for downstream passes (sink_catalog
+/// uses this to resolve `Var(...)` sink arguments against the
+/// scope they appeared in).
+pub fn lookup_symbol_in_scope(
+  g : SymbolGraph,
+  from_scope : ScopeId,
+  name : String,
+) -> SymbolId? {
+  sg_lookup(g, from_scope, name)
 }
 
 ///|
@@ -545,7 +579,13 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       sg_visit_expr(w, target)
       sg_visit_expr(w, val)
     }
-    Expr(e) | Throw(e) => sg_visit_expr(w, e)
+    Expr(e) => sg_visit_expr(w, e)
+    Throw(e) => {
+      // `throw x` — caller sees the value; any property
+      // (.message / .stack / .code) could be inspected.
+      w.scoped_sinks.push(({ expr: e, observation: Recursive }, w.current_scope))
+      sg_visit_expr(w, e)
+    }
     Return(Some(e)) => {
       sg_visit_expr(w, e)
       match w.enclosing_func {
@@ -595,13 +635,23 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       w.current_scope = outer
     }
     ForOf(_, b, _, iter, body)
-    | ForAwaitOf(_, b, _, iter, body)
-    | ForIn(_, b, _, iter, body) => {
+    | ForAwaitOf(_, b, _, iter, body) => {
       sg_visit_expr(w, iter)
       let outer = w.current_scope
       w.current_scope = sg_new_scope(w.g, Some(outer), Block)
       sg_declare_binding(w.g, b, w.current_scope, Let, {})
-      // No init expr for the loop binding — runtime fills from iter.
+      sg_visit_block_in_new_scope(w, body, Block)
+      w.current_scope = outer
+    }
+    ForIn(_, b, _, iter, body) => {
+      // `for-in iter` enumerates iter's property names — record
+      // it as a DirectKeys sink in the enclosing scope (before
+      // we open the per-iteration block).
+      w.scoped_sinks.push(({ expr: iter, observation: DirectKeys }, w.current_scope))
+      sg_visit_expr(w, iter)
+      let outer = w.current_scope
+      w.current_scope = sg_new_scope(w.g, Some(outer), Block)
+      sg_declare_binding(w.g, b, w.current_scope, Let, {})
       sg_visit_block_in_new_scope(w, body, Block)
       w.current_scope = outer
     }
@@ -713,7 +763,104 @@ fn binding_simple_ident(w : SgWalker, b : @ast.TsBinding) -> SymbolId? {
 // ---------------------------------------------------------------------------
 
 ///|
+fn sg_record_sinks_in_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
+  // Examine expression for reflection / external-call sinks at
+  // THIS node only (no recursion — the surrounding `sg_visit_expr`
+  // descends into children itself).
+  match expr {
+    MethodCall(recv, m, args) =>
+      match recv {
+        @ast.TsExpr::Var(name) =>
+          if name == "Object" {
+            match m {
+              "keys" | "values" | "entries" | "fromEntries" =>
+                for a in args {
+                  w.scoped_sinks.push(({ expr: a, observation: DirectKeys }, w.current_scope))
+                }
+              "assign" =>
+                for i, a in args {
+                  if i > 0 {
+                    w.scoped_sinks.push(({ expr: a, observation: DirectKeys }, w.current_scope))
+                  }
+                }
+              _ => ()
+            }
+          } else if name == "JSON" && m == "stringify" {
+            for a in args {
+              w.scoped_sinks.push(({ expr: a, observation: Recursive }, w.current_scope))
+            }
+          } else if name == "console" {
+            for a in args {
+              w.scoped_sinks.push(({ expr: a, observation: Recursive }, w.current_scope))
+            }
+          }
+        _ => ()
+      }
+    Call(callee, args) =>
+      if w.externals.contains(callee) {
+        for a in args {
+          w.scoped_sinks.push(({ expr: a, observation: ExternalCallArg }, w.current_scope))
+        }
+      }
+    CallExpr(callee, args) => {
+      let is_external = match callee {
+        @ast.TsExpr::Var(n) => w.externals.contains(n)
+        _ => false
+      }
+      if is_external {
+        for a in args {
+          w.scoped_sinks.push(({ expr: a, observation: ExternalCallArg }, w.current_scope))
+        }
+      }
+    }
+    New(name, args) =>
+      if w.externals.contains(name) {
+        for a in args {
+          w.scoped_sinks.push(({ expr: a, observation: ExternalCallArg }, w.current_scope))
+        }
+      }
+    NewExpr(callee, args) => {
+      let is_external = match callee {
+        @ast.TsExpr::Var(n) => w.externals.contains(n)
+        _ => false
+      }
+      if is_external {
+        for a in args {
+          w.scoped_sinks.push(({ expr: a, observation: ExternalCallArg }, w.current_scope))
+        }
+      }
+    }
+    PropAssignExpr(target, _prop, rhs) =>
+      if is_external_chain_for_sink(target, w.externals) {
+        w.scoped_sinks.push(({ expr: rhs, observation: ExternalPropWrite }, w.current_scope))
+      }
+    _ => ()
+  }
+}
+
+///|
+fn is_external_chain_for_sink(
+  expr : @ast.TsExpr,
+  externals : Map[String, Bool],
+) -> Bool {
+  match expr {
+    @ast.TsExpr::Var(n) => externals.contains(n)
+    PropAccess(recv, _) => is_external_chain_for_sink(recv, externals)
+    MethodCall(recv, _, _) => is_external_chain_for_sink(recv, externals)
+    IndexAccess(recv, _) => is_external_chain_for_sink(recv, externals)
+    Call(n, _) => externals.contains(n)
+    CallExpr(callee, _) => is_external_chain_for_sink(callee, externals)
+    NonNull(inner) | OptionalChain(inner) | As(inner, _) | Satisfies(inner, _) =>
+      is_external_chain_for_sink(inner, externals)
+    _ => false
+  }
+}
+
+///|
 fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
+  // Record observation sinks alongside the use walk so each sink
+  // carries the scope it appeared in.
+  sg_record_sinks_in_expr(w, expr)
   match expr {
     @ast.TsExpr::Var(n) => sg_record_use(w, n, Read)
     PropAccess(recv, prop) => {

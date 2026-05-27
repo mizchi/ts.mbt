@@ -123,3 +123,33 @@ test "safety: for-in iteration suppresses property mangling" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+///|
+test "phase3: local object literal handed to Object.keys reserves only its own keys" {
+  let block = @parser.parse_block_from_source(
+    #|const obj = {foo: 1, bar: 2};
+    #|Object.keys(obj);
+    #|
+  )
+  let result = collect_externally_visible_props(block, {})
+  // `foo` / `bar` survive; nothing else is reserved (no wildcard).
+  assert_true(result.contains("foo"))
+  assert_true(result.contains("bar"))
+  assert_false(result.contains("*"))
+}
+
+///|
+test "phase3: parameter handed to Object.keys does NOT reserve outside literal" {
+  // `f(obj)` — `obj` is a parameter, no def. Without flow info
+  // we can't see the literal `{a: 1}` reaching it, so the
+  // binding has no observable props recorded. This is the false-
+  // negative case Phase 4 will fix.
+  let block = @parser.parse_block_from_source(
+    #|function f(obj) { return Object.keys(obj); }
+    #|f({a: 1});
+    #|
+  )
+  let result = collect_externally_visible_props(block, {})
+  // No wildcard fallback for the param case; `a` is currently
+  // NOT preserved (call-site argument flow lands in Phase 4).
+  assert_false(result.contains("*"))
+}

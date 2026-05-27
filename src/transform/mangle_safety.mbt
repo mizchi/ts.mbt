@@ -44,16 +44,38 @@ pub fn collect_externally_visible_props(
   block : @ast.TsBlock,
   external_bindings : Map[String, Bool],
 ) -> Array[String] {
-  // Phase 1 + 2 of the observability analysis: build the symbol
-  // graph, infer which bindings hold numeric values, and project
-  // down to a name set the IndexAccess fallback can consult
-  // without threading the whole graph through every helper.
-  let graph = build_symbol_graph(block, external_bindings)
+  // Phase 1-3 of the observability analysis: build the symbol
+  // graph (also collecting reflection / I/O sinks tagged with
+  // their containing scope), infer numeric bindings for the
+  // IndexAccess fallback, and reserve sink-observable property
+  // names per binding rather than via the old wildcard fallback.
+  let (graph, scoped_sinks) = build_symbol_graph_with_sinks(
+    block, external_bindings,
+  )
   let numeric = infer_numeric_symbols(graph)
   let numeric_names = numeric_name_set(graph, numeric)
+  let reserved_external : Map[String, Bool] = {}
+  // External prop accesses (`extImport.foo`, `extImport[idx]`) still
+  // need their direct prop names reserved.
+  collect_props_on_external_block(
+    block, external_bindings, reserved_external, numeric_names,
+  )
+  // Phase 3 v1: each sink resolves its argument through the scope
+  // it was observed in, and reserves only the property names that
+  // appear on that binding.
+  let reserved_sink : Map[String, Bool] = {}
+  for entry in scoped_sinks {
+    reserve_props_from_sink(
+      entry.0, entry.1, graph, external_bindings, reserved_sink,
+    )
+  }
   let reserved : Map[String, Bool] = {}
-  collect_props_on_external_block(block, external_bindings, reserved, numeric_names)
-  collect_reflection_sinks_block(block, reserved)
+  for k in reserved_external.keys() {
+    reserved[k] = true
+  }
+  for k in reserved_sink.keys() {
+    reserved[k] = true
+  }
   let out : Array[String] = []
   for k in reserved.keys() {
     out.push(k)
