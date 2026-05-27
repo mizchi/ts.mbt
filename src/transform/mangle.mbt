@@ -1593,6 +1593,14 @@ fn rename_binding_lhs(
 /// through the scope chain, walk each method's body, and walk
 /// decorators. Property names are not touched here — that's the
 /// job of `rename_properties_in_class_decl`.
+fn rename_dotted_base_name(name : String, scope : ScopeFrame) -> String {
+  match name.find(".") {
+    Some(i) => scope.resolve(name.substring(end=i)) + name.substring(start=i)
+    None => scope.resolve(name)
+  }
+}
+
+///|
 fn rename_class_decl_idents(
   decl : @ast.TsClassDecl,
   scope : ScopeFrame,
@@ -1608,7 +1616,14 @@ fn rename_class_decl_idents(
   }
   let new_base_names : Array[String] = []
   for b in decl.base_names {
-    new_base_names.push(scope.resolve(b))
+    // `extends ns.default` is stored as the dotted string
+    // `"ns.default"` in `base_names`; `scope.resolve` doesn't know
+    // to split on `.` — it would look up `"ns.default"` as a whole
+    // name, miss the rename for `ns`, and emit
+    // `class X extends reader_1.default {}` against a renamed
+    // `var Cv = require_reader()` binding. Resolve only the leading
+    // segment.
+    new_base_names.push(rename_dotted_base_name(b, scope))
   }
   let new_methods : Array[@ast.TsClassMethodDecl] = []
   for m in decl.methods {

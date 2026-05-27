@@ -171,7 +171,13 @@ fn collect_var_refs_in_stmt(
 ) -> Unit {
   match stmt {
     Var(b, _, rhs) | Let(b, _, rhs) | Const(b, _, rhs) => {
-      let _ = b
+      // Destructuring defaults can carry the only reference to a
+      // top-level helper —
+      // `const { invalid = defaultInvalidHandler } = opts` is the
+      // only use of `defaultInvalidHandler` in prettier's
+      // options.js. Without walking the binding tree, treeshake
+      // drops the helper and the call site throws at runtime.
+      collect_var_refs_in_binding(b, out)
       collect_var_refs_in_expr(rhs, out)
     }
     Assign(name, rhs) => {
