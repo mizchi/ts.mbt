@@ -871,3 +871,10 @@ test "fold: +null coerces to 0" {
   assert_true(out.contains("0"))
   assert_false(out.contains("null"))
 }
+
+///|
+test "fold: for-of over empty array literal is dropped" {
+  let out = fold_one("for (const x of []) { use(x); }\n")
+  assert_false(out.contains("for"))
+  assert_false(out.contains("use"))
+}

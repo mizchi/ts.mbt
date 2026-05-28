@@ -351,8 +351,14 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       }
       out.push(For(init_f, cond_f, update_f, fold_block(body)))
     }
-    ForOf(k, b, t, iter, body) =>
-      out.push(ForOf(k, b, t, fold_expr(iter), fold_block(body)))
+    ForOf(k, b, t, iter, body) => {
+      let iter_f = fold_expr(iter)
+      // `for (... of [])` is a no-op — empty array produces zero iterations.
+      match iter_f {
+        ArrayLit([]) => ()
+        _ => out.push(ForOf(k, b, t, iter_f, fold_block(body)))
+      }
+    }
     ForAwaitOf(k, b, t, iter, body) =>
       out.push(ForAwaitOf(k, b, t, fold_expr(iter), fold_block(body)))
     ForIn(k, b, t, iter, body) =>
