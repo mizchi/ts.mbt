@@ -947,3 +947,17 @@ test "fold: ~~x → x (double bitwise-NOT identity, pure)" {
   let out = fold_one("const r = ~~n;\n")
   assert_false(out.contains("~"))
 }
+
+///|
+test "fold: x != null ? x : y folds to x ?? y" {
+  let out = fold_one("const r = x != null ? x : defaultVal;\n")
+  assert_true(out.contains("??"))
+  assert_false(out.contains("!="))
+  assert_false(out.contains("null"))
+}
+
+///|
+test "fold: null != x ? x : y folds to x ?? y (reversed)" {
+  let out = fold_one("const r = null != x ? x : defaultVal;\n")
+  assert_true(out.contains("??"))
+}

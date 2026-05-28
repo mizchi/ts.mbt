@@ -537,6 +537,14 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           // `c ? false : true` → `!c`.
           (_, BoolLit(false), BoolLit(true)) =>
             UnaryOp(@ast.TsUnaryOp::Not, cf)
+          // `x != null ? x : y` → `x ?? y`.
+          // JS abstract-inequality with null covers both null and
+          // undefined — exactly the semantics of `??`. Only safe for
+          // a bare Var in the then-branch (no double evaluation).
+          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), Var(tn), _)
+          | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), Var(tn), _)
+            if cn == tn =>
+            BinOp(@ast.TsBinOp::Coalesce, Var(cn), ef)
           _ => Cond(cf, tf, ef)
         }
       }
