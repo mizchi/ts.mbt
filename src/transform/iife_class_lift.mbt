@@ -122,6 +122,7 @@ fn try_lift_iife_value(
           None => ctor_func = Some(f)
         }
       Method(decl) => methods.push(decl)
+      Methods(decls) => for d in decls { methods.push(d) }
       StaticMethod(decl) => static_methods.push(decl)
       ReturnsClassName => saw_return = true
       Extra(extra) => extra_stmts.push(extra)
@@ -178,6 +179,9 @@ priv enum IifeBodyClassification {
   Skipped
   Ctor(@ast.TsFunc)
   Method(@ast.TsClassMethodDecl)
+  // Multiple methods from one statement (e.g. Object.defineProperty with
+  // both get and set accessor entries).
+  Methods(Array[@ast.TsClassMethodDecl])
   StaticMethod(@ast.TsClassMethodDecl)
   ReturnsClassName
   // A statement that isn't a class shape but is safe to move after
@@ -294,6 +298,41 @@ fn classify_iife_body_stmt(
         Some(_) => Skipped
         None => Unknown
       }
+    // `Object.defineProperty(ClassName.prototype, "prop", { get: fn, set: fn, … })`
+    // TypeScript emits this for class getters/setters. Convert to native class
+    // accessor method declarations.
+    Expr(
+      @ast.TsExpr::MethodCall(
+        @ast.TsExpr::Var("Object"),
+        "defineProperty",
+        [
+          @ast.TsExpr::PropAccess(@ast.TsExpr::Var(recv_name), "prototype"),
+          @ast.TsExpr::StringLit(prop_name),
+          @ast.TsExpr::ObjectLit(descriptor),
+        ]
+      )
+    ) =>
+      if recv_name == class_name {
+        let accessors : Array[@ast.TsClassMethodDecl] = []
+        let mut all_ok = true
+        for entry in descriptor {
+          match (entry.0, entry.1) {
+            ("get", @ast.TsExpr::FuncExpr(f)) =>
+              accessors.push(method_decl_from_func_accessor(prop_name, f, "get"))
+            ("set", @ast.TsExpr::FuncExpr(f)) =>
+              accessors.push(method_decl_from_func_accessor(prop_name, f, "set"))
+            ("enumerable", _) | ("configurable", _) | ("writable", _) => ()
+            _ => { all_ok = false; break }
+          }
+        }
+        if all_ok && accessors.length() > 0 {
+          Methods(accessors)
+        } else {
+          Unknown
+        }
+      } else {
+        Unknown
+      }
     // Any other top-level expression statement (e.g. `allMethods.forEach(…)`)
     // is a side-effect call. These are safe to move AFTER the class
     // declaration — they can still reference the class by name (the name
@@ -342,6 +381,36 @@ fn method_decl_from_func(
     is_static,
     body: Some(f.body),
     accessor: "",
+    key_expr: None,
+    is_async: f.is_async,
+    is_generator: f.is_generator,
+  }
+}
+
+///|
+/// Like `method_decl_from_func` but sets the `accessor` field to `"get"` or
+/// `"set"` for native-class getter/setter syntax.
+fn method_decl_from_func_accessor(
+  name : String,
+  f : @ast.TsFunc,
+  accessor : String,
+) -> @ast.TsClassMethodDecl {
+  let params : Array[(String, @ast.TsType)] = []
+  let param_defaults : Array[@ast.TsExpr?] = []
+  for p in f.params {
+    params.push((p.name, p.type_))
+    param_defaults.push(p.default)
+  }
+  {
+    name,
+    type_params: f.type_params,
+    type_param_bounds: [],
+    params,
+    param_defaults,
+    return_type: f.return_type,
+    is_static: false,
+    body: Some(f.body),
+    accessor,
     key_expr: None,
     is_async: f.is_async,
     is_generator: f.is_generator,

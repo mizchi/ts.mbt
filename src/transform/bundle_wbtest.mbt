@@ -1575,6 +1575,38 @@ test "link: multi-level wildcard barrel chain resolves to original declaration" 
 }
 
 ///|
+test "iife_class_lift: Object.defineProperty getter/setter lifted to native accessor" {
+  // TypeScript emits `Object.defineProperty(ClassName.prototype, "prop", {
+  //   get: function() {...}, enumerable: false, configurable: true })` for
+  // class getters. The lift should convert this to a native `get prop()` method.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|class Box {
+        #|  constructor(private _val: number) {}
+        #|  get value(): number { return this._val; }
+        #|  set value(v: number) { this._val = v; }
+        #|}
+        #|const b = new Box(1);
+        #|console.log(b.value);
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Native getter/setter syntax should appear.
+      assert_true(
+        out.js.contains("get value") || out.js.contains("get "),
+        "expected native getter syntax",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "iife_class_lift: extra Expr statements move after class (#31 perf)" {
   // A class IIFE where a side-effect expression statement (e.g.
   // `allMethods.forEach(…)`) appears at the top level of the IIFE
