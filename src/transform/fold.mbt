@@ -713,6 +713,28 @@ fn fold_binop(
     (BinNe, BoolLit(a), BoolLit(b)) => BoolLit(a != b)
     (BinEq, NullLit, NullLit) => BoolLit(true)
     (BinNe, NullLit, NullLit) => BoolLit(false)
+    // Cross-type strict comparisons that are always false/true.
+    // Two distinct literal types can never be ===.
+    (BinEq, StringLit(_), IntLit(_))
+    | (BinEq, IntLit(_), StringLit(_))
+    | (BinEq, StringLit(_), NullLit)
+    | (BinEq, NullLit, StringLit(_))
+    | (BinEq, IntLit(_), NullLit)
+    | (BinEq, NullLit, IntLit(_))
+    | (BinEq, BoolLit(_), NullLit)
+    | (BinEq, NullLit, BoolLit(_)) => BoolLit(false)
+    (BinNe, StringLit(_), IntLit(_))
+    | (BinNe, IntLit(_), StringLit(_))
+    | (BinNe, StringLit(_), NullLit)
+    | (BinNe, NullLit, StringLit(_))
+    | (BinNe, IntLit(_), NullLit)
+    | (BinNe, NullLit, IntLit(_))
+    | (BinNe, BoolLit(_), NullLit)
+    | (BinNe, NullLit, BoolLit(_)) => BoolLit(true)
+    // Bitwise ops on integer literals
+    (BitAnd, IntLit(a), IntLit(b)) => IntLit(a.land(b))
+    (BitOr, IntLit(a), IntLit(b)) => IntLit(a.lor(b))
+    (BitXor, IntLit(a), IntLit(b)) => IntLit(a.lxor(b))
     _ => BinOp(op, l, r)
   }
 }
