@@ -24,6 +24,8 @@
 //   1 !== 2    -> true
 //   1 < 2      -> true  (and <=, >, >= for integers)
 //   "a" === "b" -> false
+//   null ?? x  -> x     (null coalescing with known-nullish LHS)
+//   42 ?? x    -> 42    (null coalescing with known-non-nullish LHS)
 //
 // "Pure" here mirrors the tree-shaker's `is_pure_init`: literals,
 // function expressions, variable reads, and (recursively) pure
@@ -364,6 +366,16 @@ fn fold_binop(
     (And, BoolLit(false), _) => BoolLit(false)
     (Or, BoolLit(true), _) => BoolLit(true)
     (Or, BoolLit(false), _) => r
+    // Null coalescing: `null ?? x` and `undefined ?? x` → `x`.
+    // A non-nullish left operand (any literal that isn't null/undefined)
+    // short-circuits to that literal.
+    (Coalesce, NullLit, _) =>
+      if is_pure_value(l) {
+        r
+      } else {
+        BinOp(op, l, r)
+      }
+    (Coalesce, _, _) if is_pure_value(l) && not(can_be_nullish(l)) => l
     // Numeric folds where both sides are literals.
     (Add, IntLit(a), IntLit(b)) => IntLit(a + b)
     (Sub, IntLit(a), IntLit(b)) => IntLit(a - b)
@@ -426,5 +438,20 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
     }
     PropAccess(recv, _) => is_pure_value(recv)
     _ => false
+  }
+}
+
+///|
+/// Returns `true` when a pure expression could evaluate to `null` or
+/// `undefined` at runtime. Used by the `??` folder to decide whether
+/// the left side of a coalescing expression can short-circuit.
+fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    NullLit => true
+    Var("undefined") => true
+    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_) => false
+    FuncExpr(_) | ArrowFunc(_, _, _, _) => false
+    ArrayLit(_) | ObjectLit(_) => false
+    _ => true
   }
 }

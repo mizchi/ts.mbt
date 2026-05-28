@@ -103,3 +103,17 @@ test "fold: string strict-equality collapses to bool literal" {
   assert_true(out.contains("const a = true;"))
   assert_true(out.contains("const b = true;"))
 }
+
+///|
+test "fold: null ?? x collapses to x" {
+  let out = fold_one("const a = null ?? 42;\n")
+  assert_true(out.contains("const a = 42;"))
+  assert_false(out.contains("null"))
+}
+
+///|
+test "fold: non-nullish literal ?? x short-circuits to the literal" {
+  let out = fold_one("const a = 42 ?? fallback;\n")
+  assert_true(out.contains("const a = 42;"))
+  assert_false(out.contains("fallback"))
+}
