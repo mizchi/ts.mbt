@@ -1541,11 +1541,12 @@ fn fold_binop(
     | (BinNe, BoolLit(_), NullLit)
     | (BinNe, NullLit, BoolLit(_)) => BoolLit(true)
     // `x === null || x === undefined` → `x == null`
-    // (loose equality is the idiomatic nullish check; saves 12+ bytes
-    // per site vs the long form, and is semantically identical).
+    // Also handles `x === void 0` as the `undefined` form.
     // Only fold when both sides reference the same simple variable.
     (Or, BinOp(BinEq, Var(an), NullLit), BinOp(BinEq, Var(bn), Var("undefined")))
-    | (Or, BinOp(BinEq, Var(an), Var("undefined")), BinOp(BinEq, Var(bn), NullLit)) =>
+    | (Or, BinOp(BinEq, Var(an), Var("undefined")), BinOp(BinEq, Var(bn), NullLit))
+    | (Or, BinOp(BinEq, Var(an), NullLit), BinOp(BinEq, Var(bn), UnaryOp(@ast.TsUnaryOp::Void, _)))
+    | (Or, BinOp(BinEq, Var(an), UnaryOp(@ast.TsUnaryOp::Void, _)), BinOp(BinEq, Var(bn), NullLit)) =>
       if an == bn {
         BinOp(AbstractEq, Var(an), NullLit)
       } else {
@@ -1553,7 +1554,9 @@ fn fold_binop(
       }
     // `x !== null && x !== undefined` → `x != null`
     (And, BinOp(BinNe, Var(an), NullLit), BinOp(BinNe, Var(bn), Var("undefined")))
-    | (And, BinOp(BinNe, Var(an), Var("undefined")), BinOp(BinNe, Var(bn), NullLit)) =>
+    | (And, BinOp(BinNe, Var(an), Var("undefined")), BinOp(BinNe, Var(bn), NullLit))
+    | (And, BinOp(BinNe, Var(an), NullLit), BinOp(BinNe, Var(bn), UnaryOp(@ast.TsUnaryOp::Void, _)))
+    | (And, BinOp(BinNe, Var(an), UnaryOp(@ast.TsUnaryOp::Void, _)), BinOp(BinNe, Var(bn), NullLit)) =>
       if an == bn {
         BinOp(AbstractNe, Var(an), NullLit)
       } else {
