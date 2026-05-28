@@ -358,7 +358,32 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       // `x = x` is a no-op; drop it.
       match rhs_f {
         Var(v) if v == n => ()
-        _ => out.push(Assign(n, rhs_f))
+        _ => {
+          // `let x; x = value;` → `let x = value;` (merge uninit decl + first assign).
+          // Safe only when the previous statement is `let x = undefined` (the
+          // parser's representation of an uninitialised `let x;`).
+          let out_len = out.length()
+          let merged = if out_len > 0 {
+            match out[out_len - 1] {
+              Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
+                if ln == n =>
+                true
+              _ => false
+            }
+          } else {
+            false
+          }
+          if merged {
+            let prev = out.pop().unwrap()
+            let t = match prev {
+              Let(_, t, _) => t
+              _ => @ast.TsType::Any
+            }
+            out.push(Let(@ast.TsBinding::Ident(n), t, rhs_f))
+          } else {
+            out.push(Assign(n, rhs_f))
+          }
+        }
       }
     }
     CompoundAssign(n, op, rhs) =>

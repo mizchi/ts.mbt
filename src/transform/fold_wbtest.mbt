@@ -1299,3 +1299,18 @@ test "fold: default-only switch inlined to body" {
   assert_false(out.contains("switch"))
   assert_true(out.contains("doDefault"))
 }
+
+///|
+test "fold: uninit let + assign merges to initialized let" {
+  let out = fold_one("let x; x = 42;\n")
+  // Should emit `let x=42` (no separate assignment)
+  assert_false(out.contains("x = 42"))
+  assert_true(out.contains("42"))
+}
+
+///|
+test "fold: uninit let + assign does not merge when intervening statement" {
+  let out = fold_one("let x; doSomething(); x = 42;\n")
+  // The assignment is not the immediate next statement — do NOT merge
+  assert_true(out.contains("x=42") || out.contains("x = 42"))
+}
