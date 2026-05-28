@@ -813,6 +813,13 @@ test "fold: IIFE with two literal args is inlined" {
 }
 
 ///|
+test "fold: IIFE with block-body single return is inlined" {
+  let out = fold_one("const r = ((x) => { return x + 1; })(5);\n")
+  assert_true(out.contains("6"))
+  assert_false(out.contains("=>"))
+}
+
+///|
 test "fold: IIFE with non-pure arg is NOT inlined" {
   let out = fold_one("const r = ((x) => x + 1)(foo());\n")
   assert_true(out.contains("=>"))

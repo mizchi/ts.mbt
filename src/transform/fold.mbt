@@ -656,33 +656,54 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       //   - All args are pure values (no side effects from evaluation order).
       //   - Body is a concise expression (not a block body).
       match callee_f {
-        ArrowFunc(params, _, ArrowExpr(body_expr), false) => {
-          // Filter out `this` type annotation params (TypeScript artifacts).
-          let runtime_params : Array[@ast.TsParam] = []
-          for p in params {
-            if not(is_this_type_annotation_param(p)) {
-              runtime_params.push(p)
-            }
-          }
-          if runtime_params.length() == new_args.length() {
-            let mut can_inline = true
-            let subs : Map[String, @ast.TsExpr] = {}
-            for i, p in runtime_params {
-              if p.is_rest ||
-                p.binding != None ||
-                p.default != None ||
-                not(is_pure_value(new_args[i])) {
-                can_inline = false
-                break
+        ArrowFunc(params, _, body, false) => {
+          // Normalise both concise-expression and single-return-block bodies to
+          // the body expression so one code path handles both shapes.
+          //   `((x) => x + 1)(5)` — ArrowExpr
+          //   `((x) => { return x + 1; })(5)` — ArrowBlock / single Return
+          let body_expr_opt : @ast.TsExpr? = match body {
+            ArrowExpr(e) => Some(e)
+            ArrowBlock(b) =>
+              if b.stmts.length() == 1 {
+                match b.stmts[0] {
+                  Return(Some(e)) => Some(e)
+                  _ => None
+                }
+              } else {
+                None
               }
-              subs[p.name] = new_args[i]
-            }
-            if can_inline {
-              let substituted = substitute_vars_in_expr(body_expr, subs)
-              return fold_expr(substituted)
+          }
+          match body_expr_opt {
+            None => CallExpr(callee_f, new_args)
+            Some(body_expr) => {
+              // Filter out `this` type annotation params (TypeScript artifacts).
+              let runtime_params : Array[@ast.TsParam] = []
+              for p in params {
+                if not(is_this_type_annotation_param(p)) {
+                  runtime_params.push(p)
+                }
+              }
+              if runtime_params.length() == new_args.length() {
+                let mut can_inline = true
+                let subs : Map[String, @ast.TsExpr] = {}
+                for i, p in runtime_params {
+                  if p.is_rest ||
+                    p.binding != None ||
+                    p.default != None ||
+                    not(is_pure_value(new_args[i])) {
+                    can_inline = false
+                    break
+                  }
+                  subs[p.name] = new_args[i]
+                }
+                if can_inline {
+                  let substituted = substitute_vars_in_expr(body_expr, subs)
+                  return fold_expr(substituted)
+                }
+              }
+              CallExpr(callee_f, new_args)
             }
           }
-          CallExpr(callee_f, new_args)
         }
         _ => CallExpr(callee_f, new_args)
       }
