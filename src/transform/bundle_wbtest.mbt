@@ -1607,6 +1607,37 @@ test "iife_class_lift: Object.defineProperty getter/setter lifted to native acce
 }
 
 ///|
+test "fold: empty constructor dropped from NativeClassStmt without extends" {
+  // `class Foo { constructor() {} }` → `class Foo {}` when ctor is a no-op.
+  // Saves `constructor(){}` bytes per class without changing behavior.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|class Box {
+        #|  constructor() {}
+        #|  getValue() { return 42; }
+        #|}
+        #|export default Box;
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The empty constructor should be dropped.
+      assert_false(
+        out.js.contains("constructor"),
+        "expected empty constructor to be dropped",
+      )
+      // The method must still be present.
+      assert_true(out.js.contains("getValue"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "iife_class_lift: extra Expr statements move after class (#31 perf)" {
   // A class IIFE where a side-effect expression statement (e.g.
   // `allMethods.forEach(…)`) appears at the top level of the IIFE

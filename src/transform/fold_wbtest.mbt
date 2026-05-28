@@ -1122,3 +1122,37 @@ test "fold: x = x in expression position simplifies to x" {
   assert_true(out.contains("const r=x") || out.contains("const r = x"))
   assert_false(out.contains("x=x") || out.contains("x = x"))
 }
+
+///|
+test "fold: !!x ? a : b simplifies to x ? a : b" {
+  // Double negation doesn't change truthiness; strip it in ternary condition.
+  let out = fold_one("const r = !!x ? 1 : 2;\n")
+  assert_false(out.contains("!!") || out.contains("!x") || out.contains("!!", 0))
+  assert_true(out.contains("x"))
+}
+
+///|
+test "fold: !x ? a : b simplifies to x ? b : a (branch swap)" {
+  // Single negation in ternary condition → swap branches, drop the `!`.
+  let out = fold_one("const r = !x ? 1 : 2;\n")
+  // After swap: `x ? 2 : 1`
+  assert_false(out.contains("!x"))
+  assert_true(out.contains("x"))
+}
+
+///|
+test "fold: if (cond) { stmts } else {} drops empty else branch" {
+  // An empty `else {}` contributes bytes without changing semantics.
+  let out = fold_one("if (x) { console.log(1); } else {}\n")
+  assert_false(out.contains("else"))
+  assert_true(out.contains("if"))
+}
+
+///|
+test "fold: if (cond) {} else { stmts } becomes if (!cond) { stmts }" {
+  // Empty then-branch → invert condition, drop the else wrapper.
+  let out = fold_one("if (x) {} else { console.log(1); }\n")
+  assert_false(out.contains("else"))
+  // Inverted condition or equivalent
+  assert_true(out.contains("if"))
+}

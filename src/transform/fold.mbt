@@ -262,10 +262,14 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           (Some(e1), Some(el)) =>
             match as_single_expr(el) {
               Some(e2) => {
+                // Apply fold_expr to the synthesized Cond so patterns like
+                // `!x ? e1 : e2 → x ? e2 : e1` and `!!x ? e1 : e2 → x ? e1 : e2`
+                // fire even when the branches were produced by the block fold
+                // rather than coming directly from a Cond expression.
                 let lifted = match (e1, e2) {
                   (AssignExpr(n1, v1), AssignExpr(n2, v2)) if n1 == n2 =>
-                    Assign(n1, Cond(cond_f, v1, v2))
-                  _ => Expr(Cond(cond_f, e1, e2))
+                    Assign(n1, fold_expr(Cond(cond_f, v1, v2)))
+                  _ => Expr(fold_expr(Cond(cond_f, e1, e2)))
                 }
                 out.push(lifted)
                 return
@@ -292,14 +296,21 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         }
         // `if (cond) {} else { stmts }` → `if (!cond) { stmts }`
         // saves the empty-block bytes and avoids a spurious `else`.
+        // `if (cond) { stmts } else {}` → `if (cond) { stmts }`
+        // An empty else branch contributes `else{}` bytes with no
+        // semantic effect — drop it.
+        let else_pruned = match else_f {
+          Some(el) if el.stmts.is_empty() => None
+          _ => else_f
+        }
         let (cond_emit, then_emit, else_emit) = if then_f.stmts.is_empty() {
-          match else_f {
-            Some(el) if not(el.stmts.is_empty()) =>
+          match else_pruned {
+            Some(el) =>
               (UnaryOp(Not, cond_f), el, None)
-            _ => (cond_f, then_f, else_f)
+            _ => (cond_f, then_f, else_pruned)
           }
         } else {
-          (cond_f, then_f, else_f)
+          (cond_f, then_f, else_pruned)
         }
         out.push(If(cond_emit, then_emit, else_emit))
       }
@@ -485,10 +496,23 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     Block(b) => out.push(Block(fold_block(b)))
     NativeClassStmt(decl, ctor) => {
       // Fold + strip trailing `return;` from constructor and method bodies.
-      let new_ctor = match ctor {
-        Some(f) =>
-          Some({ ..f, body: fold_func_body(fold_block(f.body)) })
+      let folded_ctor : @ast.TsFunc? = match ctor {
+        Some(f) => Some({ ..f, body: fold_func_body(fold_block(f.body)) })
         None => None
+      }
+      // Drop a no-op constructor (`constructor() {}` with no params, empty
+      // body, and no base class) — JS provides an implicit default
+      // constructor that is identical. When the class extends another class,
+      // the implicit constructor calls `super(...arguments)` which differs
+      // from an explicit empty constructor, so we only drop when base_names
+      // is empty.
+      let new_ctor = match folded_ctor {
+        Some(f)
+          if f.params.is_empty() &&
+            f.body.stmts.is_empty() &&
+            decl.base_names.is_empty() =>
+          None
+        _ => folded_ctor
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
@@ -588,6 +612,18 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       } else if is_js_falsy(cf) {
         fold_expr(e)
       } else {
+        // `!!x ? a : b` → `x ? a : b` — double negation doesn't change
+        // truthiness; stripping it saves 2 bytes and clarifies intent.
+        // `!x ? a : b` → `x ? b : a` — single negation flips branches;
+        // saves 1 byte by moving the `!` into a branch swap.
+        // Both transforms are unconditionally safe: `x` is still evaluated
+        // exactly once in the condition position; only branch ordering changes.
+        let (cf, t, e) = match cf {
+          UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) =>
+            (inner, t, e)
+          UnaryOp(@ast.TsUnaryOp::Not, inner) => (inner, e, t)
+          _ => (cf, t, e)
+        }
         let tf = fold_expr(t)
         let ef = fold_expr(e)
         // `x ? x : y` → `x || y` (saves 3 bytes: `? x :` → `||`).
