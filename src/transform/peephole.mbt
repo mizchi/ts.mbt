@@ -135,7 +135,21 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       )
     Label(name, inner) => Label(name, peep_stmt(inner, ctx))
     Block(b) => Block(peep_block(b, ctx))
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: peep_block(f.body, ctx) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(peep_block(b, ctx))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+    }
   }
 }
 
