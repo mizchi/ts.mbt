@@ -248,3 +248,17 @@ test "minify emit: catch drops space before `(`" {
   assert_true(out.contains("catch(e)"))
   assert_false(out.contains("catch (e)"))
 }
+
+///|
+test "minify emit: for-of with destructuring binding drops space after `let`" {
+  let out = minify_one("for (const [k, v] of entries) { use(k, v); }\n")
+  // In minify mode, `let[k,v]` — no space between `let` and `[`.
+  assert_true(out.contains("let["))
+  assert_false(out.contains("let ["))
+}
+
+///|
+test "minify emit: for-of with ident binding keeps space after `let`" {
+  let out = minify_one("for (const x of arr) { use(x); }\n")
+  assert_true(out.contains("let x"))
+}

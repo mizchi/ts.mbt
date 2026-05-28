@@ -764,8 +764,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("for")
       e.space()
       e.write("(")
-      emit_for_of_kind(e, kind)
-      emit_binding(e, binding)
+      emit_for_of_kind(e, kind, binding)
       // The space before `of` is always required (binding ends with
       // ident). Space after `of` can be dropped in minify mode when
       // the iterable starts with a non-ident token.
@@ -780,8 +779,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("for await")
       e.space()
       e.write("(")
-      emit_for_of_kind(e, kind)
-      emit_binding(e, binding)
+      emit_for_of_kind(e, kind, binding)
       e.write(" of")
       e.sep_after_word(expr_leading_byte(iter))
       emit_expr(e, iter, 0)
@@ -793,8 +791,7 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("for")
       e.space()
       e.write("(")
-      emit_for_of_kind(e, kind)
-      emit_binding(e, binding)
+      emit_for_of_kind(e, kind, binding)
       // Same treatment as `of`: space before `in` always needed,
       // space after only when the iterable starts with ident char.
       e.write(" in")
@@ -1169,16 +1166,31 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
 }
 
 ///|
-fn emit_for_of_kind(e : Emitter, kind : @ast.TsForOfKind) -> Unit {
-  match kind {
-    Var => e.write("var ")
-    Let => e.write("let ")
+/// Emit the declarator keyword for a for-of/for-in/for-await-of head.
+/// Returns the leading byte of the following token (the binding) so
+/// callers can decide whether a separator is needed between the keyword
+/// and the binding.  `'?'` is returned when no keyword is emitted
+/// (the `Assign` kind).
+fn emit_for_of_kind(
+  e : Emitter,
+  kind : @ast.TsForOfKind,
+  binding : @ast.TsBinding,
+) -> Unit {
+  let kw = match kind {
+    Var => "var"
+    Let => "let"
     // Same idea as the statement-level `Const`: in minify mode the
     // loop binder doesn't need to be `const`, since the original
     // source already proved no reassignment.
-    Const => if e.pretty { e.write("const ") } else { e.write("let ") }
-    Assign => ()
+    Const => if e.pretty { "const" } else { "let" }
+    Assign => {
+      emit_binding(e, binding)
+      return
+    }
   }
+  e.word(kw)
+  e.sep_after_word(binding_leading_byte(binding))
+  emit_binding(e, binding)
 }
 
 ///|
