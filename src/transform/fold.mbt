@@ -635,7 +635,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
               // Array method folding on array literals.
               match fold_array_method(recv_f, m, new_args) {
                 Some(result) => result
-                None => MethodCall(recv_f, m, new_args)
+                None =>
+                  // Number/bool/null `.toString()` folding.
+                  match fold_scalar_method(recv_f, m, new_args) {
+                    Some(result) => result
+                    None => MethodCall(recv_f, m, new_args)
+                  }
               }
           }
       }
@@ -1073,6 +1078,46 @@ fn fold_math_call(
 }
 
 ///|
+/// Fold `.toString()` / `.valueOf()` on numeric, boolean, and null literals.
+fn fold_scalar_method(
+  recv : @ast.TsExpr,
+  method : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsExpr? {
+  match method {
+    "toString" => {
+      match args.length() {
+        0 =>
+          match recv {
+            // `(42).toString()` → `"42"`, `(3.14).toString()` → `"3.14"`
+            IntLit(n) => Some(StringLit(n.to_string()))
+            NumberLit(n) => Some(StringLit(n.to_string()))
+            BoolLit(b) => Some(StringLit(b.to_string()))
+            NullLit => Some(StringLit("null"))
+            _ => None
+          }
+        1 =>
+          // `(255).toString(16)` → `"ff"`, `(7).toString(2)` → `"111"`.
+          // Only fold non-negative integers to keep it safe.
+          match (recv, args[0]) {
+            (IntLit(n), IntLit(radix)) if n >= 0 && radix >= 2 && radix <= 36 =>
+              Some(StringLit(format_int_radix(n, radix)))
+            _ => None
+          }
+        _ => None
+      }
+    }
+    "valueOf" if args.length() == 0 =>
+      // `.valueOf()` is identity for primitives.
+      match recv {
+        IntLit(_) | NumberLit(_) | BoolLit(_) | StringLit(_) => Some(recv)
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
 /// Fold String-literal method calls with constant arguments.
 fn fold_string_method(
   recv : @ast.TsExpr,
@@ -1304,6 +1349,47 @@ fn fold_string_method(
         Some(StringLit(result))
       }
     }
+    "split" if args.length() == 1 =>
+      // `"a,b,c".split(",")` → `["a","b","c"]`
+      // Only fold when the separator is a string literal.
+      match args[0] {
+        StringLit(sep) => {
+          let parts = s.split(sep)
+          let items : Array[@ast.TsExpr] = []
+          for p in parts {
+            items.push(StringLit(p.to_string()))
+          }
+          Some(ArrayLit(items))
+        }
+        _ => None
+      }
+    "replace" if args.length() == 2 =>
+      // `"hello world".replace("world", "there")` → `"hello there"`
+      // Only fold for string patterns (no regex). Replaces first occurrence.
+      match (args[0], args[1]) {
+        (StringLit(pat), StringLit(rep)) =>
+          match s.find(pat) {
+            Some(idx) => {
+              let before = s.substring(end=idx).to_string()
+              let after = s.substring(start=idx + pat.length()).to_string()
+              Some(StringLit(before + rep + after))
+            }
+            None => Some(StringLit(s))
+          }
+        _ => None
+      }
+    "replaceAll" if args.length() == 2 =>
+      // `"aXbXc".replaceAll("X", "-")` → `"a-b-c"` for literal patterns.
+      match (args[0], args[1]) {
+        (StringLit(pat), StringLit(rep)) if pat.length() > 0 => {
+          let parts : Array[String] = []
+          for p in s.split(pat) {
+            parts.push(p.to_string())
+          }
+          Some(StringLit(parts.join(rep)))
+        }
+        _ => None
+      }
     _ => None
   }
 }
@@ -1919,6 +2005,27 @@ fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
 
 ///|
 /// Map a comparison operator to its logical negation.
+/// Format a non-negative integer as a string in the given radix (2–36).
+/// Produces lowercase digits for bases > 10, matching JS `toString(radix)`.
+fn format_int_radix(n : Int, radix : Int) -> String {
+  if n == 0 {
+    return "0"
+  }
+  let digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+  let buf : Array[Char] = []
+  let mut m = n
+  while m > 0 {
+    buf.push(digits[m % radix])
+    m = m / radix
+  }
+  let sb = StringBuilder::new()
+  for i = buf.length() - 1; i >= 0; i = i - 1 {
+    sb.write_char(buf[i])
+  }
+  sb.to_string()
+}
+
+///|
 /// `!(a op b)` → `a negate_op b` (saves 2 bytes).
 /// Parse `s` as an integer in the given radix (2–36).
 /// Returns `None` on parse error or overflow.

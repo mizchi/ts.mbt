@@ -640,3 +640,57 @@ test "fold: cross-type strict equality bool/string folds to false" {
   assert_true(out.contains("false"))
   assert_false(out.contains("==="))
 }
+
+///|
+test "fold: String.split with literal separator produces array literal" {
+  let out = fold_one("const r = \"a,b,c\".split(\",\");\n")
+  assert_true(out.contains("[\"a\",\"b\",\"c\"]") || out.contains("\"a\""))
+  assert_false(out.contains(".split("))
+}
+
+///|
+test "fold: String.replace with literal pattern and replacement" {
+  let out = fold_one("const r = \"hello world\".replace(\"world\", \"there\");\n")
+  assert_true(out.contains("\"hello there\""))
+  assert_false(out.contains(".replace("))
+}
+
+///|
+test "fold: String.replaceAll with literal pattern and replacement" {
+  let out = fold_one("const r = \"aXbXc\".replaceAll(\"X\", \"-\");\n")
+  assert_true(out.contains("\"a-b-c\""))
+  assert_false(out.contains(".replaceAll("))
+}
+
+///|
+test "fold: String.replace returns original when pattern not found" {
+  let out = fold_one("const r = \"hello\".replace(\"xyz\", \"abc\");\n")
+  assert_true(out.contains("\"hello\""))
+}
+
+///|
+test "fold: integer literal .toString() folds to string literal" {
+  let out = fold_one("const r = (42).toString();\n")
+  assert_true(out.contains("\"42\""))
+  assert_false(out.contains(".toString("))
+}
+
+///|
+test "fold: bool literal .toString() folds to string literal" {
+  let out = fold_one("const r = (true).toString();\n")
+  assert_true(out.contains("\"true\""))
+  assert_false(out.contains(".toString("))
+}
+
+///|
+test "fold: integer .toString(16) folds to hex string" {
+  let out = fold_one("const r = (255).toString(16);\n")
+  assert_true(out.contains("\"ff\""))
+  assert_false(out.contains(".toString("))
+}
+
+///|
+test "fold: integer .toString(2) folds to binary string" {
+  let out = fold_one("const r = (7).toString(2);\n")
+  assert_true(out.contains("\"111\""))
+}
