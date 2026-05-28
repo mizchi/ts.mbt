@@ -480,6 +480,8 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Typeof, StringLit(_)) => StringLit("string")
         (Typeof, BoolLit(_)) => StringLit("boolean")
         (Typeof, NullLit) => StringLit("object")
+        // `typeof void 0` / `typeof undefined` → `"undefined"`.
+        (Typeof, UnaryOp(@ast.TsUnaryOp::Void, _)) => StringLit("undefined")
         (Typeof, FuncExpr(_)) | (Typeof, ArrowFunc(_, _, _, _)) =>
           StringLit("function")
         (Typeof, ArrayLit(_)) | (Typeof, ObjectLit(_)) => StringLit("object")
