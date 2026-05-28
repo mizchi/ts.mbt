@@ -101,8 +101,11 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
   // (also handles the else-less form: `if (c) { return e1; } return e2;`)
   let merged = if n >= 1 {
     match block.stmts[n - 1] {
-      // `if (c) return e1; else return e2;` as last stmt
-      If(cond, then_b, Some(else_b)) =>
+      // `if (c) return e1; else return e2;` as last stmt.
+      // Pre-fold the else block so `else { if (c2) return e2; else return e3; }`
+      // collapses to `else { return c2 ? e2 : e3; }` before we try to extract.
+      If(cond, then_b, Some(else_b)) => {
+        let else_b = fold_func_body_once(else_b)
         match (single_return_expr(then_b), single_return_expr(else_b)) {
           (Some(e1), Some(e2)) => {
             let prefix : Array[@ast.TsStmt] = []
@@ -123,6 +126,7 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
           }
           _ => None
         }
+      }
       _ =>
         // `if (c) return e1; return e2;` — last two stmts
         if n >= 2 {

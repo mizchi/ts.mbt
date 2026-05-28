@@ -1233,3 +1233,20 @@ test "fold: multi-level if-return chain collapses to nested ternary" {
   assert_false(out.contains("if (c2)") || out.contains("if(c2)"))
   assert_true(out.contains("return"))
 }
+
+///|
+test "fold: else-if return chain collapses to nested ternary" {
+  // `if (c1) return e1; else if (c2) return e2; else return e3;`
+  // → `return c1 ? e1 : c2 ? e2 : e3;`
+  let out = fold_one(
+    (
+      #|function f(c1, c2) {
+      #|  if (c1) return 1;
+      #|  else if (c2) return 2;
+      #|  else return 3;
+      #|}
+    ),
+  )
+  assert_false(out.contains("else"))
+  assert_true(out.contains("return"))
+}
