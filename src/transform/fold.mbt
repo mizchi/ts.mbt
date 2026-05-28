@@ -285,6 +285,10 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let inner_f = fold_expr(inner)
       match (op, inner_f) {
         (Not, BoolLit(b)) => BoolLit(not(b))
+        (Not, _) if is_js_truthy(inner_f) => BoolLit(false)
+        (Not, _) if is_js_falsy(inner_f) => BoolLit(true)
+        (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
+        (Plus, IntLit(_)) | (Plus, NumberLit(_)) => inner_f
         // `typeof LITERAL` is always a known string — fold directly.
         // Combined with `StringLit === StringLit` folding, this
         // eliminates `typeof 5 === "number"` and similar guards.

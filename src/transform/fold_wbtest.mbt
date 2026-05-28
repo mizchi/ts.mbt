@@ -280,3 +280,26 @@ test "fold: Math.sign with literal args" {
   assert_true(out.contains("const a = -1;"))
   assert_true(out.contains("const b = 1;"))
 }
+
+test "fold: !truthy folds to false" {
+  let out = fold_one("const a = !1; const b = !\"hello\";\n")
+  assert_true(out.contains("const a = false;"))
+  assert_true(out.contains("const b = false;"))
+}
+
+test "fold: !falsy folds to true" {
+  let out = fold_one("const a = !0; const b = !\"\";\n")
+  assert_true(out.contains("const a = true;"))
+  assert_true(out.contains("const b = true;"))
+}
+
+test "fold: ~n folds to bitwise complement" {
+  let out = fold_one("const a = ~0; const b = ~5;\n")
+  assert_true(out.contains("const a = -1;"))
+  assert_true(out.contains("const b = -6;"))
+}
+
+test "fold: unary + on numeric literal is identity" {
+  let out = fold_one("const a = +5;\n")
+  assert_true(out.contains("const a = 5;"))
+}
