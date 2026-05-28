@@ -384,9 +384,6 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           }
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
         (Plus, IntLit(_)) | (Plus, NumberLit(_)) => inner_f
-        // `-literal` → negated literal value.
-        (Neg, IntLit(n)) => IntLit(-n)
-        (Neg, NumberLit(n)) => NumberLit(-n)
         // `-(-x)` → `x` when x is pure (double negation cancels).
         (Neg, UnaryOp(@ast.TsUnaryOp::Neg, inner_inner)) =>
           if is_pure_value(inner_inner) {
