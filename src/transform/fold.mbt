@@ -994,6 +994,34 @@ fn fold_math_call(
           }
           ("isNaN", IntLit(_)) => return Some(BoolLit(false))
           ("isNaN", NumberLit(_)) => return Some(BoolLit(false))
+          // `Number.parseFloat(s)` === `parseFloat(s)` — delegate.
+          ("parseFloat", StringLit(s)) =>
+            match (try? @strconv.parse_double(s)) {
+              Ok(n) => {
+                let as_int = n.to_int()
+                return Some(
+                  if as_int.to_double() == n { IntLit(as_int) } else { NumberLit(n) },
+                )
+              }
+              Err(_) => ()
+            }
+          // `Number.parseInt(s)` === `parseInt(s)`.
+          ("parseInt", StringLit(s)) =>
+            match parse_int_radix(s.trim().to_string(), 10) {
+              Some(n) => return Some(IntLit(n))
+              None => ()
+            }
+          _ => ()
+        }
+      }
+      // `Number.parseInt(s, radix)` with explicit radix.
+      if args.length() == 2 {
+        match (method, args[0], args[1]) {
+          ("parseInt", StringLit(s), IntLit(radix)) if radix >= 2 && radix <= 36 =>
+            match parse_int_radix(s.trim().to_string(), radix) {
+              Some(n) => return Some(IntLit(n))
+              None => ()
+            }
           _ => ()
         }
       }
