@@ -1539,10 +1539,24 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             // the emitted `{Content-Type: …}` re-parses as binary
             // minus. Numeric keys can stay unquoted; everything
             // else needs the quotes.
-            emit_object_key(e, entry.0)
-            e.write(":")
-            e.space()
-            emit_expr(e, entry.1, 2)
+            //
+            // In minify mode, when key is a valid identifier and
+            // the value is `Var(key)`, emit the ES2015 shorthand
+            // `{key}` instead of `{key: key}` (saves 2 bytes).
+            let use_shorthand = not(e.pretty) &&
+              is_valid_js_ident(entry.0) &&
+              (match entry.1 {
+                Var(n) => n == entry.0
+                _ => false
+              })
+            if use_shorthand {
+              e.write(entry.0)
+            } else {
+              emit_object_key(e, entry.0)
+              e.write(":")
+              e.space()
+              emit_expr(e, entry.1, 2)
+            }
           }
         }
       }

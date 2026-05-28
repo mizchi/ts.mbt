@@ -178,3 +178,12 @@ test "minify emit: while(true) → for(;;)" {
   assert_true(out.contains("for(;;)"))
   assert_false(out.contains("while"))
 }
+
+///|
+test "minify emit: object shorthand {x:x} → {x}" {
+  let out = minify_one("const o = { x: x, y: y };\n")
+  // In minify mode, {x: x, y: y} → {x, y} (saves 2 bytes per key-value pair).
+  assert_true(out.contains("{x,y}") || out.contains("{x, y}"))
+  assert_false(out.contains("x: x"))
+  assert_false(out.contains("y: y"))
+}
