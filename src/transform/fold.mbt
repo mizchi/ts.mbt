@@ -510,6 +510,42 @@ fn fold_math_call(
       } else {
         None
       }
+    "floor" | "ceil" | "round" | "trunc" =>
+      // Only fold integer-valued inputs — no approximation needed.
+      if args.length() == 1 {
+        match as_float(args[0]) {
+          Some(n) => {
+            let as_int = n.to_int()
+            if as_int.to_double() == n { Some(IntLit(as_int)) } else { None }
+          }
+          None => None
+        }
+      } else {
+        None
+      }
+    "pow" =>
+      if args.length() == 2 {
+        match (as_float(args[0]), as_float(args[1])) {
+          (Some(base), Some(exp)) => {
+            // Only fold small integer exponents to avoid precision loss
+            let exp_int = exp.to_int()
+            if exp_int.to_double() != exp || exp_int < 0 || exp_int > 20 {
+              None
+            } else {
+              let mut result = 1.0
+              let mut i = 0
+              while i < exp_int {
+                result = result * base
+                i = i + 1
+              }
+              Some(to_lit(result))
+            }
+          }
+          _ => None
+        }
+      } else {
+        None
+      }
     _ => None
   }
 }
