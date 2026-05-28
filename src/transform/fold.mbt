@@ -1033,6 +1033,44 @@ fn fold_math_call(
       }
       return None
     }
+    Var("JSON") => {
+      if method == "stringify" && args.length() == 1 {
+        // `JSON.stringify(literal)` → string literal for simple primitives.
+        // Only fold when the result is unambiguous and matches V8/SpiderMonkey.
+        let s = match args[0] {
+          IntLit(n) => Some(n.to_string())
+          NumberLit(n) => {
+            let as_int = n.to_int()
+            if as_int.to_double() == n { Some(as_int.to_string()) } else { None }
+          }
+          BoolLit(b) => Some(b.to_string())
+          NullLit => Some("null")
+          StringLit(s) => {
+            // Produce the JSON-encoded form: `"..."` with escapes.
+            let buf = StringBuilder::new()
+            buf.write_char('"')
+            for ch in s.iter() {
+              match ch {
+                '"' => buf.write_string("\\\"")
+                '\\' => buf.write_string("\\\\")
+                '\n' => buf.write_string("\\n")
+                '\r' => buf.write_string("\\r")
+                '\t' => buf.write_string("\\t")
+                _ => buf.write_char(ch)
+              }
+            }
+            buf.write_char('"')
+            Some(buf.to_string())
+          }
+          _ => None
+        }
+        match s {
+          Some(result) => return Some(StringLit(result))
+          None => ()
+        }
+      }
+      return None
+    }
     _ => return None
   }
   fn as_float(e : @ast.TsExpr) -> Double? {

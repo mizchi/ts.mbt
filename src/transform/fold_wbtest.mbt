@@ -727,3 +727,45 @@ test "fold: !!(a < b) simplifies to a < b" {
   assert_true(out.contains("a < b"))
   assert_false(out.contains("!!"))
 }
+
+///|
+test "fold: JSON.stringify(42) → \"42\"" {
+  let out = fold_one("const r = JSON.stringify(42);\n")
+  assert_true(out.contains("\"42\""))
+  assert_false(out.contains("JSON.stringify"))
+}
+
+///|
+test "fold: JSON.stringify(true) → \"true\"" {
+  let out = fold_one("const r = JSON.stringify(true);\n")
+  assert_true(out.contains("\"true\""))
+  assert_false(out.contains("JSON.stringify"))
+}
+
+///|
+test "fold: JSON.stringify(null) → \"null\"" {
+  let out = fold_one("const r = JSON.stringify(null);\n")
+  assert_true(out.contains("\"null\""))
+  assert_false(out.contains("JSON.stringify"))
+}
+
+///|
+test "fold: JSON.stringify(string) → quoted string" {
+  let out = fold_one("const r = JSON.stringify(\"hello\");\n")
+  assert_true(out.contains("\"\\\"hello\\\"\"") || out.contains("\\\"hello\\\""))
+  assert_false(out.contains("JSON.stringify"))
+}
+
+///|
+test "fold: Math.min with 3 literals" {
+  let out = fold_one("const r = Math.min(5, 2, 8);\n")
+  assert_true(out.contains("2"))
+  assert_false(out.contains("Math.min"))
+}
+
+///|
+test "fold: Math.floor(3.7) → 3" {
+  let out = fold_one("const r = Math.floor(3.7);\n")
+  assert_true(out.contains("3"))
+  assert_false(out.contains("Math.floor"))
+}
