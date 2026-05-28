@@ -1503,3 +1503,20 @@ test "link: `export * as ns from` synthesizes namespace object for named import 
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "link: multi-level wildcard barrel chain resolves to original declaration" {
+  // c.ts → b.ts (export * from "./c") → barrel.ts (export * from "./b") → entry.ts
+  // Transitive wildcard re-exports through two barrel hops must still resolve.
+  let files = vfs([
+    ("c.ts", "export const val = 99;\n"),
+    ("b.ts", "export * from \"./c\";\n"),
+    ("barrel.ts", "export * from \"./b\";\n"),
+    ("entry.ts", "import { val } from \"./barrel\";\nconsole.log(val);\n"),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("99"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
