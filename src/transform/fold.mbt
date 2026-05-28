@@ -805,10 +805,13 @@ fn fold_binop(
     | (BinNe, NullLit, IntLit(_))
     | (BinNe, BoolLit(_), NullLit)
     | (BinNe, NullLit, BoolLit(_)) => BoolLit(true)
-    // Bitwise ops on integer literals
+    // Bitwise/shift ops on integer literals
     (BitAnd, IntLit(a), IntLit(b)) => IntLit(a.land(b))
     (BitOr, IntLit(a), IntLit(b)) => IntLit(a.lor(b))
     (BitXor, IntLit(a), IntLit(b)) => IntLit(a.lxor(b))
+    (Shl, IntLit(a), IntLit(b)) => IntLit(a.lsl(b))
+    (Shr, IntLit(a), IntLit(b)) => IntLit(a.asr(b))
+    (UShr, IntLit(a), IntLit(b)) => IntLit(a.lsr(b))
     _ => BinOp(op, l, r)
   }
 }
