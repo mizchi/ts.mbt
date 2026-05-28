@@ -504,7 +504,15 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           for s in stmts {
             out.push(s)
           }
-        None => out.push(Switch(disc, folded_cases))
+        None => {
+          // Try to lower a switch with a single case (or case + default) to
+          // an if/else, saving the `switch(x){case y:..;break;}` boilerplate.
+          let lowered = try_lower_single_case_switch(disc, folded_cases)
+          match lowered {
+            Some(s) => out.push(s)
+            None => out.push(Switch(disc, folded_cases))
+          }
+        }
       }
     }
     Try(b, bnd, cb, fb) => {
@@ -2174,6 +2182,106 @@ fn try_fold_switch(
       Some(stmts)
     }
     _ => None // Fallthrough or labeled break — don't fold
+  }
+}
+
+///|
+/// Lower a switch with a single non-default case (+ optional default) to
+/// an if/else, or a default-only switch to its body directly.
+///
+///   switch (e) { case v: stmts; break; }
+///     → if (e === v) { stmts; }
+///
+///   switch (e) { default: stmts; }
+///     → stmts;
+///
+///   switch (e) { case v: stmts; break; default: ds; }
+///     → if (e === v) { stmts; } else { ds; }
+fn try_lower_single_case_switch(
+  disc : @ast.TsExpr,
+  cases : Array[@ast.TsSwitchCase],
+) -> @ast.TsStmt? {
+  // Filter out empty cases (can appear as case v: /* fallthrough */)
+  // We only handle 1-2 cases total (one concrete + one optional default).
+  let case_cases : Array[@ast.TsSwitchCase] = []
+  let default_cases : Array[@ast.TsSwitchCase] = []
+  for c in cases {
+    match c.test_expr {
+      None => default_cases.push(c)
+      Some(_) => case_cases.push(c)
+    }
+  }
+  // Only handle exactly one concrete case (with optional default).
+  if case_cases.length() != 1 {
+    // Default-only switch → inline the body (no if needed).
+    if case_cases.is_empty() && default_cases.length() == 1 {
+      let body = default_cases[0].body
+      let stmts = strip_trailing_break(body)
+      if stmts.length() == 1 {
+        return Some(stmts[0])
+      }
+    }
+    return None
+  }
+  let the_case = case_cases[0]
+  let test = match the_case.test_expr {
+    Some(t) => t
+    None => return None
+  }
+  let then_stmts = strip_trailing_break(the_case.body)
+  // Only lower when the case body has no break/continue/fallthrough issues.
+  // strip_trailing_break returns None when there's a mid-body break.
+  let then_block : @ast.TsBlock = { stmts: then_stmts }
+  let cond = @ast.TsExpr::BinOp(@ast.TsBinOp::BinEq, disc, test)
+  let else_block : @ast.TsBlock? = match default_cases.length() {
+    0 => None
+    1 => {
+      let ds = strip_trailing_break(default_cases[0].body)
+      if ds.is_empty() {
+        None
+      } else {
+        Some({ stmts: ds })
+      }
+    }
+    _ => return None
+  }
+  Some(@ast.TsStmt::If(cond, then_block, else_block))
+}
+
+fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
+  let n = block.stmts.length()
+  if n == 0 {
+    return []
+  }
+  // Reject if any break (other than the trailing one) exists — that would be
+  // a mid-body break targeting the switch itself.
+  for i, s in block.stmts {
+    match s {
+      Break(None) if i == n - 1 => ()
+      Break(_) | Continue(_) => return [] // bail out
+      _ => ()
+    }
+  }
+  let last = block.stmts[n - 1]
+  match last {
+    Break(None) => {
+      let out : Array[@ast.TsStmt] = []
+      for i, s in block.stmts {
+        if i < n - 1 {
+          out.push(s)
+        }
+      }
+      out
+    }
+    _ => {
+      // No trailing break — copy as-is (fallthrough at end of switch is fine
+      // if this is the last case; we already know there's no other case).
+      let out : Array[@ast.TsStmt] = []
+      for s in block.stmts {
+        out.push(s)
+      }
+      out
+    }
   }
 }
 

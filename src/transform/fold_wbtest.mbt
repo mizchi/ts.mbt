@@ -1250,3 +1250,52 @@ test "fold: else-if return chain collapses to nested ternary" {
   assert_false(out.contains("else"))
   assert_true(out.contains("return"))
 }
+
+///|
+test "fold: single-case switch lowered to if statement" {
+  let out = fold_one(
+    (
+      #|switch (x) {
+      #|  case "foo":
+      #|    doFoo();
+      #|    break;
+      #|}
+    ),
+  )
+  assert_false(out.contains("switch"))
+  assert_true(out.contains("if"))
+  assert_true(out.contains("doFoo"))
+}
+
+///|
+test "fold: single-case switch with default lowered to if-else" {
+  let out = fold_one(
+    (
+      #|switch (x) {
+      #|  case "foo":
+      #|    doFoo();
+      #|    break;
+      #|  default:
+      #|    doDefault();
+      #|}
+    ),
+  )
+  assert_false(out.contains("switch"))
+  assert_true(out.contains("if"))
+  assert_true(out.contains("doFoo"))
+  assert_true(out.contains("doDefault"))
+}
+
+///|
+test "fold: default-only switch inlined to body" {
+  let out = fold_one(
+    (
+      #|switch (x) {
+      #|  default:
+      #|    doDefault();
+      #|}
+    ),
+  )
+  assert_false(out.contains("switch"))
+  assert_true(out.contains("doDefault"))
+}
