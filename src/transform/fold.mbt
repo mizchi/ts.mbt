@@ -2014,11 +2014,16 @@ fn fold_binop(
       NumberLit(a.to_double() / b.to_double())
     // String concatenation of two string literals.
     (Add, StringLit(a), StringLit(b)) => StringLit(a + b)
-    // JS string coercion: `"str" + integer` / `integer + "str"` → string.
+    // JS string coercion: `"str" + number` / `number + "str"` → string.
     // Only fold integer (not float) coercions to avoid MoonBit's
     // double-to-string representation differing from JS's.
     (Add, StringLit(a), IntLit(b)) => StringLit(a + b.to_string())
     (Add, IntLit(a), StringLit(b)) => StringLit(a.to_string() + b)
+    // BoolLit and NullLit string coercions.
+    (Add, StringLit(a), BoolLit(b)) => StringLit(a + b.to_string())
+    (Add, BoolLit(a), StringLit(b)) => StringLit(a.to_string() + b)
+    (Add, StringLit(a), NullLit) => StringLit(a + "null")
+    (Add, NullLit, StringLit(b)) => StringLit("null" + b)
     // Strict-equality comparisons between homogeneous literals.
     (BinEq, IntLit(a), IntLit(b)) => BoolLit(a == b)
     (BinNe, IntLit(a), IntLit(b)) => BoolLit(a != b)

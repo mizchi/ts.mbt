@@ -834,3 +834,15 @@ test "fold: c ? false : true → !c" {
   assert_false(out.contains("false"))
   assert_false(out.contains("?"))
 }
+
+///|
+test "fold: string + bool coercion" {
+  let out = fold_one("const r = \"x=\" + true;\n")
+  assert_true(out.contains("\"x=true\""))
+}
+
+///|
+test "fold: string + null coercion" {
+  let out = fold_one("const r = \"val=\" + null;\n")
+  assert_true(out.contains("\"val=null\""))
+}
