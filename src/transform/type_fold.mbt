@@ -149,6 +149,11 @@ fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
           None => ()
         }
       }
+      for sf in decl.static_field_inits {
+        if expr_needs_type_fold(sf.1) {
+          return true
+        }
+      }
       match ctor_body {
         Some(f) => block_needs_type_fold(f.body)
         None => false
@@ -453,7 +458,14 @@ fn type_fold_stmt(
         }
         new_methods.push({ ..m, body: new_body })
       }
-      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, type_fold_expr(sf.1, scope)))
+      }
+      NativeClassStmt(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
     }
   }
 }
