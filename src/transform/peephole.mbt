@@ -60,7 +60,17 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     Var(b, t, rhs) => Var(b, t, peep_expr(rhs, ctx))
     Let(b, t, rhs) => Let(b, t, peep_expr(rhs, ctx))
     Const(b, t, rhs) => Const(b, t, peep_expr(rhs, ctx))
-    CompoundAssign(n, op, rhs) => CompoundAssign(n, op, peep_expr(rhs, ctx))
+    CompoundAssign(n, op, rhs) => {
+      let rhs_p = peep_expr(rhs, ctx)
+      // `x += 1` → `x++` (saves 3 bytes in statement position)
+      match (op, rhs_p) {
+        (AddAssign, @ast.TsExpr::IntLit(1)) =>
+          Expr(@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostInc, @ast.TsExpr::Var(n)))
+        (SubAssign, @ast.TsExpr::IntLit(1)) =>
+          Expr(@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostDec, @ast.TsExpr::Var(n)))
+        _ => CompoundAssign(n, op, rhs_p)
+      }
+    }
     IndexAssign(target, idx, val) =>
       IndexAssign(
         peep_expr(target, ctx),

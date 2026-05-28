@@ -110,6 +110,20 @@ test "peephole: `true` becomes `!0` and `false` becomes `!1`" {
 }
 
 ///|
+test "peephole: x += 1 becomes x++" {
+  let out = peep_one("x += 1;\n")
+  assert_true(out.contains("x++"))
+  assert_false(out.contains("+="))
+}
+
+///|
+test "peephole: x -= 1 becomes x--" {
+  let out = peep_one("x -= 1;\n")
+  assert_true(out.contains("x--"))
+  assert_false(out.contains("-="))
+}
+
+///|
 test "minify emit: single-ident arrow param skips parens" {
   let out = minify_one("const f = x => x + 1;\n")
   assert_true(out.contains("x=>"))
