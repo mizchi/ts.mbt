@@ -577,7 +577,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       for a in args {
         new_args.push(fold_expr(a))
       }
-      New(name, new_args)
+      // `new Object()` → `{}`, `new Array()` → `[]`
+      match (name, new_args.length()) {
+        ("Object", 0) => ObjectLit([])
+        ("Array", 0) => ArrayLit([])
+        _ => New(name, new_args)
+      }
     }
     NewExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []

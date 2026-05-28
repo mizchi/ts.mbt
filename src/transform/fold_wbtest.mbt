@@ -391,6 +391,20 @@ test "fold: !(a < b) folds to a >= b" {
 }
 
 ///|
+test "fold: new Object() → {}" {
+  let out = fold_one("const o = new Object();\n")
+  assert_true(out.contains("= {};"))
+  assert_false(out.contains("new Object"))
+}
+
+///|
+test "fold: new Array() → []" {
+  let out = fold_one("const a = new Array();\n")
+  assert_true(out.contains("= [];"))
+  assert_false(out.contains("new Array"))
+}
+
+///|
 test "fold: x?x:y collapses to x||y" {
   let out = fold_one("const r = a ? a : b;\n")
   assert_true(out.contains("a || b"))
