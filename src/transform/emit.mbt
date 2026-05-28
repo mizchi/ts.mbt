@@ -833,22 +833,26 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.close_block()
     }
     Try(try_b, catch_bind, catch_b, finally_b) => {
-      e.write("try ")
+      // `try{` is valid in minify mode — `{` is never an ident char.
+      e.word("try")
+      e.sep_after_word('{')
       emit_block(e, try_b)
       match (catch_bind, catch_b) {
         (_, Some(cb)) => {
           e.space()
-          e.write("catch")
+          e.word("catch")
           match catch_bind {
             Some(b) => {
-              e.space()
+              // `catch(e)` — space before `(` can be dropped in minify mode.
+              e.sep_after_word('(')
               e.write("(")
               emit_binding(e, b)
               e.write(")")
             }
             None => ()
           }
-          e.space()
+          // `catch{` — `{` doesn't need a leading space.
+          e.sep_after_word('{')
           emit_block(e, cb)
         }
         _ => ()
@@ -856,8 +860,8 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       match finally_b {
         Some(fb) => {
           e.space()
-          e.write("finally")
-          e.space()
+          e.word("finally")
+          e.sep_after_word('{')
           emit_block(e, fb)
         }
         None => ()

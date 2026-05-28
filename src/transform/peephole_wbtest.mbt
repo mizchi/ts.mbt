@@ -234,3 +234,17 @@ test "minify emit: CompoundAssignExpr += 1 becomes ++" {
   assert_true(out.contains("obj.count++") || out.contains("++"))
   assert_false(out.contains("+="))
 }
+
+///|
+test "minify emit: try drops space before `{`" {
+  let out = minify_one("try { risky(); } catch (e) { handle(e); }\n")
+  assert_true(out.contains("try{"))
+  assert_false(out.contains("try {"))
+}
+
+///|
+test "minify emit: catch drops space before `(`" {
+  let out = minify_one("try { risky(); } catch (e) { handle(e); }\n")
+  assert_true(out.contains("catch(e)"))
+  assert_false(out.contains("catch (e)"))
+}
