@@ -153,3 +153,29 @@ test "fold: empty string || x reduces to x" {
   assert_true(out.contains("const y = z;"))
   assert_false(out.contains("||"))
 }
+
+///|
+test "fold: if (1) branch folds to then-block" {
+  let out = fold_one("if (1) { console.log(\"yes\"); } else { console.log(\"no\"); }\n")
+  assert_true(out.contains("yes"))
+  assert_false(out.contains("no"))
+}
+
+///|
+test "fold: if (0) branch folds to else-block" {
+  let out = fold_one("if (0) { console.log(\"yes\"); } else { console.log(\"no\"); }\n")
+  assert_false(out.contains("yes"))
+  assert_true(out.contains("no"))
+}
+
+///|
+test "fold: ternary with truthy literal uses then arm" {
+  let out = fold_one("const x = \"hello\" ? a : b;\n")
+  assert_true(out.contains("const x = a;"))
+}
+
+///|
+test "fold: ternary with falsy literal uses else arm" {
+  let out = fold_one("const x = null ? a : b;\n")
+  assert_true(out.contains("const x = b;"))
+}

@@ -20,8 +20,8 @@
 //   1 && y     -> y      (truthy literal, y always runs)
 //   1 || y     -> 1      (short-circuit: y never runs)
 //   "" || y    -> y      (falsy literal, y always runs)
-//   cond ? a : b with cond literal -> the live arm
-//   if (true) {…} / if (false) {…} else {…} statements -> the live block
+//   cond ? a : b with cond literal (including truthy/falsy) -> the live arm
+//   if (true/1/"x") {…} / if (false/0/null/…) else {…} -> the live block
 //
 //   "a" + "b"  -> "ab"  (string literal concatenation)
 //   1 === 1    -> true  (literal strict-equality comparisons)
@@ -66,33 +66,35 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
   match stmt {
     If(cond, then_b, else_b) => {
       let cond_f = fold_expr(cond)
-      match cond_f {
-        BoolLit(true) =>
-          // Then-branch wins; splice its statements in directly so
-          // subsequent passes (treeshake, mangle) see them at the
-          // top level.
-          for s in fold_block(then_b).stmts {
-            out.push(s)
-          }
-        BoolLit(false) =>
-          match else_b {
-            Some(b) =>
-              for s in fold_block(b).stmts {
-                out.push(s)
-              }
-            None => ()
-          }
-        _ =>
-          out.push(
-            If(
-              cond_f,
-              fold_block(then_b),
-              match else_b {
-                Some(b) => Some(fold_block(b))
-                None => None
-              },
-            ),
-          )
+      // Generalised: any statically truthy/falsy literal may fold the
+      // branch. `is_js_truthy` / `is_js_falsy` cover `BoolLit`,
+      // `IntLit(0)`, `StringLit("")`, `NullLit`, and friends.
+      if is_js_truthy(cond_f) {
+        // Then-branch wins; splice its statements in directly so
+        // subsequent passes (treeshake, mangle) see them at the
+        // top level.
+        for s in fold_block(then_b).stmts {
+          out.push(s)
+        }
+      } else if is_js_falsy(cond_f) {
+        match else_b {
+          Some(b) =>
+            for s in fold_block(b).stmts {
+              out.push(s)
+            }
+          None => ()
+        }
+      } else {
+        out.push(
+          If(
+            cond_f,
+            fold_block(then_b),
+            match else_b {
+              Some(b) => Some(fold_block(b))
+              None => None
+            },
+          ),
+        )
       }
     }
     Var(b, t, rhs) => out.push(Var(b, t, fold_expr(rhs)))
@@ -111,9 +113,9 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     Throw(e) => out.push(Throw(fold_expr(e)))
     While(c, body) => {
       let cf = fold_expr(c)
-      match cf {
-        BoolLit(false) => ()
-        _ => out.push(While(cf, fold_block(body)))
+      // `while (0)` / `while ("")` / `while (false)` → dead loop.
+      if not(is_js_falsy(cf)) {
+        out.push(While(cf, fold_block(body)))
       }
     }
     DoWhile(c, body) => out.push(DoWhile(fold_expr(c), fold_block(body)))
@@ -215,10 +217,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     }
     Cond(c, t, e) => {
       let cf = fold_expr(c)
-      match cf {
-        BoolLit(true) => fold_expr(t)
-        BoolLit(false) => fold_expr(e)
-        _ => Cond(cf, fold_expr(t), fold_expr(e))
+      if is_js_truthy(cf) {
+        fold_expr(t)
+      } else if is_js_falsy(cf) {
+        fold_expr(e)
+      } else {
+        Cond(cf, fold_expr(t), fold_expr(e))
       }
     }
     Call(name, args) => {
