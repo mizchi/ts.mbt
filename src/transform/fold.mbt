@@ -175,17 +175,30 @@ fn fold_func_body(block : @ast.TsBlock) -> @ast.TsBlock {
 ///|
 /// Fold every statement in `block`, recurse into nested blocks. The
 /// returned block is fresh — the input is not mutated.
+/// Dead code after an unconditional exit (`return`, `throw`, `break`,
+/// `continue`) is silently dropped.
 pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   let positions : Array[Int] = []
   let has_positions = block.stmt_positions.length() == block.stmts.length()
+  let mut exited = false
   for i, s in block.stmts {
+    if exited {
+      break
+    }
     let before_len = stmts.length()
     fold_stmt_into(s, stmts)
     let added = stmts.length() - before_len
     if has_positions {
       for _j in 0..<added {
         positions.push(block.stmt_positions[i])
+      }
+    }
+    // Mark unconditional exits so dead trailing statements are dropped.
+    if added > 0 {
+      match stmts[stmts.length() - 1] {
+        Return(_) | Throw(_) | Break(_) | Continue(_) => exited = true
+        _ => ()
       }
     }
   }

@@ -961,3 +961,18 @@ test "fold: null != x ? x : y folds to x ?? y (reversed)" {
   let out = fold_one("const r = null != x ? x : defaultVal;\n")
   assert_true(out.contains("??"))
 }
+
+///|
+test "fold: dead code after return is dropped" {
+  let out = fold_one(
+    "function f(x) { if (!x) { return null; } return x.value; const dead = 1; }\n",
+  )
+  assert_false(out.contains("dead"))
+  assert_true(out.contains("return"))
+}
+
+///|
+test "fold: dead code after throw is dropped" {
+  let out = fold_one("function f() { throw new Error(); const dead = 2; }\n")
+  assert_false(out.contains("dead"))
+}
