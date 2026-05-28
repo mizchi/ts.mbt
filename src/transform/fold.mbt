@@ -318,7 +318,52 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       for a in args {
         new_args.push(fold_expr(a))
       }
-      Call(name, new_args)
+      // `String(literal)` / `Number(literal)` / `Boolean(literal)` → literal.
+      if new_args.length() == 1 {
+        let arg = new_args[0]
+        match name {
+          "String" =>
+            match arg {
+              StringLit(_) => arg
+              IntLit(n) => StringLit(n.to_string())
+              NumberLit(n) => StringLit(n.to_string())
+              BoolLit(b) => StringLit(b.to_string())
+              NullLit => StringLit("null")
+              _ => Call(name, new_args)
+            }
+          "Number" =>
+            match arg {
+              NumberLit(_) | IntLit(_) => arg
+              StringLit(s) =>
+                match (try? @strconv.parse_double(s)) {
+                  Ok(n) => {
+                    let as_int = n.to_int()
+                    if as_int.to_double() == n {
+                      IntLit(as_int)
+                    } else {
+                      NumberLit(n)
+                    }
+                  }
+                  Err(_) => Call(name, new_args)
+                }
+              BoolLit(true) => IntLit(1)
+              BoolLit(false) => IntLit(0)
+              NullLit => IntLit(0)
+              _ => Call(name, new_args)
+            }
+          "Boolean" =>
+            if is_js_truthy(arg) {
+              BoolLit(true)
+            } else if is_js_falsy(arg) {
+              BoolLit(false)
+            } else {
+              Call(name, new_args)
+            }
+          _ => Call(name, new_args)
+        }
+      } else {
+        Call(name, new_args)
+      }
     }
     CallExpr(callee, args) => {
       let new_args : Array[@ast.TsExpr] = []
