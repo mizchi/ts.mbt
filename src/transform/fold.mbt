@@ -514,6 +514,41 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             } else {
               Call(name, new_args)
             }
+          "parseFloat" =>
+            match arg {
+              StringLit(s) =>
+                match (try? @strconv.parse_double(s)) {
+                  Ok(n) => {
+                    let as_int = n.to_int()
+                    if as_int.to_double() == n {
+                      IntLit(as_int)
+                    } else {
+                      NumberLit(n)
+                    }
+                  }
+                  Err(_) => Call(name, new_args)
+                }
+              _ => Call(name, new_args)
+            }
+          "parseInt" =>
+            match arg {
+              StringLit(s) =>
+                match parse_int_radix(s.trim().to_string(), 10) {
+                  Some(n) => IntLit(n)
+                  None => Call(name, new_args)
+                }
+              _ => Call(name, new_args)
+            }
+          _ => Call(name, new_args)
+        }
+      } else if new_args.length() == 2 {
+        // `parseInt("123", 10)` → `123` (explicit radix form).
+        match (name, new_args[0], new_args[1]) {
+          ("parseInt", StringLit(s), IntLit(radix)) if radix >= 2 && radix <= 36 =>
+            match parse_int_radix(s.trim().to_string(), radix) {
+              Some(n) => IntLit(n)
+              None => Call(name, new_args)
+            }
           _ => Call(name, new_args)
         }
       } else {
@@ -1498,6 +1533,53 @@ fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
 ///|
 /// Map a comparison operator to its logical negation.
 /// `!(a op b)` → `a negate_op b` (saves 2 bytes).
+/// Parse `s` as an integer in the given radix (2–36).
+/// Returns `None` on parse error or overflow.
+fn parse_int_radix(s : String, radix : Int) -> Int? {
+  if s.length() == 0 {
+    return None
+  }
+  let mut i = 0
+  let mut neg = false
+  if s[0] == '-' {
+    neg = true
+    i = 1
+  } else if s[0] == '+' {
+    i = 1
+  }
+  if i >= s.length() {
+    return None
+  }
+  let mut result : Int64 = 0L
+  let r = radix.to_int64()
+  while i < s.length() {
+    let c = s[i]
+    let digit = if c >= '0' && c <= '9' {
+      c.to_int() - '0'.to_int()
+    } else if c >= 'a' && c <= 'z' {
+      c.to_int() - 'a'.to_int() + 10
+    } else if c >= 'A' && c <= 'Z' {
+      c.to_int() - 'A'.to_int() + 10
+    } else {
+      return None
+    }
+    if digit >= radix {
+      return None
+    }
+    result = result * r + digit.to_int64()
+    // Guard against overflow into MoonBit Int range.
+    if result > 2147483647L || result < -2147483648L {
+      return None
+    }
+    i = i + 1
+  }
+  if neg {
+    result = -result
+  }
+  Some(result.to_int())
+}
+
+///|
 fn negate_comparison_op(op : @ast.TsBinOp) -> @ast.TsBinOp? {
   match op {
     BinEq => Some(BinNe)

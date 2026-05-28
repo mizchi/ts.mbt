@@ -391,6 +391,27 @@ test "fold: !(a < b) folds to a >= b" {
 }
 
 ///|
+test "fold: parseInt(str,10) folds to integer literal" {
+  let out = fold_one("const n = parseInt(\"42\", 10);\n")
+  assert_true(out.contains("= 42;"))
+  assert_false(out.contains("parseInt"))
+}
+
+///|
+test "fold: parseFloat(str) folds to number literal" {
+  let out = fold_one("const n = parseFloat(\"3.14\");\n")
+  assert_true(out.contains("3.14"))
+  assert_false(out.contains("parseFloat"))
+}
+
+///|
+test "fold: parseInt without radix folds to integer literal" {
+  let out = fold_one("const n = parseInt(\"100\");\n")
+  assert_true(out.contains("= 100;"))
+  assert_false(out.contains("parseInt"))
+}
+
+///|
 test "fold: x===null||x===undefined → x==null" {
   let out = fold_one("const r = x === null || x === undefined;\n")
   assert_true(out.contains("=="))
