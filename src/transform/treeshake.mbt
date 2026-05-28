@@ -172,7 +172,8 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     | ArrayHole
     | Var(_)
     | FuncExpr(_)
-    | ArrowFunc(_, _, _, _) => true
+    | ArrowFunc(_, _, _, _)
+    | NativeClassExpr(_, _) => true
     ArrayLit(items) => {
       for e in items {
         if not(is_pure_init(e)) {
