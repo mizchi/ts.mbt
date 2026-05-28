@@ -478,20 +478,44 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.word("var")
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, 0)
+      let is_undef_init = match init {
+        UnaryOp(@ast.TsUnaryOp::Void, _) => true
+        Var("undefined") => true
+        _ => false
+      }
+      if not(e.pretty) && is_undef_init {
+        // Drop `= void 0` — `var x;` is semantically identical.
+      } else {
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
       e.semi()
     }
     Let(binding, _ty, init) => {
       e.word("let")
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, 0)
+      // In minify mode, `let x = undefined` → `let x` (drops the
+      // initializer entirely: `= void 0` is 7 bytes, the implicit
+      // `undefined` default costs nothing). Skip the `= void 0`
+      // produced by the peephole pass and the raw `Var("undefined")`
+      // from the parser for uninitialized declarations.
+      let is_undef_init = match init {
+        UnaryOp(@ast.TsUnaryOp::Void, _) => true
+        Var("undefined") => true
+        _ => false
+      }
+      if not(e.pretty) && is_undef_init {
+        // Emit with no initializer — matches `let x;` which the
+        // JS engine initialises to `undefined` automatically.
+      } else {
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
       e.semi()
     }
     Const(binding, _ty, init) => {

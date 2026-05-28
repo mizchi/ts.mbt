@@ -276,3 +276,19 @@ test "peephole: trailing break in last switch case is dropped" {
   let break_count = out.split("break").length() - 1
   assert_true(break_count == 1)
 }
+
+///|
+test "minify emit: let x = undefined drops initializer" {
+  let out = minify_one("let x = undefined;\n")
+  // Initializer should be absent — saves `= void 0` bytes.
+  assert_false(out.contains("void"))
+  assert_false(out.contains("undefined"))
+  assert_true(out.contains("let x"))
+}
+
+///|
+test "minify emit: let x = void 0 drops initializer" {
+  let out = minify_one("let x = void 0;\n")
+  assert_false(out.contains("void"))
+  assert_true(out.contains("let x"))
+}
