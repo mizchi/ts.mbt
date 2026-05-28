@@ -1826,12 +1826,16 @@ fn fold_binop(
     (Add, NumberLit(a), NumberLit(b)) => NumberLit(a + b)
     (Sub, NumberLit(a), NumberLit(b)) => NumberLit(a - b)
     (Mul, NumberLit(a), NumberLit(b)) => NumberLit(a * b)
+    (Div, NumberLit(a), NumberLit(b)) if b != 0.0 => NumberLit(a / b)
     (Add, IntLit(a), NumberLit(b)) => NumberLit(a.to_double() + b)
     (Add, NumberLit(a), IntLit(b)) => NumberLit(a + b.to_double())
     (Sub, IntLit(a), NumberLit(b)) => NumberLit(a.to_double() - b)
     (Sub, NumberLit(a), IntLit(b)) => NumberLit(a - b.to_double())
     (Mul, IntLit(a), NumberLit(b)) => NumberLit(a.to_double() * b)
     (Mul, NumberLit(a), IntLit(b)) => NumberLit(a * b.to_double())
+    // Integer-producing integer division (non-exact results folded to float)
+    (Div, IntLit(a), IntLit(b)) if b != 0 && a % b != 0 =>
+      NumberLit(a.to_double() / b.to_double())
     // String concatenation of two string literals.
     (Add, StringLit(a), StringLit(b)) => StringLit(a + b)
     // JS string coercion: `"str" + integer` / `integer + "str"` → string.
