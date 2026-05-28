@@ -225,7 +225,23 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       }
     }
     Block(b) => out.push(Block(fold_block(b)))
-    NativeClassStmt(_, _) => out.push(stmt)
+    NativeClassStmt(decl, ctor) => {
+      // Fold + strip trailing `return;` from constructor and method bodies.
+      let new_ctor = match ctor {
+        Some(f) =>
+          Some({ ..f, body: fold_func_body(fold_block(f.body)) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(fold_func_body(fold_block(b)))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      out.push(NativeClassStmt({ ..decl, methods: new_methods }, new_ctor))
+    }
   }
 }
 
