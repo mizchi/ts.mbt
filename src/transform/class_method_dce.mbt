@@ -515,6 +515,11 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
           None => ()
         }
       }
+      for sf in decl.static_field_inits {
+        if expr_has_method_sniff(sf.1) {
+          return true
+        }
+      }
       match ctor_body {
         Some(f) => block_has_method_sniff(f.body)
         None => false
@@ -804,6 +809,10 @@ fn collect_static_accesses_stmt(
       match ctor_body {
         Some(f) => collect_static_accesses_block(f.body, out)
         None => ()
+      }
+      // Static field inits may access method names via `this.method`.
+      for sf in decl.static_field_inits {
+        collect_static_accesses_expr(sf.1, out)
       }
     }
   }
