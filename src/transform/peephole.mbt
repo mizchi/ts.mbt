@@ -93,8 +93,42 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         peep_expr(idx, ctx),
         peep_expr(val, ctx),
       )
-    PropAssign(target, prop, val) =>
-      PropAssign(peep_expr(target, ctx), prop, peep_expr(val, ctx))
+    PropAssign(target, prop, val) => {
+      let target_p = peep_expr(target, ctx)
+      let val_p = peep_expr(val, ctx)
+      // `x.prop = x.prop OP y` → `x.prop OP= y` (and `x.prop = x.prop + 1` → `x.prop++`).
+      // Only fold when the receiver is a bare `Var` (no double evaluation).
+      match (target_p, val_p) {
+        (Var(tn), BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rprop), rhs))
+          if tn == rn && prop == rprop =>
+          match (compound_for_binop(op), rhs) {
+            (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
+              Expr(
+                @ast.TsExpr::UnaryOp(
+                  @ast.TsUnaryOp::PostInc,
+                  @ast.TsExpr::PropAccess(@ast.TsExpr::Var(tn), prop),
+                ),
+              )
+            (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
+              Expr(
+                @ast.TsExpr::UnaryOp(
+                  @ast.TsUnaryOp::PostDec,
+                  @ast.TsExpr::PropAccess(@ast.TsExpr::Var(tn), prop),
+                ),
+              )
+            (Some(cop), _) =>
+              Expr(
+                @ast.TsExpr::CompoundAssignExpr(
+                  @ast.TsExpr::PropAccess(@ast.TsExpr::Var(tn), prop),
+                  cop,
+                  rhs,
+                ),
+              )
+            _ => PropAssign(Var(tn), prop, BinOp(op, PropAccess(Var(rn), rprop), rhs))
+          }
+        (t, v) => PropAssign(t, prop, v)
+      }
+    }
     Expr(e) => Expr(peep_expr(e, ctx))
     Return(Some(e)) => {
       let ep = peep_expr(e, ctx)

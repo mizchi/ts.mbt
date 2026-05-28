@@ -301,3 +301,24 @@ test "minify emit: const x = undefined drops initializer (const→let, no = void
   assert_false(out.contains("undefined"))
   assert_true(out.contains("let x"))
 }
+
+///|
+test "peephole: x.prop = x.prop + 1 folds to x.prop++" {
+  let out = peep_one("x.count = x.count + 1;\n")
+  assert_true(out.contains("x.count++") || out.contains("++"))
+  assert_false(out.contains("= x.count + 1"))
+}
+
+///|
+test "peephole: x.prop = x.prop - 1 folds to x.prop--" {
+  let out = peep_one("x.count = x.count - 1;\n")
+  assert_true(out.contains("x.count--") || out.contains("--"))
+  assert_false(out.contains("= x.count - 1"))
+}
+
+///|
+test "peephole: x.prop = x.prop + n collapses to x.prop += n" {
+  let out = peep_one("x.count = x.count + 5;\n")
+  assert_true(out.contains("x.count += 5") || out.contains("+="))
+  assert_false(out.contains("= x.count + 5"))
+}
