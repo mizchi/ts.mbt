@@ -447,15 +447,28 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       }
     }
     Try(b, bnd, cb, fb) => {
+      let b_f = fold_block(b)
       let cb_f = match cb {
         Some(blk) => Some(fold_block(blk))
         None => None
       }
       let fb_f = match fb {
-        Some(blk) => Some(fold_block(blk))
+        Some(blk) => {
+          let folded = fold_block(blk)
+          if folded.stmts.is_empty() { None } else { Some(folded) }
+        }
         None => None
       }
-      out.push(Try(fold_block(b), bnd, cb_f, fb_f))
+      // `try { stmts } finally {}` — empty finally is a no-op; drop it.
+      // If there's no catch and the finally became empty, the `try` wrapper
+      // is redundant: splice the body statements in directly.
+      match (cb_f, fb_f) {
+        (None, None) =>
+          for s in b_f.stmts {
+            out.push(s)
+          }
+        _ => out.push(Try(b_f, bnd, cb_f, fb_f))
+      }
     }
     Label(name, inner) => {
       let tmp : Array[@ast.TsStmt] = []

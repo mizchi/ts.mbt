@@ -1095,6 +1095,21 @@ test "fold: return void 0 normalizes to return" {
   assert_true(out.contains("x()"))
 }
 
+test "fold: try {} finally {} with empty finally drops wrapper" {
+  // `try { stmts } finally {}` — empty finally is a no-op, and
+  // without both catch and finally the try is also redundant.
+  let out = fold_one("try { f(); } finally {}\n")
+  assert_true(out.contains("f()"))
+  assert_false(out.contains("try"))
+  assert_false(out.contains("finally"))
+}
+
+test "fold: try {} finally { stmts } keeps finally when non-empty" {
+  let out = fold_one("try { f(); } finally { g(); }\n")
+  assert_true(out.contains("try"))
+  assert_true(out.contains("finally"))
+}
+
 test "fold: x = x self-assignment in stmt is dropped" {
   let out = fold_one("x = x;\n")
   // Self-assignment is a no-op; nothing should remain.
