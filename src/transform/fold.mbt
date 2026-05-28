@@ -471,10 +471,49 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       match (recv_f, p) {
         (StringLit(s), "length") => IntLit(s.length())
         (ArrayLit(items), "length") => IntLit(items.length())
+        // `{a:1, b:2}.a` → `1` (constant prop access on object literal)
+        (ObjectLit(entries), key) => {
+          let mut found : @ast.TsExpr? = None
+          for ent in entries {
+            if ent.0 == key {
+              found = Some(ent.1)
+            }
+          }
+          match found {
+            Some(v) => v
+            None => PropAccess(recv_f, p)
+          }
+        }
         _ => PropAccess(recv_f, p)
       }
     }
-    IndexAccess(recv, idx) => IndexAccess(fold_expr(recv), fold_expr(idx))
+    IndexAccess(recv, idx) => {
+      let recv_f = fold_expr(recv)
+      let idx_f = fold_expr(idx)
+      // `[a,b,c][1]` → `b` (constant index into array literal)
+      match (recv_f, idx_f) {
+        (ArrayLit(items), IntLit(i)) =>
+          if i >= 0 && i < items.length() {
+            items[i]
+          } else {
+            IndexAccess(recv_f, idx_f)
+          }
+        // `{a:1,b:2}["a"]` → `1` (constant string key into object literal)
+        (ObjectLit(entries), StringLit(k)) => {
+          let mut found : @ast.TsExpr? = None
+          for ent in entries {
+            if ent.0 == k {
+              found = Some(ent.1)
+            }
+          }
+          match found {
+            Some(v) => v
+            None => IndexAccess(recv_f, idx_f)
+          }
+        }
+        _ => IndexAccess(recv_f, idx_f)
+      }
+    }
     ArrayLit(items) => {
       let new_items : Array[@ast.TsExpr] = []
       for i in items {

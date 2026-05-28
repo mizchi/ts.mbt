@@ -311,3 +311,19 @@ test "fold: if(c) return e1; return e2 merges to return c ? e1 : e2" {
   assert_true(out.contains("return"))
   assert_true(out.contains("?"))
 }
+
+test "fold: constant array index access folds to element" {
+  let out = fold_one("const x = [10, 20, 30][1];\n")
+  assert_true(out.contains("const x = 20;"))
+  assert_false(out.contains("[10"))
+}
+
+test "fold: constant string key access on object literal folds to value" {
+  let out = fold_one("const x = {a: 1, b: 2}[\"a\"];\n")
+  assert_true(out.contains("const x = 1;"))
+}
+
+test "fold: prop access on object literal folds to value" {
+  let out = fold_one("const x = {foo: 42}.foo;\n")
+  assert_true(out.contains("const x = 42;"))
+}
