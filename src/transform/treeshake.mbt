@@ -82,6 +82,10 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
             None => ()
           }
         }
+        // Static field initializer refs
+        for sf in decl.static_field_inits {
+          collect_var_refs_in_expr(sf.1, refs)
+        }
         decl_by_name[decl.name] = decls.length()
         decls.push({ name: decl.name, index: i, refs })
         is_decl[i] = true
