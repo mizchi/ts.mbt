@@ -358,3 +358,21 @@ test "fold: string .slice with non-negative args folds to literal" {
   let out = fold_one("const a = \"hello\".slice(1, 3);\n")
   assert_true(out.contains("\"el\""))
 }
+
+test "fold: array .join with literal items folds to string" {
+  let out = fold_one("const s = [\"a\", \"b\", \"c\"].join(\"-\");\n")
+  assert_true(out.contains("\"a-b-c\""))
+  assert_false(out.contains("join"))
+}
+
+test "fold: array .includes with matching literal folds to true" {
+  let out = fold_one("const x = [1, 2, 3].includes(2);\n")
+  assert_true(out.contains("const x = true;"))
+}
+
+test "fold: Object.keys on object literal folds to array" {
+  let out = fold_one("const k = Object.keys({a: 1, b: 2});\n")
+  assert_true(out.contains("\"a\""))
+  assert_true(out.contains("\"b\""))
+  assert_false(out.contains("Object.keys"))
+}

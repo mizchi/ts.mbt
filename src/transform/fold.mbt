@@ -492,7 +492,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           // String method folding on string literals.
           match fold_string_method(recv_f, m, new_args) {
             Some(result) => result
-            None => MethodCall(recv_f, m, new_args)
+            None =>
+              // Array method folding on array literals.
+              match fold_array_method(recv_f, m, new_args) {
+                Some(result) => result
+                None => MethodCall(recv_f, m, new_args)
+              }
           }
       }
     }
@@ -931,6 +936,125 @@ fn fold_string_method(
           }
         _ => None
       }
+    }
+    _ => None
+  }
+}
+
+///|
+/// Fold Array-literal method calls with constant arguments.
+fn fold_array_method(
+  recv : @ast.TsExpr,
+  method : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsExpr? {
+  let items = match recv {
+    ArrayLit(items) => items
+    _ => return None
+  }
+  match method {
+    "length" if args.length() == 0 => Some(IntLit(items.length()))
+    "join" => {
+      // `[a,b,c].join(sep)` → string literal when all items are literals.
+      let sep = match args.length() {
+        0 => ","
+        1 =>
+          match args[0] {
+            StringLit(s) => s
+            _ => return None
+          }
+        _ => return None
+      }
+      let parts : Array[String] = []
+      let mut all_lit = true
+      for item in items {
+        match item {
+          StringLit(s) => parts.push(s)
+          IntLit(n) => parts.push(n.to_string())
+          NumberLit(n) => parts.push(n.to_string())
+          BoolLit(b) => parts.push(b.to_string())
+          NullLit => parts.push("null")
+          _ => {
+            all_lit = false
+            break
+          }
+        }
+      }
+      if all_lit { Some(StringLit(parts.join(sep))) } else { None }
+    }
+    "includes" if args.length() == 1 => {
+      // `[1,2,3].includes(2)` → true/false when all items are literals.
+      let needle = args[0]
+      let mut all_pure = true
+      for item in items {
+        if not(is_pure_value(item)) {
+          all_pure = false
+          break
+        }
+      }
+      if not(all_pure) {
+        return None
+      }
+      // Check if any item is strictly equal to the needle.
+      let mut found = false
+      for item in items {
+        match (item, needle) {
+          (IntLit(a), IntLit(b)) => if a == b { found = true }
+          (StringLit(a), StringLit(b)) => if a == b { found = true }
+          (BoolLit(a), BoolLit(b)) => if a == b { found = true }
+          (NullLit, NullLit) => found = true
+          _ => ()
+        }
+      }
+      Some(BoolLit(found))
+    }
+    "indexOf" if args.length() == 1 => {
+      let needle = args[0]
+      let mut all_pure = true
+      for item in items {
+        if not(is_pure_value(item)) {
+          all_pure = false
+          break
+        }
+      }
+      if not(all_pure) {
+        return None
+      }
+      let mut found_idx = -1
+      for i, item in items {
+        if found_idx >= 0 {
+          break
+        }
+        match (item, needle) {
+          (IntLit(a), IntLit(b)) => if a == b { found_idx = i }
+          (StringLit(a), StringLit(b)) => if a == b { found_idx = i }
+          (BoolLit(a), BoolLit(b)) => if a == b { found_idx = i }
+          (NullLit, NullLit) => found_idx = i
+          _ => ()
+        }
+      }
+      Some(IntLit(found_idx))
+    }
+    "reverse" if args.length() == 0 => {
+      // Only fold small pure arrays.
+      if items.length() > 16 {
+        return None
+      }
+      let mut all_pure = true
+      for item in items {
+        if not(is_pure_value(item)) {
+          all_pure = false
+          break
+        }
+      }
+      if not(all_pure) {
+        return None
+      }
+      let rev : Array[@ast.TsExpr] = []
+      for i = items.length() - 1; i >= 0; i = i - 1 {
+        rev.push(items[i])
+      }
+      Some(ArrayLit(rev))
     }
     _ => None
   }
