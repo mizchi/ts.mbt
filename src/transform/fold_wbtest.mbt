@@ -81,3 +81,10 @@ test "fold: x * 0 collapses to 0 when x is pure" {
   let out = fold_one("const y = z * 0;\n")
   assert_true(out.contains("const y = 0;"))
 }
+
+///|
+test "fold: string literal concatenation collapses to single literal" {
+  let out = fold_one("const s = \"hello\" + \" \" + \"world\";\n")
+  assert_true(out.contains("\"hello world\""))
+  assert_false(out.contains("+"))
+}

@@ -19,6 +19,8 @@
 //   cond ? a : b with cond literal -> the live arm
 //   if (true) {…} / if (false) {…} else {…} statements -> the live block
 //
+//   "a" + "b"  -> "ab"  (string literal concatenation)
+//
 // "Pure" here mirrors the tree-shaker's `is_pure_init`: literals,
 // function expressions, variable reads, and (recursively) pure
 // object / array literals. Anything that could fire a side effect
@@ -362,6 +364,8 @@ fn fold_binop(
     (Add, IntLit(a), IntLit(b)) => IntLit(a + b)
     (Sub, IntLit(a), IntLit(b)) => IntLit(a - b)
     (Mul, IntLit(a), IntLit(b)) => IntLit(a * b)
+    // String concatenation of two string literals.
+    (Add, StringLit(a), StringLit(b)) => StringLit(a + b)
     _ => BinOp(op, l, r)
   }
 }
