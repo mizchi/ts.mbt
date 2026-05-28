@@ -255,11 +255,19 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         // `if (cond) { e1; } else { e2; }` → `cond ? e1 : e2;`
         // Also handles single-assign bodies.
         // Saves `if(` + `)` + `{` + `}else{` + `}` = 9 chars, adds `?` + `:` = 2 chars.
+        // Special case: when both branches assign to the same bare variable,
+        // `if (c) { x = e1; } else { x = e2; }` → `x = c ? e1 : e2`
+        // (saves ~5 more bytes vs `c ? x = e1 : x = e2`).
         match (as_single_expr(then_f), else_f) {
           (Some(e1), Some(el)) =>
             match as_single_expr(el) {
               Some(e2) => {
-                out.push(Expr(Cond(cond_f, e1, e2)))
+                let lifted = match (e1, e2) {
+                  (AssignExpr(n1, v1), AssignExpr(n2, v2)) if n1 == n2 =>
+                    Assign(n1, Cond(cond_f, v1, v2))
+                  _ => Expr(Cond(cond_f, e1, e2))
+                }
+                out.push(lifted)
                 return
               }
               None => ()

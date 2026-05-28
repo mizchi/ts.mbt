@@ -989,3 +989,12 @@ test "fold: x != null ? x.method() : undefined folds to x?.method()" {
   let out = fold_one("const r = x != null ? x.toString() : undefined;\n")
   assert_true(out.contains("?.") || out.contains("x.toString"))
 }
+
+///|
+test "fold: if(c){x=e1}else{x=e2} lifts to x=c?e1:e2" {
+  let out = fold_one("if (ok) { x = 1; } else { x = 2; }\n")
+  // Both branches assign to the same var; the assignment should be lifted out.
+  assert_true(out.contains("x ="))
+  // Should not produce two separate assignment expressions inside a ternary.
+  assert_false(out.contains("x = 1") && out.contains("x = 2"))
+}

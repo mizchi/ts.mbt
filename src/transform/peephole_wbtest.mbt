@@ -322,3 +322,24 @@ test "peephole: x.prop = x.prop + n collapses to x.prop += n" {
   assert_true(out.contains("x.count += 5") || out.contains("+="))
   assert_false(out.contains("= x.count + 5"))
 }
+
+///|
+test "peephole: arr[i] = arr[i] + 1 folds to arr[i]++" {
+  let out = peep_one("arr[i] = arr[i] + 1;\n")
+  assert_true(out.contains("arr[i]++") || out.contains("++"))
+  assert_false(out.contains("= arr[i] + 1"))
+}
+
+///|
+test "peephole: arr[i] = arr[i] - 1 folds to arr[i]--" {
+  let out = peep_one("arr[i] = arr[i] - 1;\n")
+  assert_true(out.contains("arr[i]--") || out.contains("--"))
+  assert_false(out.contains("= arr[i] - 1"))
+}
+
+///|
+test "peephole: arr[i] = arr[i] + n collapses to arr[i] += n" {
+  let out = peep_one("arr[i] = arr[i] + 5;\n")
+  assert_true(out.contains("arr[i] += 5") || out.contains("+="))
+  assert_false(out.contains("= arr[i] + 5"))
+}

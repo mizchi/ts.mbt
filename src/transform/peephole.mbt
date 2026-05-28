@@ -87,12 +87,55 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         _ => CompoundAssign(n, op, rhs_p)
       }
     }
-    IndexAssign(target, idx, val) =>
-      IndexAssign(
-        peep_expr(target, ctx),
-        peep_expr(idx, ctx),
-        peep_expr(val, ctx),
-      )
+    IndexAssign(target, idx, val) => {
+      let target_p = peep_expr(target, ctx)
+      let idx_p = peep_expr(idx, ctx)
+      let val_p = peep_expr(val, ctx)
+      // `x[i] = x[i] OP y` → `x[i] OP= y` (and `x[i] = x[i] + 1` → `x[i]++`).
+      // Only fold when both target and index are bare Vars (no double evaluation).
+      match (target_p, idx_p, val_p) {
+        (
+          Var(tn),
+          Var(ik),
+          BinOp(
+            op,
+            @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)),
+            rhs,
+          ),
+        ) if tn == rn && ik == rk =>
+          match (compound_for_binop(op), rhs) {
+            (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
+              Expr(
+                @ast.TsExpr::UnaryOp(
+                  @ast.TsUnaryOp::PostInc,
+                  @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(tn), @ast.TsExpr::Var(ik)),
+                ),
+              )
+            (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
+              Expr(
+                @ast.TsExpr::UnaryOp(
+                  @ast.TsUnaryOp::PostDec,
+                  @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(tn), @ast.TsExpr::Var(ik)),
+                ),
+              )
+            (Some(cop), _) =>
+              Expr(
+                @ast.TsExpr::CompoundAssignExpr(
+                  @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(tn), @ast.TsExpr::Var(ik)),
+                  cop,
+                  rhs,
+                ),
+              )
+            _ =>
+              IndexAssign(
+                @ast.TsExpr::Var(tn),
+                @ast.TsExpr::Var(ik),
+                BinOp(op, IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)), rhs),
+              )
+          }
+        (t, i, v) => IndexAssign(t, i, v)
+      }
+    }
     PropAssign(target, prop, val) => {
       let target_p = peep_expr(target, ctx)
       let val_p = peep_expr(val, ctx)
