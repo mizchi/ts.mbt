@@ -698,6 +698,34 @@ fn fold_binop(
     (Add, IntLit(a), IntLit(b)) => IntLit(a + b)
     (Sub, IntLit(a), IntLit(b)) => IntLit(a - b)
     (Mul, IntLit(a), IntLit(b)) => IntLit(a * b)
+    (Div, IntLit(a), IntLit(b)) =>
+      // Only fold integer division when it's exact (no remainder).
+      if b != 0 && a % b == 0 { IntLit(a / b) } else { BinOp(op, l, r) }
+    (Mod, IntLit(a), IntLit(b)) =>
+      if b != 0 { IntLit(a % b) } else { BinOp(op, l, r) }
+    (Pow, IntLit(a), IntLit(b)) =>
+      // Fold small integer exponents only.
+      if b >= 0 && b <= 20 {
+        let mut result = 1
+        let mut i = 0
+        while i < b {
+          result = result * a
+          i = i + 1
+        }
+        IntLit(result)
+      } else {
+        BinOp(op, l, r)
+      }
+    // Mixed int/float numeric folds
+    (Add, NumberLit(a), NumberLit(b)) => NumberLit(a + b)
+    (Sub, NumberLit(a), NumberLit(b)) => NumberLit(a - b)
+    (Mul, NumberLit(a), NumberLit(b)) => NumberLit(a * b)
+    (Add, IntLit(a), NumberLit(b)) => NumberLit(a.to_double() + b)
+    (Add, NumberLit(a), IntLit(b)) => NumberLit(a + b.to_double())
+    (Sub, IntLit(a), NumberLit(b)) => NumberLit(a.to_double() - b)
+    (Sub, NumberLit(a), IntLit(b)) => NumberLit(a - b.to_double())
+    (Mul, IntLit(a), NumberLit(b)) => NumberLit(a.to_double() * b)
+    (Mul, NumberLit(a), IntLit(b)) => NumberLit(a * b.to_double())
     // String concatenation of two string literals.
     (Add, StringLit(a), StringLit(b)) => StringLit(a + b)
     // Strict-equality comparisons between homogeneous literals.
