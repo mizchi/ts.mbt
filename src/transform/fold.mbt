@@ -225,11 +225,26 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           Some(b) => Some(fold_block(b))
           None => None
         }
+        // Helper: if a block has exactly one `expr;` or `x = rhs;` statement,
+        // return the equivalent expression form. Used by both the ternary and
+        // the `&&`/`||` short-circuit folds below.
+        let as_single_expr = fn(block : @ast.TsBlock) -> @ast.TsExpr? {
+          if block.stmts.length() == 1 {
+            match block.stmts[0] {
+              Expr(e) => Some(e)
+              Assign(n, v) => Some(AssignExpr(n, v))
+              _ => None
+            }
+          } else {
+            None
+          }
+        }
         // `if (cond) { e1; } else { e2; }` → `cond ? e1 : e2;`
+        // Also handles single-assign bodies.
         // Saves `if(` + `)` + `{` + `}else{` + `}` = 9 chars, adds `?` + `:` = 2 chars.
-        match (single_expr_stmt(then_f), else_f) {
+        match (as_single_expr(then_f), else_f) {
           (Some(e1), Some(el)) =>
-            match single_expr_stmt(el) {
+            match as_single_expr(el) {
               Some(e2) => {
                 out.push(Expr(Cond(cond_f, e1, e2)))
                 return
@@ -239,9 +254,10 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           _ => ()
         }
         // `if (cond) { expr; }` (no else) → `cond && expr;`
+        // `if (cond) { x = rhs; }` (no else) → `cond && (x = rhs);`
         // Saves `if(` + `)` = 4, adds `&&` = 2 → net -2 bytes per site.
         // `if (!cond) { expr; }` → `cond || expr;`
-        match (single_expr_stmt(then_f), else_f) {
+        match (as_single_expr(then_f), else_f) {
           (Some(e), None) => {
             let short = match cond_f {
               UnaryOp(@ast.TsUnaryOp::Not, inner) =>

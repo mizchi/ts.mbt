@@ -499,8 +499,23 @@ test "fold: if(c){e1;}else{e2;} → c?e1:e2 expr stmt" {
 }
 
 ///|
+test "fold: if(c){x=a;}else{x=b;} → c?x=a:x=b expr stmt" {
+  let out = fold_one("if (flag) { result = 1; } else { result = 2; }\n")
+  assert_true(out.contains("?"))
+  assert_false(out.contains("if"))
+  assert_false(out.contains("else"))
+}
+
+///|
 test "fold: if(c){expr;} (no else) → c&&expr" {
   let out = fold_one("if (ok) { doSomething(); }\n")
+  assert_true(out.contains("&&"))
+  assert_false(out.contains("if"))
+}
+
+///|
+test "fold: if(c){x=rhs;} (no else) → c&&(x=rhs)" {
+  let out = fold_one("if (flag) { x = getValue(); }\n")
   assert_true(out.contains("&&"))
   assert_false(out.contains("if"))
 }
