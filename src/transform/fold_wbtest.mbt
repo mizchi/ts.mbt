@@ -206,3 +206,16 @@ test "fold: typeof 5 === \"number\" chain folds to true" {
   let out = fold_one("const ok = typeof 5 === \"number\";\n")
   assert_true(out.contains("const ok = true;"))
 }
+
+///|
+test "fold: comma-expression with pure left side drops the left" {
+  let out = fold_one("const x = (1, z);\n")
+  assert_true(out.contains("const x = z;"))
+  assert_false(out.contains("1,"))
+}
+
+///|
+test "fold: comma-expression with side-effecting left is preserved" {
+  let out = fold_one("const x = (f(), z);\n")
+  assert_true(out.contains("f()"))
+}

@@ -14,6 +14,7 @@
 //   !false   -> true
 //   typeof 5 -> "number"  (typeof any known literal)
 //   typeof "" -> "string" / typeof true -> "boolean" / etc.
+//   (pure, x) -> x            (comma-expression with pure left operand)
 //   true && y  -> y
 //   false && y -> false  (y is pure)
 //   true || y  -> true   (y is pure)
@@ -294,7 +295,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     Yield(Some(inner)) => Yield(Some(fold_expr(inner)))
     YieldStar(inner) => YieldStar(fold_expr(inner))
     Await(inner) => Await(fold_expr(inner))
-    Seq(a, b) => Seq(fold_expr(a), fold_expr(b))
+    Seq(a, b) => {
+      let af = fold_expr(a)
+      let bf = fold_expr(b)
+      // `(pure, x)` → `x`: the left side has no observable effect
+      // so only the right value matters.
+      if is_pure_value(af) { bf } else { Seq(af, bf) }
+    }
     AssignExpr(n, v) => AssignExpr(n, fold_expr(v))
     CompoundAssignExpr(t, op, v) =>
       CompoundAssignExpr(fold_expr(t), op, fold_expr(v))
