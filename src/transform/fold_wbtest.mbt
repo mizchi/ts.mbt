@@ -585,3 +585,17 @@ test "fold: Array.at with negative index folds correctly" {
   assert_true(out.contains("30"))
   assert_false(out.contains(".at"))
 }
+
+///|
+test "fold: String.padStart folds correctly" {
+  let out = fold_one("const s = \"5\".padStart(3, \"0\");\n")
+  assert_true(out.contains("\"005\""))
+  assert_false(out.contains("padStart"))
+}
+
+///|
+test "fold: String.padEnd folds correctly" {
+  let out = fold_one("const s = \"hi\".padEnd(5);\n")
+  assert_true(out.contains("\"hi   \""))
+  assert_false(out.contains("padEnd"))
+}

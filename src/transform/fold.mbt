@@ -1231,6 +1231,68 @@ fn fold_string_method(
           Some(IntLit(s[i].to_int()))
         _ => None
       }
+    "padStart" => {
+      // `"5".padStart(3, "0")` → `"005"`, `"5".padStart(3)` → `"  5"`
+      let len = s.length()
+      let (target_len, pad) = match args.length() {
+        1 =>
+          match args[0] {
+            IntLit(n) if n >= 0 && n <= 1000 => (n, " ")
+            _ => return None
+          }
+        2 =>
+          match (args[0], args[1]) {
+            (IntLit(n), StringLit(p)) if n >= 0 && n <= 1000 && p.length() > 0 =>
+              (n, p)
+            _ => return None
+          }
+        _ => return None
+      }
+      if target_len <= len {
+        Some(StringLit(s))
+      } else {
+        let needed = target_len - len
+        let pad_len = pad.length()
+        let mut result = ""
+        let mut i = 0
+        while i < needed {
+          result = result + pad.substring(start=i % pad_len, end=i % pad_len + 1).to_string()
+          i = i + 1
+        }
+        Some(StringLit(result + s))
+      }
+    }
+    "padEnd" => {
+      // `"hello".padEnd(10)` → `"hello     "`
+      let len = s.length()
+      let (target_len, pad) = match args.length() {
+        1 =>
+          match args[0] {
+            IntLit(n) if n >= 0 && n <= 1000 => (n, " ")
+            _ => return None
+          }
+        2 =>
+          match (args[0], args[1]) {
+            (IntLit(n), StringLit(p)) if n >= 0 && n <= 1000 && p.length() > 0 =>
+              (n, p)
+            _ => return None
+          }
+        _ => return None
+      }
+      if target_len <= len {
+        Some(StringLit(s))
+      } else {
+        let needed = target_len - len
+        let pad_len = pad.length()
+        let mut result = s
+        let mut i = 0
+        while i < needed {
+          result = result + pad.substring(start=i % pad_len, end=i % pad_len + 1).to_string()
+          i = i + 1
+        }
+        Some(StringLit(result))
+      }
+    }
     _ => None
   }
 }
