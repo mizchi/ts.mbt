@@ -376,3 +376,16 @@ test "fold: Object.keys on object literal folds to array" {
   assert_true(out.contains("\"b\""))
   assert_false(out.contains("Object.keys"))
 }
+
+test "fold: !(a === b) folds to a !== b" {
+  let out = fold_one("const x = !(a === b);\n")
+  assert_true(out.contains("!=="))
+  assert_false(out.contains("==="))
+  assert_false(out.contains("!("))
+}
+
+test "fold: !(a < b) folds to a >= b" {
+  let out = fold_one("const x = !(a < b);\n")
+  assert_true(out.contains(">="))
+  assert_false(out.contains("<"))
+}

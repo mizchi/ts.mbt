@@ -376,6 +376,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Not, BoolLit(b)) => BoolLit(not(b))
         (Not, _) if is_js_truthy(inner_f) => BoolLit(false)
         (Not, _) if is_js_falsy(inner_f) => BoolLit(true)
+        // `!(a === b)` → `a !== b` etc. (saves 2 bytes vs `!(...)`).
+        (Not, BinOp(inner_op, a, b)) =>
+          match negate_comparison_op(inner_op) {
+            Some(negated) => BinOp(negated, a, b)
+            None => UnaryOp(op, inner_f)
+          }
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
         (Plus, IntLit(_)) | (Plus, NumberLit(_)) => inner_f
         // `void PURE_EXPR` → `void 0` — the argument is evaluated for
@@ -1372,5 +1378,20 @@ fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
     FuncExpr(_) | ArrowFunc(_, _, _, _) => false
     ArrayLit(_) | ObjectLit(_) => false
     _ => true
+  }
+}
+
+///|
+/// Map a comparison operator to its logical negation.
+/// `!(a op b)` → `a negate_op b` (saves 2 bytes).
+fn negate_comparison_op(op : @ast.TsBinOp) -> @ast.TsBinOp? {
+  match op {
+    BinEq => Some(BinNe)
+    BinNe => Some(BinEq)
+    BinLt => Some(BinGe)
+    BinLe => Some(BinGt)
+    BinGt => Some(BinLe)
+    BinGe => Some(BinLt)
+    _ => None
   }
 }
