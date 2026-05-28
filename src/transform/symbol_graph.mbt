@@ -730,11 +730,21 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
       } else {
         sg_visit_block_in_new_scope(w, b, Block)
       }
-    NativeClassStmt(_, ctor) =>
+    NativeClassStmt(decl, ctor) => {
       match ctor {
         Some(f) => sg_visit_function_body(w, f)
         None => ()
       }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => sg_visit_block_in_new_scope(w, b, Function)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        sg_visit_expr(w, sf.1)
+      }
+    }
     Label(_, inner) => sg_visit_stmt(w, inner)
   }
 }
