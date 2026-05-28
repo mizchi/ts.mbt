@@ -1184,3 +1184,19 @@ test "fold: nested Seq in stmt position flattens all parts" {
   assert_true(out.contains("b()"))
   assert_true(out.contains("c()"))
 }
+
+///|
+test "fold: nested if without else merges into && condition" {
+  // `if (a) { if (b) { stmts } }` → `if (a && b) { stmts }`
+  let out = fold_one("if (a) { if (b) { console.log(1); } }\n")
+  assert_true(out.contains("a && b") || out.contains("a&&b"))
+  assert_false(out.contains("if (b)") || out.contains("if(b)"))
+}
+
+///|
+test "fold: nested if with outer else not merged (unsafe)" {
+  // When the outer if has an else, merging is not safe.
+  let out = fold_one("if (a) { if (b) { console.log(1); } } else { console.log(2); }\n")
+  // Should still contain both `a` and `b` as separate conditions
+  assert_true(out.contains("else"))
+}

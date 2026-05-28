@@ -312,6 +312,23 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         } else {
           (cond_f, then_f, else_pruned)
         }
+        // `if (a) { if (b) { stmts } }` → `if (a && b) { stmts }`
+        // saves `if(` + `)` + wrapping braces = ~4 bytes.
+        // Only applies when the outer `if` has no else, the then-branch
+        // has exactly one statement, and that statement is an else-less `if`.
+        let (cond_emit, then_emit, else_emit) = match else_emit {
+          None =>
+            if then_emit.stmts.length() == 1 {
+              match then_emit.stmts[0] {
+                If(inner_c, inner_t, None) =>
+                  (fold_expr(BinOp(@ast.TsBinOp::And, cond_emit, inner_c)), inner_t, None)
+                _ => (cond_emit, then_emit, else_emit)
+              }
+            } else {
+              (cond_emit, then_emit, else_emit)
+            }
+          _ => (cond_emit, then_emit, else_emit)
+        }
         out.push(If(cond_emit, then_emit, else_emit))
       }
     }
