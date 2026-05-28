@@ -1387,7 +1387,12 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       } else {
         e.write(minify_number(n))
       }
-    IntLit(n) => e.write(n.to_string())
+    IntLit(n) =>
+      if e.pretty {
+        e.write(n.to_string())
+      } else {
+        e.write(minify_number(n.to_double()))
+      }
     BigIntLit(s) => {
       e.write(s)
       e.write("n")
