@@ -1629,7 +1629,6 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       }
     }
     NewExpr(callee, args) => {
-      e.write("new ")
       // `new X(args)` requires `X` to be a `MemberExpression`. A
       // call expression / new expression / arrow doesn't match,
       // so wrap it in parens — otherwise `new (a())(b)` would
@@ -1642,10 +1641,15 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         _ => false
       }
       if needs_paren {
+        // `new(callee)` — `(` doesn't start an ident char, so the
+        // space after `new` can be dropped in minify mode.
+        e.word("new")
+        e.sep_after_word('(')
         e.write("(")
         emit_expr(e, callee, 0)
         e.write(")")
       } else {
+        e.write("new ")
         emit_expr(e, callee, 18)
       }
       emit_args(e, args)

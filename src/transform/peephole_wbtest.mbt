@@ -262,3 +262,17 @@ test "minify emit: for-of with ident binding keeps space after `let`" {
   let out = minify_one("for (const x of arr) { use(x); }\n")
   assert_true(out.contains("let x"))
 }
+
+///|
+test "peephole: trailing break in last switch case is dropped" {
+  let out = peep_one(
+    "switch (x) { case \"a\": doA(); break; case \"b\": doB(); break; }\n",
+  )
+  // The trailing `break` in the last case (`"b"`) should be removed.
+  // The first case's `break` must be retained.
+  assert_true(out.contains("doA()"))
+  assert_true(out.contains("doB()"))
+  // Last break is gone but first break stays to prevent fallthrough.
+  let break_count = out.split("break").length() - 1
+  assert_true(break_count == 1)
+}

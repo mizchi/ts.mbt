@@ -152,6 +152,32 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           body: peep_block(c.body, ctx),
         })
       }
+      // Drop a trailing `break;` (no label) from the last case body —
+      // after the switch it has nowhere to break to, so it's dead code.
+      // Saves 6 bytes (`break;` + preceding newline/space) per switch.
+      let n_cases = new_cases.length()
+      if n_cases > 0 {
+        let last = new_cases[n_cases - 1]
+        let last_stmts = last.body.stmts
+        let m = last_stmts.length()
+        if m > 0 {
+          match last_stmts[m - 1] {
+            Break(None) => {
+              let trimmed : Array[@ast.TsStmt] = []
+              for i, s in last_stmts {
+                if i < m - 1 {
+                  trimmed.push(s)
+                }
+              }
+              new_cases[n_cases - 1] = {
+                ..last,
+                body: { stmts: trimmed, stmt_positions: [] },
+              }
+            }
+            _ => ()
+          }
+        }
+      }
       Switch(peep_expr(e, ctx), new_cases)
     }
     Try(b, bnd, cb, fb) =>
