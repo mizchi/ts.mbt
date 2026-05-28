@@ -62,7 +62,52 @@ fn single_return_expr(block : @ast.TsBlock) -> @ast.TsExpr? {
 /// Strip a trailing `return;` from an already-folded function body.
 /// A bare `return` at the end of a function is the implicit fall-through
 /// — it adds bytes without changing behavior, so we drop it.
+/// Also merges `if (c) return e1; return e2;` tail into
+/// `return c ? e1 : e2;`.
 fn fold_func_body(block : @ast.TsBlock) -> @ast.TsBlock {
+  let n = block.stmts.length()
+  if n == 0 {
+    return block
+  }
+  // `if (c) return e1; return e2;` → `return c ? e1 : e2;`
+  // Requires: last two stmts are `if (cond) { return expr1; }` (no else)
+  // and `return expr2`.
+  let merged = if n >= 2 {
+    match (block.stmts[n - 2], block.stmts[n - 1]) {
+      (
+        If(cond, then_b, None),
+        Return(Some(e2)),
+      ) =>
+        match single_return_expr(then_b) {
+          Some(e1) => {
+            let prefix : Array[@ast.TsStmt] = []
+            for i, s in block.stmts {
+              if i < n - 2 {
+                prefix.push(s)
+              }
+            }
+            prefix.push(Return(Some(Cond(cond, e1, e2))))
+            let pos : Array[Int] = []
+            if block.stmt_positions.length() == n {
+              for i in 0..<(n - 2) {
+                pos.push(block.stmt_positions[i])
+              }
+              pos.push(block.stmt_positions[n - 1])
+            }
+            Some({ stmts: prefix, stmt_positions: pos })
+          }
+          None => None
+        }
+      _ => None
+    }
+  } else {
+    None
+  }
+  let block = match merged {
+    Some(b) => b
+    None => block
+  }
+  // Strip trailing `return;`
   let n = block.stmts.length()
   if n == 0 {
     return block

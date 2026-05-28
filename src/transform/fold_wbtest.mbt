@@ -303,3 +303,11 @@ test "fold: unary + on numeric literal is identity" {
   let out = fold_one("const a = +5;\n")
   assert_true(out.contains("const a = 5;"))
 }
+
+test "fold: if(c) return e1; return e2 merges to return c ? e1 : e2" {
+  let out = fold_one(
+    "function f(x) {\n  if (x > 0) return 1;\n  return -1;\n}\n",
+  )
+  assert_true(out.contains("return"))
+  assert_true(out.contains("?"))
+}
