@@ -264,6 +264,23 @@ fn collect_props_on_external_stmt(
         None => ()
       }
     }
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) =>
+          collect_props_on_external_block(f.body, externals, out, numeric_names)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            collect_props_on_external_block(b, externals, out, numeric_names)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_props_on_external_expr(sf.1, externals, out, numeric_names)
+      }
+    }
     Label(_, inner) =>
       collect_props_on_external_stmt(inner, externals, out, numeric_names)
     Block(b) =>
@@ -539,6 +556,21 @@ fn collect_reflection_sinks_stmt(
       match fb {
         Some(blk) => collect_reflection_sinks_block(blk, out)
         None => ()
+      }
+    }
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_reflection_sinks_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_reflection_sinks_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_reflection_sinks_expr(sf.1, out)
       }
     }
     Label(_, inner) => collect_reflection_sinks_stmt(inner, out)
