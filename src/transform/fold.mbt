@@ -2116,6 +2116,10 @@ fn fold_binop(
     (Shl, IntLit(a), IntLit(b)) => IntLit(a.lsl(b))
     (Shr, IntLit(a), IntLit(b)) => IntLit(a.asr(b))
     (UShr, IntLit(a), IntLit(b)) => IntLit(a.lsr(b))
+    // `x & 0` → `0` (annihilator). Safe to fold only when the other operand
+    // is pure — we can't drop a call with side effects.
+    (BitAnd, _, IntLit(0)) if is_pure_value(l) => IntLit(0)
+    (BitAnd, IntLit(0), _) if is_pure_value(r) => IntLit(0)
     _ => BinOp(op, l, r)
   }
 }
