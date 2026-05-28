@@ -689,13 +689,25 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       }
     }
     While(cond, body) => {
-      e.write("while")
-      e.space()
-      e.write("(")
-      emit_expr(e, cond, 0)
-      e.write(")")
-      e.space()
-      emit_branch_body(e, body)
+      // `while(true){…}` → `for(;;){…}` in minify mode (saves 5 bytes).
+      let is_truthy_cond = match cond {
+        BoolLit(true) => true
+        IntLit(n) => n != 0
+        _ => false
+      }
+      if not(e.pretty) && is_truthy_cond {
+        e.write("for(;;)")
+        e.space()
+        emit_branch_body(e, body)
+      } else {
+        e.write("while")
+        e.space()
+        e.write("(")
+        emit_expr(e, cond, 0)
+        e.write(")")
+        e.space()
+        emit_branch_body(e, body)
+      }
     }
     DoWhile(cond, body) => {
       // `do` is a keyword token; the next token must either be

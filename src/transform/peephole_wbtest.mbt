@@ -155,3 +155,10 @@ test "minify emit: rest-param arrow keeps parens" {
   let out = minify_one("const f = (...args) => args;\n")
   assert_true(out.contains("(...args)=>"))
 }
+
+///|
+test "minify emit: while(true) → for(;;)" {
+  let out = minify_one("while (true) { doWork(); }\n")
+  assert_true(out.contains("for(;;)"))
+  assert_false(out.contains("while"))
+}
