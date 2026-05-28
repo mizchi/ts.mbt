@@ -509,6 +509,16 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           (_, Var(tn), Var(en)) if tn == en =>
             // Both branches are the same var — result is always that var.
             if is_pure_value(cf) { Var(tn) } else { Seq(cf, Var(tn)) }
+          // `c ? true : false` → `!!c` (saves 3+ bytes after peephole
+          // turns true/false into !0/!1, making the ternary `c?!0:!1`).
+          (_, BoolLit(true), BoolLit(false)) =>
+            UnaryOp(
+              @ast.TsUnaryOp::Not,
+              UnaryOp(@ast.TsUnaryOp::Not, cf),
+            )
+          // `c ? false : true` → `!c`.
+          (_, BoolLit(false), BoolLit(true)) =>
+            UnaryOp(@ast.TsUnaryOp::Not, cf)
           _ => Cond(cf, tf, ef)
         }
       }

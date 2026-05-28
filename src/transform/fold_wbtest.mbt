@@ -817,3 +817,20 @@ test "fold: IIFE with non-pure arg is NOT inlined" {
   let out = fold_one("const r = ((x) => x + 1)(foo());\n")
   assert_true(out.contains("=>"))
 }
+
+///|
+test "fold: c ? true : false → !!c" {
+  let out = fold_one("const r = x > 0 ? true : false;\n")
+  assert_false(out.contains("true"))
+  assert_false(out.contains("false"))
+  // Should contain double negation
+  assert_true(out.contains("!!") || out.contains("!!("))
+}
+
+///|
+test "fold: c ? false : true → !c" {
+  let out = fold_one("const r = x > 0 ? false : true;\n")
+  assert_false(out.contains("true"))
+  assert_false(out.contains("false"))
+  assert_false(out.contains("?"))
+}
