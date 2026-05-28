@@ -219,3 +219,16 @@ test "fold: comma-expression with side-effecting left is preserved" {
   let out = fold_one("const x = (f(), z);\n")
   assert_true(out.contains("f()"))
 }
+
+///|
+test "fold: trailing bare return in function body is stripped" {
+  let out = fold_one("const f = function() { console.log(1); return; };\n")
+  assert_false(out.contains("return"))
+  assert_true(out.contains("console.log"))
+}
+
+///|
+test "fold: return with value in function body is preserved" {
+  let out = fold_one("const f = function() { return 42; };\n")
+  assert_true(out.contains("return 42"))
+}

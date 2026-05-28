@@ -15,6 +15,7 @@
 //   typeof 5 -> "number"  (typeof any known literal)
 //   typeof "" -> "string" / typeof true -> "boolean" / etc.
 //   (pure, x) -> x            (comma-expression with pure left operand)
+//   function bodies: trailing `return;` dropped (implicit fall-through)
 //   true && y  -> y
 //   false && y -> false  (y is pure)
 //   true || y  -> true   (y is pure)
@@ -39,6 +40,35 @@
 // object / array literals. Anything that could fire a side effect
 // (calls, assignments, new, await, yield) blocks the fold so we
 // don't accidentally elide observable behavior.
+
+///|
+/// Strip a trailing `return;` from an already-folded function body.
+/// A bare `return` at the end of a function is the implicit fall-through
+/// — it adds bytes without changing behavior, so we drop it.
+fn fold_func_body(block : @ast.TsBlock) -> @ast.TsBlock {
+  let n = block.stmts.length()
+  if n == 0 {
+    return block
+  }
+  match block.stmts[n - 1] {
+    Return(None) => {
+      let trimmed : Array[@ast.TsStmt] = []
+      for i, s in block.stmts {
+        if i < n - 1 {
+          trimmed.push(s)
+        }
+      }
+      let pos : Array[Int] = []
+      if block.stmt_positions.length() == n {
+        for i in 0..<(n - 1) {
+          pos.push(block.stmt_positions[i])
+        }
+      }
+      { stmts: trimmed, stmt_positions: pos }
+    }
+    _ => block
+  }
+}
 
 ///|
 /// Fold every statement in `block`, recurse into nested blocks. The
@@ -313,12 +343,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(fold_expr(e))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(fold_block(b))
+        ArrowBlock(b) =>
+          @ast.TsArrowBody::ArrowBlock(fold_func_body(fold_block(b)))
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
-      let folded : @ast.TsFunc = { ..f, body: fold_block(f.body) }
+      let folded : @ast.TsFunc = { ..f, body: fold_func_body(fold_block(f.body)) }
       FuncExpr(folded)
     }
     DynamicImport(spec, opts) => {
