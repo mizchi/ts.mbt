@@ -90,7 +90,12 @@ fn try_lift_iife_value(
   }
   // Accept both `(function() { … })()` (no extends) and
   // `(function(_Super) { … })(Base)` (single-arg extends pattern).
-  let (body, super_param, super_arg) : (@ast.TsBlock, String?, @ast.TsExpr?) = match e {
+  // Also handle `/* @__PURE__ */ (function() { … })()` (PureCall wrapper).
+  let inner_e = match e {
+    PureCall(inner) => inner
+    _ => e
+  }
+  let (body, super_param, super_arg) : (@ast.TsBlock, String?, @ast.TsExpr?) = match inner_e {
     CallExpr(@ast.TsExpr::FuncExpr(f), args) =>
       if args.length() == 0 && f.params.length() == 0 {
         (f.body, None, None)
