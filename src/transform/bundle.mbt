@@ -961,7 +961,8 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
   match decl.namespace_binding {
     Some(name) => {
       if wrote_something {
-        e.write(", ")
+        e.write(",")
+        e.space()
       }
       e.write("* as ")
       e.write(name)
@@ -971,12 +972,15 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
   }
   if decl.named_bindings.length() > 0 {
     if wrote_something {
-      e.write(", ")
+      e.write(",")
+      e.space()
     }
-    e.write("{ ")
+    e.write("{")
+    e.space()
     for i, b in decl.named_bindings {
       if i > 0 {
-        e.write(", ")
+        e.write(",")
+        e.space()
       }
       // Per-specifier type-only modifier — preserved on the way out
       // for tools that consume the bundle through `tsc --noEmit`.
@@ -991,7 +995,8 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
         e.write(b.1)
       }
     }
-    e.write(" }")
+    e.space()
+    e.write("}")
     wrote_something = true
   }
   if !wrote_something && !decl.side_effect_only {
