@@ -447,6 +447,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             Some(negated) => BinOp(negated, a, b)
             None => UnaryOp(op, inner_f)
           }
+        // `!!(comparison)` → `comparison` — comparisons already return
+        // booleans; double negation is identity for boolean values.
+        // The pattern here is `Not(Not(comparison_binop))`.
+        (Not, UnaryOp(@ast.TsUnaryOp::Not, BinOp(inner_op, a, b)))
+          if is_comparison_op(inner_op) =>
+          BinOp(inner_op, a, b)
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
         (Plus, IntLit(_)) | (Plus, NumberLit(_)) => inner_f
         // `-(-x)` → `x` when x is pure (double negation cancels).
@@ -2138,5 +2144,17 @@ fn negate_comparison_op(op : @ast.TsBinOp) -> @ast.TsBinOp? {
     BinGt => Some(BinLe)
     BinGe => Some(BinLt)
     _ => None
+  }
+}
+
+///|
+/// Returns true for operators that always produce a boolean result.
+/// Used to simplify `!!(comparison)` → `comparison`.
+fn is_comparison_op(op : @ast.TsBinOp) -> Bool {
+  match op {
+    BinEq | BinNe | BinLt | BinLe | BinGt | BinGe => true
+    AbstractEq | AbstractNe => true
+    Instanceof | In => true
+    _ => false
   }
 }

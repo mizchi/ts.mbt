@@ -711,3 +711,19 @@ test "fold: Object.fromEntries([[\"a\",1],[\"b\",2]]) → {a:1,b:2}" {
   assert_true(out.contains("a"))
   assert_true(out.contains("b"))
 }
+
+///|
+test "fold: !!(a === b) simplifies to a === b" {
+  let out = fold_one("const r = !!(a === b);\n")
+  assert_true(out.contains("a === b"))
+  assert_false(out.contains("!!"))
+  // The double-not should be gone; no leading `!` before `a`
+  assert_false(out.contains("!(a"))
+}
+
+///|
+test "fold: !!(a < b) simplifies to a < b" {
+  let out = fold_one("const r = !!(a < b);\n")
+  assert_true(out.contains("a < b"))
+  assert_false(out.contains("!!"))
+}
