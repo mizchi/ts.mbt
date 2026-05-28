@@ -673,6 +673,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             _ => IndexAccess(recv_f, idx_f)
           }
         }
+        // `obj["method"]` → `obj.method` when key is a valid ident.
+        // Saves 2 bytes per access (drop quotes, `[`, `]`; add `.`).
+        (_, StringLit(k)) if is_valid_js_ident(k) => PropAccess(recv_f, k)
         _ => IndexAccess(recv_f, idx_f)
       }
     }

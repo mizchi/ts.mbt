@@ -391,6 +391,13 @@ test "fold: !(a < b) folds to a >= b" {
 }
 
 ///|
+test "fold: obj[\"key\"] → obj.key when key is a valid identifier" {
+  let out = fold_one("const v = obj[\"method\"];\n")
+  assert_true(out.contains("obj.method"))
+  assert_false(out.contains("[\"method\"]"))
+}
+
+///|
 test "fold: array .concat folds two literal arrays" {
   let out = fold_one("const c = [1, 2].concat([3, 4]);\n")
   assert_true(out.contains("[1, 2, 3, 4]"))
