@@ -161,12 +161,25 @@ fn try_lift_iife_value(
     (Some(f), Some(sp)) => Some({ ..f, body: rewrite_super_calls(f.body, sp) })
     _ => ctor_func
   }
+  // Promote `ClassName.key = val` Extra stmts to static_field_inits so
+  // downstream passes (fold, treeshake, inline) see them as part of the
+  // class rather than stand-alone statements. Any Extra stmt that
+  // doesn't match that shape stays as a post-class side-effect.
+  let static_field_inits : Array[(String, @ast.TsExpr)] = []
+  let side_effect_stmts : Array[@ast.TsStmt] = []
+  for s in extra_stmts {
+    match s {
+      @ast.TsStmt::PropAssign(@ast.TsExpr::Var(n), key, val) if n == name =>
+        static_field_inits.push((key, val))
+      _ => side_effect_stmts.push(s)
+    }
+  }
   let decl : @ast.TsClassDecl = {
     name,
     type_params: [],
     base_names,
     base_expr,
-    static_field_inits: [],
+    static_field_inits,
     constructor_params: None,
     properties: [],
     methods: all_methods,
@@ -181,8 +194,8 @@ fn try_lift_iife_value(
     out.push(s)
   }
   out.push(NativeClassStmt(decl, ctor_func))
-  // Append the extra side-effect statements after the class.
-  for s in extra_stmts {
+  // Append remaining side-effect statements after the class.
+  for s in side_effect_stmts {
     out.push(s)
   }
   true
