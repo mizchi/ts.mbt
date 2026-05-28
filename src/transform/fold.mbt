@@ -462,7 +462,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       // `Math.method(literal)` → constant result.
       match fold_math_call(recv_f, m, new_args) {
         Some(result) => result
-        None => MethodCall(recv_f, m, new_args)
+        None =>
+          // String method folding on string literals.
+          match fold_string_method(recv_f, m, new_args) {
+            Some(result) => result
+            None => MethodCall(recv_f, m, new_args)
+          }
       }
     }
     PropAccess(recv, p) => {
@@ -761,6 +766,116 @@ fn fold_math_call(
       } else {
         None
       }
+    _ => None
+  }
+}
+
+///|
+/// Fold String-literal method calls with constant arguments.
+fn fold_string_method(
+  recv : @ast.TsExpr,
+  method : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsExpr? {
+  let s = match recv {
+    StringLit(s) => s
+    _ => return None
+  }
+  match method {
+    "toUpperCase" | "toLowerCase" if args.length() == 0 =>
+      Some(
+        StringLit(
+          if method == "toUpperCase" {
+            s.to_upper()
+          } else {
+            s.to_lower()
+          },
+        ),
+      )
+    "trim" | "trimStart" | "trimEnd" if args.length() == 0 => {
+      // Use simple whitespace trimming.
+      let trimmed = match method {
+        "trimStart" => s.trim_start()
+        "trimEnd" => s.trim_end()
+        _ => s.trim()
+      }
+      Some(StringLit(trimmed))
+    }
+    "includes" | "startsWith" | "endsWith" if args.length() == 1 =>
+      match args[0] {
+        StringLit(pat) =>
+          Some(
+            BoolLit(
+              match method {
+                "includes" => s.contains(pat)
+                "startsWith" => s.has_prefix(pat)
+                _ => s.has_suffix(pat)
+              },
+            ),
+          )
+        _ => None
+      }
+    "indexOf" if args.length() == 1 =>
+      match args[0] {
+        StringLit(pat) =>
+          match s.find(pat) {
+            Some(idx) => Some(IntLit(idx))
+            None => Some(IntLit(-1))
+          }
+        _ => None
+      }
+    "charAt" if args.length() == 1 =>
+      match args[0] {
+        IntLit(i) =>
+          if i >= 0 && i < s.length() {
+            Some(StringLit(s.substring(start=i, end=i + 1).to_string()))
+          } else {
+            Some(StringLit(""))
+          }
+        _ => None
+      }
+    "repeat" if args.length() == 1 =>
+      match args[0] {
+        IntLit(n) if n >= 0 && n <= 100 => {
+          let mut result = ""
+          let mut i = 0
+          while i < n {
+            result = result + s
+            i = i + 1
+          }
+          Some(StringLit(result))
+        }
+        _ => None
+      }
+    "slice" => {
+      // `"hello".slice(start[, end])` with non-negative integer args only.
+      // Negative indices require runtime string length, which we have, but
+      // to keep the fold simple and correct, only fold non-negative cases.
+      let len = s.length()
+      let clamp = fn(i : Int) -> Int { i.max(0).min(len) }
+      match args.length() {
+        1 =>
+          match args[0] {
+            IntLit(start) if start >= 0 =>
+              Some(StringLit(s.substring(start=clamp(start)).to_string()))
+            _ => None
+          }
+        2 =>
+          match (args[0], args[1]) {
+            (IntLit(start), IntLit(end_)) if start >= 0 && end_ >= 0 => {
+              let s0 = clamp(start)
+              let e0 = clamp(end_)
+              if s0 >= e0 {
+                Some(StringLit(""))
+              } else {
+                Some(StringLit(s.substring(start=s0, end=e0).to_string()))
+              }
+            }
+            _ => None
+          }
+        _ => None
+      }
+    }
     _ => None
   }
 }

@@ -327,3 +327,26 @@ test "fold: prop access on object literal folds to value" {
   let out = fold_one("const x = {foo: 42}.foo;\n")
   assert_true(out.contains("const x = 42;"))
 }
+
+test "fold: string .includes with literal folds to bool" {
+  let out = fold_one("const a = \"hello\".includes(\"ell\"); const b = \"hello\".includes(\"xyz\");\n")
+  assert_true(out.contains("const a = true;"))
+  assert_true(out.contains("const b = false;"))
+}
+
+test "fold: string .startsWith and .endsWith fold to bool" {
+  let out = fold_one("const a = \"hello\".startsWith(\"he\"); const b = \"hello\".endsWith(\"lo\");\n")
+  assert_true(out.contains("const a = true;"))
+  assert_true(out.contains("const b = true;"))
+}
+
+test "fold: string .toUpperCase and .toLowerCase fold to literals" {
+  let out = fold_one("const a = \"hello\".toUpperCase(); const b = \"WORLD\".toLowerCase();\n")
+  assert_true(out.contains("\"HELLO\""))
+  assert_true(out.contains("\"world\""))
+}
+
+test "fold: string .slice with non-negative args folds to literal" {
+  let out = fold_one("const a = \"hello\".slice(1, 3);\n")
+  assert_true(out.contains("\"el\""))
+}
