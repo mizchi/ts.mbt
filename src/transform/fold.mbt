@@ -59,6 +59,20 @@ fn single_return_expr(block : @ast.TsBlock) -> @ast.TsExpr? {
 }
 
 ///|
+/// If `block` is exactly `{ EXPR; }` (one expression statement),
+/// return `Some(EXPR)`. Otherwise `None`.
+fn single_expr_stmt(block : @ast.TsBlock) -> @ast.TsExpr? {
+  if block.stmts.length() == 1 {
+    match block.stmts[0] {
+      Expr(e) => Some(e)
+      _ => None
+    }
+  } else {
+    None
+  }
+}
+
+///|
 /// Strip a trailing `return;` from an already-folded function body.
 /// A bare `return` at the end of a function is the implicit fall-through
 /// — it adds bytes without changing behavior, so we drop it.
@@ -210,6 +224,34 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         let else_f = match else_b {
           Some(b) => Some(fold_block(b))
           None => None
+        }
+        // `if (cond) { e1; } else { e2; }` → `cond ? e1 : e2;`
+        // Saves `if(` + `)` + `{` + `}else{` + `}` = 9 chars, adds `?` + `:` = 2 chars.
+        match (single_expr_stmt(then_f), else_f) {
+          (Some(e1), Some(el)) =>
+            match single_expr_stmt(el) {
+              Some(e2) => {
+                out.push(Expr(Cond(cond_f, e1, e2)))
+                return
+              }
+              None => ()
+            }
+          _ => ()
+        }
+        // `if (cond) { expr; }` (no else) → `cond && expr;`
+        // Saves `if(` + `)` = 4, adds `&&` = 2 → net -2 bytes per site.
+        // `if (!cond) { expr; }` → `cond || expr;`
+        match (single_expr_stmt(then_f), else_f) {
+          (Some(e), None) => {
+            let short = match cond_f {
+              UnaryOp(@ast.TsUnaryOp::Not, inner) =>
+                BinOp(@ast.TsBinOp::Or, inner, e)
+              _ => BinOp(@ast.TsBinOp::And, cond_f, e)
+            }
+            out.push(Expr(short))
+            return
+          }
+          _ => ()
         }
         // `if (cond) {} else { stmts }` → `if (!cond) { stmts }`
         // saves the empty-block bytes and avoids a spurious `else`.

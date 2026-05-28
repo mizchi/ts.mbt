@@ -389,3 +389,26 @@ test "fold: !(a < b) folds to a >= b" {
   assert_true(out.contains(">="))
   assert_false(out.contains("<"))
 }
+
+///|
+test "fold: if(c){e1;}else{e2;} → c?e1:e2 expr stmt" {
+  let out = fold_one("if (x > 0) { log(x); } else { log(-x); }\n")
+  assert_true(out.contains("?"))
+  assert_false(out.contains("if"))
+  assert_false(out.contains("else"))
+}
+
+///|
+test "fold: if(c){expr;} (no else) → c&&expr" {
+  let out = fold_one("if (ok) { doSomething(); }\n")
+  assert_true(out.contains("&&"))
+  assert_false(out.contains("if"))
+}
+
+///|
+test "fold: if(!c){expr;} (no else) → c||expr" {
+  let out = fold_one("if (!done) { process(); }\n")
+  assert_true(out.contains("||"))
+  assert_false(out.contains("if"))
+  assert_false(out.contains("!done"))
+}
