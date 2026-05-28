@@ -611,7 +611,16 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         }
         new_methods.push({ ..m, body: new_body })
       }
-      out.push(NativeClassStmt({ ..decl, methods: new_methods }, new_ctor))
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, fold_expr(sf.1)))
+      }
+      out.push(
+        NativeClassStmt(
+          { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+          new_ctor,
+        ),
+      )
     }
   }
 }
