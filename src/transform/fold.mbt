@@ -649,7 +649,7 @@ fn fold_binop(
         BinOp(op, l, r)
       }
     (Sub, _, IntLit(0)) | (Sub, _, NumberLit(0.0)) => l
-    // x * 1, 1 * x
+    // x * 1, 1 * x, x / 1
     (Mul, _, IntLit(1)) | (Mul, _, NumberLit(1.0)) => l
     (Mul, IntLit(1), _) | (Mul, NumberLit(1.0), _) =>
       if is_pure_value(l) {
@@ -657,6 +657,7 @@ fn fold_binop(
       } else {
         BinOp(op, l, r)
       }
+    (Div, _, IntLit(1)) | (Div, _, NumberLit(1.0)) => l
     // x * 0, 0 * x — only safe to fold when the other side is pure.
     (Mul, _, IntLit(0)) | (Mul, _, NumberLit(0.0)) =>
       if is_pure_value(l) {
