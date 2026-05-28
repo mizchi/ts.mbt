@@ -398,7 +398,15 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         None => MethodCall(recv_f, m, new_args)
       }
     }
-    PropAccess(recv, p) => PropAccess(fold_expr(recv), p)
+    PropAccess(recv, p) => {
+      let recv_f = fold_expr(recv)
+      // `"str".length` / `[…].length` → integer literal
+      match (recv_f, p) {
+        (StringLit(s), "length") => IntLit(s.length())
+        (ArrayLit(items), "length") => IntLit(items.length())
+        _ => PropAccess(recv_f, p)
+      }
+    }
     IndexAccess(recv, idx) => IndexAccess(fold_expr(recv), fold_expr(idx))
     ArrayLit(items) => {
       let new_items : Array[@ast.TsExpr] = []
