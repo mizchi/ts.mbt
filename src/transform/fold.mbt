@@ -848,6 +848,42 @@ fn fold_math_call(
           _ => ()
         }
       }
+      // `Object.assign({}, src1, src2, ...)` → merged object literal
+      // when the first argument is `{}` and every source is a pure
+      // object literal. Later sources shadow earlier ones (last-write wins).
+      if method == "assign" && args.length() >= 1 {
+        match args[0] {
+          ObjectLit([]) => {
+            let merged : Array[(String, @ast.TsExpr)] = []
+            let mut all_obj_lit = true
+            for i in 1..<args.length() {
+              match args[i] {
+                ObjectLit(src_entries) => {
+                  for ent in src_entries {
+                    // Remove earlier entry for the same key (last-write wins).
+                    let mut found = false
+                    for j in 0..<merged.length() {
+                      if merged[j].0 == ent.0 {
+                        merged[j] = ent
+                        found = true
+                        break
+                      }
+                    }
+                    if not(found) {
+                      merged.push(ent)
+                    }
+                  }
+                }
+                _ => { all_obj_lit = false; break }
+              }
+            }
+            if all_obj_lit {
+              return Some(ObjectLit(merged))
+            }
+          }
+          _ => ()
+        }
+      }
       return None
     }
     Var("Array") => {

@@ -527,3 +527,19 @@ test "fold: if(!c){expr;} (no else) → c||expr" {
   assert_false(out.contains("if"))
   assert_false(out.contains("!done"))
 }
+
+///|
+test "fold: Object.assign({}, src1, src2) merges to object literal" {
+  let out = fold_one("const o = Object.assign({}, {a: 1}, {b: 2});\n")
+  assert_true(out.contains("a: 1"))
+  assert_true(out.contains("b: 2"))
+  assert_false(out.contains("Object.assign"))
+}
+
+///|
+test "fold: Object.assign({}, {a:1}, {a:2}) last-write wins" {
+  let out = fold_one("const o = Object.assign({}, {a: 1}, {a: 2});\n")
+  assert_true(out.contains("a: 2"))
+  assert_false(out.contains("a: 1"))
+  assert_false(out.contains("Object.assign"))
+}
