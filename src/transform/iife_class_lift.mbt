@@ -296,6 +296,7 @@ fn classify_iife_body_stmt(
       } else if n == class_name {
         Extra(stmt)
       } else {
+        // Assignment to some other variable — ordering may matter.
         Unknown
       }
     // Prototype-chain setup for `extends` — skip all of these forms:
@@ -314,11 +315,19 @@ fn classify_iife_body_stmt(
       if (fn_name.has_prefix("_inherit") || fn_name == "__extends") &&
          args.length() >= 1 {
         match args[0] {
-          @ast.TsExpr::Var(n) => if n == class_name { Skipped } else { Unknown }
+          @ast.TsExpr::Var(n) =>
+            if n == class_name {
+              Skipped
+            } else {
+              // Inheritance setup for another class — ordering may matter.
+              Unknown
+            }
           _ => Unknown
         }
       } else {
-        Unknown
+        // Any other bare-function call is a side-effect expression.
+        // Fall through to the generic `Extra` path below.
+        Extra(stmt)
       }
     // `Object.setPrototypeOf(ClassName.prototype, _Super.prototype)`
     Expr(
@@ -330,7 +339,9 @@ fn classify_iife_body_stmt(
     ) =>
       match super_param {
         Some(_) => Skipped
-        None => Unknown
+        // Not in an extends context but still a side-effect expr —
+        // emit after the class rather than aborting the lift.
+        None => Extra(stmt)
       }
     // `Object.defineProperty(ClassName.prototype, "prop", { get: fn, set: fn, … })`
     // TypeScript emits this for class getters/setters. Convert to native class
@@ -362,10 +373,13 @@ fn classify_iife_body_stmt(
         if all_ok && accessors.length() > 0 {
           Methods(accessors)
         } else {
-          Unknown
+          // Descriptor has unrecognised keys — keep as a side-effect
+          // expression appended after the class rather than aborting.
+          Extra(stmt)
         }
       } else {
-        Unknown
+        // defineProperty on a different object — keep as Extra.
+        Extra(stmt)
       }
     // Any other top-level expression statement (e.g. `allMethods.forEach(…)`)
     // is a side-effect call. These are safe to move AFTER the class
