@@ -1461,3 +1461,45 @@ test "type-fold: null check on non-nullable primitive folds to false" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "link: wildcard re-export `export * from` resolves named import through barrel (#32)" {
+  // a.ts → barrel.ts (export * from "./a") → entry.ts (import { foo } from "./barrel")
+  // Without wildcard enumeration the linker treats barrel's export surface
+  // as empty and leaves `foo` as a free reference.
+  let files = vfs([
+    ("a.ts", "export const foo = 1;\nexport const bar = 2;\n"),
+    ("barrel.ts", "export * from \"./a\";\n"),
+    ("entry.ts", "import { foo } from \"./barrel\";\nconsole.log(foo);\n"),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_mangle(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The constant `1` must survive into the bundle — either as the
+      // inlined literal or as the initialiser of the renamed binding.
+      assert_true(out.js.contains("1"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: `export * as ns from` synthesizes namespace object for named import (#33)" {
+  // core.ts re-exports util as a namespace; consumer imports it by name.
+  // Without the synthesis path `util.check(...)` is a free-variable call.
+  let files = vfs([
+    ("util.ts", "export function check(x: unknown): boolean { return x !== null; }\n"),
+    ("core.ts", "export * as util from \"./util\";\n"),
+    (
+      "entry.ts",
+      "import { util } from \"./core\";\nconsole.log(util.check(42));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `check` must appear in the bundle — either inlined or via the
+      // synthesized namespace object.
+      assert_true(out.js.contains("check"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
