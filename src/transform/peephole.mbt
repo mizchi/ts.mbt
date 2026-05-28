@@ -285,7 +285,14 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         }
         new_methods.push({ ..m, body: new_body })
       }
-      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, peep_expr(sf.1, ctx)))
+      }
+      NativeClassStmt(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
     }
   }
 }
