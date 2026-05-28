@@ -998,3 +998,36 @@ test "fold: if(c){x=e1}else{x=e2} lifts to x=c?e1:e2" {
   // Should not produce two separate assignment expressions inside a ternary.
   assert_false(out.contains("x = 1") && out.contains("x = 2"))
 }
+
+///|
+test "fold: x ** 0 folds to 1 for pure x" {
+  let out = fold_one("const y = x ** 0;\n")
+  assert_true(out.contains("const y = 1;"))
+  assert_false(out.contains("**"))
+}
+
+///|
+test "fold: \"key\" in {key:1} folds to true" {
+  let out = fold_one("const r = \"key\" in {key: 1, other: 2};\n")
+  assert_true(out.contains("const r = true;"))
+  assert_false(out.contains(" in "))
+}
+
+///|
+test "fold: \"missing\" in {key:1} folds to false" {
+  let out = fold_one("const r = \"missing\" in {key: 1};\n")
+  assert_true(out.contains("const r = false;"))
+}
+
+///|
+test "fold: null instanceof X folds to false" {
+  let out = fold_one("const r = null instanceof Array;\n")
+  assert_true(out.contains("const r = false;"))
+  assert_false(out.contains("instanceof"))
+}
+
+///|
+test "fold: 42 instanceof X folds to false" {
+  let out = fold_one("const r = 42 instanceof Array;\n")
+  assert_true(out.contains("const r = false;"))
+}

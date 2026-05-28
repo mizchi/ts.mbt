@@ -408,14 +408,51 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       }
     }
     AssignPattern(b, v) => AssignPattern(b, peep_expr(v, ctx))
-    PropAssignExpr(recv, p, v) =>
-      PropAssignExpr(peep_expr(recv, ctx), p, peep_expr(v, ctx))
-    IndexAssignExpr(recv, idx, v) =>
-      IndexAssignExpr(
-        peep_expr(recv, ctx),
-        peep_expr(idx, ctx),
-        peep_expr(v, ctx),
-      )
+    PropAssignExpr(recv, p, v) => {
+      let recv_p = peep_expr(recv, ctx)
+      let v_p = peep_expr(v, ctx)
+      // `x.prop = x.prop OP y` → `x.prop OP= y` (and `x.prop = x.prop + 1` → `x.prop++`).
+      // Only fold when receiver is a bare Var (no double evaluation).
+      match (recv_p, v_p) {
+        (Var(tn), BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rp), rhs))
+          if tn == rn && p == rp =>
+          match (compound_for_binop(op), rhs) {
+            (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
+              UnaryOp(@ast.TsUnaryOp::PostInc, PropAccess(Var(tn), p))
+            (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
+              UnaryOp(@ast.TsUnaryOp::PostDec, PropAccess(Var(tn), p))
+            (Some(cop), _) =>
+              CompoundAssignExpr(PropAccess(Var(tn), p), cop, rhs)
+            _ => PropAssignExpr(Var(tn), p, BinOp(op, PropAccess(Var(rn), rp), rhs))
+          }
+        (t, v) => PropAssignExpr(t, p, v)
+      }
+    }
+    IndexAssignExpr(recv, idx, v) => {
+      let recv_p = peep_expr(recv, ctx)
+      let idx_p = peep_expr(idx, ctx)
+      let v_p = peep_expr(v, ctx)
+      // `x[i] = x[i] OP y` → `x[i] OP= y` (and `x[i] = x[i] + 1` → `x[i]++`).
+      // Only fold when both target and index are bare Vars (no double evaluation).
+      match (recv_p, idx_p, v_p) {
+        (
+          Var(tn),
+          Var(ik),
+          BinOp(op, @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)), rhs),
+        ) if tn == rn && ik == rk =>
+          match (compound_for_binop(op), rhs) {
+            (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
+              UnaryOp(@ast.TsUnaryOp::PostInc, IndexAccess(Var(tn), Var(ik)))
+            (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
+              UnaryOp(@ast.TsUnaryOp::PostDec, IndexAccess(Var(tn), Var(ik)))
+            (Some(cop), _) =>
+              CompoundAssignExpr(IndexAccess(Var(tn), Var(ik)), cop, rhs)
+            _ =>
+              IndexAssignExpr(Var(tn), Var(ik), BinOp(op, IndexAccess(Var(rn), Var(rk)), rhs))
+          }
+        (t, i, v) => IndexAssignExpr(t, i, v)
+      }
+    }
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(peep_expr(e, ctx))

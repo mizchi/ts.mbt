@@ -2258,6 +2258,44 @@ fn fold_binop(
     // `x | -1` → `-1` (OR with all-bits-set is annihilator).
     (BitOr, _, IntLit(-1)) if is_pure_value(l) => IntLit(-1)
     (BitOr, IntLit(-1), _) if is_pure_value(r) => IntLit(-1)
+    // `x ** 0` → `1` for any pure x (JS spec: every value including NaN
+    // and Infinity raised to the 0 power equals 1).
+    (Pow, _, IntLit(0)) | (Pow, _, NumberLit(0.0)) =>
+      if is_pure_value(l) { IntLit(1) } else { BinOp(op, l, r) }
+    // `"key" in {key: v, ...}` → true/false when all values are pure.
+    // Safe because object literals never have __proto__ side effects.
+    (In, StringLit(k), ObjectLit(entries)) => {
+      let mut all_pure = true
+      for ent in entries {
+        if not(is_pure_value(ent.1)) {
+          all_pure = false
+          break
+        }
+      }
+      if all_pure {
+        let mut found = false
+        for ent in entries {
+          if ent.0 == k {
+            found = true
+            break
+          }
+        }
+        BoolLit(found)
+      } else {
+        BinOp(op, l, r)
+      }
+    }
+    // Primitive values are never `instanceof` any constructor.
+    // `null instanceof X`, `42 instanceof X`, `"s" instanceof X` → `false`.
+    // Only safe when the rhs is pure (no side effects from evaluating X).
+    (Instanceof, NullLit, _)
+    | (Instanceof, IntLit(_), _)
+    | (Instanceof, NumberLit(_), _)
+    | (Instanceof, StringLit(_), _)
+    | (Instanceof, BoolLit(_), _)
+    | (Instanceof, UnaryOp(@ast.TsUnaryOp::Void, _), _)
+    | (Instanceof, Var("undefined"), _) =>
+      if is_pure_value(r) { BoolLit(false) } else { BinOp(op, l, r) }
     _ => BinOp(op, l, r)
   }
 }
