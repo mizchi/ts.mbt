@@ -626,3 +626,17 @@ test "fold: Seq(side_effect, pure) in statement position drops pure rhs" {
   assert_false(out.contains("42"))
   assert_false(out.contains(","))
 }
+
+///|
+test "fold: cross-type strict equality bool/int folds to false" {
+  let out = fold_one("const r = true === 1;\n")
+  assert_true(out.contains("false"))
+  assert_false(out.contains("==="))
+}
+
+///|
+test "fold: cross-type strict equality bool/string folds to false" {
+  let out = fold_one("const r = true === \"true\";\n")
+  assert_true(out.contains("false"))
+  assert_false(out.contains("==="))
+}
