@@ -232,3 +232,16 @@ test "fold: return with value in function body is preserved" {
   let out = fold_one("const f = function() { return 42; };\n")
   assert_true(out.contains("return 42"))
 }
+
+///|
+test "fold: pure expression statement is dropped" {
+  let out = fold_one("1 + 2;\nconsole.log(3);\n")
+  assert_false(out.contains("1 + 2"))
+  assert_true(out.contains("console.log"))
+}
+
+///|
+test "fold: impure expression statement is preserved" {
+  let out = fold_one("f();\n")
+  assert_true(out.contains("f()"))
+}

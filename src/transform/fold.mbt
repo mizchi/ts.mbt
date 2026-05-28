@@ -16,6 +16,7 @@
 //   typeof "" -> "string" / typeof true -> "boolean" / etc.
 //   (pure, x) -> x            (comma-expression with pure left operand)
 //   function bodies: trailing `return;` dropped (implicit fall-through)
+//   `expr;` statements that are pure are dropped entirely
 //   true && y  -> y
 //   false && y -> false  (y is pure)
 //   true || y  -> true   (y is pure)
@@ -140,7 +141,14 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       out.push(IndexAssign(fold_expr(target), fold_expr(idx), fold_expr(val)))
     PropAssign(target, prop, val) =>
       out.push(PropAssign(fold_expr(target), prop, fold_expr(val)))
-    Expr(e) => out.push(Expr(fold_expr(e)))
+    Expr(e) => {
+      let ef = fold_expr(e)
+      // A pure expression used as a statement has no observable effect;
+      // drop it so subsequent passes don't need to prove it safe.
+      if not(is_pure_value(ef)) {
+        out.push(Expr(ef))
+      }
+    }
     Return(Some(e)) => out.push(Return(Some(fold_expr(e))))
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => out.push(stmt)
     Throw(e) => out.push(Throw(fold_expr(e)))
