@@ -42,44 +42,51 @@ pub fn iife_class_lift_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let new_positions : Array[Int] = []
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   for i, s in block.stmts {
-    let lifted = try_lift_iife_class(s)
-    new_stmts.push(lifted)
-    if has_positions {
-      new_positions.push(block.stmt_positions[i])
+    let lifted : Array[@ast.TsStmt] = []
+    try_lift_iife_class_into(s, lifted)
+    for ls in lifted {
+      new_stmts.push(ls)
+      if has_positions {
+        new_positions.push(block.stmt_positions[i])
+      }
     }
   }
   { stmts: new_stmts, stmt_positions: new_positions }
 }
 
 ///|
-fn try_lift_iife_class(stmt : @ast.TsStmt) -> @ast.TsStmt {
+fn try_lift_iife_class_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
   // Match the outer shape: `Var|Let|Const(Ident(name), _,
   // CallExpr(FuncExpr(f), []))`.
   match stmt {
     Var(b, t, e) =>
-      match try_lift_iife_value(b, e) {
-        Some(s) => s
-        None => Var(b, t, e)
+      if not(try_lift_iife_value(b, e, out)) {
+        out.push(Var(b, t, e))
       }
     Let(b, t, e) =>
-      match try_lift_iife_value(b, e) {
-        Some(s) => s
-        None => Let(b, t, e)
+      if not(try_lift_iife_value(b, e, out)) {
+        out.push(Let(b, t, e))
       }
     Const(b, t, e) =>
-      match try_lift_iife_value(b, e) {
-        Some(s) => s
-        None => Const(b, t, e)
+      if not(try_lift_iife_value(b, e, out)) {
+        out.push(Const(b, t, e))
       }
-    _ => stmt
+    _ => out.push(stmt)
   }
 }
 
 ///|
-fn try_lift_iife_value(b : @ast.TsBinding, e : @ast.TsExpr) -> @ast.TsStmt? {
+// Returns `true` when the lift succeeded (output pushed into `out`),
+// `false` when the shape didn't match and the original statement
+// should be kept verbatim.
+fn try_lift_iife_value(
+  b : @ast.TsBinding,
+  e : @ast.TsExpr,
+  out : Array[@ast.TsStmt],
+) -> Bool {
   let name = match b {
     @ast.TsBinding::Ident(n) => n
-    _ => return None
+    _ => return false
   }
   // Accept both `(function() { … })()` (no extends) and
   // `(function(_Super) { … })(Base)` (single-arg extends pattern).
@@ -90,36 +97,39 @@ fn try_lift_iife_value(b : @ast.TsBinding, e : @ast.TsExpr) -> @ast.TsStmt? {
       } else if args.length() == 1 && f.params.length() == 1 {
         (f.body, Some(f.params[0].name), Some(args[0]))
       } else {
-        return None
+        return false
       }
-    _ => return None
+    _ => return false
   }
   // Walk the IIFE body, classifying each statement.
   let mut ctor_func : @ast.TsFunc? = None
   let methods : Array[@ast.TsClassMethodDecl] = []
   let static_methods : Array[@ast.TsClassMethodDecl] = []
+  // Extra statements to emit AFTER the class declaration.
+  let extra_stmts : Array[@ast.TsStmt] = []
   let mut saw_return = false
   for s in body.stmts {
     if saw_return {
       // Anything after the `return ClassName;` would be dead, but
       // the presence of dead code itself is suspicious. Abort.
-      return None
+      return false
     }
     match classify_iife_body_stmt(s, name, super_param) {
       Skipped => ()
       Ctor(f) =>
         match ctor_func {
-          Some(_) => return None // Two constructors? Bail.
+          Some(_) => return false // Two constructors? Bail.
           None => ctor_func = Some(f)
         }
       Method(decl) => methods.push(decl)
       StaticMethod(decl) => static_methods.push(decl)
       ReturnsClassName => saw_return = true
-      Unknown => return None
+      Extra(extra) => extra_stmts.push(extra)
+      Unknown => return false
     }
   }
   if not(saw_return) {
-    return None
+    return false
   }
   // Merge instance + static methods (preserves order: instance
   // first, then static — emit doesn't care about order).
@@ -155,7 +165,12 @@ fn try_lift_iife_value(b : @ast.TsBinding, e : @ast.TsExpr) -> @ast.TsStmt? {
     index_signatures: [],
     decorators: [],
   }
-  Some(NativeClassStmt(decl, ctor_func))
+  out.push(NativeClassStmt(decl, ctor_func))
+  // Append the extra side-effect statements after the class.
+  for s in extra_stmts {
+    out.push(s)
+  }
+  true
 }
 
 ///|
@@ -165,6 +180,12 @@ priv enum IifeBodyClassification {
   Method(@ast.TsClassMethodDecl)
   StaticMethod(@ast.TsClassMethodDecl)
   ReturnsClassName
+  // A statement that isn't a class shape but is safe to move after
+  // the class declaration. This allows `allMethods.forEach(…)` style
+  // dynamic-method-registration calls to live in the IIFE body
+  // without aborting the lift — they're appended as regular
+  // statements following the `class` declaration.
+  Extra(@ast.TsStmt)
   Unknown
 }
 
@@ -273,6 +294,12 @@ fn classify_iife_body_stmt(
         Some(_) => Skipped
         None => Unknown
       }
+    // Any other top-level expression statement (e.g. `allMethods.forEach(…)`)
+    // is a side-effect call. These are safe to move AFTER the class
+    // declaration — they can still reference the class by name (the name
+    // is in scope) and don't alter the class shape. Classify as `Extra`
+    // so the lift can succeed while keeping the call.
+    Expr(e) => Extra(Expr(e))
     // `return ClassName;` — the IIFE's value.
     Return(Some(@ast.TsExpr::Var(n))) =>
       if n == class_name {

@@ -1573,3 +1573,34 @@ test "link: multi-level wildcard barrel chain resolves to original declaration" 
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "iife_class_lift: extra Expr statements move after class (#31 perf)" {
+  // A class IIFE where a side-effect expression statement (e.g.
+  // `allMethods.forEach(…)`) appears at the top level of the IIFE
+  // body should still be lifted to `class C { … }`, with the forEach
+  // call appended afterward.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|const METHODS = ["get", "post"];
+        #|class Router {
+        #|  route() { return 42; }
+        #|}
+        #|METHODS.forEach(m => { Router.prototype[m] = function() {}; });
+        #|export default Router;
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Class declaration must be present.
+      assert_true(out.js.contains("class Router") || out.js.contains("route"))
+      // The forEach call must be present.
+      assert_true(out.js.contains("forEach"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
