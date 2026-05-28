@@ -249,9 +249,11 @@ fn classify_iife_body_stmt(
     )
     | PropAssign(@ast.TsExpr::Var(n), "__proto__", _) =>
       if n == class_name { Skipped } else { Unknown }
-    // `_inheritsLoose(ClassName, _Super)` / `_inherits(ClassName, _Super)`
+    // `_inheritsLoose(ClassName, _Super)` / `_inherits(ClassName, _Super)` /
+    // `__extends(ClassName, _Super)` (TypeScript emitted helper)
     Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::Var(fn_name), args)) =>
-      if fn_name.has_prefix("_inherit") && args.length() >= 1 {
+      if (fn_name.has_prefix("_inherit") || fn_name == "__extends") &&
+         args.length() >= 1 {
         match args[0] {
           @ast.TsExpr::Var(n) => if n == class_name { Skipped } else { Unknown }
           _ => Unknown
@@ -382,7 +384,39 @@ fn rewrite_super_expr(expr : @ast.TsExpr, sp : String) -> @ast.TsExpr {
       } else {
         expr
       }
-    // `_Super.apply(this, args)` → leave as-is (can't statically expand)
+    // `_Super.apply(this, arguments)` → `super(...arguments)`
+    // TypeScript emits this pattern for the default constructor in
+    // derived classes: `_super.apply(this, arguments)`.
+    MethodCall(@ast.TsExpr::Var(recv), "apply", args) =>
+      if recv == sp &&
+         args.length() >= 1 &&
+         (match args[0] {
+           @ast.TsExpr::Var("this") => true
+           _ => false
+         }) {
+        let super_args : Array[@ast.TsExpr] = []
+        for i, a in args {
+          if i > 0 {
+            super_args.push(Spread(a))
+          }
+        }
+        Call("super", super_args)
+      } else {
+        expr
+      }
+    // `_Super !== null && _Super.apply(this, arguments) || this`
+    // TypeScript 4+ default-constructor pattern. Map to `super(...arguments)`.
+    BinOp(
+      @ast.TsBinOp::Or,
+      @ast.TsExpr::BinOp(@ast.TsBinOp::And, _, inner_apply),
+      @ast.TsExpr::Var("this")
+    ) => {
+      let rewritten = rewrite_super_expr(inner_apply, sp)
+      match rewritten {
+        Call("super", _) => rewritten
+        _ => expr
+      }
+    }
     _ => expr
   }
 }
