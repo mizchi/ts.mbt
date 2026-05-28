@@ -878,3 +878,29 @@ test "fold: for-of over empty array literal is dropped" {
   assert_false(out.contains("for"))
   assert_false(out.contains("use"))
 }
+
+///|
+test "fold: x ^ x → 0 (same-var XOR)" {
+  let out = fold_one("const r = n ^ n;\n")
+  assert_true(out.contains("0"))
+  assert_false(out.contains("^"))
+}
+
+///|
+test "fold: x - x → 0 (same-var subtraction)" {
+  let out = fold_one("const r = n - n;\n")
+  assert_true(out.contains("0"))
+  assert_false(out.contains("- n"))
+}
+
+///|
+test "fold: x | x → x (bitwise-OR idempotency)" {
+  let out = fold_one("const r = n | n;\n")
+  assert_false(out.contains("|"))
+}
+
+///|
+test "fold: x & x → x (bitwise-AND idempotency)" {
+  let out = fold_one("const r = n & n;\n")
+  assert_false(out.contains("&"))
+}

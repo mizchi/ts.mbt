@@ -1983,6 +1983,14 @@ fn fold_binop(
     // `x && x` → `x` and `x || x` → `x` for same-var operands.
     // Both operators always evaluate to `x` regardless of its value.
     (And, Var(ln), Var(rn)) | (Or, Var(ln), Var(rn)) if ln == rn => Var(ln)
+    // Bitwise idempotency: `x | x → x`, `x & x → x`, `x ^ x → 0`.
+    // String equality on Var names is sufficient since we only match
+    // bare `Var` nodes (no side-effecting sub-expressions).
+    (BitOr, Var(ln), Var(rn)) | (BitAnd, Var(ln), Var(rn)) if ln == rn =>
+      Var(ln)
+    (BitXor, Var(ln), Var(rn)) if ln == rn => IntLit(0)
+    // `x - x → 0` when x is a bare variable (pure, no double evaluation).
+    (Sub, Var(ln), Var(rn)) if ln == rn => IntLit(0)
     // Null coalescing: `null ?? x` and `undefined ?? x` → `x`.
     // A non-nullish left operand (any literal that isn't null/undefined)
     // short-circuits to that literal.
