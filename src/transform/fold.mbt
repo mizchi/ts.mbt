@@ -453,8 +453,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Not, UnaryOp(@ast.TsUnaryOp::Not, BinOp(inner_op, a, b)))
           if is_comparison_op(inner_op) =>
           BinOp(inner_op, a, b)
+        (Neg, IntLit(n)) => IntLit(-n)
+        (Neg, NumberLit(n)) => NumberLit(-n)
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
         (Plus, IntLit(_)) | (Plus, NumberLit(_)) => inner_f
+        // `+true` → 1, `+false` → 0, `+null` → 0 (JS numeric coercion).
+        (Plus, BoolLit(b)) => IntLit(if b { 1 } else { 0 })
+        (Plus, NullLit) => IntLit(0)
         // `-(-x)` → `x` when x is pure (double negation cancels).
         (Neg, UnaryOp(@ast.TsUnaryOp::Neg, inner_inner)) =>
           if is_pure_value(inner_inner) {

@@ -846,3 +846,28 @@ test "fold: string + null coercion" {
   let out = fold_one("const r = \"val=\" + null;\n")
   assert_true(out.contains("\"val=null\""))
 }
+
+///|
+test "fold: -IntLit folds to negated literal" {
+  let out = fold_one("const x = -1;\n")
+  assert_true(out.contains("-1"))
+  // Check arithmetic works: (-1) + 5 = 4
+  let out2 = fold_one("const x = -1 + 5;\n")
+  assert_true(out2.contains("4"))
+}
+
+///|
+test "fold: +BoolLit coerces to integer" {
+  let out_t = fold_one("const x = +true;\n")
+  assert_true(out_t.contains("1"))
+  assert_false(out_t.contains("true"))
+  let out_f = fold_one("const x = +false;\n")
+  assert_true(out_f.contains("0"))
+}
+
+///|
+test "fold: +null coerces to 0" {
+  let out = fold_one("const x = +null;\n")
+  assert_true(out.contains("0"))
+  assert_false(out.contains("null"))
+}
