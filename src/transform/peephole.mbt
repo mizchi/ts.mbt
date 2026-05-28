@@ -80,7 +80,15 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     PropAssign(target, prop, val) =>
       PropAssign(peep_expr(target, ctx), prop, peep_expr(val, ctx))
     Expr(e) => Expr(peep_expr(e, ctx))
-    Return(Some(e)) => Return(Some(peep_expr(e, ctx)))
+    Return(Some(e)) => {
+      let ep = peep_expr(e, ctx)
+      // `return undefined` / `return void 0` → `return` (saves bytes).
+      match ep {
+        Var("undefined") if not(ctx.undefined_shadowed) => Return(None)
+        UnaryOp(@ast.TsUnaryOp::Void, _) => Return(None)
+        _ => Return(Some(ep))
+      }
+    }
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(peep_expr(e, ctx))
     If(c, t, e) =>

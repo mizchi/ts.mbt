@@ -110,6 +110,20 @@ test "peephole: `true` becomes `!0` and `false` becomes `!1`" {
 }
 
 ///|
+test "peephole: return undefined collapses to bare return" {
+  let out = peep_one("function f() { return undefined; }\n")
+  assert_false(out.contains("undefined"))
+  assert_true(out.contains("return"))
+}
+
+///|
+test "peephole: return void 0 collapses to bare return" {
+  let out = peep_one("function f() { return void 0; }\n")
+  assert_false(out.contains("void 0"))
+  assert_true(out.contains("return"))
+}
+
+///|
 test "peephole: x += 1 becomes x++" {
   let out = peep_one("x += 1;\n")
   assert_true(out.contains("x++"))
