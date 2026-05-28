@@ -717,6 +717,25 @@ fn fold_math_call(
           _ => ()
         }
       }
+      // `Array.from([1,2,3])` → `[1,2,3]` (shallow copy of literal is
+      // identical for all purely-literal elements).
+      if method == "from" && args.length() == 1 {
+        match args[0] {
+          ArrayLit(items) => {
+            let mut all_pure = true
+            for item in items {
+              if not(is_pure_value(item)) {
+                all_pure = false
+                break
+              }
+            }
+            if all_pure {
+              return Some(ArrayLit(items))
+            }
+          }
+          _ => ()
+        }
+      }
       return None
     }
     Var("Number") => {
