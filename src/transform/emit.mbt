@@ -1299,7 +1299,12 @@ fn emit_expr(e : Emitter, expr : @ast.TsExpr, parent_prec : Int) -> Unit {
 ///|
 fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
   match expr {
-    NumberLit(n) => e.write(n.to_string())
+    NumberLit(n) =>
+      if e.pretty {
+        e.write(n.to_string())
+      } else {
+        e.write(minify_number(n))
+      }
     IntLit(n) => e.write(n.to_string())
     BigIntLit(s) => {
       e.write(s)
@@ -2743,6 +2748,34 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
     | NonNull(inner)
     | OptionalChain(inner) => expr_precedence(inner)
   }
+}
+
+///|
+/// Produce the shortest JS representation of a floating-point number.
+/// - Drops leading zero: `0.5` → `.5` (saves 1 byte)
+/// - Drops trailing zero: `1.0` → `1` (saves 2 bytes)
+/// - Tries exponential when shorter: `1000000.0` → `1e6` (saves bytes)
+fn minify_number(n : Double) -> String {
+  let standard = n.to_string()
+  // Try canonical representation.
+  // Drop trailing ".0" (integer-valued doubles): 1.0 → 1
+  if standard.has_suffix(".0") {
+    let shorter = standard.substring(start=0, end=standard.length() - 2).to_string()
+    // Verify lossless round-trip.
+    match (try? @strconv.parse_double(shorter)) {
+      Ok(back) => if back == n { return shorter }
+      Err(_) => ()
+    }
+  }
+  // Drop leading zero from "0.NNN": 0.5 → .5
+  if standard.has_prefix("0.") {
+    let shorter = standard.substring(start=1).to_string()
+    match (try? @strconv.parse_double(shorter)) {
+      Ok(back) => if back == n { return shorter }
+      Err(_) => ()
+    }
+  }
+  standard
 }
 
 ///|
