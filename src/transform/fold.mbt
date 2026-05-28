@@ -587,6 +587,30 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), IndexAccess(Var(tn), idx), _)
             if cn == tn && is_nullish_or_void(ef) =>
             OptionalChain(IndexAccess(Var(cn), idx))
+          // `x == null ? void 0 : x` → `x` when x is non-nullish by context.
+          // Actually: `x == null ? void 0 : x` IS equivalent to `x ?? void 0`
+          // which reduces to nothing useful since void 0 is already undefined.
+          // But `x == null ? y : x` where x is the else-branch → `x ?? y`.
+          // This handles the `null != x ? x : y` form from the negated side.
+          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, Var(tn))
+          | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, Var(tn))
+            if cn == tn =>
+            BinOp(@ast.TsBinOp::Coalesce, Var(cn), tf)
+          // `x == null ? void 0 : x.prop` → `x?.prop` (negated condition form).
+          // This is the TSC pattern for `x?.prop` where the ternary
+          // puts the null case first.
+          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, PropAccess(Var(tn), prop))
+          | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, PropAccess(Var(tn), prop))
+            if cn == tn && is_nullish_or_void(tf) =>
+            OptionalChain(PropAccess(Var(cn), prop))
+          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, MethodCall(Var(tn), m, args))
+          | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, MethodCall(Var(tn), m, args))
+            if cn == tn && is_nullish_or_void(tf) =>
+            OptionalChain(MethodCall(Var(cn), m, args))
+          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, IndexAccess(Var(tn), idx))
+          | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, IndexAccess(Var(tn), idx))
+            if cn == tn && is_nullish_or_void(tf) =>
+            OptionalChain(IndexAccess(Var(cn), idx))
           _ => Cond(cf, tf, ef)
         }
       }
