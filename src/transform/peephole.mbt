@@ -128,9 +128,9 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
               )
             _ =>
               IndexAssign(
-                @ast.TsExpr::Var(tn),
-                @ast.TsExpr::Var(ik),
-                BinOp(op, IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)), rhs),
+                Var(tn),
+                Var(ik),
+                BinOp(op, IndexAccess(Var(rn), Var(rk)), rhs),
               )
           }
         (t, i, v) => IndexAssign(t, i, v)
