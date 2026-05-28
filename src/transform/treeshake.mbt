@@ -107,7 +107,12 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
       }
       live.contains(name)
     } else {
-      true
+      // Drop pure-expression statements at the root level — they
+      // have no observable effect even though they aren't decls.
+      match stmt {
+        Expr(e) => not(is_pure_init(e))
+        _ => true
+      }
     }
     if keep {
       kept.push(stmt)
