@@ -529,6 +529,9 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
       true
     }
     PropAccess(recv, _) => is_pure_value(recv)
+    // `/* @__PURE__ */ f(...)` — the user asserted purity, so treat
+    // the call as having no observable side effects.
+    PureCall(_) => true
     _ => false
   }
 }
