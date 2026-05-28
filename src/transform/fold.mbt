@@ -579,6 +579,41 @@ fn fold_math_call(
 ) -> @ast.TsExpr? {
   match recv {
     Var("Math") => ()
+    Var("Array") => {
+      // `Array.isArray(literal)` → bool
+      if method == "isArray" && args.length() == 1 {
+        match args[0] {
+          ArrayLit(_) => return Some(BoolLit(true))
+          IntLit(_)
+          | NumberLit(_)
+          | StringLit(_)
+          | BoolLit(_)
+          | NullLit
+          | ObjectLit(_)
+          | FuncExpr(_)
+          | ArrowFunc(_, _, _, _) => return Some(BoolLit(false))
+          _ => ()
+        }
+      }
+      return None
+    }
+    Var("Number") => {
+      if args.length() == 1 {
+        match (method, args[0]) {
+          ("isFinite", IntLit(_)) | ("isFinite", NumberLit(_)) =>
+            return Some(BoolLit(true))
+          ("isInteger", IntLit(_)) => return Some(BoolLit(true))
+          ("isInteger", NumberLit(n)) => {
+            let as_int = n.to_int()
+            return Some(BoolLit(as_int.to_double() == n))
+          }
+          ("isNaN", IntLit(_)) => return Some(BoolLit(false))
+          ("isNaN", NumberLit(_)) => return Some(BoolLit(false))
+          _ => ()
+        }
+      }
+      return None
+    }
     _ => return None
   }
   fn as_float(e : @ast.TsExpr) -> Double? {
