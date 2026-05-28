@@ -1752,6 +1752,15 @@ fn fold_array_method(
         }
         _ => None
       }
+    // Empty-array vacuous folds — safe regardless of the callback purity.
+    "every" if args.length() == 1 && items.is_empty() => Some(BoolLit(true))
+    "some" if args.length() == 1 && items.is_empty() => Some(BoolLit(false))
+    "find" if items.is_empty() => Some(Var("undefined"))
+    "findIndex" if items.is_empty() => Some(IntLit(-1))
+    "filter" | "map" if items.is_empty() => Some(ArrayLit([]))
+    "reduce" if items.is_empty() && args.length() == 2 =>
+      // `[].reduce(fn, init)` → init when init is pure.
+      if is_pure_value(args[1]) { Some(args[1]) } else { None }
     _ => None
   }
 }

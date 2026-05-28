@@ -769,3 +769,31 @@ test "fold: Math.floor(3.7) → 3" {
   assert_true(out.contains("3"))
   assert_false(out.contains("Math.floor"))
 }
+
+///|
+test "fold: [].every(fn) → true" {
+  let out = fold_one("const r = [].every(x => x > 0);\n")
+  assert_true(out.contains("true"))
+  assert_false(out.contains(".every("))
+}
+
+///|
+test "fold: [].some(fn) → false" {
+  let out = fold_one("const r = [].some(x => x > 0);\n")
+  assert_true(out.contains("false"))
+  assert_false(out.contains(".some("))
+}
+
+///|
+test "fold: [].findIndex(fn) → -1" {
+  let out = fold_one("const r = [].findIndex(x => x > 0);\n")
+  assert_true(out.contains("-1"))
+  assert_false(out.contains(".findIndex("))
+}
+
+///|
+test "fold: [].filter(fn) → []" {
+  let out = fold_one("const r = [].filter(x => x > 0);\n")
+  assert_true(out.contains("[]"))
+  assert_false(out.contains(".filter("))
+}
