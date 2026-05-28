@@ -1031,3 +1031,25 @@ test "fold: 42 instanceof X folds to false" {
   let out = fold_one("const r = 42 instanceof Array;\n")
   assert_true(out.contains("const r = false;"))
 }
+
+///|
+test "fold: abstract equality of same-type literals" {
+  let out1 = fold_one("const r = 1 == 1;\n")
+  assert_true(out1.contains("const r = true;"))
+  let out2 = fold_one("const r = 1 == 2;\n")
+  assert_true(out2.contains("const r = false;"))
+  let out3 = fold_one("const r = \"a\" == \"a\";\n")
+  assert_true(out3.contains("const r = true;"))
+}
+
+///|
+test "fold: null == undefined is true" {
+  let out = fold_one("const r = null == undefined;\n")
+  assert_true(out.contains("const r = true;"))
+}
+
+///|
+test "fold: null == 0 is false" {
+  let out = fold_one("const r = null == 0;\n")
+  assert_true(out.contains("const r = false;"))
+}

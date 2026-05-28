@@ -2219,6 +2219,46 @@ fn fold_binop(
     | (BinNe, NullLit, NumberLit(_))
     | (BinNe, BoolLit(_), NumberLit(_))
     | (BinNe, NumberLit(_), BoolLit(_)) => BoolLit(true)
+    // Abstract-equality comparisons between known-type literals.
+    // JS Abstract Equality: same-type → same as strict; null == undefined.
+    (AbstractEq, IntLit(a), IntLit(b)) => BoolLit(a == b)
+    (AbstractNe, IntLit(a), IntLit(b)) => BoolLit(a != b)
+    (AbstractEq, NumberLit(a), NumberLit(b)) => BoolLit(a == b)
+    (AbstractNe, NumberLit(a), NumberLit(b)) => BoolLit(a != b)
+    (AbstractEq, StringLit(a), StringLit(b)) => BoolLit(a == b)
+    (AbstractNe, StringLit(a), StringLit(b)) => BoolLit(a != b)
+    (AbstractEq, BoolLit(a), BoolLit(b)) => BoolLit(a == b)
+    (AbstractNe, BoolLit(a), BoolLit(b)) => BoolLit(a != b)
+    (AbstractEq, NullLit, NullLit) => BoolLit(true)
+    (AbstractNe, NullLit, NullLit) => BoolLit(false)
+    // `null == undefined` and `undefined == null` → `true`.
+    (AbstractEq, NullLit, Var("undefined"))
+    | (AbstractEq, Var("undefined"), NullLit)
+    | (AbstractEq, NullLit, UnaryOp(@ast.TsUnaryOp::Void, _))
+    | (AbstractEq, UnaryOp(@ast.TsUnaryOp::Void, _), NullLit) =>
+      if is_pure_value(l) && is_pure_value(r) { BoolLit(true) } else { BinOp(op, l, r) }
+    (AbstractNe, NullLit, Var("undefined"))
+    | (AbstractNe, Var("undefined"), NullLit)
+    | (AbstractNe, NullLit, UnaryOp(@ast.TsUnaryOp::Void, _))
+    | (AbstractNe, UnaryOp(@ast.TsUnaryOp::Void, _), NullLit) =>
+      if is_pure_value(l) && is_pure_value(r) { BoolLit(false) } else { BinOp(op, l, r) }
+    // `null == number/string/bool` → `false` (null only == null or undefined).
+    (AbstractEq, NullLit, IntLit(_))
+    | (AbstractEq, NullLit, NumberLit(_))
+    | (AbstractEq, NullLit, StringLit(_))
+    | (AbstractEq, NullLit, BoolLit(_))
+    | (AbstractEq, IntLit(_), NullLit)
+    | (AbstractEq, NumberLit(_), NullLit)
+    | (AbstractEq, StringLit(_), NullLit)
+    | (AbstractEq, BoolLit(_), NullLit) => BoolLit(false)
+    (AbstractNe, NullLit, IntLit(_))
+    | (AbstractNe, NullLit, NumberLit(_))
+    | (AbstractNe, NullLit, StringLit(_))
+    | (AbstractNe, NullLit, BoolLit(_))
+    | (AbstractNe, IntLit(_), NullLit)
+    | (AbstractNe, NumberLit(_), NullLit)
+    | (AbstractNe, StringLit(_), NullLit)
+    | (AbstractNe, BoolLit(_), NullLit) => BoolLit(true)
     // `x === null || x === undefined` → `x == null`
     // Also handles `x === void 0` as the `undefined` form.
     // Only fold when both sides reference the same simple variable.
