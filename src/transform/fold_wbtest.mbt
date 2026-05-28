@@ -887,6 +887,22 @@ test "fold: for-of over empty array literal is dropped" {
 }
 
 ///|
+test "fold: void 0 ?? x folds to x (nullish LHS)" {
+  let out = fold_one("const r = (void 0) ?? fallback;\n")
+  assert_true(out.contains("fallback"))
+  assert_false(out.contains("void"))
+  assert_false(out.contains("??"))
+}
+
+///|
+test "fold: undefined ?? x folds to x (nullish LHS)" {
+  let out = fold_one("const r = undefined ?? fallback;\n")
+  assert_true(out.contains("fallback"))
+  assert_false(out.contains("undefined"))
+  assert_false(out.contains("??"))
+}
+
+///|
 test "fold: x ^ x → 0 (same-var XOR)" {
   let out = fold_one("const r = n ^ n;\n")
   assert_true(out.contains("0"))

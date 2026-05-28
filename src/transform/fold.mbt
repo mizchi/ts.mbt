@@ -2015,7 +2015,10 @@ fn fold_binop(
     // Null coalescing: `null ?? x` and `undefined ?? x` → `x`.
     // A non-nullish left operand (any literal that isn't null/undefined)
     // short-circuits to that literal.
-    (Coalesce, NullLit, _) =>
+    // `null ?? x`, `undefined ?? x`, `void expr ?? x` → `x` (nullish LHS).
+    (Coalesce, NullLit, _)
+    | (Coalesce, Var("undefined"), _)
+    | (Coalesce, UnaryOp(@ast.TsUnaryOp::Void, _), _) =>
       if is_pure_value(l) {
         r
       } else {
