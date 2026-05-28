@@ -1082,11 +1082,14 @@ fn emit_entry_exports(
     None => ()
   }
   if named.length() > 0 {
-    e.write("export ")
-    e.write("{ ")
+    e.write("export")
+    e.space()
+    e.write("{")
+    e.space()
     for i, pair in named {
       if i > 0 {
-        e.write(", ")
+        e.write(",")
+        e.space()
       }
       if pair.0 == pair.1 {
         e.write(pair.0)
@@ -1096,7 +1099,8 @@ fn emit_entry_exports(
         e.write(pair.1)
       }
     }
-    e.write(" }")
+    e.space()
+    e.write("}")
     e.semi()
     e.nl()
   }
