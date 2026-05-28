@@ -126,7 +126,21 @@ fn collect_read_property_names_stmt(
     }
     Label(_, inner) => collect_read_property_names_stmt(inner, out)
     Block(b) => collect_read_property_names_block(b, out)
-    NativeClassStmt(_, _) => ()
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_read_property_names_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_read_property_names_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_read_property_names_expr(sf.1, out)
+      }
+    }
     _ => ()
   }
 }
@@ -453,7 +467,14 @@ fn drop_dead_props_stmt(
         }
         new_methods.push({ ..m, body: new_body })
       }
-      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, drop_dead_props_expr(sf.1, reserved, read_props)))
+      }
+      NativeClassStmt(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
     }
   }
 }

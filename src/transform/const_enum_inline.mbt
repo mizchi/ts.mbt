@@ -254,7 +254,14 @@ fn inline_const_enums_stmt(
         }
         new_methods.push({ ..m, body: new_body })
       }
-      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, inline_const_enums_expr(sf.1, table)))
+      }
+      NativeClassStmt(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
     }
   }
 }
