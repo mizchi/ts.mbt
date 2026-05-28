@@ -44,13 +44,29 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     Assign(name, rhs) => {
       // `x = x op y` -> `x op= y` when the lhs of the inner binop
       // matches the assignment target and `op` has a compound form.
+      // Also folds `x = x + 1` → `x++` and `x = x - 1` → `x--`
+      // in one step without needing two peephole passes.
       let rhs_p = peep_expr(rhs, ctx)
       match rhs_p {
         BinOp(op, @ast.TsExpr::Var(other), value) =>
           if other == name {
-            match compound_for_binop(op) {
-              Some(cop) => return CompoundAssign(name, cop, value)
-              None => ()
+            match (compound_for_binop(op), value) {
+              (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
+                return Expr(
+                  @ast.TsExpr::UnaryOp(
+                    @ast.TsUnaryOp::PostInc,
+                    @ast.TsExpr::Var(name),
+                  ),
+                )
+              (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
+                return Expr(
+                  @ast.TsExpr::UnaryOp(
+                    @ast.TsUnaryOp::PostDec,
+                    @ast.TsExpr::Var(name),
+                  ),
+                )
+              (Some(cop), _) => return CompoundAssign(name, cop, value)
+              (None, _) => ()
             }
           }
         _ => ()

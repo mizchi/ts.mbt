@@ -131,6 +131,22 @@ test "peephole: x += 1 becomes x++" {
 }
 
 ///|
+test "peephole: x = x + 1 folds to x++ in one pass" {
+  let out = peep_one("x = x + 1;\n")
+  assert_true(out.contains("x++"))
+  assert_false(out.contains("x = x + 1"))
+  assert_false(out.contains("+="))
+}
+
+///|
+test "peephole: x = x - 1 folds to x-- in one pass" {
+  let out = peep_one("x = x - 1;\n")
+  assert_true(out.contains("x--"))
+  assert_false(out.contains("x = x - 1"))
+  assert_false(out.contains("-="))
+}
+
+///|
 test "peephole: x -= 1 becomes x--" {
   let out = peep_one("x -= 1;\n")
   assert_true(out.contains("x--"))
