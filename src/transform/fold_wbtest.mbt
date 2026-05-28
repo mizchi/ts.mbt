@@ -927,3 +927,23 @@ test "fold: x & x → x (bitwise-AND idempotency)" {
   let out = fold_one("const r = n & n;\n")
   assert_false(out.contains("&"))
 }
+
+///|
+test "fold: x & -1 → x (AND with all-bits identity)" {
+  let out = fold_one("const r = n & -1;\n")
+  assert_false(out.contains("&"))
+  assert_false(out.contains("-1"))
+}
+
+///|
+test "fold: x | -1 → -1 (OR with all-bits annihilator, pure)" {
+  let out = fold_one("const r = n | -1;\n")
+  assert_false(out.contains("|"))
+  assert_true(out.contains("-1"))
+}
+
+///|
+test "fold: ~~x → x (double bitwise-NOT identity, pure)" {
+  let out = fold_one("const r = ~~n;\n")
+  assert_false(out.contains("~"))
+}

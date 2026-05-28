@@ -462,6 +462,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Neg, IntLit(n)) => IntLit(-n)
         (Neg, NumberLit(n)) => NumberLit(-n)
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
+        // `~~x` → `x` when x is a pure integer literal (double bitwise-not = identity).
+        (BitwiseNot, UnaryOp(@ast.TsUnaryOp::BitwiseNot, inner_inner)) =>
+          if is_pure_value(inner_inner) {
+            inner_inner
+          } else {
+            UnaryOp(op, inner_f)
+          }
         (Plus, IntLit(_)) | (Plus, NumberLit(_)) => inner_f
         // `+true` → 1, `+false` → 0, `+null` → 0 (JS numeric coercion).
         (Plus, BoolLit(b)) => IntLit(if b { 1 } else { 0 })
@@ -2163,6 +2170,12 @@ fn fold_binop(
     // is pure — we can't drop a call with side effects.
     (BitAnd, _, IntLit(0)) if is_pure_value(l) => IntLit(0)
     (BitAnd, IntLit(0), _) if is_pure_value(r) => IntLit(0)
+    // `x & -1` → `x` (AND with all-bits-set is identity, since -1 = 0xFFFFFFFF in 32-bit).
+    (BitAnd, _, IntLit(-1)) => l
+    (BitAnd, IntLit(-1), _) if is_pure_value(l) => r
+    // `x | -1` → `-1` (OR with all-bits-set is annihilator).
+    (BitOr, _, IntLit(-1)) if is_pure_value(l) => IntLit(-1)
+    (BitOr, IntLit(-1), _) if is_pure_value(r) => IntLit(-1)
     _ => BinOp(op, l, r)
   }
 }
