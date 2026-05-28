@@ -391,6 +391,20 @@ test "fold: !(a < b) folds to a >= b" {
 }
 
 ///|
+test "fold: array .concat folds two literal arrays" {
+  let out = fold_one("const c = [1, 2].concat([3, 4]);\n")
+  assert_true(out.contains("[1, 2, 3, 4]"))
+  assert_false(out.contains("concat"))
+}
+
+///|
+test "fold: array .flat folds one-level nested literal array" {
+  let out = fold_one("const f = [1, [2, 3], 4].flat();\n")
+  assert_true(out.contains("[1, 2, 3, 4]"))
+  assert_false(out.contains("flat"))
+}
+
+///|
 test "fold: new Object() → {}" {
   let out = fold_one("const o = new Object();\n")
   assert_true(out.contains("= {};"))

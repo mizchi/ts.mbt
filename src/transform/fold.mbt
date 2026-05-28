@@ -1201,6 +1201,70 @@ fn fold_array_method(
       }
       Some(ArrayLit(rev))
     }
+    "concat" => {
+      // `[a,b].concat([c,d])` → `[a,b,c,d]` when all items are pure.
+      let mut all_pure = true
+      for item in items {
+        if not(is_pure_value(item)) {
+          all_pure = false
+          break
+        }
+      }
+      if not(all_pure) {
+        return None
+      }
+      let result : Array[@ast.TsExpr] = []
+      for item in items {
+        result.push(item)
+      }
+      for arg in args {
+        match arg {
+          ArrayLit(extra) => {
+            let mut arg_pure = true
+            for item in extra {
+              if not(is_pure_value(item)) {
+                arg_pure = false
+                break
+              }
+            }
+            if not(arg_pure) {
+              return None
+            }
+            for item in extra {
+              result.push(item)
+            }
+          }
+          _ =>
+            // Non-array arg: JS pushes the arg itself, but we'd need
+            // to handle that case carefully — just bail out.
+            return None
+        }
+      }
+      Some(ArrayLit(result))
+    }
+    "flat" if args.length() == 0 => {
+      // `[a, [b, c], d].flat()` → `[a, b, c, d]` for one level of nesting.
+      let result : Array[@ast.TsExpr] = []
+      for item in items {
+        match item {
+          ArrayLit(inner) => {
+            for inner_item in inner {
+              if not(is_pure_value(inner_item)) {
+                return None
+              }
+              result.push(inner_item)
+            }
+          }
+          _ =>
+            if is_pure_value(item) {
+              result.push(item)
+            } else {
+              return None
+            }
+        }
+      }
+      Some(ArrayLit(result))
+    }
     _ => None
   }
 }
