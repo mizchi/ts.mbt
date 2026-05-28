@@ -738,6 +738,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Var("Math"), "SQRT2") => NumberLit(1.4142135623730951)
         (Var("Number"), "MAX_SAFE_INTEGER") => NumberLit(9007199254740991.0)
         (Var("Number"), "MIN_SAFE_INTEGER") => NumberLit(-9007199254740991.0)
+        (Var("Number"), "MAX_VALUE") => NumberLit(1.7976931348623157e308)
+        (Var("Number"), "MIN_VALUE") => NumberLit(5.0e-324)
+        (Var("Number"), "POSITIVE_INFINITY") => NumberLit(1.0 / 0.0)
+        (Var("Number"), "NEGATIVE_INFINITY") => NumberLit(-1.0 / 0.0)
+        (Var("Number"), "EPSILON") => NumberLit(2.220446049250313e-16)
+        (Var("Number"), "NaN") => NumberLit(0.0 / 0.0)
         // `{a:1, b:2}.a` → `1` only when ALL other values are pure
         // (to avoid dropping side effects from other property initializers).
         (ObjectLit(entries), key) => {
