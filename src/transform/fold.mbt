@@ -778,6 +778,11 @@ fn fold_binop(
     (Mul, NumberLit(a), IntLit(b)) => NumberLit(a * b.to_double())
     // String concatenation of two string literals.
     (Add, StringLit(a), StringLit(b)) => StringLit(a + b)
+    // JS string coercion: `"str" + integer` / `integer + "str"` → string.
+    // Only fold integer (not float) coercions to avoid MoonBit's
+    // double-to-string representation differing from JS's.
+    (Add, StringLit(a), IntLit(b)) => StringLit(a + b.to_string())
+    (Add, IntLit(a), StringLit(b)) => StringLit(a.to_string() + b)
     // Strict-equality comparisons between homogeneous literals.
     (BinEq, IntLit(a), IntLit(b)) => BoolLit(a == b)
     (BinNe, IntLit(a), IntLit(b)) => BoolLit(a != b)
