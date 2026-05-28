@@ -135,16 +135,23 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           None => ()
         }
       } else {
-        out.push(
-          If(
-            cond_f,
-            fold_block(then_b),
-            match else_b {
-              Some(b) => Some(fold_block(b))
-              None => None
-            },
-          ),
-        )
+        let then_f = fold_block(then_b)
+        let else_f = match else_b {
+          Some(b) => Some(fold_block(b))
+          None => None
+        }
+        // `if (cond) {} else { stmts }` → `if (!cond) { stmts }`
+        // saves the empty-block bytes and avoids a spurious `else`.
+        let (cond_emit, then_emit, else_emit) = if then_f.stmts.is_empty() {
+          match else_f {
+            Some(el) if not(el.stmts.is_empty()) =>
+              (UnaryOp(Not, cond_f), el, None)
+            _ => (cond_f, then_f, else_f)
+          }
+        } else {
+          (cond_f, then_f, else_f)
+        }
+        out.push(If(cond_emit, then_emit, else_emit))
       }
     }
     Var(b, t, rhs) => out.push(Var(b, t, fold_expr(rhs)))
