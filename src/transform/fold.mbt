@@ -582,6 +582,21 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
                 }
               _ => Call(name, new_args)
             }
+          // Global `isNaN(literal)` — numeric literals are never NaN.
+          "isNaN" =>
+            match arg {
+              IntLit(_) | NumberLit(_) => BoolLit(false)
+              BoolLit(_) | NullLit => BoolLit(false) // coerces to 0/0
+              _ => Call(name, new_args)
+            }
+          // Global `isFinite(literal)` — integer/number literals are finite.
+          "isFinite" =>
+            match arg {
+              IntLit(_) => BoolLit(true)
+              NumberLit(n) => BoolLit(n != 1.0 / 0.0 && n != -1.0 / 0.0)
+              BoolLit(_) | NullLit => BoolLit(true)
+              _ => Call(name, new_args)
+            }
           _ => Call(name, new_args)
         }
       } else if new_args.length() == 2 {
@@ -592,6 +607,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
               Some(n) => IntLit(n)
               None => Call(name, new_args)
             }
+          _ => Call(name, new_args)
+        }
+      } else if new_args.length() == 0 {
+        // Global `isNaN()` / `isFinite()` with no args: NaN / false.
+        match name {
+          "isNaN" => BoolLit(true) // isNaN() === isNaN(undefined) === true
+          "isFinite" => BoolLit(false)
           _ => Call(name, new_args)
         }
       } else {
