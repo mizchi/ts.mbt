@@ -267,6 +267,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     ForIn(k, b, t, iter, body) =>
       out.push(ForIn(k, b, t, fold_expr(iter), fold_block(body)))
     Switch(e, cases) => {
+      let disc = fold_expr(e)
       let folded_cases : Array[@ast.TsSwitchCase] = []
       for c in cases {
         let t = match c.test_expr {
@@ -275,7 +276,17 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         }
         folded_cases.push({ test_expr: t, body: fold_block(c.body) })
       }
-      out.push(Switch(fold_expr(e), folded_cases))
+      // When the discriminant is a literal, try to find the matching case.
+      // If found and the case body ends with `break` (no fallthrough), splice
+      // the body statements in directly and drop the switch.
+      let matched = try_fold_switch(disc, folded_cases)
+      match matched {
+        Some(stmts) =>
+          for s in stmts {
+            out.push(s)
+          }
+        None => out.push(Switch(disc, folded_cases))
+      }
     }
     Try(b, bnd, cb, fb) => {
       let cb_f = match cb {
@@ -712,6 +723,79 @@ fn fold_math_call(
         None
       }
     _ => None
+  }
+}
+
+///|
+/// Try to fold a `switch(literal)` statement to the matching case body.
+/// Returns `Some(stmts)` when:
+///   1. The discriminant is a literal with a known strict-equality value.
+///   2. A case matches that literal (or `default:` if no named case matches).
+///   3. The matching case ends with a `break` statement (no fallthrough to
+///      the next case — fallthrough would require emitting multiple cases).
+/// Returns `None` to keep the switch as-is.
+fn try_fold_switch(
+  disc : @ast.TsExpr,
+  cases : Array[@ast.TsSwitchCase],
+) -> Array[@ast.TsStmt]? {
+  // Only fold when the discriminant is a known-comparable literal.
+  let is_lit = match disc {
+    IntLit(_) | NumberLit(_) | StringLit(_) | BoolLit(_) | NullLit => true
+    _ => false
+  }
+  if not(is_lit) {
+    return None
+  }
+  // Walk cases to find the first one that matches `disc` under ===.
+  let mut matched_idx : Int? = None
+  let mut default_idx : Int? = None
+  for i, c in cases {
+    match c.test_expr {
+      None => default_idx = Some(i)
+      Some(t) =>
+        if
+          match (disc, t) {
+            (IntLit(a), IntLit(b)) => a == b
+            (NumberLit(a), NumberLit(b)) => a == b
+            (IntLit(a), NumberLit(b)) => a.to_double() == b
+            (NumberLit(a), IntLit(b)) => a == b.to_double()
+            (StringLit(a), StringLit(b)) => a == b
+            (BoolLit(a), BoolLit(b)) => a == b
+            (NullLit, NullLit) => true
+            _ => false
+          } {
+          matched_idx = Some(i)
+          break
+        }
+    }
+  }
+  let chosen_idx = match matched_idx {
+    Some(i) => i
+    None =>
+      match default_idx {
+        Some(i) => i
+        None => return Some([]) // switch with no matching case → empty
+      }
+  }
+  let body = cases[chosen_idx].body
+  // Only fold when the last statement is `break` (or empty body).
+  let n = body.stmts.length()
+  if n == 0 {
+    return Some([])
+  }
+  let last = body.stmts[n - 1]
+  match last {
+    Break(None) => {
+      // Return the body without the trailing `break`.
+      let stmts : Array[@ast.TsStmt] = []
+      for i, s in body.stmts {
+        if i < n - 1 {
+          stmts.push(s)
+        }
+      }
+      Some(stmts)
+    }
+    _ => None // Fallthrough or labeled break — don't fold
   }
 }
 
