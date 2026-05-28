@@ -307,7 +307,14 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     Var(b, t, rhs) => out.push(Var(b, t, fold_expr(rhs)))
     Let(b, t, rhs) => out.push(Let(b, t, fold_expr(rhs)))
     Const(b, t, rhs) => out.push(Const(b, t, fold_expr(rhs)))
-    Assign(n, rhs) => out.push(Assign(n, fold_expr(rhs)))
+    Assign(n, rhs) => {
+      let rhs_f = fold_expr(rhs)
+      // `x = x` is a no-op; drop it.
+      match rhs_f {
+        Var(v) if v == n => ()
+        _ => out.push(Assign(n, rhs_f))
+      }
+    }
     CompoundAssign(n, op, rhs) =>
       out.push(CompoundAssign(n, op, fold_expr(rhs)))
     IndexAssign(target, idx, val) =>
@@ -978,7 +985,15 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       // so only the right value matters.
       if is_pure_value(af) { bf } else { Seq(af, bf) }
     }
-    AssignExpr(n, v) => AssignExpr(n, fold_expr(v))
+    AssignExpr(n, v) => {
+      let vf = fold_expr(v)
+      // `x = x` in expression position evaluates to `x` with no other
+      // observable effect (plain variable write, no setter). Simplify.
+      match vf {
+        Var(v2) if v2 == n => Var(n)
+        _ => AssignExpr(n, vf)
+      }
+    }
     CompoundAssignExpr(t, op, v) =>
       CompoundAssignExpr(fold_expr(t), op, fold_expr(v))
     AssignPattern(b, v) => AssignPattern(b, fold_expr(v))

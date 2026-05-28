@@ -1094,3 +1094,16 @@ test "fold: return void 0 normalizes to return" {
   assert_false(out.contains("return"))
   assert_true(out.contains("x()"))
 }
+
+test "fold: x = x self-assignment in stmt is dropped" {
+  let out = fold_one("x = x;\n")
+  // Self-assignment is a no-op; nothing should remain.
+  assert_false(out.contains("x"))
+}
+
+test "fold: x = x in expression position simplifies to x" {
+  // In expression context, `(x = x)` evaluates to `x`.
+  let out = fold_one("const r = (x = x);\n")
+  assert_true(out.contains("const r=x") || out.contains("const r = x"))
+  assert_false(out.contains("x=x") || out.contains("x = x"))
+}
