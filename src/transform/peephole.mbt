@@ -323,9 +323,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       match rhs_p {
         BinOp(op, @ast.TsExpr::Var(other), value) =>
           if other == name {
-            match compound_for_binop(op) {
-              Some(cop) => return CompoundAssignExpr(Var(name), cop, value)
-              None => ()
+            match (compound_for_binop(op), value) {
+              (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
+                return UnaryOp(@ast.TsUnaryOp::PostInc, Var(name))
+              (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
+                return UnaryOp(@ast.TsUnaryOp::PostDec, Var(name))
+              (Some(cop), _) => return CompoundAssignExpr(Var(name), cop, value)
+              _ => ()
             }
           }
         _ => ()
