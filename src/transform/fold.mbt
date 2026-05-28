@@ -69,36 +69,62 @@ fn fold_func_body(block : @ast.TsBlock) -> @ast.TsBlock {
   if n == 0 {
     return block
   }
-  // `if (c) return e1; return e2;` → `return c ? e1 : e2;`
-  // Requires: last two stmts are `if (cond) { return expr1; }` (no else)
-  // and `return expr2`.
-  let merged = if n >= 2 {
-    match (block.stmts[n - 2], block.stmts[n - 1]) {
-      (
-        If(cond, then_b, None),
-        Return(Some(e2)),
-      ) =>
-        match single_return_expr(then_b) {
-          Some(e1) => {
+  // `if (c) { return e1; } else { return e2; }` → `return c ? e1 : e2`
+  // (also handles the else-less form: `if (c) { return e1; } return e2;`)
+  let merged = if n >= 1 {
+    match block.stmts[n - 1] {
+      // `if (c) return e1; else return e2;` as last stmt
+      If(cond, then_b, Some(else_b)) =>
+        match (single_return_expr(then_b), single_return_expr(else_b)) {
+          (Some(e1), Some(e2)) => {
             let prefix : Array[@ast.TsStmt] = []
             for i, s in block.stmts {
-              if i < n - 2 {
+              if i < n - 1 {
                 prefix.push(s)
               }
             }
             prefix.push(Return(Some(Cond(cond, e1, e2))))
             let pos : Array[Int] = []
             if block.stmt_positions.length() == n {
-              for i in 0..<(n - 2) {
+              for i in 0..<(n - 1) {
                 pos.push(block.stmt_positions[i])
               }
               pos.push(block.stmt_positions[n - 1])
             }
             Some({ stmts: prefix, stmt_positions: pos })
           }
-          None => None
+          _ => None
         }
-      _ => None
+      _ =>
+        // `if (c) return e1; return e2;` — last two stmts
+        if n >= 2 {
+          match (block.stmts[n - 2], block.stmts[n - 1]) {
+            (If(cond, then_b, None), Return(Some(e2))) =>
+              match single_return_expr(then_b) {
+                Some(e1) => {
+                  let prefix : Array[@ast.TsStmt] = []
+                  for i, s in block.stmts {
+                    if i < n - 2 {
+                      prefix.push(s)
+                    }
+                  }
+                  prefix.push(Return(Some(Cond(cond, e1, e2))))
+                  let pos : Array[Int] = []
+                  if block.stmt_positions.length() == n {
+                    for i in 0..<(n - 2) {
+                      pos.push(block.stmt_positions[i])
+                    }
+                    pos.push(block.stmt_positions[n - 1])
+                  }
+                  Some({ stmts: prefix, stmt_positions: pos })
+                }
+                None => None
+              }
+            _ => None
+          }
+        } else {
+          None
+        }
     }
   } else {
     None
