@@ -88,3 +88,18 @@ test "fold: string literal concatenation collapses to single literal" {
   assert_true(out.contains("\"hello world\""))
   assert_false(out.contains("+"))
 }
+
+///|
+test "fold: integer comparison collapses to bool literal" {
+  let out = fold_one("const a = 1 === 1; const b = 1 !== 2; const c = 3 > 2;\n")
+  assert_true(out.contains("const a = true;"))
+  assert_true(out.contains("const b = true;"))
+  assert_true(out.contains("const c = true;"))
+}
+
+///|
+test "fold: string strict-equality collapses to bool literal" {
+  let out = fold_one("const a = \"x\" === \"x\"; const b = \"x\" !== \"y\";\n")
+  assert_true(out.contains("const a = true;"))
+  assert_true(out.contains("const b = true;"))
+}

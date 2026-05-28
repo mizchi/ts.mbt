@@ -20,6 +20,10 @@
 //   if (true) {…} / if (false) {…} else {…} statements -> the live block
 //
 //   "a" + "b"  -> "ab"  (string literal concatenation)
+//   1 === 1    -> true  (literal strict-equality comparisons)
+//   1 !== 2    -> true
+//   1 < 2      -> true  (and <=, >, >= for integers)
+//   "a" === "b" -> false
 //
 // "Pure" here mirrors the tree-shaker's `is_pure_init`: literals,
 // function expressions, variable reads, and (recursively) pure
@@ -366,6 +370,17 @@ fn fold_binop(
     (Mul, IntLit(a), IntLit(b)) => IntLit(a * b)
     // String concatenation of two string literals.
     (Add, StringLit(a), StringLit(b)) => StringLit(a + b)
+    // Strict-equality comparisons between homogeneous literals.
+    (BinEq, IntLit(a), IntLit(b)) => BoolLit(a == b)
+    (BinNe, IntLit(a), IntLit(b)) => BoolLit(a != b)
+    (BinLt, IntLit(a), IntLit(b)) => BoolLit(a < b)
+    (BinLe, IntLit(a), IntLit(b)) => BoolLit(a <= b)
+    (BinGt, IntLit(a), IntLit(b)) => BoolLit(a > b)
+    (BinGe, IntLit(a), IntLit(b)) => BoolLit(a >= b)
+    (BinEq, StringLit(a), StringLit(b)) => BoolLit(a == b)
+    (BinNe, StringLit(a), StringLit(b)) => BoolLit(a != b)
+    (BinEq, BoolLit(a), BoolLit(b)) => BoolLit(a == b)
+    (BinNe, BoolLit(a), BoolLit(b)) => BoolLit(a != b)
     _ => BinOp(op, l, r)
   }
 }
