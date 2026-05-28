@@ -594,6 +594,8 @@ fn fold_binop(
     (BinNe, StringLit(a), StringLit(b)) => BoolLit(a != b)
     (BinEq, BoolLit(a), BoolLit(b)) => BoolLit(a == b)
     (BinNe, BoolLit(a), BoolLit(b)) => BoolLit(a != b)
+    (BinEq, NullLit, NullLit) => BoolLit(true)
+    (BinNe, NullLit, NullLit) => BoolLit(false)
     _ => BinOp(op, l, r)
   }
 }
