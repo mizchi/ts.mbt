@@ -976,3 +976,16 @@ test "fold: dead code after throw is dropped" {
   let out = fold_one("function f() { throw new Error(); const dead = 2; }\n")
   assert_false(out.contains("dead"))
 }
+
+///|
+test "fold: x != null ? x.prop : undefined folds to x?.prop" {
+  let out = fold_one("const r = x != null ? x.name : undefined;\n")
+  assert_true(out.contains("?.") || out.contains("x.name"))
+  assert_false(out.contains("!= null"))
+}
+
+///|
+test "fold: x != null ? x.method() : undefined folds to x?.method()" {
+  let out = fold_one("const r = x != null ? x.toString() : undefined;\n")
+  assert_true(out.contains("?.") || out.contains("x.toString"))
+}

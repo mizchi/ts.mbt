@@ -571,6 +571,22 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), Var(tn), _)
             if cn == tn =>
             BinOp(@ast.TsBinOp::Coalesce, Var(cn), ef)
+          // `x != null ? x.prop : undefined` → `x?.prop`
+          // `x != null ? x.method(...) : undefined` → `x?.method(...)`
+          // `x != null ? x[idx] : undefined` → `x?.[idx]`
+          // Only when the else-branch is the undefined value.
+          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), PropAccess(Var(tn), prop), _)
+          | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), PropAccess(Var(tn), prop), _)
+            if cn == tn && is_nullish_or_void(ef) =>
+            OptionalChain(PropAccess(Var(cn), prop))
+          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), MethodCall(Var(tn), m, args), _)
+          | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), MethodCall(Var(tn), m, args), _)
+            if cn == tn && is_nullish_or_void(ef) =>
+            OptionalChain(MethodCall(Var(cn), m, args))
+          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), IndexAccess(Var(tn), idx), _)
+          | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), IndexAccess(Var(tn), idx), _)
+            if cn == tn && is_nullish_or_void(ef) =>
+            OptionalChain(IndexAccess(Var(cn), idx))
           _ => Cond(cf, tf, ef)
         }
       }
@@ -2274,6 +2290,18 @@ fn is_js_falsy(expr : @ast.TsExpr) -> Bool {
     Var("undefined") => true
     // `void EXPR` always evaluates to `undefined` (falsy).
     UnaryOp(Void, _) => true
+    _ => false
+  }
+}
+
+///|
+/// Returns `true` when the expression is the JS `undefined` value or
+/// `void 0`. Used to detect the else-branch of optional-chain lowering.
+fn is_nullish_or_void(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    NullLit => true
+    Var("undefined") => true
+    UnaryOp(@ast.TsUnaryOp::Void, _) => true
     _ => false
   }
 }
