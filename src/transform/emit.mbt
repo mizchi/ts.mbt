@@ -1399,7 +1399,11 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           // `typeof` / `void` / `delete` are word operators; they need
           // a separator before their operand.
           match op {
-            Typeof | Void | Delete => e.write(" ")
+            Typeof | Void | Delete => {
+              // In minify mode, use `sep_after_word` to avoid the space
+              // when the operand starts with a non-identifier char.
+              e.sep_after_word(expr_leading_byte(inner))
+            }
             _ => ()
           }
           emit_expr(e, inner, 16)
