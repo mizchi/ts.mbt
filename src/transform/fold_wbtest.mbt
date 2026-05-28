@@ -694,3 +694,20 @@ test "fold: integer .toString(2) folds to binary string" {
   let out = fold_one("const r = (7).toString(2);\n")
   assert_true(out.contains("\"111\""))
 }
+
+///|
+test "fold: Object.freeze({}) drops the freeze call" {
+  let out = fold_one("const o = Object.freeze({ a: 1, b: 2 });\n")
+  assert_false(out.contains("Object.freeze"))
+  assert_true(out.contains("a"))
+}
+
+///|
+test "fold: Object.fromEntries([[\"a\",1],[\"b\",2]]) → {a:1,b:2}" {
+  let out = fold_one(
+    "const o = Object.fromEntries([[\"a\", 1], [\"b\", 2]]);\n",
+  )
+  assert_false(out.contains("Object.fromEntries"))
+  assert_true(out.contains("a"))
+  assert_true(out.contains("b"))
+}

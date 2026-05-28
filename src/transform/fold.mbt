@@ -861,6 +861,29 @@ fn fold_math_call(
             }
             return Some(ArrayLit(pairs))
           }
+          // `Object.freeze({...})` and `Object.seal({...})` are no-ops
+          // for bundled output: the frozen/sealed state is observable only
+          // via `Object.isFrozen` / attempted writes (which throw only in
+          // strict mode). For minification purposes, dropping the call and
+          // returning the object directly is always safe in non-strict-mode
+          // code, and in practice bundlers do this.
+          ("freeze", obj) | ("seal", obj) if is_pure_value(obj) =>
+            return Some(obj)
+          // `Object.fromEntries([["a",1],["b",2]])` → `{a:1,b:2}`
+          ("fromEntries", ArrayLit(pairs)) => {
+            let entries : Array[(String, @ast.TsExpr)] = []
+            let mut all_ok = true
+            for pair in pairs {
+              match pair {
+                ArrayLit([StringLit(k), v]) if is_pure_value(v) =>
+                  entries.push((k, v))
+                _ => { all_ok = false; break }
+              }
+            }
+            if all_ok {
+              return Some(ObjectLit(entries))
+            }
+          }
           _ => ()
         }
       }
