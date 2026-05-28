@@ -179,3 +179,30 @@ test "fold: ternary with falsy literal uses else arm" {
   let out = fold_one("const x = null ? a : b;\n")
   assert_true(out.contains("const x = b;"))
 }
+
+///|
+test "fold: typeof integer literal folds to \"number\"" {
+  let out = fold_one("const t = typeof 42;\n")
+  assert_true(out.contains("\"number\""))
+  assert_false(out.contains("typeof"))
+}
+
+///|
+test "fold: typeof string literal folds to \"string\"" {
+  let out = fold_one("const t = typeof \"hello\";\n")
+  assert_true(out.contains("\"string\""))
+  assert_false(out.contains("typeof"))
+}
+
+///|
+test "fold: typeof null folds to \"object\"" {
+  let out = fold_one("const t = typeof null;\n")
+  assert_true(out.contains("\"object\""))
+  assert_false(out.contains("typeof"))
+}
+
+///|
+test "fold: typeof 5 === \"number\" chain folds to true" {
+  let out = fold_one("const ok = typeof 5 === \"number\";\n")
+  assert_true(out.contains("const ok = true;"))
+}

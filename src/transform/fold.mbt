@@ -12,6 +12,8 @@
 //   x * 0    -> 0  (x is pure)
 //   !true    -> false
 //   !false   -> true
+//   typeof 5 -> "number"  (typeof any known literal)
+//   typeof "" -> "string" / typeof true -> "boolean" / etc.
 //   true && y  -> y
 //   false && y -> false  (y is pure)
 //   true || y  -> true   (y is pure)
@@ -212,6 +214,17 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let inner_f = fold_expr(inner)
       match (op, inner_f) {
         (Not, BoolLit(b)) => BoolLit(not(b))
+        // `typeof LITERAL` is always a known string — fold directly.
+        // Combined with `StringLit === StringLit` folding, this
+        // eliminates `typeof 5 === "number"` and similar guards.
+        (Typeof, IntLit(_)) | (Typeof, NumberLit(_)) => StringLit("number")
+        (Typeof, StringLit(_)) => StringLit("string")
+        (Typeof, BoolLit(_)) => StringLit("boolean")
+        (Typeof, NullLit) => StringLit("object")
+        (Typeof, FuncExpr(_)) | (Typeof, ArrowFunc(_, _, _, _)) =>
+          StringLit("function")
+        (Typeof, ArrayLit(_)) | (Typeof, ObjectLit(_)) => StringLit("object")
+        (Typeof, BigIntLit(_)) => StringLit("bigint")
         _ => UnaryOp(op, inner_f)
       }
     }
