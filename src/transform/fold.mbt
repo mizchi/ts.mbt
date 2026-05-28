@@ -346,15 +346,24 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       }
       // A pure expression used as a statement has no observable effect;
       // drop it so subsequent passes don't need to prove it safe.
-      // Also, `(side_effect, pure)` in statement position — the pure
-      // right-hand result is discarded, so trim it: `Expr(Seq(a,b))`
-      // with `b` pure reduces to `Expr(a)`.
-      let simplified = match ef {
-        Seq(a, b) if is_pure_value(b) => a
-        _ => ef
-      }
-      if not(is_pure_value(simplified)) {
-        out.push(Expr(simplified))
+      // `(a, b)` in statement position splits into two separate statements
+      // so each part can be independently eliminated when pure.
+      // Flatten nested Seqs using a stack to preserve left-to-right order.
+      let stack : Array[@ast.TsExpr] = [ef]
+      while not(stack.is_empty()) {
+        let part = stack.pop().unwrap()
+        match part {
+          Seq(a, b) => {
+            // Push right first so left is processed first (LIFO order).
+            stack.push(b)
+            stack.push(a)
+          }
+          UnaryOp(@ast.TsUnaryOp::Void, inner) =>
+            if not(is_pure_value(inner)) {
+              stack.push(inner)
+            }
+          _ => if not(is_pure_value(part)) { out.push(Expr(part)) }
+        }
       }
     }
     Return(Some(e)) => {

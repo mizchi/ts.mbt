@@ -1156,3 +1156,31 @@ test "fold: if (cond) {} else { stmts } becomes if (!cond) { stmts }" {
   // Inverted condition or equivalent
   assert_true(out.contains("if"))
 }
+
+///|
+test "fold: Seq in stmt position splits into individual statements" {
+  // `(a(), b())` → `a(); b()` — two separate statements.
+  // Each can then be independently eliminated if pure.
+  let out = fold_one("(a(), b());\n")
+  assert_false(out.contains(","))
+  assert_true(out.contains("a()"))
+  assert_true(out.contains("b()"))
+}
+
+///|
+test "fold: Seq where second part is pure drops second part" {
+  // `(a(), 1)` → `a()` — pure second operand discarded.
+  let out = fold_one("(a(), 1);\n")
+  assert_false(out.contains("1"))
+  assert_true(out.contains("a()"))
+}
+
+///|
+test "fold: nested Seq in stmt position flattens all parts" {
+  // `((a(), b()), c())` → `a(); b(); c();`
+  let out = fold_one("((a(), b()), c());\n")
+  assert_false(out.contains(","))
+  assert_true(out.contains("a()"))
+  assert_true(out.contains("b()"))
+  assert_true(out.contains("c()"))
+}
