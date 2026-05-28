@@ -660,6 +660,36 @@ fn fold_math_call(
 ) -> @ast.TsExpr? {
   match recv {
     Var("Math") => ()
+    Var("Object") => {
+      // `Object.keys({a:1,b:2})` → `["a","b"]` etc.
+      if args.length() == 1 {
+        match (method, args[0]) {
+          ("keys", ObjectLit(entries)) => {
+            let keys : Array[@ast.TsExpr] = []
+            for ent in entries {
+              keys.push(StringLit(ent.0))
+            }
+            return Some(ArrayLit(keys))
+          }
+          ("values", ObjectLit(entries)) => {
+            let vals : Array[@ast.TsExpr] = []
+            for ent in entries {
+              vals.push(ent.1)
+            }
+            return Some(ArrayLit(vals))
+          }
+          ("entries", ObjectLit(entries)) => {
+            let pairs : Array[@ast.TsExpr] = []
+            for ent in entries {
+              pairs.push(ArrayLit([StringLit(ent.0), ent.1]))
+            }
+            return Some(ArrayLit(pairs))
+          }
+          _ => ()
+        }
+      }
+      return None
+    }
     Var("Array") => {
       // `Array.isArray(literal)` → bool
       if method == "isArray" && args.length() == 1 {
