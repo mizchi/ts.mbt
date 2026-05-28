@@ -79,6 +79,20 @@ fn single_expr_stmt(block : @ast.TsBlock) -> @ast.TsExpr? {
 /// Also merges `if (c) return e1; return e2;` tail into
 /// `return c ? e1 : e2;`.
 fn fold_func_body(block : @ast.TsBlock) -> @ast.TsBlock {
+  // Loop until the block stops shrinking so multi-level
+  // `if(c1)return e1; if(c2)return e2; return e3;` collapses
+  // in one pass rather than requiring re-folding from the outside.
+  let mut cur = fold_func_body_once(block)
+  let mut prev_len = block.stmts.length()
+  while cur.stmts.length() < prev_len {
+    prev_len = cur.stmts.length()
+    cur = fold_func_body_once(cur)
+  }
+  cur
+}
+
+///|
+fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
   let n = block.stmts.length()
   if n == 0 {
     return block

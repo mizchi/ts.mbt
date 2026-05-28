@@ -1214,3 +1214,22 @@ test "fold: for-in over empty object is a no-op" {
   assert_false(out.contains("for"))
   assert_false(out.contains("console"))
 }
+
+///|
+test "fold: multi-level if-return chain collapses to nested ternary" {
+  // `if (c1) return e1; if (c2) return e2; return e3;`
+  // → `return c1 ? e1 : c2 ? e2 : e3;`
+  let out = fold_one(
+    (
+      #|function f(c1, c2) {
+      #|  if (c1) return 1;
+      #|  if (c2) return 2;
+      #|  return 3;
+      #|}
+    ),
+  )
+  // Should collapse to a single return with nested ternary
+  assert_false(out.contains("if (c1)") || out.contains("if(c1)"))
+  assert_false(out.contains("if (c2)") || out.contains("if(c2)"))
+  assert_true(out.contains("return"))
+}
