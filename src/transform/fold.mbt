@@ -366,6 +366,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           let merged = if out_len > 0 {
             match out[out_len - 1] {
               Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
+              | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
                 if ln == n =>
                 true
               _ => false
@@ -375,11 +376,16 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           }
           if merged {
             let prev = out.pop().unwrap()
-            let t = match prev {
-              Let(_, t, _) => t
-              _ => @ast.TsType::Any
+            match prev {
+              Let(_, t, _) =>
+                out.push(Let(@ast.TsBinding::Ident(n), t, rhs_f))
+              Var(_, t, _) =>
+                out.push(Var(@ast.TsBinding::Ident(n), t, rhs_f))
+              _ => {
+                out.push(prev)
+                out.push(Assign(n, rhs_f))
+              }
             }
-            out.push(Let(@ast.TsBinding::Ident(n), t, rhs_f))
           } else {
             out.push(Assign(n, rhs_f))
           }
