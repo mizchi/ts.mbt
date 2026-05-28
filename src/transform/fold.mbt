@@ -619,6 +619,16 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       match (recv_f, p) {
         (StringLit(s), "length") => IntLit(s.length())
         (ArrayLit(items), "length") => IntLit(items.length())
+        // Well-known Math / Number constants.
+        (Var("Math"), "PI") => NumberLit(3.141592653589793)
+        (Var("Math"), "E") => NumberLit(2.718281828459045)
+        (Var("Math"), "LN2") => NumberLit(0.6931471805599453)
+        (Var("Math"), "LN10") => NumberLit(2.302585092994046)
+        (Var("Math"), "LOG2E") => NumberLit(1.4426950408889634)
+        (Var("Math"), "LOG10E") => NumberLit(0.4342944819032518)
+        (Var("Math"), "SQRT2") => NumberLit(1.4142135623730951)
+        (Var("Number"), "MAX_SAFE_INTEGER") => NumberLit(9007199254740991.0)
+        (Var("Number"), "MIN_SAFE_INTEGER") => NumberLit(-9007199254740991.0)
         // `{a:1, b:2}.a` → `1` only when ALL other values are pure
         // (to avoid dropping side effects from other property initializers).
         (ObjectLit(entries), key) => {

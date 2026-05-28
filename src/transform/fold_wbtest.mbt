@@ -391,6 +391,20 @@ test "fold: !(a < b) folds to a >= b" {
 }
 
 ///|
+test "fold: Math.PI folds to numeric literal" {
+  let out = fold_one("const x = Math.PI;\n")
+  assert_true(out.contains("3.14"))
+  assert_false(out.contains("Math.PI"))
+}
+
+///|
+test "fold: Math.E folds to numeric literal" {
+  let out = fold_one("const x = Math.E;\n")
+  assert_true(out.contains("2.71"))
+  assert_false(out.contains("Math.E"))
+}
+
+///|
 test "fold: obj[\"key\"] → obj.key when key is a valid identifier" {
   let out = fold_one("const v = obj[\"method\"];\n")
   assert_true(out.contains("obj.method"))
