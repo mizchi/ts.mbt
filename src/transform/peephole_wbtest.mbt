@@ -292,3 +292,12 @@ test "minify emit: let x = void 0 drops initializer" {
   assert_false(out.contains("void"))
   assert_true(out.contains("let x"))
 }
+
+///|
+test "minify emit: const x = undefined drops initializer (const→let, no = void 0)" {
+  let out = minify_one("const x = undefined;\n")
+  // const is downgraded to let; undefined initializer is dropped.
+  assert_false(out.contains("void"))
+  assert_false(out.contains("undefined"))
+  assert_true(out.contains("let x"))
+}

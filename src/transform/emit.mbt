@@ -530,10 +530,21 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       }
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, 0)
+      // In minify mode, `const` is downgraded to `let`, so `= void 0`
+      // initializers can be dropped (plain `let x` is equivalent).
+      let is_undef_init = match init {
+        UnaryOp(@ast.TsUnaryOp::Void, _) => true
+        Var("undefined") => true
+        _ => false
+      }
+      if not(e.pretty) && is_undef_init {
+        ()
+      } else {
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
       e.semi()
     }
     Assign(name, expr) => {
@@ -1057,10 +1068,21 @@ fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
     match s {
       Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
         emit_binding(e, b)
-        e.space()
-        e.write("=")
-        e.space()
-        emit_expr(e, init, 0)
+        // In minify mode, `const` is downgraded to `let` (see `emitted_kind`
+        // above), so dropping a `= void 0` initializer is safe for all kinds.
+        let is_undef_init = match init {
+          UnaryOp(@ast.TsUnaryOp::Void, _) => true
+          Var("undefined") => true
+          _ => false
+        }
+        if not(e.pretty) && is_undef_init {
+          ()
+        } else {
+          e.space()
+          e.write("=")
+          e.space()
+          emit_expr(e, init, 0)
+        }
       }
       _ => ()
     }
