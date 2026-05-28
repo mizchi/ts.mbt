@@ -543,3 +543,24 @@ test "fold: Object.assign({}, {a:1}, {a:2}) last-write wins" {
   assert_false(out.contains("a: 1"))
   assert_false(out.contains("Object.assign"))
 }
+
+///|
+test "fold: String.slice with negative index folds correctly" {
+  let out = fold_one("const s = \"hello\".slice(-3);\n")
+  assert_true(out.contains("\"llo\""))
+  assert_false(out.contains("slice"))
+}
+
+///|
+test "fold: String.charCodeAt folds to integer" {
+  let out = fold_one("const n = \"A\".charCodeAt(0);\n")
+  assert_true(out.contains("65"))
+  assert_false(out.contains("charCodeAt"))
+}
+
+///|
+test "fold: String.fromCharCode folds to string literal" {
+  let out = fold_one("const s = String.fromCharCode(72, 101, 108);\n")
+  assert_true(out.contains("\"Hel\""))
+  assert_false(out.contains("fromCharCode"))
+}

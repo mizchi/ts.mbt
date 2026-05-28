@@ -923,6 +923,26 @@ fn fold_math_call(
       }
       return None
     }
+    Var("String") => {
+      // `String.fromCharCode(65)` → `"A"` for single-char literal args.
+      if method == "fromCharCode" && args.length() >= 1 {
+        let buf = StringBuilder::new()
+        let mut all_lit = true
+        for arg in args {
+          match arg {
+            IntLit(n) if n >= 0 && n <= 65535 => {
+              let ch = Char::from_int(n)
+              buf.write_char(ch)
+            }
+            _ => { all_lit = false; break }
+          }
+        }
+        if all_lit {
+          return Some(StringLit(buf.to_string()))
+        }
+      }
+      return None
+    }
     Var("Number") => {
       if args.length() == 1 {
         match (method, args[0]) {
@@ -1119,23 +1139,28 @@ fn fold_string_method(
         _ => None
       }
     "slice" => {
-      // `"hello".slice(start[, end])` with non-negative integer args only.
-      // Negative indices require runtime string length, which we have, but
-      // to keep the fold simple and correct, only fold non-negative cases.
+      // `"hello".slice(start[, end])` — fold all integer-arg forms,
+      // including negative indices (we know the length at compile time).
       let len = s.length()
-      let clamp = fn(i : Int) -> Int { i.max(0).min(len) }
+      // JS slice semantics: negative → clamp relative to end; out-of-bounds → 0/len.
+      let resolve = fn(i : Int) -> Int {
+        let resolved = if i < 0 { len + i } else { i }
+        resolved.max(0).min(len)
+      }
       match args.length() {
         1 =>
           match args[0] {
-            IntLit(start) if start >= 0 =>
-              Some(StringLit(s.substring(start=clamp(start)).to_string()))
+            IntLit(start) => {
+              let s0 = resolve(start)
+              Some(StringLit(s.substring(start=s0).to_string()))
+            }
             _ => None
           }
         2 =>
           match (args[0], args[1]) {
-            (IntLit(start), IntLit(end_)) if start >= 0 && end_ >= 0 => {
-              let s0 = clamp(start)
-              let e0 = clamp(end_)
+            (IntLit(start), IntLit(end_)) => {
+              let s0 = resolve(start)
+              let e0 = resolve(end_)
               if s0 >= e0 {
                 Some(StringLit(""))
               } else {
@@ -1190,6 +1215,20 @@ fn fold_string_method(
             None
           }
         }
+        _ => None
+      }
+    "charCodeAt" if args.length() == 1 =>
+      // `"A".charCodeAt(0)` → 65
+      match args[0] {
+        IntLit(i) if i >= 0 && i < s.length() =>
+          Some(IntLit(s[i].to_int()))
+        _ => None
+      }
+    "codePointAt" if args.length() == 1 =>
+      // `"A".codePointAt(0)` → 65 (same as charCodeAt for BMP chars)
+      match args[0] {
+        IntLit(i) if i >= 0 && i < s.length() =>
+          Some(IntLit(s[i].to_int()))
         _ => None
       }
     _ => None
