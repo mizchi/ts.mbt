@@ -601,7 +601,21 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
         lower_jsx_in_expr(cfg, value),
       )
     Break(_) | Continue(_) | Debugger | Empty => stmt
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: lower_jsx_in_block(cfg, f.body) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(lower_jsx_in_block(cfg, b))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+    }
   }
 }
 
