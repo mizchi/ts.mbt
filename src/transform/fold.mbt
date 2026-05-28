@@ -627,7 +627,44 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       for a in args {
         new_args.push(fold_expr(a))
       }
-      CallExpr(fold_expr(callee), new_args)
+      let callee_f = fold_expr(callee)
+      // IIFE: `((x, y) => expr)(arg1, arg2)` → substitute args for params
+      // and fold the body. Only safe when:
+      //   - Arrow has no rest param, no destructuring, no defaults.
+      //   - Each param name appears at most once in the arg list.
+      //   - All args are pure values (no side effects from evaluation order).
+      //   - Body is a concise expression (not a block body).
+      match callee_f {
+        ArrowFunc(params, _, ArrowExpr(body_expr), false) => {
+          // Filter out `this` type annotation params (TypeScript artifacts).
+          let runtime_params : Array[@ast.TsParam] = []
+          for p in params {
+            if not(is_this_type_annotation_param(p)) {
+              runtime_params.push(p)
+            }
+          }
+          if runtime_params.length() == new_args.length() {
+            let mut can_inline = true
+            let subs : Map[String, @ast.TsExpr] = {}
+            for i, p in runtime_params {
+              if p.is_rest ||
+                p.binding != None ||
+                p.default != None ||
+                not(is_pure_value(new_args[i])) {
+                can_inline = false
+                break
+              }
+              subs[p.name] = new_args[i]
+            }
+            if can_inline {
+              let substituted = substitute_vars_in_expr(body_expr, subs)
+              return fold_expr(substituted)
+            }
+          }
+          CallExpr(callee_f, new_args)
+        }
+        _ => CallExpr(callee_f, new_args)
+      }
     }
     New(name, args) => {
       let new_args : Array[@ast.TsExpr] = []
@@ -2252,4 +2289,123 @@ fn is_comparison_op(op : @ast.TsBinOp) -> Bool {
     Instanceof | In => true
     _ => false
   }
+}
+
+// Substitute free occurrences of variable names in `expr` with the
+// corresponding values from `subs`. Does NOT descend into nested
+// function bodies (arrow / function expressions) to avoid capturing.
+fn substitute_vars_in_expr(
+  expr : @ast.TsExpr,
+  subs : Map[String, @ast.TsExpr]
+) -> @ast.TsExpr {
+  fn sub(e : @ast.TsExpr) -> @ast.TsExpr {
+    match e {
+      Var(name) =>
+        match subs[name] {
+          Some(v) => v
+          None => e
+        }
+      // Do not descend into new binding scopes.
+      ArrowFunc(_, _, _, _) | FuncExpr(_) => e
+      // Recurse into everything else.
+      UnaryOp(op, a) => UnaryOp(op, sub(a))
+      BinOp(op, a, b) => BinOp(op, sub(a), sub(b))
+      Cond(c, t, f) => Cond(sub(c), sub(t), sub(f))
+      AssignExpr(name, rhs) => AssignExpr(name, sub(rhs))
+      CompoundAssignExpr(lhs, op, rhs) =>
+        CompoundAssignExpr(sub(lhs), op, sub(rhs))
+      PropAssignExpr(obj, prop, rhs) => PropAssignExpr(sub(obj), prop, sub(rhs))
+      IndexAssignExpr(obj, idx, rhs) =>
+        IndexAssignExpr(sub(obj), sub(idx), sub(rhs))
+      Call(name, args) => {
+        let new_args : Array[@ast.TsExpr] = []
+        for a in args {
+          new_args.push(sub(a))
+        }
+        Call(name, new_args)
+      }
+      CallExpr(callee, args) => {
+        let new_args : Array[@ast.TsExpr] = []
+        for a in args {
+          new_args.push(sub(a))
+        }
+        CallExpr(sub(callee), new_args)
+      }
+      MethodCall(recv, m, args) => {
+        let new_args : Array[@ast.TsExpr] = []
+        for a in args {
+          new_args.push(sub(a))
+        }
+        MethodCall(sub(recv), m, new_args)
+      }
+      New(name, args) => {
+        let new_args : Array[@ast.TsExpr] = []
+        for a in args {
+          new_args.push(sub(a))
+        }
+        New(name, new_args)
+      }
+      NewExpr(callee, args) => {
+        let new_args : Array[@ast.TsExpr] = []
+        for a in args {
+          new_args.push(sub(a))
+        }
+        NewExpr(sub(callee), new_args)
+      }
+      PropAccess(obj, prop) => PropAccess(sub(obj), prop)
+      IndexAccess(obj, idx) => IndexAccess(sub(obj), sub(idx))
+      ComputedProp(key, val) => ComputedProp(sub(key), sub(val))
+      ArrayLit(items) => {
+        let new_items : Array[@ast.TsExpr] = []
+        for item in items {
+          new_items.push(sub(item))
+        }
+        ArrayLit(new_items)
+      }
+      ObjectLit(pairs) => {
+        let new_pairs : Array[(String, @ast.TsExpr)] = []
+        for pair in pairs {
+          new_pairs.push((pair.0, sub(pair.1)))
+        }
+        ObjectLit(new_pairs)
+      }
+      Spread(inner) => Spread(sub(inner))
+      Await(inner) => Await(sub(inner))
+      Yield(inner) =>
+        match inner {
+          Some(v) => Yield(Some(sub(v)))
+          None => e
+        }
+      YieldStar(inner) => YieldStar(sub(inner))
+      Seq(a, b) => Seq(sub(a), sub(b))
+      PureCall(inner) => PureCall(sub(inner))
+      As(inner, t) => As(sub(inner), t)
+      TaggedTemplate(tag, cooked, raw, exprs) => {
+        let new_exprs : Array[@ast.TsExpr] = []
+        for ex in exprs {
+          new_exprs.push(sub(ex))
+        }
+        TaggedTemplate(sub(tag), cooked, raw, new_exprs)
+      }
+      TemplateLiteral(strings, exprs) => {
+        let new_exprs : Array[@ast.TsExpr] = []
+        for ex in exprs {
+          new_exprs.push(sub(ex))
+        }
+        TemplateLiteral(strings, new_exprs)
+      }
+      DynamicImport(spec, opts) =>
+        DynamicImport(
+          sub(spec),
+          match opts {
+            Some(o) => Some(sub(o))
+            None => None
+          },
+        )
+      // Literals and other leaves need no substitution.
+      _ => e
+    }
+  }
+
+  sub(expr)
 }

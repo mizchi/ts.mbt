@@ -797,3 +797,23 @@ test "fold: [].filter(fn) → []" {
   assert_true(out.contains("[]"))
   assert_false(out.contains(".filter("))
 }
+
+///|
+test "fold: IIFE with literal arg is inlined" {
+  let out = fold_one("const r = ((x) => x + 1)(5);\n")
+  assert_true(out.contains("6"))
+  assert_false(out.contains("=>"))
+}
+
+///|
+test "fold: IIFE with two literal args is inlined" {
+  let out = fold_one("const r = ((x, y) => x * y)(3, 4);\n")
+  assert_true(out.contains("12"))
+  assert_false(out.contains("=>"))
+}
+
+///|
+test "fold: IIFE with non-pure arg is NOT inlined" {
+  let out = fold_one("const r = ((x) => x + 1)(foo());\n")
+  assert_true(out.contains("=>"))
+}
