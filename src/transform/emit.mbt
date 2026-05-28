@@ -1742,17 +1742,20 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     Yield(opt) =>
       match opt {
         Some(inner) => {
-          e.write("yield ")
+          e.word("yield")
+          e.sep_after_word(expr_leading_byte(inner))
           emit_expr(e, inner, 2)
         }
         None => e.write("yield")
       }
     YieldStar(inner) => {
-      e.write("yield* ")
+      // `yield*` ends with `*` (not a word char), so no separator needed.
+      e.write("yield*")
       emit_expr(e, inner, 2)
     }
     Await(inner) => {
-      e.write("await ")
+      e.word("await")
+      e.sep_after_word(expr_leading_byte(inner))
       emit_expr(e, inner, 16)
     }
     DynamicImport(spec, opts) => {
