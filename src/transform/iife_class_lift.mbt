@@ -81,10 +81,14 @@ fn try_lift_iife_value(b : @ast.TsBinding, e : @ast.TsExpr) -> @ast.TsStmt? {
     @ast.TsBinding::Ident(n) => n
     _ => return None
   }
-  let body = match e {
+  // Accept both `(function() { … })()` (no extends) and
+  // `(function(_Super) { … })(Base)` (single-arg extends pattern).
+  let (body, super_param, super_arg) : (@ast.TsBlock, String?, @ast.TsExpr?) = match e {
     CallExpr(@ast.TsExpr::FuncExpr(f), args) =>
       if args.length() == 0 && f.params.length() == 0 {
-        f.body
+        (f.body, None, None)
+      } else if args.length() == 1 && f.params.length() == 1 {
+        (f.body, Some(f.params[0].name), Some(args[0]))
       } else {
         return None
       }
@@ -101,7 +105,7 @@ fn try_lift_iife_value(b : @ast.TsBinding, e : @ast.TsExpr) -> @ast.TsStmt? {
       // the presence of dead code itself is suspicious. Abort.
       return None
     }
-    match classify_iife_body_stmt(s, name) {
+    match classify_iife_body_stmt(s, name, super_param) {
       Skipped => ()
       Ctor(f) =>
         match ctor_func {
@@ -126,11 +130,22 @@ fn try_lift_iife_value(b : @ast.TsBinding, e : @ast.TsExpr) -> @ast.TsStmt? {
   for m in static_methods {
     all_methods.push(m)
   }
+  let (base_names, base_expr) : (Array[String], @ast.TsExpr?) = match super_arg {
+    Some(arg) => (["<expr-base>"], Some(arg))
+    None => ([], None)
+  }
+  // When the class extends a super, rewrite `_Super.call(this, a, b)`
+  // in the constructor body to `super(a, b)` so the lifted native
+  // class emits valid ES6.
+  let ctor_func = match (ctor_func, super_param) {
+    (Some(f), Some(sp)) => Some({ ..f, body: rewrite_super_calls(f.body, sp) })
+    _ => ctor_func
+  }
   let decl : @ast.TsClassDecl = {
     name,
     type_params: [],
-    base_names: [],
-    base_expr: None,
+    base_names,
+    base_expr,
     static_field_inits: [],
     constructor_params: None,
     properties: [],
@@ -157,6 +172,7 @@ priv enum IifeBodyClassification {
 fn classify_iife_body_stmt(
   stmt : @ast.TsStmt,
   class_name : String,
+  super_param : String?,
 ) -> IifeBodyClassification {
   match stmt {
     // `"use strict";` directive.
@@ -223,6 +239,38 @@ fn classify_iife_body_stmt(
       } else {
         Unknown
       }
+    // Prototype-chain setup for `extends` — skip all of these forms:
+    // `ClassName.prototype.__proto__ = _Super.prototype`
+    // `ClassName.__proto__ = _Super`
+    PropAssign(
+      @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
+      "__proto__",
+      _
+    )
+    | PropAssign(@ast.TsExpr::Var(n), "__proto__", _) =>
+      if n == class_name { Skipped } else { Unknown }
+    // `_inheritsLoose(ClassName, _Super)` / `_inherits(ClassName, _Super)`
+    Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::Var(fn_name), args)) =>
+      if fn_name.has_prefix("_inherit") && args.length() >= 1 {
+        match args[0] {
+          @ast.TsExpr::Var(n) => if n == class_name { Skipped } else { Unknown }
+          _ => Unknown
+        }
+      } else {
+        Unknown
+      }
+    // `Object.setPrototypeOf(ClassName.prototype, _Super.prototype)`
+    Expr(
+      @ast.TsExpr::MethodCall(
+        @ast.TsExpr::Var("Object"),
+        "setPrototypeOf",
+        _
+      )
+    ) =>
+      match super_param {
+        Some(_) => Skipped
+        None => Unknown
+      }
     // `return ClassName;` — the IIFE's value.
     Return(Some(@ast.TsExpr::Var(n))) =>
       if n == class_name {
@@ -268,5 +316,73 @@ fn method_decl_from_func(
     key_expr: None,
     is_async: f.is_async,
     is_generator: f.is_generator,
+  }
+}
+
+///|
+/// Rewrite `super_param.call(this, a, b)` → `super(a, b)` in the
+/// constructor body. This makes the lifted native `class` valid ES6
+/// when the IIFE pattern uses `_Super.call(this, ...)` for the super
+/// constructor call.
+fn rewrite_super_calls(block : @ast.TsBlock, super_param : String) -> @ast.TsBlock {
+  let stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    stmts.push(rewrite_super_stmt(s, super_param))
+  }
+  { ..block, stmts }
+}
+
+///|
+fn rewrite_super_stmt(stmt : @ast.TsStmt, sp : String) -> @ast.TsStmt {
+  match stmt {
+    Expr(e) => Expr(rewrite_super_expr(e, sp))
+    Return(Some(e)) => Return(Some(rewrite_super_expr(e, sp)))
+    If(c, t, el) =>
+      If(
+        rewrite_super_expr(c, sp),
+        rewrite_super_block(t, sp),
+        match el {
+          Some(b) => Some(rewrite_super_block(b, sp))
+          None => None
+        },
+      )
+    Block(b) => Block(rewrite_super_block(b, sp))
+    _ => stmt
+  }
+}
+
+///|
+fn rewrite_super_block(block : @ast.TsBlock, sp : String) -> @ast.TsBlock {
+  let stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    stmts.push(rewrite_super_stmt(s, sp))
+  }
+  { ..block, stmts }
+}
+
+///|
+fn rewrite_super_expr(expr : @ast.TsExpr, sp : String) -> @ast.TsExpr {
+  match expr {
+    // `_Super.call(this, a, b)` → `super(a, b)`
+    MethodCall(@ast.TsExpr::Var(recv), "call", args) =>
+      if recv == sp &&
+         args.length() >= 1 &&
+         (match args[0] {
+           @ast.TsExpr::Var("this") => true
+           _ => false
+         }) {
+        // Drop the leading `this` arg; the rest are the super() args.
+        let super_args : Array[@ast.TsExpr] = []
+        for i, a in args {
+          if i > 0 {
+            super_args.push(a)
+          }
+        }
+        Call("super", super_args)
+      } else {
+        expr
+      }
+    // `_Super.apply(this, args)` → leave as-is (can't statically expand)
+    _ => expr
   }
 }

@@ -1398,6 +1398,36 @@ test "iife-class-lift: simple class without extends becomes native syntax" {
 }
 
 ///|
+test "iife-class-lift: class with extends becomes native class with extends" {
+  // TypeScript lowers `class Child extends Base {}` to an IIFE form.
+  // The lift should recognise the single-arg IIFE pattern and produce
+  // `class Child extends Base { … }`.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Base {\n" +
+      "  greet() { return \"hi\"; }\n" +
+      "}\n" +
+      "class Child extends Base {\n" +
+      "  greet() { return super.greet() + \"!\"; }\n" +
+      "}\n" +
+      "const c = new Child();\n" +
+      "console.log(c.greet());\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Both classes should be lifted to native syntax.
+      assert_true(out.js.contains("class Base"))
+      assert_true(out.js.contains("class Child"))
+      assert_true(out.js.contains("extends"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class-method-dce: drops methods on IIFE-lowered class" {
   let files = vfs([
     (
