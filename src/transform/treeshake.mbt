@@ -52,6 +52,40 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
           decls.push({ name, index: i, refs })
           is_decl[i] = true
         }
+      // Native class declarations (`class Foo { … }`) are a
+      // declaration form too. They're droppable when nothing
+      // instantiates or extends `Foo`. Treat them analogously to a
+      // `const Foo = /* @__PURE__ */ class { … }` for the purpose
+      // of treeshake. The RHS "references" are: the base class (if
+      // `extends Base`) and all method body free variables.
+      NativeClassStmt(decl, ctor) if decl.name != "" => {
+        let refs : Map[String, Bool] = {}
+        // Base class reference
+        match decl.base_expr {
+          Some(e) => collect_var_refs_in_expr(e, refs)
+          None => ()
+        }
+        for n in decl.base_names {
+          if n != "" && n != "<expr-base>" {
+            refs[n] = true
+          }
+        }
+        // Constructor body refs
+        match ctor {
+          Some(f) => collect_var_refs_in_block(f.body, refs)
+          None => ()
+        }
+        // Method body refs
+        for m in decl.methods {
+          match m.body {
+            Some(b) => collect_var_refs_in_block(b, refs)
+            None => ()
+          }
+        }
+        decl_by_name[decl.name] = decls.length()
+        decls.push({ name: decl.name, index: i, refs })
+        is_decl[i] = true
+      }
       _ => ()
     }
   }
