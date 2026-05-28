@@ -239,7 +239,27 @@ fn scan_stmt_for_unsafe_uses(
       for s in b.stmts {
         scan_stmt_for_unsafe_uses(s, candidates)
       }
-    NativeClassStmt(_, _) => ()
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) =>
+          for s in f.body.stmts {
+            scan_stmt_for_unsafe_uses(s, candidates)
+          }
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            for s in b.stmts {
+              scan_stmt_for_unsafe_uses(s, candidates)
+            }
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        scan_expr_for_unsafe_uses(sf.1, candidates)
+      }
+    }
   }
 }
 
@@ -620,7 +640,14 @@ fn rewrite_stmt(
         }
         new_methods.push({ ..m, body: new_body })
       }
-      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, rewrite_expr(sf.1, table)))
+      }
+      NativeClassStmt(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
     }
   }
 }
