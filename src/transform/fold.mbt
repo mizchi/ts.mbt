@@ -485,11 +485,15 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         let ef = fold_expr(e)
         // `x ? x : y` → `x || y` (saves 3 bytes: `? x :` → `||`).
         // `x ? y : x` → `x && y` (saves 3 bytes: `? y :` → `&&`).
+        // `c ? b : b` → `b` when `c` is pure, else `(c, b)`.
         match (cf, tf, ef) {
           (Var(cn), Var(tn), _) if cn == tn =>
             BinOp(@ast.TsBinOp::Or, Var(cn), ef)
           (Var(cn), _, Var(en)) if cn == en =>
             BinOp(@ast.TsBinOp::And, Var(cn), tf)
+          (_, Var(tn), Var(en)) if tn == en =>
+            // Both branches are the same var — result is always that var.
+            if is_pure_value(cf) { Var(tn) } else { Seq(cf, Var(tn)) }
           _ => Cond(cf, tf, ef)
         }
       }
@@ -1667,6 +1671,9 @@ fn fold_binop(
     (And, _, _) if is_js_truthy(l) => r
     (Or, _, _) if is_js_truthy(l) => l
     (Or, _, _) if is_js_falsy(l) => r
+    // `x && x` → `x` and `x || x` → `x` for same-var operands.
+    // Both operators always evaluate to `x` regardless of its value.
+    (And, Var(ln), Var(rn)) | (Or, Var(ln), Var(rn)) if ln == rn => Var(ln)
     // Null coalescing: `null ?? x` and `undefined ?? x` → `x`.
     // A non-nullish left operand (any literal that isn't null/undefined)
     // short-circuits to that literal.

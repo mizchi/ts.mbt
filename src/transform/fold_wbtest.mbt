@@ -599,3 +599,21 @@ test "fold: String.padEnd folds correctly" {
   assert_true(out.contains("\"hi   \""))
   assert_false(out.contains("padEnd"))
 }
+
+///|
+test "fold: cond ? b : b (same var both branches) folds to b when cond is pure" {
+  let out = fold_one("const r = isPure ? x : x;\n")
+  // isPure is a Var, which is pure, so the whole expression collapses to x.
+  assert_true(out.contains("const r = x"))
+  assert_false(out.contains("?"))
+}
+
+///|
+test "fold: x && x → x and x || x → x" {
+  let out_and = fold_one("const r = x && x;\n")
+  assert_true(out_and.contains("const r = x"))
+  assert_false(out_and.contains("&&"))
+  let out_or = fold_one("const r = x || x;\n")
+  assert_true(out_or.contains("const r = x"))
+  assert_false(out_or.contains("||"))
+}
