@@ -428,7 +428,28 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       for e in exprs {
         new_exprs.push(fold_expr(e))
       }
-      TemplateLiteral(parts, new_exprs)
+      // `` `no ${expr} parts` `` with all literal expressions → plain string.
+      if new_exprs.is_empty() {
+        StringLit(parts[0])
+      } else {
+        // Try to fold all expressions to their string representations.
+        let mut all_lit = true
+        let buf = StringBuilder::new()
+        buf.write_string(parts[0])
+        for i, e in new_exprs {
+          match e {
+            IntLit(n) => buf.write_string(n.to_string())
+            NumberLit(n) => buf.write_string(n.to_string())
+            StringLit(s) => buf.write_string(s)
+            BoolLit(b) => buf.write_string(b.to_string())
+            _ => { all_lit = false; break }
+          }
+          if all_lit {
+            buf.write_string(parts[i + 1])
+          }
+        }
+        if all_lit { StringLit(buf.to_string()) } else { TemplateLiteral(parts, new_exprs) }
+      }
     }
     As(inner, ty) => As(fold_expr(inner), ty)
     Satisfies(inner, ty) => Satisfies(fold_expr(inner), ty)
