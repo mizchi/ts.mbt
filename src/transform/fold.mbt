@@ -520,17 +520,21 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       match (recv_f, p) {
         (StringLit(s), "length") => IntLit(s.length())
         (ArrayLit(items), "length") => IntLit(items.length())
-        // `{a:1, b:2}.a` → `1` (constant prop access on object literal)
+        // `{a:1, b:2}.a` → `1` only when ALL other values are pure
+        // (to avoid dropping side effects from other property initializers).
         (ObjectLit(entries), key) => {
           let mut found : @ast.TsExpr? = None
+          let mut all_others_pure = true
           for ent in entries {
             if ent.0 == key {
               found = Some(ent.1)
+            } else if not(is_pure_value(ent.1)) {
+              all_others_pure = false
             }
           }
           match found {
-            Some(v) => v
-            None => PropAccess(recv_f, p)
+            Some(v) if all_others_pure => v
+            _ => PropAccess(recv_f, p)
           }
         }
         _ => PropAccess(recv_f, p)
@@ -539,25 +543,35 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     IndexAccess(recv, idx) => {
       let recv_f = fold_expr(recv)
       let idx_f = fold_expr(idx)
-      // `[a,b,c][1]` → `b` (constant index into array literal)
+      // `[a,b,c][1]` → `b` only when all other items are pure.
       match (recv_f, idx_f) {
         (ArrayLit(items), IntLit(i)) =>
           if i >= 0 && i < items.length() {
-            items[i]
+            let mut all_others_pure = true
+            for j, item in items {
+              if j != i && not(is_pure_value(item)) {
+                all_others_pure = false
+                break
+              }
+            }
+            if all_others_pure { items[i] } else { IndexAccess(recv_f, idx_f) }
           } else {
             IndexAccess(recv_f, idx_f)
           }
-        // `{a:1,b:2}["a"]` → `1` (constant string key into object literal)
+        // `{a:1,b:2}["a"]` → `1` only when all other values are pure.
         (ObjectLit(entries), StringLit(k)) => {
           let mut found : @ast.TsExpr? = None
+          let mut all_others_pure = true
           for ent in entries {
             if ent.0 == k {
               found = Some(ent.1)
+            } else if not(is_pure_value(ent.1)) {
+              all_others_pure = false
             }
           }
           match found {
-            Some(v) => v
-            None => IndexAccess(recv_f, idx_f)
+            Some(v) if all_others_pure => v
+            _ => IndexAccess(recv_f, idx_f)
           }
         }
         _ => IndexAccess(recv_f, idx_f)
