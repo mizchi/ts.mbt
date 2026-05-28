@@ -617,3 +617,12 @@ test "fold: x && x → x and x || x → x" {
   assert_true(out_or.contains("const r = x"))
   assert_false(out_or.contains("||"))
 }
+
+///|
+test "fold: Seq(side_effect, pure) in statement position drops pure rhs" {
+  // `(call(), 42);` → `call();` — the 42 return value is discarded.
+  let out = fold_one("(doWork(), 42);\n")
+  assert_true(out.contains("doWork()"))
+  assert_false(out.contains("42"))
+  assert_false(out.contains(","))
+}

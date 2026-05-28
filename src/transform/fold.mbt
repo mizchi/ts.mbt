@@ -297,8 +297,15 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       let ef = fold_expr(e)
       // A pure expression used as a statement has no observable effect;
       // drop it so subsequent passes don't need to prove it safe.
-      if not(is_pure_value(ef)) {
-        out.push(Expr(ef))
+      // Also, `(side_effect, pure)` in statement position — the pure
+      // right-hand result is discarded, so trim it: `Expr(Seq(a,b))`
+      // with `b` pure reduces to `Expr(a)`.
+      let simplified = match ef {
+        Seq(a, b) if is_pure_value(b) => a
+        _ => ef
+      }
+      if not(is_pure_value(simplified)) {
+        out.push(Expr(simplified))
       }
     }
     Return(Some(e)) => out.push(Return(Some(fold_expr(e))))
