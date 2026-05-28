@@ -1002,6 +1002,8 @@ fn is_js_falsy(expr : @ast.TsExpr) -> Bool {
     BoolLit(false) => true
     NullLit => true
     Var("undefined") => true
+    // `void EXPR` always evaluates to `undefined` (falsy).
+    UnaryOp(Void, _) => true
     _ => false
   }
 }
