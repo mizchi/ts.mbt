@@ -117,3 +117,39 @@ test "fold: non-nullish literal ?? x short-circuits to the literal" {
   assert_true(out.contains("const a = 42;"))
   assert_false(out.contains("fallback"))
 }
+
+///|
+test "fold: 0 && x collapses to 0 when x is pure" {
+  let out = fold_one("const y = 0 && z;\n")
+  assert_true(out.contains("const y = 0;"))
+  assert_false(out.contains("&&"))
+}
+
+///|
+test "fold: 0 && f() collapses to 0 even when f() has side effects (short-circuit)" {
+  // JS short-circuit: `0 && f()` never calls f(), so dropping f() is safe.
+  let out = fold_one("const y = 0 && f();\n")
+  assert_true(out.contains("const y = 0;"))
+  assert_false(out.contains("&&"))
+}
+
+///|
+test "fold: 1 && x reduces to x" {
+  let out = fold_one("const y = 1 && z;\n")
+  assert_true(out.contains("const y = z;"))
+  assert_false(out.contains("&&"))
+}
+
+///|
+test "fold: 1 || x collapses to 1 (short-circuit)" {
+  let out = fold_one("const y = 1 || z;\n")
+  assert_true(out.contains("const y = 1;"))
+  assert_false(out.contains("||"))
+}
+
+///|
+test "fold: empty string || x reduces to x" {
+  let out = fold_one("const y = \"\" || z;\n")
+  assert_true(out.contains("const y = z;"))
+  assert_false(out.contains("||"))
+}

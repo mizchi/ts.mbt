@@ -16,6 +16,10 @@
 //   false && y -> false  (y is pure)
 //   true || y  -> true   (y is pure)
 //   false || y -> y
+//   0 && y     -> 0      (short-circuit: y never runs)
+//   1 && y     -> y      (truthy literal, y always runs)
+//   1 || y     -> 1      (short-circuit: y never runs)
+//   "" || y    -> y      (falsy literal, y always runs)
 //   cond ? a : b with cond literal -> the live arm
 //   if (true) {…} / if (false) {…} else {…} statements -> the live block
 //
@@ -361,11 +365,20 @@ fn fold_binop(
       } else {
         BinOp(op, l, r)
       }
-    // Boolean short-circuit
+    // Boolean short-circuit — BoolLit cases come first; then extend
+    // to integer / string / null literals whose truthiness is known.
     (And, BoolLit(true), _) => r
     (And, BoolLit(false), _) => BoolLit(false)
     (Or, BoolLit(true), _) => BoolLit(true)
     (Or, BoolLit(false), _) => r
+    // Short-circuit with known-falsy/truthy literal LHS.
+    // `&&`/`||` never evaluates the right side when the left side
+    // is already determinate — so `r` is unreachable regardless of
+    // its purity, and the fold is always safe.
+    (And, _, _) if is_js_falsy(l) => l
+    (And, _, _) if is_js_truthy(l) => r
+    (Or, _, _) if is_js_truthy(l) => l
+    (Or, _, _) if is_js_falsy(l) => r
     // Null coalescing: `null ?? x` and `undefined ?? x` → `x`.
     // A non-nullish left operand (any literal that isn't null/undefined)
     // short-circuits to that literal.
@@ -437,6 +450,39 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
       true
     }
     PropAccess(recv, _) => is_pure_value(recv)
+    _ => false
+  }
+}
+
+///|
+/// Returns `true` when the expression is a literal known to be falsy
+/// in JS boolean context: `0`, `0.0`, `""`, `false`, `null`, `undefined`.
+fn is_js_falsy(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    IntLit(0) => true
+    NumberLit(n) => n == 0.0
+    StringLit("") => true
+    BoolLit(false) => true
+    NullLit => true
+    Var("undefined") => true
+    _ => false
+  }
+}
+
+///|
+/// Returns `true` when the expression is a literal known to be truthy
+/// in JS boolean context: non-zero integers, non-empty strings, `true`,
+/// functions, arrays, objects. Only applied to values that are
+/// provably literals — callers must not widen this to arbitrary exprs.
+fn is_js_truthy(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    IntLit(n) => n != 0
+    NumberLit(n) => n != 0.0
+    StringLit(s) => s != ""
+    BoolLit(true) => true
+    FuncExpr(_) | ArrowFunc(_, _, _, _) => true
+    ArrayLit(_) | ObjectLit(_) => true
+    BigIntLit(_) => true
     _ => false
   }
 }
