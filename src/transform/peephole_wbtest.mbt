@@ -108,3 +108,22 @@ test "peephole: `true` becomes `!0` and `false` becomes `!1`" {
   assert_true(out_false.contains("!1"))
   assert_false(out_false.contains("false"))
 }
+
+///|
+test "minify emit: single-ident arrow param skips parens" {
+  let out = minify_one("const f = x => x + 1;\n")
+  assert_true(out.contains("x=>"))
+  assert_false(out.contains("(x)=>"))
+}
+
+///|
+test "minify emit: multi-param arrow keeps parens" {
+  let out = minify_one("const f = (x, y) => x + y;\n")
+  assert_true(out.contains("(x,y)=>") || out.contains("(x, y)=>"))
+}
+
+///|
+test "minify emit: rest-param arrow keeps parens" {
+  let out = minify_one("const f = (...args) => args;\n")
+  assert_true(out.contains("(...args)=>"))
+}

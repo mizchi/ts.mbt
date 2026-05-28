@@ -1639,9 +1639,42 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       if is_async {
         e.write("async ")
       }
-      e.write("(")
-      emit_runtime_params(e, params)
-      e.write(")")
+      // In minify mode, a single simple-identifier parameter doesn't
+      // need parens: `x=>x` is valid and saves 2 bytes over `(x)=>x`.
+      // "Simple" means: not a rest param, not a destructure, no default.
+      let bare_name : String? = if e.pretty {
+        None
+      } else {
+        let runtime : Array[@ast.TsParam] = []
+        for p in params {
+          if not(is_this_type_annotation_param(p)) {
+            runtime.push(p)
+          }
+        }
+        if runtime.length() == 1 {
+          let p = runtime[0]
+          let simple = not(p.is_rest) &&
+            (match p.binding {
+              None => true
+              _ => false
+            }) &&
+            (match p.default {
+              None => true
+              _ => false
+            })
+          if simple { Some(p.name) } else { None }
+        } else {
+          None
+        }
+      }
+      match bare_name {
+        Some(name) => e.write(name)
+        None => {
+          e.write("(")
+          emit_runtime_params(e, params)
+          e.write(")")
+        }
+      }
       e.space()
       e.write("=>")
       e.space()
