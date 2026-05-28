@@ -316,6 +316,16 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       out.push(PropAssign(fold_expr(target), prop, fold_expr(val)))
     Expr(e) => {
       let ef = fold_expr(e)
+      // `void call()` in statement position → `call()`.
+      // The result is discarded anyway, so the `void` wrapper saves nothing
+      // and costs 5 bytes. Only strip when the inner expression is not pure
+      // (a pure `void expr` is already dropped entirely by the purity check
+      // below via `is_pure_value(UnaryOp(Void,pure)) = true`).
+      let ef = match ef {
+        UnaryOp(@ast.TsUnaryOp::Void, inner) if not(is_pure_value(inner)) =>
+          inner
+        _ => ef
+      }
       // A pure expression used as a statement has no observable effect;
       // drop it so subsequent passes don't need to prove it safe.
       // Also, `(side_effect, pure)` in statement position — the pure
@@ -619,6 +629,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, IndexAccess(Var(tn), idx))
             if cn == tn && is_nullish_or_void(tf) =>
             OptionalChain(IndexAccess(Var(cn), idx))
+          // `c ? (x = a) : (x = b)` → `x = c ? a : b`.
+          // Both branches assign the same variable; hoist the assignment
+          // outside the ternary. Saves `x=` bytes in the then-branch.
+          // The expression value is the same (both sides evaluate to the
+          // assigned value).
+          (_, AssignExpr(n1, v1), AssignExpr(n2, v2)) if n1 == n2 =>
+            AssignExpr(n1, Cond(cf, v1, v2))
           _ => Cond(cf, tf, ef)
         }
       }

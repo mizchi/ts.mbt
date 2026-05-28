@@ -1053,3 +1053,28 @@ test "fold: null == 0 is false" {
   let out = fold_one("const r = null == 0;\n")
   assert_true(out.contains("const r = false;"))
 }
+
+///|
+test "fold: c ? (x=a) : (x=b) hoists assignment" {
+  // Both branches assign the same variable → hoist x= outside ternary.
+  let out = fold_one("const r = c ? (x = 1) : (x = 2);\n")
+  assert_true(out.contains("x=c?1:2") || out.contains("x = c ? 1 : 2"))
+  assert_false(out.contains("x=1"))
+  assert_false(out.contains("x=2"))
+}
+
+///|
+test "fold: void call() in stmt drops void wrapper" {
+  // `void f()` as a statement — the void wrapper is redundant since
+  // the result is discarded. Saves 5 bytes per site.
+  let out = fold_one("void f();\n")
+  assert_false(out.contains("void"))
+  assert_true(out.contains("f()"))
+}
+
+///|
+test "fold: void pure expression in stmt is dropped entirely" {
+  // `void 0;` is pure, so the entire statement is dropped.
+  let out = fold_one("void 0;\n")
+  assert_false(out.contains("void"))
+}
