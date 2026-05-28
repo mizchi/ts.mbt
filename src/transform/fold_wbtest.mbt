@@ -245,3 +245,17 @@ test "fold: impure expression statement is preserved" {
   let out = fold_one("f();\n")
   assert_true(out.contains("f()"))
 }
+
+///|
+test "fold: arrow block with single return collapses to concise form" {
+  let out = fold_one("const f = (x) => { return x + 1; };\n")
+  assert_false(out.contains("return"))
+  assert_false(out.contains("{"))
+  assert_true(out.contains("=>"))
+}
+
+///|
+test "fold: arrow block with multiple statements is preserved" {
+  let out = fold_one("const f = (x) => { const y = x + 1; return y; };\n")
+  assert_true(out.contains("return"))
+}

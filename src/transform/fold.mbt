@@ -17,6 +17,7 @@
 //   (pure, x) -> x            (comma-expression with pure left operand)
 //   function bodies: trailing `return;` dropped (implicit fall-through)
 //   `expr;` statements that are pure are dropped entirely
+//   `=> { return expr; }` arrow blocks collapse to `=> expr` concise form
 //   true && y  -> y
 //   false && y -> false  (y is pure)
 //   true || y  -> true   (y is pure)
@@ -41,6 +42,20 @@
 // object / array literals. Anything that could fire a side effect
 // (calls, assignments, new, await, yield) blocks the fold so we
 // don't accidentally elide observable behavior.
+
+///|
+/// If `block` is exactly `{ return EXPR; }` (one statement, a return
+/// with a value), return `Some(EXPR)`. Otherwise `None`.
+fn single_return_expr(block : @ast.TsBlock) -> @ast.TsExpr? {
+  if block.stmts.length() == 1 {
+    match block.stmts[0] {
+      Return(Some(e)) => Some(e)
+      _ => None
+    }
+  } else {
+    None
+  }
+}
 
 ///|
 /// Strip a trailing `return;` from an already-folded function body.
@@ -367,8 +382,16 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(fold_expr(e))
-        ArrowBlock(b) =>
-          @ast.TsArrowBody::ArrowBlock(fold_func_body(fold_block(b)))
+        ArrowBlock(b) => {
+          let folded = fold_func_body(fold_block(b))
+          // `=> { return expr; }` → `=> expr` (concise form, saves
+          // the `{ return ` + ` }` wrapper). Only when the block
+          // has a single `return EXPR` statement.
+          match single_return_expr(folded) {
+            Some(e) => @ast.TsArrowBody::ArrowExpr(e)
+            None => @ast.TsArrowBody::ArrowBlock(folded)
+          }
+        }
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
