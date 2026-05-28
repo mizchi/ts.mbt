@@ -451,16 +451,22 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     }
     ForOf(k, b, t, iter, body) => {
       let iter_f = fold_expr(iter)
-      // `for (... of [])` is a no-op — empty array produces zero iterations.
+      // `for (... of [])` / `for (... of "")` is a no-op — zero iterations.
       match iter_f {
-        ArrayLit([]) => ()
+        ArrayLit([]) | StringLit("") => ()
         _ => out.push(ForOf(k, b, t, iter_f, fold_block(body)))
       }
     }
     ForAwaitOf(k, b, t, iter, body) =>
       out.push(ForAwaitOf(k, b, t, fold_expr(iter), fold_block(body)))
-    ForIn(k, b, t, iter, body) =>
-      out.push(ForIn(k, b, t, fold_expr(iter), fold_block(body)))
+    ForIn(k, b, t, iter, body) => {
+      let iter_f = fold_expr(iter)
+      // `for (... in {})` iterates over nothing — empty object has no enumerable keys.
+      match iter_f {
+        ObjectLit([]) => ()
+        _ => out.push(ForIn(k, b, t, iter_f, fold_block(body)))
+      }
+    }
     Switch(e, cases) => {
       let disc = fold_expr(e)
       let folded_cases : Array[@ast.TsSwitchCase] = []

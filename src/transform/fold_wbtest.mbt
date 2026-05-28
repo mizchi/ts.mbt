@@ -1200,3 +1200,17 @@ test "fold: nested if with outer else not merged (unsafe)" {
   // Should still contain both `a` and `b` as separate conditions
   assert_true(out.contains("else"))
 }
+
+///|
+test "fold: for-of over empty string is a no-op" {
+  let out = fold_one("for (const c of \"\") { console.log(c); }\n")
+  assert_false(out.contains("for"))
+  assert_false(out.contains("console"))
+}
+
+///|
+test "fold: for-in over empty object is a no-op" {
+  let out = fold_one("for (const k in {}) { console.log(k); }\n")
+  assert_false(out.contains("for"))
+  assert_false(out.contains("console"))
+}
