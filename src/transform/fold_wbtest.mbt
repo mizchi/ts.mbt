@@ -564,3 +564,24 @@ test "fold: String.fromCharCode folds to string literal" {
   assert_true(out.contains("\"Hel\""))
   assert_false(out.contains("fromCharCode"))
 }
+
+///|
+test "fold: Array.slice with positive start folds correctly" {
+  let out = fold_one("const s = [1, 2, 3].slice(1);\n")
+  assert_true(out.contains("[2, 3]") || out.contains("[2,3]"))
+  assert_false(out.contains("slice"))
+}
+
+///|
+test "fold: Array.slice with negative index folds correctly" {
+  let out = fold_one("const s = [1, 2, 3, 4].slice(-2);\n")
+  assert_true(out.contains("[3, 4]") || out.contains("[3,4]"))
+  assert_false(out.contains("slice"))
+}
+
+///|
+test "fold: Array.at with negative index folds correctly" {
+  let out = fold_one("const s = [10, 20, 30].at(-1);\n")
+  assert_true(out.contains("30"))
+  assert_false(out.contains(".at"))
+}

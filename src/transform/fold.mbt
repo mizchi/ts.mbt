@@ -1414,6 +1414,66 @@ fn fold_array_method(
       }
       Some(ArrayLit(result))
     }
+    "slice" => {
+      // `[1,2,3].slice(start[, end])` — same semantics as String.slice
+      // but returns a new array.  Only fold when all items are pure.
+      let len = items.length()
+      let resolve = fn(i : Int) -> Int {
+        let r = if i < 0 { len + i } else { i }
+        r.max(0).min(len)
+      }
+      let mut all_pure = true
+      for item in items {
+        if not(is_pure_value(item)) {
+          all_pure = false
+          break
+        }
+      }
+      if not(all_pure) {
+        return None
+      }
+      let (s0, e0) = match args.length() {
+        1 =>
+          match args[0] {
+            IntLit(start) => (resolve(start), len)
+            _ => return None
+          }
+        2 =>
+          match (args[0], args[1]) {
+            (IntLit(start), IntLit(end_)) => (resolve(start), resolve(end_))
+            _ => return None
+          }
+        _ => return None
+      }
+      let sliced : Array[@ast.TsExpr] = []
+      for i in s0..<e0 {
+        sliced.push(items[i])
+      }
+      Some(ArrayLit(sliced))
+    }
+    "at" if args.length() == 1 =>
+      // `[1,2,3].at(-1)` → `3`
+      match args[0] {
+        IntLit(i) => {
+          let len = items.length()
+          let idx = if i < 0 { len + i } else { i }
+          if idx >= 0 && idx < len && is_pure_value(items[idx]) {
+            // Check all other items are also pure so we don't drop
+            // side effects from items we skip.
+            let mut all_pure = true
+            for j, item in items {
+              if j != idx && not(is_pure_value(item)) {
+                all_pure = false
+                break
+              }
+            }
+            if all_pure { Some(items[idx]) } else { None }
+          } else {
+            None
+          }
+        }
+        _ => None
+      }
     _ => None
   }
 }
