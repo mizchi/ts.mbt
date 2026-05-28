@@ -291,8 +291,19 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     YieldStar(inner) => YieldStar(peep_expr(inner, ctx))
     Await(inner) => Await(peep_expr(inner, ctx))
     Seq(a, b) => Seq(peep_expr(a, ctx), peep_expr(b, ctx))
-    CompoundAssignExpr(t, op, v) =>
-      CompoundAssignExpr(peep_expr(t, ctx), op, peep_expr(v, ctx))
+    CompoundAssignExpr(t, op, v) => {
+      let tp = peep_expr(t, ctx)
+      let vp = peep_expr(v, ctx)
+      // `expr += 1` → `expr++` and `expr -= 1` → `expr--` in expression
+      // position. Saves 2 bytes vs the compound-assign form.
+      match (op, vp) {
+        (AddAssign, @ast.TsExpr::IntLit(1)) =>
+          UnaryOp(@ast.TsUnaryOp::PostInc, tp)
+        (SubAssign, @ast.TsExpr::IntLit(1)) =>
+          UnaryOp(@ast.TsUnaryOp::PostDec, tp)
+        _ => CompoundAssignExpr(tp, op, vp)
+      }
+    }
     AssignPattern(b, v) => AssignPattern(b, peep_expr(v, ctx))
     PropAssignExpr(recv, p, v) =>
       PropAssignExpr(peep_expr(recv, ctx), p, peep_expr(v, ctx))

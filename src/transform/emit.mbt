@@ -766,7 +766,11 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("(")
       emit_for_of_kind(e, kind)
       emit_binding(e, binding)
-      e.write(" of ")
+      // The space before `of` is always required (binding ends with
+      // ident). Space after `of` can be dropped in minify mode when
+      // the iterable starts with a non-ident token.
+      e.write(" of")
+      e.sep_after_word(expr_leading_byte(iter))
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
@@ -778,7 +782,8 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("(")
       emit_for_of_kind(e, kind)
       emit_binding(e, binding)
-      e.write(" of ")
+      e.write(" of")
+      e.sep_after_word(expr_leading_byte(iter))
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
@@ -790,7 +795,10 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("(")
       emit_for_of_kind(e, kind)
       emit_binding(e, binding)
-      e.write(" in ")
+      // Same treatment as `of`: space before `in` always needed,
+      // space after only when the iterable starts with ident char.
+      e.write(" in")
+      e.sep_after_word(expr_leading_byte(iter))
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
@@ -1365,7 +1373,11 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       // leading operator would merge into `++` / `--`. Same idea
       // for `< <x`, `> >x` — those merge into shift tokens.
       if is_word_op {
-        e.write(" ")
+        // Word operators end with an ident char; space after is
+        // only strictly required when the right operand also starts
+        // with an ident char.  Use `sep_after_word` to suppress it
+        // in minify mode when the RHS starts with `(`, `[`, etc.
+        e.sep_after_word(expr_leading_byte(r))
       } else if right_needs_token_separator(op, r) {
         e.write(" ")
       } else {
@@ -1675,9 +1687,6 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       emit_expr(e, b, 2)
     }
     ArrowFunc(params, _ret_ty, body, is_async) => {
-      if is_async {
-        e.write("async ")
-      }
       // In minify mode, a single simple-identifier parameter doesn't
       // need parens: `x=>x` is valid and saves 2 bytes over `(x)=>x`.
       // "Simple" means: not a rest param, not a destructure, no default.
@@ -1706,9 +1715,22 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           None
         }
       }
+      // Emit `async` keyword, then the params.  In minify mode,
+      // `async(x)=>` is valid (saves 1 byte vs `async (x)=>`),
+      // but `asyncx=>` is not — so the space is required only
+      // when a bare identifier param follows.
       match bare_name {
-        Some(name) => e.write(name)
+        Some(name) => {
+          if is_async {
+            e.write("async ")
+          }
+          e.write(name)
+        }
         None => {
+          if is_async {
+            e.word("async")
+            e.sep_after_word('(')
+          }
           e.write("(")
           emit_runtime_params(e, params)
           e.write(")")
@@ -2790,13 +2812,13 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
 /// - Tries exponential when shorter: `1000000.0` → `1e6` (saves bytes)
 fn minify_number(n : Double) -> String {
   let standard = n.to_string()
-  // Try canonical representation.
+  let mut best = standard
   // Drop trailing ".0" (integer-valued doubles): 1.0 → 1
   if standard.has_suffix(".0") {
     let shorter = standard.substring(start=0, end=standard.length() - 2).to_string()
     // Verify lossless round-trip.
     match (try? @strconv.parse_double(shorter)) {
-      Ok(back) => if back == n { return shorter }
+      Ok(back) => if back == n && shorter.length() < best.length() { best = shorter }
       Err(_) => ()
     }
   }
@@ -2804,11 +2826,35 @@ fn minify_number(n : Double) -> String {
   if standard.has_prefix("0.") {
     let shorter = standard.substring(start=1).to_string()
     match (try? @strconv.parse_double(shorter)) {
-      Ok(back) => if back == n { return shorter }
+      Ok(back) => if back == n && shorter.length() < best.length() { best = shorter }
       Err(_) => ()
     }
   }
-  standard
+  // Scientific notation for integers with trailing zeros: 1000000 → 1e6.
+  // Only worthwhile when the exponent notation is strictly shorter.
+  // Cap at MAX_SAFE_INTEGER to avoid Int64 overflow on the conversion.
+  let abs_n = if n < 0.0 { -n } else { n }
+  if abs_n >= 1000.0 && abs_n <= 9007199254740991.0 && abs_n.to_int64().to_double() == abs_n {
+    let int_val = abs_n.to_int64()
+    let mut mantissa = int_val
+    let mut exp = 0
+    while mantissa % 10L == 0L && mantissa > 0L {
+      mantissa = mantissa / 10L
+      exp = exp + 1
+    }
+    if exp >= 2 {
+      let sci = if n < 0.0 {
+        "-" + mantissa.to_string() + "e" + exp.to_string()
+      } else {
+        mantissa.to_string() + "e" + exp.to_string()
+      }
+      match (try? @strconv.parse_double(sci)) {
+        Ok(back) => if back == n && sci.length() < best.length() { best = sci }
+        Err(_) => ()
+      }
+    }
+  }
+  best
 }
 
 ///|

@@ -193,3 +193,44 @@ test "minify emit: object shorthand {x:x} → {x}" {
   assert_false(out.contains("x: x"))
   assert_false(out.contains("y: y"))
 }
+
+///|
+test "minify emit: async arrow with parens drops space before `(`" {
+  let out = minify_one("const f = async (x) => x + 1;\n")
+  assert_true(out.contains("async(x)=>"))
+  assert_false(out.contains("async (x)=>"))
+}
+
+///|
+test "minify emit: async arrow with bare param keeps space before ident" {
+  let out = minify_one("const f = async x => x + 1;\n")
+  // bare identifier param: `async x=>` (space required before ident)
+  assert_true(out.contains("async x=>"))
+}
+
+///|
+test "minify emit: for-of array literal drops space after `of`" {
+  let out = minify_one("for (const x of [1, 2, 3]) { use(x); }\n")
+  assert_true(out.contains("of["))
+  assert_false(out.contains("of ["))
+}
+
+///|
+test "minify emit: for-of identifier keeps space after `of`" {
+  let out = minify_one("for (const x of arr) { use(x); }\n")
+  assert_true(out.contains(" of arr"))
+}
+
+///|
+test "minify emit: large integer with trailing zeros uses scientific notation" {
+  let out = minify_one("const x = 1000000;\n")
+  assert_true(out.contains("1e6"))
+  assert_false(out.contains("1000000"))
+}
+
+///|
+test "minify emit: CompoundAssignExpr += 1 becomes ++" {
+  let out = minify_one("function f(obj) { obj.count += 1; }\n")
+  assert_true(out.contains("obj.count++") || out.contains("++"))
+  assert_false(out.contains("+="))
+}
