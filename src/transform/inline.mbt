@@ -216,7 +216,21 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
       } else {
         Block(inline_block(b))
       }
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: inline_block(f.body) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(inline_block(b))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+    }
   }
 }
 
