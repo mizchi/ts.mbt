@@ -229,7 +229,14 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
         }
         new_methods.push({ ..m, body: new_body })
       }
-      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, inline_into_expr(sf.1)))
+      }
+      NativeClassStmt(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
     }
   }
 }
@@ -898,6 +905,32 @@ fn count_var_uses_stmt(
       l = l + l2
       n = n + n2
     }
+    NativeClassStmt(decl, ctor) => {
+      // All uses inside a class body are "nested" (they live inside
+      // function scopes — constructor / method bodies / static inits).
+      // Treat them as nested so single-use inlining never moves a
+      // binding's rhs into a class body.
+      let walk_block_nested = fn(blk : @ast.TsBlock) {
+        let (l2, n2) = count_var_uses_block(blk, name, true)
+        l = l + l2
+        n = n + n2
+      }
+      match ctor {
+        Some(f) => walk_block_nested(f.body)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => walk_block_nested(b)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        let (l2, n2) = count_var_uses_expr(sf.1, name, 0, 0, true)
+        l = l + l2
+        n = n + n2
+      }
+    }
     _ => ()
   }
   (l, n)
@@ -1466,6 +1499,22 @@ fn collect_captured_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
     }
     Label(_, inner) => collect_captured_stmt(inner, out)
     Block(b) => collect_captured_block(b, out, false)
+    NativeClassStmt(decl, ctor) => {
+      // Class method / constructor bodies are nested function scopes.
+      match ctor {
+        Some(f) => collect_captured_block(f.body, out, true)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_captured_block(b, out, true)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_captured_expr(sf.1, out, false)
+      }
+    }
     _ => ()
   }
 }
