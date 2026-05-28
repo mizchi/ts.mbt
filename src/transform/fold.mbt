@@ -1368,6 +1368,25 @@ fn fold_binop(
     | (BinNe, NullLit, IntLit(_))
     | (BinNe, BoolLit(_), NullLit)
     | (BinNe, NullLit, BoolLit(_)) => BoolLit(true)
+    // `x === null || x === undefined` → `x == null`
+    // (loose equality is the idiomatic nullish check; saves 12+ bytes
+    // per site vs the long form, and is semantically identical).
+    // Only fold when both sides reference the same simple variable.
+    (Or, BinOp(BinEq, Var(an), NullLit), BinOp(BinEq, Var(bn), Var("undefined")))
+    | (Or, BinOp(BinEq, Var(an), Var("undefined")), BinOp(BinEq, Var(bn), NullLit)) =>
+      if an == bn {
+        BinOp(AbstractEq, Var(an), NullLit)
+      } else {
+        BinOp(op, l, r)
+      }
+    // `x !== null && x !== undefined` → `x != null`
+    (And, BinOp(BinNe, Var(an), NullLit), BinOp(BinNe, Var(bn), Var("undefined")))
+    | (And, BinOp(BinNe, Var(an), Var("undefined")), BinOp(BinNe, Var(bn), NullLit)) =>
+      if an == bn {
+        BinOp(AbstractNe, Var(an), NullLit)
+      } else {
+        BinOp(op, l, r)
+      }
     // Bitwise/shift ops on integer literals
     (BitAnd, IntLit(a), IntLit(b)) => IntLit(a.land(b))
     (BitOr, IntLit(a), IntLit(b)) => IntLit(a.lor(b))

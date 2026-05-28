@@ -391,6 +391,22 @@ test "fold: !(a < b) folds to a >= b" {
 }
 
 ///|
+test "fold: x===null||x===undefined → x==null" {
+  let out = fold_one("const r = x === null || x === undefined;\n")
+  assert_true(out.contains("=="))
+  assert_false(out.contains("==="))
+  assert_false(out.contains("||"))
+}
+
+///|
+test "fold: x!==null&&x!==undefined → x!=null" {
+  let out = fold_one("const r = x !== null && x !== undefined;\n")
+  assert_true(out.contains("!="))
+  assert_false(out.contains("!=="))
+  assert_false(out.contains("&&"))
+}
+
+///|
 test "fold: if(c){e1;}else{e2;} → c?e1:e2 expr stmt" {
   let out = fold_one("if (x > 0) { log(x); } else { log(-x); }\n")
   assert_true(out.contains("?"))
