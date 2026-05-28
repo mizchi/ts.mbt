@@ -391,6 +391,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           } else {
             UnaryOp(op, inner_f)
           }
+        // `-(a - b)` → `b - a` when both sides are pure.
+        (Neg, BinOp(Sub, a, b)) =>
+          if is_pure_value(a) && is_pure_value(b) {
+            BinOp(Sub, b, a)
+          } else {
+            UnaryOp(op, inner_f)
+          }
         // `void PURE_EXPR` → `void 0` — the argument is evaluated for
         // side effects only; since it's pure, replace with the standard
         // `void 0` idiom (saves bytes on complex pure expressions).
