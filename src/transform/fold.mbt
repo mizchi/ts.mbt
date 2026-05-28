@@ -1082,6 +1082,51 @@ fn fold_string_method(
         _ => None
       }
     }
+    "substring" => {
+      // `"hello".substring(start[, end])` — same as slice but clamps negatives to 0.
+      let len = s.length()
+      let clamp = fn(i : Int) -> Int { i.max(0).min(len) }
+      match args.length() {
+        1 =>
+          match args[0] {
+            IntLit(start) =>
+              Some(StringLit(s.substring(start=clamp(start)).to_string()))
+            _ => None
+          }
+        2 =>
+          match (args[0], args[1]) {
+            (IntLit(start), IntLit(end_)) => {
+              let s0 = clamp(start)
+              let e0 = clamp(end_)
+              // `substring` swaps arguments when start > end.
+              let lo = s0.min(e0)
+              let hi = s0.max(e0)
+              if lo >= hi {
+                Some(StringLit(""))
+              } else {
+                Some(StringLit(s.substring(start=lo, end=hi).to_string()))
+              }
+            }
+            _ => None
+          }
+        _ => None
+      }
+    }
+    "at" if args.length() == 1 =>
+      // `"hello".at(0)` / `"hello".at(-1)` → char at position (or empty string).
+      match args[0] {
+        IntLit(i) => {
+          let len = s.length()
+          let idx = if i < 0 { len + i } else { i }
+          if idx >= 0 && idx < len {
+            Some(StringLit(s.substring(start=idx, end=idx + 1).to_string()))
+          } else {
+            // `undefined` in JS — we can't return a meaningful value.
+            None
+          }
+        }
+        _ => None
+      }
     _ => None
   }
 }
