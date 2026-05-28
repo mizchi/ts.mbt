@@ -534,7 +534,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           // an if/else, saving the `switch(x){case y:..;break;}` boilerplate.
           let lowered = try_lower_single_case_switch(disc, folded_cases)
           match lowered {
-            Some(s) => out.push(s)
+            Some(s) => fold_stmt_into(s, out)
             None => out.push(Switch(disc, folded_cases))
           }
         }
