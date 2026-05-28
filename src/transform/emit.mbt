@@ -1559,7 +1559,11 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     New(name, args) => {
       e.write("new ")
       e.write(name)
-      emit_args(e, args)
+      // In minify mode, `new Foo` (no parens) is valid when there
+      // are no arguments. Saves 2 bytes per zero-arg construction.
+      if e.pretty || args.length() > 0 {
+        emit_args(e, args)
+      }
     }
     NewExpr(callee, args) => {
       e.write("new ")
