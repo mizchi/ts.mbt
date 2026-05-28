@@ -439,7 +439,22 @@ fn drop_dead_props_stmt(
     Label(name, inner) =>
       Label(name, drop_dead_props_stmt(inner, reserved, read_props))
     Block(b) => Block(drop_dead_props_block(b, reserved, read_props))
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) =>
+          Some({ ..f, body: drop_dead_props_block(f.body, reserved, read_props) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(drop_dead_props_block(b, reserved, read_props))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+    }
   }
 }
 
