@@ -1076,31 +1076,55 @@ fn fold_math_call(
       } else {
         None
       }
-    "min" =>
-      if args.length() == 2 {
-        match (as_float(args[0]), as_float(args[1])) {
-          (Some(a), Some(b)) => Some(to_lit(if a <= b { a } else { b }))
-          _ => None
-        }
-      } else {
-        None
+    "min" => {
+      // Fold when all arguments are numeric literals (handles 0, 1, 2+ args).
+      if args.length() == 0 {
+        return Some(NumberLit(1.0 / 0.0)) // Infinity
       }
-    "max" =>
-      if args.length() == 2 {
-        match (as_float(args[0]), as_float(args[1])) {
-          (Some(a), Some(b)) => Some(to_lit(if a >= b { a } else { b }))
-          _ => None
+      let mut result = 1.0 / 0.0 // start at Infinity
+      let mut all_lit = true
+      for arg in args {
+        match as_float(arg) {
+          Some(n) => if n < result { result = n }
+          None => { all_lit = false; break }
         }
-      } else {
-        None
       }
+      if all_lit { Some(to_lit(result)) } else { None }
+    }
+    "max" => {
+      // Fold when all arguments are numeric literals.
+      if args.length() == 0 {
+        return Some(NumberLit(-1.0 / 0.0)) // -Infinity
+      }
+      let mut result = -1.0 / 0.0 // start at -Infinity
+      let mut all_lit = true
+      for arg in args {
+        match as_float(arg) {
+          Some(n) => if n > result { result = n }
+          None => { all_lit = false; break }
+        }
+      }
+      if all_lit { Some(to_lit(result)) } else { None }
+    }
     "floor" | "ceil" | "round" | "trunc" =>
-      // Only fold integer-valued inputs — no approximation needed.
       if args.length() == 1 {
         match as_float(args[0]) {
           Some(n) => {
-            let as_int = n.to_int()
-            if as_int.to_double() == n { Some(IntLit(as_int)) } else { None }
+            // JS Math.round uses "round half away from zero" for positive,
+            // and "round half up" (toward +Inf) — i.e. .5 rounds up.
+            let result = match method {
+              "floor" => n.floor()
+              "ceil" => n.ceil()
+              "round" => (n + 0.5).floor() // .5 rounds toward +Inf
+              _ => if n >= 0.0 { n.floor() } else { n.ceil() } // trunc
+            }
+            let as_int = result.to_int()
+            // Return integer form when it fits in Int, float form otherwise.
+            if as_int.to_double() == result && result >= -2147483648.0 && result <= 2147483647.0 {
+              Some(IntLit(as_int))
+            } else {
+              Some(NumberLit(result))
+            }
           }
           None => None
         }
