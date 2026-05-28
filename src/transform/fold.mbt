@@ -339,7 +339,17 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         out.push(Expr(simplified))
       }
     }
-    Return(Some(e)) => out.push(Return(Some(fold_expr(e))))
+    Return(Some(e)) => {
+      let ef = fold_expr(e)
+      // `return undefined;` / `return void 0;` → `return;`.
+      // Saves the expression bytes; `fold_func_body` then strips the
+      // trailing bare `return;` from the body entirely.
+      let normalized = match ef {
+        Var("undefined") | UnaryOp(@ast.TsUnaryOp::Void, _) => Return(None)
+        _ => Return(Some(ef))
+      }
+      out.push(normalized)
+    }
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => out.push(stmt)
     Throw(e) => out.push(Throw(fold_expr(e)))
     While(c, body) => {

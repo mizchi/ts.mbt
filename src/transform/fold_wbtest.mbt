@@ -1078,3 +1078,19 @@ test "fold: void pure expression in stmt is dropped entirely" {
   let out = fold_one("void 0;\n")
   assert_false(out.contains("void"))
 }
+
+test "fold: return undefined normalizes to return" {
+  // `return undefined` and `return void 0` carry no useful value;
+  // normalize to bare `return;` so fold_func_body can strip the
+  // trailing return entirely.
+  let out = fold_one("function f() { return undefined; }\n")
+  // After normalization + trailing-return strip, no `return` survives.
+  assert_false(out.contains("return"))
+}
+
+test "fold: return void 0 normalizes to return" {
+  let out = fold_one("function f() { x(); return void 0; }\n")
+  // The void-return is stripped; only the call stays.
+  assert_false(out.contains("return"))
+  assert_true(out.contains("x()"))
+}
