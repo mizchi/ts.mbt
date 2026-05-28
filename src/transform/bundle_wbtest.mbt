@@ -805,6 +805,29 @@ test "treeshake: class extends keeps the base class alive" {
 }
 
 ///|
+test "treeshake: unused native class declaration is dropped" {
+  // A `class Unused { … }` that is never instantiated or referenced
+  // should be eliminated by treeshake.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Unused { run() { return 42; } }\n" +
+      "class Used {}\n" +
+      "const u = new Used();\n" +
+      "console.log(u);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("Unused"))
+      assert_true(out.js.contains("Used"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "sourcemap: mangle path emits per-stmt mappings via encoded positions" {
   let files = vfs([
     (
