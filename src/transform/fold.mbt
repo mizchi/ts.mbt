@@ -881,9 +881,9 @@ fn fold_string_method(
     "trim" | "trimStart" | "trimEnd" if args.length() == 0 => {
       // Use simple whitespace trimming.
       let trimmed = match method {
-        "trimStart" => s.trim_start()
-        "trimEnd" => s.trim_end()
-        _ => s.trim()
+        "trimStart" => s.trim_start().to_string()
+        "trimEnd" => s.trim_end().to_string()
+        _ => s.trim().to_string()
       }
       Some(StringLit(trimmed))
     }
