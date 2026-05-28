@@ -287,7 +287,21 @@ fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt 
       )
     Label(name, inner) => Label(name, switch_fold_stmt(inner, table))
     Block(b) => Block(switch_fold_block(b, table))
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: switch_fold_block(f.body, table) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(switch_fold_block(b, table))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+    }
   }
 }
 

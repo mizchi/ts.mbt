@@ -440,7 +440,21 @@ fn type_fold_stmt(
       )
     Label(name, inner) => Label(name, type_fold_stmt(inner, scope))
     Block(b) => Block(type_fold_block_in(b, scope))
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: type_fold_block_in(f.body, scope) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(type_fold_block_in(b, scope))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      NativeClassStmt({ ..decl, methods: new_methods }, new_ctor)
+    }
   }
 }
 
