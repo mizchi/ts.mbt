@@ -391,6 +391,20 @@ test "fold: !(a < b) folds to a >= b" {
 }
 
 ///|
+test "fold: x?x:y collapses to x||y" {
+  let out = fold_one("const r = a ? a : b;\n")
+  assert_true(out.contains("a || b"))
+  assert_false(out.contains("?"))
+}
+
+///|
+test "fold: x?y:x collapses to x&&y" {
+  let out = fold_one("const r = a ? b : a;\n")
+  assert_true(out.contains("a && b"))
+  assert_false(out.contains("?"))
+}
+
+///|
 test "fold: parseInt(str,10) folds to integer literal" {
   let out = fold_one("const n = parseInt(\"42\", 10);\n")
   assert_true(out.contains("= 42;"))

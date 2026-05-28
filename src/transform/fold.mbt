@@ -465,7 +465,17 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       } else if is_js_falsy(cf) {
         fold_expr(e)
       } else {
-        Cond(cf, fold_expr(t), fold_expr(e))
+        let tf = fold_expr(t)
+        let ef = fold_expr(e)
+        // `x ? x : y` → `x || y` (saves 3 bytes: `? x :` → `||`).
+        // `x ? y : x` → `x && y` (saves 3 bytes: `? y :` → `&&`).
+        match (cf, tf, ef) {
+          (Var(cn), Var(tn), _) if cn == tn =>
+            BinOp(@ast.TsBinOp::Or, Var(cn), ef)
+          (Var(cn), _, Var(en)) if cn == en =>
+            BinOp(@ast.TsBinOp::And, Var(cn), tf)
+          _ => Cond(cf, tf, ef)
+        }
       }
     }
     Call(name, args) => {
