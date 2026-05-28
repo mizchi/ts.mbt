@@ -12,6 +12,8 @@
 //   x = x || y    -> x ||= y
 //   x = x ?? y    -> x ??= y
 //   undefined     -> void 0          (when `undefined` is never bound)
+//   true          -> !0              (saves 2 bytes)
+//   false         -> !1              (saves 3 bytes)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -149,6 +151,11 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
 ///|
 fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
   match expr {
+    BoolLit(b) =>
+      // `true` → `!0` (2 bytes saved), `false` → `!1` (3 bytes saved).
+      // `!0` evaluates to `true` and `!1` evaluates to `false` in all
+      // JS engines; no context requires the identifier spelling.
+      UnaryOp(Not, IntLit(if b { 0 } else { 1 }))
     Var(name) =>
       // `undefined` is a writable global on the spec's whatwg side,
       // but in practice it's always the singleton value. `void 0`

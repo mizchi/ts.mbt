@@ -98,3 +98,13 @@ test "minify emit: return followed by object literal has no space" {
   let out = minify_one("function f() { return { a: 1 }; }\n")
   assert_true(out.contains("return{"))
 }
+
+///|
+test "peephole: `true` becomes `!0` and `false` becomes `!1`" {
+  let out_true = peep_one("const x = true;\n")
+  assert_true(out_true.contains("!0"))
+  assert_false(out_true.contains("true"))
+  let out_false = peep_one("const x = false;\n")
+  assert_true(out_false.contains("!1"))
+  assert_false(out_false.contains("false"))
+}
