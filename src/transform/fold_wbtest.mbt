@@ -259,3 +259,24 @@ test "fold: arrow block with multiple statements is preserved" {
   let out = fold_one("const f = (x) => { const y = x + 1; return y; };\n")
   assert_true(out.contains("return"))
 }
+
+///|
+test "fold: Math.abs with negative literal" {
+  let out = fold_one("const x = Math.abs(-5);\n")
+  assert_true(out.contains("const x = 5;"))
+  assert_false(out.contains("Math.abs"))
+}
+
+///|
+test "fold: Math.min / Math.max with literal args" {
+  let out = fold_one("const a = Math.min(3, 1); const b = Math.max(3, 1);\n")
+  assert_true(out.contains("const a = 1;"))
+  assert_true(out.contains("const b = 3;"))
+}
+
+///|
+test "fold: Math.sign with literal args" {
+  let out = fold_one("const a = Math.sign(-5); const b = Math.sign(3);\n")
+  assert_true(out.contains("const a = -1;"))
+  assert_true(out.contains("const b = 1;"))
+}

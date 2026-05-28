@@ -18,6 +18,7 @@
 //   function bodies: trailing `return;` dropped (implicit fall-through)
 //   `expr;` statements that are pure are dropped entirely
 //   `=> { return expr; }` arrow blocks collapse to `=> expr` concise form
+//   Math.abs(-5) -> 5, Math.min(1,2) -> 1, Math.max(1,2) -> 2  (literal args)
 //   true && y  -> y
 //   false && y -> false  (y is pure)
 //   true || y  -> true   (y is pure)
@@ -341,7 +342,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       for a in args {
         new_args.push(fold_expr(a))
       }
-      MethodCall(fold_expr(recv), m, new_args)
+      let recv_f = fold_expr(recv)
+      // `Math.method(literal)` → constant result.
+      match fold_math_call(recv_f, m, new_args) {
+        Some(result) => result
+        None => MethodCall(recv_f, m, new_args)
+      }
     }
     PropAccess(recv, p) => PropAccess(fold_expr(recv), p)
     IndexAccess(recv, idx) => IndexAccess(fold_expr(recv), fold_expr(idx))
@@ -425,6 +431,82 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     NonNull(inner) => NonNull(fold_expr(inner))
     OptionalChain(inner) => OptionalChain(fold_expr(inner))
     _ => expr
+  }
+}
+
+///|
+/// Try to constant-fold a `recv.method(args)` call when `recv` is
+/// `Math` and the arguments are numeric literals. Only covers the
+/// operations implementable without a floating-point math library.
+fn fold_math_call(
+  recv : @ast.TsExpr,
+  method : String,
+  args : Array[@ast.TsExpr],
+) -> @ast.TsExpr? {
+  match recv {
+    Var("Math") => ()
+    _ => return None
+  }
+  fn as_float(e : @ast.TsExpr) -> Double? {
+    match e {
+      NumberLit(n) => Some(n)
+      IntLit(n) => Some(n.to_double())
+      _ => None
+    }
+  }
+  fn to_lit(n : Double) -> @ast.TsExpr {
+    let as_int = n.to_int()
+    if as_int.to_double() == n { IntLit(as_int) } else { NumberLit(n) }
+  }
+  match method {
+    "abs" =>
+      if args.length() == 1 {
+        match as_float(args[0]) {
+          Some(n) => Some(to_lit(if n < 0.0 { -n } else { n }))
+          None => None
+        }
+      } else {
+        None
+      }
+    "sign" =>
+      if args.length() == 1 {
+        match as_float(args[0]) {
+          Some(n) =>
+            Some(
+              IntLit(
+                if n > 0.0 {
+                  1
+                } else if n < 0.0 {
+                  -1
+                } else {
+                  0
+                },
+              ),
+            )
+          None => None
+        }
+      } else {
+        None
+      }
+    "min" =>
+      if args.length() == 2 {
+        match (as_float(args[0]), as_float(args[1])) {
+          (Some(a), Some(b)) => Some(to_lit(if a <= b { a } else { b }))
+          _ => None
+        }
+      } else {
+        None
+      }
+    "max" =>
+      if args.length() == 2 {
+        match (as_float(args[0]), as_float(args[1])) {
+          (Some(a), Some(b)) => Some(to_lit(if a >= b { a } else { b }))
+          _ => None
+        }
+      } else {
+        None
+      }
+    _ => None
   }
 }
 
