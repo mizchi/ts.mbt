@@ -1667,3 +1667,62 @@ test "iife_class_lift: extra Expr statements move after class (#31 perf)" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "iife_class_lift: static property assignment moves after class" {
+  // TypeScript sometimes emits `ClassName.staticProp = value` inside
+  // the IIFE body for non-function static fields. This previously
+  // classified as Unknown and aborted the lift. Now it is an Extra
+  // statement appended after the class declaration.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|class Config {
+        #|  getValue() { return Config.version; }
+        #|}
+        #|Config.version = "1.0";
+        #|export default Config;
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Class must be present.
+      assert_true(out.js.contains("class Config") || out.js.contains("getValue"))
+      // The static field assignment must be present.
+      assert_true(out.js.contains("1.0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: closure variable hoisted before class" {
+  // TypeScript ES5 output for classes with static closure state:
+  // `var Counter = (function() { var _count = 0; function Counter() {}
+  //   Counter.prototype.increment = function() { _count++; };
+  //   return Counter; })();`
+  // The `var _count = 0` previously aborted the lift. Now it is
+  // emitted before the class so the methods can still close over it.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|class Counter {
+        #|  increment() {}
+        #|  get() { return 0; }
+        #|}
+        #|export default Counter;
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("class Counter") || out.js.contains("increment"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

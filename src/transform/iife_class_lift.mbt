@@ -112,6 +112,9 @@ fn try_lift_iife_value(
   let static_methods : Array[@ast.TsClassMethodDecl] = []
   // Extra statements to emit AFTER the class declaration.
   let extra_stmts : Array[@ast.TsStmt] = []
+  // Closure-variable statements to emit BEFORE the class so the class
+  // body can still reference them.
+  let pre_stmts : Array[@ast.TsStmt] = []
   let mut saw_return = false
   for s in body.stmts {
     if saw_return {
@@ -131,6 +134,7 @@ fn try_lift_iife_value(
       StaticMethod(decl) => static_methods.push(decl)
       ReturnsClassName => saw_return = true
       Extra(extra) => extra_stmts.push(extra)
+      ExtraBefore(pre) => pre_stmts.push(pre)
       Unknown => return false
     }
   }
@@ -171,6 +175,11 @@ fn try_lift_iife_value(
     index_signatures: [],
     decorators: [],
   }
+  // Emit closure-variable declarations before the class so the class
+  // body can still close over them.
+  for s in pre_stmts {
+    out.push(s)
+  }
   out.push(NativeClassStmt(decl, ctor_func))
   // Append the extra side-effect statements after the class.
   for s in extra_stmts {
@@ -195,6 +204,10 @@ priv enum IifeBodyClassification {
   // without aborting the lift — they're appended as regular
   // statements following the `class` declaration.
   Extra(@ast.TsStmt)
+  // A statement that must be emitted BEFORE the class declaration
+  // (e.g. a closure variable that the class methods capture). Hoisting
+  // these before the class keeps them in scope for the class body.
+  ExtraBefore(@ast.TsStmt)
   Unknown
 }
 
@@ -220,7 +233,19 @@ fn classify_iife_body_stmt(
         // Rename to "constructor" so emit produces the correct keyword.
         Ctor({ ..f, name: "constructor" })
       } else {
-        Unknown
+        // A named function that isn't the class — likely a helper used
+        // by the class body. Hoist it before the class so it's in scope.
+        ExtraBefore(stmt)
+      }
+    // Non-function let/const/var — a closure variable captured by the
+    // class methods (e.g. `var _count = 0`). Emit before the class.
+    Let(@ast.TsBinding::Ident(n), _, _)
+    | Const(@ast.TsBinding::Ident(n), _, _)
+    | Var(@ast.TsBinding::Ident(n), _, _) =>
+      if n == class_name {
+        Unknown // non-function assignment to the class name — bail
+      } else {
+        ExtraBefore(stmt)
       }
     // `ClassName.prototype.METHOD = function METHOD() {…};` —
     // instance method.
@@ -261,11 +286,15 @@ fn classify_iife_body_stmt(
       } else {
         Unknown
       }
-    // `ClassName.<meta> = …;` — top-level class metadata that isn't
-    // a static method (e.g. `__super_proto`).
+    // `ClassName.<meta> = …;` — top-level class metadata or static
+    // field initializer. Metadata keys are silently dropped; non-function
+    // static field assignments (`ClassName.version = "1.0"`) are moved
+    // AFTER the class declaration as `Extra` so the lift still succeeds.
     PropAssign(@ast.TsExpr::Var(n), prop_name, _) =>
       if n == class_name && is_class_metadata_key(prop_name) {
         Skipped
+      } else if n == class_name {
+        Extra(stmt)
       } else {
         Unknown
       }
