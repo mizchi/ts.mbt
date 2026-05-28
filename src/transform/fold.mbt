@@ -350,6 +350,19 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         Some(e) => Some(fold_expr(e))
         None => None
       }
+      // `for (...; false; ...)` — dead loop, body never executes.
+      // We still must emit the initializer (it may have side effects).
+      let cond_always_false = match cond_f {
+        Some(c) => is_js_falsy(c)
+        None => false
+      }
+      if cond_always_false {
+        match init_f {
+          Some(s) => out.push(s)
+          None => ()
+        }
+        return
+      }
       let update_f = match update {
         Some(s) => {
           let tmp : Array[@ast.TsStmt] = []
