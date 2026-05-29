@@ -1267,8 +1267,6 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
   }
   let key_temps : Array[String?] = [] // Temp var names for ALL elements' computed keys
   let key_init_stmts : Array[@ast.TsStmt] = [] // Initialization statements for computed keys
-  let mut key_index = 0
-
   // First pass: collect all computed keys and generate temp variables
   for element in elements {
     match element {
@@ -1276,8 +1274,8 @@ fn Parser::parse_class_stub(self : Parser) -> @ast.TsExpr raise ParseError {
         match key {
           Name(_) => key_temps.push(None)
           Computed(key_expr) => {
-            let temp_name = "__class_key_" + key_index.to_string()
-            key_index += 1
+            let temp_name = "__class_key_" + self.class_key_counter.to_string()
+            self.class_key_counter += 1
             key_temps.push(Some(temp_name))
             // Generate: let __class_key_N = key_expr;
             key_init_stmts.push(
@@ -1838,8 +1836,6 @@ fn Parser::parse_class_decl_with_abstract(
   }
   let key_temps : Array[String?] = [] // Temp var names for ALL elements' computed keys
   let key_init_stmts : Array[@ast.TsStmt] = [] // Initialization statements for computed keys
-  let mut key_index = 0
-
   // First pass: collect all computed keys and generate temp variables
   for element in elements {
     match element {
@@ -1847,8 +1843,8 @@ fn Parser::parse_class_decl_with_abstract(
         match key {
           Name(_) => key_temps.push(None)
           Computed(key_expr) => {
-            let temp_name = "__class_key_" + key_index.to_string()
-            key_index += 1
+            let temp_name = "__class_key_" + self.class_key_counter.to_string()
+            self.class_key_counter += 1
             key_temps.push(Some(temp_name))
             // Generate: let __class_key_N = key_expr;
             key_init_stmts.push(
