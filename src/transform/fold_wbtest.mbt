@@ -1575,3 +1575,25 @@ test "fold: Boolean(0) folds to literal false" {
   assert_false(out.contains("Boolean"), "expected Boolean removed: \{out}")
   assert_true(out.contains("false") || out.contains("!1"), "expected false: \{out}")
 }
+
+///|
+test "fold: Number(x) folds to +x for non-literal arg (saves 7+ bytes)" {
+  let out = fold_one("const n = Number(x);\n")
+  // `Number(x)` → `+x` — saves 7 bytes vs "Number(" for a 1-char ident.
+  assert_false(out.contains("Number"), "expected Number removed: \{out}")
+  assert_true(out.contains("+x"), "expected +x: \{out}")
+}
+
+///|
+test "fold: Number(true) folds to literal 1" {
+  let out = fold_one("const n = Number(true);\n")
+  assert_false(out.contains("Number"), "expected Number removed: \{out}")
+  assert_true(out.contains("1"), "expected 1: \{out}")
+}
+
+///|
+test "fold: Number(\"42\") folds to integer 42" {
+  let out = fold_one("const n = Number(\"42\");\n")
+  assert_false(out.contains("Number"), "expected Number removed: \{out}")
+  assert_true(out.contains("42"), "expected 42: \{out}")
+}

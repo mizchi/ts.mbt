@@ -1087,7 +1087,10 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
               BoolLit(true) => IntLit(1)
               BoolLit(false) => IntLit(0)
               NullLit => IntLit(0)
-              _ => Call(name, new_args)
+              // `Number(x)` → `+x` for non-literal args.
+              // The unary `+` operator is semantically identical to
+              // `Number()` for all non-Symbol values, and saves 7+ bytes.
+              _ => UnaryOp(@ast.TsUnaryOp::Plus, arg)
             }
           "Boolean" =>
             if is_js_truthy(arg) {
