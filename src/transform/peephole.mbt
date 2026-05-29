@@ -500,7 +500,19 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)),
         ) =>
           UnaryOp(@ast.TsUnaryOp::Not, cp)
-        (tp, ep) => Cond(cp, tp, ep)
+        // `x != null ? x : y` → `x ?? y` (nullish coalescing, saves ~8 bytes).
+        // After `x!==null&&x!==undefined` → `x!=null`, this pattern is common
+        // in TypeScript generated code for default-value patterns.
+        (t_val, e_val) =>
+          match cp {
+            BinOp(@ast.TsBinOp::AbstractNe, check_x, NullLit) =>
+              if exprs_eq(check_x, t_val) {
+                BinOp(@ast.TsBinOp::Coalesce, check_x, e_val)
+              } else {
+                Cond(cp, t_val, e_val)
+              }
+            _ => Cond(cp, t_val, e_val)
+          }
       }
     }
     Call(name, args) => {
@@ -976,6 +988,18 @@ fn is_bool_expr(e : @ast.TsExpr) -> Bool {
       }
     @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Not, _) => true
     @ast.TsExpr::BoolLit(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Shallow structural equality for simple expressions used in peephole guards.
+/// Only handles the most common patterns (Var, PropAccess(Var, _), literals).
+fn exprs_eq(a : @ast.TsExpr, b : @ast.TsExpr) -> Bool {
+  match (a, b) {
+    (Var(n1), Var(n2)) => n1 == n2
+    (PropAccess(Var(r1), p1), PropAccess(Var(r2), p2)) => r1 == r2 && p1 == p2
+    (NullLit, NullLit) | (IntLit(0), IntLit(0)) => true
     _ => false
   }
 }

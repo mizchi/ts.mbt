@@ -658,3 +658,12 @@ test "peephole: if(c){} else {stmts} inverts to if(!c){stmts}" {
   assert_true(out.contains("!x") || out.contains("!"), msg="expected negation, got: \{out}")
   assert_true(out.contains("doSomething"), msg="expected doSomething, got: \{out}")
 }
+
+///|
+test "peephole: x!=null?x:y folds to x??y (nullish coalescing)" {
+  // After x!==null&&x!==undefined → x!=null (already done),
+  // x!=null?x:y → x??y saves ~8 bytes
+  let out = peep_one("const r = x !== null && x !== undefined ? x : defaultVal;\n")
+  assert_true(out.contains("??"), msg="expected ??, got: \{out}")
+  assert_false(out.contains("!=="), msg="expected no !==, got: \{out}")
+}
