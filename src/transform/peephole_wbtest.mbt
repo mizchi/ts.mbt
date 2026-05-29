@@ -533,3 +533,9 @@ test "minify emit: -0.5 emits as -.5 (drop leading zero in negative decimal)" {
   assert_true(out.contains("-.5"), msg="expected -.5, got: \{out}")
   assert_false(out.contains("-0.5"), msg="expected no -0.5, got: \{out}")
 }
+
+///|
+test "minify emit: x[\"prop\"] = v emits as x.prop = v" {
+  let out = minify_one("obj[\"hello\"] = 42;\n")
+  assert_true(out.contains("obj.hello=42"), msg="expected obj.hello=42, got: \{out}")
+}

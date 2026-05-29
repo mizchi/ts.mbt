@@ -584,9 +584,18 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       } else {
         emit_expr(e, recv, 18)
       }
-      e.write("[")
-      emit_expr(e, idx, 0)
-      e.write("]")
+      // `x["prop"] = v` → `x.prop = v` in minify mode (saves 4 bytes)
+      match idx {
+        StringLit(k) if not(e.pretty) && is_valid_js_ident(k) => {
+          e.write(".")
+          e.write(k)
+        }
+        _ => {
+          e.write("[")
+          emit_expr(e, idx, 0)
+          e.write("]")
+        }
+      }
       e.space()
       e.write("=")
       e.space()
@@ -1794,9 +1803,18 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     }
     IndexAssignExpr(recv, idx, value) => {
       emit_expr(e, recv, 18)
-      e.write("[")
-      emit_expr(e, idx, 0)
-      e.write("]")
+      // `x["prop"] = v` → `x.prop = v` in minify mode (saves 4 bytes)
+      match idx {
+        StringLit(k) if not(e.pretty) && is_valid_js_ident(k) => {
+          e.write(".")
+          e.write(k)
+        }
+        _ => {
+          e.write("[")
+          emit_expr(e, idx, 0)
+          e.write("]")
+        }
+      }
       e.space()
       e.write("=")
       e.space()
