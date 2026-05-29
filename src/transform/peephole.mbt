@@ -440,10 +440,17 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
       }
       None => ()
     }
-    stmts.push(ps)
+    // Skip empty statements entirely — they're no-ops that would
+    // emit a stray `;` in minify mode. Produced by `x = x` → Empty.
     match ps {
-      Return(_) | Throw(_) | Break(_) | Continue(_) => break
-      _ => ()
+      Empty => ()
+      _ => {
+        stmts.push(ps)
+        match ps {
+          Return(_) | Throw(_) | Break(_) | Continue(_) => break
+          _ => ()
+        }
+      }
     }
   }
   // Fold `if (c) return a; return b;` → `return c ? a : b;` and
