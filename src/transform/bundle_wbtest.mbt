@@ -2043,3 +2043,34 @@ test "fold: else block hoisted when then-branch returns, result folded to ternar
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "minify: consecutive const decls merge into single multi-decl in bundle output" {
+  // When multiple modules each declare constants, the merged bundle should
+  // have them as a single `let a=…,b=…,c=…` in minified output (not repeated
+  // `let` keywords). Saves 4 bytes per additional declarator.
+  let files = vfs([
+    (
+      "a.ts",
+      "export const A = 1;\nexport const B = 2;\nexport const C = 3;\n",
+    ),
+    ("entry.ts", "import { A, B, C } from \"./a\";\nconsole.log(A + B + C);\n"),
+  ])
+  let opts = BundleOptions::default()
+    .with_fold(true)
+    .with_treeshake(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // After treeshake, A/B/C are inlined to 1/2/3.
+      // But even if they survive, they should be in a single multi-decl.
+      // The key assertion: only one `let` keyword in the output.
+      let let_count = out.js.split("let").length() - 1
+      assert_true(
+        let_count <= 1,
+        "expected at most one `let` keyword in minified output, got \{let_count}: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
