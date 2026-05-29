@@ -457,3 +457,23 @@ test "peephole: null===x||undefined===x folds to x==null (LHS sentinels)" {
   let out = peep_one("const r = null === x || undefined === x;\n")
   assert_true(out.contains("== null"), msg="expected == null, got: \{out}")
 }
+
+///|
+test "peephole: Number(x) folds to +x" {
+  let out = peep_one("const r = Number(x);\n")
+  assert_true(out.contains("+x"), msg="expected +x, got: \{out}")
+  assert_false(out.contains("Number("), msg="expected no Number(, got: \{out}")
+}
+
+///|
+test "peephole: Boolean(x) folds to !!x" {
+  let out = peep_one("const r = Boolean(x);\n")
+  assert_true(out.contains("!!x"), msg="expected !!x, got: \{out}")
+  assert_false(out.contains("Boolean("), msg="expected no Boolean(, got: \{out}")
+}
+
+///|
+test "peephole: Number() with 0 args not folded" {
+  let out = peep_one("const r = Number();\n")
+  assert_true(out.contains("Number()"), msg="expected Number(), got: \{out}")
+}

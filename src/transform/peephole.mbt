@@ -24,6 +24,8 @@
 //   !(a >= b)     -> a < b
 //   x===null||x===void 0  -> x==null   (saves ~13 bytes per occurrence)
 //   x!==null&&x!==void 0  -> x!=null
+//   Number(x)             -> +x        (saves up to 6 bytes)
+//   Boolean(x)            -> !!x       (saves up to 4 bytes)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -394,9 +396,22 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     Cond(c, t, e) =>
       Cond(peep_expr(c, ctx), peep_expr(t, ctx), peep_expr(e, ctx))
     Call(name, args) => {
+      // `Number(x)` → `+x`  (saves up to 6 bytes)
+      // `Boolean(x)` → `!!x` (saves up to 4 bytes)
+      // Both are strictly equivalent to the stdlib coercions.
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
         new_args.push(peep_expr(a, ctx))
+      }
+      if new_args.length() == 1 {
+        if name == "Number" {
+          return UnaryOp(@ast.TsUnaryOp::Plus, new_args[0])
+        } else if name == "Boolean" {
+          return UnaryOp(
+            @ast.TsUnaryOp::Not,
+            UnaryOp(@ast.TsUnaryOp::Not, new_args[0]),
+          )
+        }
       }
       Call(name, new_args)
     }
