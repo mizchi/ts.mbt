@@ -193,6 +193,13 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
           _ => ()
         }
       }
+      // `x + ""` / `"" + x` — foldable when x is string-typed.
+      match (op, l, r) {
+        (Add, @ast.TsExpr::Var(_), @ast.TsExpr::StringLit(""))
+        | (Add, @ast.TsExpr::StringLit(""), @ast.TsExpr::Var(_)) =>
+          return true
+        _ => ()
+      }
       expr_needs_type_fold(l) || expr_needs_type_fold(r)
     }
     UnaryOp(_, inner)
@@ -520,6 +527,18 @@ fn type_fold_expr(
       match try_null_check_fold(op, x_name, "undefined", scope) {
         Some(b) => BoolLit(b)
         None => expr
+      }
+    // `x + ""` → `x` when x is statically typed as string (saves 4 bytes).
+    // `"" + x` → `x` similarly. Both are no-op string concatenations.
+    BinOp(@ast.TsBinOp::Add, Var(x_name), StringLit("")) =>
+      match scope.get(x_name) {
+        Some(ty) if typeof_of_type(ty) == Some("string") => Var(x_name)
+        _ => BinOp(@ast.TsBinOp::Add, Var(x_name), StringLit(""))
+      }
+    BinOp(@ast.TsBinOp::Add, StringLit(""), Var(x_name)) =>
+      match scope.get(x_name) {
+        Some(ty) if typeof_of_type(ty) == Some("string") => Var(x_name)
+        _ => BinOp(@ast.TsBinOp::Add, StringLit(""), Var(x_name))
       }
     BinOp(op, l, r) =>
       BinOp(op, type_fold_expr(l, scope), type_fold_expr(r, scope))

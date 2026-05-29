@@ -1998,3 +1998,25 @@ test "bundle: second fold pass after inline folds const-indexed array access" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "type-fold: x + \"\" is dropped when x is typed as string" {
+  // When `x: string`, `x + ""` is a no-op and should fold to just `x`.
+  let files = vfs([
+    (
+      "entry.ts",
+      "function greet(name: string): string { return name + \"\"; }\nconsole.log(greet(\"world\"));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The `name + ""` concatenation should be folded away.
+      assert_false(
+        out.js.contains("+ \"\"") || out.js.contains("+\"\""),
+        "expected x + \"\" to be folded away for string-typed x",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
