@@ -44,6 +44,7 @@
 //   [...a,...[1,2],...b]   -> [...a,1,2,...b] (flatten literal array spread)
 //   x==null ? void 0 : x.p  -> x?.p         (flipped optional chain)
 //   if (c) {…} else {}     -> if (c) {…}   (drop empty else)
+//   new Error(msg)         -> Error(msg)   (saves `new `, 4 bytes; also TypeError etc.)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.length > 0          -> !!x.length  (saves ~3 bytes)
 //   x.length <= 0         -> !x.length   (saves ~4 bytes)
@@ -849,6 +850,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         }
       } else if name == "Object" && new_args.length() == 0 {
         return ObjectLit([])
+      } else if name == "Error" ||
+        name == "TypeError" ||
+        name == "RangeError" ||
+        name == "ReferenceError" ||
+        name == "SyntaxError" {
+        // `new Error(msg)` → `Error(msg)` (saves 4 bytes: `new `).
+        // The built-in Error constructors return a new Error object whether
+        // called with or without `new` — the spec guarantees it.
+        return Call(name, new_args)
       }
       New(name, new_args)
     }

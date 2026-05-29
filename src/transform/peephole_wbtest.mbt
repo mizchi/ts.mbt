@@ -935,3 +935,16 @@ test "peephole: x != null ? x() : void 0 → x?.() optional call" {
   let out = minify_one("const r = x != null ? x() : void 0;")
   assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
 }
+
+///|
+test "peephole: new Error(msg) drops new keyword" {
+  let out = minify_one("throw new Error('oops');")
+  assert_false(out.contains("new"), msg="expected no new, got: \{out}")
+  assert_true(out.contains("Error("), msg="expected Error(, got: \{out}")
+}
+
+///|
+test "peephole: new TypeError(msg) drops new keyword" {
+  let out = minify_one("throw new TypeError('bad');")
+  assert_false(out.contains("new"), msg="expected no new, got: \{out}")
+}
