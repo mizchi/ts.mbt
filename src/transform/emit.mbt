@@ -1693,9 +1693,21 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     }
     IndexAccess(recv, idx) => {
       emit_expr(e, recv, 18)
-      e.write("[")
-      emit_expr(e, idx, 0)
-      e.write("]")
+      // `expr["prop"]` → `expr.prop` when the key is a valid identifier
+      // and we're in minify mode. Saves `["` + `"]` (4 bytes) per access.
+      // In pretty mode we preserve the bracket form as written to avoid
+      // surprising users who wrote `x["key"]` intentionally.
+      match idx {
+        StringLit(k) if not(e.pretty) && is_valid_js_ident(k) => {
+          e.write(".")
+          e.write(k)
+        }
+        _ => {
+          e.write("[")
+          emit_expr(e, idx, 0)
+          e.write("]")
+        }
+      }
     }
     PropAccess(recv, name) => {
       emit_expr(e, recv, 18)

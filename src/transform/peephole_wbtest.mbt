@@ -493,3 +493,23 @@ test "peephole: Boolean(x===y) chain: Boolean→!! then !!→comparison" {
   assert_false(out.contains("Boolean"), msg="expected no Boolean, got: \{out}")
   assert_false(out.contains("!!"), msg="expected no !!, got: \{out}")
 }
+
+///|
+test "minify emit: x[\"prop\"] emits as x.prop when key is valid ident" {
+  let out = minify_one("const r = obj[\"hello\"];\n")
+  assert_true(out.contains("obj.hello"), msg="expected obj.hello, got: \{out}")
+  assert_false(out.contains("[\"hello\"]"), msg="expected no bracket form, got: \{out}")
+}
+
+///|
+test "minify emit: x[\"123\"] stays as bracket form (non-ident key)" {
+  let out = minify_one("const r = obj[\"123\"];\n")
+  assert_true(out.contains("["), msg="expected bracket form, got: \{out}")
+}
+
+///|
+test "pretty emit: x[\"prop\"] stays as bracket form" {
+  // In pretty mode, keep x["prop"] to avoid surprising users.
+  let out = peep_one("const r = obj[\"hello\"];\n")
+  assert_true(out.contains("[\"hello\"]"), msg="expected bracket form, got: \{out}")
+}
