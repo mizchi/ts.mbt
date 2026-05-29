@@ -1964,29 +1964,46 @@ fn rename_class_decl_idents(
   }
   let new_methods : Array[@ast.TsClassMethodDecl] = []
   for m in decl.methods {
-    let new_body = match m.body {
+    let (new_body, new_params, new_defaults) = match m.body {
       Some(b) => {
-        // Use a fresh function scope so local variables get short
-        // 1-char names starting from 0.
-        // Pin each param to its identity (params are emitted verbatim
-        // by the class-method emitter, so they must not be renamed).
+        // Use a fresh function scope so params/locals get short 1-char names.
         let inner = ScopeFrame::function_child(scope, b)
-        for p in m.params {
-          if p.0 != "" && not(inner.renames.contains(p.0)) {
-            inner.renames[p.0] = p.0
-            inner.used[p.0] = true
+        // Rename each param and record the mapping in the inner scope.
+        let renamed_params : Array[(String, @ast.TsType)] = []
+        let renamed_defaults : Array[@ast.TsExpr?] = []
+        for i, p in m.params {
+          let new_name = if p.0 == "" {
+            ""
+          } else {
+            inner.bind(p.0, inner.reserved)
+          }
+          renamed_params.push((new_name, p.1))
+          if i < m.param_defaults.length() {
+            let d = m.param_defaults[i]
+            let new_d = match d {
+              Some(expr) => Some(rename_expr(expr, inner))
+              None => None
+            }
+            renamed_defaults.push(new_d)
           }
         }
         hoist_var_decls_into_scope(b, inner, inner.reserved)
-        Some(rename_block_inline_in(b, inner, inner.reserved))
+        let new_b = rename_block_inline_in(b, inner, inner.reserved)
+        (Some(new_b), renamed_params, renamed_defaults)
       }
-      None => None
+      None => (None, m.params, m.param_defaults)
     }
     let new_key_expr = match m.key_expr {
       Some(e) => Some(rename_expr(e, scope))
       None => None
     }
-    new_methods.push({ ..m, body: new_body, key_expr: new_key_expr })
+    new_methods.push({
+      ..m,
+      body: new_body,
+      params: new_params,
+      param_defaults: new_defaults,
+      key_expr: new_key_expr,
+    })
   }
   let new_decorators : Array[@ast.TsExpr] = []
   for d in decl.decorators {
