@@ -624,3 +624,11 @@ test "peephole: (x>0)?true:false folds all the way to (x>0)" {
   assert_true(out.contains("x>0") || out.contains("0<x"), msg="expected simple comparison, got: \{out}")
   assert_false(out.contains("?"), msg="expected no ternary, got: \{out}")
 }
+
+///|
+test "peephole: arrow with block return folds to concise body" {
+  let out = peep_one("const f = (x) => { return x + 1; };\n")
+  assert_true(out.contains("=>"), msg="expected arrow, got: \{out}")
+  assert_false(out.contains("return"), msg="expected no return, got: \{out}")
+  assert_false(out.contains("{"), msg="expected no braces, got: \{out}")
+}

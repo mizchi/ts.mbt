@@ -607,7 +607,16 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     ArrowFunc(params, ret, body, is_async) => {
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(peep_expr(e, ctx))
-        ArrowBlock(b) => @ast.TsArrowBody::ArrowBlock(peep_block(b, ctx))
+        ArrowBlock(b) => {
+          let bp = peep_block(b, ctx)
+          // `=> { return expr; }` → `=> expr` (concise arrow body).
+          // Saves 9 bytes (`{ return ` + ` }`) per single-return arrow.
+          match bp.stmts {
+            [Return(Some(inner))] => @ast.TsArrowBody::ArrowExpr(inner)
+            // `=> { return; }` / `=> {}` → `=> {}` (void arrow, no concise form)
+            _ => @ast.TsArrowBody::ArrowBlock(bp)
+          }
+        }
       }
       ArrowFunc(params, ret, new_body, is_async)
     }
