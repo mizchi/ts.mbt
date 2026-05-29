@@ -1378,3 +1378,10 @@ test "fold: new-expr ?? fallback is eliminated (new always non-null)" {
   assert_false(out.contains("fallback"))
   assert_false(out.contains("??"))
 }
+
+///|
+test "fold: Array.of(1, 2, 3) folds to array literal" {
+  let out = fold_one("const x = Array.of(1, 2, 3);\n")
+  assert_true(out.contains("[1,") || out.contains("[1, "), "expected array literal in output")
+  assert_false(out.contains("Array.of"), "Array.of should be folded away")
+}

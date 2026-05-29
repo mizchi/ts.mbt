@@ -1406,6 +1406,19 @@ fn fold_math_call(
           _ => ()
         }
       }
+      // `Array.of(a, b, c)` → `[a, b, c]` (identity for pure args).
+      if method == "of" {
+        let mut all_pure = true
+        for a in args {
+          if not(is_pure_value(a)) {
+            all_pure = false
+            break
+          }
+        }
+        if all_pure {
+          return Some(ArrayLit(args))
+        }
+      }
       return None
     }
     Var("String") => {
