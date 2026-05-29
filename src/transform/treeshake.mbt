@@ -141,6 +141,7 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
         Let(@ast.TsBinding::Ident(n), _, _)
         | Const(@ast.TsBinding::Ident(n), _, _)
         | Var(@ast.TsBinding::Ident(n), _, _) => n
+        NativeClassStmt(decl, _) => decl.name
         _ => ""
       }
       live.contains(name)

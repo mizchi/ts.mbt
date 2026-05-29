@@ -116,3 +116,26 @@ test "treeshake: template-literal initializer is pure and can be dropped" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "treeshake: live NativeClassStmt is retained" {
+  // A named class that is instantiated must survive treeshaking.
+  // Before the fix, NativeClassStmt name was extracted as "" in pass 4,
+  // so even live classes were incorrectly dropped.
+  let src = (
+    #|class Alive { greet() { return "hi"; } }
+    #|const unused = 42;
+    #|const obj = new Alive();
+    #|console.log(obj.greet());
+  )
+  let block = @parser.parse_block_from_source(src)
+  let out = treeshake_block(block)
+  let names : Map[String, Bool] = {}
+  for s in out.stmts {
+    match s {
+      @ast.TsStmt::NativeClassStmt(decl, _) => names[decl.name] = true
+      _ => ()
+    }
+  }
+  assert_true(names.contains("Alive"))
+}
