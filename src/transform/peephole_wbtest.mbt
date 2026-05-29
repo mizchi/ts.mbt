@@ -915,3 +915,17 @@ test "peephole: if (c) { stmts } else {} drops empty else" {
   let out = minify_one("if (x) { doA(); } else {}")
   assert_false(out.contains("else"), msg="expected no else, got: \{out}")
 }
+
+///|
+test "peephole: x.length > 0 → !!x.length" {
+  let out = minify_one("const r = arr.length > 0;")
+  assert_true(out.contains("!!"), msg="expected !!, got: \{out}")
+  assert_false(out.contains(">"), msg="expected no >, got: \{out}")
+}
+
+///|
+test "peephole: x.length <= 0 → !x.length" {
+  let out = minify_one("const r = arr.length <= 0;")
+  assert_true(out.contains("!arr"), msg="expected !arr, got: \{out}")
+  assert_false(out.contains("<="), msg="expected no <=, got: \{out}")
+}

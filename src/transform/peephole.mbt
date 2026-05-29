@@ -45,6 +45,8 @@
 //   x==null ? void 0 : x.p  -> x?.p         (flipped optional chain)
 //   if (c) {…} else {}     -> if (c) {…}   (drop empty else)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
+//   x.length > 0          -> !!x.length  (saves ~3 bytes)
+//   x.length <= 0         -> !x.length   (saves ~4 bytes)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
 //   x!=null ? x[k] : void 0      -> x?.[k]
@@ -618,6 +620,29 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             | (IntLit(0), PropAccess(_, "size")) =>
               UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
             (lp, rp) => BinOp(op, lp, rp)
+          }
+        // `x.length > 0` → `!!x.length`  (saves ~3 bytes; length is non-negative)
+        // `x.length <= 0` → `!x.length`  (saves ~4 bytes)
+        // `0 < x.length` / `0 >= x.length` — swapped forms
+        BinGt =>
+          match (lp, rp) {
+            (PropAccess(_, "length"), IntLit(0))
+            | (PropAccess(_, "size"), IntLit(0)) =>
+              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, lp))
+            (IntLit(0), PropAccess(_, "length"))
+            | (IntLit(0), PropAccess(_, "size")) =>
+              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
+            _ => BinOp(op, lp, rp)
+          }
+        BinLe =>
+          match (lp, rp) {
+            (PropAccess(_, "length"), IntLit(0))
+            | (PropAccess(_, "size"), IntLit(0)) =>
+              UnaryOp(@ast.TsUnaryOp::Not, lp)
+            (IntLit(0), PropAccess(_, "length"))
+            | (IntLit(0), PropAccess(_, "size")) =>
+              UnaryOp(@ast.TsUnaryOp::Not, rp)
+            _ => BinOp(op, lp, rp)
           }
         _ => BinOp(op, lp, rp)
       }
