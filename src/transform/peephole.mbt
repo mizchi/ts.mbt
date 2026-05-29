@@ -374,6 +374,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             Some(e) => e
             None => BinOp(op, lp, rp)
           }
+        BinEq =>
+          // `x.length === 0` → `!x.length`  (saves 4 bytes; .length is
+          // always a non-negative integer so the coercion is lossless)
+          match (lp, rp) {
+            (PropAccess(recv, "length"), IntLit(0)) | (IntLit(0), PropAccess(recv, "length")) =>
+              UnaryOp(@ast.TsUnaryOp::Not, PropAccess(recv, "length"))
+            (lp, rp) => BinOp(op, lp, rp)
+          }
         _ => BinOp(op, lp, rp)
       }
     }

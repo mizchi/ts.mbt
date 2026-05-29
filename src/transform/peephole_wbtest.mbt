@@ -513,3 +513,16 @@ test "pretty emit: x[\"prop\"] stays as bracket form" {
   let out = peep_one("const r = obj[\"hello\"];\n")
   assert_true(out.contains("[\"hello\"]"), msg="expected bracket form, got: \{out}")
 }
+
+///|
+test "peephole: arr.length === 0 folds to !arr.length" {
+  let out = peep_one("const r = arr.length === 0;\n")
+  assert_true(out.contains("!arr.length"), msg="expected !arr.length, got: \{out}")
+  assert_false(out.contains("=== 0"), msg="expected no === 0, got: \{out}")
+}
+
+///|
+test "peephole: 0 === arr.length folds to !arr.length (reversed)" {
+  let out = peep_one("const r = 0 === arr.length;\n")
+  assert_true(out.contains("!arr.length"), msg="expected !arr.length, got: \{out}")
+}
