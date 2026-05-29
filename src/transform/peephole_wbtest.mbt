@@ -273,7 +273,7 @@ test "peephole: trailing break in last switch case is dropped" {
   assert_true(out.contains("doA()"))
   assert_true(out.contains("doB()"))
   // Last break is gone but first break stays to prevent fallthrough.
-  let break_count = out.split("break").length() - 1
+  let break_count = out.split("break").collect().length() - 1
   assert_true(break_count == 1)
 }
 
@@ -347,21 +347,21 @@ test "peephole: arr[i] = arr[i] + n collapses to arr[i] += n" {
 ///|
 test "peephole: !(a === b) folds to a !== b" {
   let out = peep_one("const r = !(a === b);\n")
-  assert_true(out.contains("!=="), "expected !== but got: \{out}")
+  assert_true(out.contains("!=="), msg="expected !== but got: \{out}")
   assert_false(out.contains("==="))
 }
 
 ///|
 test "peephole: !(a !== b) folds to a === b" {
   let out = peep_one("const r = !(a !== b);\n")
-  assert_true(out.contains("==="), "expected === but got: \{out}")
+  assert_true(out.contains("==="), msg="expected === but got: \{out}")
   assert_false(out.contains("!=="))
 }
 
 ///|
 test "peephole: !(a < b) folds to a >= b" {
   let out = peep_one("const r = !(a < b);\n")
-  assert_true(out.contains(">="), "expected >= but got: \{out}")
+  assert_true(out.contains(">="), msg="expected >= but got: \{out}")
   assert_false(out.contains("<"))
 }
 
@@ -370,7 +370,7 @@ test "minify emit: trailing semicolon stripped from bundle output" {
   // In minify mode the last statement should NOT end with `;` — it's
   // syntactically optional and saves 1 byte per bundle.
   let out = minify_one("const x = 1;\n")
-  assert_false(out.has_suffix(";"), "expected no trailing semicolon, got: \{out}")
+  assert_false(out.has_suffix(";"), msg="expected no trailing semicolon, got: \{out}")
 }
 
 ///|
@@ -378,20 +378,20 @@ test "minify emit: string with double-quote uses single-quote wrapper" {
   // `x = "hello \"world\""` (with escapes) → `x='hello "world"'` (no escapes).
   // Single quotes are shorter when the string contains double quotes.
   let out = minify_one("const x = \"hello \\\"world\\\"\";\n")
-  assert_true(out.contains("'hello \"world\"'"), "expected single-quoted string, got: \{out}")
+  assert_true(out.contains("'hello \"world\"'"), msg="expected single-quoted string, got: \{out}")
 }
 
 ///|
 test "minify emit: string with single-quote uses double-quote wrapper" {
   // `x = 'it\'s fine'` → `x="it's fine"` — double quotes are shorter.
   let out = minify_one("const x = \"it's fine\";\n")
-  assert_true(out.contains("\"it's fine\""), "expected double-quoted string, got: \{out}")
+  assert_true(out.contains("\"it's fine\""), msg="expected double-quoted string, got: \{out}")
 }
 
 ///|
 test "minify emit: string with no quotes keeps double-quote wrapper" {
   let out = minify_one("const x = \"hello world\";\n")
-  assert_true(out.contains("\"hello world\""), "expected double-quoted string, got: \{out}")
+  assert_true(out.contains("\"hello world\""), msg="expected double-quoted string, got: \{out}")
 }
 
 ///|
@@ -399,19 +399,19 @@ test "minify emit: Number.POSITIVE_INFINITY folds to 1/0" {
   // Number.POSITIVE_INFINITY is folded by the constant folder to a NumberLit,
   // which in minify mode emits as `1/0` (3 bytes vs 8 for `Infinity`).
   let out = minify_one("const x = Number.POSITIVE_INFINITY;\n")
-  assert_true(out.contains("1/0"), "expected 1/0, got: \{out}")
-  assert_false(out.contains("Infinity"), "expected no Infinity, got: \{out}")
+  assert_true(out.contains("1/0"), msg="expected 1/0, got: \{out}")
+  assert_false(out.contains("Infinity"), msg="expected no Infinity, got: \{out}")
 }
 
 ///|
 test "minify emit: Number.NEGATIVE_INFINITY folds to -1/0" {
   let out = minify_one("const x = Number.NEGATIVE_INFINITY;\n")
-  assert_true(out.contains("-1/0"), "expected -1/0, got: \{out}")
+  assert_true(out.contains("-1/0"), msg="expected -1/0, got: \{out}")
 }
 
 ///|
 test "minify emit: Number.NaN folds to 0/0" {
   let out = minify_one("const x = Number.NaN;\n")
-  assert_true(out.contains("0/0"), "expected 0/0, got: \{out}")
+  assert_true(out.contains("0/0"), msg="expected 0/0, got: \{out}")
 }
 

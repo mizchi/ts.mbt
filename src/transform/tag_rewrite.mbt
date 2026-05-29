@@ -2331,14 +2331,14 @@ fn tag_rewrite_expr(
         Some(f) =>
           Some({
             ..f,
-            body: tag_rewrite_block(f.body, table),
+            body: tag_rewrite_block_inner(f.body, table),
           })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
       for m in decl.methods {
         let new_body = match m.body {
-          Some(b) => Some(tag_rewrite_block(b, table))
+          Some(b) => Some(tag_rewrite_block_inner(b, table))
           None => None
         }
         new_methods.push({ ..m, body: new_body })

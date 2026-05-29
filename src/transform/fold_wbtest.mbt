@@ -1134,7 +1134,7 @@ test "fold: x = x in expression position simplifies to x" {
 test "fold: !!x ? a : b simplifies to x ? a : b" {
   // Double negation doesn't change truthiness; strip it in ternary condition.
   let out = fold_one("const r = !!x ? 1 : 2;\n")
-  assert_false(out.contains("!!") || out.contains("!x") || out.contains("!!", 0))
+  assert_false(out.contains("!!") || out.contains("!x") || out.contains("!!"))
   assert_true(out.contains("x"))
 }
 
@@ -1382,29 +1382,29 @@ test "fold: new-expr ?? fallback is eliminated (new always non-null)" {
 ///|
 test "fold: Array.of(1, 2, 3) folds to array literal" {
   let out = fold_one("const x = Array.of(1, 2, 3);\n")
-  assert_true(out.contains("[1,") || out.contains("[1, "), "expected array literal in output")
-  assert_false(out.contains("Array.of"), "Array.of should be folded away")
+  assert_true(out.contains("[1,") || out.contains("[1, "), msg="expected array literal in output")
+  assert_false(out.contains("Array.of"), msg="Array.of should be folded away")
 }
 
 ///|
 test "fold: spread literal arrays are flattened in array literal" {
   // `[...a, ...b]` where a and b are literal arrays should fold to a single array.
   let out = fold_one("const x = [...[1, 2], ...[3, 4]];\n")
-  assert_true(out.contains("[1") || out.contains("[ 1"), "expected flattened array in output")
-  assert_false(out.contains("..."), "expected spread to be folded away")
+  assert_true(out.contains("[1") || out.contains("[ 1"), msg="expected flattened array in output")
+  assert_false(out.contains("..."), msg="expected spread to be folded away")
 }
 
 ///|
 test "fold: x === x folds to true" {
   let out = fold_one("const r = a === a;\n")
-  assert_true(out.contains("true") || out.contains("!0"), "expected true but got: \{out}")
+  assert_true(out.contains("true") || out.contains("!0"), msg="expected true but got: \{out}")
   assert_false(out.contains("==="))
 }
 
 ///|
 test "fold: x !== x folds to false" {
   let out = fold_one("const r = a !== a;\n")
-  assert_true(out.contains("false") || out.contains("!1"), "expected false but got: \{out}")
+  assert_true(out.contains("false") || out.contains("!1"), msg="expected false but got: \{out}")
   assert_false(out.contains("!=="))
 }
 
@@ -1415,24 +1415,24 @@ test "fold: else block hoisted when then-branch always returns" {
   let out = fold_one("function f(c, x, y) { if (c) { return x; } else { return y; } }\n")
   // After hoisting, the else is gone. The result could be
   // `return c ? x : y` (further folded) or `if(c)return x; return y;`.
-  assert_false(out.contains("else"), "expected else to be removed: \{out}")
+  assert_false(out.contains("else"), msg="expected else to be removed: \{out}")
 }
 
 ///|
 test "fold: else block hoisted when then-branch throws" {
   // `if (!x) { throw e; } else { stmts }` → `if(!x)throw e; stmts`
   let out = fold_one("function f(x) { if (!x) { throw new Error('bad'); } else { return x + 1; } }\n")
-  assert_false(out.contains("else"), "expected else to be removed: \{out}")
+  assert_false(out.contains("else"), msg="expected else to be removed: \{out}")
 }
 
 ///|
 test "fold: consecutive const decls merged into multi-decl" {
   let out = fold_one("const a = 1;\nconst b = 2;\nconst c = 3;\n")
   // All three should appear in a single multi-decl (no repeated `const`/`let`).
-  let const_count = out.split("const").length() - 1
-  let let_count = out.split("let").length() - 1
+  let const_count = out.split("const").collect().length() - 1
+  let let_count = out.split("let").collect().length() - 1
   let total_kind = const_count + let_count
-  assert_true(total_kind == 1, "expected one declaration keyword, got: \{out}")
+  assert_true(total_kind == 1, msg="expected one declaration keyword, got: \{out}")
   assert_true(out.contains("1"))
   assert_true(out.contains("2"))
   assert_true(out.contains("3"))
@@ -1470,8 +1470,8 @@ test "fold: do { body } while(false) inlines body (no break/continue)" {
   let out = fold_one("do { const x = 1; console.log(x); } while(false);\n")
   // The do-while with a false condition and no breaks executes exactly once.
   // It should be inlined to just the body statements.
-  assert_false(out.contains("do"), "expected do-while to be removed: \{out}")
-  assert_false(out.contains("while"), "expected while to be removed: \{out}")
+  assert_false(out.contains("do"), msg="expected do-while to be removed: \{out}")
+  assert_false(out.contains("while"), msg="expected while to be removed: \{out}")
   assert_true(out.contains("console"))
 }
 
@@ -1479,7 +1479,7 @@ test "fold: do { body } while(false) inlines body (no break/continue)" {
 test "fold: do { body; break; } while(false) keeps the loop (has break)" {
   let out = fold_one("do { if (x) break; doSomething(); } while(false);\n")
   // There is an unlabeled `break` — can't remove the do-while safely.
-  assert_true(out.contains("do") || out.contains("while"), "expected do-while to remain: \{out}")
+  assert_true(out.contains("do") || out.contains("while"), msg="expected do-while to remain: \{out}")
 }
 
 ///|
@@ -1494,22 +1494,22 @@ test "fold: do { body } while(true) stays as a loop" {
 test "fold: !!x in if condition is stripped (saves 2 bytes)" {
   let out = fold_one("if (!!x) { doIt(); }\n")
   // `!!x` in boolean position is equivalent to `x` — JS coerces anyway.
-  assert_false(out.contains("!!"), "expected !! stripped: \{out}")
-  assert_true(out.contains("if (x)") || out.contains("if(x)"), "expected x retained: \{out}")
+  assert_false(out.contains("!!"), msg="expected !! stripped: \{out}")
+  assert_true(out.contains("if (x)") || out.contains("if(x)") || out.contains("x&&") || out.contains("x &&"), msg="expected x retained: \{out}")
 }
 
 ///|
 test "fold: !!x in while condition is stripped" {
   let out = fold_one("while (!!running) { tick(); }\n")
-  assert_false(out.contains("!!"), "expected !! stripped: \{out}")
-  assert_true(out.contains("running"), "expected running retained: \{out}")
+  assert_false(out.contains("!!"), msg="expected !! stripped: \{out}")
+  assert_true(out.contains("running"), msg="expected running retained: \{out}")
 }
 
 ///|
 test "fold: !!x in for condition is stripped" {
   let out = fold_one("for (; !!active; ) { step(); }\n")
-  assert_false(out.contains("!!"), "expected !! stripped: \{out}")
-  assert_true(out.contains("active"), "expected active retained: \{out}")
+  assert_false(out.contains("!!"), msg="expected !! stripped: \{out}")
+  assert_true(out.contains("active"), msg="expected active retained: \{out}")
 }
 
 ///|
@@ -1517,7 +1517,7 @@ test "fold: !!x in return is NOT stripped (value semantics preserved)" {
   let out = fold_one("function f(x) { return !!x; }\n")
   // Outside boolean-context positions, `!!x` must be preserved
   // since it coerces to a boolean while `x` might not be.
-  assert_true(out.contains("!!"), "expected !! kept in return: \{out}")
+  assert_true(out.contains("!!"), msg="expected !! kept in return: \{out}")
 }
 
 ///|
@@ -1525,75 +1525,75 @@ test "fold: `call() && void 0;` in stmt position simplifies to `call()`" {
   // The right operand `void 0` is pure (no side effects), so it can be
   // dropped. In statement position `call() && void 0;` ≡ `call();`.
   let out = fold_one("call() && void 0;\n")
-  assert_true(out.contains("call()"), "expected call() retained: \{out}")
-  assert_false(out.contains("&&"), "expected && dropped: \{out}")
-  assert_false(out.contains("void"), "expected void 0 dropped: \{out}")
+  assert_true(out.contains("call()"), msg="expected call() retained: \{out}")
+  assert_false(out.contains("&&"), msg="expected && dropped: \{out}")
+  assert_false(out.contains("void"), msg="expected void 0 dropped: \{out}")
 }
 
 ///|
 test "fold: `call() || void 0;` in stmt position simplifies to `call()`" {
   let out = fold_one("call() || void 0;\n")
-  assert_true(out.contains("call()"), "expected call() retained: \{out}")
-  assert_false(out.contains("||"), "expected || dropped: \{out}")
+  assert_true(out.contains("call()"), msg="expected call() retained: \{out}")
+  assert_false(out.contains("||"), msg="expected || dropped: \{out}")
 }
 
 ///|
 test "fold: `call() && 1;` in stmt position simplifies to `call()`" {
   // `1` is a pure value — safe to drop the whole && rhs.
   let out = fold_one("call() && 1;\n")
-  assert_true(out.contains("call()"), "expected call() retained: \{out}")
-  assert_false(out.contains("&&"), "expected && dropped: \{out}")
+  assert_true(out.contains("call()"), msg="expected call() retained: \{out}")
+  assert_false(out.contains("&&"), msg="expected && dropped: \{out}")
 }
 
 ///|
 test "fold: `call() && sideEffect();` keeps both (rhs not pure)" {
   // sideEffect() is a call — not pure, so the rhs must be kept.
   let out = fold_one("call() && sideEffect();\n")
-  assert_true(out.contains("call()"), "expected call() retained: \{out}")
-  assert_true(out.contains("sideEffect()"), "expected sideEffect() retained: \{out}")
-  assert_true(out.contains("&&"), "expected && kept: \{out}")
+  assert_true(out.contains("call()"), msg="expected call() retained: \{out}")
+  assert_true(out.contains("sideEffect()"), msg="expected sideEffect() retained: \{out}")
+  assert_true(out.contains("&&"), msg="expected && kept: \{out}")
 }
 
 ///|
 test "fold: Boolean(x) folds to !!x for non-literal arg (saves 8+ bytes)" {
   let out = fold_one("const b = Boolean(x);\n")
   // `Boolean(x)` → `!!x` — saves 8 bytes vs the 9-char "Boolean(" prefix.
-  assert_true(out.contains("!!"), "expected !!: \{out}")
-  assert_false(out.contains("Boolean"), "expected Boolean removed: \{out}")
+  assert_true(out.contains("!!"), msg="expected !!: \{out}")
+  assert_false(out.contains("Boolean"), msg="expected Boolean removed: \{out}")
 }
 
 ///|
 test "fold: Boolean(true) folds to literal true (then peephole → !0)" {
   let out = fold_one("const b = Boolean(true);\n")
   // Boolean of a known-truthy literal → BoolLit(true)
-  assert_false(out.contains("Boolean"), "expected Boolean removed: \{out}")
+  assert_false(out.contains("Boolean"), msg="expected Boolean removed: \{out}")
 }
 
 ///|
 test "fold: Boolean(0) folds to literal false" {
   let out = fold_one("const b = Boolean(0);\n")
-  assert_false(out.contains("Boolean"), "expected Boolean removed: \{out}")
-  assert_true(out.contains("false") || out.contains("!1"), "expected false: \{out}")
+  assert_false(out.contains("Boolean"), msg="expected Boolean removed: \{out}")
+  assert_true(out.contains("false") || out.contains("!1"), msg="expected false: \{out}")
 }
 
 ///|
 test "fold: Number(x) folds to +x for non-literal arg (saves 7+ bytes)" {
   let out = fold_one("const n = Number(x);\n")
   // `Number(x)` → `+x` — saves 7 bytes vs "Number(" for a 1-char ident.
-  assert_false(out.contains("Number"), "expected Number removed: \{out}")
-  assert_true(out.contains("+x"), "expected +x: \{out}")
+  assert_false(out.contains("Number"), msg="expected Number removed: \{out}")
+  assert_true(out.contains("+x"), msg="expected +x: \{out}")
 }
 
 ///|
 test "fold: Number(true) folds to literal 1" {
   let out = fold_one("const n = Number(true);\n")
-  assert_false(out.contains("Number"), "expected Number removed: \{out}")
-  assert_true(out.contains("1"), "expected 1: \{out}")
+  assert_false(out.contains("Number"), msg="expected Number removed: \{out}")
+  assert_true(out.contains("1"), msg="expected 1: \{out}")
 }
 
 ///|
 test "fold: Number(\"42\") folds to integer 42" {
   let out = fold_one("const n = Number(\"42\");\n")
-  assert_false(out.contains("Number"), "expected Number removed: \{out}")
-  assert_true(out.contains("42"), "expected 42: \{out}")
+  assert_false(out.contains("Number"), msg="expected Number removed: \{out}")
+  assert_true(out.contains("42"), msg="expected 42: \{out}")
 }

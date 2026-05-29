@@ -150,8 +150,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // `x.prop = x.prop OP y` → `x.prop OP= y` (and `x.prop = x.prop + 1` → `x.prop++`).
       // Only fold when the receiver is a bare `Var` (no double evaluation).
       match (target_p, val_p) {
-        (Var(tn), BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rprop), rhs))
-          if tn == rn && prop == rprop =>
+        (Var(tn), BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rprop), rhs)) if tn == rn && prop == rprop =>
           match (compound_for_binop(op), rhs) {
             (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
               Expr(
@@ -452,8 +451,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `x.prop = x.prop OP y` → `x.prop OP= y` (and `x.prop = x.prop + 1` → `x.prop++`).
       // Only fold when receiver is a bare Var (no double evaluation).
       match (recv_p, v_p) {
-        (Var(tn), BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rp), rhs))
-          if tn == rn && p == rp =>
+        (Var(tn), BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rp), rhs)) if tn == rn && p == rp =>
           match (compound_for_binop(op), rhs) {
             (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
               UnaryOp(@ast.TsUnaryOp::PostInc, PropAccess(Var(tn), p))

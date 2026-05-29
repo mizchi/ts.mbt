@@ -1599,7 +1599,7 @@ test "iife_class_lift: Object.defineProperty getter/setter lifted to native acce
       // Native getter/setter syntax should appear.
       assert_true(
         out.js.contains("get value") || out.js.contains("get "),
-        "expected native getter syntax",
+        msg="expected native getter syntax",
       )
     }
     Err(e) => fail("bundle error: \{e}")
@@ -1628,7 +1628,7 @@ test "fold: empty constructor dropped from NativeClassStmt without extends" {
       // The empty constructor should be dropped.
       assert_false(
         out.js.contains("constructor"),
-        "expected empty constructor to be dropped",
+        msg="expected empty constructor to be dropped",
       )
       // The method must still be present.
       assert_true(out.js.contains("getValue"))
@@ -1749,10 +1749,11 @@ test "iife_class_lift: closure var referencing class name emitted after class (#
       assert_true(out.js.contains("class Foo"))
       // `var _proto = Foo.prototype` must come AFTER class Foo, so
       // that `Foo` is already initialized when the assignment runs.
-      let class_pos = out.js.index_of("class Foo")
-      let proto_pos = out.js.index_of("_proto")
-      if class_pos >= 0 && proto_pos >= 0 {
-        assert_true(proto_pos > class_pos)
+      // `_proto` must appear AFTER `class Foo` in the output.
+      let parts = out.js.split("class Foo").collect()
+      if parts.length() >= 2 {
+        // The part before "class Foo" must not contain "_proto".
+        assert_false(parts[0].to_string().contains("_proto"))
       }
     }
     Err(e) => fail("bundle error: \{e}")
@@ -1959,13 +1960,13 @@ test "emit: minify emits !0/!1 for true/false and void 0 for undefined" {
   let opts = BundleOptions::default().with_minify(true)
   match bundle_modules(files, "entry.ts", opts) {
     Ok(out) => {
-      assert_false(out.js.contains("true"), "expected true to be minified away")
-      assert_false(out.js.contains("false"), "expected false to be minified away")
+      assert_false(out.js.contains("true"), msg="expected true to be minified away")
+      assert_false(out.js.contains("false"), msg="expected false to be minified away")
       // `undefined` may be dropped entirely by the treeshaker/folder or
       // replaced with `void 0` — either way the 9-char identifier should not appear.
       assert_false(
         out.js.contains("undefined"),
-        "expected undefined to be minified away",
+        msg="expected undefined to be minified away",
       )
     }
     Err(e) => fail("bundle error: \{e}")
@@ -1991,9 +1992,9 @@ test "bundle: second fold pass after inline folds const-indexed array access" {
       // After fold+inline+fold the array literal should be gone — only "b" remains.
       assert_true(
         out.js.contains("\"b\""),
-        "expected folded value \"b\" in output",
+        msg="expected folded value \"b\" in output",
       )
-      assert_false(out.js.contains("[\"a\""), "expected array literal to be folded away")
+      assert_false(out.js.contains("[\"a\""), msg="expected array literal to be folded away")
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -2014,7 +2015,7 @@ test "type-fold: x + \"\" is dropped when x is typed as string" {
       // The `name + ""` concatenation should be folded away.
       assert_false(
         out.js.contains("+ \"\"") || out.js.contains("+\"\""),
-        "expected x + \"\" to be folded away for string-typed x",
+        msg="expected x + \"\" to be folded away for string-typed x",
       )
     }
     Err(e) => fail("bundle error: \{e}")
@@ -2037,7 +2038,7 @@ test "fold: else block hoisted when then-branch returns, result folded to ternar
       // `else` keyword should be gone; result is a ternary or direct branch.
       assert_false(
         out.js.contains("else"),
-        "expected else to be eliminated: \{out.js}",
+        msg="expected else to be eliminated: \{out.js}",
       )
     }
     Err(e) => fail("bundle error: \{e}")
@@ -2065,10 +2066,10 @@ test "minify: consecutive const decls merge into single multi-decl in bundle out
       // After treeshake, A/B/C are inlined to 1/2/3.
       // But even if they survive, they should be in a single multi-decl.
       // The key assertion: only one `let` keyword in the output.
-      let let_count = out.js.split("let").length() - 1
+      let let_count = out.js.split("let").collect().length() - 1
       assert_true(
         let_count <= 1,
-        "expected at most one `let` keyword in minified output, got \{let_count}: \{out.js}",
+        msg="expected at most one `let` keyword in minified output, got \{let_count}: \{out.js}",
       )
     }
     Err(e) => fail("bundle error: \{e}")
