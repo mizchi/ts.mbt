@@ -639,3 +639,14 @@ test "peephole: else after terminating if becomes sequential (removes else keywo
   assert_false(out.contains("else"), msg="expected no else, got: \{out}")
   assert_true(out.contains("doA") && out.contains("doB"), msg="expected both branches, got: \{out}")
 }
+
+///|
+test "peephole: complex if chain optimization" {
+  // if(a){doA();return x;} else { if(b){return y;} else {return z;}}
+  // After else-removal: if(a){doA();return x;} if(b){return y;} return z;
+  // Then guard-ternary: if(a){doA();return x;} return b?y:z;
+  let out = peep_one(
+    "function f(a,b,x,y,z){if(a){doA();return x;}else{if(b){return y;}else{return z;}}}"
+  )
+  assert_false(out.contains("else"), msg="expected no else keywords, got: \{out}")
+}
