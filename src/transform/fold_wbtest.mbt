@@ -181,6 +181,13 @@ test "fold: ternary with falsy literal uses else arm" {
 }
 
 ///|
+test "fold: typeof void 0 folds to \"undefined\"" {
+  let out = fold_one("const t = typeof void 0;\n")
+  assert_true(out.contains("\"undefined\""))
+  assert_false(out.contains("typeof"))
+}
+
+///|
 test "fold: typeof integer literal folds to \"number\"" {
   let out = fold_one("const t = typeof 42;\n")
   assert_true(out.contains("\"number\""))
