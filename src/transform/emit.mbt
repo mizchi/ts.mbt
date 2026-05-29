@@ -401,6 +401,32 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
 }
 
 ///|
+/// Variant for function bodies. In minify mode, drops trailing
+/// `return;` / `return undefined;` — the implicit return at end-of-
+/// function is semantically identical and saves ~9 bytes per occurrence.
+fn emit_func_body(e : Emitter, block : @ast.TsBlock) -> Unit {
+  if e.pretty {
+    emit_block(e, block)
+    return
+  }
+  // Count how many trailing Return(None)/Empty stmts to skip.
+  let stmts = block.stmts
+  let mut end = stmts.length()
+  while end > 0 {
+    match stmts[end - 1] {
+      @ast.TsStmt::Return(None) | @ast.TsStmt::Empty => end = end - 1
+      _ => break
+    }
+  }
+  e.open_block()
+  for i in 0..<end {
+    e.nl()
+    emit_stmt(e, stmts[i])
+  }
+  e.close_block()
+}
+
+///|
 /// Variant for control-flow bodies (`if`, `while`, `for*`). In
 /// minify mode, when the body is a single statement and that
 /// statement isn't a `Let / Const / Var / function-decl` (whose
@@ -1622,7 +1648,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_runtime_params(e, f.params)
             e.write(")")
             e.space()
-            emit_block(e, f.body)
+            emit_func_body(e, f.body)
           }
           (key, FuncExpr(f)) if key.has_prefix("@@get:") ||
             key.has_prefix("@@set:") => {
@@ -1640,7 +1666,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_runtime_params(e, f.params)
             e.write(")")
             e.space()
-            emit_block(e, f.body)
+            emit_func_body(e, f.body)
           }
           (key, FuncExpr(f)) if f.name == key && key != "" => {
             // Method shorthand: `key(args) {...}`. The parser stores
@@ -1662,7 +1688,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_runtime_params(e, f.params)
             e.write(")")
             e.space()
-            emit_block(e, f.body)
+            emit_func_body(e, f.body)
           }
           _ => {
             // Non-identifier keys (`"Content-Type"`, `"foo bar"`,
@@ -1897,7 +1923,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_expr(e, inner, 2)
           }
         }
-        ArrowBlock(block) => emit_block(e, block)
+        ArrowBlock(block) => emit_func_body(e, block)
       }
     }
     FuncExpr(f) => emit_function_expr(e, f)
@@ -2186,7 +2212,7 @@ fn try_emit_function_decl(e : Emitter, stmt : @ast.TsStmt) -> Bool {
   emit_runtime_params(e, func.params)
   e.write(")")
   e.space()
-  emit_block(e, func.body)
+  emit_func_body(e, func.body)
   true
 }
 
@@ -2235,7 +2261,7 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
   emit_runtime_params(e, f.params)
   e.write(")")
   e.space()
-  emit_block(e, f.body)
+  emit_func_body(e, f.body)
 }
 
 ///|
@@ -3097,7 +3123,7 @@ fn emit_native_class(
         emit_runtime_params(e, func.params)
         e.write(")")
         e.space()
-        emit_block(e, func.body)
+        emit_func_body(e, func.body)
       }
       None => ()
     }
@@ -3172,7 +3198,7 @@ fn emit_native_class(
     e.write(")")
     e.space()
     match m.body {
-      Some(b) => emit_block(e, b)
+      Some(b) => emit_func_body(e, b)
       None => {
         e.write("{")
         e.write("}")

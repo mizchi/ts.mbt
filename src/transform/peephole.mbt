@@ -200,15 +200,24 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     }
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(peep_expr(e, ctx))
-    If(c, t, e) =>
-      If(
-        peep_expr(c, ctx),
-        peep_block(t, ctx),
-        match e {
-          Some(b) => Some(peep_block(b, ctx))
-          None => None
-        },
-      )
+    If(c, t, e) => {
+      let cp = peep_expr(c, ctx)
+      let tp = peep_block(t, ctx)
+      let ep = match e {
+        Some(b) => Some(peep_block(b, ctx))
+        None => None
+      }
+      // `if (c) return a; else return b;` → `return c ? a : b;`
+      match (tp.stmts, ep) {
+        ([Return(Some(a))], Some({ stmts: [Return(Some(b))], .. })) =>
+          Return(Some(@ast.TsExpr::Cond(cp, a, b)))
+        // `if (c) expr;` (no else) → `c && expr;` (short-circuit)
+        ([Expr(a)], None) => Expr(@ast.TsExpr::BinOp(@ast.TsBinOp::And, cp, a))
+        // `if (c) return;` (no else) → `if (!c) break/continue` doesn't apply,
+        // but `if (c) return;` stays as-is for now
+        _ => If(cp, tp, ep)
+      }
+    }
     While(c, body) => While(peep_expr(c, ctx), peep_block(body, ctx))
     DoWhile(c, body) => DoWhile(peep_expr(c, ctx), peep_block(body, ctx))
     With(c, body) => With(peep_expr(c, ctx), peep_block(body, ctx))

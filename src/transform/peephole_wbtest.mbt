@@ -546,3 +546,31 @@ test "peephole: obj.prop===null||obj.prop===undefined folds to obj.prop==null" {
   assert_true(out.contains("obj.prop == null"), msg="expected obj.prop == null, got: \{out}")
   assert_false(out.contains("==="), msg="expected no ===, got: \{out}")
 }
+
+///|
+test "minify emit: trailing return; dropped from function body" {
+  let e = Emitter::new(pretty=false)
+  let block = @parser.parse_block_from_source(
+    "function foo() { doSomething(); return; }\n",
+  )
+  for s in block.stmts {
+    try_emit_function_decl(e, s) |> ignore
+  }
+  let out = e.to_string()
+  assert_false(out.contains("return"), msg="expected no trailing return, got: \{out}")
+  assert_true(out.contains("doSomething()"), msg="expected doSomething(), got: \{out}")
+}
+
+///|
+test "peephole: if(c) return a; else return b; folds to return c?a:b" {
+  let out = peep_one("function f(c,a,b){if(c){return a;}else{return b;}}")
+  assert_true(out.contains("?"), msg="expected ternary, got: \{out}")
+  assert_false(out.contains("if"), msg="expected no if, got: \{out}")
+}
+
+///|
+test "peephole: if(c) expr; (no else) folds to c&&expr" {
+  let out = peep_one("if(x){doSomething();}")
+  assert_true(out.contains("&&"), msg="expected &&, got: \{out}")
+  assert_false(out.contains("if"), msg="expected no if, got: \{out}")
+}
