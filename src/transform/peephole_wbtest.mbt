@@ -1248,3 +1248,10 @@ test "peephole: (0, fn)(args) indirect call → fn(args)" {
   assert_false(out.contains("(0,"), msg="expected no (0, indirect call, got: \{out}")
   assert_true(out.contains("myFn("), msg="expected direct call, got: \{out}")
 }
+
+///|
+test "peephole: Array.prototype.METHOD.call(arr, ...) → arr.METHOD(...)" {
+  let out = minify_one("Array.prototype.forEach.call(arr, fn);")
+  assert_false(out.contains("Array.prototype"), msg="expected no Array.prototype, got: \{out}")
+  assert_true(out.contains("arr.forEach("), msg="expected arr.forEach(), got: \{out}")
+}

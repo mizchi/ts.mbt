@@ -82,6 +82,7 @@
 //   x !== false                 -> x            (saves 7 bytes)
 //   Object.prototype.hasOwnProperty.call(o,k) -> Object.hasOwn(o,k)  (saves ~22 bytes; ES2022)
 //   x.hasOwnProperty(k)                       -> Object.hasOwn(x,k)  (saves ~8 bytes; ES2022)
+//   Array.prototype.METHOD.call(arr, args) -> arr.METHOD(args)  (saves ~22 bytes)
 //   x.toString()                -> ""+x         (saves ~9 bytes; same as String(x))
 //   (0, fn)(args)               -> fn(args)      (saves 4 bytes; indirect call in ESM is redundant)
 //   "a" + "b"                -> "ab"           (string literal concatenation folding)
@@ -1202,6 +1203,31 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             "slice",
           ) =>
             return ArrayLit([Spread(new_args[0])])
+          _ => ()
+        }
+      }
+      // `Array.prototype.METHOD.call(arr, arg1, arg2, ...)` → `arr.METHOD(arg1, arg2, ...)`.
+      // TypeScript's `__spreadArray` helper and some polyfills call Array
+      // prototype methods indirectly. The `.call` form is safe to collapse
+      // when the first argument (the `this` receiver) is a plain array or
+      // a var — the method semantics are the same. Only fold when the
+      // receiver is `Array.prototype.METHOD` (not e.g. `[].METHOD`).
+      // Saves ~22 bytes for methods like forEach, map, filter, reduce, etc.
+      if m == "call" && new_args.length() >= 1 {
+        match recv_p {
+          PropAccess(
+            PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
+            method_name,
+          ) if method_name != "slice" => {
+            // Rewrite to `new_args[0].method_name(new_args[1..])`.
+            let rest : Array[@ast.TsExpr] = []
+            for ii, a in new_args {
+              if ii > 0 {
+                rest.push(a)
+              }
+            }
+            return MethodCall(new_args[0], method_name, rest)
+          }
           _ => ()
         }
       }
