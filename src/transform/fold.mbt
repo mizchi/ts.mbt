@@ -2257,6 +2257,11 @@ fn fold_array_method(
     "find" if items.is_empty() => Some(Var("undefined"))
     "findIndex" if items.is_empty() => Some(IntLit(-1))
     "filter" | "map" if items.is_empty() => Some(ArrayLit([]))
+    "forEach" if items.is_empty() => Some(Var("undefined"))
+    "flatMap" | "sort" | "reverse" | "copyWithin" | "fill" | "flat"
+      if items.is_empty() =>
+      Some(ArrayLit([]))
+    "indexOf" | "lastIndexOf" if items.is_empty() => Some(IntLit(-1))
     "reduce" if items.is_empty() && args.length() == 2 =>
       // `[].reduce(fn, init)` → init when init is pure.
       if is_pure_value(args[1]) { Some(args[1]) } else { None }
