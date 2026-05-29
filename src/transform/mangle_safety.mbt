@@ -70,16 +70,30 @@ pub fn collect_externally_visible_props(
   let reserved_obs = reserved_props_from_observability(graph, obs_map)
   let reserved : Map[String, Bool] = {}
   for k in reserved_external.keys() {
-    reserved[k] = true
+    // Internal mtsc markers (`__private_brand__N__X`, `__super_proto`,
+    // `__brand__`) are synthesised private — no external consumer can
+    // reference them by their desugared names. Exclude them from the
+    // escaped-property set so the property mangler can still shorten them
+    // even when the containing object is transitively exported.
+    if not(is_internal_marker_prop(k)) {
+      reserved[k] = true
+    }
   }
   for k in reserved_obs.keys() {
-    reserved[k] = true
+    if not(is_internal_marker_prop(k)) {
+      reserved[k] = true
+    }
   }
   let out : Array[String] = []
   for k in reserved.keys() {
     out.push(k)
   }
   out
+}
+
+///|
+fn is_internal_marker_prop(name : String) -> Bool {
+  name == "__super_proto" || name == "__brand__" || name.has_prefix("__private_brand__")
 }
 
 ///|
@@ -789,6 +803,11 @@ fn arg_is_literal_or_known(expr : @ast.TsExpr) -> Bool {
     | IntLit(_)
     | BoolLit(_)
     | NullLit => true
+    // `this.__private_brand__N__X` accesses are safe: the mtsc-synthesized
+    // private-field maps contain only routing/structural data written by the
+    // bundle itself, not arbitrary user-controlled property names.
+    PropAccess(@ast.TsExpr::Var("this"), name) =>
+      name.has_prefix("__private_brand__")
     _ => false
   }
 }

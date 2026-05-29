@@ -106,6 +106,22 @@ fn try_lift_iife_value(
       }
     _ => return false
   }
+  // If the inner function/class name differs from the outer variable name
+  // (e.g. anonymous class expressions use `_anon` internally but the outer
+  // binding may be `Context`, `HonoBase`, etc.), detect the inner name by
+  // finding `return innerName` at the end of the body. Use `innerName` as
+  // the effective class name so prototype assignments like
+  // `_anon.prototype.method = …` and `return _anon` resolve correctly.
+  let inner_name : String = {
+    let mut found : String = name
+    for s in body.stmts {
+      match s {
+        Return(Some(@ast.TsExpr::Var(ret_n))) => found = ret_n
+        _ => ()
+      }
+    }
+    found
+  }
   // Pre-scan: collect `__get_NAME` / `__set_NAME` function definitions
   // that the parser emits for named getter/setter methods. These are
   // referenced by `PropAssign(proto, "@@get:NAME", Var("__get_NAME"))`.
@@ -142,7 +158,7 @@ fn try_lift_iife_value(
       _ => [s]
     }
     for fs in flat_stmts {
-      match classify_iife_body_stmt(fs, name, super_param, accessor_funcs) {
+      match classify_iife_body_stmt(fs, inner_name, super_param, accessor_funcs) {
         Skipped => ()
         Ctor(f) =>
           match ctor_func {
@@ -190,7 +206,7 @@ fn try_lift_iife_value(
   let side_effect_stmts : Array[@ast.TsStmt] = []
   for s in extra_stmts {
     match s {
-      @ast.TsStmt::PropAssign(@ast.TsExpr::Var(n), key, val) if n == name =>
+      @ast.TsStmt::PropAssign(@ast.TsExpr::Var(n), key, val) if n == name || n == inner_name =>
         static_field_inits.push((key, val))
       _ => side_effect_stmts.push(s)
     }
@@ -214,10 +230,37 @@ fn try_lift_iife_value(
   for s in pre_stmts {
     out.push(s)
   }
-  out.push(NativeClassStmt(decl, ctor_func))
+  // When the inner name differs from the outer name (anonymous class
+  // expression pattern), rename all `inner_name` references to `name`
+  // in method bodies, the constructor, and extra/pre stmts.
+  let (final_decl, final_ctor) = if inner_name != name {
+    let renamed_methods = all_methods.map(fn(m) {
+      let new_body = match m.body {
+        Some(b) => Some(rename_var_in_block(b, inner_name, name))
+        None => None
+      }
+      { ..m, body: new_body }
+    })
+    let renamed_ctor = match ctor_func {
+      Some(f) => Some({ ..f, body: rename_var_in_block(f.body, inner_name, name) })
+      None => None
+    }
+    (
+      { ..decl, methods: renamed_methods },
+      renamed_ctor,
+    )
+  } else {
+    (decl, ctor_func)
+  }
+  out.push(NativeClassStmt(final_decl, final_ctor))
   // Append remaining side-effect statements after the class.
   for s in side_effect_stmts {
-    out.push(s)
+    let s2 = if inner_name != name {
+      rename_var_in_stmt(s, inner_name, name)
+    } else {
+      s
+    }
+    out.push(s2)
   }
   true
 }
@@ -782,5 +825,64 @@ fn rewrite_super_expr(expr : @ast.TsExpr, sp : String) -> @ast.TsExpr {
       }
     }
     _ => expr
+  }
+}
+
+///|
+// Rename all `Var(from)` / `New(from, …)` references in an expression.
+// Used to replace the inner class name with the outer class name after
+// an IIFE whose inner constructor name differs from the outer binding.
+fn rename_var_in_expr(expr : @ast.TsExpr, from : String, to : String) -> @ast.TsExpr {
+  let re = fn(e) { rename_var_in_expr(e, from, to) }
+  match expr {
+    Var(n) => if n == from { Var(to) } else { expr }
+    New(n, args) => New(if n == from { to } else { n }, args.map(re))
+    NewExpr(callee, args) => NewExpr(re(callee), args.map(re))
+    PropAccess(recv, p) => PropAccess(re(recv), p)
+    IndexAccess(recv, idx) => IndexAccess(re(recv), re(idx))
+    MethodCall(recv, m, args) => MethodCall(re(recv), m, args.map(re))
+    CallExpr(callee, args) => CallExpr(re(callee), args.map(re))
+    Call(n, args) => Call(n, args.map(re))
+    BinOp(op, l, r) => BinOp(op, re(l), re(r))
+    UnaryOp(op, operand) => UnaryOp(op, re(operand))
+    Cond(c, t, e) => Cond(re(c), re(t), re(e))
+    Seq(l, r) => Seq(re(l), re(r))
+    Await(e) => Await(re(e))
+    ArrayLit(items) => ArrayLit(items.map(re))
+    Spread(e) => Spread(re(e))
+    ObjectLit(pairs) => ObjectLit(pairs.map(p => (p.0, re(p.1))))
+    AssignExpr(n, v) => AssignExpr(n, re(v))
+    PropAssignExpr(recv, p, val) => PropAssignExpr(re(recv), p, re(val))
+    CompoundAssignExpr(target, op, val) => CompoundAssignExpr(re(target), op, re(val))
+    IndexAssignExpr(recv, idx, val) => IndexAssignExpr(re(recv), re(idx), re(val))
+    _ => expr
+  }
+}
+
+fn rename_var_in_block(block : @ast.TsBlock, from : String, to : String) -> @ast.TsBlock {
+  { ..block, stmts: block.stmts.map(s => rename_var_in_stmt(s, from, to)) }
+}
+
+///|
+fn rename_var_in_stmt(stmt : @ast.TsStmt, from : String, to : String) -> @ast.TsStmt {
+  let re = fn(e) { rename_var_in_expr(e, from, to) }
+  let rb = fn(b) { rename_var_in_block(b, from, to) }
+  match stmt {
+    @ast.TsStmt::Expr(e) => Expr(re(e))
+    @ast.TsStmt::Return(Some(e)) => Return(Some(re(e)))
+    @ast.TsStmt::Let(b, t, e) => Let(b, t, re(e))
+    @ast.TsStmt::Const(b, t, e) => Const(b, t, re(e))
+    @ast.TsStmt::Var(b, t, e) => Var(b, t, re(e))
+    @ast.TsStmt::Assign(n, e) => Assign(n, re(e))
+    @ast.TsStmt::PropAssign(recv, p, val) => PropAssign(re(recv), p, re(val))
+    @ast.TsStmt::IndexAssign(arr, idx, val) => IndexAssign(re(arr), re(idx), re(val))
+    @ast.TsStmt::If(c, t, e) => If(re(c), rb(t), e.map(rb))
+    @ast.TsStmt::While(c, body) => While(re(c), rb(body))
+    @ast.TsStmt::For(init, cond, update, body) =>
+      For(init.map(s => rename_var_in_stmt(s, from, to)), cond.map(re), update.map(s => rename_var_in_stmt(s, from, to)), rb(body))
+    @ast.TsStmt::Block(b) => Block(rb(b))
+    @ast.TsStmt::Throw(e) => Throw(re(e))
+    @ast.TsStmt::CompoundAssign(n, op, e) => CompoundAssign(n, op, re(e))
+    _ => stmt
   }
 }
