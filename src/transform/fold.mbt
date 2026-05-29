@@ -963,6 +963,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (Typeof, BigIntLit(_)) => StringLit("bigint")
         // Tag-less template literals always produce a string.
         (Typeof, TemplateLiteral(_, _)) => StringLit("string")
+        // `typeof` always returns one of the 8 known type strings; applying
+        // `typeof` again always yields `"string"`.
+        (Typeof, UnaryOp(@ast.TsUnaryOp::Typeof, _)) => StringLit("string")
         // `new` always returns an object; class expression is a function.
         (Typeof, New(_, _)) | (Typeof, NewExpr(_, _)) => StringLit("object")
         (Typeof, NativeClassExpr(_, _)) => StringLit("function")
