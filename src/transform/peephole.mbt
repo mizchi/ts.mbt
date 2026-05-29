@@ -63,6 +63,8 @@
 //   typeof x !== "undefined"    -> x !== void 0
 //   !x ? b : a                  -> x ? a : b   (flip branches, drop negation)
 //   `text` (no exprs)           -> "text"       (saves 2 backtick bytes)
+//   Number.parseInt(x)          -> parseInt(x)  (saves 7 bytes; same fn per spec)
+//   Number.parseFloat(x)        -> parseFloat(x)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -905,6 +907,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         new_args.push(peep_expr(a, ctx))
       }
       let recv_p = peep_expr(recv, ctx)
+      // `Number.parseInt(x)` → `parseInt(x)` (saves 7 bytes; same function per spec)
+      // `Number.parseFloat(x)` → `parseFloat(x)` (saves 7 bytes; same function)
+      if (m == "parseInt" || m == "parseFloat") {
+        match recv_p {
+          Var("Number") => return Call(m, new_args)
+          _ => ()
+        }
+      }
       // `Math.pow(x, y)` → `x**y` (saves up to 8 bytes)
       if m == "pow" && new_args.length() == 2 {
         match recv_p {

@@ -1014,3 +1014,17 @@ test "peephole: template literal with no exprs → string literal" {
   assert_false(out.contains("`"), msg="expected no backticks, got: \{out}")
   assert_true(out.contains("\"hello world\"") || out.contains("'hello world'"), msg="expected string literal, got: \{out}")
 }
+
+///|
+test "peephole: Number.parseInt → parseInt" {
+  let out = minify_one("const r = Number.parseInt(x, 10);")
+  assert_false(out.contains("Number."), msg="expected no Number. prefix, got: \{out}")
+  assert_true(out.contains("parseInt"), msg="expected parseInt, got: \{out}")
+}
+
+///|
+test "peephole: Number.parseFloat → parseFloat" {
+  let out = minify_one("const r = Number.parseFloat(x);")
+  assert_false(out.contains("Number."), msg="expected no Number. prefix, got: \{out}")
+  assert_true(out.contains("parseFloat"), msg="expected parseFloat, got: \{out}")
+}
