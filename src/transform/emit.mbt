@@ -518,6 +518,20 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
       }
       match decl_kind {
         Some(kind) => {
+          // FuncExpr-initialised declarations must be emitted as function
+          // declarations (`function foo(){}`) — not merged into a multi-decl
+          // — so that JS hoisting semantics are preserved.
+          let is_func_init = match stmt {
+            @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+            _ => false
+          }
+          if is_func_init {
+            emit_stmt(e, stmt)
+            i = i + 1
+            continue
+          }
           let group : Array[@ast.TsStmt] = [stmt]
           let mut j = i + 1
           while j < n {
@@ -528,7 +542,14 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
               @ast.TsStmt::Var(_, _, _) => Some("var")
               _ => None
             }
-            if next_kind == Some(kind) {
+            // Also stop accumulating when the next stmt has a FuncExpr init.
+            let next_is_func = match next {
+              @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+              | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+              | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+              _ => false
+            }
+            if next_kind == Some(kind) && not(next_is_func) {
               group.push(next)
               j = j + 1
             } else {

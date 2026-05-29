@@ -514,12 +514,14 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         [{ test_expr: Some(case_e), body: case_body }] => {
           // A `break` terminator is only valid inside a switch / loop, so
           // don't lift a single-case switch to `if` when the body ends with
-          // `break` — the resulting `if(…){…;break}` would be a SyntaxError
-          // outside a switch or loop context.
-          let is_non_fall_through = match case_body.stmts.last() {
+          // `break` or contains an internal bare break — the resulting
+          // `if(…){…;break}` would be a SyntaxError outside a switch/loop.
+          let has_bare_break = block_has_bare_break(case_body)
+          let last_is_terminator = match case_body.stmts.last() {
             Some(Return(_)) | Some(Throw(_)) => true
             _ => false
           }
+          let is_non_fall_through = not(has_bare_break) && last_is_terminator
           if is_non_fall_through {
             let if_stmt = peep_stmt(
               If(BinOp(@ast.TsBinOp::BinEq, ep, case_e), case_body, None),
@@ -534,10 +536,12 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           { test_expr: Some(case_e), body: case_body },
           { test_expr: None, body: default_body },
         ] => {
-          let is_non_fall_through = match case_body.stmts.last() {
+          let has_bare_break2 = block_has_bare_break(case_body)
+          let last_is_term2 = match case_body.stmts.last() {
             Some(Return(_)) | Some(Throw(_)) => true
             _ => false
           }
+          let is_non_fall_through = not(has_bare_break2) && last_is_term2
           if is_non_fall_through {
             let if_stmt = peep_stmt(
               If(
@@ -559,12 +563,20 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         // The resulting if-else chain then collapses via the
         // `if(c)return a; return b;` block-level fold into ternaries.
         _ => {
-          // Check all named cases end with a terminator.
+          // Check all named cases end with a terminator and have no
+          // internal bare breaks (a bare break inside a case targets the
+          // switch; lifting to if would make it a SyntaxError).
           let all_non_fall_through = {
             let mut ok = final_cases.length() > 1
             for c in final_cases {
               match c.test_expr {
-                Some(_) =>
+                Some(_) => {
+                  // Also bail out if the body has any mid-body bare break —
+                  // those target the switch and become illegal in an if-else.
+                  if block_has_bare_break(c.body) {
+                    ok = false
+                    break
+                  }
                   match c.body.stmts.last() {
                     // Break is only valid inside switch/loop — don't
                     // lift to if-else where it would be a SyntaxError.
@@ -574,6 +586,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
                       break
                     }
                   }
+                }
                 None => () // default — no terminator required
               }
             }
@@ -1712,7 +1725,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       //   - Body doesn't reference `this` or `arguments` (arrow functions capture these lexically).
       //   - Not named (or the name isn't used inside the body as a recursive ref).
       //   - Not async (async arrows are fine syntax-wise, but we only need to handle the common case).
+      // Don't convert empty-body functions to arrows: empty functions are
+      // frequently used as constructor bases and their `.prototype` is
+      // accessed in the surrounding scope — arrows lack `.prototype`.
       let can_arrow = not(f.is_generator) &&
+        not(folded.stmts.is_empty()) &&
         not(block_references_name(folded, "this")) &&
         not(block_references_name(folded, "arguments")) &&
         (f.name == "" || not(block_references_name(folded, f.name)))

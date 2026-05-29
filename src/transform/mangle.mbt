@@ -913,9 +913,17 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_var_refs_expr(a, out)
       collect_var_refs_expr(b, out)
     }
-    // Do NOT recurse into function/arrow bodies — they have their own scope
-    ArrowFunc(_, _, _, _) => ()
-    FuncExpr(_) => ()
+    // Recurse into function/arrow bodies to collect outer-scope references
+    // that inner closures capture. This is used by function_child to pre-
+    // occupy short names of outer bindings that inner closures reference —
+    // preventing the inner closure's local name from shadowing the outer name.
+    ArrowFunc(params, _, body, _) => {
+      match body {
+        ArrowExpr(e) => collect_var_refs_expr(e, out)
+        ArrowBlock(b) => collect_var_refs_block(b, out)
+      }
+    }
+    FuncExpr(f) => collect_var_refs_block(f.body, out)
     Await(e) => collect_var_refs_expr(e, out)
     Yield(Some(e)) => collect_var_refs_expr(e, out)
     YieldStar(e) => collect_var_refs_expr(e, out)
