@@ -34,6 +34,11 @@ pub struct Parser {
   src : String
   allow_jsx : Bool
   mut class_id : Int // for private field brand generation
+  // File-level counter for computed-key temp variables (`__class_key_N`).
+  // A per-class local counter would reset to 0 for every class in the file,
+  // causing duplicate `let __class_key_0` declarations when multiple classes
+  // are bundled into a single scope.
+  mut class_key_counter : Int
   mut current_class_brand : String? // brand ID of current class being parsed
   mut last_runtime_class_decl : @ast.TsClassDecl?
   // The expression parsed by `parse_class_base_name` when the
@@ -120,6 +125,7 @@ pub fn Parser::new_with_strict_and_jsx(
     src: "",
     allow_jsx,
     class_id: 0,
+    class_key_counter: 0,
     current_class_brand: None,
     last_runtime_class_decl: None,
     pending_class_base_expr: None,
@@ -171,6 +177,7 @@ pub fn Parser::from_source_with_jsx(src : String, allow_jsx : Bool) -> Parser {
     src,
     allow_jsx,
     class_id: 0,
+    class_key_counter: 0,
     current_class_brand: None,
     last_runtime_class_decl: None,
     pending_class_base_expr: None,

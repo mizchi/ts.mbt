@@ -512,8 +512,12 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // collapse further via the `if (c) return a; return b;` rule.
       match final_cases[:] {
         [{ test_expr: Some(case_e), body: case_body }] => {
+          // A `break` terminator is only valid inside a switch / loop, so
+          // don't lift a single-case switch to `if` when the body ends with
+          // `break` — the resulting `if(…){…;break}` would be a SyntaxError
+          // outside a switch or loop context.
           let is_non_fall_through = match case_body.stmts.last() {
-            Some(Return(_)) | Some(Throw(_)) | Some(Break(_)) => true
+            Some(Return(_)) | Some(Throw(_)) => true
             _ => false
           }
           if is_non_fall_through {
@@ -531,7 +535,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           { test_expr: None, body: default_body },
         ] => {
           let is_non_fall_through = match case_body.stmts.last() {
-            Some(Return(_)) | Some(Throw(_)) | Some(Break(_)) => true
+            Some(Return(_)) | Some(Throw(_)) => true
             _ => false
           }
           if is_non_fall_through {
@@ -562,7 +566,9 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
               match c.test_expr {
                 Some(_) =>
                   match c.body.stmts.last() {
-                    Some(Return(_)) | Some(Throw(_)) | Some(Break(_)) => ()
+                    // Break is only valid inside switch/loop — don't
+                    // lift to if-else where it would be a SyntaxError.
+                    Some(Return(_)) | Some(Throw(_)) => ()
                     _ => {
                       ok = false
                       break

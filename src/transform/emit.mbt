@@ -2145,8 +2145,16 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           // returning an object literal. Wrap an ObjectLit-shaped
           // expression in parens to keep the JS parser on the
           // expression branch.
+          // An arrow expression body that starts with `{` is
+          // ambiguous: the JS parser reads it as a block statement.
+          // Any expression whose leftmost token is `{` needs wrapping.
           let needs_paren_for_obj = match inner {
             ObjectLit(_) => true
+            // `({...})[k]` / `({...}).prop` — the object literal is
+            // on the left of an index/member access.
+            IndexAccess(ObjectLit(_), _) => true
+            PropAccess(ObjectLit(_), _) => true
+            MethodCall(ObjectLit(_), _, _) => true
             _ => false
           }
           if needs_paren_for_obj {

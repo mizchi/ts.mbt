@@ -323,6 +323,21 @@ pub fn bundle_modules(
     Err(e) => return Err(e)
   }
   let order = topological_order(modules, entry)
+  // Lift IIFE-lowered classes to native `class Name { … }` syntax on
+  // each module individually BEFORE the linker pass. The parser emits
+  // computed-key temp vars (`let __class_key_0 = expr`) inside the
+  // IIFE body; the lift hoists them to module-top-level. Running the
+  // lift here lets the linker see those names and rename duplicates
+  // (multiple modules each starting their counter at 0 would otherwise
+  // produce identical `let __class_key_0` at the bundle top-level).
+  for path in order {
+    let m = match modules.get(path) {
+      Some(node) => node
+      None => continue
+    }
+    let lifted = iife_class_lift_block(m.block)
+    modules[path] = { ..m, block: lifted }
+  }
   // Run the cross-module linker before any pass that operates on
   // the combined block. Phase 1 gives each module's top-level
   // bindings a globally-unique name when they collide; phase 2
