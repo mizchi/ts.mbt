@@ -1393,3 +1393,17 @@ test "fold: spread literal arrays are flattened in array literal" {
   assert_true(out.contains("[1") || out.contains("[ 1"), "expected flattened array in output")
   assert_false(out.contains("..."), "expected spread to be folded away")
 }
+
+///|
+test "fold: x === x folds to true" {
+  let out = fold_one("const r = a === a;\n")
+  assert_true(out.contains("true") || out.contains("!0"), "expected true but got: \{out}")
+  assert_false(out.contains("==="))
+}
+
+///|
+test "fold: x !== x folds to false" {
+  let out = fold_one("const r = a !== a;\n")
+  assert_true(out.contains("false") || out.contains("!1"), "expected false but got: \{out}")
+  assert_false(out.contains("!=="))
+}

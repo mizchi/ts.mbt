@@ -2589,6 +2589,12 @@ fn fold_binop(
     (BinNe, BoolLit(a), BoolLit(b)) => BoolLit(a != b)
     (BinEq, NullLit, NullLit) => BoolLit(true)
     (BinNe, NullLit, NullLit) => BoolLit(false)
+    // `x === x` → `true` and `x !== x` → `false` for pure `x`.
+    // Most useful after inlining: `x === x` can arise from constant
+    // substitution where both sides reduce to the same literal, but
+    // also directly for var-to-var comparisons.
+    (BinEq, Var(an), Var(bn)) if an == bn => BoolLit(true)
+    (BinNe, Var(an), Var(bn)) if an == bn => BoolLit(false)
     // Cross-type strict comparisons that are always false/true.
     // Two distinct literal types can never be ===.
     (BinEq, StringLit(_), IntLit(_))
