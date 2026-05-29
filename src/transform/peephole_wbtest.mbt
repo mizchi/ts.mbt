@@ -1049,3 +1049,18 @@ test "peephole: Object.assign with non-empty literal target → spread" {
   assert_false(out.contains("Object.assign"), msg="expected no Object.assign, got: \{out}")
   assert_true(out.contains("x"), msg="expected x key, got: \{out}")
 }
+
+///|
+test "peephole: single-case switch without default → if" {
+  let out = minify_one("function f(){switch(x){case 'a':return 1;}}")
+  assert_false(out.contains("switch"), msg="expected no switch, got: \{out}")
+  assert_true(out.contains("if") || out.contains("==="), msg="expected if or ===, got: \{out}")
+}
+
+///|
+test "peephole: 2-case switch (case+default, return) → if/else then ternary" {
+  let out = minify_one("function f(){switch(x){case 'a':return 1;default:return 2;}}")
+  assert_false(out.contains("switch"), msg="expected no switch, got: \{out}")
+  // After if+else folding: return x==='a'?1:2
+  assert_true(out.contains("?"), msg="expected ternary, got: \{out}")
+}

@@ -67,6 +67,8 @@
 //   Number.parseInt(x)          -> parseInt(x)  (saves 7 bytes; same fn per spec)
 //   Number.parseFloat(x)        -> parseFloat(x)
 //   Array.prototype.slice.call(x,0) -> [...x]   (saves ~24 bytes; 0-start copy)
+//   switch(x){case a:S}           -> if(x===a){S}   (enables further if→ternary folds)
+//   switch(x){case a:S default:T} -> if(x===a){S}else{T}
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -373,7 +375,54 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       } else {
         new_cases
       }
-      Switch(peep_expr(e, ctx), final_cases)
+      let ep = peep_expr(e, ctx)
+      // Convert small switches to if / ternary when they're non-fall-through:
+      //   switch(x){case a:S}           -> if(x===a){S}
+      //   switch(x){case a:S default:T} -> if(x===a){S}else{T}
+      // Only when the case body ends with a terminator (return/throw/break)
+      // so fall-through is impossible. The resulting if/else can then
+      // collapse further via the `if (c) return a; return b;` rule.
+      match final_cases[:] {
+        [{ test_expr: Some(case_e), body: case_body }] => {
+          let is_non_fall_through = match case_body.stmts.last() {
+            Some(Return(_)) | Some(Throw(_)) | Some(Break(_)) => true
+            _ => false
+          }
+          if is_non_fall_through {
+            let if_stmt = peep_stmt(
+              If(
+                BinOp(@ast.TsBinOp::BinEq, ep, case_e),
+                case_body,
+                None,
+              ),
+              ctx,
+            )
+            if_stmt
+          } else {
+            Switch(ep, final_cases)
+          }
+        }
+        [{ test_expr: Some(case_e), body: case_body }, { test_expr: None, body: default_body }] => {
+          let is_non_fall_through = match case_body.stmts.last() {
+            Some(Return(_)) | Some(Throw(_)) | Some(Break(_)) => true
+            _ => false
+          }
+          if is_non_fall_through {
+            let if_stmt = peep_stmt(
+              If(
+                BinOp(@ast.TsBinOp::BinEq, ep, case_e),
+                case_body,
+                Some(default_body),
+              ),
+              ctx,
+            )
+            if_stmt
+          } else {
+            Switch(ep, final_cases)
+          }
+        }
+        _ => Switch(ep, final_cases)
+      }
     }
     Try(b, bnd, cb, fb) =>
       Try(
