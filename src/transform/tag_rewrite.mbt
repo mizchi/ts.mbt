@@ -511,7 +511,24 @@ fn collect_sink_args_stmt(stmt : @ast.TsStmt, out : Array[@ast.TsExpr]) -> Unit 
     }
     Label(_, inner) => collect_sink_args_stmt(inner, out)
     Block(b) => collect_sink_args_block(b, out)
-    NativeClassStmt(_, _) => ()
+    NativeClassStmt(decl, ctor) => {
+      // Scan constructor and method bodies for escape sinks so the
+      // tag-rewrite doesn't apply if e.g. `JSON.stringify(x)` appears
+      // inside a method body.
+      match ctor {
+        Some(f) => collect_sink_args_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_sink_args_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_sink_args_expr(sf.1, out)
+      }
+    }
   }
 }
 
@@ -1041,7 +1058,24 @@ fn stmt_has_escape_sink(stmt : @ast.TsStmt) -> Bool {
     }
     Label(_, inner) => stmt_has_escape_sink(inner)
     Block(b) => block_has_escape_sink(b)
-    NativeClassStmt(_, _) => false
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) if block_has_escape_sink(f.body) => return true
+        _ => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) if block_has_escape_sink(b) => return true
+          _ => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        if expr_has_escape_sink(sf.1) {
+          return true
+        }
+      }
+      false
+    }
   }
 }
 
@@ -1393,7 +1427,34 @@ fn prop_uses_safe_stmt(
       } nobreak {
         true
       }
-    NativeClassStmt(_, _) => true
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) =>
+          for s in f.body.stmts {
+            if not(prop_uses_safe_stmt(s, k, lits, false)) {
+              return false
+            }
+          }
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            for s in b.stmts {
+              if not(prop_uses_safe_stmt(s, k, lits, false)) {
+                return false
+              }
+            }
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        if not(prop_uses_safe_expr(sf.1, k, lits, false)) {
+          return false
+        }
+      }
+      true
+    }
   }
 }
 
@@ -1757,7 +1818,34 @@ fn object_literals_safe_stmt(
       } nobreak {
         true
       }
-    NativeClassStmt(_, _) => true
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) =>
+          for s in f.body.stmts {
+            if not(object_literals_safe_stmt(s, k, lits)) {
+              return false
+            }
+          }
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            for s in b.stmts {
+              if not(object_literals_safe_stmt(s, k, lits)) {
+                return false
+              }
+            }
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        if not(object_literals_safe_expr(sf.1, k, lits)) {
+          return false
+        }
+      }
+      true
+    }
   }
 }
 
