@@ -223,8 +223,16 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   let mut exited = false
   for i, s in block.stmts {
-    if exited {
-      break
+    // Even after a `return`/`throw`, hoisted function declarations must be
+    // retained — JavaScript hoisting makes them available before the return.
+    // They're represented as `Let(name, _, FuncExpr(...))` by the parser.
+    let is_hoisted_func = match s {
+      Let(_, _, FuncExpr(_)) | Var(_, _, FuncExpr(_)) => true
+      _ => false
+    }
+    if exited && not(is_hoisted_func) {
+      // Skip dead non-function-declaration code
+      continue
     }
     let before_len = stmts.length()
     fold_stmt_into(s, stmts)
