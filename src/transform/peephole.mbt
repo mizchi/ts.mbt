@@ -29,6 +29,8 @@
 //   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
+//   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
+//   x!=null ? x[k] : void 0      -> x?.[k]
 //   this.x=void 0;…;this.x=val  -> this.x=val  (drop TS class-field placeholders)
 //
 // The compound-assign rewrite touches both expression-level
@@ -618,14 +620,35 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         // `x != null ? x : y` → `x ?? y` (nullish coalescing, saves ~8 bytes).
         // After `x!==null&&x!==undefined` → `x!=null`, this pattern is common
         // in TypeScript generated code for default-value patterns.
+        //
+        // `x != null ? x.prop : void 0` → `x?.prop` (optional chaining).
+        // `x != null ? x[key] : void 0` → `x?.[key]`.
+        // TypeScript emits this pattern when downleveling `x?.prop` to ES5/ES2019.
+        // The else-arm can be either `void 0` or `undefined` (both denote undefined).
         (t_val, e_val) =>
           match cp {
-            BinOp(@ast.TsBinOp::AbstractNe, check_x, NullLit) =>
+            BinOp(@ast.TsBinOp::AbstractNe, check_x, NullLit) => {
+              let is_void_else = match e_val {
+                UnaryOp(@ast.TsUnaryOp::Void, _) => true
+                Var("undefined") if not(ctx.undefined_shadowed) => true
+                _ => false
+              }
               if exprs_eq(check_x, t_val) {
                 BinOp(@ast.TsBinOp::Coalesce, check_x, e_val)
+              } else if is_void_else {
+                match t_val {
+                  PropAccess(recv, prop) if exprs_eq(check_x, recv) =>
+                    OptionalChain(PropAccess(check_x, prop))
+                  IndexAccess(recv, idx) if exprs_eq(check_x, recv) =>
+                    OptionalChain(IndexAccess(check_x, idx))
+                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
+                    OptionalChain(MethodCall(check_x, method, args))
+                  _ => Cond(cp, t_val, e_val)
+                }
               } else {
                 Cond(cp, t_val, e_val)
               }
+            }
             _ => Cond(cp, t_val, e_val)
           }
       }

@@ -713,3 +713,17 @@ test "peephole: multi-field class drops all void-0 field initializers" {
   assert_true(out.contains("this.x"), msg="expected this.x, got: \{out}")
   assert_true(out.contains("this.y"), msg="expected this.y, got: \{out}")
 }
+
+///|
+test "peephole: x != null ? x.prop : void 0 → x?.prop" {
+  // TypeScript emits this pattern when downleveling optional chaining.
+  let out = minify_one("const r = x != null ? x.prop : void 0;")
+  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+  assert_false(out.contains("!="), msg="expected no != null check, got: \{out}")
+}
+
+///|
+test "peephole: x != null ? x[key] : void 0 → x?.[key]" {
+  let out = minify_one("const r = x != null ? x[key] : void 0;")
+  assert_true(out.contains("?.["), msg="expected optional index chain, got: \{out}")
+}
