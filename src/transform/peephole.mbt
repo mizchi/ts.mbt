@@ -226,6 +226,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         (t, i, v) => IndexAssign(t, i, v)
       }
     }
+    PropAssign(_, prop, _) if prop == "__super_proto" => return Empty
     PropAssign(target, prop, val) => {
       let target_p = peep_expr(target, ctx)
       let val_p = peep_expr(val, ctx)
@@ -261,6 +262,8 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         (t, v) => PropAssign(t, prop, v)
       }
     }
+    Expr(@ast.TsExpr::PropAssignExpr(_, prop, _)) if prop == "__super_proto" =>
+      return Empty
     Expr(e) => {
       let ep = peep_expr(e, ctx)
       // `void f()` as a statement → `f()` — the return value of the
