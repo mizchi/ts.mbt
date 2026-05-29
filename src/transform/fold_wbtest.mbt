@@ -1337,3 +1337,10 @@ test "fold: uninit let + assign does not merge when intervening statement" {
   // The assignment is not the immediate next statement — do NOT merge
   assert_true(out.contains("x=42") || out.contains("x = 42"))
 }
+
+///|
+test "fold: void on pure template literal collapses to void 0" {
+  // TemplateLiteral is now pure, so `void \`${x}\`` → `void 0`.
+  let out = fold_one("const t = void `${x} world`;\n")
+  assert_true(out.contains("void 0"))
+}

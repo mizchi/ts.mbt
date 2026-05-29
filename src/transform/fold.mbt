@@ -2674,6 +2674,21 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
     // `/* @__PURE__ */ f(...)` — the user asserted purity, so treat
     // the call as having no observable side effects.
     PureCall(_) => true
+    // Tag-less template literals concatenate strings — pure when every
+    // interpolated expression is pure.
+    TemplateLiteral(_, exprs) => {
+      for e in exprs {
+        if not(is_pure_value(e)) {
+          return false
+        }
+      }
+      true
+    }
+    // TypeScript-only wrappers: no runtime side effects.
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
+      is_pure_value(inner)
+    // Spread of a pure value is itself pure (e.g. inside an array literal).
+    Spread(inner) => is_pure_value(inner)
     _ => false
   }
 }
