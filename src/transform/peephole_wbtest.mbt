@@ -365,3 +365,11 @@ test "peephole: !(a < b) folds to a >= b" {
   assert_false(out.contains("<"))
 }
 
+///|
+test "minify emit: trailing semicolon stripped from bundle output" {
+  // In minify mode the last statement should NOT end with `;` — it's
+  // syntactically optional and saves 1 byte per bundle.
+  let out = minify_one("const x = 1;\n")
+  assert_false(out.has_suffix(";"), "expected no trailing semicolon, got: \{out}")
+}
+

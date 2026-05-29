@@ -101,7 +101,20 @@ fn Emitter::semi(self : Emitter) -> Unit {
 
 ///|
 fn Emitter::to_string(self : Emitter) -> String {
-  self.buf.to_string()
+  // In minify mode, the emit loop leaves a trailing `;` after the last
+  // statement (the final `nl()` flushes `pending_semi`). Strip it — the
+  // semicolon is syntactically optional at the end of a script and saves
+  // 1 byte per bundle.
+  if self.pending_semi {
+    // Semi still parked (wasn't flushed by nl()). Nothing to strip.
+    return self.buf.to_string()
+  }
+  let s = self.buf.to_string()
+  if not(self.pretty) && s.has_suffix(";") {
+    s.substring(end=s.length() - 1).to_string()
+  } else {
+    s
+  }
 }
 
 ///|
