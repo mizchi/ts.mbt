@@ -791,3 +791,10 @@ test "peephole: x.y != null ? x.y.z : void 0 → x.y?.z (chained optional)" {
   let out = minify_one("const r = x.y != null ? x.y.z : void 0;")
   assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
 }
+
+///|
+test "peephole: `${x}` folds to \"\"+x (single interpolation)" {
+  let out = minify_one("const s = `${x}`;")
+  assert_true(out.contains("\"\""), msg="expected empty string concat, got: \{out}")
+  assert_false(out.contains("`"), msg="expected no template literal, got: \{out}")
+}

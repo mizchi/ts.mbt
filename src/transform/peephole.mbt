@@ -29,6 +29,7 @@
 //   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
 //   Array.from(x)         -> [...x]    (saves ~6 bytes; single-arg only)
 //   String(x)             -> ""+x      (saves up to 5 bytes)
+//   `${x}`                -> ""+x      (saves 2 bytes; single interpolation only)
 //   Object.assign({},a,b) -> {...a,...b} (saves ~12 bytes; first arg must be {})
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
@@ -908,7 +909,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       for e in exprs {
         new_exprs.push(peep_expr(e, ctx))
       }
-      TemplateLiteral(parts, new_exprs)
+      // `` `${x}` `` → `""+x` (saves 2 bytes; single interpolation with
+      // empty prefix and suffix). More than one interpolation keeps the
+      // template form since it's typically shorter.
+      if new_exprs.length() == 1 && parts.length() == 2 && parts[0] == "" && parts[1] == "" {
+        BinOp(@ast.TsBinOp::Add, StringLit(""), new_exprs[0])
+      } else {
+        TemplateLiteral(parts, new_exprs)
+      }
     }
     As(inner, ty) => As(peep_expr(inner, ctx), ty)
     Satisfies(inner, ty) => Satisfies(peep_expr(inner, ctx), ty)
