@@ -157,14 +157,18 @@ test "fold: empty string || x reduces to x" {
 
 ///|
 test "fold: if (1) branch folds to then-block" {
-  let out = fold_one("if (1) { console.log(\"yes\"); } else { console.log(\"no\"); }\n")
+  let out = fold_one(
+    "if (1) { console.log(\"yes\"); } else { console.log(\"no\"); }\n",
+  )
   assert_true(out.contains("yes"))
   assert_false(out.contains("no"))
 }
 
 ///|
 test "fold: if (0) branch folds to else-block" {
-  let out = fold_one("if (0) { console.log(\"yes\"); } else { console.log(\"no\"); }\n")
+  let out = fold_one(
+    "if (0) { console.log(\"yes\"); } else { console.log(\"no\"); }\n",
+  )
   assert_false(out.contains("yes"))
   assert_true(out.contains("no"))
 }
@@ -292,6 +296,7 @@ test "fold: Math.sign with literal args" {
   assert_true(out.contains("1"))
 }
 
+///|
 test "fold: !truthy folds to false" {
   let out = fold_one("const a = !1; const b = !\"hello\";\n")
   assert_false(out.contains("!1"))
@@ -299,6 +304,7 @@ test "fold: !truthy folds to false" {
   assert_true(out.contains("false"))
 }
 
+///|
 test "fold: !falsy folds to true" {
   let out = fold_one("const a = !0; const b = !\"\";\n")
   assert_false(out.contains("!0"))
@@ -306,6 +312,7 @@ test "fold: !falsy folds to true" {
   assert_true(out.contains("true"))
 }
 
+///|
 test "fold: ~n folds to bitwise complement" {
   let out = fold_one("const a = ~0; const b = ~5;\n")
   assert_false(out.contains("~0"))
@@ -314,11 +321,13 @@ test "fold: ~n folds to bitwise complement" {
   assert_true(out.contains("-6"))
 }
 
+///|
 test "fold: unary + on numeric literal is identity" {
   let out = fold_one("const a = +5;\n")
   assert_true(out.contains("const a = 5;"))
 }
 
+///|
 test "fold: if(c) return e1; return e2 merges to return c ? e1 : e2" {
   let out = fold_one(
     "function f(x) {\n  if (x > 0) return 1;\n  return -1;\n}\n",
@@ -327,6 +336,7 @@ test "fold: if(c) return e1; return e2 merges to return c ? e1 : e2" {
   assert_true(out.contains("?"))
 }
 
+///|
 test "fold: if(c) { return e1; } else { return e2; } merges to return c ? e1 : e2" {
   let out = fold_one(
     "function f(x) {\n  if (x > 0) { return 1; } else { return -1; }\n}\n",
@@ -335,58 +345,74 @@ test "fold: if(c) { return e1; } else { return e2; } merges to return c ? e1 : e
   assert_false(out.contains("else"))
 }
 
+///|
 test "fold: constant array index access folds to element" {
   let out = fold_one("const x = [10, 20, 30][1];\n")
   assert_true(out.contains("const x = 20;"))
   assert_false(out.contains("[10"))
 }
 
+///|
 test "fold: constant string key access on object literal folds to value" {
   let out = fold_one("const x = {a: 1, b: 2}[\"a\"];\n")
   assert_true(out.contains("const x = 1;"))
 }
 
+///|
 test "fold: prop access on object literal folds to value" {
   let out = fold_one("const x = {foo: 42}.foo;\n")
   assert_true(out.contains("const x = 42;"))
 }
 
+///|
 test "fold: string .includes with literal folds to bool" {
-  let out = fold_one("const a = \"hello\".includes(\"ell\"); const b = \"hello\".includes(\"xyz\");\n")
+  let out = fold_one(
+    "const a = \"hello\".includes(\"ell\"); const b = \"hello\".includes(\"xyz\");\n",
+  )
   assert_false(out.contains(".includes("))
   assert_true(out.contains("true"))
   assert_true(out.contains("false"))
 }
 
+///|
 test "fold: string .startsWith and .endsWith fold to bool" {
-  let out = fold_one("const a = \"hello\".startsWith(\"he\"); const b = \"hello\".endsWith(\"lo\");\n")
+  let out = fold_one(
+    "const a = \"hello\".startsWith(\"he\"); const b = \"hello\".endsWith(\"lo\");\n",
+  )
   assert_false(out.contains(".startsWith("))
   assert_false(out.contains(".endsWith("))
   assert_true(out.contains("true"))
 }
 
+///|
 test "fold: string .toUpperCase and .toLowerCase fold to literals" {
-  let out = fold_one("const a = \"hello\".toUpperCase(); const b = \"WORLD\".toLowerCase();\n")
+  let out = fold_one(
+    "const a = \"hello\".toUpperCase(); const b = \"WORLD\".toLowerCase();\n",
+  )
   assert_true(out.contains("\"HELLO\""))
   assert_true(out.contains("\"world\""))
 }
 
+///|
 test "fold: string .slice with non-negative args folds to literal" {
   let out = fold_one("const a = \"hello\".slice(1, 3);\n")
   assert_true(out.contains("\"el\""))
 }
 
+///|
 test "fold: array .join with literal items folds to string" {
   let out = fold_one("const s = [\"a\", \"b\", \"c\"].join(\"-\");\n")
   assert_true(out.contains("\"a-b-c\""))
   assert_false(out.contains("join"))
 }
 
+///|
 test "fold: array .includes with matching literal folds to true" {
   let out = fold_one("const x = [1, 2, 3].includes(2);\n")
   assert_true(out.contains("const x = true;"))
 }
 
+///|
 test "fold: Object.keys on object literal folds to array" {
   let out = fold_one("const k = Object.keys({a: 1, b: 2});\n")
   assert_true(out.contains("\"a\""))
@@ -394,6 +420,7 @@ test "fold: Object.keys on object literal folds to array" {
   assert_false(out.contains("Object.keys"))
 }
 
+///|
 test "fold: !(a === b) folds to a !== b" {
   let out = fold_one("const x = !(a === b);\n")
   assert_true(out.contains("!=="))
@@ -401,6 +428,7 @@ test "fold: !(a === b) folds to a !== b" {
   assert_false(out.contains("!("))
 }
 
+///|
 test "fold: !(a < b) folds to a >= b" {
   let out = fold_one("const x = !(a < b);\n")
   assert_true(out.contains(">="))
@@ -667,7 +695,9 @@ test "fold: String.split with literal separator produces array literal" {
 
 ///|
 test "fold: String.replace with literal pattern and replacement" {
-  let out = fold_one("const r = \"hello world\".replace(\"world\", \"there\");\n")
+  let out = fold_one(
+    "const r = \"hello world\".replace(\"world\", \"there\");\n",
+  )
   assert_true(out.contains("\"hello there\""))
   assert_false(out.contains(".replace("))
 }
@@ -769,7 +799,9 @@ test "fold: JSON.stringify(null) → \"null\"" {
 ///|
 test "fold: JSON.stringify(string) → quoted string" {
   let out = fold_one("const r = JSON.stringify(\"hello\");\n")
-  assert_true(out.contains("\"\\\"hello\\\"\"") || out.contains("\\\"hello\\\""))
+  assert_true(
+    out.contains("\"\\\"hello\\\"\"") || out.contains("\\\"hello\\\""),
+  )
   assert_false(out.contains("JSON.stringify"))
 }
 
@@ -1096,6 +1128,7 @@ test "fold: void pure expression in stmt is dropped entirely" {
   assert_false(out.contains("void"))
 }
 
+///|
 test "fold: return undefined normalizes to return" {
   // `return undefined` and `return void 0` carry no useful value;
   // normalize to bare `return;` so fold_func_body can strip the
@@ -1105,6 +1138,7 @@ test "fold: return undefined normalizes to return" {
   assert_false(out.contains("return"))
 }
 
+///|
 test "fold: return void 0 normalizes to return" {
   let out = fold_one("function f() { x(); return void 0; }\n")
   // The void-return is stripped; only the call stays.
@@ -1112,6 +1146,7 @@ test "fold: return void 0 normalizes to return" {
   assert_true(out.contains("x()"))
 }
 
+///|
 test "fold: try {} finally {} with empty finally drops wrapper" {
   // `try { stmts } finally {}` — empty finally is a no-op, and
   // without both catch and finally the try is also redundant.
@@ -1121,18 +1156,21 @@ test "fold: try {} finally {} with empty finally drops wrapper" {
   assert_false(out.contains("finally"))
 }
 
+///|
 test "fold: try {} finally { stmts } keeps finally when non-empty" {
   let out = fold_one("try { f(); } finally { g(); }\n")
   assert_true(out.contains("try"))
   assert_true(out.contains("finally"))
 }
 
+///|
 test "fold: x = x self-assignment in stmt is dropped" {
   let out = fold_one("x = x;\n")
   // Self-assignment is a no-op; nothing should remain.
   assert_false(out.contains("x"))
 }
 
+///|
 test "fold: x = x in expression position simplifies to x" {
   // In expression context, `(x = x)` evaluates to `x`.
   let out = fold_one("const r = (x = x);\n")
@@ -1214,7 +1252,9 @@ test "fold: nested if without else merges into && condition" {
 ///|
 test "fold: nested if with outer else not merged (unsafe)" {
   // When the outer if has an else, merging is not safe.
-  let out = fold_one("if (a) { if (b) { console.log(1); } } else { console.log(2); }\n")
+  let out = fold_one(
+    "if (a) { if (b) { console.log(1); } } else { console.log(2); }\n",
+  )
   // Should still contain both `a` and `b` as separate conditions
   assert_true(out.contains("else") || out.contains("?"))
 }
@@ -1392,7 +1432,10 @@ test "fold: new-expr ?? fallback is eliminated (new always non-null)" {
 ///|
 test "fold: Array.of(1, 2, 3) folds to array literal" {
   let out = fold_one("const x = Array.of(1, 2, 3);\n")
-  assert_true(out.contains("[1,") || out.contains("[1, "), msg="expected array literal in output")
+  assert_true(
+    out.contains("[1,") || out.contains("[1, "),
+    msg="expected array literal in output",
+  )
   assert_false(out.contains("Array.of"), msg="Array.of should be folded away")
 }
 
@@ -1400,21 +1443,30 @@ test "fold: Array.of(1, 2, 3) folds to array literal" {
 test "fold: spread literal arrays are flattened in array literal" {
   // `[...a, ...b]` where a and b are literal arrays should fold to a single array.
   let out = fold_one("const x = [...[1, 2], ...[3, 4]];\n")
-  assert_true(out.contains("[1") || out.contains("[ 1"), msg="expected flattened array in output")
+  assert_true(
+    out.contains("[1") || out.contains("[ 1"),
+    msg="expected flattened array in output",
+  )
   assert_false(out.contains("..."), msg="expected spread to be folded away")
 }
 
 ///|
 test "fold: x === x folds to true" {
   let out = fold_one("const r = a === a;\n")
-  assert_true(out.contains("true") || out.contains("!0"), msg="expected true but got: \{out}")
+  assert_true(
+    out.contains("true") || out.contains("!0"),
+    msg="expected true but got: \{out}",
+  )
   assert_false(out.contains("==="))
 }
 
 ///|
 test "fold: x !== x folds to false" {
   let out = fold_one("const r = a !== a;\n")
-  assert_true(out.contains("false") || out.contains("!1"), msg="expected false but got: \{out}")
+  assert_true(
+    out.contains("false") || out.contains("!1"),
+    msg="expected false but got: \{out}",
+  )
   assert_false(out.contains("!=="))
 }
 
@@ -1422,7 +1474,9 @@ test "fold: x !== x folds to false" {
 test "fold: else block hoisted when then-branch always returns" {
   // `if (c) { return x; } else { stmts }` → `if (c) return x; stmts`
   // Saves `} else {` bytes in minified output.
-  let out = fold_one("function f(c, x, y) { if (c) { return x; } else { return y; } }\n")
+  let out = fold_one(
+    "function f(c, x, y) { if (c) { return x; } else { return y; } }\n",
+  )
   // After hoisting, the else is gone. The result could be
   // `return c ? x : y` (further folded) or `if(c)return x; return y;`.
   assert_false(out.contains("else"), msg="expected else to be removed: \{out}")
@@ -1431,7 +1485,9 @@ test "fold: else block hoisted when then-branch always returns" {
 ///|
 test "fold: else block hoisted when then-branch throws" {
   // `if (!x) { throw e; } else { stmts }` → `if(!x)throw e; stmts`
-  let out = fold_one("function f(x) { if (!x) { throw new Error('bad'); } else { return x + 1; } }\n")
+  let out = fold_one(
+    "function f(x) { if (!x) { throw new Error('bad'); } else { return x + 1; } }\n",
+  )
   assert_false(out.contains("else"), msg="expected else to be removed: \{out}")
 }
 
@@ -1442,7 +1498,10 @@ test "fold: consecutive const decls merged into multi-decl" {
   let const_count = out.split("const").collect().length() - 1
   let let_count = out.split("let").collect().length() - 1
   let total_kind = const_count + let_count
-  assert_true(total_kind == 1, msg="expected one declaration keyword, got: \{out}")
+  assert_true(
+    total_kind == 1,
+    msg="expected one declaration keyword, got: \{out}",
+  )
   assert_true(out.contains("1"))
   assert_true(out.contains("2"))
   assert_true(out.contains("3"))
@@ -1480,8 +1539,14 @@ test "fold: do { body } while(false) inlines body (no break/continue)" {
   let out = fold_one("do { const x = 1; console.log(x); } while(false);\n")
   // The do-while with a false condition and no breaks executes exactly once.
   // It should be inlined to just the body statements.
-  assert_false(out.contains("do"), msg="expected do-while to be removed: \{out}")
-  assert_false(out.contains("while"), msg="expected while to be removed: \{out}")
+  assert_false(
+    out.contains("do"),
+    msg="expected do-while to be removed: \{out}",
+  )
+  assert_false(
+    out.contains("while"),
+    msg="expected while to be removed: \{out}",
+  )
   assert_true(out.contains("console"))
 }
 
@@ -1489,7 +1554,10 @@ test "fold: do { body } while(false) inlines body (no break/continue)" {
 test "fold: do { body; break; } while(false) keeps the loop (has break)" {
   let out = fold_one("do { if (x) break; doSomething(); } while(false);\n")
   // There is an unlabeled `break` — can't remove the do-while safely.
-  assert_true(out.contains("do") || out.contains("while"), msg="expected do-while to remain: \{out}")
+  assert_true(
+    out.contains("do") || out.contains("while"),
+    msg="expected do-while to remain: \{out}",
+  )
 }
 
 ///|
@@ -1505,7 +1573,13 @@ test "fold: !!x in if condition is stripped (saves 2 bytes)" {
   let out = fold_one("if (!!x) { doIt(); }\n")
   // `!!x` in boolean position is equivalent to `x` — JS coerces anyway.
   assert_false(out.contains("!!"), msg="expected !! stripped: \{out}")
-  assert_true(out.contains("if (x)") || out.contains("if(x)") || out.contains("x&&") || out.contains("x &&"), msg="expected x retained: \{out}")
+  assert_true(
+    out.contains("if (x)") ||
+    out.contains("if(x)") ||
+    out.contains("x&&") ||
+    out.contains("x &&"),
+    msg="expected x retained: \{out}",
+  )
 }
 
 ///|
@@ -1560,7 +1634,10 @@ test "fold: `call() && sideEffect();` keeps both (rhs not pure)" {
   // sideEffect() is a call — not pure, so the rhs must be kept.
   let out = fold_one("call() && sideEffect();\n")
   assert_true(out.contains("call()"), msg="expected call() retained: \{out}")
-  assert_true(out.contains("sideEffect()"), msg="expected sideEffect() retained: \{out}")
+  assert_true(
+    out.contains("sideEffect()"),
+    msg="expected sideEffect() retained: \{out}",
+  )
   assert_true(out.contains("&&"), msg="expected && kept: \{out}")
 }
 
@@ -1583,7 +1660,10 @@ test "fold: Boolean(true) folds to literal true (then peephole → !0)" {
 test "fold: Boolean(0) folds to literal false" {
   let out = fold_one("const b = Boolean(0);\n")
   assert_false(out.contains("Boolean"), msg="expected Boolean removed: \{out}")
-  assert_true(out.contains("false") || out.contains("!1"), msg="expected false: \{out}")
+  assert_true(
+    out.contains("false") || out.contains("!1"),
+    msg="expected false: \{out}",
+  )
 }
 
 ///|

@@ -1740,11 +1740,10 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           // `typeof` / `void` / `delete` are word operators; they need
           // a separator before their operand.
           match op {
-            Typeof | Void | Delete => {
+            Typeof | Void | Delete =>
               // In minify mode, use `sep_after_word` to avoid the space
               // when the operand starts with a non-identifier char.
               e.sep_after_word(expr_leading_byte(inner))
-            }
             _ => ()
           }
           emit_expr(e, inner, 16)
@@ -1967,8 +1966,14 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           _ => false
         }
         if pat_ok && flags_ok {
-          let pat = match args[0] { StringLit(p) => p; _ => "" }
-          let flags = match args.get(1) { Some(StringLit(f)) => f; _ => "" }
+          let pat = match args[0] {
+            StringLit(p) => p
+            _ => ""
+          }
+          let flags = match args.get(1) {
+            Some(StringLit(f)) => f
+            _ => ""
+          }
           e.write("/")
           emit_regex_body(e, pat)
           e.write("/")
@@ -2101,7 +2106,11 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
               None => true
               _ => false
             })
-          if simple { Some(p.name) } else { None }
+          if simple {
+            Some(p.name)
+          } else {
+            None
+          }
         } else {
           None
         }
@@ -3006,10 +3015,18 @@ fn emit_string_literal(e : Emitter, s : String) -> Unit {
     let mut dq = 0 // double-quote occurrences
     let mut sq = 0 // single-quote occurrences
     for c in s {
-      if c == '"' { dq = dq + 1 }
-      if c == '\'' { sq = sq + 1 }
+      if c == '"' {
+        dq = dq + 1
+      }
+      if c == '\'' {
+        sq = sq + 1
+      }
     }
-    if sq < dq { '\'' } else { '"' }
+    if sq < dq {
+      '\''
+    } else {
+      '"'
+    }
   } else {
     '"'
   }
@@ -3034,6 +3051,8 @@ fn emit_string_literal(e : Emitter, s : String) -> Unit {
 // Returns true iff the runtime string value `s` can be safely used as the
 // body of a regex literal /s/. Rejects empty patterns (would produce `//`,
 // a comment), newlines, NUL bytes, and other control characters.
+
+///|
 fn regex_literal_safe(s : String) -> Bool {
   if s.length() == 0 {
     return false
@@ -3065,6 +3084,8 @@ fn regex_literal_safe(s : String) -> Bool {
 // Bare `/` (not part of an existing `\/` escape sequence) is written
 // as `\/` to avoid closing the regex prematurely.
 // Caller must have verified regex_literal_safe(s).
+
+///|
 fn emit_regex_body(e : Emitter, s : String) -> Unit {
   // Iterate using `for c in s` (char-level). Track whether the previous
   // character was a backslash so we can tell a bare `/` from an already-
@@ -3283,17 +3304,28 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
 fn minify_number(n : Double) -> String {
   // Special floating-point values have no numeric literal representation.
   // Minify to the shortest valid JS form instead of the global identifier.
-  if n != n { return "0/0" } // NaN (same length, guaranteed valid JS)
-  if n == 1.0 / 0.0 { return "1/0" } // Infinity (8 chars → 3)
-  if n == -1.0 / 0.0 { return "-1/0" } // -Infinity (9 chars → 4)
+  if n != n {
+    return "0/0"
+  } // NaN (same length, guaranteed valid JS)
+  if n == 1.0 / 0.0 {
+    return "1/0"
+  } // Infinity (8 chars → 3)
+  if n == -1.0 / 0.0 {
+    return "-1/0"
+  } // -Infinity (9 chars → 4)
   let standard = n.to_string()
   let mut best = standard
   // Drop trailing ".0" (integer-valued doubles): 1.0 → 1
   if standard.has_suffix(".0") {
-    let shorter = standard.substring(start=0, end=standard.length() - 2).to_string()
+    let shorter = standard
+      .substring(start=0, end=standard.length() - 2)
+      .to_string()
     // Verify lossless round-trip.
     match (try? @strconv.parse_double(shorter)) {
-      Ok(back) => if back == n && shorter.length() < best.length() { best = shorter }
+      Ok(back) =>
+        if back == n && shorter.length() < best.length() {
+          best = shorter
+        }
       Err(_) => ()
     }
   }
@@ -3301,7 +3333,10 @@ fn minify_number(n : Double) -> String {
   if standard.has_prefix("0.") {
     let shorter = standard.substring(start=1).to_string()
     match (try? @strconv.parse_double(shorter)) {
-      Ok(back) => if back == n && shorter.length() < best.length() { best = shorter }
+      Ok(back) =>
+        if back == n && shorter.length() < best.length() {
+          best = shorter
+        }
       Err(_) => ()
     }
   }
@@ -3309,7 +3344,10 @@ fn minify_number(n : Double) -> String {
   if standard.has_prefix("-0.") {
     let shorter = "-" + standard.substring(start=2).to_string()
     match (try? @strconv.parse_double(shorter)) {
-      Ok(back) => if back == n && shorter.length() < best.length() { best = shorter }
+      Ok(back) =>
+        if back == n && shorter.length() < best.length() {
+          best = shorter
+        }
       Err(_) => ()
     }
   }
@@ -3317,7 +3355,9 @@ fn minify_number(n : Double) -> String {
   // Only worthwhile when the exponent notation is strictly shorter.
   // Cap at MAX_SAFE_INTEGER to avoid Int64 overflow on the conversion.
   let abs_n = if n < 0.0 { -n } else { n }
-  if abs_n >= 1000.0 && abs_n <= 9007199254740991.0 && abs_n.to_int64().to_double() == abs_n {
+  if abs_n >= 1000.0 &&
+    abs_n <= 9007199254740991.0 &&
+    abs_n.to_int64().to_double() == abs_n {
     let int_val = abs_n.to_int64()
     let mut mantissa = int_val
     let mut exp = 0

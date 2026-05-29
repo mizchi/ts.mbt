@@ -236,8 +236,10 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     }
     // TypeScript cast / non-null / optional-chain wrappers don't
     // introduce side effects on their own.
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      is_pure_init(inner)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => is_pure_init(inner)
     // Spread of a pure value is itself pure (used in array literals).
     Spread(inner) => is_pure_init(inner)
     _ => false
@@ -621,17 +623,32 @@ fn is_pure_multi_decl_block(block : @ast.TsBlock) -> Bool {
       Const(@ast.TsBinding::Ident(_), _, rhs) =>
         match rhs {
           @ast.TsExpr::FuncExpr(_) => return false
-          _ => if kind == "" { kind = "const" } else if kind != "const" { return false }
+          _ =>
+            if kind == "" {
+              kind = "const"
+            } else if kind != "const" {
+              return false
+            }
         }
       Let(@ast.TsBinding::Ident(_), _, rhs) =>
         match rhs {
           @ast.TsExpr::FuncExpr(_) => return false
-          _ => if kind == "" { kind = "let" } else if kind != "let" { return false }
+          _ =>
+            if kind == "" {
+              kind = "let"
+            } else if kind != "let" {
+              return false
+            }
         }
       Var(@ast.TsBinding::Ident(_), _, rhs) =>
         match rhs {
           @ast.TsExpr::FuncExpr(_) => return false
-          _ => if kind == "" { kind = "var" } else if kind != "var" { return false }
+          _ =>
+            if kind == "" {
+              kind = "var"
+            } else if kind != "var" {
+              return false
+            }
         }
       _ => return false
     }

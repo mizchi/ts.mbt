@@ -270,8 +270,13 @@ fn stmt_has_unlabeled_break_or_continue(stmt : @ast.TsStmt) -> Bool {
     Break(Some(_)) | Continue(Some(_)) => false
     // Don't recurse into nested loop / switch bodies — their breaks/continues
     // target that inner construct, not the outer do-while we're trying to remove.
-    While(_, _) | DoWhile(_, _) | For(_, _, _, _) | ForOf(_, _, _, _, _)
-    | ForAwaitOf(_, _, _, _, _) | ForIn(_, _, _, _, _) | Switch(_, _) => false
+    While(_, _)
+    | DoWhile(_, _)
+    | For(_, _, _, _)
+    | ForOf(_, _, _, _, _)
+    | ForAwaitOf(_, _, _, _, _)
+    | ForIn(_, _, _, _, _)
+    | Switch(_, _) => false
     // Do recurse into non-loop nested blocks and conditionals.
     If(_, then_b, else_b) => {
       if block_has_unlabeled_break_or_continue(then_b) {
@@ -287,9 +292,9 @@ fn stmt_has_unlabeled_break_or_continue(stmt : @ast.TsStmt) -> Bool {
         return true
       }
       if (match cb {
-        Some(b) => block_has_unlabeled_break_or_continue(b)
-        None => false
-      }) {
+          Some(b) => block_has_unlabeled_break_or_continue(b)
+          None => false
+        }) {
         return true
       }
       match fb {
@@ -339,9 +344,7 @@ fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
 /// so the emitter can emit them as `let a=…,b=…;` (saves `let ` per
 /// extra declarator). Only groups with 2+ declarations are wrapped;
 /// lone declarations are left as-is.
-fn merge_consecutive_decls(
-  stmts : Array[@ast.TsStmt],
-) -> Array[@ast.TsStmt] {
+fn merge_consecutive_decls(stmts : Array[@ast.TsStmt]) -> Array[@ast.TsStmt] {
   let out : Array[@ast.TsStmt] = []
   let mut i = 0
   while i < stmts.length() {
@@ -521,7 +524,11 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
             if then_emit.stmts.length() == 1 {
               match then_emit.stmts[0] {
                 If(inner_c, inner_t, None) =>
-                  (fold_expr(BinOp(@ast.TsBinOp::And, cond_emit, inner_c)), inner_t, None)
+                  (
+                    fold_expr(BinOp(@ast.TsBinOp::And, cond_emit, inner_c)),
+                    inner_t,
+                    None,
+                  )
                 _ => (cond_emit, then_emit, else_emit)
               }
             } else {
@@ -559,8 +566,9 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           let out_len = out.length()
           let merged = if out_len > 0 {
             match out[out_len - 1] {
-              Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) if ln == n =>
-                true
+              Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
+              | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) if ln ==
+                n => true
               _ => false
             }
           } else {
@@ -569,10 +577,8 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           if merged {
             let prev = out.pop().unwrap()
             match prev {
-              Let(_, t, _) =>
-                out.push(Let(@ast.TsBinding::Ident(n), t, rhs_f))
-              Var(_, t, _) =>
-                out.push(Var(@ast.TsBinding::Ident(n), t, rhs_f))
+              Let(_, t, _) => out.push(Let(@ast.TsBinding::Ident(n), t, rhs_f))
+              Var(_, t, _) => out.push(Var(@ast.TsBinding::Ident(n), t, rhs_f))
               _ => {
                 out.push(prev)
                 out.push(Assign(n, rhs_f))
@@ -626,15 +632,20 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           // Also handles `pure && x;` / `pure || x;` when lhs is pure
           // (the whole expression is pure and gets dropped entirely by
           // the check below, which is already correct).
-          BinOp(@ast.TsBinOp::And, lhs, rhs) | BinOp(@ast.TsBinOp::Or, lhs, rhs) if is_pure_value(rhs) =>
+          BinOp(@ast.TsBinOp::And, lhs, rhs)
+          | BinOp(@ast.TsBinOp::Or, lhs, rhs) if is_pure_value(rhs) =>
             stack.push(lhs)
           // `let x; x = value;` → `let x = value;` when AssignExpr in stmt position.
           AssignExpr(n, v) => {
             let out_len = out.length()
             let merged = if out_len > 0 {
               match out[out_len - 1] {
-                Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) if ln == n =>
-                  true
+                Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
+                | Var(
+                  @ast.TsBinding::Ident(ln),
+                  _,
+                  @ast.TsExpr::Var("undefined")
+                ) if ln == n => true
                 _ => false
               }
             } else {
@@ -664,7 +675,8 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       // Saves the expression bytes; `fold_func_body` then strips the
       // trailing bare `return;` from the body entirely.
       let normalized : @ast.TsStmt = match ef {
-        Var("undefined") | UnaryOp(@ast.TsUnaryOp::Void, _) => @ast.TsStmt::Return(None)
+        Var("undefined") | UnaryOp(@ast.TsUnaryOp::Void, _) =>
+          @ast.TsStmt::Return(None)
         _ => @ast.TsStmt::Return(Some(ef))
       }
       out.push(normalized)
@@ -795,7 +807,11 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       let fb_f = match fb {
         Some(blk) => {
           let folded = fold_block(blk)
-          if folded.stmts.is_empty() { None } else { Some(folded) }
+          if folded.stmts.is_empty() {
+            None
+          } else {
+            Some(folded)
+          }
         }
         None => None
       }
@@ -822,7 +838,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         out.push(Label(name, Block({ stmts: tmp, stmt_positions: [] })))
       }
     }
-    Block(b) => {
+    Block(b) =>
       // Multi-decl blocks (`let a = 1, b = 2;` parsed as
       // `Block([Let, Let, ...])`) are transparently unboxed: push the
       // folded individual declarations directly so the parent's
@@ -838,7 +854,6 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       } else {
         out.push(Block(fold_block(b)))
       }
-    }
     NativeClassStmt(decl, ctor) => {
       // Fold + strip trailing `return;` from constructor and method bodies.
       let folded_ctor : @ast.TsFunc? = match ctor {
@@ -852,8 +867,9 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       // from an explicit empty constructor, so we only drop when base_names
       // is empty.
       let new_ctor = match folded_ctor {
-        Some(f) if f.params.is_empty() && f.body.stmts.is_empty() && decl.base_names.is_empty() =>
-          None
+        Some(f) if f.params.is_empty() &&
+          f.body.stmts.is_empty() &&
+          decl.base_names.is_empty() => None
         _ => folded_ctor
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -914,8 +930,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         // `!!(comparison)` → `comparison` — comparisons already return
         // booleans; double negation is identity for boolean values.
         // The pattern here is `Not(Not(comparison_binop))`.
-        (Not, UnaryOp(@ast.TsUnaryOp::Not, BinOp(inner_op, a, b))) if is_comparison_op(inner_op) =>
-          BinOp(inner_op, a, b)
+        (Not, UnaryOp(@ast.TsUnaryOp::Not, BinOp(inner_op, a, b))) if is_comparison_op(
+            inner_op,
+          ) => BinOp(inner_op, a, b)
         (Neg, IntLit(n)) => IntLit(-n)
         (Neg, NumberLit(n)) => NumberLit(-n)
         (BitwiseNot, IntLit(n)) => IntLit(-(n + 1))
@@ -1003,48 +1020,104 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             BinOp(@ast.TsBinOp::And, Var(cn), tf)
           (_, Var(tn), Var(en)) if tn == en =>
             // Both branches are the same var — result is always that var.
-            if is_pure_value(cf) { Var(tn) } else { Seq(cf, Var(tn)) }
+            if is_pure_value(cf) {
+              Var(tn)
+            } else {
+              Seq(cf, Var(tn))
+            }
           // `c ? true : false` → `!!c` (saves 3+ bytes after peephole
           // turns true/false into !0/!1, making the ternary `c?!0:!1`).
           (_, BoolLit(true), BoolLit(false)) =>
-            UnaryOp(
-              @ast.TsUnaryOp::Not,
-              UnaryOp(@ast.TsUnaryOp::Not, cf),
-            )
+            UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, cf))
           // `c ? false : true` → `!c`.
-          (_, BoolLit(false), BoolLit(true)) =>
-            UnaryOp(@ast.TsUnaryOp::Not, cf)
+          (_, BoolLit(false), BoolLit(true)) => UnaryOp(@ast.TsUnaryOp::Not, cf)
           // `x != null ? x : y` → `x ?? y`.
           // JS abstract-inequality with null covers both null and
           // undefined — exactly the semantics of `??`. Only safe for
           // a bare Var in the then-branch (no double evaluation).
-          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), Var(tn), _) | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), Var(tn), _) if cn == tn =>
-            BinOp(@ast.TsBinOp::Coalesce, Var(cn), ef)
+          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), Var(tn), _)
+          | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), Var(tn), _) if cn ==
+            tn => BinOp(@ast.TsBinOp::Coalesce, Var(cn), ef)
           // `x != null ? x.prop : undefined` → `x?.prop`
           // `x != null ? x.method(...) : undefined` → `x?.method(...)`
           // `x != null ? x[idx] : undefined` → `x?.[idx]`
           // Only when the else-branch is the undefined value.
-          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), PropAccess(Var(tn), prop), _) | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), PropAccess(Var(tn), prop), _) if cn == tn && is_nullish_or_void(ef) =>
+          (
+            BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit),
+            PropAccess(Var(tn), prop),
+            _,
+          )
+          | (
+            BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)),
+            PropAccess(Var(tn), prop),
+            _,
+          ) if cn == tn && is_nullish_or_void(ef) =>
             OptionalChain(PropAccess(Var(cn), prop))
-          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), MethodCall(Var(tn), m, args), _) | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), MethodCall(Var(tn), m, args), _) if cn == tn && is_nullish_or_void(ef) =>
+          (
+            BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit),
+            MethodCall(Var(tn), m, args),
+            _,
+          )
+          | (
+            BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)),
+            MethodCall(Var(tn), m, args),
+            _,
+          ) if cn == tn && is_nullish_or_void(ef) =>
             OptionalChain(MethodCall(Var(cn), m, args))
-          (BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit), IndexAccess(Var(tn), idx), _) | (BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)), IndexAccess(Var(tn), idx), _) if cn == tn && is_nullish_or_void(ef) =>
+          (
+            BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit),
+            IndexAccess(Var(tn), idx),
+            _,
+          )
+          | (
+            BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)),
+            IndexAccess(Var(tn), idx),
+            _,
+          ) if cn == tn && is_nullish_or_void(ef) =>
             OptionalChain(IndexAccess(Var(cn), idx))
           // `x == null ? void 0 : x` → `x` when x is non-nullish by context.
           // Actually: `x == null ? void 0 : x` IS equivalent to `x ?? void 0`
           // which reduces to nothing useful since void 0 is already undefined.
           // But `x == null ? y : x` where x is the else-branch → `x ?? y`.
           // This handles the `null != x ? x : y` form from the negated side.
-          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, Var(tn)) | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, Var(tn)) if cn == tn =>
-            BinOp(@ast.TsBinOp::Coalesce, Var(cn), tf)
+          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, Var(tn))
+          | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, Var(tn)) if cn ==
+            tn => BinOp(@ast.TsBinOp::Coalesce, Var(cn), tf)
           // `x == null ? void 0 : x.prop` → `x?.prop` (negated condition form).
           // This is the TSC pattern for `x?.prop` where the ternary
           // puts the null case first.
-          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, PropAccess(Var(tn), prop)) | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, PropAccess(Var(tn), prop)) if cn == tn && is_nullish_or_void(tf) =>
+          (
+            BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit),
+            _,
+            PropAccess(Var(tn), prop),
+          )
+          | (
+            BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)),
+            _,
+            PropAccess(Var(tn), prop),
+          ) if cn == tn && is_nullish_or_void(tf) =>
             OptionalChain(PropAccess(Var(cn), prop))
-          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, MethodCall(Var(tn), m, args)) | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, MethodCall(Var(tn), m, args)) if cn == tn && is_nullish_or_void(tf) =>
+          (
+            BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit),
+            _,
+            MethodCall(Var(tn), m, args),
+          )
+          | (
+            BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)),
+            _,
+            MethodCall(Var(tn), m, args),
+          ) if cn == tn && is_nullish_or_void(tf) =>
             OptionalChain(MethodCall(Var(cn), m, args))
-          (BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit), _, IndexAccess(Var(tn), idx)) | (BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)), _, IndexAccess(Var(tn), idx)) if cn == tn && is_nullish_or_void(tf) =>
+          (
+            BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit),
+            _,
+            IndexAccess(Var(tn), idx),
+          )
+          | (
+            BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)),
+            _,
+            IndexAccess(Var(tn), idx),
+          ) if cn == tn && is_nullish_or_void(tf) =>
             OptionalChain(IndexAccess(Var(cn), idx))
           // `c ? (x = a) : (x = b)` → `x = c ? a : b`.
           // Both branches assign the same variable; hoist the assignment
@@ -1107,10 +1180,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
               // `Boolean(x)` → `!!x` for non-literal args.
               // `!!` is always shorter (3 bytes vs 9+ for "Boolean(…)")
               // and semantically identical: both coerce to boolean.
-              UnaryOp(
-                @ast.TsUnaryOp::Not,
-                UnaryOp(@ast.TsUnaryOp::Not, arg),
-              )
+              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, arg))
             }
           "parseFloat" =>
             match arg {
@@ -1220,8 +1290,14 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
                 let subs : Map[String, @ast.TsExpr] = {}
                 for i, p in runtime_params {
                   if p.is_rest ||
-                    (match p.binding { Some(Array(_)) | Some(Object(_)) => true; _ => false }) ||
-                    (match p.default { None => false; _ => true }) ||
+                    (match p.binding {
+                      Some(Array(_)) | Some(Object(_)) => true
+                      _ => false
+                    }) ||
+                    (match p.default {
+                      None => false
+                      _ => true
+                    }) ||
                     not(is_pure_value(new_args[i])) {
                     can_inline = false
                     break
@@ -1342,7 +1418,11 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
                 break
               }
             }
-            if all_others_pure { items[i] } else { IndexAccess(recv_f, idx_f) }
+            if all_others_pure {
+              items[i]
+            } else {
+              IndexAccess(recv_f, idx_f)
+            }
           } else {
             IndexAccess(recv_f, idx_f)
           }
@@ -1416,7 +1496,11 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
               }
           }
         }
-        if all_ok { ArrayLit(flat) } else { ArrayLit(new_items) }
+        if all_ok {
+          ArrayLit(flat)
+        } else {
+          ArrayLit(new_items)
+        }
       } else {
         ArrayLit(new_items)
       }
@@ -1438,7 +1522,11 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       let bf = fold_expr(b)
       // `(pure, x)` → `x`: the left side has no observable effect
       // so only the right value matters.
-      if is_pure_value(af) { bf } else { Seq(af, bf) }
+      if is_pure_value(af) {
+        bf
+      } else {
+        Seq(af, bf)
+      }
     }
     AssignExpr(n, v) => {
       let vf = fold_expr(v)
@@ -1473,7 +1561,10 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
-      let folded : @ast.TsFunc = { ..f, body: fold_func_body(fold_block(f.body)) }
+      let folded : @ast.TsFunc = {
+        ..f,
+        body: fold_func_body(fold_block(f.body)),
+      }
       FuncExpr(folded)
     }
     DynamicImport(spec, opts) => {
@@ -1509,13 +1600,20 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             NumberLit(n) => buf.write_string(n.to_string())
             StringLit(s) => buf.write_string(s)
             BoolLit(b) => buf.write_string(b.to_string())
-            _ => { all_lit = false; break }
+            _ => {
+              all_lit = false
+              break
+            }
           }
           if all_lit {
             buf.write_string(parts[i + 1])
           }
         }
-        if all_lit { StringLit(buf.to_string()) } else { TemplateLiteral(parts, new_exprs) }
+        if all_lit {
+          StringLit(buf.to_string())
+        } else {
+          TemplateLiteral(parts, new_exprs)
+        }
       }
     }
     As(inner, ty) => As(fold_expr(inner), ty)
@@ -1557,7 +1655,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         None => None
       }
       NativeClassExpr(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
@@ -1617,7 +1720,10 @@ fn fold_math_call(
               match pair {
                 ArrayLit([StringLit(k), v]) if is_pure_value(v) =>
                   entries.push((k, v))
-                _ => { all_ok = false; break }
+                _ => {
+                  all_ok = false
+                  break
+                }
               }
             }
             if all_ok {
@@ -1637,7 +1743,7 @@ fn fold_math_call(
             let mut all_obj_lit = true
             for i in 1..<args.length() {
               match args[i] {
-                ObjectLit(src_entries) => {
+                ObjectLit(src_entries) =>
                   for ent in src_entries {
                     // Remove earlier entry for the same key (last-write wins).
                     let mut found = false
@@ -1652,8 +1758,10 @@ fn fold_math_call(
                       merged.push(ent)
                     }
                   }
+                _ => {
+                  all_obj_lit = false
+                  break
                 }
-                _ => { all_obj_lit = false; break }
               }
             }
             if all_obj_lit {
@@ -1726,7 +1834,10 @@ fn fold_math_call(
               let ch = Char::from_int(n)
               buf.write_char(ch)
             }
-            _ => { all_lit = false; break }
+            _ => {
+              all_lit = false
+              break
+            }
           }
         }
         if all_lit {
@@ -1753,7 +1864,11 @@ fn fold_math_call(
               Ok(n) => {
                 let as_int = n.to_int()
                 return Some(
-                  if as_int.to_double() == n { IntLit(as_int) } else { NumberLit(n) },
+                  if as_int.to_double() == n {
+                    IntLit(as_int)
+                  } else {
+                    NumberLit(n)
+                  },
                 )
               }
               Err(_) => ()
@@ -1788,7 +1903,11 @@ fn fold_math_call(
           IntLit(n) => Some(n.to_string())
           NumberLit(n) => {
             let as_int = n.to_int()
-            if as_int.to_double() == n { Some(as_int.to_string()) } else { None }
+            if as_int.to_double() == n {
+              Some(as_int.to_string())
+            } else {
+              None
+            }
           }
           BoolLit(b) => Some(b.to_string())
           NullLit => Some("null")
@@ -1829,7 +1948,11 @@ fn fold_math_call(
   }
   fn to_lit(n : Double) -> @ast.TsExpr {
     let as_int = n.to_int()
-    if as_int.to_double() == n { IntLit(as_int) } else { NumberLit(n) }
+    if as_int.to_double() == n {
+      IntLit(as_int)
+    } else {
+      NumberLit(n)
+    }
   }
   match method {
     "abs" =>
@@ -1845,17 +1968,7 @@ fn fold_math_call(
       if args.length() == 1 {
         match as_float(args[0]) {
           Some(n) =>
-            Some(
-              IntLit(
-                if n > 0.0 {
-                  1
-                } else if n < 0.0 {
-                  -1
-                } else {
-                  0
-                },
-              ),
-            )
+            Some(IntLit(if n > 0.0 { 1 } else if n < 0.0 { -1 } else { 0 }))
           None => None
         }
       } else {
@@ -1871,10 +1984,17 @@ fn fold_math_call(
       for arg in args {
         match as_float(arg) {
           Some(n) => if n < result { result = n }
-          None => { all_lit = false; break }
+          None => {
+            all_lit = false
+            break
+          }
         }
       }
-      if all_lit { Some(to_lit(result)) } else { None }
+      if all_lit {
+        Some(to_lit(result))
+      } else {
+        None
+      }
     }
     "max" => {
       // Fold when all arguments are numeric literals.
@@ -1886,10 +2006,17 @@ fn fold_math_call(
       for arg in args {
         match as_float(arg) {
           Some(n) => if n > result { result = n }
-          None => { all_lit = false; break }
+          None => {
+            all_lit = false
+            break
+          }
         }
       }
-      if all_lit { Some(to_lit(result)) } else { None }
+      if all_lit {
+        Some(to_lit(result))
+      } else {
+        None
+      }
     }
     "floor" | "ceil" | "round" | "trunc" =>
       if args.length() == 1 {
@@ -1905,7 +2032,9 @@ fn fold_math_call(
             }
             let as_int = result.to_int()
             // Return integer form when it fits in Int, float form otherwise.
-            if as_int.to_double() == result && result >= -2147483648.0 && result <= 2147483647.0 {
+            if as_int.to_double() == result &&
+              result >= -2147483648.0 &&
+              result <= 2147483647.0 {
               Some(IntLit(as_int))
             } else {
               Some(NumberLit(result))
@@ -1951,7 +2080,7 @@ fn fold_scalar_method(
   args : Array[@ast.TsExpr],
 ) -> @ast.TsExpr? {
   match method {
-    "toString" => {
+    "toString" =>
       match args.length() {
         0 =>
           match recv {
@@ -1972,7 +2101,6 @@ fn fold_scalar_method(
           }
         _ => None
       }
-    }
     "valueOf" if args.length() == 0 =>
       // `.valueOf()` is identity for primitives.
       match recv {
@@ -2142,15 +2270,13 @@ fn fold_string_method(
     "charCodeAt" if args.length() == 1 =>
       // `"A".charCodeAt(0)` → 65
       match args[0] {
-        IntLit(i) if i >= 0 && i < s.length() =>
-          Some(IntLit(s[i].to_int()))
+        IntLit(i) if i >= 0 && i < s.length() => Some(IntLit(s[i].to_int()))
         _ => None
       }
     "codePointAt" if args.length() == 1 =>
       // `"A".codePointAt(0)` → 65 (same as charCodeAt for BMP chars)
       match args[0] {
-        IntLit(i) if i >= 0 && i < s.length() =>
-          Some(IntLit(s[i].to_int()))
+        IntLit(i) if i >= 0 && i < s.length() => Some(IntLit(s[i].to_int()))
         _ => None
       }
     "padStart" => {
@@ -2178,7 +2304,8 @@ fn fold_string_method(
         let mut result = ""
         let mut i = 0
         while i < needed {
-          result = result + pad.substring(start=i % pad_len, end=i % pad_len + 1).to_string()
+          result = result +
+            pad.substring(start=i % pad_len, end=i % pad_len + 1).to_string()
           i = i + 1
         }
         Some(StringLit(result + s))
@@ -2209,7 +2336,8 @@ fn fold_string_method(
         let mut result = s
         let mut i = 0
         while i < needed {
-          result = result + pad.substring(start=i % pad_len, end=i % pad_len + 1).to_string()
+          result = result +
+            pad.substring(start=i % pad_len, end=i % pad_len + 1).to_string()
           i = i + 1
         }
         Some(StringLit(result))
@@ -2299,7 +2427,11 @@ fn fold_array_method(
           }
         }
       }
-      if all_lit { Some(StringLit(parts.join(sep))) } else { None }
+      if all_lit {
+        Some(StringLit(parts.join(sep)))
+      } else {
+        None
+      }
     }
     "includes" if args.length() == 1 => {
       // `[1,2,3].includes(2)` → true/false when all items are literals.
@@ -2421,20 +2553,14 @@ fn fold_array_method(
       let result : Array[@ast.TsExpr] = []
       for item in items {
         match item {
-          ArrayLit(inner) => {
+          ArrayLit(inner) =>
             for inner_item in inner {
               if not(is_pure_value(inner_item)) {
                 return None
               }
               result.push(inner_item)
             }
-          }
-          _ =>
-            if is_pure_value(item) {
-              result.push(item)
-            } else {
-              return None
-            }
+          _ => if is_pure_value(item) { result.push(item) } else { return None }
         }
       }
       Some(ArrayLit(result))
@@ -2492,7 +2618,11 @@ fn fold_array_method(
                 break
               }
             }
-            if all_pure { Some(items[idx]) } else { None }
+            if all_pure {
+              Some(items[idx])
+            } else {
+              None
+            }
           } else {
             None
           }
@@ -2511,7 +2641,11 @@ fn fold_array_method(
     "indexOf" | "lastIndexOf" if items.is_empty() => Some(IntLit(-1))
     "reduce" if items.is_empty() && args.length() == 2 =>
       // `[].reduce(fn, init)` → init when init is pure.
-      if is_pure_value(args[1]) { Some(args[1]) } else { None }
+      if is_pure_value(args[1]) {
+        Some(args[1])
+      } else {
+        None
+      }
     _ => None
   }
 }
@@ -2653,6 +2787,7 @@ fn try_lower_single_case_switch(
   Some(@ast.TsStmt::If(cond, then_block, else_block))
 }
 
+///|
 fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
   let n = block.stmts.length()
   if n == 0 {
@@ -2776,9 +2911,17 @@ fn fold_binop(
     (Mul, IntLit(a), IntLit(b)) => IntLit(a * b)
     (Div, IntLit(a), IntLit(b)) =>
       // Only fold integer division when it's exact (no remainder).
-      if b != 0 && a % b == 0 { IntLit(a / b) } else { BinOp(op, l, r) }
+      if b != 0 && a % b == 0 {
+        IntLit(a / b)
+      } else {
+        BinOp(op, l, r)
+      }
     (Mod, IntLit(a), IntLit(b)) =>
-      if b != 0 { IntLit(a % b) } else { BinOp(op, l, r) }
+      if b != 0 {
+        IntLit(a % b)
+      } else {
+        BinOp(op, l, r)
+      }
     (Pow, IntLit(a), IntLit(b)) =>
       // Fold small integer exponents only.
       if b >= 0 && b <= 20 {
@@ -2898,12 +3041,20 @@ fn fold_binop(
     | (AbstractEq, Var("undefined"), NullLit)
     | (AbstractEq, NullLit, UnaryOp(@ast.TsUnaryOp::Void, _))
     | (AbstractEq, UnaryOp(@ast.TsUnaryOp::Void, _), NullLit) =>
-      if is_pure_value(l) && is_pure_value(r) { BoolLit(true) } else { BinOp(op, l, r) }
+      if is_pure_value(l) && is_pure_value(r) {
+        BoolLit(true)
+      } else {
+        BinOp(op, l, r)
+      }
     (AbstractNe, NullLit, Var("undefined"))
     | (AbstractNe, Var("undefined"), NullLit)
     | (AbstractNe, NullLit, UnaryOp(@ast.TsUnaryOp::Void, _))
     | (AbstractNe, UnaryOp(@ast.TsUnaryOp::Void, _), NullLit) =>
-      if is_pure_value(l) && is_pure_value(r) { BoolLit(false) } else { BinOp(op, l, r) }
+      if is_pure_value(l) && is_pure_value(r) {
+        BoolLit(false)
+      } else {
+        BinOp(op, l, r)
+      }
     // `null == number/string/bool` → `false` (null only == null or undefined).
     (AbstractEq, NullLit, IntLit(_))
     | (AbstractEq, NullLit, NumberLit(_))
@@ -2924,20 +3075,49 @@ fn fold_binop(
     // `x === null || x === undefined` → `x == null`
     // Also handles `x === void 0` as the `undefined` form.
     // Only fold when both sides reference the same simple variable.
-    (Or, BinOp(BinEq, Var(an), NullLit), BinOp(BinEq, Var(bn), Var("undefined")))
-    | (Or, BinOp(BinEq, Var(an), Var("undefined")), BinOp(BinEq, Var(bn), NullLit))
-    | (Or, BinOp(BinEq, Var(an), NullLit), BinOp(BinEq, Var(bn), UnaryOp(@ast.TsUnaryOp::Void, _)))
-    | (Or, BinOp(BinEq, Var(an), UnaryOp(@ast.TsUnaryOp::Void, _)), BinOp(BinEq, Var(bn), NullLit)) =>
+    (Or, BinOp(BinEq, Var(an), NullLit), BinOp(BinEq, Var(bn), Var("undefined"))
+    )
+    | (
+      Or,
+      BinOp(BinEq, Var(an), Var("undefined")),
+      BinOp(BinEq, Var(bn), NullLit),
+    )
+    | (
+      Or,
+      BinOp(BinEq, Var(an), NullLit),
+      BinOp(BinEq, Var(bn), UnaryOp(@ast.TsUnaryOp::Void, _)),
+    )
+    | (
+      Or,
+      BinOp(BinEq, Var(an), UnaryOp(@ast.TsUnaryOp::Void, _)),
+      BinOp(BinEq, Var(bn), NullLit),
+    ) =>
       if an == bn {
         BinOp(AbstractEq, Var(an), NullLit)
       } else {
         BinOp(op, l, r)
       }
     // `x !== null && x !== undefined` → `x != null`
-    (And, BinOp(BinNe, Var(an), NullLit), BinOp(BinNe, Var(bn), Var("undefined")))
-    | (And, BinOp(BinNe, Var(an), Var("undefined")), BinOp(BinNe, Var(bn), NullLit))
-    | (And, BinOp(BinNe, Var(an), NullLit), BinOp(BinNe, Var(bn), UnaryOp(@ast.TsUnaryOp::Void, _)))
-    | (And, BinOp(BinNe, Var(an), UnaryOp(@ast.TsUnaryOp::Void, _)), BinOp(BinNe, Var(bn), NullLit)) =>
+    (
+      And,
+      BinOp(BinNe, Var(an), NullLit),
+      BinOp(BinNe, Var(bn), Var("undefined")),
+    )
+    | (
+      And,
+      BinOp(BinNe, Var(an), Var("undefined")),
+      BinOp(BinNe, Var(bn), NullLit),
+    )
+    | (
+      And,
+      BinOp(BinNe, Var(an), NullLit),
+      BinOp(BinNe, Var(bn), UnaryOp(@ast.TsUnaryOp::Void, _)),
+    )
+    | (
+      And,
+      BinOp(BinNe, Var(an), UnaryOp(@ast.TsUnaryOp::Void, _)),
+      BinOp(BinNe, Var(bn), NullLit),
+    ) =>
       if an == bn {
         BinOp(AbstractNe, Var(an), NullLit)
       } else {
@@ -2963,7 +3143,11 @@ fn fold_binop(
     // `x ** 0` → `1` for any pure x (JS spec: every value including NaN
     // and Infinity raised to the 0 power equals 1).
     (Pow, _, IntLit(0)) | (Pow, _, NumberLit(0.0)) =>
-      if is_pure_value(l) { IntLit(1) } else { BinOp(op, l, r) }
+      if is_pure_value(l) {
+        IntLit(1)
+      } else {
+        BinOp(op, l, r)
+      }
     // `"key" in {key: v, ...}` → true/false when all values are pure.
     // Safe because object literals never have __proto__ side effects.
     (In, StringLit(k), ObjectLit(entries)) => {
@@ -2997,7 +3181,11 @@ fn fold_binop(
     | (Instanceof, BoolLit(_), _)
     | (Instanceof, UnaryOp(@ast.TsUnaryOp::Void, _), _)
     | (Instanceof, Var("undefined"), _) =>
-      if is_pure_value(r) { BoolLit(false) } else { BinOp(op, l, r) }
+      if is_pure_value(r) {
+        BoolLit(false)
+      } else {
+        BinOp(op, l, r)
+      }
     _ => BinOp(op, l, r)
   }
 }
@@ -3056,8 +3244,10 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
       true
     }
     // TypeScript-only wrappers: no runtime side effects.
-    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
-      is_pure_value(inner)
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => is_pure_value(inner)
     // Spread of a pure value is itself pure (e.g. inside an array literal).
     Spread(inner) => is_pure_value(inner)
     _ => false
@@ -3247,17 +3437,19 @@ fn is_comparison_op(op : @ast.TsBinOp) -> Bool {
 // Substitute free occurrences of variable names in `expr` with the
 // corresponding values from `subs`. Does NOT descend into nested
 // function bodies (arrow / function expressions) to avoid capturing.
+
+///|
 fn substitute_vars_in_expr(
   expr : @ast.TsExpr,
-  subs : Map[String, @ast.TsExpr]
+  subs : Map[String, @ast.TsExpr],
 ) -> @ast.TsExpr {
   fn sub(e : @ast.TsExpr) -> @ast.TsExpr {
     match e {
       Var(name) =>
-        (match subs.get(name) {
+        match subs.get(name) {
           Some(v) => v
           None => e
-        })
+        }
       // Do not descend into new binding scopes.
       ArrowFunc(_, _, _, _) | FuncExpr(_) => e
       // Recurse into everything else.

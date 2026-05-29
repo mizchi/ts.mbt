@@ -669,7 +669,7 @@ test "mangle: NativeClassStmt method names are collected and shortened (#mangle_
   // Method names that appear ONLY inside a NativeClassStmt (never in a
   // PropAccess outside the class) were previously missing from the
   // property-rename candidates, so `mangle_properties` left them intact.
-  let src = (
+  let src =
     #|class Counter {
     #|  constructor() { this.internalValue = 0; }
     #|  incrementCount() { this.internalValue += 1; }
@@ -678,7 +678,6 @@ test "mangle: NativeClassStmt method names are collected and shortened (#mangle_
     #|const c = new Counter();
     #|c.incrementCount();
     #|console.log(c.getCount());
-  )
   let cfg = ManglerConfig::default()
     .with_mangle_properties(true)
     .with_preserve_top_level(false)

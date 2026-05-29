@@ -55,7 +55,10 @@ pub fn iife_class_lift_block(block : @ast.TsBlock) -> @ast.TsBlock {
 }
 
 ///|
-fn try_lift_iife_class_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
+fn try_lift_iife_class_into(
+  stmt : @ast.TsStmt,
+  out : Array[@ast.TsStmt],
+) -> Unit {
   // Match the outer shape: `Var|Let|Const(Ident(name), _,
   // CallExpr(FuncExpr(f), []))`.
   match stmt {
@@ -95,7 +98,8 @@ fn try_lift_iife_value(
     PureCall(inner) => inner
     _ => e
   }
-  let (body, super_param, super_arg) : (@ast.TsBlock, String?, @ast.TsExpr?) = match inner_e {
+  let (body, super_param, super_arg) : (@ast.TsBlock, String?, @ast.TsExpr?) = match
+    inner_e {
     CallExpr(@ast.TsExpr::FuncExpr(f), args) =>
       if args.length() == 0 && f.params.length() == 0 {
         (f.body, None, None)
@@ -158,7 +162,8 @@ fn try_lift_iife_value(
       _ => [s]
     }
     for fs in flat_stmts {
-      match classify_iife_body_stmt(fs, inner_name, super_param, accessor_funcs) {
+      match
+        classify_iife_body_stmt(fs, inner_name, super_param, accessor_funcs) {
         Skipped => ()
         Ctor(f) =>
           match ctor_func {
@@ -166,7 +171,10 @@ fn try_lift_iife_value(
             None => ctor_func = Some(f)
           }
         Method(decl) => methods.push(decl)
-        Methods(decls) => for d in decls { methods.push(d) }
+        Methods(decls) =>
+          for d in decls {
+            methods.push(d)
+          }
         StaticMethod(decl) => static_methods.push(decl)
         ReturnsClassName => saw_return = true
         Extra(extra) => extra_stmts.push(extra)
@@ -187,7 +195,8 @@ fn try_lift_iife_value(
   for m in static_methods {
     all_methods.push(m)
   }
-  let (base_names, base_expr) : (Array[String], @ast.TsExpr?) = match super_arg {
+  let (base_names, base_expr) : (Array[String], @ast.TsExpr?) = match
+    super_arg {
     Some(arg) => (["<expr-base>"], Some(arg))
     None => ([], None)
   }
@@ -206,8 +215,8 @@ fn try_lift_iife_value(
   let side_effect_stmts : Array[@ast.TsStmt] = []
   for s in extra_stmts {
     match s {
-      @ast.TsStmt::PropAssign(@ast.TsExpr::Var(n), key, val) if n == name || n == inner_name =>
-        static_field_inits.push((key, val))
+      @ast.TsStmt::PropAssign(@ast.TsExpr::Var(n), key, val) if n == name ||
+        n == inner_name => static_field_inits.push((key, val))
       _ => side_effect_stmts.push(s)
     }
   }
@@ -242,13 +251,11 @@ fn try_lift_iife_value(
       { ..m, body: new_body }
     })
     let renamed_ctor = match ctor_func {
-      Some(f) => Some({ ..f, body: rename_var_in_block(f.body, inner_name, name) })
+      Some(f) =>
+        Some({ ..f, body: rename_var_in_block(f.body, inner_name, name) })
       None => None
     }
-    (
-      { ..decl, methods: renamed_methods },
-      renamed_ctor,
-    )
+    ({ ..decl, methods: renamed_methods }, renamed_ctor)
   } else {
     (decl, ctor_func)
   }
@@ -354,7 +361,8 @@ fn classify_iife_body_stmt(
       @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
       marker_key,
       @ast.TsExpr::Var(accessor_tmp)
-    ) if n == class_name && (marker_key.has_prefix("@@get:") || marker_key.has_prefix("@@set:")) => {
+    ) if n == class_name &&
+      (marker_key.has_prefix("@@get:") || marker_key.has_prefix("@@set:")) => {
       let (kind, prop_name) = if marker_key.has_prefix("@@get:") {
         ("get", marker_key.substring(start=6))
       } else {
@@ -366,8 +374,9 @@ fn classify_iife_body_stmt(
       }
     }
     // Also skip the __super_proto metadata on accessor temp vars.
-    PropAssign(@ast.TsExpr::Var(n), "__super_proto", _) if accessor_funcs.contains(n) =>
-      Skipped
+    PropAssign(@ast.TsExpr::Var(n), "__super_proto", _) if accessor_funcs.contains(
+        n,
+      ) => Skipped
     // `ClassName.prototype.METHOD = function METHOD() {…};` —
     // instance method. For non-class-name receivers this is a side
     // effect (prototype augmentation of another class) that is safe
@@ -445,12 +454,16 @@ fn classify_iife_body_stmt(
       _
     )
     | PropAssign(@ast.TsExpr::Var(n), "__proto__", _) =>
-      if n == class_name { Skipped } else { Extra(stmt) }
+      if n == class_name {
+        Skipped
+      } else {
+        Extra(stmt)
+      }
     // `_inheritsLoose(ClassName, _Super)` / `_inherits(ClassName, _Super)` /
     // `__extends(ClassName, _Super)` (TypeScript emitted helper)
     Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::Var(fn_name), args)) =>
       if (fn_name.has_prefix("_inherit") || fn_name == "__extends") &&
-         args.length() >= 1 {
+        args.length() >= 1 {
         match args[0] {
           @ast.TsExpr::Var(n) =>
             if n == class_name {
@@ -469,11 +482,7 @@ fn classify_iife_body_stmt(
       }
     // `Object.setPrototypeOf(ClassName.prototype, _Super.prototype)`
     Expr(
-      @ast.TsExpr::MethodCall(
-        @ast.TsExpr::Var("Object"),
-        "setPrototypeOf",
-        _
-      )
+      @ast.TsExpr::MethodCall(@ast.TsExpr::Var("Object"), "setPrototypeOf", _)
     ) =>
       match super_param {
         Some(_) => Skipped
@@ -496,8 +505,7 @@ fn classify_iife_body_stmt(
           @ast.TsExpr::ObjectLit(descriptor),
         ]
       )
-      |
-      @ast.TsExpr::CallExpr(
+      | @ast.TsExpr::CallExpr(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Object"), "defineProperty"),
         [
           @ast.TsExpr::PropAccess(@ast.TsExpr::Var(recv_name), "prototype"),
@@ -512,11 +520,18 @@ fn classify_iife_body_stmt(
         for entry in descriptor {
           match (entry.0, entry.1) {
             ("get", @ast.TsExpr::FuncExpr(f)) =>
-              accessors.push(method_decl_from_func_accessor(prop_name, f, "get"))
+              accessors.push(
+                method_decl_from_func_accessor(prop_name, f, "get"),
+              )
             ("set", @ast.TsExpr::FuncExpr(f)) =>
-              accessors.push(method_decl_from_func_accessor(prop_name, f, "set"))
+              accessors.push(
+                method_decl_from_func_accessor(prop_name, f, "set"),
+              )
             ("enumerable", _) | ("configurable", _) | ("writable", _) => ()
-            _ => { all_ok = false; break }
+            _ => {
+              all_ok = false
+              break
+            }
           }
         }
         if all_ok && accessors.length() > 0 {
@@ -549,14 +564,17 @@ fn classify_iife_body_stmt(
     // treat as a side-effect emitted AFTER the class. We don't hoist
     // assignments before the class even when the RHS is independent —
     // the original IIFE ran them after the constructor definition.
-    Assign(n, _) =>
-      if n == class_name { Unknown } else { Extra(stmt) }
+    Assign(n, _) => if n == class_name { Unknown } else { Extra(stmt) }
     // `name op= expr;` — compound assignment. Same ordering logic as
     // plain Assign: abort if it touches the class binding, otherwise
     // emit as a side effect (after, since the RHS might implicitly use
     // the current value of `name` which could reference the class).
     CompoundAssign(n, _, _) =>
-      if n == class_name { Unknown } else { Extra(stmt) }
+      if n == class_name {
+        Unknown
+      } else {
+        Extra(stmt)
+      }
     // `recv[idx] = val;` — dynamic index assignment. Always emit after
     // the class (Extra) since the receiver may be a class instance or
     // prototype reference, and we want to avoid any forward-ref issues.
@@ -733,12 +751,15 @@ fn method_decl_from_func_accessor(
 /// constructor body. This makes the lifted native `class` valid ES6
 /// when the IIFE pattern uses `_Super.call(this, ...)` for the super
 /// constructor call.
-fn rewrite_super_calls(block : @ast.TsBlock, super_param : String) -> @ast.TsBlock {
+fn rewrite_super_calls(
+  block : @ast.TsBlock,
+  super_param : String,
+) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(rewrite_super_stmt(s, super_param))
   }
-  { ..block, stmts }
+  { ..block, stmts, }
 }
 
 ///|
@@ -766,7 +787,7 @@ fn rewrite_super_block(block : @ast.TsBlock, sp : String) -> @ast.TsBlock {
   for s in block.stmts {
     stmts.push(rewrite_super_stmt(s, sp))
   }
-  { ..block, stmts }
+  { ..block, stmts, }
 }
 
 ///|
@@ -775,11 +796,11 @@ fn rewrite_super_expr(expr : @ast.TsExpr, sp : String) -> @ast.TsExpr {
     // `_Super.call(this, a, b)` → `super(a, b)`
     MethodCall(@ast.TsExpr::Var(recv), "call", args) =>
       if recv == sp &&
-         args.length() >= 1 &&
-         (match args[0] {
-           @ast.TsExpr::Var("this") => true
-           _ => false
-         }) {
+        args.length() >= 1 &&
+        (match args[0] {
+          @ast.TsExpr::Var("this") => true
+          _ => false
+        }) {
         // Drop the leading `this` arg; the rest are the super() args.
         let super_args : Array[@ast.TsExpr] = []
         for i, a in args {
@@ -796,11 +817,11 @@ fn rewrite_super_expr(expr : @ast.TsExpr, sp : String) -> @ast.TsExpr {
     // derived classes: `_super.apply(this, arguments)`.
     MethodCall(@ast.TsExpr::Var(recv), "apply", args) =>
       if recv == sp &&
-         args.length() >= 1 &&
-         (match args[0] {
-           @ast.TsExpr::Var("this") => true
-           _ => false
-         }) {
+        args.length() >= 1 &&
+        (match args[0] {
+          @ast.TsExpr::Var("this") => true
+          _ => false
+        }) {
         let super_args : Array[@ast.TsExpr] = []
         for i, a in args {
           if i > 0 {
@@ -832,7 +853,11 @@ fn rewrite_super_expr(expr : @ast.TsExpr, sp : String) -> @ast.TsExpr {
 // Rename all `Var(from)` / `New(from, …)` references in an expression.
 // Used to replace the inner class name with the outer class name after
 // an IIFE whose inner constructor name differs from the outer binding.
-fn rename_var_in_expr(expr : @ast.TsExpr, from : String, to : String) -> @ast.TsExpr {
+fn rename_var_in_expr(
+  expr : @ast.TsExpr,
+  from : String,
+  to : String,
+) -> @ast.TsExpr {
   let re = fn(e) { rename_var_in_expr(e, from, to) }
   match expr {
     Var(n) => if n == from { Var(to) } else { expr }
@@ -853,18 +878,29 @@ fn rename_var_in_expr(expr : @ast.TsExpr, from : String, to : String) -> @ast.Ts
     ObjectLit(pairs) => ObjectLit(pairs.map(p => (p.0, re(p.1))))
     AssignExpr(n, v) => AssignExpr(n, re(v))
     PropAssignExpr(recv, p, val) => PropAssignExpr(re(recv), p, re(val))
-    CompoundAssignExpr(target, op, val) => CompoundAssignExpr(re(target), op, re(val))
-    IndexAssignExpr(recv, idx, val) => IndexAssignExpr(re(recv), re(idx), re(val))
+    CompoundAssignExpr(target, op, val) =>
+      CompoundAssignExpr(re(target), op, re(val))
+    IndexAssignExpr(recv, idx, val) =>
+      IndexAssignExpr(re(recv), re(idx), re(val))
     _ => expr
   }
 }
 
-fn rename_var_in_block(block : @ast.TsBlock, from : String, to : String) -> @ast.TsBlock {
+///|
+fn rename_var_in_block(
+  block : @ast.TsBlock,
+  from : String,
+  to : String,
+) -> @ast.TsBlock {
   { ..block, stmts: block.stmts.map(s => rename_var_in_stmt(s, from, to)) }
 }
 
 ///|
-fn rename_var_in_stmt(stmt : @ast.TsStmt, from : String, to : String) -> @ast.TsStmt {
+fn rename_var_in_stmt(
+  stmt : @ast.TsStmt,
+  from : String,
+  to : String,
+) -> @ast.TsStmt {
   let re = fn(e) { rename_var_in_expr(e, from, to) }
   let rb = fn(b) { rename_var_in_block(b, from, to) }
   match stmt {
@@ -875,11 +911,17 @@ fn rename_var_in_stmt(stmt : @ast.TsStmt, from : String, to : String) -> @ast.Ts
     @ast.TsStmt::Var(b, t, e) => Var(b, t, re(e))
     @ast.TsStmt::Assign(n, e) => Assign(n, re(e))
     @ast.TsStmt::PropAssign(recv, p, val) => PropAssign(re(recv), p, re(val))
-    @ast.TsStmt::IndexAssign(arr, idx, val) => IndexAssign(re(arr), re(idx), re(val))
+    @ast.TsStmt::IndexAssign(arr, idx, val) =>
+      IndexAssign(re(arr), re(idx), re(val))
     @ast.TsStmt::If(c, t, e) => If(re(c), rb(t), e.map(rb))
     @ast.TsStmt::While(c, body) => While(re(c), rb(body))
     @ast.TsStmt::For(init, cond, update, body) =>
-      For(init.map(s => rename_var_in_stmt(s, from, to)), cond.map(re), update.map(s => rename_var_in_stmt(s, from, to)), rb(body))
+      For(
+        init.map(s => rename_var_in_stmt(s, from, to)),
+        cond.map(re),
+        update.map(s => rename_var_in_stmt(s, from, to)),
+        rb(body),
+      )
     @ast.TsStmt::Block(b) => Block(rb(b))
     @ast.TsStmt::Throw(e) => Throw(re(e))
     @ast.TsStmt::CompoundAssign(n, op, e) => CompoundAssign(n, op, re(e))

@@ -93,7 +93,9 @@ pub fn collect_externally_visible_props(
 
 ///|
 fn is_internal_marker_prop(name : String) -> Bool {
-  name == "__super_proto" || name == "__brand__" || name.has_prefix("__private_brand__")
+  name == "__super_proto" ||
+  name == "__brand__" ||
+  name.has_prefix("__private_brand__")
 }
 
 ///|
@@ -280,7 +282,8 @@ fn collect_props_on_external_stmt(
     }
     NativeClassStmt(decl, ctor) => {
       match decl.base_expr {
-        Some(b) => collect_props_on_external_expr(b, externals, out, numeric_names)
+        Some(b) =>
+          collect_props_on_external_expr(b, externals, out, numeric_names)
         None => ()
       }
       match ctor {
@@ -455,7 +458,8 @@ fn collect_props_on_external_expr(
       }
     NativeClassExpr(decl, ctor) => {
       match decl.base_expr {
-        Some(b) => collect_props_on_external_expr(b, externals, out, numeric_names)
+        Some(b) =>
+          collect_props_on_external_expr(b, externals, out, numeric_names)
         None => ()
       }
       match ctor {

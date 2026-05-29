@@ -1200,16 +1200,16 @@ fn strip_super_proto_stmts(block : @ast.TsBlock) -> @ast.TsBlock {
       _ => stmts.push(stripped)
     }
   }
-  { ..block, stmts }
+  { ..block, stmts, }
 }
 
+///|
 fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
   match s {
     @ast.TsStmt::PropAssign(_, "__super_proto", _) => Empty
     @ast.TsStmt::Expr(@ast.TsExpr::PropAssignExpr(_, "__super_proto", _)) =>
       Empty
-    @ast.TsStmt::Block(b) =>
-      Block(strip_super_proto_stmts(b))
+    @ast.TsStmt::Block(b) => Block(strip_super_proto_stmts(b))
     @ast.TsStmt::If(c, t, e) =>
       If(
         c,
@@ -1219,32 +1219,35 @@ fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
           None => None
         },
       )
-    @ast.TsStmt::Let(b, t, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)) =>
+    @ast.TsStmt::Let(
+      b,
+      t,
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+    ) =>
       Let(
         b,
         t,
-        CallExpr(
-          FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }),
-          args,
-        ),
+        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
       )
-    @ast.TsStmt::Const(b, t, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)) =>
+    @ast.TsStmt::Const(
+      b,
+      t,
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+    ) =>
       Const(
         b,
         t,
-        CallExpr(
-          FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }),
-          args,
-        ),
+        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
       )
-    @ast.TsStmt::Var(b, t, @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)) =>
+    @ast.TsStmt::Var(
+      b,
+      t,
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+    ) =>
       Var(
         b,
         t,
-        CallExpr(
-          FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }),
-          args,
-        ),
+        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
       )
     _ => s
   }

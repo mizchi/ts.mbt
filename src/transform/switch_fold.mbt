@@ -123,7 +123,7 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
         }
         arms[s] = expr
       }
-      None => {
+      None =>
         // `default:` arm — accept exactly one.
         if default_expr.is_empty() {
           if c.body.stmts.length() != 1 {
@@ -137,7 +137,6 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
         } else {
           return None // two defaults — shouldn't happen but bail
         }
-      }
       _ => return None // non-string, non-default case
     }
   }

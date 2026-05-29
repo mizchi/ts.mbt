@@ -479,7 +479,10 @@ fn drop_dead_props_stmt(
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>
-          Some({ ..f, body: drop_dead_props_block(f.body, reserved, read_props) })
+          Some({
+            ..f,
+            body: drop_dead_props_block(f.body, reserved, read_props),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -492,14 +495,21 @@ fn drop_dead_props_stmt(
       }
       let new_static_fields : Array[(String, @ast.TsExpr)] = []
       for sf in decl.static_field_inits {
-        new_static_fields.push((sf.0, drop_dead_props_expr(sf.1, reserved, read_props)))
+        new_static_fields.push(
+          (sf.0, drop_dead_props_expr(sf.1, reserved, read_props)),
+        )
       }
       let new_base_expr = match decl.base_expr {
         Some(b) => Some(drop_dead_props_expr(b, reserved, read_props))
         None => None
       }
       NativeClassStmt(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
@@ -707,7 +717,10 @@ fn drop_dead_props_expr(
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
         Some(f) =>
-          Some({ ..f, body: drop_dead_props_block(f.body, reserved, read_props) })
+          Some({
+            ..f,
+            body: drop_dead_props_block(f.body, reserved, read_props),
+          })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -729,7 +742,12 @@ fn drop_dead_props_expr(
         None => None
       }
       NativeClassExpr(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }

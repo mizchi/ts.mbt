@@ -196,8 +196,7 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
       // `x + ""` / `"" + x` — foldable when x is string-typed.
       match (op, l, r) {
         (Add, @ast.TsExpr::Var(_), @ast.TsExpr::StringLit(""))
-        | (Add, @ast.TsExpr::StringLit(""), @ast.TsExpr::Var(_)) =>
-          return true
+        | (Add, @ast.TsExpr::StringLit(""), @ast.TsExpr::Var(_)) => return true
         _ => ()
       }
       expr_needs_type_fold(l) || expr_needs_type_fold(r)

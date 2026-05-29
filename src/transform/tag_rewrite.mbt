@@ -2155,7 +2155,12 @@ fn tag_rewrite_stmt(
         None => None
       }
       NativeClassStmt(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
@@ -2328,11 +2333,7 @@ fn tag_rewrite_expr(
     PureCall(inner) => PureCall(tag_rewrite_expr(inner, table))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) =>
-          Some({
-            ..f,
-            body: tag_rewrite_block_inner(f.body, table),
-          })
+        Some(f) => Some({ ..f, body: tag_rewrite_block_inner(f.body, table) })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -2352,7 +2353,12 @@ fn tag_rewrite_expr(
         None => None
       }
       NativeClassExpr(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }

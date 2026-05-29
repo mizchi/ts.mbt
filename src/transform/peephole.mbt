@@ -171,9 +171,13 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // `x += 1` → `x++` (saves 3 bytes in statement position)
       match (op, rhs_p) {
         (AddAssign, @ast.TsExpr::IntLit(1)) =>
-          Expr(@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostInc, @ast.TsExpr::Var(n)))
+          Expr(
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostInc, @ast.TsExpr::Var(n)),
+          )
         (SubAssign, @ast.TsExpr::IntLit(1)) =>
-          Expr(@ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostDec, @ast.TsExpr::Var(n)))
+          Expr(
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::PostDec, @ast.TsExpr::Var(n)),
+          )
         _ => CompoundAssign(n, op, rhs_p)
       }
     }
@@ -190,7 +194,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           BinOp(
             op,
             @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)),
-            rhs,
+            rhs
           ),
         ) if tn == rn && ik == rk =>
           match (compound_for_binop(op), rhs) {
@@ -198,20 +202,29 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
               Expr(
                 @ast.TsExpr::UnaryOp(
                   @ast.TsUnaryOp::PostInc,
-                  @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(tn), @ast.TsExpr::Var(ik)),
+                  @ast.TsExpr::IndexAccess(
+                    @ast.TsExpr::Var(tn),
+                    @ast.TsExpr::Var(ik),
+                  ),
                 ),
               )
             (Some(SubAssign), @ast.TsExpr::IntLit(1)) =>
               Expr(
                 @ast.TsExpr::UnaryOp(
                   @ast.TsUnaryOp::PostDec,
-                  @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(tn), @ast.TsExpr::Var(ik)),
+                  @ast.TsExpr::IndexAccess(
+                    @ast.TsExpr::Var(tn),
+                    @ast.TsExpr::Var(ik),
+                  ),
                 ),
               )
             (Some(cop), _) =>
               Expr(
                 @ast.TsExpr::CompoundAssignExpr(
-                  @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(tn), @ast.TsExpr::Var(ik)),
+                  @ast.TsExpr::IndexAccess(
+                    @ast.TsExpr::Var(tn),
+                    @ast.TsExpr::Var(ik),
+                  ),
                   cop,
                   rhs,
                 ),
@@ -233,7 +246,10 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // `x.prop = x.prop OP y` → `x.prop OP= y` (and `x.prop = x.prop + 1` → `x.prop++`).
       // Only fold when the receiver is a bare `Var` (no double evaluation).
       match (target_p, val_p) {
-        (Var(tn), BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rprop), rhs)) if tn == rn && prop == rprop =>
+        (
+          Var(tn),
+          BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rprop), rhs),
+        ) if tn == rn && prop == rprop =>
           match (compound_for_binop(op), rhs) {
             (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
               Expr(
@@ -257,7 +273,12 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
                   rhs,
                 ),
               )
-            _ => PropAssign(Var(tn), prop, BinOp(op, PropAccess(Var(rn), rprop), rhs))
+            _ =>
+              PropAssign(
+                Var(tn),
+                prop,
+                BinOp(op, PropAccess(Var(rn), rprop), rhs),
+              )
           }
         (t, v) => PropAssign(t, prop, v)
       }
@@ -297,7 +318,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
             _ => Block(tp)
           }
         }
-        UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)) => {
+        UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)) =>
           match e {
             Some(eb) => {
               let ep = peep_block(eb, ctx)
@@ -308,13 +329,13 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
             }
             None => return Empty
           }
-        }
         _ => ()
       }
       // `if (!!x) …` → `if (x) …`  (strip double negation from condition;
       // truthiness coercion makes the extra `!!` a no-op in boolean context).
       let cp = match cp_raw {
-        UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) => inner
+        UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) =>
+          inner
         _ => cp_raw
       }
       let tp = peep_block(t, ctx)
@@ -329,10 +350,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         ([Return(Some(a))], Some({ stmts: [Return(Some(b))], .. })) =>
           Return(Some(peep_expr(Cond(cp, a, b), ctx)))
         // `if (c) x = a; else x = b;` → `x = c ? a : b;`
-        (
-          [Assign(n1, a)],
-          Some({ stmts: [Assign(n2, b)], .. }),
-        ) if n1 == n2 =>
+        ([Assign(n1, a)], Some({ stmts: [Assign(n2, b)], .. })) if n1 == n2 =>
           Assign(n1, peep_expr(Cond(cp, a, b), ctx))
         // `if (c) expr_a; else expr_b;` → `c ? expr_a : expr_b;`
         ([Expr(a)], Some({ stmts: [Expr(b)], .. })) =>
@@ -342,7 +360,15 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           let coalesce_assign : @ast.TsStmt? = match cp {
             BinOp(@ast.TsBinOp::AbstractEq, @ast.TsExpr::Var(check_n), NullLit) =>
               if check_n == n {
-                Some(@ast.TsStmt::Expr(@ast.TsExpr::CompoundAssignExpr(@ast.TsExpr::Var(n), @ast.TsCompoundOp::CoalesceAssign, v)))
+                Some(
+                  @ast.TsStmt::Expr(
+                    @ast.TsExpr::CompoundAssignExpr(
+                      @ast.TsExpr::Var(n),
+                      @ast.TsCompoundOp::CoalesceAssign,
+                      v,
+                    ),
+                  ),
+                )
               } else {
                 None
               }
@@ -350,7 +376,13 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           }
           match coalesce_assign {
             Some(s) => s
-            None => @ast.TsStmt::Expr(peep_expr(BinOp(@ast.TsBinOp::And, cp, @ast.TsExpr::AssignExpr(n, v)), ctx))
+            None =>
+              @ast.TsStmt::Expr(
+                peep_expr(
+                  BinOp(@ast.TsBinOp::And, cp, @ast.TsExpr::AssignExpr(n, v)),
+                  ctx,
+                ),
+              )
           }
         }
         // `if (c) expr;` (no else) → `c && expr;` (short-circuit)
@@ -358,11 +390,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           Expr(peep_expr(BinOp(@ast.TsBinOp::And, cp, a), ctx))
         // `if (c) {} else { stmts }` → `if (!c) { stmts }` (invert + drop empty then)
         ([], Some(else_block)) =>
-          If(
-            peep_expr(UnaryOp(@ast.TsUnaryOp::Not, cp), ctx),
-            else_block,
-            None,
-          )
+          If(peep_expr(UnaryOp(@ast.TsUnaryOp::Not, cp), ctx), else_block, None)
         // `if (c) { stmts } else {}` → `if (c) { stmts }` (drop empty else)
         (_, Some({ stmts: [], .. })) => If(cp, tp, None)
         // `if (c) { if (d) { stmts } }` → `if (c && d) { stmts }`
@@ -370,7 +398,11 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         // `}` and indentation — roughly 8 bytes per merge, more in pretty mode.
         ([If(d, inner_block, None)], None) =>
           peep_stmt(
-            If(peep_expr(BinOp(@ast.TsBinOp::And, cp, d), ctx), inner_block, None),
+            If(
+              peep_expr(BinOp(@ast.TsBinOp::And, cp, d), ctx),
+              inner_block,
+              None,
+            ),
             ctx,
           )
         _ => If(cp, tp, ep)
@@ -380,7 +412,8 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       let cp_raw = peep_expr(c, ctx)
       // `while (!!x) …` → `while (x) …`  (strip double negation; same as If)
       let cp = match cp_raw {
-        UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) => inner
+        UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) =>
+          inner
         _ => cp_raw
       }
       While(cp, peep_block(body, ctx))
@@ -485,11 +518,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           }
           if is_non_fall_through {
             let if_stmt = peep_stmt(
-              If(
-                BinOp(@ast.TsBinOp::BinEq, ep, case_e),
-                case_body,
-                None,
-              ),
+              If(BinOp(@ast.TsBinOp::BinEq, ep, case_e), case_body, None),
               ctx,
             )
             if_stmt
@@ -497,7 +526,10 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
             Switch(ep, final_cases)
           }
         }
-        [{ test_expr: Some(case_e), body: case_body }, { test_expr: None, body: default_body }] => {
+        [
+          { test_expr: Some(case_e), body: case_body },
+          { test_expr: None, body: default_body },
+        ] => {
           let is_non_fall_through = match case_body.stmts.last() {
             Some(Return(_)) | Some(Throw(_)) | Some(Break(_)) => true
             _ => false
@@ -531,7 +563,10 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
                 Some(_) =>
                   match c.body.stmts.last() {
                     Some(Return(_)) | Some(Throw(_)) | Some(Break(_)) => ()
-                    _ => { ok = false; break }
+                    _ => {
+                      ok = false
+                      break
+                    }
                   }
                 None => () // default — no terminator required
               }
@@ -565,10 +600,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
                 If(BinOp(@ast.TsBinOp::BinEq, ep, test_e), c.body, else_block),
                 ctx,
               )
-              else_block = Some({
-                stmts: [new_if],
-                stmt_positions: [],
-              })
+              else_block = Some({ stmts: [new_if], stmt_positions: [] })
               i = i - 1
             }
             match else_block {
@@ -592,7 +624,11 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // ES2019 optional catch binding is supported by all modern runtimes.
       let bnd_p = match (bnd, cb_p) {
         (Some(@ast.TsBinding::Ident(name)), Some(catch_blk)) =>
-          if block_references_name(catch_blk, name) { bnd } else { None }
+          if block_references_name(catch_blk, name) {
+            bnd
+          } else {
+            None
+          }
         _ => bnd
       }
       Try(
@@ -609,10 +645,8 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     Block(b) => Block(peep_block(b, ctx))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({
-          ..f,
-          body: elim_ctor_void_inits(peep_block(f.body, ctx)),
-        })
+        Some(f) =>
+          Some({ ..f, body: elim_ctor_void_inits(peep_block(f.body, ctx)) })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -632,7 +666,12 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         None => None
       }
       NativeClassStmt(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
@@ -655,14 +694,14 @@ fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
       PropAssign(
         @ast.TsExpr::Var("this"),
         p,
-        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
       )
       | Expr(
         @ast.TsExpr::PropAssignExpr(
           @ast.TsExpr::Var("this"),
           p,
-          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
-        ),
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
+        )
       ) => void_inits[p] = i
       _ => ()
     }
@@ -680,15 +719,15 @@ fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
         PropAssign(
           @ast.TsExpr::Var("this"),
           q,
-          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
         ) => q == p // another void-0: update the "latest init" index instead
         PropAssign(@ast.TsExpr::Var("this"), q, _) => q == p
         Expr(
           @ast.TsExpr::PropAssignExpr(
             @ast.TsExpr::Var("this"),
             q,
-            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
-          ),
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
+          )
         ) => q == p
         Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), q, _)) =>
           q == p
@@ -710,7 +749,7 @@ fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
     }
     stmts.push(s)
   }
-  { ..block, stmts }
+  { ..block, stmts, }
 }
 
 ///|
@@ -737,7 +776,9 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
     // `stmts` spliced inline. Saves the `else ` keyword (5 bytes) and the
     // braces (2 bytes) for every such pattern.
     match ps {
-      If(cond, then_block, Some(else_block)) if block_ends_with_terminator(then_block) => {
+      If(cond, then_block, Some(else_block)) if block_ends_with_terminator(
+          then_block,
+        ) => {
         stmts.push(If(cond, then_block, None))
         for es in else_block.stmts {
           stmts.push(es)
@@ -759,14 +800,14 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
         PropAssign(
           @ast.TsExpr::Var("this"),
           _,
-          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
         ) => true
         Expr(
           @ast.TsExpr::PropAssignExpr(
             @ast.TsExpr::Var("this"),
             _,
-            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
-          ),
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _)
+          )
         ) => true
         _ => false
       }
@@ -774,7 +815,8 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
     let this_prop_name = fn(s : @ast.TsStmt) -> String? {
       match s {
         PropAssign(@ast.TsExpr::Var("this"), p, _) => Some(p)
-        Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), p, _)) => Some(p)
+        Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), p, _)) =>
+          Some(p)
         _ => None
       }
     }
@@ -934,7 +976,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             // `"undefined" === typeof x` → `x === void 0`
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
-              BinOp(@ast.TsBinOp::BinEq, x, UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)))
+              BinOp(
+                @ast.TsBinOp::BinEq,
+                x,
+                UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
+              )
             // `x === true` / `x === !0` → `x`  (saves 7 bytes; x is already boolean)
             (x, BoolLit(true))
             | (BoolLit(true), x)
@@ -967,7 +1013,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             // `typeof x !== "undefined"` → `x !== void 0`  (saves ~9 bytes)
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
-              BinOp(@ast.TsBinOp::BinNe, x, UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)))
+              BinOp(
+                @ast.TsBinOp::BinNe,
+                x,
+                UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
+              )
             // `x !== true` / `x !== !0` → `!x`  (saves 6 bytes)
             (x, BoolLit(true))
             | (BoolLit(true), x)
@@ -1050,8 +1100,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       match inner_p {
         BinOp(@ast.TsBinOp::BinEq, a, b) => BinOp(@ast.TsBinOp::BinNe, a, b)
         BinOp(@ast.TsBinOp::BinNe, a, b) => BinOp(@ast.TsBinOp::BinEq, a, b)
-        BinOp(@ast.TsBinOp::AbstractEq, a, b) => BinOp(@ast.TsBinOp::AbstractNe, a, b)
-        BinOp(@ast.TsBinOp::AbstractNe, a, b) => BinOp(@ast.TsBinOp::AbstractEq, a, b)
+        BinOp(@ast.TsBinOp::AbstractEq, a, b) =>
+          BinOp(@ast.TsBinOp::AbstractNe, a, b)
+        BinOp(@ast.TsBinOp::AbstractNe, a, b) =>
+          BinOp(@ast.TsBinOp::AbstractEq, a, b)
         BinOp(@ast.TsBinOp::BinLt, a, b) => BinOp(@ast.TsBinOp::BinGe, a, b)
         BinOp(@ast.TsBinOp::BinLe, a, b) => BinOp(@ast.TsBinOp::BinGt, a, b)
         BinOp(@ast.TsBinOp::BinGt, a, b) => BinOp(@ast.TsBinOp::BinLe, a, b)
@@ -1113,17 +1165,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         (
           UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)),
           UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)),
-        ) =>
-          UnaryOp(
-            @ast.TsUnaryOp::Not,
-            UnaryOp(@ast.TsUnaryOp::Not, cp),
-          )
+        ) => UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, cp))
         // `c ? !1 : !0` → `!c` (c ? false : true).
         (
           UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)),
           UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)),
-        ) =>
-          UnaryOp(@ast.TsUnaryOp::Not, cp)
+        ) => UnaryOp(@ast.TsUnaryOp::Not, cp)
         // `x != null ? x : y` → `x ?? y` (nullish coalescing, saves ~8 bytes).
         // After `x!==null&&x!==undefined` → `x!=null`, this pattern is common
         // in TypeScript generated code for default-value patterns.
@@ -1310,7 +1357,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       let recv_p = peep_expr(recv, ctx)
       // `Number.parseInt(x)` → `parseInt(x)` (saves 7 bytes; same function per spec)
       // `Number.parseFloat(x)` → `parseFloat(x)` (saves 7 bytes; same function)
-      if (m == "parseInt" || m == "parseFloat") {
+      if m == "parseInt" || m == "parseFloat" {
         match recv_p {
           Var("Number") => return Call(m, new_args)
           _ => ()
@@ -1319,7 +1366,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `Math.pow(x, y)` → `x**y` (saves up to 8 bytes)
       if m == "pow" && new_args.length() == 2 {
         match recv_p {
-          Var("Math") => return BinOp(@ast.TsBinOp::Pow, new_args[0], new_args[1])
+          Var("Math") =>
+            return BinOp(@ast.TsBinOp::Pow, new_args[0], new_args[1])
           _ => ()
         }
       }
@@ -1327,8 +1375,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // two-arg form has a map function and must be left alone).
       if m == "from" && new_args.length() == 1 {
         match recv_p {
-          Var("Array") =>
-            return ArrayLit([Spread(new_args[0])])
+          Var("Array") => return ArrayLit([Spread(new_args[0])])
           _ => ()
         }
       }
@@ -1336,14 +1383,19 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `Array.prototype.slice.call(x, 0)` → `[...x]` (saves ~24 bytes).
       // This pattern converts array-likes (arguments, NodeLists) to
       // real arrays. Spread is semantically equivalent for iterable inputs.
-      if m == "call" && (new_args.length() == 1 ||
-        (new_args.length() == 2 && exprs_eq(new_args[1], @ast.TsExpr::IntLit(0)))) {
+      if m == "call" &&
+        (
+          new_args.length() == 1 ||
+          (
+            new_args.length() == 2 &&
+            exprs_eq(new_args[1], @ast.TsExpr::IntLit(0))
+          )
+        ) {
         match recv_p {
           PropAccess(
             PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
-            "slice",
-          ) =>
-            return ArrayLit([Spread(new_args[0])])
+            "slice"
+          ) => return ArrayLit([Spread(new_args[0])])
           _ => ()
         }
       }
@@ -1358,7 +1410,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         match recv_p {
           PropAccess(
             PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
-            method_name,
+            method_name
           ) if method_name != "slice" => {
             // Rewrite to `new_args[0].method_name(new_args[1..])`.
             let rest : Array[@ast.TsExpr] = []
@@ -1379,7 +1431,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         let is_hasown_recv = match recv_p {
           PropAccess(
             PropAccess(@ast.TsExpr::Var("Object"), "prototype"),
-            "hasOwnProperty",
+            "hasOwnProperty"
           ) => true
           PropAccess(@ast.TsExpr::ObjectLit([]), "hasOwnProperty") => true
           _ => false
@@ -1406,7 +1458,9 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               entries.push(ie)
             }
             for i, a in new_args {
-              if i == 0 { continue }
+              if i == 0 {
+                continue
+              }
               match a {
                 ObjectLit(ents) =>
                   for e in ents {
@@ -1460,7 +1514,9 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         if is_null_this {
           let rest_args : Array[@ast.TsExpr] = []
           for i, a in new_args {
-            if i == 0 { continue }
+            if i == 0 {
+              continue
+            }
             rest_args.push(a)
           }
           return CallExpr(recv_p, rest_args)
@@ -1482,7 +1538,9 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `arr.slice(0)` → `[...arr]` (saves ~5 bytes; shallow copy of array).
       // Only the single-arg form with literal 0 (from-start copy); multi-arg
       // and non-zero-start forms can't be simplified to a spread.
-      if m == "slice" && new_args.length() == 1 && exprs_eq(new_args[0], @ast.TsExpr::IntLit(0)) {
+      if m == "slice" &&
+        new_args.length() == 1 &&
+        exprs_eq(new_args[0], @ast.TsExpr::IntLit(0)) {
         return ArrayLit([Spread(recv_p)])
       }
       // `x.toString()` → `""+x`  (saves ~9 bytes; same as String(x)).
@@ -1503,11 +1561,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         // `[...a, ...[1,2,3], ...b]` → `[...a, 1, 2, 3, ...b]`
         // Flatten spreads of literal arrays in-place.
         match ip {
-          @ast.TsExpr::Spread(@ast.TsExpr::ArrayLit(inner)) => {
+          @ast.TsExpr::Spread(@ast.TsExpr::ArrayLit(inner)) =>
             for e in inner {
               new_items.push(e)
             }
-          }
           _ => new_items.push(ip)
         }
       }
@@ -1570,7 +1627,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `x.prop = x.prop OP y` → `x.prop OP= y` (and `x.prop = x.prop + 1` → `x.prop++`).
       // Only fold when receiver is a bare Var (no double evaluation).
       match (recv_p, v_p) {
-        (Var(tn), BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rp), rhs)) if tn == rn && p == rp =>
+        (
+          Var(tn),
+          BinOp(op, @ast.TsExpr::PropAccess(@ast.TsExpr::Var(rn), rp), rhs),
+        ) if tn == rn && p == rp =>
           match (compound_for_binop(op), rhs) {
             (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
               UnaryOp(@ast.TsUnaryOp::PostInc, PropAccess(Var(tn), p))
@@ -1578,7 +1638,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               UnaryOp(@ast.TsUnaryOp::PostDec, PropAccess(Var(tn), p))
             (Some(cop), _) =>
               CompoundAssignExpr(PropAccess(Var(tn), p), cop, rhs)
-            _ => PropAssignExpr(Var(tn), p, BinOp(op, PropAccess(Var(rn), rp), rhs))
+            _ =>
+              PropAssignExpr(
+                Var(tn),
+                p,
+                BinOp(op, PropAccess(Var(rn), rp), rhs),
+              )
           }
         (t, v) => PropAssignExpr(t, p, v)
       }
@@ -1593,7 +1658,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         (
           Var(tn),
           Var(ik),
-          BinOp(op, @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)), rhs),
+          BinOp(
+            op,
+            @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(rn), @ast.TsExpr::Var(rk)),
+            rhs
+          ),
         ) if tn == rn && ik == rk =>
           match (compound_for_binop(op), rhs) {
             (Some(AddAssign), @ast.TsExpr::IntLit(1)) =>
@@ -1603,7 +1672,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             (Some(cop), _) =>
               CompoundAssignExpr(IndexAccess(Var(tn), Var(ik)), cop, rhs)
             _ =>
-              IndexAssignExpr(Var(tn), Var(ik), BinOp(op, IndexAccess(Var(rn), Var(rk)), rhs))
+              IndexAssignExpr(
+                Var(tn),
+                Var(ik),
+                BinOp(op, IndexAccess(Var(rn), Var(rk)), rhs),
+              )
           }
         (t, i, v) => IndexAssignExpr(t, i, v)
       }
@@ -1669,11 +1742,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `` `text` `` → `"text"` (no interpolations; saves 2 bytes for the backticks).
       if new_exprs.length() == 0 && parts.length() == 1 {
         StringLit(parts[0])
-      // Single-interpolation templates with empty suffix save 2 bytes over
-      // string concatenation. Only the suffix-empty case is shorter:
-      //   `` `${x}` ``       → `""+x`       (saves 2 bytes; empty prefix+suffix)
-      //   `` `prefix${x}` `` → `"prefix"+x`  (saves 2 bytes; non-empty prefix OK)
-      // Suffix-non-empty forms are NOT shorter: `` `${x}s` `` = `""+x+"s"` (same or longer).
+        // Single-interpolation templates with empty suffix save 2 bytes over
+        // string concatenation. Only the suffix-empty case is shorter:
+        //   `` `${x}` ``       → `""+x`       (saves 2 bytes; empty prefix+suffix)
+        //   `` `prefix${x}` `` → `"prefix"+x`  (saves 2 bytes; non-empty prefix OK)
+        // Suffix-non-empty forms are NOT shorter: `` `${x}s` `` = `""+x+"s"` (same or longer).
       } else if new_exprs.length() == 1 && parts.length() == 2 && parts[1] == "" {
         BinOp(@ast.TsBinOp::Add, StringLit(parts[0]), new_exprs[0])
       } else {
@@ -1686,10 +1759,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     OptionalChain(inner) => OptionalChain(peep_expr(inner, ctx))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({
-          ..f,
-          body: elim_ctor_void_inits(peep_block(f.body, ctx)),
-        })
+        Some(f) =>
+          Some({ ..f, body: elim_ctor_void_inits(peep_block(f.body, ctx)) })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -1709,7 +1780,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         None => None
       }
       NativeClassExpr(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
@@ -1842,15 +1918,11 @@ fn binding_contains_undefined(binding : @ast.TsBinding) -> Bool {
   }
 }
 
-
 ///|
 /// Given one side of a `===` / `!==` check, return `(checked_expr, is_null)`
 /// where `is_null` is true for `null` (vs `void 0` for undefined).
 /// Returns `None` when neither operand is a null/undefined sentinel.
-fn extract_null_check(
-  a : @ast.TsExpr,
-  b : @ast.TsExpr,
-) -> (@ast.TsExpr, Bool)? {
+fn extract_null_check(a : @ast.TsExpr, b : @ast.TsExpr) -> (@ast.TsExpr, Bool)? {
   match b {
     @ast.TsExpr::NullLit => Some((a, true))
     @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, @ast.TsExpr::IntLit(0)) =>
@@ -1869,10 +1941,7 @@ fn extract_null_check(
 /// `x === null || x === void 0` → `x == null`
 /// Only applies when the checked expression is a simple variable reference
 /// (safe to duplicate / no side effects).
-fn fold_null_undef_or(
-  l : @ast.TsExpr,
-  r : @ast.TsExpr,
-) -> @ast.TsExpr? {
+fn fold_null_undef_or(l : @ast.TsExpr, r : @ast.TsExpr) -> @ast.TsExpr? {
   match (l, r) {
     (
       @ast.TsExpr::BinOp(@ast.TsBinOp::BinEq, la, lb),
@@ -1906,10 +1975,7 @@ fn fold_null_undef_or(
 
 ///|
 /// `x !== null && x !== void 0` → `x != null`
-fn fold_null_undef_and(
-  l : @ast.TsExpr,
-  r : @ast.TsExpr,
-) -> @ast.TsExpr? {
+fn fold_null_undef_and(l : @ast.TsExpr, r : @ast.TsExpr) -> @ast.TsExpr? {
   match (l, r) {
     (
       @ast.TsExpr::BinOp(@ast.TsBinOp::BinNe, la, lb),
@@ -1943,10 +2009,7 @@ fn fold_null_undef_and(
 /// TypeScript emits `&&` chains for optional access when targeting
 /// older ES versions (pre-ES2020). Only folds bare-Var guards whose
 /// rhs receiver is the same name.
-fn fold_and_optional_chain(
-  lp : @ast.TsExpr,
-  rp : @ast.TsExpr
-) -> @ast.TsExpr {
+fn fold_and_optional_chain(lp : @ast.TsExpr, rp : @ast.TsExpr) -> @ast.TsExpr {
   match lp {
     @ast.TsExpr::Var(guard_n) =>
       match rp {

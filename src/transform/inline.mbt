@@ -248,7 +248,12 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
         None => None
       }
       NativeClassStmt(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
@@ -390,7 +395,12 @@ fn inline_into_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         None => None
       }
       NativeClassExpr(
-        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
@@ -611,7 +621,12 @@ fn substitute_stmt(
         new_static_fields.push((sf.0, substitute_expr(sf.1, name, rhs)))
       }
       NativeClassStmt(
-        { ..decl, base_expr: new_base, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
@@ -804,7 +819,12 @@ fn substitute_expr(
         new_static_fields.push((sf.0, substitute_expr(sf.1, name, rhs)))
       }
       NativeClassExpr(
-        { ..decl, base_expr: new_base, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }

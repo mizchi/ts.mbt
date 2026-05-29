@@ -639,7 +639,14 @@ fn ScopeFrame::new_root(reserved : Map[String, Bool]) -> ScopeFrame {
     let (n, _) = entry
     used[n] = true
   }
-  { parent: None, renames: {}, used, counter: 0, reserved, is_function_scope: false }
+  {
+    parent: None,
+    renames: {},
+    used,
+    counter: 0,
+    reserved,
+    is_function_scope: false,
+  }
 }
 
 ///|
@@ -720,7 +727,10 @@ fn ScopeFrame::function_child(
 ///|
 /// Collect all `Var(name)` references in `block`, not descending into
 /// nested function / arrow bodies (they have independent scopes).
-fn collect_var_refs_block(block : @ast.TsBlock, out : Map[String, Bool]) -> Unit {
+fn collect_var_refs_block(
+  block : @ast.TsBlock,
+  out : Map[String, Bool],
+) -> Unit {
   for s in block.stmts {
     collect_var_refs_stmt(s, out)
   }
@@ -729,7 +739,8 @@ fn collect_var_refs_block(block : @ast.TsBlock, out : Map[String, Bool]) -> Unit
 ///|
 fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
   match stmt {
-    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => collect_var_refs_expr(e, out)
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
+      collect_var_refs_expr(e, out)
     Assign(_, e) => collect_var_refs_expr(e, out)
     CompoundAssign(_, _, e) => collect_var_refs_expr(e, out)
     IndexAssign(t, k, v) => {
@@ -817,10 +828,15 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_var_refs_expr(b, out)
     }
     UnaryOp(_, e) => collect_var_refs_expr(e, out)
-    Call(_, args) => for a in args { collect_var_refs_expr(a, out) }
+    Call(_, args) =>
+      for a in args {
+        collect_var_refs_expr(a, out)
+      }
     CallExpr(f, args) => {
       collect_var_refs_expr(f, out)
-      for a in args { collect_var_refs_expr(a, out) }
+      for a in args {
+        collect_var_refs_expr(a, out)
+      }
     }
     Cond(c, t, f) => {
       collect_var_refs_expr(c, out)
@@ -828,9 +844,14 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_var_refs_expr(f, out)
     }
     ArrayLit(elems) =>
-      for e in elems { collect_var_refs_expr(e, out) }
+      for e in elems {
+        collect_var_refs_expr(e, out)
+      }
     Spread(e) => collect_var_refs_expr(e, out)
-    ObjectLit(pairs) => for pair in pairs { collect_var_refs_expr(pair.1, out) }
+    ObjectLit(pairs) =>
+      for pair in pairs {
+        collect_var_refs_expr(pair.1, out)
+      }
     ComputedProp(k, v) => {
       collect_var_refs_expr(k, out)
       collect_var_refs_expr(v, out)
@@ -840,14 +861,21 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_var_refs_expr(k, out)
     }
     PropAccess(t, _) => collect_var_refs_expr(t, out)
-    New(_, args) => for a in args { collect_var_refs_expr(a, out) }
+    New(_, args) =>
+      for a in args {
+        collect_var_refs_expr(a, out)
+      }
     NewExpr(c, args) => {
       collect_var_refs_expr(c, out)
-      for a in args { collect_var_refs_expr(a, out) }
+      for a in args {
+        collect_var_refs_expr(a, out)
+      }
     }
     MethodCall(t, _, args) => {
       collect_var_refs_expr(t, out)
-      for a in args { collect_var_refs_expr(a, out) }
+      for a in args {
+        collect_var_refs_expr(a, out)
+      }
     }
     AssignExpr(_, e) => collect_var_refs_expr(e, out)
     AssignPattern(_, e) => collect_var_refs_expr(e, out)
@@ -877,11 +905,16 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
     DynamicImport(e, _) => collect_var_refs_expr(e, out)
     TaggedTemplate(tag, _, _, exprs) => {
       collect_var_refs_expr(tag, out)
-      for e in exprs { collect_var_refs_expr(e, out) }
+      for e in exprs {
+        collect_var_refs_expr(e, out)
+      }
     }
-    TemplateLiteral(_, exprs) => for e in exprs { collect_var_refs_expr(e, out) }
-    As(e, _) | Satisfies(e, _) | NonNull(e) | PureCall(e) |
-    OptionalChain(e) => collect_var_refs_expr(e, out)
+    TemplateLiteral(_, exprs) =>
+      for e in exprs {
+        collect_var_refs_expr(e, out)
+      }
+    As(e, _) | Satisfies(e, _) | NonNull(e) | PureCall(e) | OptionalChain(e) =>
+      collect_var_refs_expr(e, out)
     NativeClassExpr(_, _) => ()
     JsxElement(_, attrs, children) => {
       for attr in attrs {
@@ -890,10 +923,19 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
           None => ()
         }
       }
-      for c in children { collect_var_refs_expr(c, out) }
+      for c in children {
+        collect_var_refs_expr(c, out)
+      }
     }
-    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_) |
-    NullLit | ArrayHole | ImportMeta | Yield(None) => ()
+    NumberLit(_)
+    | IntLit(_)
+    | BigIntLit(_)
+    | BoolLit(_)
+    | StringLit(_)
+    | NullLit
+    | ArrayHole
+    | ImportMeta
+    | Yield(None) => ()
   }
 }
 
@@ -1132,10 +1174,7 @@ fn collect_top_level_decls(
       | Const(@ast.TsBinding::Ident(n), _, _) => out[n] = true
       Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
         collect_binding_names(b, out)
-      NativeClassStmt(decl, _) =>
-        if decl.name != "" {
-          out[decl.name] = true
-        }
+      NativeClassStmt(decl, _) => if decl.name != "" { out[decl.name] = true }
       _ => ()
     }
   }
