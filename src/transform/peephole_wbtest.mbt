@@ -695,3 +695,21 @@ test "peephole: Math.pow(x, y) folds to x**y" {
   assert_true(out.contains("**"), msg="expected **, got: \{out}")
   assert_false(out.contains("Math.pow"), msg="expected no Math.pow, got: \{out}")
 }
+
+///|
+test "peephole: this.prop = void 0; this.prop = val; → this.prop = val;" {
+  let out = peep_one("function ctor(x){this.x=void 0;this.x=x}")
+  assert_false(out.contains("void 0"), msg="expected no void 0, got: \{out}")
+  // peep_one uses pretty mode, so assignment appears with spaces
+  assert_true(out.contains("this.x"), msg="expected this.x assignment, got: \{out}")
+}
+
+///|
+test "peephole: multi-field class drops all void-0 field initializers" {
+  let out = peep_one(
+    "function Foo(x,y){this.x=void 0;this.y=void 0;this.x=x;this.y=y}"
+  )
+  assert_false(out.contains("void 0"), msg="expected no void 0, got: \{out}")
+  assert_true(out.contains("this.x"), msg="expected this.x, got: \{out}")
+  assert_true(out.contains("this.y"), msg="expected this.y, got: \{out}")
+}

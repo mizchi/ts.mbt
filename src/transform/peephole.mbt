@@ -29,6 +29,7 @@
 //   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
+//   this.x=void 0;…;this.x=val  -> this.x=val  (drop TS class-field placeholders)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -378,6 +379,66 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
         continue
       }
       _ => ()
+    }
+    // `this.prop = void 0; …; this.prop = value;` → drop the void-0 init.
+    // TypeScript class field initializers emit `this.x = void 0` as a
+    // placeholder before the constructor body assigns the real value.
+    // Scan backwards through already-emitted statements to find a
+    // matching void-0 init and remove it in-place.
+    // The parser emits `Expr(PropAssignExpr(...))` in regular function bodies
+    // and `PropAssign(...)` in class-desugared IIFE bodies — handle both.
+    let this_prop_is_void_free = fn(s : @ast.TsStmt) -> Bool {
+      // Returns true when `s` assigns `void 0` to a property of `this`.
+      match s {
+        PropAssign(
+          @ast.TsExpr::Var("this"),
+          _,
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+        ) => true
+        Expr(
+          @ast.TsExpr::PropAssignExpr(
+            @ast.TsExpr::Var("this"),
+            _,
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+          ),
+        ) => true
+        _ => false
+      }
+    }
+    let this_prop_name = fn(s : @ast.TsStmt) -> String? {
+      match s {
+        PropAssign(@ast.TsExpr::Var("this"), p, _) => Some(p)
+        Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), p, _)) => Some(p)
+        _ => None
+      }
+    }
+    match this_prop_name(ps) {
+      Some(prop2) => {
+        // Look for an earlier `this.prop2 = void 0` in the already-emitted
+        // stmts and remove it. Only safe if the value was `void 0` (not a
+        // real expression that would have side effects when dropped).
+        let mut i = stmts.length()
+        while i > 0 {
+          i = i - 1
+          match this_prop_name(stmts[i]) {
+            Some(p) if p == prop2 => {
+              if this_prop_is_void_free(stmts[i]) {
+                // Remove the void-0 initializer.
+                stmts.remove(i) |> ignore
+              }
+              // Whether we removed it or not, stop searching — found
+              // a prior assignment to this property.
+              break
+            }
+            // A different this.prop assignment — keep searching backwards.
+            Some(_) => ()
+            // Something else (control flow, other stmt) — stop searching,
+            // we can't safely remove an earlier initializer.
+            None => break
+          }
+        }
+      }
+      None => ()
     }
     stmts.push(ps)
     match ps {
