@@ -26,6 +26,7 @@
 //   x!==null&&x!==void 0  -> x!=null
 //   Number(x)             -> +x        (saves up to 6 bytes)
 //   Boolean(x)            -> !!x       (saves up to 4 bytes)
+//   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -592,7 +593,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       for a in args {
         new_args.push(peep_expr(a, ctx))
       }
-      MethodCall(peep_expr(recv, ctx), m, new_args)
+      let recv_p = peep_expr(recv, ctx)
+      // `Math.pow(x, y)` → `x**y` (saves up to 8 bytes)
+      if m == "pow" && new_args.length() == 2 {
+        match recv_p {
+          Var("Math") => return BinOp(@ast.TsBinOp::Pow, new_args[0], new_args[1])
+          _ => ()
+        }
+      }
+      MethodCall(recv_p, m, new_args)
     }
     PropAccess(recv, p) => PropAccess(peep_expr(recv, ctx), p)
     IndexAccess(recv, idx) =>
@@ -999,7 +1008,7 @@ fn fold_null_undef_and(
 /// `!!(expr)` → `expr` peephole to strip redundant double-negation.
 fn is_bool_expr(e : @ast.TsExpr) -> Bool {
   match e {
-    @ast.TsExpr::BinOp(op, _, _) =>
+    @ast.TsExpr::BinOp(op, l, r) =>
       match op {
         @ast.TsBinOp::BinEq
         | @ast.TsBinOp::BinNe
@@ -1011,6 +1020,9 @@ fn is_bool_expr(e : @ast.TsExpr) -> Bool {
         | @ast.TsBinOp::BinGe
         | @ast.TsBinOp::Instanceof
         | @ast.TsBinOp::In => true
+        // `a && b` and `a || b` are boolean when both operands are boolean.
+        @ast.TsBinOp::And | @ast.TsBinOp::Or =>
+          is_bool_expr(l) && is_bool_expr(r)
         _ => false
       }
     @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Not, _) => true

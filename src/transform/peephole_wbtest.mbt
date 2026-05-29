@@ -688,3 +688,10 @@ test "peephole: three-way if chain collapses to nested ternary" {
   // Should not have any if statements remaining
   assert_false(out.contains("if"), msg="expected no if, got: \{out}")
 }
+
+///|
+test "peephole: Math.pow(x, y) folds to x**y" {
+  let out = peep_one("const r = Math.pow(x, 2);")
+  assert_true(out.contains("**"), msg="expected **, got: \{out}")
+  assert_false(out.contains("Math.pow"), msg="expected no Math.pow, got: \{out}")
+}
