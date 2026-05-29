@@ -909,6 +909,10 @@ fn collect_top_level_decls(
       | Const(@ast.TsBinding::Ident(n), _, _) => out[n] = true
       Var(b, _, _) | Let(b, _, _) | Const(b, _, _) =>
         collect_binding_names(b, out)
+      NativeClassStmt(decl, _) =>
+        if decl.name != "" {
+          out[decl.name] = true
+        }
       _ => ()
     }
   }
