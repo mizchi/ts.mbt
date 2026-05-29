@@ -1092,3 +1092,10 @@ test "peephole: catch(e) where e is used → binding kept" {
   let out = minify_one("try { x(); } catch (e) { console.log(e); }")
   assert_true(out.contains("catch("), msg="expected catch binding kept, got: \{out}")
 }
+
+///|
+test "peephole: template literal with prefix and no suffix → string concat" {
+  let out = minify_one("const r = `prefix${x}`;")
+  assert_false(out.contains("`"), msg="expected no backticks, got: \{out}")
+  assert_true(out.contains("\"prefix\"+x") || out.contains("'prefix'+x"), msg="expected string concat, got: \{out}")
+}

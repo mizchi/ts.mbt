@@ -30,7 +30,8 @@
 //   Array.from(x)         -> [...x]    (saves ~6 bytes; single-arg only)
 //   Array.prototype.slice.call(x) -> [...x]  (saves ~21 bytes)
 //   String(x)             -> ""+x      (saves up to 5 bytes)
-//   `${x}`                -> ""+x      (saves 2 bytes; single interpolation only)
+//   `${x}`                -> ""+x      (saves 2 bytes; empty prefix+suffix)
+//   `prefix${x}`          -> "prefix"+x (saves 2 bytes; non-empty prefix OK)
 //   Object.assign({},a,b)     -> {...a,...b}     (saves ~12 bytes)
 //   Object.assign({x:1},a,b) -> {x:1,...a,...b}  (literal target also safe)
 //   new Array(0) / new Array() -> []    (saves up to 11 bytes)
@@ -1252,11 +1253,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `` `text` `` → `"text"` (no interpolations; saves 2 bytes for the backticks).
       if new_exprs.length() == 0 && parts.length() == 1 {
         StringLit(parts[0])
-      // `` `${x}` `` → `""+x` (saves 2 bytes; single interpolation with
-      // empty prefix and suffix). More than one interpolation keeps the
-      // template form since it's typically shorter.
-      } else if new_exprs.length() == 1 && parts.length() == 2 && parts[0] == "" && parts[1] == "" {
-        BinOp(@ast.TsBinOp::Add, StringLit(""), new_exprs[0])
+      // Single-interpolation templates with empty suffix save 2 bytes over
+      // string concatenation. Only the suffix-empty case is shorter:
+      //   `` `${x}` ``       → `""+x`       (saves 2 bytes; empty prefix+suffix)
+      //   `` `prefix${x}` `` → `"prefix"+x`  (saves 2 bytes; non-empty prefix OK)
+      // Suffix-non-empty forms are NOT shorter: `` `${x}s` `` = `""+x+"s"` (same or longer).
+      } else if new_exprs.length() == 1 && parts.length() == 2 && parts[1] == "" {
+        BinOp(@ast.TsBinOp::Add, StringLit(parts[0]), new_exprs[0])
       } else {
         TemplateLiteral(parts, new_exprs)
       }
