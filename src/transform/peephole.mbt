@@ -82,6 +82,7 @@
 //   x !== false                 -> x            (saves 7 bytes)
 //   Object.prototype.hasOwnProperty.call(o,k) -> Object.hasOwn(o,k)  (saves ~22 bytes; ES2022)
 //   x.hasOwnProperty(k)                       -> Object.hasOwn(x,k)  (saves ~8 bytes; ES2022)
+//   c ? expr : void 0           -> c && expr    (saves ~7 bytes; short-circuit form)
 //   Array.prototype.METHOD.call(arr, args) -> arr.METHOD(args)  (saves ~22 bytes)
 //   x.toString()                -> ""+x         (saves ~9 bytes; same as String(x))
 //   (0, fn)(args)               -> fn(args)      (saves 4 bytes; indirect call in ESM is redundant)
@@ -1075,6 +1076,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               match (t_val, e_val) {
                 (AssignExpr(n1, v1), AssignExpr(n2, v2)) if n1 == n2 =>
                   AssignExpr(n1, peep_expr(Cond(cp, v1, v2), ctx))
+                // `c ? expr : void 0` → `c && expr`  (saves ~7 bytes).
+                // When the else-branch is undefined/void the ternary is
+                // equivalent to a short-circuit `&&`. The `!x ? b : a`
+                // flip already turns `c ? void 0 : expr` into `!c ? expr : void 0`
+                // which then lands here.
+                (t_expr, UnaryOp(@ast.TsUnaryOp::Void, _)) =>
+                  BinOp(@ast.TsBinOp::And, cp, t_expr)
                 _ => Cond(cp, t_val, e_val)
               }
           }

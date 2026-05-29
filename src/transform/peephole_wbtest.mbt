@@ -1255,3 +1255,10 @@ test "peephole: Array.prototype.METHOD.call(arr, ...) → arr.METHOD(...)" {
   assert_false(out.contains("Array.prototype"), msg="expected no Array.prototype, got: \{out}")
   assert_true(out.contains("arr.forEach("), msg="expected arr.forEach(), got: \{out}")
 }
+
+///|
+test "peephole: c ? expr : void 0 → c && expr" {
+  let out = minify_one("const a = x > 0 ? doSomething(x) : undefined;")
+  assert_false(out.contains("void 0") || out.contains("undefined"), msg="expected no void 0, got: \{out}")
+  assert_true(out.contains("&&"), msg="expected && operator, got: \{out}")
+}
