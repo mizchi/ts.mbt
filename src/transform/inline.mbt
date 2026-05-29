@@ -84,7 +84,17 @@ pub fn inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
       }
     }
   }
-  inline_pass(flattened, flat_positions)
+  // Run inline_pass to fixpoint: chained decls (`const a = rhs; const b = f(a); use(b)`)
+  // need two passes — first to inline `a` into `b`, then to inline `b` into `use(b)`.
+  // Each pass either reduces the statement count or makes no progress, so the loop
+  // terminates in O(chain_length) iterations, typically 2–3.
+  let mut cur = inline_pass(flattened, flat_positions)
+  let mut prev_len = flattened.length()
+  while cur.stmts.length() < prev_len {
+    prev_len = cur.stmts.length()
+    cur = inline_pass(cur.stmts, cur.stmt_positions)
+  }
+  cur
 }
 
 ///|

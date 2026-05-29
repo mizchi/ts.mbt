@@ -73,3 +73,15 @@ test "inline: nested function body is inlined recursively" {
   // The wrapped fn's body should have its `y` folded too.
   assert_true(out.contains("return (x + 1) * 2"))
 }
+
+///|
+test "inline: chained single-use decls collapse in one call" {
+  // Two consecutive single-use bindings: `a` inlines into `b`, then
+  // `b` inlines into the return — both in a single `inline_block` call.
+  let out = inline_one(
+    "function f(x) { const a = x + 1; const b = a * 2; return b; }\n",
+  )
+  assert_false(out.contains("const a"))
+  assert_false(out.contains("const b"))
+  assert_true(out.contains("return (x + 1) * 2"))
+}
