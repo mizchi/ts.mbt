@@ -2181,3 +2181,46 @@ test "bundler: export * as ns treeshake drops unused top-level decls" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "type_fold: typeof unannotated literal binding folds typeof check" {
+  // `const x = 42` has no annotation, but type_fold should infer Number
+  // from the RHS literal so that `typeof x === "number"` folds to `true`.
+  let src =
+    #|const x = 42;
+    #|if (typeof x === "number") {
+    #|  console.log("yes");
+    #|} else {
+    #|  console.log("no");
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type_fold: typeof string literal binding folds typeof check" {
+  // `const s = "hello"` — infer String_ from RHS so typeof folds.
+  let src =
+    #|const s = "hello";
+    #|if (typeof s === "string") {
+    #|  console.log("yes");
+    #|} else {
+    #|  console.log("no");
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

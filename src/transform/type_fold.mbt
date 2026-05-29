@@ -341,8 +341,19 @@ fn type_fold_stmt(
       let new_init = type_fold_expr(e, scope)
       // Record the binding's type if it's a simple identifier
       // and the annotation is one we can reason about.
+      // When there's no annotation (Any), infer from the RHS literal.
       match b {
-        @ast.TsBinding::Ident(name) => if is_useful_type(t) { scope[name] = t }
+        @ast.TsBinding::Ident(name) => {
+          let effective_type = if is_useful_type(t) {
+            t
+          } else {
+            infer_type_from_literal(new_init)
+          }
+          match effective_type {
+            @ast.TsType::Any => ()
+            ty => scope[name] = ty
+          }
+        }
         _ => ()
       }
       match stmt {
@@ -734,6 +745,19 @@ fn is_useful_type(ty : @ast.TsType) -> Bool {
       true
     }
     _ => false
+  }
+}
+
+///|
+/// Infer a primitive TsType from an RHS literal expression.
+/// Returns `Any` for non-literals so callers can fall through.
+fn infer_type_from_literal(expr : @ast.TsExpr) -> @ast.TsType {
+  match expr {
+    IntLit(_) | NumberLit(_) => @ast.TsType::Number
+    StringLit(_) => @ast.TsType::String_
+    BoolLit(_) => @ast.TsType::Boolean
+    BigIntLit(_) => @ast.TsType::BigInt
+    _ => @ast.TsType::Any
   }
 }
 
