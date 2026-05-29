@@ -1397,7 +1397,18 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
   match expr {
     NumberLit(n) =>
       if e.pretty {
-        e.write(n.to_string())
+        // Use JS-valid names for special floating-point values.
+        // MoonBit's `to_string()` may return "inf" / "nan" which are
+        // NOT valid JS; JavaScript uses the global identifiers instead.
+        if n != n {
+          e.write("NaN")
+        } else if n == 1.0 / 0.0 {
+          e.write("Infinity")
+        } else if n == -1.0 / 0.0 {
+          e.write("-Infinity")
+        } else {
+          e.write(n.to_string())
+        }
       } else {
         e.write(minify_number(n))
       }
@@ -2935,6 +2946,11 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
 /// - Drops trailing zero: `1.0` → `1` (saves 2 bytes)
 /// - Tries exponential when shorter: `1000000.0` → `1e6` (saves bytes)
 fn minify_number(n : Double) -> String {
+  // Special floating-point values have no numeric literal representation.
+  // Minify to the shortest valid JS form instead of the global identifier.
+  if n != n { return "0/0" } // NaN (same length, guaranteed valid JS)
+  if n == 1.0 / 0.0 { return "1/0" } // Infinity (8 chars → 3)
+  if n == -1.0 / 0.0 { return "-1/0" } // -Infinity (9 chars → 4)
   let standard = n.to_string()
   let mut best = standard
   // Drop trailing ".0" (integer-valued doubles): 1.0 → 1

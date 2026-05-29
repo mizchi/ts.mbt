@@ -413,7 +413,7 @@ fn merge_consecutive_decls(
 fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
   match stmt {
     If(cond, then_b, else_b) => {
-      let cond_f = fold_expr(cond)
+      let cond_f = strip_double_negation(fold_expr(cond))
       // Generalised: any statically truthy/falsy literal may fold the
       // branch. `is_js_truthy` / `is_js_falsy` cover `BoolLit`,
       // `IntLit(0)`, `StringLit("")`, `NullLit`, and friends.
@@ -640,7 +640,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => out.push(stmt)
     Throw(e) => out.push(Throw(fold_expr(e)))
     While(c, body) => {
-      let cf = fold_expr(c)
+      let cf = strip_double_negation(fold_expr(c))
       // `while (0)` / `while ("")` / `while (false)` → dead loop.
       if not(is_js_falsy(cf)) {
         out.push(While(cf, fold_block(body)))
@@ -676,7 +676,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         None => None
       }
       let cond_f = match cond {
-        Some(e) => Some(fold_expr(e))
+        Some(e) => Some(strip_double_negation(fold_expr(e)))
         None => None
       }
       // `for (...; false; ...)` — dead loop, body never executes.
@@ -3037,6 +3037,17 @@ fn is_pure_value(expr : @ast.TsExpr) -> Bool {
     // Spread of a pure value is itself pure (e.g. inside an array literal).
     Spread(inner) => is_pure_value(inner)
     _ => false
+  }
+}
+
+///|
+/// In boolean-context positions (`if`, `while`, `for` condition), JS
+/// coerces the value to boolean anyway, so a double negation `!!x` is
+/// semantically identical to `x`. Strip one `!!` layer to save 2 bytes.
+fn strip_double_negation(expr : @ast.TsExpr) -> @ast.TsExpr {
+  match expr {
+    UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) => inner
+    _ => expr
   }
 }
 

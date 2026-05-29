@@ -1489,3 +1489,33 @@ test "fold: do { body } while(true) stays as a loop" {
   // The `while(true)` emits as `while(!0)` or stays as do-while.
   assert_true(out.contains("do") || out.contains("while"))
 }
+
+///|
+test "fold: !!x in if condition is stripped (saves 2 bytes)" {
+  let out = fold_one("if (!!x) { doIt(); }\n")
+  // `!!x` in boolean position is equivalent to `x` — JS coerces anyway.
+  assert_false(out.contains("!!"), "expected !! stripped: \{out}")
+  assert_true(out.contains("if (x)") || out.contains("if(x)"), "expected x retained: \{out}")
+}
+
+///|
+test "fold: !!x in while condition is stripped" {
+  let out = fold_one("while (!!running) { tick(); }\n")
+  assert_false(out.contains("!!"), "expected !! stripped: \{out}")
+  assert_true(out.contains("running"), "expected running retained: \{out}")
+}
+
+///|
+test "fold: !!x in for condition is stripped" {
+  let out = fold_one("for (; !!active; ) { step(); }\n")
+  assert_false(out.contains("!!"), "expected !! stripped: \{out}")
+  assert_true(out.contains("active"), "expected active retained: \{out}")
+}
+
+///|
+test "fold: !!x in return is NOT stripped (value semantics preserved)" {
+  let out = fold_one("function f(x) { return !!x; }\n")
+  // Outside boolean-context positions, `!!x` must be preserved
+  // since it coerces to a boolean while `x` might not be.
+  assert_true(out.contains("!!"), "expected !! kept in return: \{out}")
+}

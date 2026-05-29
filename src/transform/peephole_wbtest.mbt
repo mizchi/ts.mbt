@@ -394,3 +394,24 @@ test "minify emit: string with no quotes keeps double-quote wrapper" {
   assert_true(out.contains("\"hello world\""), "expected double-quoted string, got: \{out}")
 }
 
+///|
+test "minify emit: Number.POSITIVE_INFINITY folds to 1/0" {
+  // Number.POSITIVE_INFINITY is folded by the constant folder to a NumberLit,
+  // which in minify mode emits as `1/0` (3 bytes vs 8 for `Infinity`).
+  let out = minify_one("const x = Number.POSITIVE_INFINITY;\n")
+  assert_true(out.contains("1/0"), "expected 1/0, got: \{out}")
+  assert_false(out.contains("Infinity"), "expected no Infinity, got: \{out}")
+}
+
+///|
+test "minify emit: Number.NEGATIVE_INFINITY folds to -1/0" {
+  let out = minify_one("const x = Number.NEGATIVE_INFINITY;\n")
+  assert_true(out.contains("-1/0"), "expected -1/0, got: \{out}")
+}
+
+///|
+test "minify emit: Number.NaN folds to 0/0" {
+  let out = minify_one("const x = Number.NaN;\n")
+  assert_true(out.contains("0/0"), "expected 0/0, got: \{out}")
+}
+
