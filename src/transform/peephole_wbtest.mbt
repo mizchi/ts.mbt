@@ -1113,3 +1113,15 @@ test "peephole: arr.slice(0) → [...arr]" {
   assert_false(out.contains("slice"), msg="expected no .slice, got: \{out}")
   assert_true(out.contains("...arr"), msg="expected spread, got: \{out}")
 }
+
+///|
+test "emit: consecutive const and let merged as let in minify mode" {
+  let block = @parser.parse_block_from_source("const a = 1; let b = 2;")
+  let folded = peephole_block(block)
+  let e = Emitter::new(pretty=false)
+  emit_block(e, folded)
+  let out = e.to_string()
+  // Both should be merged as `let a=1,b=2`
+  assert_false(out.contains("const"), msg="expected no const in minify mode, got: \{out}")
+  assert_false(out.contains("let a") && out.contains("let b"), msg="expected merged, got: \{out}")
+}
