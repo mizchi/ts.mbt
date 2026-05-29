@@ -375,13 +375,19 @@ pub fn transform_source_full(
   // mappings when mangling is on; consumers asking for both should
   // file a follow-up.
   let emit_positions = not(mangle) && with_sourcemap
-  for i, stmt in mangled.stmts {
-    if emit_positions && i < positions.length() {
-      let src_pos = e.line_index.position(positions[i])
-      e.mark(src_pos)
+  // In minify mode without source maps, use the merged-decl emitter so
+  // `let a=1;let b=2;` collapses to `let a=1,b=2;` at the top level too.
+  if not(emit_positions) {
+    emit_stmts_merged(e, mangled.stmts)
+  } else {
+    for i, stmt in mangled.stmts {
+      if emit_positions && i < positions.length() {
+        let src_pos = e.line_index.position(positions[i])
+        e.mark(src_pos)
+      }
+      emit_stmt(e, stmt)
+      e.nl()
     }
-    emit_stmt(e, stmt)
-    e.nl()
   }
   let sm_json : String? = match e.smap {
     Some(b) => Some(b.to_json(source~, source_path~, output_path~))
@@ -489,6 +495,94 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
     i = i + 1
   }
   e.close_block()
+}
+
+///|
+/// Emit a flat array of statements with the same minify-mode
+/// declaration-merging logic used by `emit_block`. Call this for
+/// top-level stmt lists (bundle, transform_source_full) so that
+/// `let a=1;let b=2;` → `let a=1,b=2;` at the module scope too.
+/// In pretty mode every statement is emitted verbatim (no merging).
+fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
+  let n = stmts.length()
+  let mut i = 0
+  while i < n {
+    let stmt = stmts[i]
+    e.nl()
+    if not(e.pretty) {
+      let decl_kind : String? = match stmt {
+        @ast.TsStmt::Let(_, _, _) => Some("let")
+        @ast.TsStmt::Const(_, _, _) => Some("let")
+        @ast.TsStmt::Var(_, _, _) => Some("var")
+        _ => None
+      }
+      match decl_kind {
+        Some(kind) => {
+          let group : Array[@ast.TsStmt] = [stmt]
+          let mut j = i + 1
+          while j < n {
+            let next = stmts[j]
+            let next_kind : String? = match next {
+              @ast.TsStmt::Let(_, _, _) => Some("let")
+              @ast.TsStmt::Const(_, _, _) => Some("let")
+              @ast.TsStmt::Var(_, _, _) => Some("var")
+              _ => None
+            }
+            if next_kind == Some(kind) {
+              group.push(next)
+              j = j + 1
+            } else {
+              break
+            }
+          }
+          if group.length() > 1 {
+            let first_byte = match group[0] {
+              @ast.TsStmt::Var(b, _, _)
+              | @ast.TsStmt::Let(b, _, _)
+              | @ast.TsStmt::Const(b, _, _) => binding_leading_byte(b)
+              _ => '?'
+            }
+            e.word(kind)
+            e.sep_after_word(first_byte)
+            for k, gs in group {
+              if k > 0 {
+                e.write(",")
+                e.space()
+              }
+              match gs {
+                @ast.TsStmt::Var(b, _, init)
+                | @ast.TsStmt::Let(b, _, init)
+                | @ast.TsStmt::Const(b, _, init) => {
+                  emit_binding(e, b)
+                  let is_undef_init = match init {
+                    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
+                    @ast.TsExpr::Var("undefined") => true
+                    _ => false
+                  }
+                  if not(is_undef_init) {
+                    e.space()
+                    e.write("=")
+                    e.space()
+                    emit_expr(e, init, 0)
+                  }
+                }
+                _ => ()
+              }
+            }
+            e.semi()
+            i = j
+            continue
+          }
+          emit_stmt(e, stmt)
+          i = i + 1
+          continue
+        }
+        None => ()
+      }
+    }
+    emit_stmt(e, stmt)
+    i = i + 1
+  }
 }
 
 ///|

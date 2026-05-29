@@ -610,28 +610,34 @@ pub fn bundle_modules(
     }
     let has_combined_positions = combined.stmt_positions.length() ==
       combined.stmts.length()
-    for i, s in combined.stmts {
-      // When source-maps are on, decode the per-stmt origin and
-      // switch the emitter's line index to the source the stmt
-      // came from before recording the mapping. Stmts whose origin
-      // was lost (synthesized by a transform) have an out-of-range
-      // source-id and are simply skipped.
-      if opts.with_sourcemap && has_combined_positions {
-        let (offset, source_id) = decode_combined_position(
-          combined.stmt_positions[i],
-        )
-        if source_id < combined_line_indices.length() {
-          e.line_index = combined_line_indices[source_id]
-          match e.smap {
-            Some(b) => b.set_current_source(source_id)
-            None => ()
+    // In minify mode without source-maps, use the merged-decl emitter so
+    // `let a=1;let b=2;` collapses to `let a=1,b=2;` at the top level.
+    if opts.minify && not(opts.with_sourcemap) {
+      emit_stmts_merged(e, combined.stmts)
+    } else {
+      for i, s in combined.stmts {
+        // When source-maps are on, decode the per-stmt origin and
+        // switch the emitter's line index to the source the stmt
+        // came from before recording the mapping. Stmts whose origin
+        // was lost (synthesized by a transform) have an out-of-range
+        // source-id and are simply skipped.
+        if opts.with_sourcemap && has_combined_positions {
+          let (offset, source_id) = decode_combined_position(
+            combined.stmt_positions[i],
+          )
+          if source_id < combined_line_indices.length() {
+            e.line_index = combined_line_indices[source_id]
+            match e.smap {
+              Some(b) => b.set_current_source(source_id)
+              None => ()
+            }
+            let src_pos = e.line_index.position(offset)
+            e.mark(src_pos)
           }
-          let src_pos = e.line_index.position(offset)
-          e.mark(src_pos)
         }
+        emit_stmt(e, s)
+        e.nl()
       }
-      emit_stmt(e, s)
-      e.nl()
     }
     // After the combined emit, surface the entry module's exports
     // so the bundle is consumable as an ES module. The mangle path
