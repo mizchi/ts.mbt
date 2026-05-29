@@ -61,6 +61,7 @@
 //   this.x=void 0;…;this.x=val  -> this.x=val  (drop TS class-field placeholders)
 //   typeof x === "undefined"    -> x === void 0  (saves ~9 bytes; combines with x==null rule)
 //   typeof x !== "undefined"    -> x !== void 0
+//   !x ? b : a                  -> x ? a : b   (flip branches, drop negation)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -702,10 +703,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `!!x ? a : b` → `x ? a : b` (double negation in condition is a no-op
       // in a ternary since the truthiness test already coerces to boolean).
       // Saves 2 bytes per occurrence. Unwrap any number of `!!` layers.
-      let cp = match cp {
+      // `!x ? b : a` → `x ? a : b` (flip branches, drop negation, saves 1 byte).
+      let (cp, tp, ep) = match cp {
         UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) =>
-          inner
-        _ => cp
+          (inner, tp, ep)
+        UnaryOp(@ast.TsUnaryOp::Not, inner) => (inner, ep, tp)
+        _ => (cp, tp, ep)
       }
       // `x ? x : y` → `x || y` (saves 3 bytes: `? x :` → `||`)
       // `x ? y : x` → `x && y` (saves 3 bytes: `? y :` → `&&`)

@@ -1000,3 +1000,10 @@ test "peephole: 'undefined' === typeof x (swapped form)" {
   assert_false(out.contains("typeof"), msg="expected no typeof, got: \{out}")
   assert_true(out.contains("void 0"), msg="expected void 0, got: \{out}")
 }
+
+///|
+test "peephole: !x ? b : a → x ? a : b (flip branches)" {
+  let out = minify_one("const r = !cond ? 1 : 2;")
+  assert_false(out.contains("!cond"), msg="expected no negation in cond, got: \{out}")
+  assert_true(out.contains("cond?2:1") || out.contains("cond ? 2 : 1"), msg="expected flipped branches, got: \{out}")
+}
