@@ -735,3 +735,10 @@ test "peephole: x == null ? fallback : x → x ?? fallback" {
   assert_true(out.contains("??"), msg="expected ??, got: \{out}")
   assert_false(out.contains("=="), msg="expected no == null check, got: \{out}")
 }
+
+///|
+test "peephole: Array.from(x) folds to [...x]" {
+  let out = peep_one("const r = Array.from(items);")
+  assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
+  assert_false(out.contains("Array.from"), msg="expected no Array.from, got: \{out}")
+}

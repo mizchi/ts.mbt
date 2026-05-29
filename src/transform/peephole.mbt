@@ -27,6 +27,7 @@
 //   Number(x)             -> +x        (saves up to 6 bytes)
 //   Boolean(x)            -> !!x       (saves up to 4 bytes)
 //   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
+//   Array.from(x)         -> [...x]    (saves ~6 bytes; single-arg only)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -718,6 +719,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       if m == "pow" && new_args.length() == 2 {
         match recv_p {
           Var("Math") => return BinOp(@ast.TsBinOp::Pow, new_args[0], new_args[1])
+          _ => ()
+        }
+      }
+      // `Array.from(x)` → `[...x]` (saves ~6 bytes; single-arg only —
+      // two-arg form has a map function and must be left alone).
+      if m == "from" && new_args.length() == 1 {
+        match recv_p {
+          Var("Array") =>
+            return ArrayLit([Spread(new_args[0])])
           _ => ()
         }
       }
