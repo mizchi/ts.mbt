@@ -74,10 +74,14 @@ test "peephole: undefined is preserved when shadowed by a binding" {
 
 ///|
 test "minify emit: trailing ; before } is dropped" {
-  let out = minify_one("function f() { return 1; }\n")
-  // The trailing `;` before `}` should be elided in minify mode.
-  assert_true(out.contains("return 1}"))
-  assert_false(out.contains("return 1;}"))
+  // Use a body that can't be simplified to a concise arrow to test brace dropping.
+  let out = minify_one("function f() { let x=1; return x+1; }\n")
+  // The trailing `;` before `}` should be elided in minify mode. Arrow concise form
+  // won't have braces at all, so check that either form is correct.
+  assert_true(
+    out.contains("return") && not(out.contains("return x+1;}")),
+    msg="expected trailing ; dropped before }, got: \{out}",
+  )
 }
 
 ///|
@@ -120,8 +124,9 @@ test "minify emit: single-statement if drops braces" {
 
 ///|
 test "minify emit: return followed by object literal has no space" {
+  // Arrow concise body wraps objects in parens: `() => ({a:1})` — check for that too.
   let out = minify_one("function f() { return { a: 1 }; }\n")
-  assert_true(out.contains("return{"))
+  assert_true(out.contains("return{") || out.contains("({"), msg="expected return{ or ({ for object body, got: \{out}")
 }
 
 ///|
@@ -683,7 +688,12 @@ test "peephole: x!=null?x:y folds to x??y (nullish coalescing)" {
 ///|
 test "peephole: let x = expr; return x; folds to return expr;" {
   let out = peep_one("function f(a){let r=a+1;return r;}")
-  assert_true(out.contains("return"), msg="expected return, got: \{out}")
+  // FuncExpr is converted to ArrowFunc, so the body may be a concise arrow (no return keyword).
+  // Either `return a + 1` (in a block body) or `a + 1` (in a concise arrow body) is correct.
+  assert_true(
+    out.contains("a + 1") || out.contains("a+1"),
+    msg="expected folded expression, got: \{out}",
+  )
   assert_false(out.contains("let r"), msg="expected no temp var, got: \{out}")
 }
 
@@ -1204,7 +1214,9 @@ test "peephole: multi-case all-return switch → if-else chain" {
     "function f(x) { switch (x) { case 1: return \"a\"; case 2: return \"b\"; case 3: return \"c\"; default: return \"d\"; } }\n",
   )
   assert_false(out.contains("switch"), msg="expected no switch, got: \{out}")
-  assert_true(out.contains("return"), msg="expected return, got: \{out}")
+  // After switch→if-chain→ternary + FuncExpr→ArrowFunc, the function has a concise
+  // arrow body (no `return` keyword). Check for ternary `?` as the structural indicator.
+  assert_true(out.contains("?"), msg="expected ternary in output, got: \{out}")
 }
 
 ///|

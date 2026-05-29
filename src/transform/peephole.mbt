@@ -88,6 +88,8 @@
 //   if (!0) { S }               -> S            (dead-else elimination)
 //   "a" === "b"                 -> !1           (string literal strict comparison)
 //   "a" !== "b"                 -> !0
+//   function(p){return e}       -> (p) => e    (saves ~16 bytes; no this/arguments/self-ref)
+//   function(p){stmts}          -> (p) => {stmts} (saves ~9 bytes)
 //   Array.prototype.METHOD.call(arr, args) -> arr.METHOD(args)  (saves ~22 bytes)
 //   x.toString()                -> ""+x         (saves ~9 bytes; same as String(x))
 //   (0, fn)(args)               -> fn(args)      (saves 4 bytes; indirect call in ESM is redundant)
@@ -1543,8 +1545,27 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       ArrowFunc(params, ret, new_body, is_async)
     }
     FuncExpr(f) => {
-      let folded : @ast.TsFunc = { ..f, body: peep_block(f.body, ctx) }
-      FuncExpr(folded)
+      let folded : @ast.TsBlock = peep_block(f.body, ctx)
+      // Convert `function(params) { return expr; }` → `(params) => expr` (saves ~16 bytes).
+      // Also `function(params) { stmts; }` → `(params) => { stmts; }` (saves ~9 bytes: `function` vs `=>`).
+      // Safe only when:
+      //   - Not a generator function.
+      //   - Body doesn't reference `this` or `arguments` (arrow functions capture these lexically).
+      //   - Not named (or the name isn't used inside the body as a recursive ref).
+      //   - Not async (async arrows are fine syntax-wise, but we only need to handle the common case).
+      let can_arrow = not(f.is_generator) &&
+        not(block_references_name(folded, "this")) &&
+        not(block_references_name(folded, "arguments")) &&
+        (f.name == "" || not(block_references_name(folded, f.name)))
+      if can_arrow {
+        let arrow_body = match folded.stmts {
+          [Return(Some(inner))] => @ast.TsArrowBody::ArrowExpr(inner)
+          _ => @ast.TsArrowBody::ArrowBlock(folded)
+        }
+        ArrowFunc(f.params, f.return_type, arrow_body, f.is_async)
+      } else {
+        FuncExpr({ ..f, body: folded })
+      }
     }
     DynamicImport(spec, opts) => {
       let opts_f = match opts {
