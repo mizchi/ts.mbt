@@ -1206,3 +1206,31 @@ test "peephole: multi-case all-return switch → if-else chain" {
   assert_false(out.contains("switch"), msg="expected no switch, got: \{out}")
   assert_true(out.contains("return"), msg="expected return, got: \{out}")
 }
+
+///|
+test "peephole: string literal concatenation folding" {
+  let out = peep_one("const s = \"hello\" + \" \" + \"world\";")
+  // Both adjacent literals should collapse to a single string
+  assert_false(out.contains("\" + \""), msg="expected no adjacent string lits, got: \{out}")
+  assert_true(out.contains("\"hello world\""), msg="expected folded string, got: \{out}")
+}
+
+///|
+test "peephole: additive identity 0 + x → x" {
+  let out = peep_one("const a = 0 + n;")
+  assert_false(out.contains("0 +"), msg="expected no 0 + n, got: \{out}")
+}
+
+///|
+test "peephole: integer arithmetic constant folding" {
+  let out = peep_one("const a = 2 + 3;")
+  assert_true(out.contains("5"), msg="expected 5, got: \{out}")
+  assert_false(out.contains("2 +"), msg="expected folded result, got: \{out}")
+}
+
+///|
+test "peephole: double negation stripped from if condition" {
+  let out = minify_one("if (!!x) y();")
+  assert_false(out.contains("!!"), msg="expected no !! in condition, got: \{out}")
+  assert_true(out.contains("x&&"), msg="expected x&&, got: \{out}")
+}

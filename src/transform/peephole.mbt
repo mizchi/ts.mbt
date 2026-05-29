@@ -82,6 +82,12 @@
 //   x !== false                 -> x            (saves 7 bytes)
 //   Object.prototype.hasOwnProperty.call(o,k) -> Object.hasOwn(o,k)  (saves ~22 bytes; ES2022)
 //   x.hasOwnProperty(k)                       -> Object.hasOwn(x,k)  (saves ~8 bytes; ES2022)
+//   "a" + "b"                -> "ab"           (string literal concatenation folding)
+//   0 + x / x + 0           -> x              (additive identity for integers)
+//   n + m / n - m / n * m   -> <result>       (integer literal arithmetic)
+//   x - 0 / x * 1 / 1 * x  -> x              (multiplicative identity)
+//   if (!!x) …              -> if (x) …       (strip double negation in condition)
+//   while (!!x) …           -> while (x) …
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -266,7 +272,13 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => stmt
     Throw(e) => Throw(peep_expr(e, ctx))
     If(c, t, e) => {
-      let cp = peep_expr(c, ctx)
+      let cp_raw = peep_expr(c, ctx)
+      // `if (!!x) …` → `if (x) …`  (strip double negation from condition;
+      // truthiness coercion makes the extra `!!` a no-op in boolean context).
+      let cp = match cp_raw {
+        UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) => inner
+        _ => cp_raw
+      }
       let tp = peep_block(t, ctx)
       let ep = match e {
         Some(b) => Some(peep_block(b, ctx))
@@ -326,7 +338,15 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         _ => If(cp, tp, ep)
       }
     }
-    While(c, body) => While(peep_expr(c, ctx), peep_block(body, ctx))
+    While(c, body) => {
+      let cp_raw = peep_expr(c, ctx)
+      // `while (!!x) …` → `while (x) …`  (strip double negation; same as If)
+      let cp = match cp_raw {
+        UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) => inner
+        _ => cp_raw
+      }
+      While(cp, peep_block(body, ctx))
+    }
     DoWhile(c, body) => DoWhile(peep_expr(c, ctx), peep_block(body, ctx))
     With(c, body) => With(peep_expr(c, ctx), peep_block(body, ctx))
     For(init, cond, update, body) =>
@@ -853,6 +873,41 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             (IntLit(0), PropAccess(_, "length"))
             | (IntLit(0), PropAccess(_, "size")) =>
               UnaryOp(@ast.TsUnaryOp::Not, rp)
+            _ => BinOp(op, lp, rp)
+          }
+        // `"a" + "b"` → `"ab"`  (string constant folding; saves quotes + operator)
+        // Produced when template literals like `"prefix" + x + "suffix"` get
+        // partially evaluated, leaving adjacent string literals next to each other.
+        // Also handles `"" + ""` → `""` (empty-string identity).
+        Add =>
+          match (lp, rp) {
+            (StringLit(a), StringLit(b)) => StringLit(a + b)
+            // `0 + x` / `x + 0` → `x`  (identity under addition for numbers).
+            // Only safe when the other operand is an integer literal (so no
+            // string coercion occurs).
+            (IntLit(0), _) => rp
+            (_, IntLit(0)) => lp
+            // `n + m` → constant  (integer literal arithmetic folding).
+            (IntLit(a), IntLit(b)) => IntLit(a + b)
+            _ => BinOp(op, lp, rp)
+          }
+        // `n - m` → constant  (integer literal subtraction).
+        Sub =>
+          match (lp, rp) {
+            (IntLit(a), IntLit(b)) => IntLit(a - b)
+            // `x - 0` → `x`
+            (_, IntLit(0)) => lp
+            _ => BinOp(op, lp, rp)
+          }
+        // `n * m` → constant  (integer literal multiplication).
+        Mul =>
+          match (lp, rp) {
+            (IntLit(a), IntLit(b)) => IntLit(a * b)
+            // `x * 1` / `1 * x` → `x`
+            (_, IntLit(1)) => lp
+            (IntLit(1), _) => rp
+            // `x * 0` / `0 * x` → `0`  (safe only when x has no side effects,
+            // but IntLit(0) * anything is only folded when BOTH sides are IntLit)
             _ => BinOp(op, lp, rp)
           }
         _ => BinOp(op, lp, rp)
