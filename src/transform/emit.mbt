@@ -331,13 +331,16 @@ pub fn transform_source_full(
   } else {
     lowered_jsx
   }
+  // Constant-fold before mangle so the mangler sees already-simplified
+  // expressions (shorter names are assigned to already-reduced code).
+  let folded = if minify { fold_block(lowered) } else { lowered }
   let mangled = if mangle {
     let mangler_cfg = ManglerConfig::default().with_mangle_properties(
       mangle_properties,
     )
-    mangle_block(lowered, mangler_cfg)
+    mangle_block(folded, mangler_cfg)
   } else {
-    lowered
+    folded
   }
   let mangled = if minify { peephole_block(mangled) } else { mangled }
   let e = Emitter::new(pretty=not(minify))
