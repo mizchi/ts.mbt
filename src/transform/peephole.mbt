@@ -33,6 +33,7 @@
 //   `${x}`                -> ""+x      (saves 2 bytes; empty prefix+suffix)
 //   `prefix${x}`          -> "prefix"+x (saves 2 bytes; non-empty prefix OK)
 //   +new Date()           -> Date.now() (saves 1 byte; same timestamp semantics)
+//   arr.slice(0)          -> [...arr]   (saves ~5 bytes; 0-start shallow copy)
 //   Object.assign({},a,b)     -> {...a,...b}     (saves ~12 bytes)
 //   Object.assign({x:1},a,b) -> {x:1,...a,...b}  (literal target also safe)
 //   new Array(0) / new Array() -> []    (saves up to 11 bytes)
@@ -1103,6 +1104,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         if is_null_this {
           return CallExpr(recv_p, [Spread(new_args[1])])
         }
+      }
+      // `arr.slice(0)` → `[...arr]` (saves ~5 bytes; shallow copy of array).
+      // Only the single-arg form with literal 0 (from-start copy); multi-arg
+      // and non-zero-start forms can't be simplified to a spread.
+      if m == "slice" && new_args.length() == 1 && exprs_eq(new_args[0], @ast.TsExpr::IntLit(0)) {
+        return ArrayLit([Spread(recv_p)])
       }
       MethodCall(recv_p, m, new_args)
     }

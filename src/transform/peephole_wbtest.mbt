@@ -1106,3 +1106,10 @@ test "peephole: +new Date() → Date.now()" {
   assert_false(out.contains("new Date"), msg="expected no new Date, got: \{out}")
   assert_true(out.contains("Date.now()"), msg="expected Date.now(), got: \{out}")
 }
+
+///|
+test "peephole: arr.slice(0) → [...arr]" {
+  let out = minify_one("const r = arr.slice(0);")
+  assert_false(out.contains("slice"), msg="expected no .slice, got: \{out}")
+  assert_true(out.contains("...arr"), msg="expected spread, got: \{out}")
+}
