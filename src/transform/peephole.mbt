@@ -211,10 +211,17 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       match (tp.stmts, ep) {
         ([Return(Some(a))], Some({ stmts: [Return(Some(b))], .. })) =>
           Return(Some(@ast.TsExpr::Cond(cp, a, b)))
+        // `if (c) x = a; else x = b;` → `x = c ? a : b;`
+        (
+          [Assign(n1, a)],
+          Some({ stmts: [Assign(n2, b)], .. }),
+        ) if n1 == n2 =>
+          Assign(n1, @ast.TsExpr::Cond(cp, a, b))
+        // `if (c) expr_a; else expr_b;` → `c ? expr_a : expr_b;`
+        ([Expr(a)], Some({ stmts: [Expr(b)], .. })) =>
+          Expr(@ast.TsExpr::Cond(cp, a, b))
         // `if (c) expr;` (no else) → `c && expr;` (short-circuit)
         ([Expr(a)], None) => Expr(@ast.TsExpr::BinOp(@ast.TsBinOp::And, cp, a))
-        // `if (c) return;` (no else) → `if (!c) break/continue` doesn't apply,
-        // but `if (c) return;` stays as-is for now
         _ => If(cp, tp, ep)
       }
     }
@@ -331,6 +338,18 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(peep_stmt(s, ctx))
+  }
+  // Fold `if (c) return a; return b;` → `return c ? a : b;`.
+  // Walk backwards and merge adjacent pairs.
+  let n = stmts.length()
+  if n >= 2 {
+    match (stmts[n - 2], stmts[n - 1]) {
+      (If(c, { stmts: [Return(Some(a))], .. }, None), Return(Some(b))) => {
+        stmts[n - 2] = Return(Some(@ast.TsExpr::Cond(c, a, b)))
+        stmts.pop() |> ignore
+      }
+      _ => ()
+    }
   }
   { stmts, stmt_positions: block.stmt_positions }
 }

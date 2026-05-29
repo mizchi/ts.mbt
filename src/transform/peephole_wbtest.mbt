@@ -574,3 +574,24 @@ test "peephole: if(c) expr; (no else) folds to c&&expr" {
   assert_true(out.contains("&&"), msg="expected &&, got: \{out}")
   assert_false(out.contains("if"), msg="expected no if, got: \{out}")
 }
+
+///|
+test "peephole: if(c) x=a; else x=b; folds to x=c?a:b" {
+  let out = peep_one("if(c){x=a;}else{x=b;}")
+  assert_true(out.contains("?"), msg="expected ternary, got: \{out}")
+  assert_false(out.contains("if"), msg="expected no if, got: \{out}")
+}
+
+///|
+test "peephole: if(c) expr_a; else expr_b; folds to c?expr_a:expr_b" {
+  let out = peep_one("if(c){foo();}else{bar();}")
+  assert_true(out.contains("?"), msg="expected ternary, got: \{out}")
+  assert_false(out.contains("if"), msg="expected no if, got: \{out}")
+}
+
+///|
+test "peephole: if(c) return a; return b; folds to return c?a:b (guard pattern)" {
+  let out = peep_one("function f(c,a,b){if(c){return a;} return b;}")
+  assert_true(out.contains("?"), msg="expected ternary, got: \{out}")
+  assert_false(out.contains("if"), msg="expected no if, got: \{out}")
+}
