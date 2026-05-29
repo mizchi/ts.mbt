@@ -222,6 +222,13 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           Expr(@ast.TsExpr::Cond(cp, a, b))
         // `if (c) expr;` (no else) → `c && expr;` (short-circuit)
         ([Expr(a)], None) => Expr(@ast.TsExpr::BinOp(@ast.TsBinOp::And, cp, a))
+        // `if (c) {} else { stmts }` → `if (!c) { stmts }` (invert + drop empty then)
+        ([], Some(else_block)) =>
+          If(
+            UnaryOp(@ast.TsUnaryOp::Not, cp),
+            else_block,
+            None,
+          )
         _ => If(cp, tp, ep)
       }
     }

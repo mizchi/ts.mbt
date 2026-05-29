@@ -650,3 +650,11 @@ test "peephole: complex if chain optimization" {
   )
   assert_false(out.contains("else"), msg="expected no else keywords, got: \{out}")
 }
+
+///|
+test "peephole: if(c){} else {stmts} inverts to if(!c){stmts}" {
+  let out = peep_one("if(x){}else{doSomething();}")
+  assert_false(out.contains("else"), msg="expected no else, got: \{out}")
+  assert_true(out.contains("!x") || out.contains("!"), msg="expected negation, got: \{out}")
+  assert_true(out.contains("doSomething"), msg="expected doSomething, got: \{out}")
+}
