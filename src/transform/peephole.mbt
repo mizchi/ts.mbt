@@ -779,13 +779,25 @@ fn fold_null_undef_or(
           if l_is_null == r_is_null {
             return None
           }
-          // The checked expressions must be equal simple variables.
+          // The checked expressions must be equal side-effect-free expressions.
           match (lexpr, rexpr) {
             (@ast.TsExpr::Var(n1), @ast.TsExpr::Var(n2)) if n1 == n2 =>
               Some(
                 @ast.TsExpr::BinOp(
                   @ast.TsBinOp::AbstractEq,
                   @ast.TsExpr::Var(n1),
+                  @ast.TsExpr::NullLit,
+                ),
+              )
+            // `obj.prop === null || obj.prop === void 0` → `obj.prop == null`
+            (
+              @ast.TsExpr::PropAccess(@ast.TsExpr::Var(o1), p1),
+              @ast.TsExpr::PropAccess(@ast.TsExpr::Var(o2), p2),
+            ) if o1 == o2 && p1 == p2 =>
+              Some(
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::AbstractEq,
+                  @ast.TsExpr::PropAccess(@ast.TsExpr::Var(o1), p1),
                   @ast.TsExpr::NullLit,
                 ),
               )
@@ -820,6 +832,17 @@ fn fold_null_undef_and(
                 @ast.TsExpr::BinOp(
                   @ast.TsBinOp::AbstractNe,
                   @ast.TsExpr::Var(n1),
+                  @ast.TsExpr::NullLit,
+                ),
+              )
+            (
+              @ast.TsExpr::PropAccess(@ast.TsExpr::Var(o1), p1),
+              @ast.TsExpr::PropAccess(@ast.TsExpr::Var(o2), p2),
+            ) if o1 == o2 && p1 == p2 =>
+              Some(
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::AbstractNe,
+                  @ast.TsExpr::PropAccess(@ast.TsExpr::Var(o1), p1),
                   @ast.TsExpr::NullLit,
                 ),
               )

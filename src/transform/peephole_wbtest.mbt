@@ -539,3 +539,10 @@ test "minify emit: x[\"prop\"] = v emits as x.prop = v" {
   let out = minify_one("obj[\"hello\"] = 42;\n")
   assert_true(out.contains("obj.hello=42"), msg="expected obj.hello=42, got: \{out}")
 }
+
+///|
+test "peephole: obj.prop===null||obj.prop===undefined folds to obj.prop==null" {
+  let out = peep_one("const r = obj.prop === null || obj.prop === undefined;\n")
+  assert_true(out.contains("obj.prop == null"), msg="expected obj.prop == null, got: \{out}")
+  assert_false(out.contains("==="), msg="expected no ===, got: \{out}")
+}
