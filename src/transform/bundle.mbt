@@ -598,6 +598,13 @@ pub fn bundle_modules(
       // those collapse before the terminal compaction step.
       if opts.fold {
         combined = fold_block(combined)
+        // Second treeshake: the second fold may produce new dead
+        // `if (false) { … }` branches whose declarations are now
+        // unreachable. A lightweight treeshake pass removes them
+        // before the final peephole compaction.
+        if opts.treeshake {
+          combined = treeshake_block(combined)
+        }
       }
       combined = peephole_block(combined)
     }
