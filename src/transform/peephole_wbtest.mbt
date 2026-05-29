@@ -798,3 +798,10 @@ test "peephole: `${x}` folds to \"\"+x (single interpolation)" {
   assert_true(out.contains("\"\""), msg="expected empty string concat, got: \{out}")
   assert_false(out.contains("`"), msg="expected no template literal, got: \{out}")
 }
+
+///|
+test "peephole: Array.prototype.slice.call(x) folds to [...x]" {
+  let out = minify_one("const r = Array.prototype.slice.call(args);")
+  assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
+  assert_false(out.contains("slice"), msg="expected no slice, got: \{out}")
+}

@@ -28,6 +28,7 @@
 //   Boolean(x)            -> !!x       (saves up to 4 bytes)
 //   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
 //   Array.from(x)         -> [...x]    (saves ~6 bytes; single-arg only)
+//   Array.prototype.slice.call(x) -> [...x]  (saves ~21 bytes)
 //   String(x)             -> ""+x      (saves up to 5 bytes)
 //   `${x}`                -> ""+x      (saves 2 bytes; single interpolation only)
 //   Object.assign({},a,b) -> {...a,...b} (saves ~12 bytes; first arg must be {})
@@ -756,6 +757,19 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       if m == "from" && new_args.length() == 1 {
         match recv_p {
           Var("Array") =>
+            return ArrayLit([Spread(new_args[0])])
+          _ => ()
+        }
+      }
+      // `Array.prototype.slice.call(x)` → `[...x]` (saves ~21 bytes).
+      // This pattern converts array-likes (arguments, NodeLists) to
+      // real arrays. Spread is semantically equivalent for iterable inputs.
+      if m == "call" && new_args.length() == 1 {
+        match recv_p {
+          PropAccess(
+            PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
+            "slice",
+          ) =>
             return ArrayLit([Spread(new_args[0])])
           _ => ()
         }
