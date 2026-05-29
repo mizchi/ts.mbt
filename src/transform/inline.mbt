@@ -1368,6 +1368,21 @@ fn collect_reassigned_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit 
     }
     Label(_, inner) => collect_reassigned_stmt(inner, out)
     Block(b) => collect_reassigned_block(b, out)
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_reassigned_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_reassigned_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_reassigned_expr(sf.1, out)
+      }
+    }
     _ => ()
   }
 }
@@ -1534,6 +1549,21 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
       for e in exprs {
         collect_reassigned_expr(e, out)
       }
+    NativeClassExpr(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_reassigned_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_reassigned_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_reassigned_expr(sf.1, out)
+      }
+    }
     _ => ()
   }
 }
