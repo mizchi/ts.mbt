@@ -373,3 +373,24 @@ test "minify emit: trailing semicolon stripped from bundle output" {
   assert_false(out.has_suffix(";"), "expected no trailing semicolon, got: \{out}")
 }
 
+///|
+test "minify emit: string with double-quote uses single-quote wrapper" {
+  // `x = "hello \"world\""` (with escapes) → `x='hello "world"'` (no escapes).
+  // Single quotes are shorter when the string contains double quotes.
+  let out = minify_one("const x = \"hello \\\"world\\\"\";\n")
+  assert_true(out.contains("'hello \"world\"'"), "expected single-quoted string, got: \{out}")
+}
+
+///|
+test "minify emit: string with single-quote uses double-quote wrapper" {
+  // `x = 'it\'s fine'` → `x="it's fine"` — double quotes are shorter.
+  let out = minify_one("const x = \"it's fine\";\n")
+  assert_true(out.contains("\"it's fine\""), "expected double-quoted string, got: \{out}")
+}
+
+///|
+test "minify emit: string with no quotes keeps double-quote wrapper" {
+  let out = minify_one("const x = \"hello world\";\n")
+  assert_true(out.contains("\"hello world\""), "expected double-quoted string, got: \{out}")
+}
+

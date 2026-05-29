@@ -2704,18 +2704,35 @@ fn strip_internal_prop_marker(name : String) -> String {
 
 ///|
 fn emit_string_literal(e : Emitter, s : String) -> Unit {
-  e.write("\"")
+  // In minify mode, pick the quote character that requires fewer escapes.
+  // Each avoided escape saves 1 byte (the backslash).
+  let quote = if not(e.pretty) {
+    let mut dq = 0 // double-quote occurrences
+    let mut sq = 0 // single-quote occurrences
+    for c in s {
+      if c == '"' { dq = dq + 1 }
+      if c == '\'' { sq = sq + 1 }
+    }
+    if sq < dq { '\'' } else { '"' }
+  } else {
+    '"'
+  }
+  e.write(quote.to_string())
   for c in s {
-    match c {
-      '"' => e.write("\\\"")
-      '\\' => e.write("\\\\")
-      '\n' => e.write("\\n")
-      '\r' => e.write("\\r")
-      '\t' => e.write("\\t")
-      _ => e.write(c.to_string())
+    if c == quote {
+      e.write("\\")
+      e.write(c.to_string())
+    } else {
+      match c {
+        '\\' => e.write("\\\\")
+        '\n' => e.write("\\n")
+        '\r' => e.write("\\r")
+        '\t' => e.write("\\t")
+        _ => e.write(c.to_string())
+      }
     }
   }
-  e.write("\"")
+  e.write(quote.to_string())
 }
 
 // ---------------------------------------------------------------------------
