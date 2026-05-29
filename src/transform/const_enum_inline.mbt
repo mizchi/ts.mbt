@@ -450,6 +450,37 @@ fn inline_const_enums_expr(
     Satisfies(inner, ty) => Satisfies(inline_const_enums_expr(inner, table), ty)
     NonNull(inner) => NonNull(inline_const_enums_expr(inner, table))
     OptionalChain(inner) => OptionalChain(inline_const_enums_expr(inner, table))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: inline_const_enums_block(f.body, table) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(inline_const_enums_block(b, table))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, inline_const_enums_expr(sf.1, table)))
+      }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(inline_const_enums_expr(b, table))
+        None => None
+      }
+      NativeClassExpr(
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }

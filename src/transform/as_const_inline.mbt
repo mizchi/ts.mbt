@@ -531,6 +531,31 @@ fn scan_expr_for_unsafe_uses(
     As(inner, _) | Satisfies(inner, _) =>
       scan_expr_for_unsafe_uses(inner, candidates)
     Yield(Some(inner)) => scan_expr_for_unsafe_uses(inner, candidates)
+    NativeClassExpr(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => scan_expr_for_unsafe_uses(b, candidates)
+        None => ()
+      }
+      match ctor {
+        Some(f) =>
+          for s in f.body.stmts {
+            scan_stmt_for_unsafe_uses(s, candidates)
+          }
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            for s in b.stmts {
+              scan_stmt_for_unsafe_uses(s, candidates)
+            }
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        scan_expr_for_unsafe_uses(sf.1, candidates)
+      }
+    }
     _ => ()
   }
 }
@@ -865,6 +890,37 @@ fn rewrite_expr(
     NonNull(inner) => NonNull(rewrite_expr(inner, table))
     OptionalChain(inner) => OptionalChain(rewrite_expr(inner, table))
     PureCall(inner) => PureCall(rewrite_expr(inner, table))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: rewrite_block(f.body, table) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(rewrite_block(b, table))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, rewrite_expr(sf.1, table)))
+      }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(rewrite_expr(b, table))
+        None => None
+      }
+      NativeClassExpr(
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }

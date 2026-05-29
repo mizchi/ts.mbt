@@ -502,6 +502,37 @@ fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr 
     NonNull(inner) => NonNull(switch_fold_expr(inner, table))
     OptionalChain(inner) => OptionalChain(switch_fold_expr(inner, table))
     PureCall(inner) => PureCall(switch_fold_expr(inner, table))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: switch_fold_block(f.body, table) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(switch_fold_block(b, table))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, switch_fold_expr(sf.1, table)))
+      }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(switch_fold_expr(b, table))
+        None => None
+      }
+      NativeClassExpr(
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }

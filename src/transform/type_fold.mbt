@@ -656,6 +656,37 @@ fn type_fold_expr(
     NonNull(inner) => NonNull(type_fold_expr(inner, scope))
     OptionalChain(inner) => OptionalChain(type_fold_expr(inner, scope))
     PureCall(inner) => PureCall(type_fold_expr(inner, scope))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: type_fold_block_in(f.body, scope) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(type_fold_block_in(b, scope))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, type_fold_expr(sf.1, scope)))
+      }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(type_fold_expr(b, scope))
+        None => None
+      }
+      NativeClassExpr(
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
