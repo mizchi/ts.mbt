@@ -30,6 +30,29 @@ priv struct DeclEntry {
 /// references. Only run me on a flattened bundle block — sub-blocks
 /// (function bodies, control flow) are left alone.
 pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
+  // Flatten fold's multi-declarator Block wrappers (`const a=1, b=2;`
+  // is stored as `Block([Const(a), Const(b)])`) back into individual
+  // top-level statements so each declarator can be independently
+  // classified and dropped when dead.
+  let flat_stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    match s {
+      Block(inner) if is_pure_multi_decl_block(inner) =>
+        for inner_s in inner.stmts {
+          flat_stmts.push(inner_s)
+        }
+      _ => flat_stmts.push(s)
+    }
+  }
+  let flat_block : @ast.TsBlock = {
+    stmts: flat_stmts,
+    stmt_positions: block.stmt_positions,
+  }
+  treeshake_flat_block(flat_block)
+}
+
+///|
+fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // Pass 1: classify every stmt as either a droppable declaration
   // (single name + pure rhs) or a side-effect root. Build a name ->
   // DeclEntry index for the BFS.
@@ -580,4 +603,38 @@ fn collect_var_refs_in_binding(
       }
     Target(e) => collect_var_refs_in_expr(e, out)
   }
+}
+
+///|
+/// True when `block` is a fold-produced multi-declarator group:
+/// every statement is a `Const`/`Let`/`Var` with a plain `Ident`
+/// binding and a pure initializer, and none uses a `FuncExpr`
+/// initializer (those emit as `function f(){}` and must stay
+/// as standalone statements).
+fn is_pure_multi_decl_block(block : @ast.TsBlock) -> Bool {
+  if block.stmts.length() < 2 {
+    return false
+  }
+  let mut kind = ""
+  for s in block.stmts {
+    match s {
+      Const(@ast.TsBinding::Ident(_), _, rhs) =>
+        match rhs {
+          @ast.TsExpr::FuncExpr(_) => return false
+          _ => if kind == "" { kind = "const" } else if kind != "const" { return false }
+        }
+      Let(@ast.TsBinding::Ident(_), _, rhs) =>
+        match rhs {
+          @ast.TsExpr::FuncExpr(_) => return false
+          _ => if kind == "" { kind = "let" } else if kind != "let" { return false }
+        }
+      Var(@ast.TsBinding::Ident(_), _, rhs) =>
+        match rhs {
+          @ast.TsExpr::FuncExpr(_) => return false
+          _ => if kind == "" { kind = "var" } else if kind != "var" { return false }
+        }
+      _ => return false
+    }
+  }
+  kind != ""
 }

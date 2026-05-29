@@ -2079,3 +2079,60 @@ test "minify: consecutive const decls merge into single multi-decl in bundle out
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundler: export * from barrel resolves named import" {
+  // Issue #32: `export * from "./a"` wildcard re-exports must enumerate
+  // the source module's exports so downstream named imports resolve.
+  let files = vfs([
+    ("a.ts", "export const foo = 1;\nexport const bar = 2;\n"),
+    ("barrel.ts", "export * from \"./a\";\n"),
+    ("entry.ts", "import { foo } from \"./barrel\";\nconsole.log(foo);\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("const foo = 1"))
+      assert_true(out.js.contains("console.log(foo)"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundler: export * treeshake drops unreferenced barrel re-export" {
+  // With treeshake enabled, `bar` (exported by a.ts via barrel.ts but
+  // never imported by entry.ts) must be dropped from the output.
+  let files = vfs([
+    ("a.ts", "export const foo = 1;\nexport const bar = 2;\n"),
+    ("barrel.ts", "export * from \"./a\";\n"),
+    ("entry.ts", "import { foo } from \"./barrel\";\nconsole.log(foo);\n"),
+  ])
+  let opts = BundleOptions::default().with_fold(true).with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("1"))
+      assert_false(out.js.contains("bar"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundler: export * from two sources both resolve" {
+  // barrel.ts wildcard-re-exports from two sources; both foo and baz
+  // must resolve in entry.ts.
+  let files = vfs([
+    ("a.ts", "export const foo = 1;\n"),
+    ("barrel.ts", "export * from \"./a\";\nexport * from \"./c\";\n"),
+    ("c.ts", "export const baz = 99;\n"),
+    ("entry.ts", "import { foo, baz } from \"./barrel\";\nconsole.log(foo, baz);\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("const foo = 1"))
+      assert_true(out.js.contains("const baz = 99"))
+      assert_true(out.js.contains("console.log(foo, baz)"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
