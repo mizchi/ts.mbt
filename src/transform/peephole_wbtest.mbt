@@ -727,3 +727,11 @@ test "peephole: x != null ? x[key] : void 0 → x?.[key]" {
   let out = minify_one("const r = x != null ? x[key] : void 0;")
   assert_true(out.contains("?.["), msg="expected optional index chain, got: \{out}")
 }
+
+///|
+test "peephole: x == null ? fallback : x → x ?? fallback" {
+  // Flipped form of nullish coalescing.
+  let out = minify_one("const r = x == null ? 'default' : x;")
+  assert_true(out.contains("??"), msg="expected ??, got: \{out}")
+  assert_false(out.contains("=="), msg="expected no == null check, got: \{out}")
+}

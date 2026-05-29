@@ -31,6 +31,7 @@
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
 //   x!=null ? x[k] : void 0      -> x?.[k]
+//   x==null ? y : x               -> x ?? y       (flipped nullish coalescing)
 //   this.x=void 0;…;this.x=val  -> this.x=val  (drop TS class-field placeholders)
 //
 // The compound-assign rewrite touches both expression-level
@@ -634,6 +635,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 _ => false
               }
               if exprs_eq(check_x, t_val) {
+                // `x != null ? x : y` → `x ?? y`
                 BinOp(@ast.TsBinOp::Coalesce, check_x, e_val)
               } else if is_void_else {
                 match t_val {
@@ -649,6 +651,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                 Cond(cp, t_val, e_val)
               }
             }
+            // `x == null ? y : x` → `x ?? y` (flipped nullish coalescing).
+            // TypeScript sometimes emits the eq-form for null-default patterns.
+            BinOp(@ast.TsBinOp::AbstractEq, check_x, NullLit) =>
+              if exprs_eq(check_x, e_val) {
+                BinOp(@ast.TsBinOp::Coalesce, check_x, t_val)
+              } else {
+                Cond(cp, t_val, e_val)
+              }
             _ => Cond(cp, t_val, e_val)
           }
       }
