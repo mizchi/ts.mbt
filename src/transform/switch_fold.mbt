@@ -106,27 +106,56 @@ fn try_extract_switch_fold(f : @ast.TsFunc) -> SwitchFoldEntry? {
       }
     _ => return None
   }
-  // Every arm must be `case "lit": return EXPR;`. No `default:`.
+  // Every arm must be `case "lit": return EXPR;`.
+  // A single `default: return EXPR;` is also accepted: it acts as a
+  // fallback for any union literal that doesn't have an explicit arm.
   let arms : Map[String, @ast.TsExpr] = {}
+  let mut default_expr : @ast.TsExpr? = None
   for c in cases {
-    let lit = match c.test_expr {
-      Some(@ast.TsExpr::StringLit(s)) => s
-      _ => return None
+    match c.test_expr {
+      Some(@ast.TsExpr::StringLit(s)) => {
+        if c.body.stmts.length() != 1 {
+          return None
+        }
+        let expr = match c.body.stmts[0] {
+          Return(Some(e)) => e
+          _ => return None
+        }
+        arms[s] = expr
+      }
+      None => {
+        // `default:` arm — accept exactly one.
+        if default_expr.is_empty() {
+          if c.body.stmts.length() != 1 {
+            return None
+          }
+          let expr = match c.body.stmts[0] {
+            Return(Some(e)) => e
+            _ => return None
+          }
+          default_expr = Some(expr)
+        } else {
+          return None // two defaults — shouldn't happen but bail
+        }
+      }
+      _ => return None // non-string, non-default case
     }
-    if c.body.stmts.length() != 1 {
-      return None
-    }
-    let expr = match c.body.stmts[0] {
-      Return(Some(e)) => e
-      _ => return None
-    }
-    arms[lit] = expr
   }
-  // Every literal in the union must have a matching arm.
-  for l in literals {
-    if not(arms.contains(l)) {
-      return None
-    }
+  // Fill in missing literals from the default arm (if any).
+  match default_expr {
+    Some(d) =>
+      for l in literals {
+        if not(arms.contains(l)) {
+          arms[l] = d
+        }
+      }
+    None =>
+      // No default: every literal must have an explicit arm.
+      for l in literals {
+        if not(arms.contains(l)) {
+          return None
+        }
+      }
   }
   Some({ param_names, switch_param_index: 0, arms })
 }

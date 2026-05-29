@@ -1845,6 +1845,25 @@ test "link: `export * as ns from` where source uses `export * from` (re-export c
 }
 
 ///|
+test "switch_fold: switch with default arm folds known-literal call sites" {
+  // A dispatch function with `default:` for unmapped literals should still
+  // fold when the call site uses a literal that hits the default.
+  let src = #|function dispatch(k: "x" | "y" | "z"): number {
+  #|  switch (k) {
+  #|    case "x": return 1;
+  #|    default: return 99;
+  #|  }
+  #|}
+  #|console.log(dispatch("y"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("99"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "type_fold: typeof x === \"undefined\" folds to true for x: undefined param" {
   // When a parameter is declared `: undefined`, `typeof x === "undefined"`
   // is statically true. The fold pass should collapse the if-branch.
