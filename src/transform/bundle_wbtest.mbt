@@ -1907,6 +1907,25 @@ test "class_method_dce: for-in loop in constructor body does not abort prototype
 }
 
 ///|
+test "emit: empty no-arg constructor on base class is dropped in minify mode" {
+  // An explicit `constructor() {}` on a class that does not extend another
+  // is identical to the implicit default constructor. The emitter should
+  // drop it in minify mode to save bytes.
+  let src = #|class Foo {
+  #|  constructor() {}
+  #|  run(): number { return 42; }
+  #|}
+  #|const f = new Foo();
+  #|console.log(f.run());
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true).with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("constructor"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class_method_dce: this[dynamic] instance-write does not abort prototype method DCE" {
   // Hono-style: constructor assigns this[method] = ... for all methods.
   // The DCE should still drop the unused `old()` prototype method.

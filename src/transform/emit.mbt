@@ -2963,17 +2963,35 @@ fn emit_native_class(
   e.open_block()
   // Constructor — emit the full TsFunc so rest / default /
   // destructuring params are preserved verbatim.
-  match ctor_func {
-    Some(func) => {
-      e.nl()
-      e.write("constructor")
-      e.write("(")
-      emit_runtime_params(e, func.params)
-      e.write(")")
-      e.space()
-      emit_block(e, func.body)
+  // In minify mode, a no-arg empty constructor on a base class (no
+  // `extends`) is identical to the implicit default constructor — drop
+  // it to save bytes. Derived classes must keep even an empty
+  // constructor since `constructor(){}` calls `super()` with no args,
+  // while the implicit constructor forwards all args to `super`.
+  let ctor_is_implicit = match ctor_func {
+    Some(func) =>
+      not(e.pretty) &&
+      decl.base_names.is_empty() &&
+      decl.base_expr.is_empty() &&
+      func.params.is_empty() &&
+      func.body.stmts.is_empty() &&
+      not(func.is_async) &&
+      not(func.is_generator)
+    None => true
+  }
+  if not(ctor_is_implicit) {
+    match ctor_func {
+      Some(func) => {
+        e.nl()
+        e.write("constructor")
+        e.write("(")
+        emit_runtime_params(e, func.params)
+        e.write(")")
+        e.space()
+        emit_block(e, func.body)
+      }
+      None => ()
     }
-    None => ()
   }
   // Methods.
   for m in decl.methods {
