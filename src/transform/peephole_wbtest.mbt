@@ -1064,3 +1064,17 @@ test "peephole: 2-case switch (case+default, return) → if/else then ternary" {
   // After if+else folding: return x==='a'?1:2
   assert_true(out.contains("?"), msg="expected ternary, got: \{out}")
 }
+
+///|
+test "emit: consecutive let declarations merged in minify mode" {
+  // Use emit_block directly so the consecutive-merge logic fires.
+  let block = @parser.parse_block_from_source("let a = 1; let b = 2; let c = 3;")
+  let folded = peephole_block(block)
+  let e = Emitter::new(pretty=false)
+  emit_block(e, folded)
+  let out = e.to_string()
+  // Three separate `let` decls should become one `let a=1,b=2,c=3`
+  // Verify only one `let` keyword appears (no second `let ` after comma separation)
+  assert_false(out.contains("let a") && out.contains("let b"), msg="expected merged let, got: \{out}")
+  assert_true(out.contains("a") && out.contains("b") && out.contains("c"), msg="expected a,b,c, got: \{out}")
+}

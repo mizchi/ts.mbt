@@ -393,12 +393,13 @@ pub fn transform_source_full(
 ///|
 fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
   e.open_block()
-  for i, stmt in block.stmts {
+  let stmts = block.stmts
+  let n = stmts.length()
+  let mut i = 0
+  while i < n {
+    let stmt = stmts[i]
     e.nl()
-    // Record a source-map segment at every statement entry when the
-    // parser supplied positions. `stmt_positions` is aligned with
-    // `stmts`; synthesized blocks (e.g. class desugar) leave it
-    // empty and the emit just skips the mapping.
+    // Record a source-map segment when positions are available.
     match e.smap {
       Some(_) =>
         if i < block.stmt_positions.length() {
@@ -407,7 +408,85 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
         }
       None => ()
     }
+    // In minify mode, merge consecutive same-kind declarations:
+    // `let a=1;let b=2;` → `let a=1,b=2;` (saves 4 bytes per merged decl).
+    // Only in minify mode to avoid changing pretty output.
+    // `const` is treated as `let` in minify mode (matching try_emit_multi_decl_inline).
+    if not(e.pretty) {
+      let decl_kind : String? = match stmt {
+        @ast.TsStmt::Let(_, _, _) => Some("let")
+        @ast.TsStmt::Const(_, _, _) => Some("let")
+        @ast.TsStmt::Var(_, _, _) => Some("var")
+        _ => None
+      }
+      match decl_kind {
+        Some(kind) => {
+          // Collect this and all following same-kind declarations into a group.
+          let group : Array[@ast.TsStmt] = [stmt]
+          let mut j = i + 1
+          while j < n {
+            let next = stmts[j]
+            let next_kind : String? = match next {
+              @ast.TsStmt::Let(_, _, _) => Some("let")
+              @ast.TsStmt::Const(_, _, _) => Some("let")
+              @ast.TsStmt::Var(_, _, _) => Some("var")
+              _ => None
+            }
+            if next_kind == Some(kind) {
+              group.push(next)
+              j = j + 1
+            } else {
+              break
+            }
+          }
+          if group.length() > 1 {
+            // Emit as merged: `let a=init_a,b=init_b,...;`
+            let first_byte = match group[0] {
+              @ast.TsStmt::Var(b, _, _)
+              | @ast.TsStmt::Let(b, _, _)
+              | @ast.TsStmt::Const(b, _, _) => binding_leading_byte(b)
+              _ => '?'
+            }
+            e.word(kind)
+            e.sep_after_word(first_byte)
+            for k, gs in group {
+              if k > 0 {
+                e.write(",")
+                e.space()
+              }
+              match gs {
+                @ast.TsStmt::Var(b, _, init)
+                | @ast.TsStmt::Let(b, _, init)
+                | @ast.TsStmt::Const(b, _, init) => {
+                  emit_binding(e, b)
+                  let is_undef_init = match init {
+                    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
+                    @ast.TsExpr::Var("undefined") => true
+                    _ => false
+                  }
+                  if not(is_undef_init) {
+                    e.space()
+                    e.write("=")
+                    e.space()
+                    emit_expr(e, init, 0)
+                  }
+                }
+                _ => ()
+              }
+            }
+            e.semi()
+            i = j
+            continue
+          }
+          emit_stmt(e, stmt)
+          i = i + 1
+          continue
+        }
+        None => ()
+      }
+    }
     emit_stmt(e, stmt)
+    i = i + 1
   }
   e.close_block()
 }
