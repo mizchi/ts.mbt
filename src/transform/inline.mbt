@@ -243,8 +243,12 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, inline_into_expr(sf.1)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(inline_into_expr(b))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }
@@ -381,8 +385,12 @@ fn inline_into_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, inline_into_expr(sf.1)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(inline_into_expr(b))
+        None => None
+      }
       NativeClassExpr(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }
