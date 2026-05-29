@@ -477,3 +477,19 @@ test "peephole: Number() with 0 args not folded" {
   let out = peep_one("const r = Number();\n")
   assert_true(out.contains("Number()"), msg="expected Number(), got: \{out}")
 }
+
+///|
+test "peephole: !!(x===y) folds to x===y (double negation on comparison)" {
+  let out = peep_one("const r = !!(x === y);\n")
+  assert_true(out.contains("x === y"), msg="expected x === y, got: \{out}")
+  assert_false(out.contains("!!"), msg="expected no !!, got: \{out}")
+}
+
+///|
+test "peephole: Boolean(x===y) chain: Boolean→!! then !!→comparison" {
+  // Boolean(x===y) → !!(x===y) → x===y
+  let out = peep_one("const r = Boolean(x === y);\n")
+  assert_true(out.contains("x === y"), msg="expected x === y, got: \{out}")
+  assert_false(out.contains("Boolean"), msg="expected no Boolean, got: \{out}")
+  assert_false(out.contains("!!"), msg="expected no !!, got: \{out}")
+}

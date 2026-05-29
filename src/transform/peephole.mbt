@@ -380,6 +380,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     UnaryOp(Not, inner) => {
       let inner_p = peep_expr(inner, ctx)
       // `!(a OP b)` → `a INV_OP b` — saves the two wrapping characters.
+      // `!!(bool_expr)` → `bool_expr` — double negation on a comparison is
+      // a no-op (comparisons already yield boolean). Saves 2 bytes.
       match inner_p {
         BinOp(@ast.TsBinOp::BinEq, a, b) => BinOp(@ast.TsBinOp::BinNe, a, b)
         BinOp(@ast.TsBinOp::BinNe, a, b) => BinOp(@ast.TsBinOp::BinEq, a, b)
@@ -389,6 +391,9 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         BinOp(@ast.TsBinOp::BinLe, a, b) => BinOp(@ast.TsBinOp::BinGt, a, b)
         BinOp(@ast.TsBinOp::BinGt, a, b) => BinOp(@ast.TsBinOp::BinLe, a, b)
         BinOp(@ast.TsBinOp::BinGe, a, b) => BinOp(@ast.TsBinOp::BinLt, a, b)
+        // `!!(comparison)` → `comparison`
+        UnaryOp(@ast.TsUnaryOp::Not, bool_expr) if is_bool_expr(bool_expr) =>
+          bool_expr
         _ => UnaryOp(@ast.TsUnaryOp::Not, inner_p)
       }
     }
@@ -407,6 +412,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         if name == "Number" {
           return UnaryOp(@ast.TsUnaryOp::Plus, new_args[0])
         } else if name == "Boolean" {
+          // Boolean(bool_expr) → bool_expr directly (skip the !! round-trip)
+          if is_bool_expr(new_args[0]) {
+            return new_args[0]
+          }
           return UnaryOp(
             @ast.TsUnaryOp::Not,
             UnaryOp(@ast.TsUnaryOp::Not, new_args[0]),
@@ -816,5 +825,31 @@ fn fold_null_undef_and(
         _ => None
       }
     _ => None
+  }
+}
+
+///|
+/// Returns true when an expression is guaranteed to be boolean-typed:
+/// comparisons, `instanceof`, `in`, and logical-not. Used by the
+/// `!!(expr)` → `expr` peephole to strip redundant double-negation.
+fn is_bool_expr(e : @ast.TsExpr) -> Bool {
+  match e {
+    @ast.TsExpr::BinOp(op, _, _) =>
+      match op {
+        @ast.TsBinOp::BinEq
+        | @ast.TsBinOp::BinNe
+        | @ast.TsBinOp::AbstractEq
+        | @ast.TsBinOp::AbstractNe
+        | @ast.TsBinOp::BinLt
+        | @ast.TsBinOp::BinLe
+        | @ast.TsBinOp::BinGt
+        | @ast.TsBinOp::BinGe
+        | @ast.TsBinOp::Instanceof
+        | @ast.TsBinOp::In => true
+        _ => false
+      }
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Not, _) => true
+    @ast.TsExpr::BoolLit(_) => true
+    _ => false
   }
 }
