@@ -412,8 +412,13 @@ fn block_has_method_sniff(block : @ast.TsBlock) -> Bool {
 ///|
 fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
   match stmt {
-    // for-in iterates property names — sink.
-    ForIn(_, _, _, _, _) => true
+    // for-in iterates property names, but the body itself may or may
+    // not access prototype methods; recurse rather than unconditionally
+    // aborting. The iter expression and body are checked the same way
+    // ForOf is, since a `for...in` body can still contain calls or
+    // computed accesses that are legitimate method-sniff sinks.
+    ForIn(_, _, _, iter, body) =>
+      expr_has_method_sniff(iter) || block_has_method_sniff(body)
     Var(_, _, e)
     | Let(_, _, e)
     | Const(_, _, e)

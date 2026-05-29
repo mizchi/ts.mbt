@@ -1883,6 +1883,30 @@ test "type_fold: typeof x === \"undefined\" folds to true for x: undefined param
 }
 
 ///|
+test "class_method_dce: for-in loop in constructor body does not abort prototype method DCE" {
+  // A class whose constructor uses `for...in` over a plain object should
+  // still have unused prototype methods removed. The conservative `ForIn =>
+  // true` caused DCE to be skipped entirely for any such class.
+  let src = #|class Router {
+  #|  constructor(routes: Record<string, string>) {
+  #|    for (const k in routes) {
+  #|      this.register(k, routes[k]);
+  #|    }
+  #|  }
+  #|  register(path: string, handler: string) { return path + handler; }
+  #|  unused() { return 99; }
+  #|}
+  #|const r = new Router({});
+  #|r.register("/", "h");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class_method_dce: this[dynamic] instance-write does not abort prototype method DCE" {
   // Hono-style: constructor assigns this[method] = ... for all methods.
   // The DCE should still drop the unused `old()` prototype method.
