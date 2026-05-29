@@ -1995,6 +1995,18 @@ fn collect_var_refs_in_expr_local(
     // which the bundler will resolve through the surrounding scope
     // at call time, not at decl time.
     ArrowFunc(_, _, _, _) | FuncExpr(_) => ()
+    // For class expressions, the base class is evaluated at definition
+    // time; method/ctor bodies are captures (skip them). Static field
+    // initializers also run at definition time and must be tracked.
+    NativeClassExpr(decl, _) => {
+      match decl.base_expr {
+        Some(b) => collect_var_refs_in_expr_local(b, out)
+        None => ()
+      }
+      for sf in decl.static_field_inits {
+        collect_var_refs_in_expr_local(sf.1, out)
+      }
+    }
     DynamicImport(spec, opts) => {
       collect_var_refs_in_expr_local(spec, out)
       match opts {
