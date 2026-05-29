@@ -667,3 +667,16 @@ test "peephole: x!=null?x:y folds to x??y (nullish coalescing)" {
   assert_true(out.contains("??"), msg="expected ??, got: \{out}")
   assert_false(out.contains("!=="), msg="expected no !==, got: \{out}")
 }
+
+///|
+test "peephole: let x = expr; return x; folds to return expr;" {
+  let out = peep_one("function f(a){let r=a+1;return r;}")
+  assert_true(out.contains("return"), msg="expected return, got: \{out}")
+  assert_false(out.contains("let r"), msg="expected no temp var, got: \{out}")
+}
+
+///|
+test "peephole: const x = expr; return x; folds to return expr;" {
+  let out = peep_one("function f(a){const r=a*2;return r;}")
+  assert_false(out.contains("let r") || out.contains("const r"), msg="expected no temp var, got: \{out}")
+}

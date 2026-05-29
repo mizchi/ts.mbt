@@ -392,6 +392,21 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
         stmts[n - 2] = Return(Some(peep_expr(Cond(c, a, b), ctx)))
         stmts.pop() |> ignore
       }
+      // `let/const/var x = expr; return x;` → `return expr;`
+      // Eliminates a temporary variable used only to name the return value.
+      // Only safe when the binding is a simple identifier (not destructuring).
+      (Let(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+        stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
+        stmts.pop() |> ignore
+      }
+      (Const(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+        stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
+        stmts.pop() |> ignore
+      }
+      (Var(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
+        stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
+        stmts.pop() |> ignore
+      }
       _ => ()
     }
   }
