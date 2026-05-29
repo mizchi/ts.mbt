@@ -1407,3 +1407,20 @@ test "fold: x !== x folds to false" {
   assert_true(out.contains("false") || out.contains("!1"), "expected false but got: \{out}")
   assert_false(out.contains("!=="))
 }
+
+///|
+test "fold: else block hoisted when then-branch always returns" {
+  // `if (c) { return x; } else { stmts }` → `if (c) return x; stmts`
+  // Saves `} else {` bytes in minified output.
+  let out = fold_one("function f(c, x, y) { if (c) { return x; } else { return y; } }\n")
+  // After hoisting, the else is gone. The result could be
+  // `return c ? x : y` (further folded) or `if(c)return x; return y;`.
+  assert_false(out.contains("else"), "expected else to be removed: \{out}")
+}
+
+///|
+test "fold: else block hoisted when then-branch throws" {
+  // `if (!x) { throw e; } else { stmts }` → `if(!x)throw e; stmts`
+  let out = fold_one("function f(x) { if (!x) { throw new Error('bad'); } else { return x + 1; } }\n")
+  assert_false(out.contains("else"), "expected else to be removed: \{out}")
+}

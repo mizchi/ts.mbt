@@ -59,6 +59,28 @@ fn single_return_expr(block : @ast.TsBlock) -> @ast.TsExpr? {
 }
 
 ///|
+/// Returns `true` when `stmt` unconditionally exits the current
+/// function/block (return / throw / break / continue). Used by
+/// the else-hoist optimization: when an `if` branch always exits,
+/// the `else` block can be hoisted as sibling statements.
+fn stmt_always_exits(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Return(_) | Throw(_) | Break(_) | Continue(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Returns `true` when `block` always exits on every path —
+/// specifically when the last statement always exits.
+fn block_always_exits(block : @ast.TsBlock) -> Bool {
+  if block.stmts.is_empty() {
+    return false
+  }
+  stmt_always_exits(block.stmts[block.stmts.length() - 1])
+}
+
+///|
 /// If `block` is exactly `{ EXPR; }` (one expression statement),
 /// return `Some(EXPR)`. Otherwise `None`.
 fn single_expr_stmt(block : @ast.TsBlock) -> @ast.TsExpr? {
@@ -347,7 +369,19 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
             }
           _ => (cond_emit, then_emit, else_emit)
         }
-        out.push(If(cond_emit, then_emit, else_emit))
+        // Else-hoist: when the then-block always exits (return/throw/break/
+        // continue), the else block's contents can be hoisted to sibling
+        // position. Saves `} else {` = ~7 chars in minified output.
+        // Only applies when there IS an else block and the then-branch exits.
+        match else_emit {
+          Some(else_b) if block_always_exits(then_emit) => {
+            out.push(If(cond_emit, then_emit, None))
+            for s in else_b.stmts {
+              out.push(s)
+            }
+          }
+          _ => out.push(If(cond_emit, then_emit, else_emit))
+        }
       }
     }
     Var(b, t, rhs) => out.push(Var(b, t, fold_expr(rhs)))
