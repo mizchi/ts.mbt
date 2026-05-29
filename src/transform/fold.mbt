@@ -1084,17 +1084,6 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             OptionalChain(PropAccess(Var(cn), prop))
           (
             BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit),
-            MethodCall(Var(tn), m, args),
-            _,
-          )
-          | (
-            BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)),
-            MethodCall(Var(tn), m, args),
-            _,
-          ) if cn == tn && is_nullish_or_void(ef) =>
-            OptionalChain(MethodCall(Var(cn), m, args))
-          (
-            BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit),
             IndexAccess(Var(tn), idx),
             _,
           )
@@ -1126,17 +1115,6 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             PropAccess(Var(tn), prop),
           ) if cn == tn && is_nullish_or_void(tf) =>
             OptionalChain(PropAccess(Var(cn), prop))
-          (
-            BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit),
-            _,
-            MethodCall(Var(tn), m, args),
-          )
-          | (
-            BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)),
-            _,
-            MethodCall(Var(tn), m, args),
-          ) if cn == tn && is_nullish_or_void(tf) =>
-            OptionalChain(MethodCall(Var(cn), m, args))
           (
             BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit),
             _,

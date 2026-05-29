@@ -1215,8 +1215,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     OptionalChain(PropAccess(check_x, prop))
                   IndexAccess(recv, idx) if exprs_eq(check_x, recv) =>
                     OptionalChain(IndexAccess(check_x, idx))
-                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
-                    OptionalChain(MethodCall(check_x, method, args))
                   // `x != null ? x() : void 0` → `x?.()` (optional call)
                   Call(fn_name, args) =>
                     if exprs_eq(check_x, Var(fn_name)) {
@@ -1252,8 +1250,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     OptionalChain(PropAccess(check_x, prop))
                   IndexAccess(recv, idx) if exprs_eq(check_x, recv) =>
                     OptionalChain(IndexAccess(check_x, idx))
-                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
-                    OptionalChain(MethodCall(check_x, method, args))
                   Call(fn_name, args) =>
                     if exprs_eq(check_x, Var(fn_name)) {
                       OptionalChain(Call(fn_name, args))
@@ -1725,14 +1721,18 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       //   - Body doesn't reference `this` or `arguments` (arrow functions capture these lexically).
       //   - Not named (or the name isn't used inside the body as a recursive ref).
       //   - Not async (async arrows are fine syntax-wise, but we only need to handle the common case).
-      // Don't convert empty-body functions to arrows: empty functions are
-      // frequently used as constructor bases and their `.prototype` is
-      // accessed in the surrounding scope — arrows lack `.prototype`.
+      // Only convert ANONYMOUS function expressions to arrows.  Named
+      // FuncExprs (`let foo = function foo(){...}`) are the parser's
+      // representation of `function foo(){}` declarations, which are
+      // hoisted in JS. Converting to an arrow would prevent
+      // `try_emit_function_decl` from emitting a real function declaration
+      // and break forward references.  Also guard against empty-body
+      // functions used as constructor bases (arrows lack `.prototype`).
       let can_arrow = not(f.is_generator) &&
+        f.name == "" &&
         not(folded.stmts.is_empty()) &&
         not(block_references_name(folded, "this")) &&
-        not(block_references_name(folded, "arguments")) &&
-        (f.name == "" || not(block_references_name(folded, f.name)))
+        not(block_references_name(folded, "arguments"))
       if can_arrow {
         let arrow_body = match folded.stmts {
           [Return(Some(inner))] => @ast.TsArrowBody::ArrowExpr(inner)

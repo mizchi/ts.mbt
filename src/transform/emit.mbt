@@ -427,6 +427,19 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
       }
       match decl_kind {
         Some(kind) => {
+          // FuncExpr-initialised declarations must not be merged — emit them
+          // as real function declarations so JS hoisting semantics are preserved.
+          let is_func_init = match stmt {
+            @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+            _ => false
+          }
+          if is_func_init {
+            emit_stmt(e, stmt)
+            i = i + 1
+            continue
+          }
           // Collect this and all following same-kind declarations into a group.
           let group : Array[@ast.TsStmt] = [stmt]
           let mut j = i + 1
@@ -438,7 +451,13 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
               @ast.TsStmt::Var(_, _, _) => Some("var")
               _ => None
             }
-            if next_kind == Some(kind) {
+            let next_is_func = match next {
+              @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+              | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+              | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+              _ => false
+            }
+            if next_kind == Some(kind) && not(next_is_func) {
               group.push(next)
               j = j + 1
             } else {
