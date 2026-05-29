@@ -127,6 +127,10 @@ fn collect_read_property_names_stmt(
     Label(_, inner) => collect_read_property_names_stmt(inner, out)
     Block(b) => collect_read_property_names_block(b, out)
     NativeClassStmt(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_read_property_names_expr(b, out)
+        None => ()
+      }
       match ctor {
         Some(f) => collect_read_property_names_block(f.body, out)
         None => ()
@@ -325,6 +329,10 @@ fn collect_read_property_names_expr(
         collect_read_property_names_expr(e, out)
       }
     NativeClassExpr(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_read_property_names_expr(b, out)
+        None => ()
+      }
       match ctor {
         Some(f) => collect_read_property_names_block(f.body, out)
         None => ()
