@@ -343,3 +343,30 @@ test "peephole: arr[i] = arr[i] + n collapses to arr[i] += n" {
   assert_true(out.contains("arr[i] += 5") || out.contains("+="))
   assert_false(out.contains("= arr[i] + 5"))
 }
+
+///|
+test "peephole: !(a === b) folds to a !== b" {
+  let out = peep_one("const r = !(a === b);\n")
+  assert_true(out.contains("!=="), "expected !== but got: \{out}")
+  assert_false(out.contains("==="))
+}
+
+///|
+test "peephole: !(a !== b) folds to a === b" {
+  let out = peep_one("const r = !(a !== b);\n")
+  assert_true(out.contains("==="), "expected === but got: \{out}")
+  assert_false(out.contains("!=="))
+}
+
+///|
+test "peephole: !(a < b) folds to a >= b" {
+  let out = peep_one("const r = !(a < b);\n")
+  assert_true(out.contains(">="), "expected >= but got: \{out}")
+  assert_false(out.contains("<"))
+}
+
+///|
+test "peephole: !!x folds to Boolean(x)" {
+  let out = peep_one("const r = !!x;\n")
+  assert_true(out.contains("Boolean("), "expected Boolean() but got: \{out}")
+}

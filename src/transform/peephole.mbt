@@ -14,6 +14,15 @@
 //   undefined     -> void 0          (when `undefined` is never bound)
 //   true          -> !0              (saves 2 bytes)
 //   false         -> !1              (saves 3 bytes)
+//   !(a === b)    -> a !== b         (saves 3 bytes: `!(` + `)` vs `!==`)
+//   !(a !== b)    -> a === b
+//   !(a == b)     -> a != b
+//   !(a != b)     -> a == b
+//   !(a < b)      -> a >= b
+//   !(a <= b)     -> a > b
+//   !(a > b)      -> a <= b
+//   !(a >= b)     -> a < b
+//   !!x           -> Boolean(x)      (saves 1 byte; coerces to bool consistently)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -348,6 +357,23 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       AssignExpr(name, rhs_p)
     }
     BinOp(op, l, r) => BinOp(op, peep_expr(l, ctx), peep_expr(r, ctx))
+    UnaryOp(Not, inner) => {
+      let inner_p = peep_expr(inner, ctx)
+      // `!(a OP b)` → `a INV_OP b` — saves the two wrapping characters.
+      match inner_p {
+        BinOp(@ast.TsBinOp::BinEq, a, b) => BinOp(@ast.TsBinOp::BinNe, a, b)
+        BinOp(@ast.TsBinOp::BinNe, a, b) => BinOp(@ast.TsBinOp::BinEq, a, b)
+        BinOp(@ast.TsBinOp::AbstractEq, a, b) => BinOp(@ast.TsBinOp::AbstractNe, a, b)
+        BinOp(@ast.TsBinOp::AbstractNe, a, b) => BinOp(@ast.TsBinOp::AbstractEq, a, b)
+        BinOp(@ast.TsBinOp::BinLt, a, b) => BinOp(@ast.TsBinOp::BinGe, a, b)
+        BinOp(@ast.TsBinOp::BinLe, a, b) => BinOp(@ast.TsBinOp::BinGt, a, b)
+        BinOp(@ast.TsBinOp::BinGt, a, b) => BinOp(@ast.TsBinOp::BinLe, a, b)
+        BinOp(@ast.TsBinOp::BinGe, a, b) => BinOp(@ast.TsBinOp::BinLt, a, b)
+        // `!!x` → `Boolean(x)` saves one byte and is semantically identical.
+        UnaryOp(@ast.TsUnaryOp::Not, x) => Call("Boolean", [x])
+        _ => UnaryOp(@ast.TsUnaryOp::Not, inner_p)
+      }
+    }
     UnaryOp(op, inner) => UnaryOp(op, peep_expr(inner, ctx))
     Cond(c, t, e) =>
       Cond(peep_expr(c, ctx), peep_expr(t, ctx), peep_expr(e, ctx))
