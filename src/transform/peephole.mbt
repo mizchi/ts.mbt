@@ -41,6 +41,7 @@
 //   x && x.method(args)    -> x?.method(args)
 //   switch { …; default: } -> switch { … }  (drop empty trailing cases)
 //   { ...{a,b} }           -> { a, b }     (flatten literal object spread)
+//   [...a,...[1,2],...b]   -> [...a,1,2,...b] (flatten literal array spread)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -884,7 +885,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     ArrayLit(items) => {
       let new_items : Array[@ast.TsExpr] = []
       for i in items {
-        new_items.push(peep_expr(i, ctx))
+        let ip = peep_expr(i, ctx)
+        // `[...a, ...[1,2,3], ...b]` → `[...a, 1, 2, 3, ...b]`
+        // Flatten spreads of literal arrays in-place.
+        match ip {
+          @ast.TsExpr::Spread(@ast.TsExpr::ArrayLit(inner)) => {
+            for e in inner {
+              new_items.push(e)
+            }
+          }
+          _ => new_items.push(ip)
+        }
       }
       ArrayLit(new_items)
     }

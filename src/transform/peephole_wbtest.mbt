@@ -888,3 +888,11 @@ test "peephole: {...{a:1}} flattens object spread of literal" {
   assert_false(out.contains("..."), msg="expected no spread, got: \{out}")
   assert_true(out.contains("a:"), msg="expected a: entry, got: \{out}")
 }
+
+///|
+test "peephole: [...a, ...[1,2], ...b] flattens literal array spread" {
+  let out = minify_one("const r = [...a, ...[1, 2], ...b];")
+  // The ...[1,2] should be flattened to 1,2 inline.
+  assert_true(out.contains("1,2"), msg="expected 1,2 inlined, got: \{out}")
+  assert_false(out.contains("...["), msg="expected no ...[, got: \{out}")
+}
