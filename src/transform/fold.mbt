@@ -1213,7 +1213,20 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     As(inner, ty) => As(fold_expr(inner), ty)
     Satisfies(inner, ty) => Satisfies(fold_expr(inner), ty)
     NonNull(inner) => NonNull(fold_expr(inner))
-    OptionalChain(inner) => OptionalChain(fold_expr(inner))
+    OptionalChain(inner) => {
+      let inner_f = fold_expr(inner)
+      // `recv?.prop` / `recv?.method(...)` / `recv?.[idx]` — when
+      // `recv` is provably non-null the `?.` guard is redundant:
+      // drop the wrapper and keep the plain access.
+      let recv = match inner_f {
+        PropAccess(r, _) | MethodCall(r, _, _) | IndexAccess(r, _) => Some(r)
+        _ => None
+      }
+      match recv {
+        Some(r) if not(can_be_nullish(r)) => inner_f
+        _ => OptionalChain(inner_f)
+      }
+    }
     _ => expr
   }
 }

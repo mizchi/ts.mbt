@@ -1360,3 +1360,12 @@ test "fold: NonNull assertion ?? fallback is eliminated (x! never nullish)" {
   assert_false(out.contains("fallback"))
   assert_false(out.contains("??"))
 }
+
+///|
+test "fold: optional chain on non-null receiver is dropped" {
+  // `[1,2,3]?.length` — the receiver is an array literal (never null),
+  // so `?.` is redundant and should become `.`.
+  let out = fold_one("const n = [1,2,3]?.length;\n")
+  assert_false(out.contains("?."))
+  assert_true(out.contains(".length"))
+}
