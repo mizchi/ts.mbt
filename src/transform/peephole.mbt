@@ -71,8 +71,9 @@
 //   Number.parseInt(x)          -> parseInt(x)  (saves 7 bytes; same fn per spec)
 //   Number.parseFloat(x)        -> parseFloat(x)
 //   Array.prototype.slice.call(x,0) -> [...x]   (saves ~24 bytes; 0-start copy)
-//   switch(x){case a:S}           -> if(x===a){S}   (enables further if→ternary folds)
-//   switch(x){case a:S default:T} -> if(x===a){S}else{T}
+//   switch(x){case a:S}                  -> if(x===a){S}   (enables further if→ternary folds)
+//   switch(x){case a:S default:T}        -> if(x===a){S}else{T}
+//   switch(x){case a:S1 case b:S2 …}    -> if(x===a){S1}else if(x===b){S2}… (all-terminator multi-case)
 //   catch(e){…not using e…}     -> catch{…}   (saves 3 bytes; ES2019 optional binding)
 //   if(x==null){x=y}            -> x??=y       (saves ~10 bytes; ES2021 CoalesceAssign)
 //   x === true                  -> x            (saves 7 bytes; drops bool literal cmp)
@@ -457,7 +458,70 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
             Switch(ep, final_cases)
           }
         }
-        _ => Switch(ep, final_cases)
+        // Multi-case switch where EVERY named case ends with a hard
+        // terminator (return/throw/break): convert to an if-else chain.
+        //   switch(x){case a:S1 case b:S2 default:T}
+        //     → if(x===a){S1}else if(x===b){S2}else{T}
+        // The resulting if-else chain then collapses via the
+        // `if(c)return a; return b;` block-level fold into ternaries.
+        _ => {
+          // Check all named cases end with a terminator.
+          let all_non_fall_through = {
+            let mut ok = final_cases.length() > 1
+            for c in final_cases {
+              match c.test_expr {
+                Some(_) =>
+                  match c.body.stmts.last() {
+                    Some(Return(_)) | Some(Throw(_)) | Some(Break(_)) => ()
+                    _ => { ok = false; break }
+                  }
+                None => () // default — no terminator required
+              }
+            }
+            ok
+          }
+          if all_non_fall_through {
+            // Build the if-else chain from right to left.
+            // Start from the default (if any) or None.
+            let default_block : @ast.TsBlock? = match final_cases.last() {
+              Some({ test_expr: None, body: db }) => Some(db)
+              _ => None
+            }
+            let named : Array[@ast.TsSwitchCase] = []
+            for c in final_cases {
+              match c.test_expr {
+                Some(_) => named.push(c)
+                None => ()
+              }
+            }
+            // Build else chain: rightmost named case first.
+            let mut else_block : @ast.TsBlock? = default_block
+            let mut i = named.length() - 1
+            while i >= 0 {
+              let c = named[i]
+              let test_e = match c.test_expr {
+                Some(te) => te
+                None => break
+              }
+              let new_if = peep_stmt(
+                If(BinOp(@ast.TsBinOp::BinEq, ep, test_e), c.body, else_block),
+                ctx,
+              )
+              else_block = Some({
+                stmts: [new_if],
+                stmt_positions: [],
+              })
+              i = i - 1
+            }
+            match else_block {
+              Some({ stmts: [single], .. }) => single
+              Some(blk) => If(BoolLit(true), blk, None) // fallback (shouldn't happen)
+              None => Switch(ep, final_cases)
+            }
+          } else {
+            Switch(ep, final_cases)
+          }
+        }
       }
     }
     Try(b, bnd, cb, fb) => {

@@ -81,12 +81,24 @@ test "minify emit: trailing ; before } is dropped" {
 }
 
 ///|
-test "minify emit: case keyword abuts string literal" {
+test "minify emit: 2-case all-return switch converts to if-else then ternary" {
+  // Both cases end with `return`, so the switch → if/else chain → ternary.
   let out = minify_one(
     "function f(x) { switch (x) { case \"a\": return 1; case \"b\": return 2; } }\n",
   )
-  assert_true(out.contains("case\"a\""))
-  assert_true(out.contains("case\"b\""))
+  // After conversion the output should have no switch/case keywords;
+  // it folds to `return x==="a"?1:x==="b"?2:void 0` or similar.
+  assert_false(out.contains("switch"), msg="expected no switch, got: \{out}")
+  assert_true(out.contains("return"), msg="expected return, got: \{out}")
+}
+
+///|
+test "minify emit: switch with fall-through stays as switch" {
+  // Case "a" falls through to "b" — no terminator after case "a".
+  let out = minify_one(
+    "function f(x) { switch (x) { case \"a\": case \"b\": return 1; } }\n",
+  )
+  assert_true(out.contains("switch") || out.contains("case"), msg="expected switch/case, got: \{out}")
 }
 
 ///|
@@ -1184,4 +1196,13 @@ test "peephole: x.hasOwnProperty(key) → Object.hasOwn(x, key)" {
   let r = minify_one("obj.hasOwnProperty(key);")
   assert_true(r.contains("Object.hasOwn"), msg="expected Object.hasOwn, got: \{r}")
   assert_false(r.contains("hasOwnProperty"), msg="expected no hasOwnProperty, got: \{r}")
+}
+
+///|
+test "peephole: multi-case all-return switch → if-else chain" {
+  let out = minify_one(
+    "function f(x) { switch (x) { case 1: return \"a\"; case 2: return \"b\"; case 3: return \"c\"; default: return \"d\"; } }\n",
+  )
+  assert_false(out.contains("switch"), msg="expected no switch, got: \{out}")
+  assert_true(out.contains("return"), msg="expected return, got: \{out}")
 }
