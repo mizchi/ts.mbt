@@ -2119,7 +2119,12 @@ fn try_emit_function_decl(e : Emitter, stmt : @ast.TsStmt) -> Bool {
   if func.is_generator {
     e.write("*")
   }
-  e.write(" ")
+  // In minify mode, `function*foo(){}` is valid — no space needed
+  // between `*` and the identifier. For non-generators `function`
+  // is a keyword and needs a separator before the name.
+  if e.pretty || not(func.is_generator) {
+    e.write(" ")
+  }
   e.write(name)
   e.write("(")
   emit_runtime_params(e, func.params)
@@ -2162,7 +2167,12 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
     is_valid_js_ident(f.name) &&
     not(is_reserved_word(f.name)) &&
     not(func_body_references_name_as_free_var(f, f.name)) {
-    e.write(" ")
+    // In minify mode, `function*name()` needs no space — `*` is
+    // punctuation, not a word token. Non-generators must keep the
+    // space: `functionname` would be parsed as one identifier.
+    if e.pretty || not(f.is_generator) {
+      e.write(" ")
+    }
     e.write(f.name)
   }
   e.write("(")
