@@ -1099,3 +1099,10 @@ test "peephole: template literal with prefix and no suffix → string concat" {
   assert_false(out.contains("`"), msg="expected no backticks, got: \{out}")
   assert_true(out.contains("\"prefix\"+x") || out.contains("'prefix'+x"), msg="expected string concat, got: \{out}")
 }
+
+///|
+test "peephole: +new Date() → Date.now()" {
+  let out = minify_one("const t = +new Date();")
+  assert_false(out.contains("new Date"), msg="expected no new Date, got: \{out}")
+  assert_true(out.contains("Date.now()"), msg="expected Date.now(), got: \{out}")
+}

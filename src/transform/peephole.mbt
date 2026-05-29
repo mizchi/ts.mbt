@@ -32,6 +32,7 @@
 //   String(x)             -> ""+x      (saves up to 5 bytes)
 //   `${x}`                -> ""+x      (saves 2 bytes; empty prefix+suffix)
 //   `prefix${x}`          -> "prefix"+x (saves 2 bytes; non-empty prefix OK)
+//   +new Date()           -> Date.now() (saves 1 byte; same timestamp semantics)
 //   Object.assign({},a,b)     -> {...a,...b}     (saves ~12 bytes)
 //   Object.assign({x:1},a,b) -> {x:1,...a,...b}  (literal target also safe)
 //   new Array(0) / new Array() -> []    (saves up to 11 bytes)
@@ -759,6 +760,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) | @ast.TsExpr::NullLit =>
           UnaryOp(@ast.TsUnaryOp::Not, IntLit(0))
         _ => UnaryOp(@ast.TsUnaryOp::Not, inner_p)
+      }
+    }
+    UnaryOp(Plus, inner) => {
+      let inner_p = peep_expr(inner, ctx)
+      // `+new Date()` → `Date.now()` (saves 1 byte; semantically equivalent
+      // for getting the current timestamp in milliseconds).
+      match inner_p {
+        @ast.TsExpr::New("Date", []) => MethodCall(Var("Date"), "now", [])
+        _ => UnaryOp(@ast.TsUnaryOp::Plus, inner_p)
       }
     }
     UnaryOp(op, inner) => UnaryOp(op, peep_expr(inner, ctx))
