@@ -64,8 +64,8 @@
 //   x ? x : y                     -> x || y          (saves 3 bytes)
 //   x ? y : x                     -> x && y          (saves 3 bytes)
 //   this.x=void 0;…;this.x=val  -> this.x=val  (drop TS class-field placeholders)
-//   typeof x === "undefined"    -> x === void 0  (saves ~9 bytes; combines with x==null rule)
-//   typeof x !== "undefined"    -> x !== void 0
+//   typeof x === "undefined"    -> SKIPPED (unsafe for undeclared globals)
+//   typeof x !== "undefined"    -> SKIPPED (unsafe for undeclared globals)
 //   !x ? b : a                  -> x ? a : b   (flip branches, drop negation)
 //   `text` (no exprs)           -> "text"       (saves 2 backtick bytes)
 //   Number.parseInt(x)          -> parseInt(x)  (saves 7 bytes; same fn per spec)
@@ -978,15 +978,9 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             (IntLit(0), PropAccess(_, "length"))
             | (IntLit(0), PropAccess(_, "size")) =>
               UnaryOp(@ast.TsUnaryOp::Not, rp)
-            // `typeof x === "undefined"` → `x === void 0`  (saves ~9 bytes)
-            // `"undefined" === typeof x` → `x === void 0`
-            (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
-            | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
-              BinOp(
-                @ast.TsBinOp::BinEq,
-                x,
-                UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
-              )
+            // NOTE: `typeof x === "undefined"` → `x === void 0` is unsafe for
+            // undeclared globals (throws ReferenceError). Skip this rewrite.
+
             // `x === true` / `x === !0` → `x`  (saves 7 bytes; x is already boolean)
             (x, BoolLit(true))
             | (BoolLit(true), x)
@@ -1016,14 +1010,9 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             (IntLit(0), PropAccess(_, "length"))
             | (IntLit(0), PropAccess(_, "size")) =>
               UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
-            // `typeof x !== "undefined"` → `x !== void 0`  (saves ~9 bytes)
-            (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
-            | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
-              BinOp(
-                @ast.TsBinOp::BinNe,
-                x,
-                UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)),
-              )
+            // NOTE: `typeof x !== "undefined"` → `x !== void 0` is unsafe for
+            // undeclared globals (throws ReferenceError). Skip this rewrite.
+
             // `x !== true` / `x !== !0` → `!x`  (saves 6 bytes)
             (x, BoolLit(true))
             | (BoolLit(true), x)
@@ -1553,7 +1542,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // Safe for all non-Symbol values which is the common case in bundled code.
       // The no-arg form only — `.toString(radix)` must be preserved.
       if m == "toString" && new_args.length() == 0 {
-        return BinOp(@ast.TsBinOp::Add, StringLit(""), recv_p)
+        // super.toString() must not become ""+super — `super` alone is a SyntaxError
+        match recv_p {
+          Var("super") => ()
+          _ => return BinOp(@ast.TsBinOp::Add, StringLit(""), recv_p)
+        }
       }
       MethodCall(recv_p, m, new_args)
     }

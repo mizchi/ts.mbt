@@ -93,9 +93,12 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
             refs[n] = true
           }
         }
-        // Constructor body refs
+        // Constructor body refs (params first for default-expression refs)
         match ctor {
-          Some(f) => collect_var_refs_in_block(f.body, refs)
+          Some(f) => {
+            collect_var_refs_in_params(f.params, refs)
+            collect_var_refs_in_block(f.body, refs)
+          }
           None => ()
         }
         // Method body refs
