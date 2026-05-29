@@ -334,6 +334,10 @@ pub fn transform_source_full(
   // Constant-fold before mangle so the mangler sees already-simplified
   // expressions (shorter names are assigned to already-reduced code).
   let folded = if minify { fold_block(lowered) } else { lowered }
+  // Lift IIFE-lowered classes to native `class` syntax in minify mode.
+  // The parser lowers TS classes with getters/setters/statics to IIFEs;
+  // re-lifting to class saves ~40+ bytes per class that qualifies.
+  let folded = if minify { iife_class_lift_block(folded) } else { folded }
   let mangled = if mangle {
     let mangler_cfg = ManglerConfig::default().with_mangle_properties(
       mangle_properties,
