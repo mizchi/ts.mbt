@@ -1943,12 +1943,49 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       }
     }
     New(name, args) => {
-      e.write("new ")
-      e.write(name)
-      // In minify mode, `new Foo` (no parens) is valid when there
-      // are no arguments. Saves 2 bytes per zero-arg construction.
-      if e.pretty || args.length() > 0 {
-        emit_args(e, args)
+      // In minify mode, `new RegExp("pat")` → `/pat/` and
+      // `new RegExp("pat","flags")` → `/pat/flags` saves bytes.
+      let emitted_as_regex = if not(e.pretty) && name == "RegExp" {
+        let pat_ok = match args.get(0) {
+          Some(StringLit(p)) => regex_literal_safe(p)
+          _ => false
+        }
+        let flags_ok = match args.get(1) {
+          None => true
+          Some(StringLit(f)) => {
+            let mut ok = true
+            for c in f {
+              match c {
+                'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd' | 'v' => ()
+                _ => ok = false
+              }
+            }
+            ok
+          }
+          _ => false
+        }
+        if pat_ok && flags_ok {
+          let pat = match args[0] { StringLit(p) => p; _ => "" }
+          let flags = match args.get(1) { Some(StringLit(f)) => f; _ => "" }
+          e.write("/")
+          emit_regex_body(e, pat)
+          e.write("/")
+          e.write(flags)
+          true
+        } else {
+          false
+        }
+      } else {
+        false
+      }
+      if not(emitted_as_regex) {
+        e.write("new ")
+        e.write(name)
+        // In minify mode, `new Foo` (no parens) is valid when there
+        // are no arguments. Saves 2 bytes per zero-arg construction.
+        if e.pretty || args.length() > 0 {
+          emit_args(e, args)
+        }
       }
     }
     NewExpr(callee, args) => {
@@ -2988,6 +3025,31 @@ fn emit_string_literal(e : Emitter, s : String) -> Unit {
     }
   }
   e.write(quote.to_string())
+}
+
+// Returns true iff the runtime string value `s` can be safely used as the
+// body of a regex literal /s/. Rejects empty patterns (would produce `//`,
+// a comment), newlines, NUL bytes, and other control characters.
+fn regex_literal_safe(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  for c in s {
+    // Reject `/`: escaping it as `\/` is unsafe when preceded by `\`
+    // (produces `\\/` which closes the regex).  Reject control chars too.
+    if c == '/' || c == '\n' || c == '\r' || c.to_int() < 32 {
+      return false
+    }
+  }
+  true
+}
+
+// Emit the runtime string value `s` as the body of a regex literal.
+// Caller must have verified regex_literal_safe(s).
+fn emit_regex_body(e : Emitter, s : String) -> Unit {
+  for c in s {
+    e.write(c.to_string())
+  }
 }
 
 // ---------------------------------------------------------------------------
