@@ -334,6 +334,18 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
 }
 
 ///|
+fn block_ends_with_terminator(b : @ast.TsBlock) -> Bool {
+  let n = b.stmts.length()
+  if n == 0 {
+    return false
+  }
+  match b.stmts[n - 1] {
+    Return(_) | Throw(_) | Break(_) | Continue(_) => true
+    _ => false
+  }
+}
+
+///|
 fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   // Emit statements, stopping after the first hard terminator
@@ -341,6 +353,19 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   // same block are unreachable and can be dropped.
   for s in block.stmts {
     let ps = peep_stmt(s, ctx)
+    // `if (c) { …; return; } else { stmts }` → `if (c) { …; return; }` +
+    // `stmts` spliced inline. Saves the `else ` keyword (5 bytes) and the
+    // braces (2 bytes) for every such pattern.
+    match ps {
+      If(cond, then_block, Some(else_block)) if block_ends_with_terminator(then_block) => {
+        stmts.push(If(cond, then_block, None))
+        for es in else_block.stmts {
+          stmts.push(es)
+        }
+        continue
+      }
+      _ => ()
+    }
     stmts.push(ps)
     match ps {
       Return(_) | Throw(_) | Break(_) | Continue(_) => break

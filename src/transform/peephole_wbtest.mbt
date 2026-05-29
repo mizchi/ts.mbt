@@ -632,3 +632,10 @@ test "peephole: arrow with block return folds to concise body" {
   assert_false(out.contains("return"), msg="expected no return, got: \{out}")
   assert_false(out.contains("{"), msg="expected no braces, got: \{out}")
 }
+
+///|
+test "peephole: else after terminating if becomes sequential (removes else keyword)" {
+  let out = peep_one("function f(){if(x){doA();return;}else{doB();}}")
+  assert_false(out.contains("else"), msg="expected no else, got: \{out}")
+  assert_true(out.contains("doA") && out.contains("doB"), msg="expected both branches, got: \{out}")
+}
