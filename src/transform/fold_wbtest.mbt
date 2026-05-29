@@ -1369,3 +1369,12 @@ test "fold: optional chain on non-null receiver is dropped" {
   assert_false(out.contains("?."))
   assert_true(out.contains(".length"))
 }
+
+///|
+test "fold: new-expr ?? fallback is eliminated (new always non-null)" {
+  // `new Map() ?? fallback` — `new` always returns an object, so the
+  // fallback can never be reached.
+  let out = fold_one("const m = new Map() ?? fallback;\n")
+  assert_false(out.contains("fallback"))
+  assert_false(out.contains("??"))
+}

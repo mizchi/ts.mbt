@@ -2786,6 +2786,10 @@ fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
     NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_) => false
     FuncExpr(_) | ArrowFunc(_, _, _, _) => false
     ArrayLit(_) | ObjectLit(_) => false
+    // `new Foo(...)` always returns an object, never null/undefined.
+    New(_, _) | NewExpr(_, _) => false
+    // A class expression evaluates to the class constructor — never null.
+    NativeClassExpr(_, _) => false
     // Tag-less template literals always produce a string, never null/undefined.
     TemplateLiteral(_, _) => false
     // TypeScript casts are transparent — delegate to the inner expression.
