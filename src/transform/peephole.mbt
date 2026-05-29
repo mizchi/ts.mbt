@@ -83,6 +83,11 @@
 //   Object.prototype.hasOwnProperty.call(o,k) -> Object.hasOwn(o,k)  (saves ~22 bytes; ES2022)
 //   x.hasOwnProperty(k)                       -> Object.hasOwn(x,k)  (saves ~8 bytes; ES2022)
 //   c ? expr : void 0           -> c && expr    (saves ~7 bytes; short-circuit form)
+//   !0 ? a : b                  -> a            (constant condition evaluation)
+//   !1 ? a : b                  -> b            (constant condition evaluation)
+//   if (!0) { S }               -> S            (dead-else elimination)
+//   "a" === "b"                 -> !1           (string literal strict comparison)
+//   "a" !== "b"                 -> !0
 //   Array.prototype.METHOD.call(arr, args) -> arr.METHOD(args)  (saves ~22 bytes)
 //   x.toString()                -> ""+x         (saves ~9 bytes; same as String(x))
 //   (0, fn)(args)               -> fn(args)      (saves 4 bytes; indirect call in ESM is redundant)
@@ -277,6 +282,30 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     Throw(e) => Throw(peep_expr(e, ctx))
     If(c, t, e) => {
       let cp_raw = peep_expr(c, ctx)
+      // Constant condition: `if (!0) { … }` → inline body; `if (!1) { … }` → else body.
+      // Produced when literal comparisons from switch→ternary collapse to `!0`/`!1`.
+      match cp_raw {
+        UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)) => {
+          let tp = peep_block(t, ctx)
+          return match tp.stmts {
+            [single] => single
+            _ => Block(tp)
+          }
+        }
+        UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)) => {
+          match e {
+            Some(eb) => {
+              let ep = peep_block(eb, ctx)
+              return match ep.stmts {
+                [single] => single
+                _ => Block(ep)
+              }
+            }
+            None => return Empty
+          }
+        }
+        _ => ()
+      }
       // `if (!!x) …` → `if (x) …`  (strip double negation from condition;
       // truthiness coercion makes the extra `!!` a no-op in boolean context).
       let cp = match cp_raw {
@@ -804,7 +833,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           // `x.length === 0` → `!x.length`  (saves 4 bytes; .length is
           // always a non-negative integer so the coercion is lossless)
           // Same applies to `.size` (Map/Set) which is also non-negative.
+          // Also do literal constant folding here: `"a" === "b"` → `!1`,
+          // `"a" === "a"` → `!0`. This is important because the switch→ternary
+          // peephole runs after fold, so string comparisons from switch cases
+          // need to be constant-folded in the peephole pass.
           match (lp, rp) {
+            (StringLit(a), StringLit(b)) =>
+              UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a == b { 0 } else { 1 }))
+            (IntLit(a), IntLit(b)) =>
+              UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a == b { 0 } else { 1 }))
             (PropAccess(_, "length"), IntLit(0))
             | (PropAccess(_, "size"), IntLit(0)) =>
               UnaryOp(@ast.TsUnaryOp::Not, lp)
@@ -832,7 +869,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         BinNe =>
           // `x.length !== 0` → `!!x.length` (saves ~4 bytes; same
           // reasoning as the === 0 case: .length is always non-negative)
+          // Literal constant folding (same idea as BinEq above):
+          // `"a" !== "b"` → `!0`, `"a" !== "a"` → `!1`.
           match (lp, rp) {
+            (StringLit(a), StringLit(b)) =>
+              UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a != b { 0 } else { 1 }))
+            (IntLit(a), IntLit(b)) =>
+              UnaryOp(@ast.TsUnaryOp::Not, IntLit(if a != b { 0 } else { 1 }))
             (PropAccess(_, "length"), IntLit(0))
             | (PropAccess(_, "size"), IntLit(0)) =>
               UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, lp))
@@ -954,6 +997,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       let cp = peep_expr(c, ctx)
       let tp = peep_expr(t, ctx)
       let ep = peep_expr(e, ctx)
+      // Constant condition: `!0 ? a : b` → `a`, `!1 ? a : b` → `b`.
+      // After literal comparisons collapse to `!0`/`!1` in the peephole
+      // (e.g. from switch→ternary chains), this rule evaluates the ternary.
+      match cp {
+        UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)) => return tp
+        UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)) => return ep
+        _ => ()
+      }
       // `!!x ? a : b` → `x ? a : b` (double negation in condition is a no-op
       // in a ternary since the truthiness test already coerces to boolean).
       // Saves 2 bytes per occurrence. Unwrap any number of `!!` layers.
