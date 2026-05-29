@@ -962,3 +962,10 @@ test "peephole: fn.apply(null, args) → fn(...args) strips null-this apply" {
   assert_false(out.contains(".apply("), msg="expected no .apply, got: \{out}")
   assert_true(out.contains("...args"), msg="expected spread, got: \{out}")
 }
+
+///|
+test "peephole: !void 0 → !0 (saves 3 bytes)" {
+  let out = minify_one("const r = !void 0;")
+  assert_false(out.contains("void"), msg="expected no void, got: \{out}")
+  assert_true(out.contains("!0"), msg="expected !0, got: \{out}")
+}

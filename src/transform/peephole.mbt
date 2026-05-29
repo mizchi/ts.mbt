@@ -667,6 +667,9 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         // `!!(comparison)` → `comparison`
         UnaryOp(@ast.TsUnaryOp::Not, bool_expr) if is_bool_expr(bool_expr) =>
           bool_expr
+        // `!void 0` / `!null` → `!0` (saves bytes; all three are `true`)
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) | @ast.TsExpr::NullLit =>
+          UnaryOp(@ast.TsUnaryOp::Not, IntLit(0))
         _ => UnaryOp(@ast.TsUnaryOp::Not, inner_p)
       }
     }
