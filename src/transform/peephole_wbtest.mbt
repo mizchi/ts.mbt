@@ -1178,3 +1178,10 @@ test "peephole: Object.prototype.hasOwnProperty.call → Object.hasOwn" {
   let r2 = minify_one("({}).hasOwnProperty.call(obj, key);")
   assert_true(r2.contains("Object.hasOwn"), msg="expected Object.hasOwn for {}.form, got: \{r2}")
 }
+
+///|
+test "peephole: x.hasOwnProperty(key) → Object.hasOwn(x, key)" {
+  let r = minify_one("obj.hasOwnProperty(key);")
+  assert_true(r.contains("Object.hasOwn"), msg="expected Object.hasOwn, got: \{r}")
+  assert_false(r.contains("hasOwnProperty"), msg="expected no hasOwnProperty, got: \{r}")
+}
