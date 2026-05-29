@@ -1778,3 +1778,47 @@ test "iife_class_lift: non-class-name PropAssign lifted as Extra (#31)" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "iife_class_lift: Assign to non-class var in IIFE body does not abort lift" {
+  // `counter = counter + 1` inside the IIFE is a side effect to a
+  // non-class variable. The lift should keep it as Extra and still
+  // produce `class Foo`.
+  let src = #|var counter = 0;
+  #|var Foo = (function() {
+  #|  function Foo() {}
+  #|  counter = counter + 1;
+  #|  Foo.prototype.run = function() { return counter; };
+  #|  return Foo;
+  #|}());
+  #|export default Foo;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("class Foo"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: `export * as ns from` where source uses `export * from` (re-export chain)" {
+  // util-impl.ts → util.ts (export * from "./util-impl") → core.ts (export * as util from "./util")
+  // The namespace object in core.ts should include `check` from the transitive re-export.
+  let files = vfs([
+    (
+      "util-impl.ts",
+      "export function check(x: unknown): boolean { return x !== null; }\n",
+    ),
+    ("util.ts", "export * from \"./util-impl\";\n"),
+    ("core.ts", "export * as util from \"./util\";\n"),
+    (
+      "entry.ts",
+      "import { util } from \"./core\";\nconsole.log(util.check(42));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("check"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

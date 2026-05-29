@@ -430,6 +430,29 @@ fn classify_iife_body_stmt(
       } else {
         Unknown
       }
+    // `name = expr;` — plain assignment to a variable (not prop).
+    // If the variable is the class name itself, bail (the IIFE is
+    // reassigning the class, e.g. decorator wrapping). Otherwise
+    // treat as a side-effect: emit before the class when the RHS
+    // doesn't reference the class, or after when it does.
+    Assign(n, rhs) =>
+      if n == class_name {
+        Unknown
+      } else if expr_refs_class_name(rhs, class_name) {
+        Extra(stmt)
+      } else {
+        ExtraBefore(stmt)
+      }
+    // `name op= expr;` — compound assignment. Same ordering logic as
+    // plain Assign: abort if it touches the class binding, otherwise
+    // emit as a side effect (after, since the RHS might implicitly use
+    // the current value of `name` which could reference the class).
+    CompoundAssign(n, _, _) =>
+      if n == class_name { Unknown } else { Extra(stmt) }
+    // `recv[idx] = val;` — dynamic index assignment. Always emit after
+    // the class (Extra) since the receiver may be a class instance or
+    // prototype reference, and we want to avoid any forward-ref issues.
+    IndexAssign(_, _, _) => Extra(stmt)
     _ => Unknown
   }
 }
