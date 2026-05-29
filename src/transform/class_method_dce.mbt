@@ -551,9 +551,12 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
       }
       false
     }
-    // Spread of an object literal is fine, but spread of an
-    // arbitrary expression `{...x}` enumerates whatever `x` is.
-    Spread(_) => true
+    // Object spread `{...x}` only copies OWN enumerable properties;
+    // class prototype methods are NOT own properties of instances, so
+    // spreading a class instance never enumerates its methods. Recurse
+    // into the inner expression for reflection sinks but do NOT abort
+    // just because spread is present.
+    Spread(inner) => expr_has_method_sniff(inner)
     // `delete x.method` (statement form is `Expr(UnaryOp(Delete, _))`).
     UnaryOp(@ast.TsUnaryOp::Delete, _) => true
     // Computed-key access with a non-static index.
