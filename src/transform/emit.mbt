@@ -2239,11 +2239,13 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       emit_jsx_element(e, tag, attrs, children)
     NativeClassExpr(decl, ctor_body) => emit_native_class(e, decl, ctor_body)
     PureCall(inner) => {
-      // Restore the `/* @__PURE__ */` annotation so downstream
-      // minifiers (terser, esbuild, rolldown) keep treating the
-      // call as droppable when the result is unused. The comment
-      // appears immediately before the call body.
-      e.write("/* @__PURE__ */ ")
+      // In pretty mode, restore the `/* @__PURE__ */` annotation so
+      // downstream minifiers keep treating the call as droppable.
+      // In minify mode we've already tree-shaken dead code ourselves,
+      // so the annotation is unnecessary noise.
+      if e.pretty {
+        e.write("/* @__PURE__ */ ")
+      }
       emit_expr_body(e, inner)
     }
   }
