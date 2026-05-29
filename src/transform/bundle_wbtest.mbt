@@ -1971,3 +1971,30 @@ test "emit: minify emits !0/!1 for true/false and void 0 for undefined" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundle: second fold pass after inline folds const-indexed array access" {
+  // `const N = 1; const arr = ["a","b","c"]; console.log(arr[N])` should
+  // fold to `console.log("b")` when fold+minify are both enabled.
+  // Without the post-inline fold pass, `arr[N]` survives as-is after inlining
+  // substitutes `N → 1`, yielding `["a","b","c"][1]` which is not folded.
+  let src = #|const N = 1;
+  #|const arr = ["a", "b", "c"];
+  #|console.log(arr[N]);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_fold(true)
+    .with_minify(true)
+    .with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // After fold+inline+fold the array literal should be gone — only "b" remains.
+      assert_true(
+        out.js.contains("\"b\""),
+        "expected folded value \"b\" in output",
+      )
+      assert_false(out.js.contains("[\"a\""), "expected array literal to be folded away")
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
