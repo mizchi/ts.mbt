@@ -847,3 +847,24 @@ test "peephole: !!x ? a : b strips double negation in condition" {
   assert_false(out.contains("!!"), msg="expected no !!, got: \{out}")
   assert_true(out.contains("?"), msg="expected ternary kept, got: \{out}")
 }
+
+///|
+test "peephole: x && x.prop → x?.prop (optional chain from && guard)" {
+  let out = minify_one("const r = x && x.prop;")
+  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+  assert_false(out.contains("&&"), msg="expected no &&, got: \{out}")
+}
+
+///|
+test "peephole: x && x[key] → x?.[key] (optional index from && guard)" {
+  let out = minify_one("const r = x && x[key];")
+  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+  assert_false(out.contains("&&"), msg="expected no &&, got: \{out}")
+}
+
+///|
+test "peephole: x && x.method(a) → x?.method(a) (optional call from && guard)" {
+  let out = minify_one("const r = x && x.method(a);")
+  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+  assert_false(out.contains("&&"), msg="expected no &&, got: \{out}")
+}

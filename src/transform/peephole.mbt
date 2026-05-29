@@ -36,6 +36,9 @@
 //   new Object()           -> {}        (saves up to 12 bytes)
 //   [].concat(a,b)         -> [...a,...b] (saves ~5 bytes per element)
 //   !!x ? a : b            -> x ? a : b  (double negation in cond is no-op)
+//   x && x.prop            -> x?.prop    (optional chain from && guard)
+//   x && x[k]              -> x?.[k]
+//   x && x.method(args)    -> x?.method(args)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -558,7 +561,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         And =>
           match fold_null_undef_and(lp, rp) {
             Some(e) => e
-            None => BinOp(op, lp, rp)
+            None => fold_and_optional_chain(lp, rp)
           }
         BinEq =>
           // `x.length === 0` → `!x.length`  (saves 4 bytes; .length is
@@ -1252,6 +1255,48 @@ fn fold_null_undef_and(
         _ => None
       }
     _ => None
+  }
+}
+
+///|
+/// `x && x.prop` → `x?.prop`, `x && x[k]` → `x?.[k]`, etc.
+/// TypeScript emits `&&` chains for optional access when targeting
+/// older ES versions (pre-ES2020). Only folds bare-Var guards whose
+/// rhs receiver is the same name.
+fn fold_and_optional_chain(
+  lp : @ast.TsExpr,
+  rp : @ast.TsExpr
+) -> @ast.TsExpr {
+  match lp {
+    @ast.TsExpr::Var(guard_n) =>
+      match rp {
+        @ast.TsExpr::PropAccess(@ast.TsExpr::Var(recv_n), prop) =>
+          if guard_n == recv_n {
+            @ast.TsExpr::OptionalChain(
+              @ast.TsExpr::PropAccess(@ast.TsExpr::Var(guard_n), prop),
+            )
+          } else {
+            @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
+          }
+        @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(recv_n), idx) =>
+          if guard_n == recv_n {
+            @ast.TsExpr::OptionalChain(
+              @ast.TsExpr::IndexAccess(@ast.TsExpr::Var(guard_n), idx),
+            )
+          } else {
+            @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
+          }
+        @ast.TsExpr::MethodCall(@ast.TsExpr::Var(recv_n), method, args) =>
+          if guard_n == recv_n {
+            @ast.TsExpr::OptionalChain(
+              @ast.TsExpr::MethodCall(@ast.TsExpr::Var(guard_n), method, args),
+            )
+          } else {
+            @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
+          }
+        _ => @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
+      }
+    _ => @ast.TsExpr::BinOp(@ast.TsBinOp::And, lp, rp)
   }
 }
 
