@@ -2296,3 +2296,5 @@ test "type_fold: .length RHS infers Number so typeof check folds" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
