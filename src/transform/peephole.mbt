@@ -336,8 +336,16 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
 ///|
 fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
+  // Emit statements, stopping after the first hard terminator
+  // (Return / Throw / Break / Continue). Subsequent statements in the
+  // same block are unreachable and can be dropped.
   for s in block.stmts {
-    stmts.push(peep_stmt(s, ctx))
+    let ps = peep_stmt(s, ctx)
+    stmts.push(ps)
+    match ps {
+      Return(_) | Throw(_) | Break(_) | Continue(_) => break
+      _ => ()
+    }
   }
   // Fold `if (c) return a; return b;` → `return c ? a : b;`.
   // Walk backwards and merge adjacent pairs.

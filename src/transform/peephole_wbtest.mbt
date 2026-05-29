@@ -595,3 +595,10 @@ test "peephole: if(c) return a; return b; folds to return c?a:b (guard pattern)"
   assert_true(out.contains("?"), msg="expected ternary, got: \{out}")
   assert_false(out.contains("if"), msg="expected no if, got: \{out}")
 }
+
+///|
+test "peephole: dead code after return is eliminated" {
+  let out = peep_one("function f(){return 1; x=2; y=3;}")
+  assert_false(out.contains("x="), msg="expected dead code dropped, got: \{out}")
+  assert_false(out.contains("y="), msg="expected dead code dropped, got: \{out}")
+}
