@@ -948,3 +948,17 @@ test "peephole: new TypeError(msg) drops new keyword" {
   let out = minify_one("throw new TypeError('bad');")
   assert_false(out.contains("new"), msg="expected no new, got: \{out}")
 }
+
+///|
+test "peephole: fn.call(null, a, b) → fn(a, b) strips null-this call" {
+  let out = minify_one("const r = fn.call(null, a, b);")
+  assert_false(out.contains(".call("), msg="expected no .call, got: \{out}")
+  assert_true(out.contains("fn("), msg="expected fn(, got: \{out}")
+}
+
+///|
+test "peephole: fn.apply(null, args) → fn(...args) strips null-this apply" {
+  let out = minify_one("const r = fn.apply(null, args);")
+  assert_false(out.contains(".apply("), msg="expected no .apply, got: \{out}")
+  assert_true(out.contains("...args"), msg="expected spread, got: \{out}")
+}

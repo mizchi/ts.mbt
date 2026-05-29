@@ -45,6 +45,8 @@
 //   x==null ? void 0 : x.p  -> x?.p         (flipped optional chain)
 //   if (c) {…} else {}     -> if (c) {…}   (drop empty else)
 //   new Error(msg)         -> Error(msg)   (saves `new `, 4 bytes; also TypeError etc.)
+//   fn.call(null, a, b)    -> fn(a, b)     (null/undefined this → direct call)
+//   fn.apply(null, arr)    -> fn(...arr)   (null/undefined this → spread call)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.length > 0          -> !!x.length  (saves ~3 bytes)
 //   x.length <= 0         -> !x.length   (saves ~4 bytes)
@@ -951,6 +953,41 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             return ArrayLit(items)
           }
           _ => ()
+        }
+      }
+      // `fn.call(null, a, b)` → `fn(a, b)` (saves ~6 bytes).
+      // `fn.call(undefined, a, b)` → `fn(a, b)` (same).
+      // Only fold when the `this` argument is null/undefined — those are
+      // the same as an unbound call in sloppy mode and throw in strict mode
+      // (same as a direct call). NOT safe for `fn.call(obj, ...)` where
+      // `obj` provides a meaningful `this`.
+      if m == "call" && new_args.length() >= 1 {
+        let is_null_this = match new_args[0] {
+          @ast.TsExpr::NullLit => true
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
+          @ast.TsExpr::Var("undefined") if not(ctx.undefined_shadowed) => true
+          _ => false
+        }
+        if is_null_this {
+          let rest_args : Array[@ast.TsExpr] = []
+          for i, a in new_args {
+            if i == 0 { continue }
+            rest_args.push(a)
+          }
+          return CallExpr(recv_p, rest_args)
+        }
+      }
+      // `fn.apply(null, argsArray)` → `fn(...argsArray)` (saves ~7 bytes).
+      // Only fold the single-arg form where the array arg is known.
+      if m == "apply" && new_args.length() == 2 {
+        let is_null_this = match new_args[0] {
+          @ast.TsExpr::NullLit => true
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
+          @ast.TsExpr::Var("undefined") if not(ctx.undefined_shadowed) => true
+          _ => false
+        }
+        if is_null_this {
+          return CallExpr(recv_p, [Spread(new_args[1])])
         }
       }
       MethodCall(recv_p, m, new_args)
