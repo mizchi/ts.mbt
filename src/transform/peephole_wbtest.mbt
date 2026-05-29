@@ -805,3 +805,38 @@ test "peephole: Array.prototype.slice.call(x) folds to [...x]" {
   assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
   assert_false(out.contains("slice"), msg="expected no slice, got: \{out}")
 }
+
+///|
+test "peephole: new Array(0) folds to []" {
+  let out = minify_one("const r = new Array(0);")
+  assert_true(out.contains("=[]"), msg="expected [], got: \{out}")
+  assert_false(out.contains("Array"), msg="expected no Array, got: \{out}")
+}
+
+///|
+test "peephole: new Array() folds to []" {
+  let out = minify_one("const r = new Array();")
+  assert_true(out.contains("=[]"), msg="expected [], got: \{out}")
+  assert_false(out.contains("Array"), msg="expected no Array, got: \{out}")
+}
+
+///|
+test "peephole: new Object() folds to {}" {
+  let out = minify_one("const r = new Object();")
+  assert_true(out.contains("={}"), msg="expected {}, got: \{out}")
+  assert_false(out.contains("Object"), msg="expected no Object, got: \{out}")
+}
+
+///|
+test "peephole: [].concat(a, b) folds to [...a,...b]" {
+  let out = minify_one("const r = [].concat(a, b);")
+  assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
+  assert_false(out.contains("concat"), msg="expected no concat, got: \{out}")
+}
+
+///|
+test "peephole: [].concat([1,2], [3,4]) flattens to [1,2,3,4]" {
+  let out = minify_one("const r = [].concat([1, 2], [3, 4]);")
+  assert_true(out.contains("1,2,3,4"), msg="expected flattened array, got: \{out}")
+  assert_false(out.contains("concat"), msg="expected no concat, got: \{out}")
+}

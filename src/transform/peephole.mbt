@@ -32,6 +32,9 @@
 //   String(x)             -> ""+x      (saves up to 5 bytes)
 //   `${x}`                -> ""+x      (saves 2 bytes; single interpolation only)
 //   Object.assign({},a,b) -> {...a,...b} (saves ~12 bytes; first arg must be {})
+//   new Array(0) / new Array() -> []    (saves up to 11 bytes)
+//   new Object()           -> {}        (saves up to 12 bytes)
+//   [].concat(a,b)         -> [...a,...b] (saves ~5 bytes per element)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -730,6 +733,18 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       for a in args {
         new_args.push(peep_expr(a, ctx))
       }
+      // `new Array(0)` → `[]` and `new Array()` → `[]` (saves up to 11 bytes).
+      // `new Object()` → `{}` (saves up to 12 bytes).
+      // Only fold the zero-argument or literal-zero forms; `new Array(n)` with
+      // a positive literal creates a sparse array and must be kept.
+      if name == "Array" {
+        match new_args {
+          [] | [IntLit(0)] => return ArrayLit([])
+          _ => ()
+        }
+      } else if name == "Object" && new_args.length() == 0 {
+        return ObjectLit([])
+      }
       New(name, new_args)
     }
     NewExpr(callee, args) => {
@@ -797,6 +812,28 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               }
             }
             return ObjectLit(entries)
+          }
+          _ => ()
+        }
+      }
+      // `[].concat(a, b, …)` → `[...a, ...b, …]` (array spread).
+      // TypeScript's `__spreadArray` helper or manual concatenation emits this.
+      // Safe because `concat` on a fresh `[]` never mutates anything and
+      // spread is semantically equivalent for iterable arrays.
+      if m == "concat" && new_args.length() >= 1 {
+        match recv_p {
+          ArrayLit([]) => {
+            let items : Array[@ast.TsExpr] = []
+            for a in new_args {
+              match a {
+                ArrayLit(elems) =>
+                  for e in elems {
+                    items.push(e)
+                  }
+                _ => items.push(Spread(a))
+              }
+            }
+            return ArrayLit(items)
           }
           _ => ()
         }
