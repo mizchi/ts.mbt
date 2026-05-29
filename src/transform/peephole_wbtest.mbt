@@ -1148,3 +1148,24 @@ test "peephole: if(x==null){x=y} → x??=y" {
   assert_true(out.contains("??="), msg="expected ??= operator, got: \{out}")
   assert_false(out.contains("if"), msg="expected no if, got: \{out}")
 }
+
+///|
+test "peephole: x===true → x, x===false → !x" {
+  // if(x===true) y() → x&&y() after short-circuit fold; no boolean literal remains
+  let r1 = minify_one("if (x === true) y();")
+  assert_false(r1.contains("==="), msg="expected no === after fold, got: \{r1}")
+  assert_false(r1.contains("true") || r1.contains("!0"), msg="expected no bool lit, got: \{r1}")
+  let r2 = minify_one("if (x === false) y();")
+  assert_false(r2.contains("==="), msg="expected no === in false-fold, got: \{r2}")
+  assert_true(r2.contains("!x"), msg="expected !x from x===false, got: \{r2}")
+}
+
+///|
+test "peephole: x!==true → !x, x!==false → x" {
+  let r1 = minify_one("if (x !== true) y();")
+  assert_false(r1.contains("!=="), msg="expected no !== after fold, got: \{r1}")
+  assert_true(r1.contains("!x"), msg="expected !x from x!==true, got: \{r1}")
+  let r2 = minify_one("if (x !== false) y();")
+  assert_false(r2.contains("!=="), msg="expected no !== after fold, got: \{r2}")
+  assert_false(r2.contains("false") || r2.contains("!1"), msg="expected no bool lit, got: \{r2}")
+}

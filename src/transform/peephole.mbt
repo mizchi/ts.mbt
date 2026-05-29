@@ -75,6 +75,10 @@
 //   switch(x){case a:S default:T} -> if(x===a){S}else{T}
 //   catch(e){…not using e…}     -> catch{…}   (saves 3 bytes; ES2019 optional binding)
 //   if(x==null){x=y}            -> x??=y       (saves ~10 bytes; ES2021 CoalesceAssign)
+//   x === true                  -> x            (saves 7 bytes; drops bool literal cmp)
+//   x === false                 -> !x           (saves 6 bytes)
+//   x !== true                  -> !x           (saves 6 bytes)
+//   x !== false                 -> x            (saves 7 bytes)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -722,6 +726,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(@ast.TsBinOp::BinEq, x, UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)))
+            // `x === true` / `x === !0` → `x`  (saves 7 bytes; x is already boolean)
+            (x, BoolLit(true))
+            | (BoolLit(true), x)
+            | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)))
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) => x
+            // `x === false` / `x === !1` → `!x`  (saves 6 bytes)
+            (x, BoolLit(false))
+            | (BoolLit(false), x)
+            | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)))
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) =>
+              UnaryOp(@ast.TsUnaryOp::Not, x)
             (lp, rp) => BinOp(op, lp, rp)
           }
         BinNe =>
@@ -738,6 +753,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(@ast.TsBinOp::BinNe, x, UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)))
+            // `x !== true` / `x !== !0` → `!x`  (saves 6 bytes)
+            (x, BoolLit(true))
+            | (BoolLit(true), x)
+            | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)))
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)), x) =>
+              UnaryOp(@ast.TsUnaryOp::Not, x)
+            // `x !== false` / `x !== !1` → `x`  (saves 7 bytes)
+            (x, BoolLit(false))
+            | (BoolLit(false), x)
+            | (x, UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)))
+            | (UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)), x) => x
             (lp, rp) => BinOp(op, lp, rp)
           }
         // `x.length > 0` → `!!x.length`  (saves ~3 bytes; length is non-negative)
