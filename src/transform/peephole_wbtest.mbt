@@ -1035,3 +1035,10 @@ test "peephole: Array.prototype.slice.call(x, 0) → [...x]" {
   assert_false(out.contains("slice"), msg="expected no slice, got: \{out}")
   assert_true(out.contains("...arr") || out.contains("arr"), msg="expected spread, got: \{out}")
 }
+
+///|
+test "peephole: {...x, ...{}} removes empty spread" {
+  let out = minify_one("const r = {...x, ...{}};")
+  // after flattening, the empty spread contributes nothing
+  assert_false(out.contains("{}"), msg="expected no empty object, got: \{out}")
+}
