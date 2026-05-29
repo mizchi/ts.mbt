@@ -722,6 +722,21 @@ fn collect_reflection_sinks_expr(
       for e in exprs {
         collect_reflection_sinks_expr(e, out)
       }
+    NativeClassExpr(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_reflection_sinks_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_reflection_sinks_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_reflection_sinks_expr(sf.1, out)
+      }
+    }
     _ => ()
   }
 }
