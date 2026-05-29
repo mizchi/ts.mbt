@@ -58,6 +58,11 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       // matches the assignment target and `op` has a compound form.
       // Also folds `x = x + 1` → `x++` and `x = x - 1` → `x--`
       // in one step without needing two peephole passes.
+      // `x = x` → drop (self-assignment is a no-op; saves n+3 bytes).
+      match rhs {
+        @ast.TsExpr::Var(v) if v == name => return Empty
+        _ => ()
+      }
       let rhs_p = peep_expr(rhs, ctx)
       match rhs_p {
         BinOp(op, @ast.TsExpr::Var(other), value) =>
@@ -732,15 +737,6 @@ fn binding_contains_undefined(binding : @ast.TsBinding) -> Bool {
   }
 }
 
-///|
-/// Returns true if `e` is a null literal or a `void 0` expression.
-fn is_null_or_void_zero(e : @ast.TsExpr) -> Bool {
-  match e {
-    @ast.TsExpr::NullLit => true
-    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, @ast.TsExpr::IntLit(0)) => true
-    _ => false
-  }
-}
 
 ///|
 /// Given one side of a `===` / `!==` check, return `(checked_expr, is_null)`
