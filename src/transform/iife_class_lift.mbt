@@ -133,9 +133,8 @@ fn try_lift_iife_value(
   let mut saw_return = false
   for s in body.stmts {
     if saw_return {
-      // Anything after the `return ClassName;` would be dead, but
-      // the presence of dead code itself is suspicious. Abort.
-      return false
+      // Dead code after `return ClassName;` — just skip it.
+      continue
     }
     // Flatten Block stmts from multi-declarator `var a=1, b=2;`.
     let flat_stmts : Array[@ast.TsStmt] = match s {
