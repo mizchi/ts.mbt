@@ -969,3 +969,10 @@ test "peephole: !void 0 → !0 (saves 3 bytes)" {
   assert_false(out.contains("void"), msg="expected no void, got: \{out}")
   assert_true(out.contains("!0"), msg="expected !0, got: \{out}")
 }
+
+///|
+test "peephole: void f() as statement drops void" {
+  let out = minify_one("void sideEffect();")
+  assert_false(out.contains("void"), msg="expected no void, got: \{out}")
+  assert_true(out.contains("sideEffect"), msg="expected sideEffect, got: \{out}")
+}

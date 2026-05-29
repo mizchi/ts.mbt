@@ -47,6 +47,7 @@
 //   new Error(msg)         -> Error(msg)   (saves `new `, 4 bytes; also TypeError etc.)
 //   fn.call(null, a, b)    -> fn(a, b)     (null/undefined this → direct call)
 //   fn.apply(null, arr)    -> fn(...arr)   (null/undefined this → spread call)
+//   void f() (stmt)        -> f()         (return value discarded at stmt level)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.length > 0          -> !!x.length  (saves ~3 bytes)
 //   x.length <= 0         -> !x.length   (saves ~4 bytes)
@@ -220,7 +221,16 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         (t, v) => PropAssign(t, prop, v)
       }
     }
-    Expr(e) => Expr(peep_expr(e, ctx))
+    Expr(e) => {
+      let ep = peep_expr(e, ctx)
+      // `void f()` as a statement → `f()` — the return value of the
+      // expression is discarded at statement level anyway, so `void` is
+      // redundant. Saves the 5 chars `void `.
+      match ep {
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, inner) => Expr(inner)
+        _ => Expr(ep)
+      }
+    }
     Return(Some(e)) => {
       let ep = peep_expr(e, ctx)
       // `return undefined` / `return void 0` → `return` (saves bytes).
