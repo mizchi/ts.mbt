@@ -430,3 +430,30 @@ test "minify emit: Number.NaN folds to 0/0" {
   assert_true(out.contains("0/0"), msg="expected 0/0, got: \{out}")
 }
 
+
+///|
+test "peephole: x===null||x===undefined folds to x==null" {
+  let out = peep_one("const r = x === null || x === undefined;\n")
+  assert_true(out.contains("== null"), msg="expected x == null, got: \{out}")
+  assert_false(out.contains("=== null"), msg="expected no === null, got: \{out}")
+  assert_false(out.contains("undefined"), msg="expected no undefined, got: \{out}")
+}
+
+///|
+test "peephole: x===undefined||x===null folds to x==null (reversed order)" {
+  let out = peep_one("const r = x === undefined || x === null;\n")
+  assert_true(out.contains("== null"), msg="expected x == null, got: \{out}")
+}
+
+///|
+test "peephole: x!==null&&x!==undefined folds to x!=null" {
+  let out = peep_one("const r = x !== null && x !== undefined;\n")
+  assert_true(out.contains("!= null"), msg="expected x != null, got: \{out}")
+  assert_false(out.contains("!== null"), msg="expected no !== null, got: \{out}")
+}
+
+///|
+test "peephole: null===x||undefined===x folds to x==null (LHS sentinels)" {
+  let out = peep_one("const r = null === x || undefined === x;\n")
+  assert_true(out.contains("== null"), msg="expected == null, got: \{out}")
+}

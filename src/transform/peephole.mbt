@@ -22,6 +22,8 @@
 //   !(a <= b)     -> a > b
 //   !(a > b)      -> a <= b
 //   !(a >= b)     -> a < b
+//   x===null||x===void 0  -> x==null   (saves ~13 bytes per occurrence)
+//   x!==null&&x!==void 0  -> x!=null
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -354,7 +356,25 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       }
       AssignExpr(name, rhs_p)
     }
-    BinOp(op, l, r) => BinOp(op, peep_expr(l, ctx), peep_expr(r, ctx))
+    BinOp(op, l, r) => {
+      let lp = peep_expr(l, ctx)
+      let rp = peep_expr(r, ctx)
+      // `x === null || x === void 0` → `x == null`  (saves ~13 bytes)
+      // `x !== null && x !== void 0` → `x != null`
+      match op {
+        Or =>
+          match fold_null_undef_or(lp, rp) {
+            Some(e) => e
+            None => BinOp(op, lp, rp)
+          }
+        And =>
+          match fold_null_undef_and(lp, rp) {
+            Some(e) => e
+            None => BinOp(op, lp, rp)
+          }
+        _ => BinOp(op, lp, rp)
+      }
+    }
     UnaryOp(Not, inner) => {
       let inner_p = peep_expr(inner, ctx)
       // `!(a OP b)` → `a INV_OP b` — saves the two wrapping characters.
@@ -677,5 +697,109 @@ fn binding_contains_undefined(binding : @ast.TsBinding) -> Bool {
       }
     }
     Target(_) => false
+  }
+}
+
+///|
+/// Returns true if `e` is a null literal or a `void 0` expression.
+fn is_null_or_void_zero(e : @ast.TsExpr) -> Bool {
+  match e {
+    @ast.TsExpr::NullLit => true
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, @ast.TsExpr::IntLit(0)) => true
+    _ => false
+  }
+}
+
+///|
+/// Given one side of a `===` / `!==` check, return `(checked_expr, is_null)`
+/// where `is_null` is true for `null` (vs `void 0` for undefined).
+/// Returns `None` when neither operand is a null/undefined sentinel.
+fn extract_null_check(
+  a : @ast.TsExpr,
+  b : @ast.TsExpr,
+) -> (@ast.TsExpr, Bool)? {
+  match b {
+    @ast.TsExpr::NullLit => Some((a, true))
+    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, @ast.TsExpr::IntLit(0)) =>
+      Some((a, false))
+    _ =>
+      match a {
+        @ast.TsExpr::NullLit => Some((b, true))
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, @ast.TsExpr::IntLit(0)) =>
+          Some((b, false))
+        _ => None
+      }
+  }
+}
+
+///|
+/// `x === null || x === void 0` → `x == null`
+/// Only applies when the checked expression is a simple variable reference
+/// (safe to duplicate / no side effects).
+fn fold_null_undef_or(
+  l : @ast.TsExpr,
+  r : @ast.TsExpr,
+) -> @ast.TsExpr? {
+  match (l, r) {
+    (
+      @ast.TsExpr::BinOp(@ast.TsBinOp::BinEq, la, lb),
+      @ast.TsExpr::BinOp(@ast.TsBinOp::BinEq, ra, rb),
+    ) =>
+      match (extract_null_check(la, lb), extract_null_check(ra, rb)) {
+        (Some((lexpr, l_is_null)), Some((rexpr, r_is_null))) => {
+          // One side must be the null check, the other undefined.
+          if l_is_null == r_is_null {
+            return None
+          }
+          // The checked expressions must be equal simple variables.
+          match (lexpr, rexpr) {
+            (@ast.TsExpr::Var(n1), @ast.TsExpr::Var(n2)) if n1 == n2 =>
+              Some(
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::AbstractEq,
+                  @ast.TsExpr::Var(n1),
+                  @ast.TsExpr::NullLit,
+                ),
+              )
+            _ => None
+          }
+        }
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// `x !== null && x !== void 0` → `x != null`
+fn fold_null_undef_and(
+  l : @ast.TsExpr,
+  r : @ast.TsExpr,
+) -> @ast.TsExpr? {
+  match (l, r) {
+    (
+      @ast.TsExpr::BinOp(@ast.TsBinOp::BinNe, la, lb),
+      @ast.TsExpr::BinOp(@ast.TsBinOp::BinNe, ra, rb),
+    ) =>
+      match (extract_null_check(la, lb), extract_null_check(ra, rb)) {
+        (Some((lexpr, l_is_null)), Some((rexpr, r_is_null))) => {
+          if l_is_null == r_is_null {
+            return None
+          }
+          match (lexpr, rexpr) {
+            (@ast.TsExpr::Var(n1), @ast.TsExpr::Var(n2)) if n1 == n2 =>
+              Some(
+                @ast.TsExpr::BinOp(
+                  @ast.TsBinOp::AbstractNe,
+                  @ast.TsExpr::Var(n1),
+                  @ast.TsExpr::NullLit,
+                ),
+              )
+            _ => None
+          }
+        }
+        _ => None
+      }
+    _ => None
   }
 }
