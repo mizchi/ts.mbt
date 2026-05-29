@@ -255,6 +255,9 @@ fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
     return false
   }
   let kind = match block.stmts[0] {
+    @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => return false
+    @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_)) => return false
+    @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_)) => return false
     @ast.TsStmt::Var(_, _, _) => 0
     @ast.TsStmt::Let(_, _, _) => 1
     @ast.TsStmt::Const(_, _, _) => 2
@@ -262,6 +265,9 @@ fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
   }
   for s in block.stmts {
     match s {
+      @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => return false
+      @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_)) => return false
+      @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_)) => return false
       @ast.TsStmt::Var(_, _, _) => if kind != 0 { return false }
       @ast.TsStmt::Let(_, _, _) => if kind != 1 { return false }
       @ast.TsStmt::Const(_, _, _) => if kind != 2 { return false }
@@ -283,9 +289,21 @@ fn merge_consecutive_decls(
   let mut i = 0
   while i < stmts.length() {
     let kind = match stmts[i] {
-      @ast.TsStmt::Let(_, _, _) => Some("let")
-      @ast.TsStmt::Const(_, _, _) => Some("const")
-      @ast.TsStmt::Var(_, _, _) => Some("var")
+      @ast.TsStmt::Let(_, _, init)
+      | @ast.TsStmt::Const(_, _, init)
+      | @ast.TsStmt::Var(_, _, init) =>
+        // Don't merge declarations whose initializer is a FuncExpr —
+        // those emit as `function foo() {}` (shorter than `let foo =
+        // function foo() {}`) and must not be bundled into multi-decls.
+        match init {
+          @ast.TsExpr::FuncExpr(_) => None
+          _ =>
+            match stmts[i] {
+              @ast.TsStmt::Let(_, _, _) => Some("let")
+              @ast.TsStmt::Const(_, _, _) => Some("const")
+              _ => Some("var")
+            }
+        }
       _ => None
     }
     match kind {
@@ -294,17 +312,24 @@ fn merge_consecutive_decls(
         i = i + 1
       }
       Some(k) => {
-        // Accumulate all consecutive declarations of the same kind.
+        // Accumulate all consecutive declarations of the same kind
+        // (skipping FuncExpr-initialised ones).
         let run : Array[@ast.TsStmt] = [stmts[i]]
         let mut j = i + 1
         while j < stmts.length() {
-          let is_same = match (k, stmts[j]) {
+          let same_kind = match (k, stmts[j]) {
             ("let", @ast.TsStmt::Let(_, _, _)) => true
             ("const", @ast.TsStmt::Const(_, _, _)) => true
             ("var", @ast.TsStmt::Var(_, _, _)) => true
             _ => false
           }
-          if is_same {
+          let has_func_init = match stmts[j] {
+            @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+            _ => false
+          }
+          if same_kind && not(has_func_init) {
             run.push(stmts[j])
             j = j + 1
           } else {

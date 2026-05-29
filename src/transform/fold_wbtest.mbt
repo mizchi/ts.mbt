@@ -1454,3 +1454,13 @@ test "fold: consecutive let decls separated by non-decl are not merged" {
   assert_true(out.contains("2"))
   assert_true(out.contains("console"))
 }
+
+///|
+test "fold: function-decl const is NOT merged with adjacent const" {
+  let out = fold_one("const a = 1;\nconst f = function f() { return 2; };\n")
+  // `f` emits as `function f() {...}` (shorter than `const f = function...`).
+  // Merging it into a multi-decl would force it to be a function expression
+  // and produce longer output, so they must stay separate.
+  assert_true(out.contains("function"))
+  assert_true(out.contains("1"))
+}
