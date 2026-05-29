@@ -2224,3 +2224,30 @@ test "type_fold: typeof string literal binding folds typeof check" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "type_fold: JSDoc-typed param enables typeof folding in untyped JS" {
+  // A JS function with a JSDoc `@param {number}` annotation should have
+  // its parameter type inferred, enabling `typeof x === "number"` to fold.
+  let src =
+    #|/**
+    #| * @param {number} x
+    #| */
+    #|function check(x) {
+    #|  if (typeof x === "number") {
+    #|    console.log("yes");
+    #|  } else {
+    #|    console.log("no");
+    #|  }
+    #|}
+    #|check(42);
+  let files = vfs([("entry.ts", src)])
+  let opts_fold = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts_fold) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
