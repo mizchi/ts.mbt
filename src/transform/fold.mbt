@@ -1374,7 +1374,10 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       // `"str".length` / `[…].length` → integer literal
       match (recv_f, p) {
         (StringLit(s), "length") => IntLit(s.length())
-        (ArrayLit(items), "length") => IntLit(items.length())
+        // Only safe when no spread elements — `[...it].length` expands at
+        // runtime to the iterable's count, not 1.
+        (ArrayLit(items), "length") if items.iter().all(fn(it) { not(it is Spread(_)) }) =>
+          IntLit(items.length())
         // Well-known Math / Number constants.
         (Var("Math"), "PI") => NumberLit(3.141592653589793)
         (Var("Math"), "E") => NumberLit(2.718281828459045)

@@ -93,13 +93,24 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
             refs[n] = true
           }
         }
-        // Constructor body refs
+        // Constructor body refs (params first — default expressions like
+        // `{guid = uuidv4(), …} = {}` carry references that the body walk
+        // won't see).
         match ctor {
-          Some(f) => collect_var_refs_in_block(f.body, refs)
+          Some(f) => {
+            collect_var_refs_in_params(f.params, refs)
+            collect_var_refs_in_block(f.body, refs)
+          }
           None => ()
         }
-        // Method body refs
+        // Method body refs (param_defaults can carry references too)
         for m in decl.methods {
+          for d in m.param_defaults {
+            match d {
+              Some(e) => collect_var_refs_in_expr(e, refs)
+              None => ()
+            }
+          }
           match m.body {
             Some(b) => collect_var_refs_in_block(b, refs)
             None => ()

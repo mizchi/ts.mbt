@@ -970,7 +970,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         And =>
           match fold_null_undef_and(lp, rp) {
             Some(e) => e
-            None => fold_and_optional_chain(lp, rp)
+            // NOTE: `x && x.prop` → `x?.prop` is NOT applied here.
+            // Optional chaining short-circuits only on null/undefined, but
+            // `x && x.prop` short-circuits on ANY falsy value. More critically,
+            // `null && null.prop` returns `null` while `null?.prop` returns
+            // `undefined` — downstream code that uses `=== null` to distinguish
+            // the two cases (e.g. yjs's `compareIDs`) will silently misbehave.
+            None => BinOp(op, lp, rp)
           }
         BinEq =>
           // `x.length === 0` → `!x.length`  (saves 4 bytes; .length is
@@ -993,6 +999,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               UnaryOp(@ast.TsUnaryOp::Not, rp)
             // `typeof x === "undefined"` → `x === void 0`  (saves ~9 bytes)
             // `"undefined" === typeof x` → `x === void 0`
+            // Only safe when x is not a bare Var — undeclared globals like
+            // `document`, `window`, `DOMParser` throw ReferenceError when
+            // accessed directly; `typeof` is the safe guard for those.
+            (UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)), StringLit("undefined"))
+            | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_))) =>
+              BinOp(op, lp, rp)
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1030,6 +1042,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             | (IntLit(0), PropAccess(_, "size")) =>
               UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
             // `typeof x !== "undefined"` → `x !== void 0`  (saves ~9 bytes)
+            // Only safe when x is not a bare Var — undeclared globals like
+            // `document`, `window`, `DOMParser` throw ReferenceError when
+            // accessed directly; `typeof` is the safe guard for those.
+            (UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)), StringLit("undefined"))
+            | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_))) =>
+              BinOp(op, lp, rp)
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1561,7 +1579,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `x.toString()` → `""+x`  (saves ~9 bytes; same as String(x)).
       // Safe for all non-Symbol values which is the common case in bundled code.
       // The no-arg form only — `.toString(radix)` must be preserved.
-      if m == "toString" && new_args.length() == 0 {
+      // Never apply to `super.toString()` — `super` is not a valid expression
+      // value in JS; `"" + super` is a SyntaxError outside class methods.
+      let is_super_recv = match recv_p {
+        @ast.TsExpr::Var("super") => true
+        _ => false
+      }
+      if m == "toString" && new_args.length() == 0 && not(is_super_recv) {
         return BinOp(@ast.TsBinOp::Add, StringLit(""), recv_p)
       }
       MethodCall(recv_p, m, new_args)
