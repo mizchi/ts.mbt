@@ -1845,6 +1845,25 @@ test "link: `export * as ns from` where source uses `export * from` (re-export c
 }
 
 ///|
+test "type_fold: typeof x === \"undefined\" folds to true for x: undefined param" {
+  // When a parameter is declared `: undefined`, `typeof x === "undefined"`
+  // is statically true. The fold pass should collapse the if-branch.
+  let src = #|function check(x: undefined): string {
+  #|  if (typeof x === "undefined") {
+  #|    return "yes";
+  #|  }
+  #|  return "no";
+  #|}
+  #|console.log(check(undefined));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("\"no\""))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class_method_dce: this[dynamic] instance-write does not abort prototype method DCE" {
   // Hono-style: constructor assigns this[method] = ... for all methods.
   // The DCE should still drop the unused `old()` prototype method.

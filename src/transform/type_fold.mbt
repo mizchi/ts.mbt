@@ -682,6 +682,8 @@ fn typeof_of_type(ty : @ast.TsType) -> String? {
     Boolean | BooleanLiteral(_) => Some("boolean")
     BigInt | BigIntLiteral(_) => Some("bigint")
     Symbol => Some("symbol")
+    // `typeof undefined` is "undefined" at runtime.
+    Undefined | Void => Some("undefined")
     _ => None
   }
 }
@@ -798,10 +800,24 @@ fn try_null_check_fold(
     Some(t) => t
     None => return None
   }
+  // `x: undefined` — x IS undefined; null-check folds with exact semantics.
+  // `x === undefined` → true; `x !== undefined` → false.
+  // `x === null` → false (undefined !== null under strict equality).
+  // `x !== null` → true.
+  match ty {
+    Undefined | Void => {
+      let is_equal = rhs_kind == "undefined"
+      return match op {
+        BinEq | AbstractEq => Some(is_equal)
+        BinNe | AbstractNe => Some(not(is_equal))
+        _ => None
+      }
+    }
+    _ => ()
+  }
   // The types we cleared in `is_useful_type` are all non-
   // nullable primitives — a `: number` parameter / binding
   // can't be `null` or `undefined` in a well-typed program.
-  let _ = rhs_kind
   let can_be_null = match ty {
     Number | Int | String_ | Boolean | BigInt | Symbol => false
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>
