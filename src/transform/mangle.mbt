@@ -627,6 +627,9 @@ priv struct ScopeFrame {
   // Reserved-name set — shared across the whole scope tree so nested
   // functions / arrow bodies see the same names as the root.
   reserved : Map[String, Bool]
+  // When true, `is_used_in_chain` stops here instead of walking up.
+  // Used for function-scope frames so params can shadow outer bindings.
+  is_function_scope : Bool
 }
 
 ///|
@@ -636,7 +639,7 @@ fn ScopeFrame::new_root(reserved : Map[String, Bool]) -> ScopeFrame {
     let (n, _) = entry
     used[n] = true
   }
-  { parent: None, renames: {}, used, counter: 0, reserved }
+  { parent: None, renames: {}, used, counter: 0, reserved, is_function_scope: false }
 }
 
 ///|
@@ -657,21 +660,241 @@ fn ScopeFrame::child(parent : ScopeFrame) -> ScopeFrame {
     used: {},
     counter: parent.counter,
     reserved: parent.reserved,
+    is_function_scope: false,
   }
 }
 
 ///|
 /// True when any frame in the chain starting at `self` records
-/// `name` as already used. Replaces the eager copy in `child()`.
+/// `name` as already used. Stops at function-scope frames because
+/// function params/locals can legally shadow outer bindings.
 fn ScopeFrame::is_used_in_chain(self : ScopeFrame, name : String) -> Bool {
   let mut cur : ScopeFrame? = Some(self)
   while cur is Some(frame) {
     if frame.used.contains(name) {
       return true
     }
+    // Stop at function scope boundaries — params/locals inside a function
+    // can shadow outer bindings, so we don't need to check further up.
+    if frame.is_function_scope {
+      return false
+    }
     cur = frame.parent
   }
   false
+}
+
+///|
+/// Create a fresh scope for a function body. Starts the counter at 0 so
+/// params get short 1-char names. Pre-marks the short names of any
+/// outer-scope variables referenced inside `body` as occupied, preventing
+/// params from accidentally shadowing a captured outer binding.
+fn ScopeFrame::function_child(
+  parent : ScopeFrame,
+  body : @ast.TsBlock,
+) -> ScopeFrame {
+  // Collect all Var references inside the body (non-recursive: stops at
+  // nested function boundaries so we only see free vars of this level).
+  let refs : Map[String, Bool] = {}
+  collect_var_refs_block(body, refs)
+  // For each referenced name, look up its short name via the parent chain.
+  // If it was renamed, pre-occupy that short name in the new scope so the
+  // param allocator skips it.
+  let used : Map[String, Bool] = {}
+  for name, _ in refs {
+    let short = parent.resolve(name)
+    if short != name {
+      used[short] = true
+    }
+  }
+  {
+    parent: Some(parent),
+    renames: {},
+    used,
+    counter: 0,
+    reserved: parent.reserved,
+    is_function_scope: true,
+  }
+}
+
+///|
+/// Collect all `Var(name)` references in `block`, not descending into
+/// nested function / arrow bodies (they have independent scopes).
+fn collect_var_refs_block(block : @ast.TsBlock, out : Map[String, Bool]) -> Unit {
+  for s in block.stmts {
+    collect_var_refs_stmt(s, out)
+  }
+}
+
+///|
+fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
+  match stmt {
+    Var(_, _, e) | Let(_, _, e) | Const(_, _, e) => collect_var_refs_expr(e, out)
+    Assign(_, e) => collect_var_refs_expr(e, out)
+    CompoundAssign(_, _, e) => collect_var_refs_expr(e, out)
+    IndexAssign(t, k, v) => {
+      collect_var_refs_expr(t, out)
+      collect_var_refs_expr(k, out)
+      collect_var_refs_expr(v, out)
+    }
+    PropAssign(t, _, v) => {
+      collect_var_refs_expr(t, out)
+      collect_var_refs_expr(v, out)
+    }
+    Expr(e) => collect_var_refs_expr(e, out)
+    Return(Some(e)) => collect_var_refs_expr(e, out)
+    Return(None) => ()
+    Throw(e) => collect_var_refs_expr(e, out)
+    Try(b, _, catch_b, finally_b) => {
+      collect_var_refs_block(b, out)
+      match catch_b {
+        Some(cb) => collect_var_refs_block(cb, out)
+        None => ()
+      }
+      match finally_b {
+        Some(fb) => collect_var_refs_block(fb, out)
+        None => ()
+      }
+    }
+    If(cond, then_b, else_b) => {
+      collect_var_refs_expr(cond, out)
+      collect_var_refs_block(then_b, out)
+      match else_b {
+        Some(eb) => collect_var_refs_block(eb, out)
+        None => ()
+      }
+    }
+    While(cond, b) | DoWhile(cond, b) => {
+      collect_var_refs_expr(cond, out)
+      collect_var_refs_block(b, out)
+    }
+    For(init, cond, update, b) => {
+      match init {
+        Some(s) => collect_var_refs_stmt(s, out)
+        None => ()
+      }
+      match cond {
+        Some(e) => collect_var_refs_expr(e, out)
+        None => ()
+      }
+      match update {
+        Some(s) => collect_var_refs_stmt(s, out)
+        None => ()
+      }
+      collect_var_refs_block(b, out)
+    }
+    ForOf(_, _, _, e, b) | ForIn(_, _, _, e, b) | ForAwaitOf(_, _, _, e, b) => {
+      collect_var_refs_expr(e, out)
+      collect_var_refs_block(b, out)
+    }
+    Switch(e, cases) => {
+      collect_var_refs_expr(e, out)
+      for c in cases {
+        match c.test_expr {
+          Some(te) => collect_var_refs_expr(te, out)
+          None => ()
+        }
+        collect_var_refs_block(c.body, out)
+      }
+    }
+    Block(b) => collect_var_refs_block(b, out)
+    Label(_, s) => collect_var_refs_stmt(s, out)
+    NativeClassStmt(_, _) => () // class body has its own scope
+    With(e, b) => {
+      collect_var_refs_expr(e, out)
+      collect_var_refs_block(b, out)
+    }
+    Empty | Break(_) | Continue(_) | Debugger => ()
+  }
+}
+
+///|
+fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
+  match expr {
+    Var(name) => out[name] = true
+    BinOp(_, a, b) => {
+      collect_var_refs_expr(a, out)
+      collect_var_refs_expr(b, out)
+    }
+    UnaryOp(_, e) => collect_var_refs_expr(e, out)
+    Call(_, args) => for a in args { collect_var_refs_expr(a, out) }
+    CallExpr(f, args) => {
+      collect_var_refs_expr(f, out)
+      for a in args { collect_var_refs_expr(a, out) }
+    }
+    Cond(c, t, f) => {
+      collect_var_refs_expr(c, out)
+      collect_var_refs_expr(t, out)
+      collect_var_refs_expr(f, out)
+    }
+    ArrayLit(elems) =>
+      for e in elems { collect_var_refs_expr(e, out) }
+    Spread(e) => collect_var_refs_expr(e, out)
+    ObjectLit(pairs) => for pair in pairs { collect_var_refs_expr(pair.1, out) }
+    ComputedProp(k, v) => {
+      collect_var_refs_expr(k, out)
+      collect_var_refs_expr(v, out)
+    }
+    IndexAccess(t, k) => {
+      collect_var_refs_expr(t, out)
+      collect_var_refs_expr(k, out)
+    }
+    PropAccess(t, _) => collect_var_refs_expr(t, out)
+    New(_, args) => for a in args { collect_var_refs_expr(a, out) }
+    NewExpr(c, args) => {
+      collect_var_refs_expr(c, out)
+      for a in args { collect_var_refs_expr(a, out) }
+    }
+    MethodCall(t, _, args) => {
+      collect_var_refs_expr(t, out)
+      for a in args { collect_var_refs_expr(a, out) }
+    }
+    AssignExpr(_, e) => collect_var_refs_expr(e, out)
+    AssignPattern(_, e) => collect_var_refs_expr(e, out)
+    CompoundAssignExpr(t, _, v) => {
+      collect_var_refs_expr(t, out)
+      collect_var_refs_expr(v, out)
+    }
+    PropAssignExpr(t, _, v) => {
+      collect_var_refs_expr(t, out)
+      collect_var_refs_expr(v, out)
+    }
+    IndexAssignExpr(t, k, v) => {
+      collect_var_refs_expr(t, out)
+      collect_var_refs_expr(k, out)
+      collect_var_refs_expr(v, out)
+    }
+    Seq(a, b) => {
+      collect_var_refs_expr(a, out)
+      collect_var_refs_expr(b, out)
+    }
+    // Do NOT recurse into function/arrow bodies — they have their own scope
+    ArrowFunc(_, _, _, _) => ()
+    FuncExpr(_) => ()
+    Await(e) => collect_var_refs_expr(e, out)
+    Yield(Some(e)) => collect_var_refs_expr(e, out)
+    YieldStar(e) => collect_var_refs_expr(e, out)
+    DynamicImport(e, _) => collect_var_refs_expr(e, out)
+    TaggedTemplate(tag, _, _, exprs) => {
+      collect_var_refs_expr(tag, out)
+      for e in exprs { collect_var_refs_expr(e, out) }
+    }
+    TemplateLiteral(_, exprs) => for e in exprs { collect_var_refs_expr(e, out) }
+    As(e, _) | Satisfies(e, _) | NonNull(e) | PureCall(e) |
+    OptionalChain(e) => collect_var_refs_expr(e, out)
+    NativeClassExpr(_, _) => ()
+    JsxElement(_, attrs, children) => {
+      for attr in attrs {
+        match attr.1 {
+          Some(e) => collect_var_refs_expr(e, out)
+          None => ()
+        }
+      }
+      for c in children { collect_var_refs_expr(c, out) }
+    }
+    NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_) |
+    NullLit | ArrayHole | ImportMeta | Yield(None) => ()
+  }
 }
 
 ///|
@@ -1547,8 +1770,34 @@ fn rename_expr(expr : @ast.TsExpr, scope : ScopeFrame) -> @ast.TsExpr {
       )
     Seq(a, b) => Seq(rename_expr(a, scope), rename_expr(b, scope))
     ArrowFunc(params, ret_ty, body, is_async) => {
-      // New scope for the arrow function body.
-      let inner = ScopeFrame::child(scope)
+      // New function scope — params get short names starting from 0.
+      let inner = match body {
+        ArrowBlock(b) => ScopeFrame::function_child(scope, b)
+        ArrowExpr(_) => {
+          // Expression body: synthesize a block with a single Return
+          // so we can reuse function_child's free-var collection.
+          let refs : Map[String, Bool] = {}
+          match body {
+            ArrowExpr(e) => collect_var_refs_expr(e, refs)
+            _ => ()
+          }
+          let used : Map[String, Bool] = {}
+          for name, _ in refs {
+            let short = scope.resolve(name)
+            if short != name {
+              used[short] = true
+            }
+          }
+          {
+            parent: Some(scope),
+            renames: {},
+            used,
+            counter: 0,
+            reserved: scope.reserved,
+            is_function_scope: true,
+          }
+        }
+      }
       let new_params = rename_param_list(params, inner, inner.reserved)
       let new_body = match body {
         ArrowExpr(e) => @ast.TsArrowBody::ArrowExpr(rename_expr(e, inner))
@@ -1717,22 +1966,18 @@ fn rename_class_decl_idents(
   for m in decl.methods {
     let new_body = match m.body {
       Some(b) => {
-        // Method params introduce bindings into the body's scope.
-        // Without flagging them in the inner frame, a `fiber`
-        // parameter inside `shouldYield(fiber) { fiber.foo() }`
-        // resolves up the chain to whatever the outer scope mangled
-        // `fiber` to (effect's FiberRuntime keeps a top-level
-        // binding with the same name). Pin each param to its
-        // identity in the inner frame so body references resolve
-        // back to the parameter — emit prints params verbatim,
-        // so the names must not change.
-        let inner = ScopeFrame::child(scope)
+        // Use a fresh function scope so local variables get short
+        // 1-char names starting from 0.
+        // Pin each param to its identity (params are emitted verbatim
+        // by the class-method emitter, so they must not be renamed).
+        let inner = ScopeFrame::function_child(scope, b)
         for p in m.params {
           if p.0 != "" && not(inner.renames.contains(p.0)) {
             inner.renames[p.0] = p.0
             inner.used[p.0] = true
           }
         }
+        hoist_var_decls_into_scope(b, inner, inner.reserved)
         Some(rename_block_inline_in(b, inner, inner.reserved))
       }
       None => None
@@ -1783,7 +2028,7 @@ fn rename_function_expr(f : @ast.TsFunc, scope : ScopeFrame) -> @ast.TsFunc {
   } else {
     ""
   }
-  let inner = ScopeFrame::child(scope)
+  let inner = ScopeFrame::function_child(scope, f.body)
   let new_params = rename_param_list(f.params, inner, inner.reserved)
   // Hoist `var` names from the body into the function frame so
   // block-scoped child frames can resolve them through the chain.
