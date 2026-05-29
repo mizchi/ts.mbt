@@ -364,6 +364,28 @@ fn inline_into_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     Satisfies(inner, ty) => Satisfies(inline_into_expr(inner), ty)
     NonNull(inner) => NonNull(inline_into_expr(inner))
     OptionalChain(inner) => OptionalChain(inline_into_expr(inner))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: inline_block(f.body) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(inline_block(b))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, inline_into_expr(sf.1)))
+      }
+      NativeClassExpr(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
@@ -1202,6 +1224,29 @@ fn count_var_uses_expr(
         l = l + l2
         n = n + n2
       }
+    NativeClassExpr(decl, ctor) => {
+      // Class bodies are nested function scopes — count as nested.
+      let walk_block_nested = fn(blk : @ast.TsBlock) {
+        let (l2, n2) = count_var_uses_block(blk, name, true)
+        l = l + l2
+        n = n + n2
+      }
+      match ctor {
+        Some(f) => walk_block_nested(f.body)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => walk_block_nested(b)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        let (l2, n2) = count_var_uses_expr(sf.1, name, 0, 0, inside_func)
+        l = l + l2
+        n = n + n2
+      }
+    }
     _ => ()
   }
   (l, n)
@@ -1746,6 +1791,22 @@ fn collect_captured_expr(
       for e in exprs {
         collect_captured_expr(e, out, inside_func)
       }
+    NativeClassExpr(decl, ctor) => {
+      // Class method / constructor bodies are nested function scopes.
+      match ctor {
+        Some(f) => collect_captured_block(f.body, out, true)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_captured_block(b, out, true)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_captured_expr(sf.1, out, inside_func)
+      }
+    }
     _ => ()
   }
 }
