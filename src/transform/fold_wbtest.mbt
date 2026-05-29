@@ -1385,3 +1385,11 @@ test "fold: Array.of(1, 2, 3) folds to array literal" {
   assert_true(out.contains("[1,") || out.contains("[1, "), "expected array literal in output")
   assert_false(out.contains("Array.of"), "Array.of should be folded away")
 }
+
+///|
+test "fold: spread literal arrays are flattened in array literal" {
+  // `[...a, ...b]` where a and b are literal arrays should fold to a single array.
+  let out = fold_one("const x = [...[1, 2], ...[3, 4]];\n")
+  assert_true(out.contains("[1") || out.contains("[ 1"), "expected flattened array in output")
+  assert_false(out.contains("..."), "expected spread to be folded away")
+}

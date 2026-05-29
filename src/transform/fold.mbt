@@ -1125,7 +1125,53 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       for i in items {
         new_items.push(fold_expr(i))
       }
-      ArrayLit(new_items)
+      // Flatten `Spread(ArrayLit([…]))` into the parent array when
+      // all spread elements are pure literals: `[...a, ...b]` where
+      // `a = [1,2]` and `b = [3,4]` → `[1,2,3,4]`. Only flattens
+      // when every non-spread item is also a pure value so the
+      // resulting array is fully literal.
+      let mut can_flatten = false
+      for item in new_items {
+        if item is Spread(ArrayLit(_)) {
+          can_flatten = true
+          break
+        }
+      }
+      if can_flatten {
+        let flat : Array[@ast.TsExpr] = []
+        let mut all_ok = true
+        for item in new_items {
+          match item {
+            Spread(ArrayLit(inner)) => {
+              let mut inner_pure = true
+              for e in inner {
+                if not(is_pure_value(e)) {
+                  inner_pure = false
+                  break
+                }
+              }
+              if inner_pure {
+                for e in inner {
+                  flat.push(e)
+                }
+              } else {
+                all_ok = false
+                break
+              }
+            }
+            _ =>
+              if is_pure_value(item) {
+                flat.push(item)
+              } else {
+                all_ok = false
+                break
+              }
+          }
+        }
+        if all_ok { ArrayLit(flat) } else { ArrayLit(new_items) }
+      } else {
+        ArrayLit(new_items)
+      }
     }
     ObjectLit(entries) => {
       let new_entries : Array[(String, @ast.TsExpr)] = []
