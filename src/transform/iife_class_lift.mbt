@@ -333,13 +333,17 @@ fn classify_iife_body_stmt(
     // Prototype-chain setup for `extends` — skip all of these forms:
     // `ClassName.prototype.__proto__ = _Super.prototype`
     // `ClassName.__proto__ = _Super`
+    // `ClassName.prototype.__proto__ = _Super.prototype` /
+    // `ClassName.__proto__ = _Super` — prototype chain wiring.
+    // For non-class-name targets: prototype-chain setup for another
+    // class, safe to emit after our class as a side effect.
     PropAssign(
       @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
       "__proto__",
       _
     )
     | PropAssign(@ast.TsExpr::Var(n), "__proto__", _) =>
-      if n == class_name { Skipped } else { Unknown }
+      if n == class_name { Skipped } else { Extra(stmt) }
     // `_inheritsLoose(ClassName, _Super)` / `_inherits(ClassName, _Super)` /
     // `__extends(ClassName, _Super)` (TypeScript emitted helper)
     Expr(@ast.TsExpr::CallExpr(@ast.TsExpr::Var(fn_name), args)) =>
@@ -350,10 +354,11 @@ fn classify_iife_body_stmt(
             if n == class_name {
               Skipped
             } else {
-              // Inheritance setup for another class — ordering may matter.
-              Unknown
+              // Inheritance setup for another class — safe as a side
+              // effect after our class (the other class is not our target).
+              Extra(stmt)
             }
-          _ => Unknown
+          _ => Extra(stmt)
         }
       } else {
         // Any other bare-function call is a side-effect expression.
