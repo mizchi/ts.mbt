@@ -929,3 +929,9 @@ test "peephole: x.length <= 0 → !x.length" {
   assert_true(out.contains("!arr"), msg="expected !arr, got: \{out}")
   assert_false(out.contains("<="), msg="expected no <=, got: \{out}")
 }
+
+///|
+test "peephole: x != null ? x() : void 0 → x?.() optional call" {
+  let out = minify_one("const r = x != null ? x() : void 0;")
+  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+}

@@ -734,6 +734,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     OptionalChain(IndexAccess(check_x, idx))
                   MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
                     OptionalChain(MethodCall(check_x, method, args))
+                  // `x != null ? x() : void 0` → `x?.()` (optional call)
+                  Call(fn_name, args) =>
+                    if exprs_eq(check_x, Var(fn_name)) {
+                      OptionalChain(Call(fn_name, args))
+                    } else {
+                      Cond(cp, t_val, e_val)
+                    }
+                  CallExpr(callee, args) if exprs_eq(check_x, callee) =>
+                    OptionalChain(CallExpr(check_x, args))
                   _ => Cond(cp, t_val, e_val)
                 }
               } else {
@@ -762,6 +771,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     OptionalChain(IndexAccess(check_x, idx))
                   MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
                     OptionalChain(MethodCall(check_x, method, args))
+                  Call(fn_name, args) =>
+                    if exprs_eq(check_x, Var(fn_name)) {
+                      OptionalChain(Call(fn_name, args))
+                    } else {
+                      Cond(cp, t_val, e_val)
+                    }
+                  CallExpr(callee, args) if exprs_eq(check_x, callee) =>
+                    OptionalChain(CallExpr(check_x, args))
                   _ => Cond(cp, t_val, e_val)
                 }
               } else {
