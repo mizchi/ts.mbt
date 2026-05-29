@@ -581,6 +581,32 @@ fn substitute_stmt(
       ForIn(k, b, t, substitute_expr(iter, name, rhs), body)
     Switch(e, cases) => Switch(substitute_expr(e, name, rhs), cases)
     Label(lname, inner) => Label(lname, substitute_stmt(inner, name, rhs))
+    NativeClassStmt(decl, ctor) => {
+      let new_base = match decl.base_expr {
+        Some(b) => Some(substitute_expr(b, name, rhs))
+        None => None
+      }
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: substitute_block(f.body, name, rhs) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(substitute_block(b, name, rhs))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, substitute_expr(sf.1, name, rhs)))
+      }
+      NativeClassStmt(
+        { ..decl, base_expr: new_base, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
+    }
     _ => stmt
   }
 }
