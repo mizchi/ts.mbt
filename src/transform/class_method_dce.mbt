@@ -424,9 +424,16 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
     Return(Some(e)) => expr_has_method_sniff(e)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => false
     IndexAssign(t, idx, v) => {
-      // Computed assignment with non-static index is a sink.
+      // Computed assignment with non-static index is a sink UNLESS the
+      // receiver is `this`: `this[key] = val` writes to the INSTANCE,
+      // not to the prototype, so prototype-method DCE is still safe.
+      // `Foo.prototype[key] = val` (dynamic prototype augmentation) IS
+      // a sink and correctly falls through to `return true`.
       if not(is_static_index_for_method_dce(idx)) {
-        return true
+        match t {
+          @ast.TsExpr::Var("this") => ()
+          _ => return true
+        }
       }
       expr_has_method_sniff(t) ||
       expr_has_method_sniff(idx) ||
@@ -558,7 +565,10 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     }
     IndexAssignExpr(recv, idx, v) => {
       if not(is_static_index_for_method_dce(idx)) {
-        return true
+        match recv {
+          @ast.TsExpr::Var("this") => ()
+          _ => return true
+        }
       }
       expr_has_method_sniff(recv) ||
       expr_has_method_sniff(idx) ||

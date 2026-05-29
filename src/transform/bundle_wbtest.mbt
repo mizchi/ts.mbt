@@ -1843,3 +1843,25 @@ test "link: `export * as ns from` where source uses `export * from` (re-export c
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "class_method_dce: this[dynamic] instance-write does not abort prototype method DCE" {
+  // Hono-style: constructor assigns this[method] = ... for all methods.
+  // The DCE should still drop the unused `old()` prototype method.
+  let src = #|class Foo {
+  #|  constructor() {
+  #|    const methods = ["run"];
+  #|    methods.forEach(m => { this[m] = () => 42; });
+  #|  }
+  #|  run() { return 1; }
+  #|  old() { return 99; }
+  #|}
+  #|const f = new Foo();
+  #|f.run();
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("old"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
