@@ -365,8 +365,3 @@ test "peephole: !(a < b) folds to a >= b" {
   assert_false(out.contains("<"))
 }
 
-///|
-test "peephole: !!x folds to Boolean(x)" {
-  let out = peep_one("const r = !!x;\n")
-  assert_true(out.contains("Boolean("), "expected Boolean() but got: \{out}")
-}

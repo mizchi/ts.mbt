@@ -22,7 +22,6 @@
 //   !(a <= b)     -> a > b
 //   !(a > b)      -> a <= b
 //   !(a >= b)     -> a < b
-//   !!x           -> Boolean(x)      (saves 1 byte; coerces to bool consistently)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -369,8 +368,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         BinOp(@ast.TsBinOp::BinLe, a, b) => BinOp(@ast.TsBinOp::BinGt, a, b)
         BinOp(@ast.TsBinOp::BinGt, a, b) => BinOp(@ast.TsBinOp::BinLe, a, b)
         BinOp(@ast.TsBinOp::BinGe, a, b) => BinOp(@ast.TsBinOp::BinLt, a, b)
-        // `!!x` → `Boolean(x)` saves one byte and is semantically identical.
-        UnaryOp(@ast.TsUnaryOp::Not, x) => Call("Boolean", [x])
         _ => UnaryOp(@ast.TsUnaryOp::Not, inner_p)
       }
     }
