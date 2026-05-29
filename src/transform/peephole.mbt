@@ -79,6 +79,7 @@
 //   x === false                 -> !x           (saves 6 bytes)
 //   x !== true                  -> !x           (saves 6 bytes)
 //   x !== false                 -> x            (saves 7 bytes)
+//   Object.prototype.hasOwnProperty.call(o,k) -> Object.hasOwn(o,k)  (saves ~22 bytes; ES2022)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -1070,6 +1071,22 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
           ) =>
             return ArrayLit([Spread(new_args[0])])
           _ => ()
+        }
+      }
+      // `Object.prototype.hasOwnProperty.call(obj, key)` → `Object.hasOwn(obj, key)`
+      // ES2022+; saves ~22 bytes and is the modern idiom.
+      // Also handles the shorter `{}.hasOwnProperty.call(obj, key)` form.
+      if m == "call" && new_args.length() == 2 {
+        let is_hasown_recv = match recv_p {
+          PropAccess(
+            PropAccess(@ast.TsExpr::Var("Object"), "prototype"),
+            "hasOwnProperty",
+          ) => true
+          PropAccess(@ast.TsExpr::ObjectLit([]), "hasOwnProperty") => true
+          _ => false
+        }
+        if is_hasown_recv {
+          return MethodCall(Var("Object"), "hasOwn", new_args)
         }
       }
       // `Object.assign({}, a, b, …)` → `{...a, ...b, …}` (object spread).

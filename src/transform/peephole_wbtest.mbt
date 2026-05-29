@@ -1169,3 +1169,12 @@ test "peephole: x!==true → !x, x!==false → x" {
   assert_false(r2.contains("!=="), msg="expected no !== after fold, got: \{r2}")
   assert_false(r2.contains("false") || r2.contains("!1"), msg="expected no bool lit, got: \{r2}")
 }
+
+///|
+test "peephole: Object.prototype.hasOwnProperty.call → Object.hasOwn" {
+  let r1 = minify_one("Object.prototype.hasOwnProperty.call(obj, key);")
+  assert_true(r1.contains("Object.hasOwn"), msg="expected Object.hasOwn, got: \{r1}")
+  assert_false(r1.contains("hasOwnProperty"), msg="expected no hasOwnProperty, got: \{r1}")
+  let r2 = minify_one("({}).hasOwnProperty.call(obj, key);")
+  assert_true(r2.contains("Object.hasOwn"), msg="expected Object.hasOwn for {}.form, got: \{r2}")
+}
