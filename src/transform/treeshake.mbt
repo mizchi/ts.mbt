@@ -103,13 +103,19 @@ fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
           }
           None => ()
         }
-        // Method body refs (param_defaults can carry references too)
+        // Method body refs (param_defaults, computed keys, and bodies)
         for m in decl.methods {
           for d in m.param_defaults {
             match d {
               Some(e) => collect_var_refs_in_expr(e, refs)
               None => ()
             }
+          }
+          // Computed method keys like `[OP_TAG](op) { … }` reference symbols
+          // that must be kept alive.
+          match m.key_expr {
+            Some(ke) => collect_var_refs_in_expr(ke, refs)
+            None => ()
           }
           match m.body {
             Some(b) => collect_var_refs_in_block(b, refs)

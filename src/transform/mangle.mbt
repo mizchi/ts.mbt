@@ -1389,13 +1389,42 @@ fn rename_stmt(
       // the function-level rename.
       Var(rename_binding_lhs(b, scope), t, rename_expr(init, scope))
     Let(b, t, init) =>
-      Let(rename_binding_decl(b, scope, reserved), t, rename_expr(init, scope))
+      // Named-function-declaration form: `let g = function() { … }`
+      // After renaming the binding to e.g. `g`, the FuncExpr's internal
+      // `name` must also be updated to `g` — otherwise it stays `""` (or
+      // the original source name) and downstream peephole sees an
+      // anonymous FuncExpr, converts it to an arrow, and the emit merges
+      // it into a multi-decl sequence (`let a=1,g=()=>…`), stripping the
+      // hoistable function-declaration form and causing a TDZ.
+      match (rename_binding_decl(b, scope, reserved), init) {
+        (@ast.TsBinding::Ident(new_name), @ast.TsExpr::FuncExpr(_)) =>
+          Let(
+            @ast.TsBinding::Ident(new_name),
+            t,
+            match rename_expr(init, scope) {
+              @ast.TsExpr::FuncExpr(rf) =>
+                @ast.TsExpr::FuncExpr({ ..rf, name: new_name })
+              renamed => renamed
+            },
+          )
+        (new_b, _) => Let(new_b, t, rename_expr(init, scope))
+      }
     Const(b, t, init) =>
-      Const(
-        rename_binding_decl(b, scope, reserved),
-        t,
-        rename_expr(init, scope),
-      )
+      // Same FuncExpr-name preservation as the Let branch above.
+      match (rename_binding_decl(b, scope, reserved), init) {
+        (@ast.TsBinding::Ident(new_name), @ast.TsExpr::FuncExpr(_)) =>
+          Const(
+            @ast.TsBinding::Ident(new_name),
+            t,
+            match rename_expr(init, scope) {
+              @ast.TsExpr::FuncExpr(rf) =>
+                @ast.TsExpr::FuncExpr({ ..rf, name: new_name })
+              renamed => renamed
+            },
+          )
+        (new_b, _) =>
+          Const(new_b, t, rename_expr(init, scope))
+      }
     Expr(e) => Expr(rename_expr(e, scope))
     Return(opt) =>
       match opt {
