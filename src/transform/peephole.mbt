@@ -208,24 +208,27 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         None => None
       }
       // `if (c) return a; else return b;` → `return c ? a : b;`
+      // Apply peep_expr to the resulting expression so further folding
+      // (e.g. `c?!0:!1` → `!!c`) happens in the same pass.
       match (tp.stmts, ep) {
         ([Return(Some(a))], Some({ stmts: [Return(Some(b))], .. })) =>
-          Return(Some(@ast.TsExpr::Cond(cp, a, b)))
+          Return(Some(peep_expr(Cond(cp, a, b), ctx)))
         // `if (c) x = a; else x = b;` → `x = c ? a : b;`
         (
           [Assign(n1, a)],
           Some({ stmts: [Assign(n2, b)], .. }),
         ) if n1 == n2 =>
-          Assign(n1, @ast.TsExpr::Cond(cp, a, b))
+          Assign(n1, peep_expr(Cond(cp, a, b), ctx))
         // `if (c) expr_a; else expr_b;` → `c ? expr_a : expr_b;`
         ([Expr(a)], Some({ stmts: [Expr(b)], .. })) =>
-          Expr(@ast.TsExpr::Cond(cp, a, b))
+          Expr(peep_expr(Cond(cp, a, b), ctx))
         // `if (c) expr;` (no else) → `c && expr;` (short-circuit)
-        ([Expr(a)], None) => Expr(@ast.TsExpr::BinOp(@ast.TsBinOp::And, cp, a))
+        ([Expr(a)], None) =>
+          Expr(peep_expr(BinOp(@ast.TsBinOp::And, cp, a), ctx))
         // `if (c) {} else { stmts }` → `if (!c) { stmts }` (invert + drop empty then)
         ([], Some(else_block)) =>
           If(
-            UnaryOp(@ast.TsUnaryOp::Not, cp),
+            peep_expr(UnaryOp(@ast.TsUnaryOp::Not, cp), ctx),
             else_block,
             None,
           )
@@ -385,7 +388,8 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   if n >= 2 {
     match (stmts[n - 2], stmts[n - 1]) {
       (If(c, { stmts: [Return(Some(a))], .. }, None), Return(Some(b))) => {
-        stmts[n - 2] = Return(Some(@ast.TsExpr::Cond(c, a, b)))
+        // Apply peep_expr to the new Cond for further folding (e.g. `c?!0:!1` → `!!c`).
+        stmts[n - 2] = Return(Some(peep_expr(Cond(c, a, b), ctx)))
         stmts.pop() |> ignore
       }
       _ => ()

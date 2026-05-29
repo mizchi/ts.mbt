@@ -339,6 +339,7 @@ pub fn transform_source_full(
   } else {
     lowered
   }
+  let mangled = if minify { peephole_block(mangled) } else { mangled }
   let e = Emitter::new(pretty=not(minify))
   if with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
