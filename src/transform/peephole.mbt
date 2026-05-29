@@ -382,30 +382,38 @@ fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
       _ => ()
     }
   }
-  // Fold `if (c) return a; return b;` → `return c ? a : b;`.
-  // Walk backwards and merge adjacent pairs.
-  let n = stmts.length()
-  if n >= 2 {
+  // Fold `if (c) return a; return b;` → `return c ? a : b;` and
+  // `let/const/var x = expr; return x;` → `return expr;`.
+  // Loop to fixpoint so chains like `if(a) return x; if(b) return y; return z;`
+  // collapse all the way to `return a?x:b?y:z;` in a single pass.
+  let mut folded = true
+  while folded {
+    folded = false
+    let n = stmts.length()
+    if n < 2 {
+      break
+    }
     match (stmts[n - 2], stmts[n - 1]) {
       (If(c, { stmts: [Return(Some(a))], .. }, None), Return(Some(b))) => {
-        // Apply peep_expr to the new Cond for further folding (e.g. `c?!0:!1` → `!!c`).
         stmts[n - 2] = Return(Some(peep_expr(Cond(c, a, b), ctx)))
         stmts.pop() |> ignore
+        folded = true
       }
       // `let/const/var x = expr; return x;` → `return expr;`
-      // Eliminates a temporary variable used only to name the return value.
-      // Only safe when the binding is a simple identifier (not destructuring).
       (Let(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
+        folded = true
       }
       (Const(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
+        folded = true
       }
       (Var(Ident(vname), _, init), Return(Some(Var(rname)))) if vname == rname => {
         stmts[n - 2] = Return(Some(peep_expr(init, ctx)))
         stmts.pop() |> ignore
+        folded = true
       }
       _ => ()
     }

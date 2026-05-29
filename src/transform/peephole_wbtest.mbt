@@ -680,3 +680,11 @@ test "peephole: const x = expr; return x; folds to return expr;" {
   let out = peep_one("function f(a){const r=a*2;return r;}")
   assert_false(out.contains("let r") || out.contains("const r"), msg="expected no temp var, got: \{out}")
 }
+
+///|
+test "peephole: three-way if chain collapses to nested ternary" {
+  let out = peep_one("function f(x){if(x<0)return\"neg\";if(x===0)return\"zero\";return\"pos\";}")
+  assert_true(out.contains("?"), msg="expected ternary, got: \{out}")
+  // Should not have any if statements remaining
+  assert_false(out.contains("if"), msg="expected no if, got: \{out}")
+}
