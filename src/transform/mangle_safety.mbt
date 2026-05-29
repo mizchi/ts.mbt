@@ -265,6 +265,10 @@ fn collect_props_on_external_stmt(
       }
     }
     NativeClassStmt(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_props_on_external_expr(b, externals, out, numeric_names)
+        None => ()
+      }
       match ctor {
         Some(f) =>
           collect_props_on_external_block(f.body, externals, out, numeric_names)
@@ -436,6 +440,10 @@ fn collect_props_on_external_expr(
         collect_props_on_external_expr(e, externals, out, numeric_names)
       }
     NativeClassExpr(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_props_on_external_expr(b, externals, out, numeric_names)
+        None => ()
+      }
       match ctor {
         Some(f) =>
           collect_props_on_external_block(f.body, externals, out, numeric_names)
@@ -576,6 +584,10 @@ fn collect_reflection_sinks_stmt(
       }
     }
     NativeClassStmt(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_reflection_sinks_expr(b, out)
+        None => ()
+      }
       match ctor {
         Some(f) => collect_reflection_sinks_block(f.body, out)
         None => ()
@@ -723,6 +735,10 @@ fn collect_reflection_sinks_expr(
         collect_reflection_sinks_expr(e, out)
       }
     NativeClassExpr(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_reflection_sinks_expr(b, out)
+        None => ()
+      }
       match ctor {
         Some(f) => collect_reflection_sinks_block(f.body, out)
         None => ()
