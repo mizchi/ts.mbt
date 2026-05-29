@@ -289,8 +289,12 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, peep_expr(sf.1, ctx)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(peep_expr(b, ctx))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }
@@ -517,8 +521,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, peep_expr(sf.1, ctx)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(peep_expr(b, ctx))
+        None => None
+      }
       NativeClassExpr(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }

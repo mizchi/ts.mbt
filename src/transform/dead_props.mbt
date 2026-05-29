@@ -486,8 +486,12 @@ fn drop_dead_props_stmt(
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, drop_dead_props_expr(sf.1, reserved, read_props)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(drop_dead_props_expr(b, reserved, read_props))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }
@@ -712,8 +716,12 @@ fn drop_dead_props_expr(
           (sf.0, drop_dead_props_expr(sf.1, reserved, read_props)),
         )
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(drop_dead_props_expr(b, reserved, read_props))
+        None => None
+      }
       NativeClassExpr(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }

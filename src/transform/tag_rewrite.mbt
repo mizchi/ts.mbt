@@ -2150,8 +2150,12 @@ fn tag_rewrite_stmt(
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, tag_rewrite_expr(sf.1, table)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(tag_rewrite_expr(b, table))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }
@@ -2343,8 +2347,12 @@ fn tag_rewrite_expr(
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, tag_rewrite_expr(sf.1, table)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(tag_rewrite_expr(b, table))
+        None => None
+      }
       NativeClassExpr(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }

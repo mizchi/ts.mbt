@@ -731,6 +731,10 @@ fn sg_visit_stmt(w : SgWalker, stmt : @ast.TsStmt) -> Unit {
         sg_visit_block_in_new_scope(w, b, Block)
       }
     NativeClassStmt(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => sg_visit_expr(w, b)
+        None => ()
+      }
       match ctor {
         Some(f) => sg_visit_function_body(w, f)
         None => ()
@@ -1141,6 +1145,10 @@ fn sg_visit_expr(w : SgWalker, expr : @ast.TsExpr) -> Unit {
         sg_visit_expr(w, e)
       }
     NativeClassExpr(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => sg_visit_expr(w, b)
+        None => ()
+      }
       match ctor {
         Some(f) => sg_visit_function_body(w, f)
         None => ()
