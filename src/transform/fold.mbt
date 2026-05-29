@@ -2257,8 +2257,10 @@ fn try_lower_single_case_switch(
     if case_cases.is_empty() && default_cases.length() == 1 {
       let body = default_cases[0].body
       let stmts = strip_trailing_break(body)
-      if stmts.length() == 1 {
-        return Some(stmts[0])
+      match stmts.length() {
+        0 => return Some(Empty)
+        1 => return Some(stmts[0])
+        _ => return Some(Block({ stmts, stmt_positions: [] }))
       }
     }
     return None

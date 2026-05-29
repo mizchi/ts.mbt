@@ -1301,6 +1301,22 @@ test "fold: default-only switch inlined to body" {
 }
 
 ///|
+test "fold: multi-stmt default-only switch inlined to block" {
+  let out = fold_one(
+    (
+      #|switch (x) {
+      #|  default:
+      #|    doFirst();
+      #|    doSecond();
+      #|}
+    ),
+  )
+  assert_false(out.contains("switch"))
+  assert_true(out.contains("doFirst"))
+  assert_true(out.contains("doSecond"))
+}
+
+///|
 test "fold: uninit let + assign merges to initialized let" {
   let out = fold_one("let x; x = 42;\n")
   // Should emit `let x=42` (no separate assignment)
