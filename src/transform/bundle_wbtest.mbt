@@ -1801,6 +1801,27 @@ test "iife_class_lift: Assign to non-class var in IIFE body does not abort lift"
 }
 
 ///|
+test "iife_class_lift: destructuring Var in IIFE body does not abort lift" {
+  // `var { a, b } = opts` inside the IIFE is a destructuring declaration
+  // that does not touch the class name. The lift should hoist it before
+  // the class and still produce `class Foo`.
+  let src = #|var Foo = (function() {
+  #|  var opts = { a: 1, b: 2 };
+  #|  var _a = opts.a, _b = opts.b;
+  #|  function Foo() { this.v = _a + _b; }
+  #|  Foo.prototype.get = function() { return this.v; };
+  #|  return Foo;
+  #|}());
+  #|export default Foo;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("class Foo"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "link: `export * as ns from` where source uses `export * from` (re-export chain)" {
   // util-impl.ts → util.ts (export * from "./util-impl") → core.ts (export * as util from "./util")
   // The namespace object in core.ts should include `check` from the transitive re-export.

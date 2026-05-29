@@ -266,6 +266,17 @@ fn classify_iife_body_stmt(
       } else {
         ExtraBefore(stmt)
       }
+    // Destructuring bindings (`const [a, b] = arr`, `var {x} = obj`).
+    // The binding pattern can never be the class name, so always safe.
+    // Use ExtraBefore unless the RHS references the class.
+    Let(_, _, rhs) | Const(_, _, rhs) | Var(_, _, rhs) =>
+      if expr_refs_class_name(rhs, class_name) {
+        Extra(stmt)
+      } else {
+        ExtraBefore(stmt)
+      }
+    // Empty statement — no-op.
+    Empty => Skipped
     // `ClassName.prototype.METHOD = function METHOD() {…};` —
     // instance method. For non-class-name receivers this is a side
     // effect (prototype augmentation of another class) that is safe
