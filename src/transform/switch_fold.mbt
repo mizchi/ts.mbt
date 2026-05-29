@@ -361,6 +361,20 @@ fn switch_fold_expr(expr : @ast.TsExpr, table : SwitchFoldTable) -> @ast.TsExpr 
       Call(name, new_args)
     }
     CallExpr(callee, args) => {
+      // `CallExpr(Var(name), args)` — try the switch-fold rewrite
+      // the same as the `Call(name, args)` form above.
+      match callee {
+        @ast.TsExpr::Var(name) =>
+          match table.entries.get(name) {
+            Some(entry) =>
+              match try_fold_call(entry, args) {
+                Some(folded) => return folded
+                None => ()
+              }
+            None => ()
+          }
+        _ => ()
+      }
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
         new_args.push(switch_fold_expr(a, table))

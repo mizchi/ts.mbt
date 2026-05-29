@@ -299,6 +299,23 @@ fn inline_predicates_expr(
         }
       }
     CallExpr(callee, args) => {
+      // `CallExpr(Var(name), [arg])` — try the predicate rewrite
+      // the same as the `Call(name, [arg])` form above.
+      match callee {
+        @ast.TsExpr::Var(name) =>
+          match table.entries.get(name) {
+            Some(entry) =>
+              if args.length() == 1 {
+                return substitute_param_with_arg(
+                  entry.body_expr,
+                  entry.param_name,
+                  args[0],
+                )
+              }
+            None => ()
+          }
+        _ => ()
+      }
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
         new_args.push(inline_predicates_expr(a, table))
