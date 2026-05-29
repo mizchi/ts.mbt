@@ -1946,3 +1946,28 @@ test "class_method_dce: this[dynamic] instance-write does not abort prototype me
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "emit: minify emits !0/!1 for true/false and void 0 for undefined" {
+  // In minify mode `true` → `!0` (saves 2 bytes), `false` → `!1` (saves 3
+  // bytes), and `undefined` → `void 0` (saves 3 bytes).
+  let src = #|const a = true;
+  #|const b = false;
+  #|const c = undefined;
+  #|console.log(a, b, c);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("true"), "expected true to be minified away")
+      assert_false(out.js.contains("false"), "expected false to be minified away")
+      // `undefined` may be dropped entirely by the treeshaker/folder or
+      // replaced with `void 0` — either way the 9-char identifier should not appear.
+      assert_false(
+        out.js.contains("undefined"),
+        "expected undefined to be minified away",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
