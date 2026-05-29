@@ -1042,3 +1042,10 @@ test "peephole: {...x, ...{}} removes empty spread" {
   // after flattening, the empty spread contributes nothing
   assert_false(out.contains("{}"), msg="expected no empty object, got: \{out}")
 }
+
+///|
+test "peephole: Object.assign with non-empty literal target → spread" {
+  let out = minify_one("const r = Object.assign({x:1}, a, b);")
+  assert_false(out.contains("Object.assign"), msg="expected no Object.assign, got: \{out}")
+  assert_true(out.contains("x"), msg="expected x key, got: \{out}")
+}

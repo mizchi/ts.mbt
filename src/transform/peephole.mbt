@@ -31,7 +31,8 @@
 //   Array.prototype.slice.call(x) -> [...x]  (saves ~21 bytes)
 //   String(x)             -> ""+x      (saves up to 5 bytes)
 //   `${x}`                -> ""+x      (saves 2 bytes; single interpolation only)
-//   Object.assign({},a,b) -> {...a,...b} (saves ~12 bytes; first arg must be {})
+//   Object.assign({},a,b)     -> {...a,...b}     (saves ~12 bytes)
+//   Object.assign({x:1},a,b) -> {x:1,...a,...b}  (literal target also safe)
 //   new Array(0) / new Array() -> []    (saves up to 11 bytes)
 //   new Object()           -> {}        (saves up to 12 bytes)
 //   [].concat(a,b)         -> [...a,...b] (saves ~5 bytes per element)
@@ -948,15 +949,16 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         }
       }
       // `Object.assign({}, a, b, …)` → `{...a, ...b, …}` (object spread).
-      // Only safe when the first argument is an empty object literal `{}` —
-      // that's the target TypeScript uses when it needs a fresh copy.
-      // Only applies when all source arguments are object literals or
-      // variable references (not arbitrary expressions that could have
-      // custom property descriptors).
+      // `Object.assign({x:1}, a, b)` → `{x:1, ...a, ...b}` (literal target).
+      // Safe when the first argument is an object literal (creates a fresh
+      // copy; the target is never shared). Sources are inlined or spread.
       if m == "assign" && new_args.length() >= 2 {
         match (recv_p, new_args[0]) {
-          (Var("Object"), @ast.TsExpr::ObjectLit([])) => {
+          (Var("Object"), @ast.TsExpr::ObjectLit(init_ents)) => {
             let entries : Array[(String, @ast.TsExpr)] = []
+            for ie in init_ents {
+              entries.push(ie)
+            }
             for i, a in new_args {
               if i == 0 { continue }
               match a {
