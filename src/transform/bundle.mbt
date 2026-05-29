@@ -592,6 +592,13 @@ pub fn bundle_modules(
       // on `minify` since the inlining produces deeply nested
       // expressions that are unpleasant in pretty mode.
       combined = inline_block(combined)
+      // Second fold pass: inlining can expose new constant-foldable
+      // expressions (e.g. `const N = 3; arr[N]` → `arr[3]` → element
+      // access on a literal array). Run fold again before peephole so
+      // those collapse before the terminal compaction step.
+      if opts.fold {
+        combined = fold_block(combined)
+      }
       combined = peephole_block(combined)
     }
     let has_combined_positions = combined.stmt_positions.length() ==
