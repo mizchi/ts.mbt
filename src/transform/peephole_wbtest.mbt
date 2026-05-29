@@ -1007,3 +1007,10 @@ test "peephole: !x ? b : a → x ? a : b (flip branches)" {
   assert_false(out.contains("!cond"), msg="expected no negation in cond, got: \{out}")
   assert_true(out.contains("cond?2:1") || out.contains("cond ? 2 : 1"), msg="expected flipped branches, got: \{out}")
 }
+
+///|
+test "peephole: template literal with no exprs → string literal" {
+  let out = minify_one("const r = `hello world`;")
+  assert_false(out.contains("`"), msg="expected no backticks, got: \{out}")
+  assert_true(out.contains("\"hello world\"") || out.contains("'hello world'"), msg="expected string literal, got: \{out}")
+}

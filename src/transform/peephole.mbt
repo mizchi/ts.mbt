@@ -62,6 +62,7 @@
 //   typeof x === "undefined"    -> x === void 0  (saves ~9 bytes; combines with x==null rule)
 //   typeof x !== "undefined"    -> x !== void 0
 //   !x ? b : a                  -> x ? a : b   (flip branches, drop negation)
+//   `text` (no exprs)           -> "text"       (saves 2 backtick bytes)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -1173,10 +1174,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       for e in exprs {
         new_exprs.push(peep_expr(e, ctx))
       }
+      // `` `text` `` → `"text"` (no interpolations; saves 2 bytes for the backticks).
+      if new_exprs.length() == 0 && parts.length() == 1 {
+        StringLit(parts[0])
       // `` `${x}` `` → `""+x` (saves 2 bytes; single interpolation with
       // empty prefix and suffix). More than one interpolation keeps the
       // template form since it's typically shorter.
-      if new_exprs.length() == 1 && parts.length() == 2 && parts[0] == "" && parts[1] == "" {
+      } else if new_exprs.length() == 1 && parts.length() == 2 && parts[0] == "" && parts[1] == "" {
         BinOp(@ast.TsBinOp::Add, StringLit(""), new_exprs[0])
       } else {
         TemplateLiteral(parts, new_exprs)
