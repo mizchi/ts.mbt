@@ -435,6 +435,23 @@ fn collect_props_on_external_expr(
       for e in exprs {
         collect_props_on_external_expr(e, externals, out, numeric_names)
       }
+    NativeClassExpr(decl, ctor) => {
+      match ctor {
+        Some(f) =>
+          collect_props_on_external_block(f.body, externals, out, numeric_names)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            collect_props_on_external_block(b, externals, out, numeric_names)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_props_on_external_expr(sf.1, externals, out, numeric_names)
+      }
+    }
     _ => ()
   }
 }
