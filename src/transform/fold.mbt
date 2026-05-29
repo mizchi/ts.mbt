@@ -1095,7 +1095,13 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             } else if is_js_falsy(arg) {
               BoolLit(false)
             } else {
-              Call(name, new_args)
+              // `Boolean(x)` → `!!x` for non-literal args.
+              // `!!` is always shorter (3 bytes vs 9+ for "Boolean(…)")
+              // and semantically identical: both coerce to boolean.
+              UnaryOp(
+                @ast.TsUnaryOp::Not,
+                UnaryOp(@ast.TsUnaryOp::Not, arg),
+              )
             }
           "parseFloat" =>
             match arg {

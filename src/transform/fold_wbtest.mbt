@@ -1553,3 +1553,25 @@ test "fold: `call() && sideEffect();` keeps both (rhs not pure)" {
   assert_true(out.contains("sideEffect()"), "expected sideEffect() retained: \{out}")
   assert_true(out.contains("&&"), "expected && kept: \{out}")
 }
+
+///|
+test "fold: Boolean(x) folds to !!x for non-literal arg (saves 8+ bytes)" {
+  let out = fold_one("const b = Boolean(x);\n")
+  // `Boolean(x)` → `!!x` — saves 8 bytes vs the 9-char "Boolean(" prefix.
+  assert_true(out.contains("!!"), "expected !!: \{out}")
+  assert_false(out.contains("Boolean"), "expected Boolean removed: \{out}")
+}
+
+///|
+test "fold: Boolean(true) folds to literal true (then peephole → !0)" {
+  let out = fold_one("const b = Boolean(true);\n")
+  // Boolean of a known-truthy literal → BoolLit(true)
+  assert_false(out.contains("Boolean"), "expected Boolean removed: \{out}")
+}
+
+///|
+test "fold: Boolean(0) folds to literal false" {
+  let out = fold_one("const b = Boolean(0);\n")
+  assert_false(out.contains("Boolean"), "expected Boolean removed: \{out}")
+  assert_true(out.contains("false") || out.contains("!1"), "expected false: \{out}")
+}
