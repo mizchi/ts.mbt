@@ -509,12 +509,13 @@ fn emit_func_body(e : Emitter, block : @ast.TsBlock) -> Unit {
       _ => break
     }
   }
-  e.open_block()
-  for i in 0..<end {
-    e.nl()
-    emit_stmt(e, stmts[i])
+  // Delegate to emit_block with a truncated view (drops trailing returns).
+  // This lets emit_block's consecutive-decl merging apply in function bodies.
+  let trimmed : @ast.TsBlock = {
+    stmts: stmts.iter().take(end).collect(),
+    stmt_positions: block.stmt_positions,
   }
-  e.close_block()
+  emit_block(e, trimmed)
 }
 
 ///|
