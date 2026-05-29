@@ -756,3 +756,10 @@ test "peephole: Object.assign({}, a, b) folds to {...a,...b}" {
   assert_true(out.contains("{..."), msg="expected spread, got: \{out}")
   assert_false(out.contains("Object.assign"), msg="expected no Object.assign, got: \{out}")
 }
+
+///|
+test "peephole: c ? (x = a) : (x = b) → x = c ? a : b" {
+  let out = minify_one("const r = cond ? (x = 1) : (x = 2);")
+  // The assignment should be hoisted outside the ternary.
+  assert_true(out.contains("x="), msg="expected hoisted assignment, got: \{out}")
+}

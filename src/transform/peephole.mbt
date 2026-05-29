@@ -34,6 +34,7 @@
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
 //   x!=null ? x[k] : void 0      -> x?.[k]
 //   x==null ? y : x               -> x ?? y       (flipped nullish coalescing)
+//   c ? (x=a) : (x=b)             -> x = c ? a : b  (hoist common assignment)
 //   this.x=void 0;…;this.x=val  -> this.x=val  (drop TS class-field placeholders)
 //
 // The compound-assign rewrite touches both expression-level
@@ -661,7 +662,15 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               } else {
                 Cond(cp, t_val, e_val)
               }
-            _ => Cond(cp, t_val, e_val)
+            // `c ? (x = a) : (x = b)` → `x = c ? a : b`.
+            // Hoists the assignment outside the ternary; saves `x=` bytes
+            // in the then-branch and enables further folding on the condition.
+            _ =>
+              match (t_val, e_val) {
+                (AssignExpr(n1, v1), AssignExpr(n2, v2)) if n1 == n2 =>
+                  AssignExpr(n1, peep_expr(Cond(cp, v1, v2), ctx))
+                _ => Cond(cp, t_val, e_val)
+              }
           }
       }
     }
