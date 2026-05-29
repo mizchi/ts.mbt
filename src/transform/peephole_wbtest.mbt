@@ -25,9 +25,22 @@ fn minify_one(src : String) -> String raise {
 }
 
 ///|
+fn fold_minify_one(src : String) -> String raise {
+  let block = @parser.parse_block_from_source(src)
+  let folded = peephole_block(fold_block(block))
+  let e = Emitter::new(pretty=false)
+  for s in folded.stmts {
+    emit_stmt(e, s)
+    e.nl()
+  }
+  e.to_string()
+}
+
+///|
 test "peephole: x = x + y collapses to x += y" {
   let out = peep_one("x = x + 1;\n")
-  assert_true(out.contains("x += 1"))
+  // x = x + 1 → x += 1 → x++
+  assert_true(out.contains("x++") || out.contains("x += 1"))
   assert_false(out.contains("x = x +"))
 }
 
@@ -195,10 +208,12 @@ test "minify emit: object shorthand {x:x} → {x}" {
 }
 
 ///|
-test "minify emit: async arrow with parens drops space before `(`" {
+test "minify emit: async arrow with single param skips parens" {
+  // async (x) => ... and async x => ... both become async x=> in minify mode
   let out = minify_one("const f = async (x) => x + 1;\n")
-  assert_true(out.contains("async(x)=>"))
   assert_false(out.contains("async (x)=>"))
+  assert_true(out.contains("async"))
+  assert_true(out.contains("x=>") || out.contains("x =>" ))
 }
 
 ///|
@@ -398,20 +413,20 @@ test "minify emit: string with no quotes keeps double-quote wrapper" {
 test "minify emit: Number.POSITIVE_INFINITY folds to 1/0" {
   // Number.POSITIVE_INFINITY is folded by the constant folder to a NumberLit,
   // which in minify mode emits as `1/0` (3 bytes vs 8 for `Infinity`).
-  let out = minify_one("const x = Number.POSITIVE_INFINITY;\n")
+  let out = fold_minify_one("const x = Number.POSITIVE_INFINITY;\n")
   assert_true(out.contains("1/0"), msg="expected 1/0, got: \{out}")
   assert_false(out.contains("Infinity"), msg="expected no Infinity, got: \{out}")
 }
 
 ///|
 test "minify emit: Number.NEGATIVE_INFINITY folds to -1/0" {
-  let out = minify_one("const x = Number.NEGATIVE_INFINITY;\n")
+  let out = fold_minify_one("const x = Number.NEGATIVE_INFINITY;\n")
   assert_true(out.contains("-1/0"), msg="expected -1/0, got: \{out}")
 }
 
 ///|
 test "minify emit: Number.NaN folds to 0/0" {
-  let out = minify_one("const x = Number.NaN;\n")
+  let out = fold_minify_one("const x = Number.NaN;\n")
   assert_true(out.contains("0/0"), msg="expected 0/0, got: \{out}")
 }
 

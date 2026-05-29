@@ -718,6 +718,7 @@ fn type_fold_expr(
 fn is_useful_type(ty : @ast.TsType) -> Bool {
   match ty {
     Number | Int | String_ | Boolean | BigInt | Symbol => true
+    Undefined | Void => true
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
     // Closed string-literal unions feed `drop_exhaustive_default`.
     Union(parts) => {

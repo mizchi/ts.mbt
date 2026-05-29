@@ -688,9 +688,10 @@ pub fn bundle_modules(
           None => ()
         }
       }
-      for j, stmt in m.block.stmts {
-        if opts.with_sourcemap && j < m.block.stmt_positions.length() {
-          let src_pos = e.line_index.position(m.block.stmt_positions[j])
+      let lifted_block = class_method_dce_block(iife_class_lift_block(m.block))
+      for j, stmt in lifted_block.stmts {
+        if opts.with_sourcemap && j < lifted_block.stmt_positions.length() {
+          let src_pos = e.line_index.position(lifted_block.stmt_positions[j])
           e.mark(src_pos)
         }
         emit_stmt(e, stmt)

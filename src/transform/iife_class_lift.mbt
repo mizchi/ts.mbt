@@ -106,6 +106,21 @@ fn try_lift_iife_value(
       }
     _ => return false
   }
+  // Pre-scan: collect `__get_NAME` / `__set_NAME` function definitions
+  // that the parser emits for named getter/setter methods. These are
+  // referenced by `PropAssign(proto, "@@get:NAME", Var("__get_NAME"))`.
+  let accessor_funcs : Map[String, @ast.TsFunc] = {}
+  for s in body.stmts {
+    match s {
+      Let(@ast.TsBinding::Ident(n), _, @ast.TsExpr::FuncExpr(f))
+      | Const(@ast.TsBinding::Ident(n), _, @ast.TsExpr::FuncExpr(f))
+      | Var(@ast.TsBinding::Ident(n), _, @ast.TsExpr::FuncExpr(f)) =>
+        if n.has_prefix("__get_") || n.has_prefix("__set_") {
+          accessor_funcs[n] = f
+        }
+      _ => ()
+    }
+  }
   // Walk the IIFE body, classifying each statement.
   let mut ctor_func : @ast.TsFunc? = None
   let methods : Array[@ast.TsClassMethodDecl] = []
@@ -122,20 +137,27 @@ fn try_lift_iife_value(
       // the presence of dead code itself is suspicious. Abort.
       return false
     }
-    match classify_iife_body_stmt(s, name, super_param) {
-      Skipped => ()
-      Ctor(f) =>
-        match ctor_func {
-          Some(_) => return false // Two constructors? Bail.
-          None => ctor_func = Some(f)
-        }
-      Method(decl) => methods.push(decl)
-      Methods(decls) => for d in decls { methods.push(d) }
-      StaticMethod(decl) => static_methods.push(decl)
-      ReturnsClassName => saw_return = true
-      Extra(extra) => extra_stmts.push(extra)
-      ExtraBefore(pre) => pre_stmts.push(pre)
-      Unknown => return false
+    // Flatten Block stmts from multi-declarator `var a=1, b=2;`.
+    let flat_stmts : Array[@ast.TsStmt] = match s {
+      Block(inner) => inner.stmts
+      _ => [s]
+    }
+    for fs in flat_stmts {
+      match classify_iife_body_stmt(fs, name, super_param, accessor_funcs) {
+        Skipped => ()
+        Ctor(f) =>
+          match ctor_func {
+            Some(_) => return false // Two constructors? Bail.
+            None => ctor_func = Some(f)
+          }
+        Method(decl) => methods.push(decl)
+        Methods(decls) => for d in decls { methods.push(d) }
+        StaticMethod(decl) => static_methods.push(decl)
+        ReturnsClassName => saw_return = true
+        Extra(extra) => extra_stmts.push(extra)
+        ExtraBefore(pre) => pre_stmts.push(pre)
+        Unknown => return false
+      }
     }
   }
   if not(saw_return) {
@@ -229,6 +251,7 @@ fn classify_iife_body_stmt(
   stmt : @ast.TsStmt,
   class_name : String,
   super_param : String?,
+  accessor_funcs : Map[String, @ast.TsFunc],
 ) -> IifeBodyClassification {
   match stmt {
     // `"use strict";` directive.
@@ -245,6 +268,11 @@ fn classify_iife_body_stmt(
         // Promote the function expression to a constructor candidate.
         // Rename to "constructor" so emit produces the correct keyword.
         Ctor({ ..f, name: "constructor" })
+      } else if n.has_prefix("__get_") || n.has_prefix("__set_") {
+        // Accessor helper functions emitted by the parser for `get`/`set`
+        // methods. These are consumed by the `@@get:` / `@@set:` PropAssign
+        // handler below and should not be hoisted separately.
+        Skipped
       } else {
         // A named function that isn't the class — likely a helper used
         // by the class body. Hoist it before the class so it's in scope.
@@ -277,6 +305,27 @@ fn classify_iife_body_stmt(
       }
     // Empty statement — no-op.
     Empty => Skipped
+    // `ClassName.prototype["@@get:VALUE"] = __get_VALUE;` —
+    // Named getter/setter from the parser's `@@get:`/`@@set:` desugar.
+    // The function body is stored in `accessor_funcs` under `__get_VALUE`.
+    PropAssign(
+      @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
+      marker_key,
+      @ast.TsExpr::Var(accessor_tmp)
+    ) if n == class_name && (marker_key.has_prefix("@@get:") || marker_key.has_prefix("@@set:")) => {
+      let (kind, prop_name) = if marker_key.has_prefix("@@get:") {
+        ("get", marker_key.substring(start=6))
+      } else {
+        ("set", marker_key.substring(start=6))
+      }
+      match accessor_funcs.get(accessor_tmp) {
+        Some(f) => Method(method_decl_from_func_accessor(prop_name, f, kind))
+        None => Extra(stmt) // function definition not found — keep as-is
+      }
+    }
+    // Also skip the __super_proto metadata on accessor temp vars.
+    PropAssign(@ast.TsExpr::Var(n), "__super_proto", _) if accessor_funcs.contains(n) =>
+      Skipped
     // `ClassName.prototype.METHOD = function METHOD() {…};` —
     // instance method. For non-class-name receivers this is a side
     // effect (prototype augmentation of another class) that is safe
@@ -393,10 +442,21 @@ fn classify_iife_body_stmt(
     // `Object.defineProperty(ClassName.prototype, "prop", { get: fn, set: fn, … })`
     // TypeScript emits this for class getters/setters. Convert to native class
     // accessor method declarations.
+    // Handles both MethodCall(Var("Object"), "defineProperty", [...]) and
+    // Expr(CallExpr(PropAccess(Var("Object"), "defineProperty"), [...])) forms.
     Expr(
       @ast.TsExpr::MethodCall(
         @ast.TsExpr::Var("Object"),
         "defineProperty",
+        [
+          @ast.TsExpr::PropAccess(@ast.TsExpr::Var(recv_name), "prototype"),
+          @ast.TsExpr::StringLit(prop_name),
+          @ast.TsExpr::ObjectLit(descriptor),
+        ]
+      )
+      |
+      @ast.TsExpr::CallExpr(
+        @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Object"), "defineProperty"),
         [
           @ast.TsExpr::PropAccess(@ast.TsExpr::Var(recv_name), "prototype"),
           @ast.TsExpr::StringLit(prop_name),

@@ -149,7 +149,10 @@ test "treeshake: live NativeClassStmt is retained" {
     #|console.log(obj.greet());
   )
   let block = @parser.parse_block_from_source(src)
-  let out = treeshake_block(block)
+  // Lift IIFE-lowered classes to NativeClassStmt before treeshaking so the
+  // treeshaker sees the structured form and can reason about the class name.
+  let lifted = iife_class_lift_block(block)
+  let out = treeshake_block(lifted)
   let names : Map[String, Bool] = {}
   for s in out.stmts {
     match s {

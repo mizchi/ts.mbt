@@ -564,13 +564,11 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
     Spread(inner) => expr_has_method_sniff(inner)
     // `delete x.method` (statement form is `Expr(UnaryOp(Delete, _))`).
     UnaryOp(@ast.TsUnaryOp::Delete, _) => true
-    // Computed-key access with a non-static index.
-    IndexAccess(recv, idx) => {
-      if not(is_static_index_for_method_dce(idx)) {
-        return true
-      }
+    // Computed-key access: reading `obj[dynamic]` does not enumerate
+    // all method names — it accesses at most one property. Don't abort
+    // DCE on reads; only writes and explicit reflection ops matter.
+    IndexAccess(recv, idx) =>
       expr_has_method_sniff(recv) || expr_has_method_sniff(idx)
-    }
     IndexAssignExpr(recv, idx, v) => {
       if not(is_static_index_for_method_dce(idx)) {
         match recv {

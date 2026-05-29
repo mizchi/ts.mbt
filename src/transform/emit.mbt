@@ -741,6 +741,8 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       let is_truthy_cond = match cond {
         BoolLit(true) => true
         IntLit(n) => n != 0
+        // `!0` is a common minifier substitution for `true`
+        UnaryOp(@ast.TsUnaryOp::Not, @ast.TsExpr::IntLit(0)) => true
         _ => false
       }
       if not(e.pretty) && is_truthy_cond {
@@ -1811,7 +1813,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           let p = runtime[0]
           let simple = not(p.is_rest) &&
             (match p.binding {
-              None => true
+              None | Some(@ast.TsBinding::Ident(_)) => true
               _ => false
             }) &&
             (match p.default {

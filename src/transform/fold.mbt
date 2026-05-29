@@ -628,6 +628,32 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           // the check below, which is already correct).
           BinOp(@ast.TsBinOp::And, lhs, rhs) | BinOp(@ast.TsBinOp::Or, lhs, rhs) if is_pure_value(rhs) =>
             stack.push(lhs)
+          // `let x; x = value;` → `let x = value;` when AssignExpr in stmt position.
+          AssignExpr(n, v) => {
+            let out_len = out.length()
+            let merged = if out_len > 0 {
+              match out[out_len - 1] {
+                Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) if ln == n =>
+                  true
+                _ => false
+              }
+            } else {
+              false
+            }
+            if merged {
+              let prev = out.pop().unwrap()
+              match prev {
+                Let(_, t, _) => out.push(Let(@ast.TsBinding::Ident(n), t, v))
+                Var(_, t, _) => out.push(Var(@ast.TsBinding::Ident(n), t, v))
+                _ => {
+                  out.push(prev)
+                  out.push(Expr(AssignExpr(n, v)))
+                }
+              }
+            } else {
+              out.push(Expr(AssignExpr(n, v)))
+            }
+          }
           _ => if not(is_pure_value(part)) { out.push(Expr(part)) }
         }
       }
@@ -1191,7 +1217,7 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
                 let subs : Map[String, @ast.TsExpr] = {}
                 for i, p in runtime_params {
                   if p.is_rest ||
-                    (match p.binding { None => false; _ => true }) ||
+                    (match p.binding { Some(Array(_)) | Some(Object(_)) => true; _ => false }) ||
                     (match p.default { None => false; _ => true }) ||
                     not(is_pure_value(new_args[i])) {
                     can_inline = false
@@ -2739,6 +2765,8 @@ fn fold_binop(
         BinOp(op, l, r)
       }
     (Coalesce, _, _) if is_pure_value(l) && not(can_be_nullish(l)) => l
+    // `new X(...) ?? fallback` → `new X(...)` — constructors never return null.
+    (Coalesce, New(_, _), _) | (Coalesce, NewExpr(_, _), _) => l
     // Numeric folds where both sides are literals.
     (Add, IntLit(a), IntLit(b)) => IntLit(a + b)
     (Sub, IntLit(a), IntLit(b)) => IntLit(a - b)
