@@ -2020,3 +2020,26 @@ test "type-fold: x + \"\" is dropped when x is typed as string" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "fold: else block hoisted when then-branch returns, result folded to ternary" {
+  // `if (c) { return x; } else { return y; }` should fold to `return c ? x : y`.
+  // The else-hoist enables fold_func_body to then combine to a ternary.
+  let files = vfs([
+    (
+      "entry.ts",
+      "function pick(c: boolean, x: number, y: number): number { if (c) { return x; } else { return y; } }\nconsole.log(pick(true, 1, 2));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // `else` keyword should be gone; result is a ternary or direct branch.
+      assert_false(
+        out.js.contains("else"),
+        "expected else to be eliminated: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
