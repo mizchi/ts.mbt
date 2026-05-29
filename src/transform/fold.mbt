@@ -242,7 +242,85 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
       }
     }
   }
-  { stmts, stmt_positions: positions }
+  let merged = merge_consecutive_decls(stmts)
+  { stmts: merged, stmt_positions: positions }
+}
+
+///|
+/// Returns `true` when `block` is a multi-declarator group (`let a,b;`
+/// parsed as `Block([Let, Let, …])`): 2+ statements all of the same
+/// declaration kind. Used to decide whether to unbox vs keep braces.
+fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
+  if block.stmts.length() < 2 {
+    return false
+  }
+  let kind = match block.stmts[0] {
+    @ast.TsStmt::Var(_, _, _) => 0
+    @ast.TsStmt::Let(_, _, _) => 1
+    @ast.TsStmt::Const(_, _, _) => 2
+    _ => return false
+  }
+  for s in block.stmts {
+    match s {
+      @ast.TsStmt::Var(_, _, _) => if kind != 0 { return false }
+      @ast.TsStmt::Let(_, _, _) => if kind != 1 { return false }
+      @ast.TsStmt::Const(_, _, _) => if kind != 2 { return false }
+      _ => return false
+    }
+  }
+  true
+}
+
+///|
+/// Merge consecutive same-kind declarations into `Block([…])` wrappers
+/// so the emitter can emit them as `let a=…,b=…;` (saves `let ` per
+/// extra declarator). Only groups with 2+ declarations are wrapped;
+/// lone declarations are left as-is.
+fn merge_consecutive_decls(
+  stmts : Array[@ast.TsStmt],
+) -> Array[@ast.TsStmt] {
+  let out : Array[@ast.TsStmt] = []
+  let mut i = 0
+  while i < stmts.length() {
+    let kind = match stmts[i] {
+      @ast.TsStmt::Let(_, _, _) => Some("let")
+      @ast.TsStmt::Const(_, _, _) => Some("const")
+      @ast.TsStmt::Var(_, _, _) => Some("var")
+      _ => None
+    }
+    match kind {
+      None => {
+        out.push(stmts[i])
+        i = i + 1
+      }
+      Some(k) => {
+        // Accumulate all consecutive declarations of the same kind.
+        let run : Array[@ast.TsStmt] = [stmts[i]]
+        let mut j = i + 1
+        while j < stmts.length() {
+          let is_same = match (k, stmts[j]) {
+            ("let", @ast.TsStmt::Let(_, _, _)) => true
+            ("const", @ast.TsStmt::Const(_, _, _)) => true
+            ("var", @ast.TsStmt::Var(_, _, _)) => true
+            _ => false
+          }
+          if is_same {
+            run.push(stmts[j])
+            j = j + 1
+          } else {
+            break
+          }
+        }
+        if run.length() == 1 {
+          out.push(run[0])
+        } else {
+          out.push(@ast.TsStmt::Block({ stmts: run, stmt_positions: [] }))
+        }
+        i = j
+      }
+    }
+  }
+  out
 }
 
 ///|
@@ -616,7 +694,23 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         out.push(Label(name, Block({ stmts: tmp, stmt_positions: [] })))
       }
     }
-    Block(b) => out.push(Block(fold_block(b)))
+    Block(b) => {
+      // Multi-decl blocks (`let a = 1, b = 2;` parsed as
+      // `Block([Let, Let, ...])`) are transparently unboxed: push the
+      // folded individual declarations directly so the parent's
+      // `merge_consecutive_decls` can (re-)group them. Real scope
+      // blocks (non-uniform or fewer than 2 stmts) keep their braces.
+      // We check the original `b` before folding so that the fold
+      // result (which may have `merge_consecutive_decls` applied) can't
+      // produce a confusing double-wrapped Block.
+      if is_fold_multi_decl_block(b) {
+        for s in b.stmts {
+          fold_stmt_into(s, out)
+        }
+      } else {
+        out.push(Block(fold_block(b)))
+      }
+    }
     NativeClassStmt(decl, ctor) => {
       // Fold + strip trailing `return;` from constructor and method bodies.
       let folded_ctor : @ast.TsFunc? = match ctor {

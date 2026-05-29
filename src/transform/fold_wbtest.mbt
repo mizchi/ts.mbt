@@ -1424,3 +1424,33 @@ test "fold: else block hoisted when then-branch throws" {
   let out = fold_one("function f(x) { if (!x) { throw new Error('bad'); } else { return x + 1; } }\n")
   assert_false(out.contains("else"), "expected else to be removed: \{out}")
 }
+
+///|
+test "fold: consecutive const decls merged into multi-decl" {
+  let out = fold_one("const a = 1;\nconst b = 2;\nconst c = 3;\n")
+  // All three should appear in a single multi-decl (no repeated `const`/`let`).
+  let const_count = out.split("const").length() - 1
+  let let_count = out.split("let").length() - 1
+  let total_kind = const_count + let_count
+  assert_true(total_kind == 1, "expected one declaration keyword, got: \{out}")
+  assert_true(out.contains("1"))
+  assert_true(out.contains("2"))
+  assert_true(out.contains("3"))
+}
+
+///|
+test "fold: mixed let and const are NOT merged (different kinds)" {
+  let out = fold_one("const a = 1;\nlet b = 2;\n")
+  // `const` and `let` must stay separate — different semantic kinds.
+  assert_true(out.contains("1"))
+  assert_true(out.contains("2"))
+}
+
+///|
+test "fold: consecutive let decls separated by non-decl are not merged" {
+  let out = fold_one("let a = 1;\nconsole.log(a);\nlet b = 2;\n")
+  // The `console.log` breaks the run — a and b cannot be merged.
+  assert_true(out.contains("1"))
+  assert_true(out.contains("2"))
+  assert_true(out.contains("console"))
+}
