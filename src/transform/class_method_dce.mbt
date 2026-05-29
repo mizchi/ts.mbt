@@ -412,8 +412,13 @@ fn block_has_method_sniff(block : @ast.TsBlock) -> Bool {
 ///|
 fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
   match stmt {
-    // for-in iterates property names — sink.
-    ForIn(_, _, _, _, _) => true
+    // for-in iterates property names, but the body itself may or may
+    // not access prototype methods; recurse rather than unconditionally
+    // aborting. The iter expression and body are checked the same way
+    // ForOf is, since a `for...in` body can still contain calls or
+    // computed accesses that are legitimate method-sniff sinks.
+    ForIn(_, _, _, iter, body) =>
+      expr_has_method_sniff(iter) || block_has_method_sniff(body)
     Var(_, _, e)
     | Let(_, _, e)
     | Const(_, _, e)
@@ -424,9 +429,16 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
     Return(Some(e)) => expr_has_method_sniff(e)
     Return(None) | Empty | Debugger | Break(_) | Continue(_) => false
     IndexAssign(t, idx, v) => {
-      // Computed assignment with non-static index is a sink.
+      // Computed assignment with non-static index is a sink UNLESS the
+      // receiver is `this`: `this[key] = val` writes to the INSTANCE,
+      // not to the prototype, so prototype-method DCE is still safe.
+      // `Foo.prototype[key] = val` (dynamic prototype augmentation) IS
+      // a sink and correctly falls through to `return true`.
       if not(is_static_index_for_method_dce(idx)) {
-        return true
+        match t {
+          @ast.TsExpr::Var("this") => ()
+          _ => return true
+        }
       }
       expr_has_method_sniff(t) ||
       expr_has_method_sniff(idx) ||
@@ -515,6 +527,11 @@ fn stmt_has_method_sniff(stmt : @ast.TsStmt) -> Bool {
           None => ()
         }
       }
+      for sf in decl.static_field_inits {
+        if expr_has_method_sniff(sf.1) {
+          return true
+        }
+      }
       match ctor_body {
         Some(f) => block_has_method_sniff(f.body)
         None => false
@@ -539,21 +556,25 @@ fn expr_has_method_sniff(expr : @ast.TsExpr) -> Bool {
       }
       false
     }
-    // Spread of an object literal is fine, but spread of an
-    // arbitrary expression `{...x}` enumerates whatever `x` is.
-    Spread(_) => true
+    // Object spread `{...x}` only copies OWN enumerable properties;
+    // class prototype methods are NOT own properties of instances, so
+    // spreading a class instance never enumerates its methods. Recurse
+    // into the inner expression for reflection sinks but do NOT abort
+    // just because spread is present.
+    Spread(inner) => expr_has_method_sniff(inner)
     // `delete x.method` (statement form is `Expr(UnaryOp(Delete, _))`).
     UnaryOp(@ast.TsUnaryOp::Delete, _) => true
-    // Computed-key access with a non-static index.
-    IndexAccess(recv, idx) => {
-      if not(is_static_index_for_method_dce(idx)) {
-        return true
-      }
+    // Computed-key access: reading `obj[dynamic]` does not enumerate
+    // all method names — it accesses at most one property. Don't abort
+    // DCE on reads; only writes and explicit reflection ops matter.
+    IndexAccess(recv, idx) =>
       expr_has_method_sniff(recv) || expr_has_method_sniff(idx)
-    }
     IndexAssignExpr(recv, idx, v) => {
       if not(is_static_index_for_method_dce(idx)) {
-        return true
+        match recv {
+          @ast.TsExpr::Var("this") => ()
+          _ => return true
+        }
       }
       expr_has_method_sniff(recv) ||
       expr_has_method_sniff(idx) ||
@@ -804,6 +825,10 @@ fn collect_static_accesses_stmt(
       match ctor_body {
         Some(f) => collect_static_accesses_block(f.body, out)
         None => ()
+      }
+      // Static field inits may access method names via `this.method`.
+      for sf in decl.static_field_inits {
+        collect_static_accesses_expr(sf.1, out)
       }
     }
   }

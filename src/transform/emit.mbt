@@ -101,7 +101,20 @@ fn Emitter::semi(self : Emitter) -> Unit {
 
 ///|
 fn Emitter::to_string(self : Emitter) -> String {
-  self.buf.to_string()
+  // In minify mode, the emit loop leaves a trailing `;` after the last
+  // statement (the final `nl()` flushes `pending_semi`). Strip it — the
+  // semicolon is syntactically optional at the end of a script and saves
+  // 1 byte per bundle.
+  if self.pending_semi {
+    // Semi still parked (wasn't flushed by nl()). Nothing to strip.
+    return self.buf.to_string()
+  }
+  let s = self.buf.to_string()
+  if not(self.pretty) && s.has_suffix(";") {
+    s.substring(end=s.length() - 1).to_string()
+  } else {
+    s
+  }
 }
 
 ///|
@@ -318,14 +331,26 @@ pub fn transform_source_full(
   } else {
     lowered_jsx
   }
+  // Constant-fold before mangle so the mangler sees already-simplified
+  // expressions (shorter names are assigned to already-reduced code).
+  let folded = if minify { fold_block(lowered) } else { lowered }
+  // Lift IIFE-lowered classes to native `class` syntax in minify mode.
+  // The parser lowers TS classes with getters/setters/statics to IIFEs;
+  // re-lifting to class saves ~40+ bytes per class that qualifies.
+  let folded = if minify { iife_class_lift_block(folded) } else { folded }
   let mangled = if mangle {
     let mangler_cfg = ManglerConfig::default().with_mangle_properties(
       mangle_properties,
     )
-    mangle_block(lowered, mangler_cfg)
+    mangle_block(folded, mangler_cfg)
   } else {
-    lowered
+    folded
   }
+  // Single-use binding inlining: `const x = expr; f(x)` → `f(expr)`.
+  // Runs after mangle so the already-shortened names are inlined,
+  // keeping the inline table small.
+  let mangled = if minify { inline_block(mangled) } else { mangled }
+  let mangled = if minify { peephole_block(mangled) } else { mangled }
   let e = Emitter::new(pretty=not(minify))
   if with_sourcemap {
     e.smap = Some(SourceMapBuilder::new())
@@ -350,13 +375,19 @@ pub fn transform_source_full(
   // mappings when mangling is on; consumers asking for both should
   // file a follow-up.
   let emit_positions = not(mangle) && with_sourcemap
-  for i, stmt in mangled.stmts {
-    if emit_positions && i < positions.length() {
-      let src_pos = e.line_index.position(positions[i])
-      e.mark(src_pos)
+  // In minify mode without source maps, use the merged-decl emitter so
+  // `let a=1;let b=2;` collapses to `let a=1,b=2;` at the top level too.
+  if not(emit_positions) {
+    emit_stmts_merged(e, mangled.stmts)
+  } else {
+    for i, stmt in mangled.stmts {
+      if emit_positions && i < positions.length() {
+        let src_pos = e.line_index.position(positions[i])
+        e.mark(src_pos)
+      }
+      emit_stmt(e, stmt)
+      e.nl()
     }
-    emit_stmt(e, stmt)
-    e.nl()
   }
   let sm_json : String? = match e.smap {
     Some(b) => Some(b.to_json(source~, source_path~, output_path~))
@@ -368,12 +399,13 @@ pub fn transform_source_full(
 ///|
 fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
   e.open_block()
-  for i, stmt in block.stmts {
+  let stmts = block.stmts
+  let n = stmts.length()
+  let mut i = 0
+  while i < n {
+    let stmt = stmts[i]
     e.nl()
-    // Record a source-map segment at every statement entry when the
-    // parser supplied positions. `stmt_positions` is aligned with
-    // `stmts`; synthesized blocks (e.g. class desugar) leave it
-    // empty and the emit just skips the mapping.
+    // Record a source-map segment when positions are available.
     match e.smap {
       Some(_) =>
         if i < block.stmt_positions.length() {
@@ -382,9 +414,202 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
         }
       None => ()
     }
+    // In minify mode, merge consecutive same-kind declarations:
+    // `let a=1;let b=2;` → `let a=1,b=2;` (saves 4 bytes per merged decl).
+    // Only in minify mode to avoid changing pretty output.
+    // `const` is treated as `let` in minify mode (matching try_emit_multi_decl_inline).
+    if not(e.pretty) {
+      let decl_kind : String? = match stmt {
+        @ast.TsStmt::Let(_, _, _) => Some("let")
+        @ast.TsStmt::Const(_, _, _) => Some("let")
+        @ast.TsStmt::Var(_, _, _) => Some("var")
+        _ => None
+      }
+      match decl_kind {
+        Some(kind) => {
+          // Collect this and all following same-kind declarations into a group.
+          let group : Array[@ast.TsStmt] = [stmt]
+          let mut j = i + 1
+          while j < n {
+            let next = stmts[j]
+            let next_kind : String? = match next {
+              @ast.TsStmt::Let(_, _, _) => Some("let")
+              @ast.TsStmt::Const(_, _, _) => Some("let")
+              @ast.TsStmt::Var(_, _, _) => Some("var")
+              _ => None
+            }
+            if next_kind == Some(kind) {
+              group.push(next)
+              j = j + 1
+            } else {
+              break
+            }
+          }
+          if group.length() > 1 {
+            // Emit as merged: `let a=init_a,b=init_b,...;`
+            let first_byte = match group[0] {
+              @ast.TsStmt::Var(b, _, _)
+              | @ast.TsStmt::Let(b, _, _)
+              | @ast.TsStmt::Const(b, _, _) => binding_leading_byte(b)
+              _ => '?'
+            }
+            e.word(kind)
+            e.sep_after_word(first_byte)
+            for k, gs in group {
+              if k > 0 {
+                e.write(",")
+                e.space()
+              }
+              match gs {
+                @ast.TsStmt::Var(b, _, init)
+                | @ast.TsStmt::Let(b, _, init)
+                | @ast.TsStmt::Const(b, _, init) => {
+                  emit_binding(e, b)
+                  let is_undef_init = match init {
+                    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
+                    @ast.TsExpr::Var("undefined") => true
+                    _ => false
+                  }
+                  if not(is_undef_init) {
+                    e.space()
+                    e.write("=")
+                    e.space()
+                    emit_expr(e, init, 0)
+                  }
+                }
+                _ => ()
+              }
+            }
+            e.semi()
+            i = j
+            continue
+          }
+          emit_stmt(e, stmt)
+          i = i + 1
+          continue
+        }
+        None => ()
+      }
+    }
     emit_stmt(e, stmt)
+    i = i + 1
   }
   e.close_block()
+}
+
+///|
+/// Emit a flat array of statements with the same minify-mode
+/// declaration-merging logic used by `emit_block`. Call this for
+/// top-level stmt lists (bundle, transform_source_full) so that
+/// `let a=1;let b=2;` → `let a=1,b=2;` at the module scope too.
+/// In pretty mode every statement is emitted verbatim (no merging).
+fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
+  let n = stmts.length()
+  let mut i = 0
+  while i < n {
+    let stmt = stmts[i]
+    e.nl()
+    if not(e.pretty) {
+      let decl_kind : String? = match stmt {
+        @ast.TsStmt::Let(_, _, _) => Some("let")
+        @ast.TsStmt::Const(_, _, _) => Some("let")
+        @ast.TsStmt::Var(_, _, _) => Some("var")
+        _ => None
+      }
+      match decl_kind {
+        Some(kind) => {
+          let group : Array[@ast.TsStmt] = [stmt]
+          let mut j = i + 1
+          while j < n {
+            let next = stmts[j]
+            let next_kind : String? = match next {
+              @ast.TsStmt::Let(_, _, _) => Some("let")
+              @ast.TsStmt::Const(_, _, _) => Some("let")
+              @ast.TsStmt::Var(_, _, _) => Some("var")
+              _ => None
+            }
+            if next_kind == Some(kind) {
+              group.push(next)
+              j = j + 1
+            } else {
+              break
+            }
+          }
+          if group.length() > 1 {
+            let first_byte = match group[0] {
+              @ast.TsStmt::Var(b, _, _)
+              | @ast.TsStmt::Let(b, _, _)
+              | @ast.TsStmt::Const(b, _, _) => binding_leading_byte(b)
+              _ => '?'
+            }
+            e.word(kind)
+            e.sep_after_word(first_byte)
+            for k, gs in group {
+              if k > 0 {
+                e.write(",")
+                e.space()
+              }
+              match gs {
+                @ast.TsStmt::Var(b, _, init)
+                | @ast.TsStmt::Let(b, _, init)
+                | @ast.TsStmt::Const(b, _, init) => {
+                  emit_binding(e, b)
+                  let is_undef_init = match init {
+                    @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _) => true
+                    @ast.TsExpr::Var("undefined") => true
+                    _ => false
+                  }
+                  if not(is_undef_init) {
+                    e.space()
+                    e.write("=")
+                    e.space()
+                    emit_expr(e, init, 0)
+                  }
+                }
+                _ => ()
+              }
+            }
+            e.semi()
+            i = j
+            continue
+          }
+          emit_stmt(e, stmt)
+          i = i + 1
+          continue
+        }
+        None => ()
+      }
+    }
+    emit_stmt(e, stmt)
+    i = i + 1
+  }
+}
+
+///|
+/// Variant for function bodies. In minify mode, drops trailing
+/// `return;` / `return undefined;` — the implicit return at end-of-
+/// function is semantically identical and saves ~9 bytes per occurrence.
+fn emit_func_body(e : Emitter, block : @ast.TsBlock) -> Unit {
+  if e.pretty {
+    emit_block(e, block)
+    return
+  }
+  // Count how many trailing Return(None)/Empty stmts to skip.
+  let stmts = block.stmts
+  let mut end = stmts.length()
+  while end > 0 {
+    match stmts[end - 1] {
+      @ast.TsStmt::Return(None) | @ast.TsStmt::Empty => end = end - 1
+      _ => break
+    }
+  }
+  // Delegate to emit_block with a truncated view (drops trailing returns).
+  // This lets emit_block's consecutive-decl merging apply in function bodies.
+  let trimmed : @ast.TsBlock = {
+    stmts: stmts.iter().take(end).collect(),
+    stmt_positions: block.stmt_positions,
+  }
+  emit_block(e, trimmed)
 }
 
 ///|
@@ -478,20 +703,44 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.word("var")
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, 0)
+      let is_undef_init = match init {
+        UnaryOp(@ast.TsUnaryOp::Void, _) => true
+        Var("undefined") => true
+        _ => false
+      }
+      if not(e.pretty) && is_undef_init {
+        // Drop `= void 0` — `var x;` is semantically identical.
+      } else {
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
       e.semi()
     }
     Let(binding, _ty, init) => {
       e.word("let")
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, 0)
+      // In minify mode, `let x = undefined` → `let x` (drops the
+      // initializer entirely: `= void 0` is 7 bytes, the implicit
+      // `undefined` default costs nothing). Skip the `= void 0`
+      // produced by the peephole pass and the raw `Var("undefined")`
+      // from the parser for uninitialized declarations.
+      let is_undef_init = match init {
+        UnaryOp(@ast.TsUnaryOp::Void, _) => true
+        Var("undefined") => true
+        _ => false
+      }
+      if not(e.pretty) && is_undef_init {
+        // Emit with no initializer — matches `let x;` which the
+        // JS engine initialises to `undefined` automatically.
+      } else {
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
       e.semi()
     }
     Const(binding, _ty, init) => {
@@ -506,10 +755,21 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       }
       e.sep_after_word(binding_leading_byte(binding))
       emit_binding(e, binding)
-      e.space()
-      e.write("=")
-      e.space()
-      emit_expr(e, init, 0)
+      // In minify mode, `const` is downgraded to `let`, so `= void 0`
+      // initializers can be dropped (plain `let x` is equivalent).
+      let is_undef_init = match init {
+        UnaryOp(@ast.TsUnaryOp::Void, _) => true
+        Var("undefined") => true
+        _ => false
+      }
+      if not(e.pretty) && is_undef_init {
+        ()
+      } else {
+        e.space()
+        e.write("=")
+        e.space()
+        emit_expr(e, init, 0)
+      }
       e.semi()
     }
     Assign(name, expr) => {
@@ -536,9 +796,18 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       } else {
         emit_expr(e, recv, 18)
       }
-      e.write("[")
-      emit_expr(e, idx, 0)
-      e.write("]")
+      // `x["prop"] = v` → `x.prop = v` in minify mode (saves 4 bytes)
+      match idx {
+        StringLit(k) if not(e.pretty) && is_valid_js_ident(k) => {
+          e.write(".")
+          e.write(k)
+        }
+        _ => {
+          e.write("[")
+          emit_expr(e, idx, 0)
+          e.write("]")
+        }
+      }
       e.space()
       e.write("=")
       e.space()
@@ -689,13 +958,27 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       }
     }
     While(cond, body) => {
-      e.write("while")
-      e.space()
-      e.write("(")
-      emit_expr(e, cond, 0)
-      e.write(")")
-      e.space()
-      emit_branch_body(e, body)
+      // `while(true){…}` → `for(;;){…}` in minify mode (saves 5 bytes).
+      let is_truthy_cond = match cond {
+        BoolLit(true) => true
+        IntLit(n) => n != 0
+        // `!0` is a common minifier substitution for `true`
+        UnaryOp(@ast.TsUnaryOp::Not, @ast.TsExpr::IntLit(0)) => true
+        _ => false
+      }
+      if not(e.pretty) && is_truthy_cond {
+        e.write("for(;;)")
+        e.space()
+        emit_branch_body(e, body)
+      } else {
+        e.write("while")
+        e.space()
+        e.write("(")
+        emit_expr(e, cond, 0)
+        e.write(")")
+        e.space()
+        emit_branch_body(e, body)
+      }
     }
     DoWhile(cond, body) => {
       // `do` is a keyword token; the next token must either be
@@ -752,9 +1035,12 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("for")
       e.space()
       e.write("(")
-      emit_for_of_kind(e, kind)
-      emit_binding(e, binding)
-      e.write(" of ")
+      emit_for_of_kind(e, kind, binding)
+      // The space before `of` is always required (binding ends with
+      // ident). Space after `of` can be dropped in minify mode when
+      // the iterable starts with a non-ident token.
+      e.write(" of")
+      e.sep_after_word(expr_leading_byte(iter))
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
@@ -764,9 +1050,9 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("for await")
       e.space()
       e.write("(")
-      emit_for_of_kind(e, kind)
-      emit_binding(e, binding)
-      e.write(" of ")
+      emit_for_of_kind(e, kind, binding)
+      e.write(" of")
+      e.sep_after_word(expr_leading_byte(iter))
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
@@ -776,9 +1062,11 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.write("for")
       e.space()
       e.write("(")
-      emit_for_of_kind(e, kind)
-      emit_binding(e, binding)
-      e.write(" in ")
+      emit_for_of_kind(e, kind, binding)
+      // Same treatment as `of`: space before `in` always needed,
+      // space after only when the iterable starts with ident char.
+      e.write(" in")
+      e.sep_after_word(expr_leading_byte(iter))
       emit_expr(e, iter, 0)
       e.write(")")
       e.space()
@@ -813,22 +1101,26 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       e.close_block()
     }
     Try(try_b, catch_bind, catch_b, finally_b) => {
-      e.write("try ")
+      // `try{` is valid in minify mode — `{` is never an ident char.
+      e.word("try")
+      e.sep_after_word('{')
       emit_block(e, try_b)
       match (catch_bind, catch_b) {
         (_, Some(cb)) => {
           e.space()
-          e.write("catch")
+          e.word("catch")
           match catch_bind {
             Some(b) => {
-              e.space()
+              // `catch(e)` — space before `(` can be dropped in minify mode.
+              e.sep_after_word('(')
               e.write("(")
               emit_binding(e, b)
               e.write(")")
             }
             None => ()
           }
-          e.space()
+          // `catch{` — `{` doesn't need a leading space.
+          e.sep_after_word('{')
           emit_block(e, cb)
         }
         _ => ()
@@ -836,8 +1128,8 @@ fn emit_stmt(e : Emitter, stmt : @ast.TsStmt) -> Unit {
       match finally_b {
         Some(fb) => {
           e.space()
-          e.write("finally")
-          e.space()
+          e.word("finally")
+          e.sep_after_word('{')
           emit_block(e, fb)
         }
         None => ()
@@ -903,7 +1195,8 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     TemplateLiteral(_, _) | TaggedTemplate(_, _, _, _) => '`'
     NumberLit(_) | IntLit(_) => '0'
     BigIntLit(_) => '0'
-    BoolLit(_) => '?'
+    // In minify mode `BoolLit` emits as `!0`/`!1`; in pretty mode as `true`/`false`.
+    BoolLit(_) => '!'
     NullLit => '?'
     UnaryOp(op, _) =>
       match op {
@@ -917,14 +1210,16 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     CallExpr(callee, _) | NewExpr(callee, _) => expr_leading_byte(callee)
     MethodCall(recv, _, _) | PropAccess(recv, _) | IndexAccess(recv, _) =>
       expr_leading_byte(recv)
-    // ArrowFunc's 4th field is `is_async`. When set, the arrow
-    // emits as `async (…) => …` — the leading byte is `'a'`, NOT
-    // `'('`. Reporting `'('` here lets `sep_after_word` skip the
-    // space after `return`/`throw`/`yield`, producing
-    // `returnasync (...) => …` which V8 parses as a call to the
-    // identifier `returnasync` with `(...)` as arrow params and
-    // throws `Malformed arrow function parameter list`.
-    ArrowFunc(_, _, _, is_async) => if is_async { 'a' } else { '(' }
+    // ArrowFunc: in minify mode a single simple non-async parameter
+    // is emitted without parens (`x=>body`), so the leading byte is
+    // the first char of the parameter name — which may be a letter.
+    // Returning `'?'` (→ `needs_space = true`) is safe for all cases:
+    //   - async arrow:      `return async(x)=>…`  (parens ok, `async` needs space anyway)
+    //   - bare-param arrow: `return x=>…`          (needs space before `x`)
+    //   - multi-param:      `return (x,y)=>…`      (extra space is harmless)
+    // The async single-param case (`async x=>`) also needs a space
+    // before the name, handled above by `'a'`.
+    ArrowFunc(_, _, _, is_async) => if is_async { 'a' } else { '?' }
     FuncExpr(_) => '?'
     _ => '?'
   }
@@ -1012,10 +1307,21 @@ fn try_emit_multi_decl_inline(e : Emitter, block : @ast.TsBlock) -> Bool {
     match s {
       Var(b, _, init) | Let(b, _, init) | Const(b, _, init) => {
         emit_binding(e, b)
-        e.space()
-        e.write("=")
-        e.space()
-        emit_expr(e, init, 0)
+        // In minify mode, `const` is downgraded to `let` (see `emitted_kind`
+        // above), so dropping a `= void 0` initializer is safe for all kinds.
+        let is_undef_init = match init {
+          UnaryOp(@ast.TsUnaryOp::Void, _) => true
+          Var("undefined") => true
+          _ => false
+        }
+        if not(e.pretty) && is_undef_init {
+          ()
+        } else {
+          e.space()
+          e.write("=")
+          e.space()
+          emit_expr(e, init, 0)
+        }
       }
       _ => ()
     }
@@ -1145,16 +1451,31 @@ fn emit_stmt_for_head(e : Emitter, stmt : @ast.TsStmt) -> Unit {
 }
 
 ///|
-fn emit_for_of_kind(e : Emitter, kind : @ast.TsForOfKind) -> Unit {
-  match kind {
-    Var => e.write("var ")
-    Let => e.write("let ")
+/// Emit the declarator keyword for a for-of/for-in/for-await-of head.
+/// Returns the leading byte of the following token (the binding) so
+/// callers can decide whether a separator is needed between the keyword
+/// and the binding.  `'?'` is returned when no keyword is emitted
+/// (the `Assign` kind).
+fn emit_for_of_kind(
+  e : Emitter,
+  kind : @ast.TsForOfKind,
+  binding : @ast.TsBinding,
+) -> Unit {
+  let kw = match kind {
+    Var => "var"
+    Let => "let"
     // Same idea as the statement-level `Const`: in minify mode the
     // loop binder doesn't need to be `const`, since the original
     // source already proved no reassignment.
-    Const => if e.pretty { e.write("const ") } else { e.write("let ") }
-    Assign => ()
+    Const => if e.pretty { "const" } else { "let" }
+    Assign => {
+      emit_binding(e, binding)
+      return
+    }
   }
+  e.word(kw)
+  e.sep_after_word(binding_leading_byte(binding))
+  emit_binding(e, binding)
 }
 
 ///|
@@ -1299,17 +1620,50 @@ fn emit_expr(e : Emitter, expr : @ast.TsExpr, parent_prec : Int) -> Unit {
 ///|
 fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
   match expr {
-    NumberLit(n) => e.write(n.to_string())
-    IntLit(n) => e.write(n.to_string())
+    NumberLit(n) =>
+      if e.pretty {
+        // Use JS-valid names for special floating-point values.
+        // MoonBit's `to_string()` may return "inf" / "nan" which are
+        // NOT valid JS; JavaScript uses the global identifiers instead.
+        if n != n {
+          e.write("NaN")
+        } else if n == 1.0 / 0.0 {
+          e.write("Infinity")
+        } else if n == -1.0 / 0.0 {
+          e.write("-Infinity")
+        } else {
+          e.write(n.to_string())
+        }
+      } else {
+        e.write(minify_number(n))
+      }
+    IntLit(n) =>
+      if e.pretty {
+        e.write(n.to_string())
+      } else {
+        e.write(minify_number(n.to_double()))
+      }
     BigIntLit(s) => {
       e.write(s)
       e.write("n")
     }
-    BoolLit(b) => e.write(if b { "true" } else { "false" })
+    BoolLit(b) =>
+      // In minify mode: `true` → `!0` (saves 2 bytes), `false` → `!1` (saves 3 bytes).
+      if e.pretty {
+        e.write(if b { "true" } else { "false" })
+      } else {
+        e.write(if b { "!0" } else { "!1" })
+      }
     StringLit(s) => emit_string_literal(e, s)
     NullLit => e.write("null")
     ArrayHole => ()
-    Var(name) => e.write(name)
+    Var(name) =>
+      // In minify mode, emit `undefined` as `void 0` (6 vs 9 bytes).
+      if not(e.pretty) && name == "undefined" {
+        e.write("void 0")
+      } else {
+        e.write(name)
+      }
     BinOp(op, l, r) => {
       let prec = binop_precedence(op)
       // `??` cannot be mixed with `||` / `&&` without explicit
@@ -1348,7 +1702,11 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       // leading operator would merge into `++` / `--`. Same idea
       // for `< <x`, `> >x` — those merge into shift tokens.
       if is_word_op {
-        e.write(" ")
+        // Word operators end with an ident char; space after is
+        // only strictly required when the right operand also starts
+        // with an ident char.  Use `sep_after_word` to suppress it
+        // in minify mode when the RHS starts with `(`, `[`, etc.
+        e.sep_after_word(expr_leading_byte(r))
       } else if right_needs_token_separator(op, r) {
         e.write(" ")
       } else {
@@ -1382,7 +1740,10 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
           // `typeof` / `void` / `delete` are word operators; they need
           // a separator before their operand.
           match op {
-            Typeof | Void | Delete => e.write(" ")
+            Typeof | Void | Delete =>
+              // In minify mode, use `sep_after_word` to avoid the space
+              // when the operand starts with a non-identifier char.
+              e.sep_after_word(expr_leading_byte(inner))
             _ => ()
           }
           emit_expr(e, inner, 16)
@@ -1474,7 +1835,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_runtime_params(e, f.params)
             e.write(")")
             e.space()
-            emit_block(e, f.body)
+            emit_func_body(e, f.body)
           }
           (key, FuncExpr(f)) if key.has_prefix("@@get:") ||
             key.has_prefix("@@set:") => {
@@ -1492,7 +1853,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_runtime_params(e, f.params)
             e.write(")")
             e.space()
-            emit_block(e, f.body)
+            emit_func_body(e, f.body)
           }
           (key, FuncExpr(f)) if f.name == key && key != "" => {
             // Method shorthand: `key(args) {...}`. The parser stores
@@ -1514,7 +1875,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_runtime_params(e, f.params)
             e.write(")")
             e.space()
-            emit_block(e, f.body)
+            emit_func_body(e, f.body)
           }
           _ => {
             // Non-identifier keys (`"Content-Type"`, `"foo bar"`,
@@ -1522,10 +1883,24 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             // the emitted `{Content-Type: …}` re-parses as binary
             // minus. Numeric keys can stay unquoted; everything
             // else needs the quotes.
-            emit_object_key(e, entry.0)
-            e.write(":")
-            e.space()
-            emit_expr(e, entry.1, 2)
+            //
+            // In minify mode, when key is a valid identifier and
+            // the value is `Var(key)`, emit the ES2015 shorthand
+            // `{key}` instead of `{key: key}` (saves 2 bytes).
+            let use_shorthand = not(e.pretty) &&
+              is_valid_js_ident(entry.0) &&
+              (match entry.1 {
+                Var(n) => n == entry.0
+                _ => false
+              })
+            if use_shorthand {
+              e.write(entry.0)
+            } else {
+              emit_object_key(e, entry.0)
+              e.write(":")
+              e.space()
+              emit_expr(e, entry.1, 2)
+            }
           }
         }
       }
@@ -1540,9 +1915,21 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     }
     IndexAccess(recv, idx) => {
       emit_expr(e, recv, 18)
-      e.write("[")
-      emit_expr(e, idx, 0)
-      e.write("]")
+      // `expr["prop"]` → `expr.prop` when the key is a valid identifier
+      // and we're in minify mode. Saves `["` + `"]` (4 bytes) per access.
+      // In pretty mode we preserve the bracket form as written to avoid
+      // surprising users who wrote `x["key"]` intentionally.
+      match idx {
+        StringLit(k) if not(e.pretty) && is_valid_js_ident(k) => {
+          e.write(".")
+          e.write(k)
+        }
+        _ => {
+          e.write("[")
+          emit_expr(e, idx, 0)
+          e.write("]")
+        }
+      }
     }
     PropAccess(recv, name) => {
       emit_expr(e, recv, 18)
@@ -1557,12 +1944,58 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       }
     }
     New(name, args) => {
-      e.write("new ")
-      e.write(name)
-      emit_args(e, args)
+      // In minify mode, `new RegExp("pat")` → `/pat/` and
+      // `new RegExp("pat","flags")` → `/pat/flags` saves bytes.
+      let emitted_as_regex = if not(e.pretty) && name == "RegExp" {
+        let pat_ok = match args.get(0) {
+          Some(StringLit(p)) => regex_literal_safe(p)
+          _ => false
+        }
+        let flags_ok = match args.get(1) {
+          None => true
+          Some(StringLit(f)) => {
+            let mut ok = true
+            for c in f {
+              match c {
+                'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd' | 'v' => ()
+                _ => ok = false
+              }
+            }
+            ok
+          }
+          _ => false
+        }
+        if pat_ok && flags_ok {
+          let pat = match args[0] {
+            StringLit(p) => p
+            _ => ""
+          }
+          let flags = match args.get(1) {
+            Some(StringLit(f)) => f
+            _ => ""
+          }
+          e.write("/")
+          emit_regex_body(e, pat)
+          e.write("/")
+          e.write(flags)
+          true
+        } else {
+          false
+        }
+      } else {
+        false
+      }
+      if not(emitted_as_regex) {
+        e.write("new ")
+        e.write(name)
+        // In minify mode, `new Foo` (no parens) is valid when there
+        // are no arguments. Saves 2 bytes per zero-arg construction.
+        if e.pretty || args.length() > 0 {
+          emit_args(e, args)
+        }
+      }
     }
     NewExpr(callee, args) => {
-      e.write("new ")
       // `new X(args)` requires `X` to be a `MemberExpression`. A
       // call expression / new expression / arrow doesn't match,
       // so wrap it in parens — otherwise `new (a())(b)` would
@@ -1575,10 +2008,15 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
         _ => false
       }
       if needs_paren {
+        // `new(callee)` — `(` doesn't start an ident char, so the
+        // space after `new` can be dropped in minify mode.
+        e.word("new")
+        e.sep_after_word('(')
         e.write("(")
         emit_expr(e, callee, 0)
         e.write(")")
       } else {
+        e.write("new ")
         emit_expr(e, callee, 18)
       }
       emit_args(e, args)
@@ -1621,9 +2059,18 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
     }
     IndexAssignExpr(recv, idx, value) => {
       emit_expr(e, recv, 18)
-      e.write("[")
-      emit_expr(e, idx, 0)
-      e.write("]")
+      // `x["prop"] = v` → `x.prop = v` in minify mode (saves 4 bytes)
+      match idx {
+        StringLit(k) if not(e.pretty) && is_valid_js_ident(k) => {
+          e.write(".")
+          e.write(k)
+        }
+        _ => {
+          e.write("[")
+          emit_expr(e, idx, 0)
+          e.write("]")
+        }
+      }
       e.space()
       e.write("=")
       e.space()
@@ -1636,12 +2083,59 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       emit_expr(e, b, 2)
     }
     ArrowFunc(params, _ret_ty, body, is_async) => {
-      if is_async {
-        e.write("async ")
+      // In minify mode, a single simple-identifier parameter doesn't
+      // need parens: `x=>x` is valid and saves 2 bytes over `(x)=>x`.
+      // "Simple" means: not a rest param, not a destructure, no default.
+      let bare_name : String? = if e.pretty {
+        None
+      } else {
+        let runtime : Array[@ast.TsParam] = []
+        for p in params {
+          if not(is_this_type_annotation_param(p)) {
+            runtime.push(p)
+          }
+        }
+        if runtime.length() == 1 {
+          let p = runtime[0]
+          let simple = not(p.is_rest) &&
+            (match p.binding {
+              None | Some(@ast.TsBinding::Ident(_)) => true
+              _ => false
+            }) &&
+            (match p.default {
+              None => true
+              _ => false
+            })
+          if simple {
+            Some(p.name)
+          } else {
+            None
+          }
+        } else {
+          None
+        }
       }
-      e.write("(")
-      emit_runtime_params(e, params)
-      e.write(")")
+      // Emit `async` keyword, then the params.  In minify mode,
+      // `async(x)=>` is valid (saves 1 byte vs `async (x)=>`),
+      // but `asyncx=>` is not — so the space is required only
+      // when a bare identifier param follows.
+      match bare_name {
+        Some(name) => {
+          if is_async {
+            e.write("async ")
+          }
+          e.write(name)
+        }
+        None => {
+          if is_async {
+            e.word("async")
+            e.sep_after_word('(')
+          }
+          e.write("(")
+          emit_runtime_params(e, params)
+          e.write(")")
+        }
+      }
       e.space()
       e.write("=>")
       e.space()
@@ -1663,24 +2157,27 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             emit_expr(e, inner, 2)
           }
         }
-        ArrowBlock(block) => emit_block(e, block)
+        ArrowBlock(block) => emit_func_body(e, block)
       }
     }
     FuncExpr(f) => emit_function_expr(e, f)
     Yield(opt) =>
       match opt {
         Some(inner) => {
-          e.write("yield ")
+          e.word("yield")
+          e.sep_after_word(expr_leading_byte(inner))
           emit_expr(e, inner, 2)
         }
         None => e.write("yield")
       }
     YieldStar(inner) => {
-      e.write("yield* ")
+      // `yield*` ends with `*` (not a word char), so no separator needed.
+      e.write("yield*")
       emit_expr(e, inner, 2)
     }
     Await(inner) => {
-      e.write("await ")
+      e.word("await")
+      e.sep_after_word(expr_leading_byte(inner))
       emit_expr(e, inner, 16)
     }
     DynamicImport(spec, opts) => {
@@ -1753,11 +2250,13 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       emit_jsx_element(e, tag, attrs, children)
     NativeClassExpr(decl, ctor_body) => emit_native_class(e, decl, ctor_body)
     PureCall(inner) => {
-      // Restore the `/* @__PURE__ */` annotation so downstream
-      // minifiers (terser, esbuild, rolldown) keep treating the
-      // call as droppable when the result is unused. The comment
-      // appears immediately before the call body.
-      e.write("/* @__PURE__ */ ")
+      // In pretty mode, restore the `/* @__PURE__ */` annotation so
+      // downstream minifiers keep treating the call as droppable.
+      // In minify mode we've already tree-shaken dead code ourselves,
+      // so the annotation is unnecessary noise.
+      if e.pretty {
+        e.write("/* @__PURE__ */ ")
+      }
       emit_expr_body(e, inner)
     }
   }
@@ -1938,13 +2437,18 @@ fn try_emit_function_decl(e : Emitter, stmt : @ast.TsStmt) -> Bool {
   if func.is_generator {
     e.write("*")
   }
-  e.write(" ")
+  // In minify mode, `function*foo(){}` is valid — no space needed
+  // between `*` and the identifier. For non-generators `function`
+  // is a keyword and needs a separator before the name.
+  if e.pretty || not(func.is_generator) {
+    e.write(" ")
+  }
   e.write(name)
   e.write("(")
   emit_runtime_params(e, func.params)
   e.write(")")
   e.space()
-  emit_block(e, func.body)
+  emit_func_body(e, func.body)
   true
 }
 
@@ -1981,14 +2485,19 @@ fn emit_function_expr(e : Emitter, f : @ast.TsFunc) -> Unit {
     is_valid_js_ident(f.name) &&
     not(is_reserved_word(f.name)) &&
     not(func_body_references_name_as_free_var(f, f.name)) {
-    e.write(" ")
+    // In minify mode, `function*name()` needs no space — `*` is
+    // punctuation, not a word token. Non-generators must keep the
+    // space: `functionname` would be parsed as one identifier.
+    if e.pretty || not(f.is_generator) {
+      e.write(" ")
+    }
     e.write(f.name)
   }
   e.write("(")
   emit_runtime_params(e, f.params)
   e.write(")")
   e.space()
-  emit_block(e, f.body)
+  emit_func_body(e, f.body)
 }
 
 ///|
@@ -2500,18 +3009,97 @@ fn strip_internal_prop_marker(name : String) -> String {
 
 ///|
 fn emit_string_literal(e : Emitter, s : String) -> Unit {
-  e.write("\"")
+  // In minify mode, pick the quote character that requires fewer escapes.
+  // Each avoided escape saves 1 byte (the backslash).
+  let quote = if not(e.pretty) {
+    let mut dq = 0 // double-quote occurrences
+    let mut sq = 0 // single-quote occurrences
+    for c in s {
+      if c == '"' {
+        dq = dq + 1
+      }
+      if c == '\'' {
+        sq = sq + 1
+      }
+    }
+    if sq < dq {
+      '\''
+    } else {
+      '"'
+    }
+  } else {
+    '"'
+  }
+  e.write(quote.to_string())
   for c in s {
-    match c {
-      '"' => e.write("\\\"")
-      '\\' => e.write("\\\\")
-      '\n' => e.write("\\n")
-      '\r' => e.write("\\r")
-      '\t' => e.write("\\t")
-      _ => e.write(c.to_string())
+    if c == quote {
+      e.write("\\")
+      e.write(c.to_string())
+    } else {
+      match c {
+        '\\' => e.write("\\\\")
+        '\n' => e.write("\\n")
+        '\r' => e.write("\\r")
+        '\t' => e.write("\\t")
+        _ => e.write(c.to_string())
+      }
     }
   }
-  e.write("\"")
+  e.write(quote.to_string())
+}
+
+// Returns true iff the runtime string value `s` can be safely used as the
+// body of a regex literal /s/. Rejects empty patterns (would produce `//`,
+// a comment), newlines, NUL bytes, and other control characters.
+
+///|
+fn regex_literal_safe(s : String) -> Bool {
+  if s.length() == 0 {
+    return false
+  }
+  // Reject control chars and newlines (never valid inside a regex literal).
+  for c in s {
+    if c == '\n' || c == '\r' || c.to_int() < 32 {
+      return false
+    }
+  }
+  // Reject if the pattern ends with an odd number of backslashes: the
+  // trailing `\` would escape the `/` delimiter we add to close the literal,
+  // producing an unclosed regex.
+  let mut trailing_bs = 0
+  for c in s {
+    if c == '\\' {
+      trailing_bs = trailing_bs + 1
+    } else {
+      trailing_bs = 0
+    }
+  }
+  if trailing_bs % 2 != 0 {
+    return false
+  }
+  true
+}
+
+// Emit the runtime string value `s` as the body of a regex literal.
+// Bare `/` (not part of an existing `\/` escape sequence) is written
+// as `\/` to avoid closing the regex prematurely.
+// Caller must have verified regex_literal_safe(s).
+
+///|
+fn emit_regex_body(e : Emitter, s : String) -> Unit {
+  // Iterate using `for c in s` (char-level). Track whether the previous
+  // character was a backslash so we can tell a bare `/` from an already-
+  // escaped `\/` (the `\` was already emitted, so we just emit `/`).
+  let mut prev_was_bs = false
+  for c in s {
+    if c == '/' && not(prev_was_bs) {
+      // Bare slash — escape it so it does not close the regex literal.
+      e.write("\\/")
+    } else {
+      e.write(c.to_string())
+    }
+    prev_was_bs = c == '\\'
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2709,6 +3297,90 @@ fn expr_precedence(expr : @ast.TsExpr) -> Int {
 }
 
 ///|
+/// Produce the shortest JS representation of a floating-point number.
+/// - Drops leading zero: `0.5` → `.5` (saves 1 byte)
+/// - Drops trailing zero: `1.0` → `1` (saves 2 bytes)
+/// - Tries exponential when shorter: `1000000.0` → `1e6` (saves bytes)
+fn minify_number(n : Double) -> String {
+  // Special floating-point values have no numeric literal representation.
+  // Minify to the shortest valid JS form instead of the global identifier.
+  if n != n {
+    return "0/0"
+  } // NaN (same length, guaranteed valid JS)
+  if n == 1.0 / 0.0 {
+    return "1/0"
+  } // Infinity (8 chars → 3)
+  if n == -1.0 / 0.0 {
+    return "-1/0"
+  } // -Infinity (9 chars → 4)
+  let standard = n.to_string()
+  let mut best = standard
+  // Drop trailing ".0" (integer-valued doubles): 1.0 → 1
+  if standard.has_suffix(".0") {
+    let shorter = standard
+      .substring(start=0, end=standard.length() - 2)
+      .to_string()
+    // Verify lossless round-trip.
+    match (try? @strconv.parse_double(shorter)) {
+      Ok(back) =>
+        if back == n && shorter.length() < best.length() {
+          best = shorter
+        }
+      Err(_) => ()
+    }
+  }
+  // Drop leading zero from "0.NNN": 0.5 → .5
+  if standard.has_prefix("0.") {
+    let shorter = standard.substring(start=1).to_string()
+    match (try? @strconv.parse_double(shorter)) {
+      Ok(back) =>
+        if back == n && shorter.length() < best.length() {
+          best = shorter
+        }
+      Err(_) => ()
+    }
+  }
+  // Drop leading zero from "-0.NNN": -0.5 → -.5
+  if standard.has_prefix("-0.") {
+    let shorter = "-" + standard.substring(start=2).to_string()
+    match (try? @strconv.parse_double(shorter)) {
+      Ok(back) =>
+        if back == n && shorter.length() < best.length() {
+          best = shorter
+        }
+      Err(_) => ()
+    }
+  }
+  // Scientific notation for integers with trailing zeros: 1000000 → 1e6.
+  // Only worthwhile when the exponent notation is strictly shorter.
+  // Cap at MAX_SAFE_INTEGER to avoid Int64 overflow on the conversion.
+  let abs_n = if n < 0.0 { -n } else { n }
+  if abs_n >= 1000.0 &&
+    abs_n <= 9007199254740991.0 &&
+    abs_n.to_int64().to_double() == abs_n {
+    let int_val = abs_n.to_int64()
+    let mut mantissa = int_val
+    let mut exp = 0
+    while mantissa % 10L == 0L && mantissa > 0L {
+      mantissa = mantissa / 10L
+      exp = exp + 1
+    }
+    if exp >= 2 {
+      let sci = if n < 0.0 {
+        "-" + mantissa.to_string() + "e" + exp.to_string()
+      } else {
+        mantissa.to_string() + "e" + exp.to_string()
+      }
+      match (try? @strconv.parse_double(sci)) {
+        Ok(back) => if back == n && sci.length() < best.length() { best = sci }
+        Err(_) => ()
+      }
+    }
+  }
+  best
+}
+
+///|
 /// Emit a native `class Name extends Base { … }` declaration. Used
 /// when the parser bypassed the IIFE desugar — primarily for
 /// `class X extends Y` shapes where the desugar's `super(…)` call
@@ -2743,17 +3415,35 @@ fn emit_native_class(
   e.open_block()
   // Constructor — emit the full TsFunc so rest / default /
   // destructuring params are preserved verbatim.
-  match ctor_func {
-    Some(func) => {
-      e.nl()
-      e.write("constructor")
-      e.write("(")
-      emit_runtime_params(e, func.params)
-      e.write(")")
-      e.space()
-      emit_block(e, func.body)
+  // In minify mode, a no-arg empty constructor on a base class (no
+  // `extends`) is identical to the implicit default constructor — drop
+  // it to save bytes. Derived classes must keep even an empty
+  // constructor since `constructor(){}` calls `super()` with no args,
+  // while the implicit constructor forwards all args to `super`.
+  let ctor_is_implicit = match ctor_func {
+    Some(func) =>
+      not(e.pretty) &&
+      decl.base_names.is_empty() &&
+      decl.base_expr.is_empty() &&
+      func.params.is_empty() &&
+      func.body.stmts.is_empty() &&
+      not(func.is_async) &&
+      not(func.is_generator)
+    None => true
+  }
+  if not(ctor_is_implicit) {
+    match ctor_func {
+      Some(func) => {
+        e.nl()
+        e.write("constructor")
+        e.write("(")
+        emit_runtime_params(e, func.params)
+        e.write(")")
+        e.space()
+        emit_func_body(e, func.body)
+      }
+      None => ()
     }
-    None => ()
   }
   // Methods.
   for m in decl.methods {
@@ -2825,7 +3515,7 @@ fn emit_native_class(
     e.write(")")
     e.space()
     match m.body {
-      Some(b) => emit_block(e, b)
+      Some(b) => emit_func_body(e, b)
       None => {
         e.write("{")
         e.write("}")

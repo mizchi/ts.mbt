@@ -30,6 +30,29 @@ priv struct DeclEntry {
 /// references. Only run me on a flattened bundle block — sub-blocks
 /// (function bodies, control flow) are left alone.
 pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
+  // Flatten fold's multi-declarator Block wrappers (`const a=1, b=2;`
+  // is stored as `Block([Const(a), Const(b)])`) back into individual
+  // top-level statements so each declarator can be independently
+  // classified and dropped when dead.
+  let flat_stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    match s {
+      Block(inner) if is_pure_multi_decl_block(inner) =>
+        for inner_s in inner.stmts {
+          flat_stmts.push(inner_s)
+        }
+      _ => flat_stmts.push(s)
+    }
+  }
+  let flat_block : @ast.TsBlock = {
+    stmts: flat_stmts,
+    stmt_positions: block.stmt_positions,
+  }
+  treeshake_flat_block(flat_block)
+}
+
+///|
+fn treeshake_flat_block(block : @ast.TsBlock) -> @ast.TsBlock {
   // Pass 1: classify every stmt as either a droppable declaration
   // (single name + pure rhs) or a side-effect root. Build a name ->
   // DeclEntry index for the BFS.
@@ -52,6 +75,44 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
           decls.push({ name, index: i, refs })
           is_decl[i] = true
         }
+      // Native class declarations (`class Foo { … }`) are a
+      // declaration form too. They're droppable when nothing
+      // instantiates or extends `Foo`. Treat them analogously to a
+      // `const Foo = /* @__PURE__ */ class { … }` for the purpose
+      // of treeshake. The RHS "references" are: the base class (if
+      // `extends Base`) and all method body free variables.
+      NativeClassStmt(decl, ctor) if decl.name != "" => {
+        let refs : Map[String, Bool] = {}
+        // Base class reference
+        match decl.base_expr {
+          Some(e) => collect_var_refs_in_expr(e, refs)
+          None => ()
+        }
+        for n in decl.base_names {
+          if n != "" && n != "<expr-base>" {
+            refs[n] = true
+          }
+        }
+        // Constructor body refs
+        match ctor {
+          Some(f) => collect_var_refs_in_block(f.body, refs)
+          None => ()
+        }
+        // Method body refs
+        for m in decl.methods {
+          match m.body {
+            Some(b) => collect_var_refs_in_block(b, refs)
+            None => ()
+          }
+        }
+        // Static field initializer refs
+        for sf in decl.static_field_inits {
+          collect_var_refs_in_expr(sf.1, refs)
+        }
+        decl_by_name[decl.name] = decls.length()
+        decls.push({ name: decl.name, index: i, refs })
+        is_decl[i] = true
+      }
       _ => ()
     }
   }
@@ -103,11 +164,17 @@ pub fn treeshake_block(block : @ast.TsBlock) -> @ast.TsBlock {
         Let(@ast.TsBinding::Ident(n), _, _)
         | Const(@ast.TsBinding::Ident(n), _, _)
         | Var(@ast.TsBinding::Ident(n), _, _) => n
+        NativeClassStmt(decl, _) => decl.name
         _ => ""
       }
       live.contains(name)
     } else {
-      true
+      // Drop pure-expression statements at the root level — they
+      // have no observable effect even though they aren't decls.
+      match stmt {
+        Expr(e) => not(is_pure_init(e))
+        _ => true
+      }
     }
     if keep {
       kept.push(stmt)
@@ -133,7 +200,8 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     | ArrayHole
     | Var(_)
     | FuncExpr(_)
-    | ArrowFunc(_, _, _, _) => true
+    | ArrowFunc(_, _, _, _)
+    | NativeClassExpr(_, _) => true
     ArrayLit(items) => {
       for e in items {
         if not(is_pure_init(e)) {
@@ -156,6 +224,24 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     // `/* @__PURE__ */ f(...)` — the user asserted purity, so
     // treeshake can drop the binding when the result is unused.
     PureCall(_) => true
+    // Template literals are pure when every interpolated expression
+    // is pure (the tag-less form just concatenates strings).
+    TemplateLiteral(_, exprs) => {
+      for e in exprs {
+        if not(is_pure_init(e)) {
+          return false
+        }
+      }
+      true
+    }
+    // TypeScript cast / non-null / optional-chain wrappers don't
+    // introduce side effects on their own.
+    As(inner, _)
+    | Satisfies(inner, _)
+    | NonNull(inner)
+    | OptionalChain(inner) => is_pure_init(inner)
+    // Spread of a pure value is itself pure (used in array literals).
+    Spread(inner) => is_pure_init(inner)
     _ => false
   }
 }
@@ -519,4 +605,53 @@ fn collect_var_refs_in_binding(
       }
     Target(e) => collect_var_refs_in_expr(e, out)
   }
+}
+
+///|
+/// True when `block` is a fold-produced multi-declarator group:
+/// every statement is a `Const`/`Let`/`Var` with a plain `Ident`
+/// binding and a pure initializer, and none uses a `FuncExpr`
+/// initializer (those emit as `function f(){}` and must stay
+/// as standalone statements).
+fn is_pure_multi_decl_block(block : @ast.TsBlock) -> Bool {
+  if block.stmts.length() < 2 {
+    return false
+  }
+  let mut kind = ""
+  for s in block.stmts {
+    match s {
+      Const(@ast.TsBinding::Ident(_), _, rhs) =>
+        match rhs {
+          @ast.TsExpr::FuncExpr(_) => return false
+          _ =>
+            if kind == "" {
+              kind = "const"
+            } else if kind != "const" {
+              return false
+            }
+        }
+      Let(@ast.TsBinding::Ident(_), _, rhs) =>
+        match rhs {
+          @ast.TsExpr::FuncExpr(_) => return false
+          _ =>
+            if kind == "" {
+              kind = "let"
+            } else if kind != "let" {
+              return false
+            }
+        }
+      Var(@ast.TsBinding::Ident(_), _, rhs) =>
+        match rhs {
+          @ast.TsExpr::FuncExpr(_) => return false
+          _ =>
+            if kind == "" {
+              kind = "var"
+            } else if kind != "var" {
+              return false
+            }
+        }
+      _ => return false
+    }
+  }
+  kind != ""
 }

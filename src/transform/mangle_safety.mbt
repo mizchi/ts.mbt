@@ -70,16 +70,32 @@ pub fn collect_externally_visible_props(
   let reserved_obs = reserved_props_from_observability(graph, obs_map)
   let reserved : Map[String, Bool] = {}
   for k in reserved_external.keys() {
-    reserved[k] = true
+    // Internal mtsc markers (`__private_brand__N__X`, `__super_proto`,
+    // `__brand__`) are synthesised private — no external consumer can
+    // reference them by their desugared names. Exclude them from the
+    // escaped-property set so the property mangler can still shorten them
+    // even when the containing object is transitively exported.
+    if not(is_internal_marker_prop(k)) {
+      reserved[k] = true
+    }
   }
   for k in reserved_obs.keys() {
-    reserved[k] = true
+    if not(is_internal_marker_prop(k)) {
+      reserved[k] = true
+    }
   }
   let out : Array[String] = []
   for k in reserved.keys() {
     out.push(k)
   }
   out
+}
+
+///|
+fn is_internal_marker_prop(name : String) -> Bool {
+  name == "__super_proto" ||
+  name == "__brand__" ||
+  name.has_prefix("__private_brand__")
 }
 
 ///|
@@ -264,6 +280,28 @@ fn collect_props_on_external_stmt(
         None => ()
       }
     }
+    NativeClassStmt(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) =>
+          collect_props_on_external_expr(b, externals, out, numeric_names)
+        None => ()
+      }
+      match ctor {
+        Some(f) =>
+          collect_props_on_external_block(f.body, externals, out, numeric_names)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            collect_props_on_external_block(b, externals, out, numeric_names)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_props_on_external_expr(sf.1, externals, out, numeric_names)
+      }
+    }
     Label(_, inner) =>
       collect_props_on_external_stmt(inner, externals, out, numeric_names)
     Block(b) =>
@@ -418,6 +456,28 @@ fn collect_props_on_external_expr(
       for e in exprs {
         collect_props_on_external_expr(e, externals, out, numeric_names)
       }
+    NativeClassExpr(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) =>
+          collect_props_on_external_expr(b, externals, out, numeric_names)
+        None => ()
+      }
+      match ctor {
+        Some(f) =>
+          collect_props_on_external_block(f.body, externals, out, numeric_names)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) =>
+            collect_props_on_external_block(b, externals, out, numeric_names)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_props_on_external_expr(sf.1, externals, out, numeric_names)
+      }
+    }
     _ => ()
   }
 }
@@ -539,6 +599,25 @@ fn collect_reflection_sinks_stmt(
       match fb {
         Some(blk) => collect_reflection_sinks_block(blk, out)
         None => ()
+      }
+    }
+    NativeClassStmt(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_reflection_sinks_expr(b, out)
+        None => ()
+      }
+      match ctor {
+        Some(f) => collect_reflection_sinks_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_reflection_sinks_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_reflection_sinks_expr(sf.1, out)
       }
     }
     Label(_, inner) => collect_reflection_sinks_stmt(inner, out)
@@ -673,6 +752,25 @@ fn collect_reflection_sinks_expr(
       for e in exprs {
         collect_reflection_sinks_expr(e, out)
       }
+    NativeClassExpr(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_reflection_sinks_expr(b, out)
+        None => ()
+      }
+      match ctor {
+        Some(f) => collect_reflection_sinks_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_reflection_sinks_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_reflection_sinks_expr(sf.1, out)
+      }
+    }
     _ => ()
   }
 }
@@ -709,6 +807,11 @@ fn arg_is_literal_or_known(expr : @ast.TsExpr) -> Bool {
     | IntLit(_)
     | BoolLit(_)
     | NullLit => true
+    // `this.__private_brand__N__X` accesses are safe: the mtsc-synthesized
+    // private-field maps contain only routing/structural data written by the
+    // bundle itself, not arbitrary user-controlled property names.
+    PropAccess(@ast.TsExpr::Var("this"), name) =>
+      name.has_prefix("__private_brand__")
     _ => false
   }
 }

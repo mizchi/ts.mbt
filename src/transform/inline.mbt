@@ -84,7 +84,17 @@ pub fn inline_block(block : @ast.TsBlock) -> @ast.TsBlock {
       }
     }
   }
-  inline_pass(flattened, flat_positions)
+  // Run inline_pass to fixpoint: chained decls (`const a = rhs; const b = f(a); use(b)`)
+  // need two passes — first to inline `a` into `b`, then to inline `b` into `use(b)`.
+  // Each pass either reduces the statement count or makes no progress, so the loop
+  // terminates in O(chain_length) iterations, typically 2–3.
+  let mut cur = inline_pass(flattened, flat_positions)
+  let mut prev_len = flattened.length()
+  while cur.stmts.length() < prev_len {
+    prev_len = cur.stmts.length()
+    cur = inline_pass(cur.stmts, cur.stmt_positions)
+  }
+  cur
 }
 
 ///|
@@ -216,7 +226,37 @@ fn inline_into_stmt(stmt : @ast.TsStmt) -> @ast.TsStmt {
       } else {
         Block(inline_block(b))
       }
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: inline_block(f.body) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(inline_block(b))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, inline_into_expr(sf.1)))
+      }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(inline_into_expr(b))
+        None => None
+      }
+      NativeClassStmt(
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
   }
 }
 
@@ -333,6 +373,37 @@ fn inline_into_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
     Satisfies(inner, ty) => Satisfies(inline_into_expr(inner), ty)
     NonNull(inner) => NonNull(inline_into_expr(inner))
     OptionalChain(inner) => OptionalChain(inline_into_expr(inner))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: inline_block(f.body) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(inline_block(b))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, inline_into_expr(sf.1)))
+      }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(inline_into_expr(b))
+        None => None
+      }
+      NativeClassExpr(
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
@@ -528,6 +599,37 @@ fn substitute_stmt(
       ForIn(k, b, t, substitute_expr(iter, name, rhs), body)
     Switch(e, cases) => Switch(substitute_expr(e, name, rhs), cases)
     Label(lname, inner) => Label(lname, substitute_stmt(inner, name, rhs))
+    NativeClassStmt(decl, ctor) => {
+      let new_base = match decl.base_expr {
+        Some(b) => Some(substitute_expr(b, name, rhs))
+        None => None
+      }
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: substitute_block(f.body, name, rhs) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(substitute_block(b, name, rhs))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, substitute_expr(sf.1, name, rhs)))
+      }
+      NativeClassStmt(
+        {
+          ..decl,
+          base_expr: new_base,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
     _ => stmt
   }
 }
@@ -695,6 +797,37 @@ fn substitute_expr(
     Satisfies(inner, ty) => Satisfies(substitute_expr(inner, name, rhs), ty)
     NonNull(inner) => NonNull(substitute_expr(inner, name, rhs))
     OptionalChain(inner) => OptionalChain(substitute_expr(inner, name, rhs))
+    NativeClassExpr(decl, ctor) => {
+      let new_base = match decl.base_expr {
+        Some(b) => Some(substitute_expr(b, name, rhs))
+        None => None
+      }
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: substitute_block(f.body, name, rhs) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(substitute_block(b, name, rhs))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, substitute_expr(sf.1, name, rhs)))
+      }
+      NativeClassExpr(
+        {
+          ..decl,
+          base_expr: new_base,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
@@ -883,6 +1016,32 @@ fn count_var_uses_stmt(
       let (l2, n2) = count_var_uses_block(b, name, inside_func)
       l = l + l2
       n = n + n2
+    }
+    NativeClassStmt(decl, ctor) => {
+      // All uses inside a class body are "nested" (they live inside
+      // function scopes — constructor / method bodies / static inits).
+      // Treat them as nested so single-use inlining never moves a
+      // binding's rhs into a class body.
+      let walk_block_nested = fn(blk : @ast.TsBlock) {
+        let (l2, n2) = count_var_uses_block(blk, name, true)
+        l = l + l2
+        n = n + n2
+      }
+      match ctor {
+        Some(f) => walk_block_nested(f.body)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => walk_block_nested(b)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        let (l2, n2) = count_var_uses_expr(sf.1, name, 0, 0, true)
+        l = l + l2
+        n = n + n2
+      }
     }
     _ => ()
   }
@@ -1145,6 +1304,29 @@ fn count_var_uses_expr(
         l = l + l2
         n = n + n2
       }
+    NativeClassExpr(decl, ctor) => {
+      // Class bodies are nested function scopes — count as nested.
+      let walk_block_nested = fn(blk : @ast.TsBlock) {
+        let (l2, n2) = count_var_uses_block(blk, name, true)
+        l = l + l2
+        n = n + n2
+      }
+      match ctor {
+        Some(f) => walk_block_nested(f.body)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => walk_block_nested(b)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        let (l2, n2) = count_var_uses_expr(sf.1, name, 0, 0, inside_func)
+        l = l + l2
+        n = n + n2
+      }
+    }
     _ => ()
   }
   (l, n)
@@ -1214,6 +1396,21 @@ fn collect_reassigned_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit 
     }
     Label(_, inner) => collect_reassigned_stmt(inner, out)
     Block(b) => collect_reassigned_block(b, out)
+    NativeClassStmt(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_reassigned_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_reassigned_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_reassigned_expr(sf.1, out)
+      }
+    }
     _ => ()
   }
 }
@@ -1380,6 +1577,21 @@ fn collect_reassigned_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit 
       for e in exprs {
         collect_reassigned_expr(e, out)
       }
+    NativeClassExpr(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_reassigned_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_reassigned_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_reassigned_expr(sf.1, out)
+      }
+    }
     _ => ()
   }
 }
@@ -1452,6 +1664,22 @@ fn collect_captured_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
     }
     Label(_, inner) => collect_captured_stmt(inner, out)
     Block(b) => collect_captured_block(b, out, false)
+    NativeClassStmt(decl, ctor) => {
+      // Class method / constructor bodies are nested function scopes.
+      match ctor {
+        Some(f) => collect_captured_block(f.body, out, true)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_captured_block(b, out, true)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_captured_expr(sf.1, out, false)
+      }
+    }
     _ => ()
   }
 }
@@ -1673,6 +1901,22 @@ fn collect_captured_expr(
       for e in exprs {
         collect_captured_expr(e, out, inside_func)
       }
+    NativeClassExpr(decl, ctor) => {
+      // Class method / constructor bodies are nested function scopes.
+      match ctor {
+        Some(f) => collect_captured_block(f.body, out, true)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_captured_block(b, out, true)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_captured_expr(sf.1, out, inside_func)
+      }
+    }
     _ => ()
   }
 }
@@ -1779,6 +2023,18 @@ fn collect_var_refs_in_expr_local(
     // which the bundler will resolve through the surrounding scope
     // at call time, not at decl time.
     ArrowFunc(_, _, _, _) | FuncExpr(_) => ()
+    // For class expressions, the base class is evaluated at definition
+    // time; method/ctor bodies are captures (skip them). Static field
+    // initializers also run at definition time and must be tracked.
+    NativeClassExpr(decl, _) => {
+      match decl.base_expr {
+        Some(b) => collect_var_refs_in_expr_local(b, out)
+        None => ()
+      }
+      for sf in decl.static_field_inits {
+        collect_var_refs_in_expr_local(sf.1, out)
+      }
+    }
     DynamicImport(spec, opts) => {
       collect_var_refs_in_expr_local(spec, out)
       match opts {

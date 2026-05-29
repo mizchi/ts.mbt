@@ -468,6 +468,10 @@ pub fn bundle_modules(
     // form (NativeClassStmt) instead of pattern-matching the
     // prototype-assignment chain.
     combined = iife_class_lift_block(combined)
+    // Strip __super_proto metadata assignments from IIFE bodies that
+    // couldn't be lifted to native class syntax. These are pure mtsc
+    // internals with no runtime effect once the lift pass has run.
+    combined = strip_super_proto_stmts(combined)
     // Class-method DCE: drop methods on native class declarations
     // that nothing in the bundle accesses by name. Gated on the
     // absence of reflection / dynamic-key access in the bundle.
@@ -592,32 +596,52 @@ pub fn bundle_modules(
       // on `minify` since the inlining produces deeply nested
       // expressions that are unpleasant in pretty mode.
       combined = inline_block(combined)
+      // Second fold pass: inlining can expose new constant-foldable
+      // expressions (e.g. `const N = 3; arr[N]` → `arr[3]` → element
+      // access on a literal array). Run fold again before peephole so
+      // those collapse before the terminal compaction step.
+      if opts.fold {
+        combined = fold_block(combined)
+        // Second treeshake: the second fold may produce new dead
+        // `if (false) { … }` branches whose declarations are now
+        // unreachable. A lightweight treeshake pass removes them
+        // before the final peephole compaction.
+        if opts.treeshake {
+          combined = treeshake_block(combined)
+        }
+      }
       combined = peephole_block(combined)
     }
     let has_combined_positions = combined.stmt_positions.length() ==
       combined.stmts.length()
-    for i, s in combined.stmts {
-      // When source-maps are on, decode the per-stmt origin and
-      // switch the emitter's line index to the source the stmt
-      // came from before recording the mapping. Stmts whose origin
-      // was lost (synthesized by a transform) have an out-of-range
-      // source-id and are simply skipped.
-      if opts.with_sourcemap && has_combined_positions {
-        let (offset, source_id) = decode_combined_position(
-          combined.stmt_positions[i],
-        )
-        if source_id < combined_line_indices.length() {
-          e.line_index = combined_line_indices[source_id]
-          match e.smap {
-            Some(b) => b.set_current_source(source_id)
-            None => ()
+    // In minify mode without source-maps, use the merged-decl emitter so
+    // `let a=1;let b=2;` collapses to `let a=1,b=2;` at the top level.
+    if opts.minify && not(opts.with_sourcemap) {
+      emit_stmts_merged(e, combined.stmts)
+    } else {
+      for i, s in combined.stmts {
+        // When source-maps are on, decode the per-stmt origin and
+        // switch the emitter's line index to the source the stmt
+        // came from before recording the mapping. Stmts whose origin
+        // was lost (synthesized by a transform) have an out-of-range
+        // source-id and are simply skipped.
+        if opts.with_sourcemap && has_combined_positions {
+          let (offset, source_id) = decode_combined_position(
+            combined.stmt_positions[i],
+          )
+          if source_id < combined_line_indices.length() {
+            e.line_index = combined_line_indices[source_id]
+            match e.smap {
+              Some(b) => b.set_current_source(source_id)
+              None => ()
+            }
+            let src_pos = e.line_index.position(offset)
+            e.mark(src_pos)
           }
-          let src_pos = e.line_index.position(offset)
-          e.mark(src_pos)
         }
+        emit_stmt(e, s)
+        e.nl()
       }
-      emit_stmt(e, s)
-      e.nl()
     }
     // After the combined emit, surface the entry module's exports
     // so the bundle is consumable as an ES module. The mangle path
@@ -674,9 +698,10 @@ pub fn bundle_modules(
           None => ()
         }
       }
-      for j, stmt in m.block.stmts {
-        if opts.with_sourcemap && j < m.block.stmt_positions.length() {
-          let src_pos = e.line_index.position(m.block.stmt_positions[j])
+      let lifted_block = class_method_dce_block(iife_class_lift_block(m.block))
+      for j, stmt in lifted_block.stmts {
+        if opts.with_sourcemap && j < lifted_block.stmt_positions.length() {
+          let src_pos = e.line_index.position(lifted_block.stmt_positions[j])
           e.mark(src_pos)
         }
         emit_stmt(e, stmt)
@@ -961,7 +986,8 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
   match decl.namespace_binding {
     Some(name) => {
       if wrote_something {
-        e.write(", ")
+        e.write(",")
+        e.space()
       }
       e.write("* as ")
       e.write(name)
@@ -971,12 +997,15 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
   }
   if decl.named_bindings.length() > 0 {
     if wrote_something {
-      e.write(", ")
+      e.write(",")
+      e.space()
     }
-    e.write("{ ")
+    e.write("{")
+    e.space()
     for i, b in decl.named_bindings {
       if i > 0 {
-        e.write(", ")
+        e.write(",")
+        e.space()
       }
       // Per-specifier type-only modifier — preserved on the way out
       // for tools that consume the bundle through `tsc --noEmit`.
@@ -991,7 +1020,8 @@ fn emit_import_decl(e : Emitter, decl : @ast.TsImportDecl) -> Unit {
         e.write(b.1)
       }
     }
-    e.write(" }")
+    e.space()
+    e.write("}")
     wrote_something = true
   }
   if !wrote_something && !decl.side_effect_only {
@@ -1082,11 +1112,14 @@ fn emit_entry_exports(
     None => ()
   }
   if named.length() > 0 {
-    e.write("export ")
-    e.write("{ ")
+    e.write("export")
+    e.space()
+    e.write("{")
+    e.space()
     for i, pair in named {
       if i > 0 {
-        e.write(", ")
+        e.write(",")
+        e.space()
       }
       if pair.0 == pair.1 {
         e.write(pair.0)
@@ -1096,7 +1129,8 @@ fn emit_entry_exports(
         e.write(pair.1)
       }
     }
-    e.write(" }")
+    e.space()
+    e.write("}")
     e.semi()
     e.nl()
   }
@@ -1149,4 +1183,72 @@ fn is_internal_marker_property(name : String) -> Bool {
   name == "__super_proto" ||
   name == "__brand__" ||
   name.has_prefix("__private_brand__")
+}
+
+///|
+/// Strip all `__super_proto` property-assignment statements from
+/// the block (recursively).  After `iife_class_lift` runs, any
+/// remaining `__super_proto` assignments belong to IIFE classes
+/// that couldn't be lifted — they are pure mtsc metadata and have
+/// no runtime effect.
+fn strip_super_proto_stmts(block : @ast.TsBlock) -> @ast.TsBlock {
+  let stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    let stripped = strip_super_proto_stmt(s)
+    match stripped {
+      @ast.TsStmt::Empty => ()
+      _ => stmts.push(stripped)
+    }
+  }
+  { ..block, stmts, }
+}
+
+///|
+fn strip_super_proto_stmt(s : @ast.TsStmt) -> @ast.TsStmt {
+  match s {
+    @ast.TsStmt::PropAssign(_, "__super_proto", _) => Empty
+    @ast.TsStmt::Expr(@ast.TsExpr::PropAssignExpr(_, "__super_proto", _)) =>
+      Empty
+    @ast.TsStmt::Block(b) => Block(strip_super_proto_stmts(b))
+    @ast.TsStmt::If(c, t, e) =>
+      If(
+        c,
+        strip_super_proto_stmts(t),
+        match e {
+          Some(eb) => Some(strip_super_proto_stmts(eb))
+          None => None
+        },
+      )
+    @ast.TsStmt::Let(
+      b,
+      t,
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+    ) =>
+      Let(
+        b,
+        t,
+        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
+      )
+    @ast.TsStmt::Const(
+      b,
+      t,
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+    ) =>
+      Const(
+        b,
+        t,
+        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
+      )
+    @ast.TsStmt::Var(
+      b,
+      t,
+      @ast.TsExpr::CallExpr(@ast.TsExpr::FuncExpr(f), args)
+    ) =>
+      Var(
+        b,
+        t,
+        CallExpr(FuncExpr({ ..f, body: strip_super_proto_stmts(f.body) }), args),
+      )
+    _ => s
+  }
 }

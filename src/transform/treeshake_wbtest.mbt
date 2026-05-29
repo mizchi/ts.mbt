@@ -93,3 +93,70 @@ test "treeshake + mangle compose into a smaller bundle than mangle alone" {
   // Tree-shake should remove the three dead declarations entirely.
   assert_true(b.js.length() < a.js.length())
 }
+
+///|
+test "treeshake: template-literal initializer is pure and can be dropped" {
+  let files = ts_vfs([
+    (
+      "entry.ts",
+      (
+        #|const prefix = "hello";
+        #|const unused_msg = `${prefix}, world!`;
+        #|console.log(prefix);
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // `unused_msg` binding should be dropped since it's never referenced.
+      assert_false(out.js.contains("unused_msg"))
+      assert_true(out.js.contains("hello"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "treeshake: dead NativeClassStmt is dropped" {
+  // An unreferenced native class should be dropped when its initializer
+  // is pure (no side-effecting static fields or base constructor calls).
+  let src =
+    #|class Dead { greet() { return "bye"; } }
+    #|console.log("hello");
+  let block = @parser.parse_block_from_source(src)
+  let out = treeshake_block(block)
+  let names : Map[String, Bool] = {}
+  for s in out.stmts {
+    match s {
+      @ast.TsStmt::NativeClassStmt(decl, _) => names[decl.name] = true
+      _ => ()
+    }
+  }
+  assert_false(names.contains("Dead"))
+}
+
+///|
+test "treeshake: live NativeClassStmt is retained" {
+  // A named class that is instantiated must survive treeshaking.
+  // Before the fix, NativeClassStmt name was extracted as "" in pass 4,
+  // so even live classes were incorrectly dropped.
+  let src =
+    #|class Alive { greet() { return "hi"; } }
+    #|const unused = 42;
+    #|const obj = new Alive();
+    #|console.log(obj.greet());
+  let block = @parser.parse_block_from_source(src)
+  // Lift IIFE-lowered classes to NativeClassStmt before treeshaking so the
+  // treeshaker sees the structured form and can reason about the class name.
+  let lifted = iife_class_lift_block(block)
+  let out = treeshake_block(lifted)
+  let names : Map[String, Bool] = {}
+  for s in out.stmts {
+    match s {
+      @ast.TsStmt::NativeClassStmt(decl, _) => names[decl.name] = true
+      _ => ()
+    }
+  }
+  assert_true(names.contains("Alive"))
+}

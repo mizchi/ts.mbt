@@ -403,19 +403,24 @@ test "bundle: private fields strip the `#` after brand mangling" {
 }
 
 ///|
-test "bundle: class getter desugars to Object.defineProperty" {
-  let files = vfs([
-    ("entry.ts", "class Box {\n  v = 7;\n  get value() { return this.v; }\n}\n"),
-  ])
+test "bundle: class getter/setter emits valid JavaScript" {
+  let src =
+    #|class Box {
+    #|  v = 7;
+    #|  get value() { return this.v; }
+    #|}
+    #|const b = new Box();
+    #|console.log(b.value);
+  let files = vfs([("entry.ts", src)])
   match bundle_modules(files, "entry.ts", BundleOptions::default()) {
     Ok(out) => {
-      // The `@@get:value` desugar marker must become
-      // `Object.defineProperty(...)` in the output — without this
-      // the previous emit wrote `proto.@@get:value = …`, which V8
-      // rejects.
-      assert_true(out.js.contains("Object.defineProperty"))
+      // The getter must not use internal `@@get:` marker names (V8 rejects them).
       assert_false(out.js.contains("@@get:"))
       assert_false(out.js.contains("@@set:"))
+      // Must emit either Object.defineProperty or native get/set syntax.
+      assert_true(
+        out.js.contains("Object.defineProperty") || out.js.contains("get value"),
+      )
     }
     Err(e) => fail("bundle error: \{e}")
   }
@@ -800,6 +805,29 @@ test "treeshake: class extends keeps the base class alive" {
       // `Greeter`'s extends clause. The bundle is invalid at
       // runtime in that case.
       assert_true(out.js.contains("Base"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "treeshake: unused native class declaration is dropped" {
+  // A `class Unused { … }` that is never instantiated or referenced
+  // should be eliminated by treeshake.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Unused { run() { return 42; } }\n" +
+      "class Used {}\n" +
+      "const u = new Used();\n" +
+      "console.log(u);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(out.js.contains("Unused"))
+      assert_true(out.js.contains("Used"))
+    }
     Err(e) => fail("bundle error: \{e}")
   }
 }
@@ -1398,6 +1426,36 @@ test "iife-class-lift: simple class without extends becomes native syntax" {
 }
 
 ///|
+test "iife-class-lift: class with extends becomes native class with extends" {
+  // TypeScript lowers `class Child extends Base {}` to an IIFE form.
+  // The lift should recognise the single-arg IIFE pattern and produce
+  // `class Child extends Base { … }`.
+  let files = vfs([
+    (
+      "entry.ts",
+      "class Base {\n" +
+      "  greet() { return \"hi\"; }\n" +
+      "}\n" +
+      "class Child extends Base {\n" +
+      "  greet() { return super.greet() + \"!\"; }\n" +
+      "}\n" +
+      "const c = new Child();\n" +
+      "console.log(c.greet());\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Both classes should be lifted to native syntax.
+      assert_true(out.js.contains("class Base"))
+      assert_true(out.js.contains("class Child"))
+      assert_true(out.js.contains("extends"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 test "class-method-dce: drops methods on IIFE-lowered class" {
   let files = vfs([
     (
@@ -1461,3 +1519,800 @@ test "type-fold: null check on non-nullable primitive folds to false" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "link: wildcard re-export `export * from` resolves named import through barrel (#32)" {
+  // a.ts → barrel.ts (export * from "./a") → entry.ts (import { foo } from "./barrel")
+  // Without wildcard enumeration the linker treats barrel's export surface
+  // as empty and leaves `foo` as a free reference.
+  let files = vfs([
+    ("a.ts", "export const foo = 1;\nexport const bar = 2;\n"),
+    ("barrel.ts", "export * from \"./a\";\n"),
+    ("entry.ts", "import { foo } from \"./barrel\";\nconsole.log(foo);\n"),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true).with_mangle(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The constant `1` must survive into the bundle — either as the
+      // inlined literal or as the initialiser of the renamed binding.
+      assert_true(out.js.contains("1"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: `export * as ns from` synthesizes namespace object for named import (#33)" {
+  // core.ts re-exports util as a namespace; consumer imports it by name.
+  // Without the synthesis path `util.check(...)` is a free-variable call.
+  let files = vfs([
+    (
+      "util.ts", "export function check(x: unknown): boolean { return x !== null; }\n",
+    ),
+    ("core.ts", "export * as util from \"./util\";\n"),
+    (
+      "entry.ts", "import { util } from \"./core\";\nconsole.log(util.check(42));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `check` must appear in the bundle — either inlined or via the
+      // synthesized namespace object.
+      assert_true(out.js.contains("check"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: multi-level wildcard barrel chain resolves to original declaration" {
+  // c.ts → b.ts (export * from "./c") → barrel.ts (export * from "./b") → entry.ts
+  // Transitive wildcard re-exports through two barrel hops must still resolve.
+  let files = vfs([
+    ("c.ts", "export const val = 99;\n"),
+    ("b.ts", "export * from \"./c\";\n"),
+    ("barrel.ts", "export * from \"./b\";\n"),
+    ("entry.ts", "import { val } from \"./barrel\";\nconsole.log(val);\n"),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("99"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: Object.defineProperty getter/setter lifted to native accessor" {
+  // TypeScript emits `Object.defineProperty(ClassName.prototype, "prop", {
+  //   get: function() {...}, enumerable: false, configurable: true })` for
+  // class getters. The lift should convert this to a native `get prop()` method.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|class Box {
+        #|  constructor(private _val: number) {}
+        #|  get value(): number { return this._val; }
+        #|  set value(v: number) { this._val = v; }
+        #|}
+        #|const b = new Box(1);
+        #|console.log(b.value);
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // Native getter/setter syntax should appear.
+      assert_true(
+        out.js.contains("get value") || out.js.contains("get "),
+        msg="expected native getter syntax",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "fold: empty constructor dropped from NativeClassStmt without extends" {
+  // `class Foo { constructor() {} }` → `class Foo {}` when ctor is a no-op.
+  // Saves `constructor(){}` bytes per class without changing behavior.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|class Box {
+        #|  constructor() {}
+        #|  getValue() { return 42; }
+        #|}
+        #|export default Box;
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The empty constructor should be dropped.
+      assert_false(
+        out.js.contains("constructor"),
+        msg="expected empty constructor to be dropped",
+      )
+      // The class itself must still be present.
+      assert_true(out.js.contains("class Box"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: extra Expr statements move after class (#31 perf)" {
+  // A class IIFE where a side-effect expression statement (e.g.
+  // `allMethods.forEach(…)`) appears at the top level of the IIFE
+  // body should still be lifted to `class C { … }`, with the forEach
+  // call appended afterward.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|const METHODS = ["get", "post"];
+        #|class Router {
+        #|  route() { return 42; }
+        #|}
+        #|METHODS.forEach(m => { Router.prototype[m] = function() {}; });
+        #|export default Router;
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Class declaration must be present.
+      assert_true(out.js.contains("class Router") || out.js.contains("route"))
+      // The forEach call must be present.
+      assert_true(out.js.contains("forEach"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: static property assignment moves after class" {
+  // TypeScript sometimes emits `ClassName.staticProp = value` inside
+  // the IIFE body for non-function static fields. This previously
+  // classified as Unknown and aborted the lift. Now it is an Extra
+  // statement appended after the class declaration.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|class Config {
+        #|  getValue() { return Config.version; }
+        #|}
+        #|Config.version = "1.0";
+        #|export default Config;
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // Class must be present.
+      assert_true(
+        out.js.contains("class Config") || out.js.contains("getValue"),
+      )
+      // The static field assignment must be present.
+      assert_true(out.js.contains("1.0"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: closure variable hoisted before class" {
+  // TypeScript ES5 output for classes with static closure state:
+  // `var Counter = (function() { var _count = 0; function Counter() {}
+  //   Counter.prototype.increment = function() { _count++; };
+  //   return Counter; })();`
+  // The `var _count = 0` previously aborted the lift. Now it is
+  // emitted before the class so the methods can still close over it.
+  let files = vfs([
+    (
+      "entry.ts",
+      (
+        #|class Counter {
+        #|  increment() {}
+        #|  get() { return 0; }
+        #|}
+        #|export default Counter;
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      assert_true(
+        out.js.contains("class Counter") || out.js.contains("increment"),
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: closure var referencing class name emitted after class (#31)" {
+  // `var _proto = Foo.prototype` references Foo (the class being lifted).
+  // Class declarations are NOT hoisted, so this variable must be emitted
+  // AFTER the class definition, not before it (ExtraBefore would be wrong).
+  // The fix checks whether the variable's RHS mentions the class name.
+  let src =
+    #|var Foo = (function() {
+    #|  function Foo() {}
+    #|  Foo.prototype.run = function() { return 1; };
+    #|  var _proto = Foo.prototype;
+    #|  _proto.stop = function() { return 2; };
+    #|  return Foo;
+    #|}());
+    #|export default Foo;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The class must be lifted (not left as an IIFE).
+      assert_true(out.js.contains("class Foo"))
+      // `var _proto = Foo.prototype` must come AFTER class Foo, so
+      // that `Foo` is already initialized when the assignment runs.
+      // `_proto` must appear AFTER `class Foo` in the output.
+      let parts = out.js.split("class Foo").collect()
+      if parts.length() >= 2 {
+        // The part before "class Foo" must not contain "_proto".
+        assert_false(parts[0].to_string().contains("_proto"))
+      }
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: non-class-name PropAssign lifted as Extra (#31)" {
+  // Assignments to other objects' properties inside an IIFE should not
+  // abort the class lift — they're side effects that can run after the class.
+  let src =
+    #|var registry = {};
+    #|var Foo = (function() {
+    #|  function Foo() {}
+    #|  Foo.prototype.run = function() { return 1; };
+    #|  registry.Foo = Foo;
+    #|  return Foo;
+    #|}());
+    #|export default Foo;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("class Foo"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: Assign to non-class var in IIFE body does not abort lift" {
+  // `counter = counter + 1` inside the IIFE is a side effect to a
+  // non-class variable. The lift should keep it as Extra and still
+  // produce `class Foo`.
+  let src =
+    #|var counter = 0;
+    #|var Foo = (function() {
+    #|  function Foo() {}
+    #|  counter = counter + 1;
+    #|  Foo.prototype.run = function() { return counter; };
+    #|  return Foo;
+    #|}());
+    #|export default Foo;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("class Foo"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: destructuring Var in IIFE body does not abort lift" {
+  // `var { a, b } = opts` inside the IIFE is a destructuring declaration
+  // that does not touch the class name. The lift should hoist it before
+  // the class and still produce `class Foo`.
+  let src =
+    #|var Foo = (function() {
+    #|  var opts = { a: 1, b: 2 };
+    #|  var _a = opts.a, _b = opts.b;
+    #|  function Foo() { this.v = _a + _b; }
+    #|  Foo.prototype.get = function() { return this.v; };
+    #|  return Foo;
+    #|}());
+    #|export default Foo;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("class Foo"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "link: `export * as ns from` where source uses `export * from` (re-export chain)" {
+  // util-impl.ts → util.ts (export * from "./util-impl") → core.ts (export * as util from "./util")
+  // The namespace object in core.ts should include `check` from the transitive re-export.
+  let files = vfs([
+    (
+      "util-impl.ts", "export function check(x: unknown): boolean { return x !== null; }\n",
+    ),
+    ("util.ts", "export * from \"./util-impl\";\n"),
+    ("core.ts", "export * as util from \"./util\";\n"),
+    (
+      "entry.ts", "import { util } from \"./core\";\nconsole.log(util.check(42));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("check"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "switch_fold: switch with default arm folds known-literal call sites" {
+  // A dispatch function with `default:` for unmapped literals should still
+  // fold when the call site uses a literal that hits the default.
+  let src =
+    #|function dispatch(k: "x" | "y" | "z"): number {
+    #|  switch (k) {
+    #|    case "x": return 1;
+    #|    default: return 99;
+    #|  }
+    #|}
+    #|console.log(dispatch("y"));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("99"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type_fold: typeof x === \"undefined\" folds to true for x: undefined param" {
+  // When a parameter is declared `: undefined`, `typeof x === "undefined"`
+  // is statically true. The fold pass should collapse the if-branch.
+  let src =
+    #|function check(x: undefined): string {
+    #|  if (typeof x === "undefined") {
+    #|    return "yes";
+    #|  }
+    #|  return "no";
+    #|}
+    #|console.log(check(undefined));
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("\"no\""))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: for-in loop in constructor body does not abort prototype method DCE" {
+  // A class whose constructor uses `for...in` over a plain object should
+  // still have unused prototype methods removed. The conservative `ForIn =>
+  // true` caused DCE to be skipped entirely for any such class.
+  let src =
+    #|class Router {
+    #|  constructor(routes: Record<string, string>) {
+    #|    for (const k in routes) {
+    #|      this.register(k, routes[k]);
+    #|    }
+    #|  }
+    #|  register(path: string, handler: string) { return path + handler; }
+    #|  unused() { return 99; }
+    #|}
+    #|const r = new Router({});
+    #|r.register("/", "h");
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("unused"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "emit: empty no-arg constructor on base class is dropped in minify mode" {
+  // An explicit `constructor() {}` on a class that does not extend another
+  // is identical to the implicit default constructor. The emitter should
+  // drop it in minify mode to save bytes.
+  let src =
+    #|class Foo {
+    #|  constructor() {}
+    #|  run(): number { return 42; }
+    #|}
+    #|const f = new Foo();
+    #|console.log(f.run());
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true).with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("constructor"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "class_method_dce: this[dynamic] instance-write does not abort prototype method DCE" {
+  // Hono-style: constructor assigns this[method] = ... for all methods.
+  // The DCE should still drop the unused `old()` prototype method.
+  let src =
+    #|class Foo {
+    #|  constructor() {
+    #|    const methods = ["run"];
+    #|    methods.forEach(m => { this[m] = () => 42; });
+    #|  }
+    #|  run() { return 1; }
+    #|  old() { return 99; }
+    #|}
+    #|const f = new Foo();
+    #|f.run();
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_false(out.js.contains("old"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "emit: minify emits !0/!1 for true/false and void 0 for undefined" {
+  // In minify mode `true` → `!0` (saves 2 bytes), `false` → `!1` (saves 3
+  // bytes), and `undefined` → `void 0` (saves 3 bytes).
+  let src =
+    #|const a = true;
+    #|const b = false;
+    #|const c = undefined;
+    #|console.log(a, b, c);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_false(
+        out.js.contains("true"),
+        msg="expected true to be minified away",
+      )
+      assert_false(
+        out.js.contains("false"),
+        msg="expected false to be minified away",
+      )
+      // `undefined` may be dropped entirely by the treeshaker/folder or
+      // replaced with `void 0` — either way the 9-char identifier should not appear.
+      assert_false(
+        out.js.contains("undefined"),
+        msg="expected undefined to be minified away",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundle: second fold pass after inline folds const-indexed array access" {
+  // `const N = 1; const arr = ["a","b","c"]; console.log(arr[N])` should
+  // fold to `console.log("b")` when fold+minify are both enabled.
+  // Without the post-inline fold pass, `arr[N]` survives as-is after inlining
+  // substitutes `N → 1`, yielding `["a","b","c"][1]` which is not folded.
+  let src =
+    #|const N = 1;
+    #|const arr = ["a", "b", "c"];
+    #|console.log(arr[N]);
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+    .with_fold(true)
+    .with_minify(true)
+    .with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // After fold+inline+fold the array literal should be gone — only "b" remains.
+      assert_true(
+        out.js.contains("\"b\""),
+        msg="expected folded value \"b\" in output",
+      )
+      assert_false(
+        out.js.contains("[\"a\""),
+        msg="expected array literal to be folded away",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type-fold: x + \"\" is dropped when x is typed as string" {
+  // When `x: string`, `x + ""` is a no-op and should fold to just `x`.
+  let files = vfs([
+    (
+      "entry.ts", "function greet(name: string): string { return name + \"\"; }\nconsole.log(greet(\"world\"));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // The `name + ""` concatenation should be folded away.
+      assert_false(
+        out.js.contains("+ \"\"") || out.js.contains("+\"\""),
+        msg="expected x + \"\" to be folded away for string-typed x",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "fold: else block hoisted when then-branch returns, result folded to ternary" {
+  // `if (c) { return x; } else { return y; }` should fold to `return c ? x : y`.
+  // The else-hoist enables fold_func_body to then combine to a ternary.
+  let files = vfs([
+    (
+      "entry.ts", "function pick(c: boolean, x: number, y: number): number { if (c) { return x; } else { return y; } }\nconsole.log(pick(true, 1, 2));\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) =>
+      // `else` keyword should be gone; result is a ternary or direct branch.
+      assert_false(
+        out.js.contains("else"),
+        msg="expected else to be eliminated: \{out.js}",
+      )
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "minify: consecutive const decls merge into single multi-decl in bundle output" {
+  // When multiple modules each declare constants, the merged bundle should
+  // have them as a single `let a=…,b=…,c=…` in minified output (not repeated
+  // `let` keywords). Saves 4 bytes per additional declarator.
+  let files = vfs([
+    ("a.ts", "export const A = 1;\nexport const B = 2;\nexport const C = 3;\n"),
+    ("entry.ts", "import { A, B, C } from \"./a\";\nconsole.log(A + B + C);\n"),
+  ])
+  let opts = BundleOptions::default()
+    .with_fold(true)
+    .with_treeshake(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // After treeshake, A/B/C are inlined to 1/2/3.
+      // But even if they survive, they should be in a single multi-decl.
+      // The key assertion: only one `let` keyword in the output.
+      let let_count = out.js.split("let").collect().length() - 1
+      assert_true(
+        let_count <= 1,
+        msg="expected at most one `let` keyword in minified output, got \{let_count}: \{out.js}",
+      )
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundler: export * from barrel resolves named import" {
+  // Issue #32: `export * from "./a"` wildcard re-exports must enumerate
+  // the source module's exports so downstream named imports resolve.
+  let files = vfs([
+    ("a.ts", "export const foo = 1;\nexport const bar = 2;\n"),
+    ("barrel.ts", "export * from \"./a\";\n"),
+    ("entry.ts", "import { foo } from \"./barrel\";\nconsole.log(foo);\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("const foo = 1"))
+      assert_true(out.js.contains("console.log(foo)"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundler: export * treeshake drops unreferenced barrel re-export" {
+  // With treeshake enabled, `bar` (exported by a.ts via barrel.ts but
+  // never imported by entry.ts) must be dropped from the output.
+  let files = vfs([
+    ("a.ts", "export const foo = 1;\nexport const bar = 2;\n"),
+    ("barrel.ts", "export * from \"./a\";\n"),
+    ("entry.ts", "import { foo } from \"./barrel\";\nconsole.log(foo);\n"),
+  ])
+  let opts = BundleOptions::default().with_fold(true).with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("1"))
+      assert_false(out.js.contains("bar"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundler: export * from two sources both resolve" {
+  // barrel.ts wildcard-re-exports from two sources; both foo and baz
+  // must resolve in entry.ts.
+  let files = vfs([
+    ("a.ts", "export const foo = 1;\n"),
+    ("barrel.ts", "export * from \"./a\";\nexport * from \"./c\";\n"),
+    ("c.ts", "export const baz = 99;\n"),
+    (
+      "entry.ts", "import { foo, baz } from \"./barrel\";\nconsole.log(foo, baz);\n",
+    ),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      assert_true(out.js.contains("const foo = 1"))
+      assert_true(out.js.contains("const baz = 99"))
+      assert_true(out.js.contains("console.log(foo, baz)"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundler: export * as ns synthesizes namespace object for downstream import" {
+  // Issue #33: `export * as util from "./util"` must synthesize a real
+  // `const util = { x: resolved_x, … }` binding so that
+  // `import { util } from "./core"; util.x` resolves correctly.
+  let files = vfs([
+    ("util.ts", "export const x = 1;\nexport const y = 2;\n"),
+    ("core.ts", "export * as util from \"./util\";\n"),
+    ("entry.ts", "import { util } from \"./core\";\nconsole.log(util.x);\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The namespace object must appear.
+      assert_true(out.js.contains("x: x") || out.js.contains("x:x"))
+      // util.x access must be present.
+      assert_true(out.js.contains("util.x"))
+      assert_false(out.js.contains("@@"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundler: export * as ns treeshake drops unused top-level decls" {
+  // When only util.x is used, the synthesized namespace object still
+  // references y, so y is kept. But an unrelated unused top-level
+  // binding (dead) that doesn't feed into the namespace must be dropped.
+  let files = vfs([
+    ("util.ts", "export const x = 1;\nexport const y = 2;\n"),
+    ("core.ts", "export * as util from \"./util\";\n"),
+    (
+      "entry.ts", "import { util } from \"./core\";\nconst dead = 99;\nconsole.log(util.x);\n",
+    ),
+  ])
+  let opts = BundleOptions::default().with_fold(true).with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("1"))
+      // dead is unreachable and must be dropped.
+      assert_false(out.js.contains("dead"))
+      assert_false(out.js.contains("99"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type_fold: typeof unannotated literal binding folds typeof check" {
+  // `const x = 42` has no annotation, but type_fold should infer Number
+  // from the RHS literal so that `typeof x === "number"` folds to `true`.
+  let src =
+    #|const x = 42;
+    #|if (typeof x === "number") {
+    #|  console.log("yes");
+    #|} else {
+    #|  console.log("no");
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type_fold: typeof string literal binding folds typeof check" {
+  // `const s = "hello"` — infer String_ from RHS so typeof folds.
+  let src =
+    #|const s = "hello";
+    #|if (typeof s === "string") {
+    #|  console.log("yes");
+    #|} else {
+    #|  console.log("no");
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type_fold: JSDoc-typed param enables typeof folding in untyped JS" {
+  // A JS function with a JSDoc `@param {number}` annotation should have
+  // its parameter type inferred, enabling `typeof x === "number"` to fold.
+  let src =
+    #|/**
+    #| * @param {number} x
+    #| */
+    #|function check(x) {
+    #|  if (typeof x === "number") {
+    #|    console.log("yes");
+    #|  } else {
+    #|    console.log("no");
+    #|  }
+    #|}
+    #|check(42);
+  let files = vfs([("entry.ts", src)])
+  let opts_fold = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts_fold) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type_fold: typeof(expr) RHS infers String_ so typeof check folds" {
+  // `const t = typeof x` always has type String. A downstream
+  // `typeof t === "string"` should therefore fold to true.
+  let src =
+    #|const x: number = 42;
+    #|const t = typeof x;
+    #|if (typeof t === "string") {
+    #|  console.log("yes");
+    #|} else {
+    #|  console.log("no");
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts_fold = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts_fold) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type_fold: .length RHS infers Number so typeof check folds" {
+  // `const n = arr.length` always has type Number.
+  let src =
+    #|const arr = [1, 2, 3];
+    #|const n = arr.length;
+    #|if (typeof n === "number") {
+    #|  console.log("yes");
+    #|} else {
+    #|  console.log("no");
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts_fold = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts_fold) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|

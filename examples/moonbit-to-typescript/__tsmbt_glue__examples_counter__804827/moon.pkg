@@ -1,0 +1,20 @@
+import {
+  "examples/counter" @tsmbt_source,
+  "examples/counter/child" @tsmbt_source_child,
+  "examples/counter/child/grand" @tsmbt_source_child_grand,
+}
+
+options(
+  link: {
+    "js": {
+      "exports": [
+        "create",
+        "summarize",
+        "tsmbt_source_child_grand_make_tag",
+        "tsmbt_source_child_item_tag",
+        "tsmbt_source_child_make_item"
+      ],
+      "format": "esm",
+    },
+  },
+)

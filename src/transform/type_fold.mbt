@@ -143,10 +143,19 @@ fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
     Label(_, inner) => stmt_needs_type_fold(inner)
     Block(b) => block_needs_type_fold(b)
     NativeClassStmt(decl, ctor_body) => {
+      match decl.base_expr {
+        Some(b) => if expr_needs_type_fold(b) { return true }
+        None => ()
+      }
       for m in decl.methods {
         match m.body {
           Some(b) => if block_needs_type_fold(b) { return true }
           None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        if expr_needs_type_fold(sf.1) {
+          return true
         }
       }
       match ctor_body {
@@ -183,6 +192,12 @@ fn expr_needs_type_fold(expr : @ast.TsExpr) -> Bool {
           | (@ast.TsExpr::Var("undefined"), @ast.TsExpr::Var(_)) => return true
           _ => ()
         }
+      }
+      // `x + ""` / `"" + x` — foldable when x is string-typed.
+      match (op, l, r) {
+        (Add, @ast.TsExpr::Var(_), @ast.TsExpr::StringLit(""))
+        | (Add, @ast.TsExpr::StringLit(""), @ast.TsExpr::Var(_)) => return true
+        _ => ()
       }
       expr_needs_type_fold(l) || expr_needs_type_fold(r)
     }
@@ -325,8 +340,19 @@ fn type_fold_stmt(
       let new_init = type_fold_expr(e, scope)
       // Record the binding's type if it's a simple identifier
       // and the annotation is one we can reason about.
+      // When there's no annotation (Any), infer from the RHS literal.
       match b {
-        @ast.TsBinding::Ident(name) => if is_useful_type(t) { scope[name] = t }
+        @ast.TsBinding::Ident(name) => {
+          let effective_type = if is_useful_type(t) {
+            t
+          } else {
+            infer_type_from_literal(new_init)
+          }
+          match effective_type {
+            @ast.TsType::Any => ()
+            ty => scope[name] = ty
+          }
+        }
         _ => ()
       }
       match stmt {
@@ -440,7 +466,37 @@ fn type_fold_stmt(
       )
     Label(name, inner) => Label(name, type_fold_stmt(inner, scope))
     Block(b) => Block(type_fold_block_in(b, scope))
-    NativeClassStmt(_, _) => stmt
+    NativeClassStmt(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: type_fold_block_in(f.body, scope) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(type_fold_block_in(b, scope))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, type_fold_expr(sf.1, scope)))
+      }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(type_fold_expr(b, scope))
+        None => None
+      }
+      NativeClassStmt(
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
   }
 }
 
@@ -481,6 +537,18 @@ fn type_fold_expr(
       match try_null_check_fold(op, x_name, "undefined", scope) {
         Some(b) => BoolLit(b)
         None => expr
+      }
+    // `x + ""` → `x` when x is statically typed as string (saves 4 bytes).
+    // `"" + x` → `x` similarly. Both are no-op string concatenations.
+    BinOp(@ast.TsBinOp::Add, Var(x_name), StringLit("")) =>
+      match scope.get(x_name) {
+        Some(ty) if typeof_of_type(ty) == Some("string") => Var(x_name)
+        _ => BinOp(@ast.TsBinOp::Add, Var(x_name), StringLit(""))
+      }
+    BinOp(@ast.TsBinOp::Add, StringLit(""), Var(x_name)) =>
+      match scope.get(x_name) {
+        Some(ty) if typeof_of_type(ty) == Some("string") => Var(x_name)
+        _ => BinOp(@ast.TsBinOp::Add, StringLit(""), Var(x_name))
       }
     BinOp(op, l, r) =>
       BinOp(op, type_fold_expr(l, scope), type_fold_expr(r, scope))
@@ -617,6 +685,37 @@ fn type_fold_expr(
     NonNull(inner) => NonNull(type_fold_expr(inner, scope))
     OptionalChain(inner) => OptionalChain(type_fold_expr(inner, scope))
     PureCall(inner) => PureCall(type_fold_expr(inner, scope))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: type_fold_block_in(f.body, scope) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(type_fold_block_in(b, scope))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, type_fold_expr(sf.1, scope)))
+      }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(type_fold_expr(b, scope))
+        None => None
+      }
+      NativeClassExpr(
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
@@ -629,6 +728,7 @@ fn type_fold_expr(
 fn is_useful_type(ty : @ast.TsType) -> Bool {
   match ty {
     Number | Int | String_ | Boolean | BigInt | Symbol => true
+    Undefined | Void => true
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) => true
     // Closed string-literal unions feed `drop_exhaustive_default`.
     Union(parts) => {
@@ -648,6 +748,49 @@ fn is_useful_type(ty : @ast.TsType) -> Bool {
 }
 
 ///|
+/// Infer a primitive TsType from an RHS expression.
+/// Returns `Any` when the type can't be determined statically.
+fn infer_type_from_literal(expr : @ast.TsExpr) -> @ast.TsType {
+  match expr {
+    IntLit(_) | NumberLit(_) => @ast.TsType::Number
+    StringLit(_) => @ast.TsType::String_
+    BoolLit(_) => @ast.TsType::Boolean
+    BigIntLit(_) => @ast.TsType::BigInt
+    // `typeof x` always produces a string.
+    UnaryOp(@ast.TsUnaryOp::Typeof, _) => @ast.TsType::String_
+    // `.length` on arrays/strings is always a number.
+    PropAccess(_, "length") => @ast.TsType::Number
+    // `.indexOf(...)` / `.lastIndexOf(...)` / `.findIndex(...)` always return number.
+    MethodCall(_, "indexOf", _)
+    | MethodCall(_, "lastIndexOf", _)
+    | MethodCall(_, "findIndex", _)
+    | MethodCall(_, "search", _) => @ast.TsType::Number
+    // `.toString()` / `.toUpperCase()` etc. always return string.
+    MethodCall(_, "toString", _)
+    | MethodCall(_, "toUpperCase", _)
+    | MethodCall(_, "toLowerCase", _)
+    | MethodCall(_, "trim", _)
+    | MethodCall(_, "trimStart", _)
+    | MethodCall(_, "trimEnd", _)
+    | MethodCall(_, "slice", _)
+    | MethodCall(_, "substring", _)
+    | MethodCall(_, "replace", _)
+    | MethodCall(_, "replaceAll", _) => @ast.TsType::String_
+    // Arithmetic operators on two numbers yield number.
+    BinOp(@ast.TsBinOp::Add, l, r)
+    | BinOp(@ast.TsBinOp::Sub, l, r)
+    | BinOp(@ast.TsBinOp::Mul, l, r)
+    | BinOp(@ast.TsBinOp::Div, l, r)
+    | BinOp(@ast.TsBinOp::Mod, l, r) =>
+      match (infer_type_from_literal(l), infer_type_from_literal(r)) {
+        (@ast.TsType::Number, @ast.TsType::Number) => @ast.TsType::Number
+        _ => @ast.TsType::Any
+      }
+    _ => @ast.TsType::Any
+  }
+}
+
+///|
 /// Map a primitive type to its `typeof` JavaScript string.
 fn typeof_of_type(ty : @ast.TsType) -> String? {
   match ty {
@@ -656,6 +799,8 @@ fn typeof_of_type(ty : @ast.TsType) -> String? {
     Boolean | BooleanLiteral(_) => Some("boolean")
     BigInt | BigIntLiteral(_) => Some("bigint")
     Symbol => Some("symbol")
+    // `typeof undefined` is "undefined" at runtime.
+    Undefined | Void => Some("undefined")
     _ => None
   }
 }
@@ -772,10 +917,24 @@ fn try_null_check_fold(
     Some(t) => t
     None => return None
   }
+  // `x: undefined` — x IS undefined; null-check folds with exact semantics.
+  // `x === undefined` → true; `x !== undefined` → false.
+  // `x === null` → false (undefined !== null under strict equality).
+  // `x !== null` → true.
+  match ty {
+    Undefined | Void => {
+      let is_equal = rhs_kind == "undefined"
+      return match op {
+        BinEq | AbstractEq => Some(is_equal)
+        BinNe | AbstractNe => Some(not(is_equal))
+        _ => None
+      }
+    }
+    _ => ()
+  }
   // The types we cleared in `is_useful_type` are all non-
   // nullable primitives — a `: number` parameter / binding
   // can't be `null` or `undefined` in a well-typed program.
-  let _ = rhs_kind
   let can_be_null = match ty {
     Number | Int | String_ | Boolean | BigInt | Symbol => false
     Literal(_) | NumberLiteral(_) | BigIntLiteral(_) | BooleanLiteral(_) =>

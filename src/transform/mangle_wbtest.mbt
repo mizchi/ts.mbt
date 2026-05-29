@@ -663,3 +663,30 @@ test "mangle: name short-name generator avoids reserved single-letter clashes" {
     Err(e) => fail("\{e}")
   }
 }
+
+///|
+test "mangle: NativeClassStmt method names are collected and shortened (#mangle_properties)" {
+  // Method names that appear ONLY inside a NativeClassStmt (never in a
+  // PropAccess outside the class) were previously missing from the
+  // property-rename candidates, so `mangle_properties` left them intact.
+  let src =
+    #|class Counter {
+    #|  constructor() { this.internalValue = 0; }
+    #|  incrementCount() { this.internalValue += 1; }
+    #|  getCount() { return this.internalValue; }
+    #|}
+    #|const c = new Counter();
+    #|c.incrementCount();
+    #|console.log(c.getCount());
+  let cfg = ManglerConfig::default()
+    .with_mangle_properties(true)
+    .with_preserve_top_level(false)
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // Long method names must be gone after mangling.
+      assert_false(js.contains("incrementCount"))
+      assert_false(js.contains("internalValue"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
