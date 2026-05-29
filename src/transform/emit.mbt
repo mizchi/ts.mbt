@@ -346,6 +346,10 @@ pub fn transform_source_full(
   } else {
     folded
   }
+  // Single-use binding inlining: `const x = expr; f(x)` → `f(expr)`.
+  // Runs after mangle so the already-shortened names are inlined,
+  // keeping the inline table small.
+  let mangled = if minify { inline_block(mangled) } else { mangled }
   let mangled = if minify { peephole_block(mangled) } else { mangled }
   let e = Emitter::new(pretty=not(minify))
   if with_sourcemap {
