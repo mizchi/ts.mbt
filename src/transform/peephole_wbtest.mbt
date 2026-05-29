@@ -602,3 +602,25 @@ test "peephole: dead code after return is eliminated" {
   assert_false(out.contains("x="), msg="expected dead code dropped, got: \{out}")
   assert_false(out.contains("y="), msg="expected dead code dropped, got: \{out}")
 }
+
+///|
+test "peephole: c?!0:!1 folds to !!c (4 bytes saved)" {
+  let out = minify_one("const r = x > 0 ? true : false;\n")
+  assert_true(out.contains("!!("), msg="expected !!(x>0), got: \{out}")
+  assert_false(out.contains("?"), msg="expected no ternary, got: \{out}")
+}
+
+///|
+test "peephole: c?!1:!0 folds to !c" {
+  let out = minify_one("const r = x > 0 ? false : true;\n")
+  assert_true(out.contains("!("), msg="expected !(x>0), got: \{out}")
+  assert_false(out.contains("?"), msg="expected no ternary, got: \{out}")
+}
+
+///|
+test "peephole: (x>0)?true:false folds all the way to (x>0)" {
+  let out = minify_one("const r = (x > 0) ? true : false;\n")
+  // x>0 is already a bool, so !!(x>0) -> x>0
+  assert_true(out.contains("x>0") || out.contains("0<x"), msg="expected simple comparison, got: \{out}")
+  assert_false(out.contains("?"), msg="expected no ternary, got: \{out}")
+}

@@ -447,8 +447,30 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       }
     }
     UnaryOp(op, inner) => UnaryOp(op, peep_expr(inner, ctx))
-    Cond(c, t, e) =>
-      Cond(peep_expr(c, ctx), peep_expr(t, ctx), peep_expr(e, ctx))
+    Cond(c, t, e) => {
+      let cp = peep_expr(c, ctx)
+      let tp = peep_expr(t, ctx)
+      let ep = peep_expr(e, ctx)
+      // `c ? !0 : !1` → `!!c` (4 bytes saved; both evaluate to true/false).
+      // After BoolLit → `!0`/`!1` rewrite, `true ? … : …` patterns land here.
+      match (tp, ep) {
+        (
+          UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)),
+          UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)),
+        ) =>
+          UnaryOp(
+            @ast.TsUnaryOp::Not,
+            UnaryOp(@ast.TsUnaryOp::Not, cp),
+          )
+        // `c ? !1 : !0` → `!c` (c ? false : true).
+        (
+          UnaryOp(@ast.TsUnaryOp::Not, IntLit(1)),
+          UnaryOp(@ast.TsUnaryOp::Not, IntLit(0)),
+        ) =>
+          UnaryOp(@ast.TsUnaryOp::Not, cp)
+        (tp, ep) => Cond(cp, tp, ep)
+      }
+    }
     Call(name, args) => {
       // `Number(x)` → `+x`  (saves up to 6 bytes)
       // `Boolean(x)` → `!!x` (saves up to 4 bytes)
