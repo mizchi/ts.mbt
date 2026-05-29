@@ -875,3 +875,9 @@ test "peephole: a.b.c === null || a.b.c === undefined → a.b.c == null" {
   assert_true(out.contains("==null"), msg="expected ==null, got: \{out}")
   assert_false(out.contains("==="), msg="expected no ===, got: \{out}")
 }
+
+///|
+test "peephole: empty trailing default case is dropped from switch" {
+  let out = minify_one("switch(x){ case 1: doA(); break; default: break; }")
+  assert_false(out.contains("default"), msg="expected no default, got: \{out}")
+}

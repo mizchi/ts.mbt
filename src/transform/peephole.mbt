@@ -39,6 +39,7 @@
 //   x && x.prop            -> x?.prop    (optional chain from && guard)
 //   x && x[k]              -> x?.[k]
 //   x && x.method(args)    -> x?.method(args)
+//   switch { …; default: } -> switch { … }  (drop empty trailing cases)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -319,7 +320,31 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           }
         }
       }
-      Switch(peep_expr(e, ctx), new_cases)
+      // Drop empty trailing `default:` cases — a `default:` with no body
+      // is a no-op. Saves the `default:` label (8 bytes) per switch.
+      // Also drop empty trailing `case X:` only when there is no fall-through
+      // from it (the only use-case for an empty case is fall-through to the
+      // next case — but if it's the LAST case it can't fall through anywhere
+      // useful, so it's dead).
+      let mut trimmed_cases = new_cases.length()
+      while trimmed_cases > 0 {
+        let last = new_cases[trimmed_cases - 1]
+        if last.body.stmts.length() == 0 {
+          trimmed_cases = trimmed_cases - 1
+        } else {
+          break
+        }
+      }
+      let final_cases = if trimmed_cases < new_cases.length() {
+        let arr : Array[@ast.TsSwitchCase] = []
+        for i in 0..<trimmed_cases {
+          arr.push(new_cases[i])
+        }
+        arr
+      } else {
+        new_cases
+      }
+      Switch(peep_expr(e, ctx), final_cases)
     }
     Try(b, bnd, cb, fb) =>
       Try(
