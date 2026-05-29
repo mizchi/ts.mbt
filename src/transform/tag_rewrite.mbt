@@ -2322,6 +2322,32 @@ fn tag_rewrite_expr(
     NonNull(inner) => NonNull(tag_rewrite_expr(inner, table))
     OptionalChain(inner) => OptionalChain(tag_rewrite_expr(inner, table))
     PureCall(inner) => PureCall(tag_rewrite_expr(inner, table))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) =>
+          Some({
+            ..f,
+            body: tag_rewrite_block(f.body, table),
+          })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(tag_rewrite_block(b, table))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, tag_rewrite_expr(sf.1, table)))
+      }
+      NativeClassExpr(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
