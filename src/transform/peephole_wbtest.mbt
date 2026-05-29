@@ -526,3 +526,10 @@ test "peephole: 0 === arr.length folds to !arr.length (reversed)" {
   let out = peep_one("const r = 0 === arr.length;\n")
   assert_true(out.contains("!arr.length"), msg="expected !arr.length, got: \{out}")
 }
+
+///|
+test "minify emit: -0.5 emits as -.5 (drop leading zero in negative decimal)" {
+  let out = minify_one("const x = -0.5;\n")
+  assert_true(out.contains("-.5"), msg="expected -.5, got: \{out}")
+  assert_false(out.contains("-0.5"), msg="expected no -0.5, got: \{out}")
+}

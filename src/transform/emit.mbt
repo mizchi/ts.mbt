@@ -2984,6 +2984,14 @@ fn minify_number(n : Double) -> String {
       Err(_) => ()
     }
   }
+  // Drop leading zero from "-0.NNN": -0.5 → -.5
+  if standard.has_prefix("-0.") {
+    let shorter = "-" + standard.substring(start=2).to_string()
+    match (try? @strconv.parse_double(shorter)) {
+      Ok(back) => if back == n && shorter.length() < best.length() { best = shorter }
+      Err(_) => ()
+    }
+  }
   // Scientific notation for integers with trailing zeros: 1000000 → 1e6.
   // Only worthwhile when the exponent notation is strictly shorter.
   // Cap at MAX_SAFE_INTEGER to avoid Int64 overflow on the conversion.
