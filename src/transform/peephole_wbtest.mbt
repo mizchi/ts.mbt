@@ -1028,3 +1028,10 @@ test "peephole: Number.parseFloat → parseFloat" {
   assert_false(out.contains("Number."), msg="expected no Number. prefix, got: \{out}")
   assert_true(out.contains("parseFloat"), msg="expected parseFloat, got: \{out}")
 }
+
+///|
+test "peephole: Array.prototype.slice.call(x, 0) → [...x]" {
+  let out = minify_one("const r = Array.prototype.slice.call(arr, 0);")
+  assert_false(out.contains("slice"), msg="expected no slice, got: \{out}")
+  assert_true(out.contains("...arr") || out.contains("arr"), msg="expected spread, got: \{out}")
+}

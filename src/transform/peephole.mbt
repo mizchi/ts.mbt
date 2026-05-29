@@ -65,6 +65,7 @@
 //   `text` (no exprs)           -> "text"       (saves 2 backtick bytes)
 //   Number.parseInt(x)          -> parseInt(x)  (saves 7 bytes; same fn per spec)
 //   Number.parseFloat(x)        -> parseFloat(x)
+//   Array.prototype.slice.call(x,0) -> [...x]   (saves ~24 bytes; 0-start copy)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -932,9 +933,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         }
       }
       // `Array.prototype.slice.call(x)` → `[...x]` (saves ~21 bytes).
+      // `Array.prototype.slice.call(x, 0)` → `[...x]` (saves ~24 bytes).
       // This pattern converts array-likes (arguments, NodeLists) to
       // real arrays. Spread is semantically equivalent for iterable inputs.
-      if m == "call" && new_args.length() == 1 {
+      if m == "call" && (new_args.length() == 1 ||
+        (new_args.length() == 2 && exprs_eq(new_args[1], @ast.TsExpr::IntLit(0)))) {
         match recv_p {
           PropAccess(
             PropAccess(@ast.TsExpr::Var("Array"), "prototype"),
