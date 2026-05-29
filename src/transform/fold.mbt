@@ -247,6 +247,63 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
 }
 
 ///|
+/// Returns `true` when `block` (or any statement nested inside it, not
+/// crossing a function/loop boundary) contains an unlabeled `break` or
+/// `continue`. Used to guard the `do { … } while(false)` → inline
+/// optimization: those unlabeled jumps target the do-while itself, so
+/// they cannot be safely removed with the loop wrapper.
+fn block_has_unlabeled_break_or_continue(block : @ast.TsBlock) -> Bool {
+  for s in block.stmts {
+    if stmt_has_unlabeled_break_or_continue(s) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_has_unlabeled_break_or_continue(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Break(None) | Continue(None) => true
+    // Labeled break/continue target the named statement, not the do-while,
+    // so they're safe to keep after the loop is removed.
+    Break(Some(_)) | Continue(Some(_)) => false
+    // Don't recurse into nested loop / switch bodies — their breaks/continues
+    // target that inner construct, not the outer do-while we're trying to remove.
+    While(_, _) | DoWhile(_, _) | For(_, _, _, _) | ForOf(_, _, _, _, _)
+    | ForAwaitOf(_, _, _, _, _) | ForIn(_, _, _, _, _) | Switch(_, _) => false
+    // Do recurse into non-loop nested blocks and conditionals.
+    If(_, then_b, else_b) => {
+      if block_has_unlabeled_break_or_continue(then_b) {
+        return true
+      }
+      match else_b {
+        Some(eb) => block_has_unlabeled_break_or_continue(eb)
+        None => false
+      }
+    }
+    Try(tb, _, cb, fb) => {
+      if block_has_unlabeled_break_or_continue(tb) {
+        return true
+      }
+      if match cb {
+        Some(b) => block_has_unlabeled_break_or_continue(b)
+        None => false
+      } {
+        return true
+      }
+      match fb {
+        Some(b) => block_has_unlabeled_break_or_continue(b)
+        None => false
+      }
+    }
+    Block(b) => block_has_unlabeled_break_or_continue(b)
+    Label(_, inner) => stmt_has_unlabeled_break_or_continue(inner)
+    _ => false
+  }
+}
+
+///|
 /// Returns `true` when `block` is a multi-declarator group (`let a,b;`
 /// parsed as `Block([Let, Let, …])`): 2+ statements all of the same
 /// declaration kind. Used to decide whether to unbox vs keep braces.
@@ -589,7 +646,21 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         out.push(While(cf, fold_block(body)))
       }
     }
-    DoWhile(c, body) => out.push(DoWhile(fold_expr(c), fold_block(body)))
+    DoWhile(c, body) => {
+      let cf = fold_expr(c)
+      let body_f = fold_block(body)
+      // `do { stmts } while(false)` → inline the body when the condition is
+      // statically falsy AND the body has no unlabeled `break`/`continue`
+      // (those jump to the do-while, not any outer loop, so removing the
+      // loop wrapper would change their target). Saves `do{}`+`while(!1)` bytes.
+      if is_js_falsy(cf) && not(block_has_unlabeled_break_or_continue(body_f)) {
+        for s in body_f.stmts {
+          out.push(s)
+        }
+      } else {
+        out.push(DoWhile(cf, body_f))
+      }
+    }
     With(c, body) => out.push(With(fold_expr(c), fold_block(body)))
     For(init, cond, update, body) => {
       let init_f = match init {

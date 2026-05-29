@@ -1464,3 +1464,28 @@ test "fold: function-decl const is NOT merged with adjacent const" {
   assert_true(out.contains("function"))
   assert_true(out.contains("1"))
 }
+
+///|
+test "fold: do { body } while(false) inlines body (no break/continue)" {
+  let out = fold_one("do { const x = 1; console.log(x); } while(false);\n")
+  // The do-while with a false condition and no breaks executes exactly once.
+  // It should be inlined to just the body statements.
+  assert_false(out.contains("do"), "expected do-while to be removed: \{out}")
+  assert_false(out.contains("while"), "expected while to be removed: \{out}")
+  assert_true(out.contains("console"))
+}
+
+///|
+test "fold: do { body; break; } while(false) keeps the loop (has break)" {
+  let out = fold_one("do { if (x) break; doSomething(); } while(false);\n")
+  // There is an unlabeled `break` — can't remove the do-while safely.
+  assert_true(out.contains("do") || out.contains("while"), "expected do-while to remain: \{out}")
+}
+
+///|
+test "fold: do { body } while(true) stays as a loop" {
+  // `while(true)` is truthy → do-while is not removed (it's an infinite loop).
+  let out = fold_one("do { doWork(); } while(true);\n")
+  // The `while(true)` emits as `while(!0)` or stays as do-while.
+  assert_true(out.contains("do") || out.contains("while"))
+}
