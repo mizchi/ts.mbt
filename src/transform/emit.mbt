@@ -1210,14 +1210,16 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     CallExpr(callee, _) | NewExpr(callee, _) => expr_leading_byte(callee)
     MethodCall(recv, _, _) | PropAccess(recv, _) | IndexAccess(recv, _) =>
       expr_leading_byte(recv)
-    // ArrowFunc's 4th field is `is_async`. When set, the arrow
-    // emits as `async (…) => …` — the leading byte is `'a'`, NOT
-    // `'('`. Reporting `'('` here lets `sep_after_word` skip the
-    // space after `return`/`throw`/`yield`, producing
-    // `returnasync (...) => …` which V8 parses as a call to the
-    // identifier `returnasync` with `(...)` as arrow params and
-    // throws `Malformed arrow function parameter list`.
-    ArrowFunc(_, _, _, is_async) => if is_async { 'a' } else { '(' }
+    // ArrowFunc: in minify mode a single simple non-async parameter
+    // is emitted without parens (`x=>body`), so the leading byte is
+    // the first char of the parameter name — which may be a letter.
+    // Returning `'?'` (→ `needs_space = true`) is safe for all cases:
+    //   - async arrow:      `return async(x)=>…`  (parens ok, `async` needs space anyway)
+    //   - bare-param arrow: `return x=>…`          (needs space before `x`)
+    //   - multi-param:      `return (x,y)=>…`      (extra space is harmless)
+    // The async single-param case (`async x=>`) also needs a space
+    // before the name, handled above by `'a'`.
+    ArrowFunc(_, _, _, is_async) => if is_async { 'a' } else { '?' }
     FuncExpr(_) => '?'
     _ => '?'
   }

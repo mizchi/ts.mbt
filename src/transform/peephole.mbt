@@ -609,7 +609,10 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
     Block(b) => Block(peep_block(b, ctx))
     NativeClassStmt(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: peep_block(f.body, ctx) })
+        Some(f) => Some({
+          ..f,
+          body: elim_ctor_void_inits(peep_block(f.body, ctx)),
+        })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
@@ -634,6 +637,80 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       )
     }
   }
+}
+
+///|
+/// Eliminate `this.X = void 0` initializers in a constructor body when
+/// the same property is unconditionally overwritten later at the top level
+/// of the same block. TypeScript class-field lowering emits these as a
+/// placeholder before the real assignment — they're dead writes.
+///
+/// Only removes an init when the later assignment is a plain top-level
+/// statement (not nested in a branch or loop), so the removal is safe.
+fn elim_ctor_void_inits(block : @ast.TsBlock) -> @ast.TsBlock {
+  // Collect the indices of top-level `this.X = void 0` statements.
+  let void_inits : Map[String, Int] = {}
+  for i, s in block.stmts {
+    match s {
+      PropAssign(
+        @ast.TsExpr::Var("this"),
+        p,
+        @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+      )
+      | Expr(
+        @ast.TsExpr::PropAssignExpr(
+          @ast.TsExpr::Var("this"),
+          p,
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+        ),
+      ) => void_inits[p] = i
+      _ => ()
+    }
+  }
+  if void_inits.is_empty() {
+    return block
+  }
+  // For each void-0 init, check if there is a later top-level unconditional
+  // assignment to the same property. If so, mark it for removal.
+  let removals : Map[Int, Bool] = {}
+  for p, init_idx in void_inits {
+    for j = init_idx + 1; j < block.stmts.length(); j = j + 1 {
+      let s = block.stmts[j]
+      let is_override = match s {
+        PropAssign(
+          @ast.TsExpr::Var("this"),
+          q,
+          @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+        ) => q == p // another void-0: update the "latest init" index instead
+        PropAssign(@ast.TsExpr::Var("this"), q, _) => q == p
+        Expr(
+          @ast.TsExpr::PropAssignExpr(
+            @ast.TsExpr::Var("this"),
+            q,
+            @ast.TsExpr::UnaryOp(@ast.TsUnaryOp::Void, _),
+          ),
+        ) => q == p
+        Expr(@ast.TsExpr::PropAssignExpr(@ast.TsExpr::Var("this"), q, _)) =>
+          q == p
+        _ => false
+      }
+      if is_override {
+        removals[init_idx] = true
+        break
+      }
+    }
+  }
+  if removals.is_empty() {
+    return block
+  }
+  let stmts : Array[@ast.TsStmt] = []
+  for i, s in block.stmts {
+    if removals.contains(i) {
+      continue
+    }
+    stmts.push(s)
+  }
+  { ..block, stmts }
 }
 
 ///|
@@ -1609,7 +1686,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     OptionalChain(inner) => OptionalChain(peep_expr(inner, ctx))
     NativeClassExpr(decl, ctor) => {
       let new_ctor = match ctor {
-        Some(f) => Some({ ..f, body: peep_block(f.body, ctx) })
+        Some(f) => Some({
+          ..f,
+          body: elim_ctor_void_inits(peep_block(f.body, ctx)),
+        })
         None => None
       }
       let new_methods : Array[@ast.TsClassMethodDecl] = []
