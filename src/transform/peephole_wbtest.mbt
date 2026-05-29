@@ -909,3 +909,9 @@ test "peephole: x == null ? void 0 : x.method(a) → x?.method(a)" {
   let out = minify_one("const r = x == null ? void 0 : x.method(a);")
   assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
 }
+
+///|
+test "peephole: if (c) { stmts } else {} drops empty else" {
+  let out = minify_one("if (x) { doA(); } else {}")
+  assert_false(out.contains("else"), msg="expected no else, got: \{out}")
+}

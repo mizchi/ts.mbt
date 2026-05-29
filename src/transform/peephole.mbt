@@ -43,6 +43,7 @@
 //   { ...{a,b} }           -> { a, b }     (flatten literal object spread)
 //   [...a,...[1,2],...b]   -> [...a,1,2,...b] (flatten literal array spread)
 //   x==null ? void 0 : x.p  -> x?.p         (flipped optional chain)
+//   if (c) {…} else {}     -> if (c) {…}   (drop empty else)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -258,6 +259,8 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
             else_block,
             None,
           )
+        // `if (c) { stmts } else {}` → `if (c) { stmts }` (drop empty else)
+        (_, Some({ stmts: [], .. })) => If(cp, tp, None)
         _ => If(cp, tp, ep)
       }
     }
