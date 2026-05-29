@@ -777,3 +777,10 @@ test "peephole: x ? y : x → x && y" {
   assert_true(out.contains("&&"), msg="expected &&, got: \{out}")
   assert_false(out.contains("?"), msg="expected no ternary, got: \{out}")
 }
+
+///|
+test "peephole: String(x) folds to \"\"+x" {
+  let out = minify_one("const s = String(x);")
+  assert_true(out.contains("\"\""), msg="expected empty string concat, got: \{out}")
+  assert_false(out.contains("String("), msg="expected no String(), got: \{out}")
+}

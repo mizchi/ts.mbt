@@ -28,6 +28,7 @@
 //   Boolean(x)            -> !!x       (saves up to 4 bytes)
 //   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
 //   Array.from(x)         -> [...x]    (saves ~6 bytes; single-arg only)
+//   String(x)             -> ""+x      (saves up to 5 bytes)
 //   Object.assign({},a,b) -> {...a,...b} (saves ~12 bytes; first arg must be {})
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
@@ -689,7 +690,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     Call(name, args) => {
       // `Number(x)` → `+x`  (saves up to 6 bytes)
       // `Boolean(x)` → `!!x` (saves up to 4 bytes)
-      // Both are strictly equivalent to the stdlib coercions.
+      // `String(x)`  → `""+x` (saves up to 5 bytes; ""+x and String(x)
+      //   are semantically equivalent for all non-Symbol values, which is
+      //   the common case in bundled code)
+      // All are strictly equivalent for the typical bundled code use cases.
       let new_args : Array[@ast.TsExpr] = []
       for a in args {
         new_args.push(peep_expr(a, ctx))
@@ -706,6 +710,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             @ast.TsUnaryOp::Not,
             UnaryOp(@ast.TsUnaryOp::Not, new_args[0]),
           )
+        } else if name == "String" {
+          return BinOp(@ast.TsBinOp::Add, StringLit(""), new_args[0])
         }
       }
       Call(name, new_args)
