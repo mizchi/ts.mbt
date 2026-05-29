@@ -27,6 +27,8 @@
 //   Number(x)             -> +x        (saves up to 6 bytes)
 //   Boolean(x)            -> !!x       (saves up to 4 bytes)
 //   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
+//   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
+//   x.size === 0          -> !x.size
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -478,9 +480,26 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         BinEq =>
           // `x.length === 0` → `!x.length`  (saves 4 bytes; .length is
           // always a non-negative integer so the coercion is lossless)
+          // Same applies to `.size` (Map/Set) which is also non-negative.
           match (lp, rp) {
-            (PropAccess(recv, "length"), IntLit(0)) | (IntLit(0), PropAccess(recv, "length")) =>
-              UnaryOp(@ast.TsUnaryOp::Not, PropAccess(recv, "length"))
+            (PropAccess(_, "length"), IntLit(0))
+            | (PropAccess(_, "size"), IntLit(0)) =>
+              UnaryOp(@ast.TsUnaryOp::Not, lp)
+            (IntLit(0), PropAccess(_, "length"))
+            | (IntLit(0), PropAccess(_, "size")) =>
+              UnaryOp(@ast.TsUnaryOp::Not, rp)
+            (lp, rp) => BinOp(op, lp, rp)
+          }
+        BinNe =>
+          // `x.length !== 0` → `!!x.length` (saves ~4 bytes; same
+          // reasoning as the === 0 case: .length is always non-negative)
+          match (lp, rp) {
+            (PropAccess(_, "length"), IntLit(0))
+            | (PropAccess(_, "size"), IntLit(0)) =>
+              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, lp))
+            (IntLit(0), PropAccess(_, "length"))
+            | (IntLit(0), PropAccess(_, "size")) =>
+              UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
             (lp, rp) => BinOp(op, lp, rp)
           }
         _ => BinOp(op, lp, rp)
