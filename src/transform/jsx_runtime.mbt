@@ -744,6 +744,28 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
     NonNull(inner) => NonNull(lower_jsx_in_expr(cfg, inner))
     OptionalChain(inner) => OptionalChain(lower_jsx_in_expr(cfg, inner))
     FuncExpr(_) => expr // function-expression bodies are not JSX-walked yet
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: lower_jsx_in_block(cfg, f.body) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(lower_jsx_in_block(cfg, b))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, lower_jsx_in_expr(cfg, sf.1)))
+      }
+      NativeClassExpr(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
