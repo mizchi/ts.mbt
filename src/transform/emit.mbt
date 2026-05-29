@@ -959,7 +959,8 @@ fn expr_leading_byte(expr : @ast.TsExpr) -> Char {
     TemplateLiteral(_, _) | TaggedTemplate(_, _, _, _) => '`'
     NumberLit(_) | IntLit(_) => '0'
     BigIntLit(_) => '0'
-    BoolLit(_) => '?'
+    // In minify mode `BoolLit` emits as `!0`/`!1`; in pretty mode as `true`/`false`.
+    BoolLit(_) => '!'
     NullLit => '?'
     UnaryOp(op, _) =>
       match op {
@@ -1397,11 +1398,23 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       e.write(s)
       e.write("n")
     }
-    BoolLit(b) => e.write(if b { "true" } else { "false" })
+    BoolLit(b) =>
+      // In minify mode: `true` → `!0` (saves 2 bytes), `false` → `!1` (saves 3 bytes).
+      if e.pretty {
+        e.write(if b { "true" } else { "false" })
+      } else {
+        e.write(if b { "!0" } else { "!1" })
+      }
     StringLit(s) => emit_string_literal(e, s)
     NullLit => e.write("null")
     ArrayHole => ()
-    Var(name) => e.write(name)
+    Var(name) =>
+      // In minify mode, emit `undefined` as `void 0` (6 vs 9 bytes).
+      if not(e.pretty) && name == "undefined" {
+        e.write("void 0")
+      } else {
+        e.write(name)
+      }
     BinOp(op, l, r) => {
       let prec = binop_precedence(op)
       // `??` cannot be mixed with `||` / `&&` without explicit
