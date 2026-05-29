@@ -28,6 +28,7 @@
 //   Boolean(x)            -> !!x       (saves up to 4 bytes)
 //   Math.pow(x, y)        -> x**y      (saves up to 8 bytes)
 //   Array.from(x)         -> [...x]    (saves ~6 bytes; single-arg only)
+//   Object.assign({},a,b) -> {...a,...b} (saves ~12 bytes; first arg must be {})
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -728,6 +729,33 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         match recv_p {
           Var("Array") =>
             return ArrayLit([Spread(new_args[0])])
+          _ => ()
+        }
+      }
+      // `Object.assign({}, a, b, …)` → `{...a, ...b, …}` (object spread).
+      // Only safe when the first argument is an empty object literal `{}` —
+      // that's the target TypeScript uses when it needs a fresh copy.
+      // Only applies when all source arguments are object literals or
+      // variable references (not arbitrary expressions that could have
+      // custom property descriptors).
+      if m == "assign" && new_args.length() >= 2 {
+        match (recv_p, new_args[0]) {
+          (Var("Object"), @ast.TsExpr::ObjectLit([])) => {
+            let entries : Array[(String, @ast.TsExpr)] = []
+            for i, a in new_args {
+              if i == 0 { continue }
+              match a {
+                ObjectLit(ents) =>
+                  for e in ents {
+                    entries.push(e)
+                  }
+                // Non-ObjectLit sources: spread them in. `("...", Spread(e))`
+                // is the sentinel that ObjectLit emit uses for `...e`.
+                _ => entries.push(("...", Spread(a)))
+              }
+            }
+            return ObjectLit(entries)
+          }
           _ => ()
         }
       }

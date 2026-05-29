@@ -742,3 +742,17 @@ test "peephole: Array.from(x) folds to [...x]" {
   assert_true(out.contains("[..."), msg="expected spread array, got: \{out}")
   assert_false(out.contains("Array.from"), msg="expected no Array.from, got: \{out}")
 }
+
+///|
+test "peephole: Object.assign({}, a) folds to {...a}" {
+  let out = minify_one("const r = Object.assign({}, src);")
+  assert_true(out.contains("{..."), msg="expected spread, got: \{out}")
+  assert_false(out.contains("Object.assign"), msg="expected no Object.assign, got: \{out}")
+}
+
+///|
+test "peephole: Object.assign({}, a, b) folds to {...a,...b}" {
+  let out = minify_one("const r = Object.assign({}, a, b);")
+  assert_true(out.contains("{..."), msg="expected spread, got: \{out}")
+  assert_false(out.contains("Object.assign"), msg="expected no Object.assign, got: \{out}")
+}
