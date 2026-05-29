@@ -741,8 +741,14 @@ fn collect_var_refs_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
   match stmt {
     Var(_, _, e) | Let(_, _, e) | Const(_, _, e) =>
       collect_var_refs_expr(e, out)
-    Assign(_, e) => collect_var_refs_expr(e, out)
-    CompoundAssign(_, _, e) => collect_var_refs_expr(e, out)
+    Assign(name, e) => {
+      out[name] = true
+      collect_var_refs_expr(e, out)
+    }
+    CompoundAssign(name, _, e) => {
+      out[name] = true
+      collect_var_refs_expr(e, out)
+    }
     IndexAssign(t, k, v) => {
       collect_var_refs_expr(t, out)
       collect_var_refs_expr(k, out)
@@ -828,10 +834,16 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_var_refs_expr(b, out)
     }
     UnaryOp(_, e) => collect_var_refs_expr(e, out)
-    Call(_, args) =>
+    Call(callee, args) => {
+      // `callee` is the bare identifier being called (`init(...)`).
+      // It is a free reference just like any other `Var`, so a nested
+      // function that calls an outer binding must mark its short name
+      // occupied or a local could shadow it.
+      out[callee] = true
       for a in args {
         collect_var_refs_expr(a, out)
       }
+    }
     CallExpr(f, args) => {
       collect_var_refs_expr(f, out)
       for a in args {
@@ -861,10 +873,12 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_var_refs_expr(k, out)
     }
     PropAccess(t, _) => collect_var_refs_expr(t, out)
-    New(_, args) =>
+    New(callee, args) => {
+      out[callee] = true
       for a in args {
         collect_var_refs_expr(a, out)
       }
+    }
     NewExpr(c, args) => {
       collect_var_refs_expr(c, out)
       for a in args {
@@ -877,7 +891,10 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
         collect_var_refs_expr(a, out)
       }
     }
-    AssignExpr(_, e) => collect_var_refs_expr(e, out)
+    AssignExpr(name, e) => {
+      out[name] = true
+      collect_var_refs_expr(e, out)
+    }
     AssignPattern(_, e) => collect_var_refs_expr(e, out)
     CompoundAssignExpr(t, _, v) => {
       collect_var_refs_expr(t, out)

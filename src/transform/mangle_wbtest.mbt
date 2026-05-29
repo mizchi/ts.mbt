@@ -161,6 +161,36 @@ test "mangle: nested function bodies get their own scope" {
 }
 
 ///|
+test "mangle: nested call to outer binding is not shadowed by inner local" {
+  // Regression: a nested function that *calls* an outer binding
+  // (`init(...)`) must reserve that binding's short name so an
+  // inner local can't reuse it. The callee of `Call(name, args)`
+  // is stored as a bare string, so the free-variable collector
+  // used to miss it — letting `inst` and `init` collapse onto the
+  // same short name and turning `init(inst)` into `inst(inst)`.
+  let cfg = ManglerConfig::default()
+  let src =
+    #|function make() {
+    #|  function init(x) { return x; }
+    #|  function build(arg) {
+    #|    const inst = arg;
+    #|    return init(inst);
+    #|  }
+    #|  return build;
+    #|}
+  match mangle_to_js(src, cfg) {
+    Ok(js) => {
+      // `build`'s local `inst` is renamed to `c`; the call to the
+      // captured outer `init` (renamed `a`) must stay `a(c)`. The
+      // buggy collapse produced `c(c)` (calling the local instead).
+      assert_true(js.contains("a(c)"))
+      assert_false(js.contains("c(c)"))
+    }
+    Err(e) => fail("\{e}")
+  }
+}
+
+///|
 test "mangle: explicit reserved set overrides default" {
   // `keepMe` should NOT be mangled because the caller asked for it
   // to be reserved.
