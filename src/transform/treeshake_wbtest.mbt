@@ -118,6 +118,26 @@ test "treeshake: template-literal initializer is pure and can be dropped" {
 }
 
 ///|
+test "treeshake: dead NativeClassStmt is dropped" {
+  // An unreferenced native class should be dropped when its initializer
+  // is pure (no side-effecting static fields or base constructor calls).
+  let src = (
+    #|class Dead { greet() { return "bye"; } }
+    #|console.log("hello");
+  )
+  let block = @parser.parse_block_from_source(src)
+  let out = treeshake_block(block)
+  let names : Map[String, Bool] = {}
+  for s in out.stmts {
+    match s {
+      @ast.TsStmt::NativeClassStmt(decl, _) => names[decl.name] = true
+      _ => ()
+    }
+  }
+  assert_false(names.contains("Dead"))
+}
+
+///|
 test "treeshake: live NativeClassStmt is retained" {
   // A named class that is instantiated must survive treeshaking.
   // Before the fix, NativeClassStmt name was extracted as "" in pass 4,
