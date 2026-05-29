@@ -163,9 +163,9 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       }
       Assign(name, rhs_p)
     }
-    Var(b, t, rhs) => Var(b, t, peep_expr(rhs, ctx))
-    Let(b, t, rhs) => Let(b, t, peep_expr(rhs, ctx))
-    Const(b, t, rhs) => Const(b, t, peep_expr(rhs, ctx))
+    Var(b, t, rhs) => Var(b, t, peep_decl_rhs(b, rhs, ctx))
+    Let(b, t, rhs) => Let(b, t, peep_decl_rhs(b, rhs, ctx))
+    Const(b, t, rhs) => Const(b, t, peep_decl_rhs(b, rhs, ctx))
     CompoundAssign(n, op, rhs) => {
       let rhs_p = peep_expr(rhs, ctx)
       // `x += 1` → `x++` (saves 3 bytes in statement position)
@@ -780,6 +780,48 @@ fn block_ends_with_terminator(b : @ast.TsBlock) -> Bool {
   match b.stmts[n - 1] {
     Return(_) | Throw(_) | Break(_) | Continue(_) => true
     _ => false
+  }
+}
+
+// Peephole a declaration RHS. Named bindings (`let foo = function(){}`) must
+// not be converted to ArrowFunc — `try_emit_function_decl` relies on FuncExpr
+// to emit a hoisted `function foo(){}` declaration.
+fn peep_decl_rhs(
+  binding : @ast.TsBinding,
+  rhs : @ast.TsExpr,
+  ctx : PeepCtx
+) -> @ast.TsExpr {
+  let name = match binding {
+    @ast.TsBinding::Ident(n) => n
+    _ => ""
+  }
+  let result = peep_expr(rhs, ctx)
+  if name != "" {
+    match result {
+      @ast.TsExpr::ArrowFunc(params, ret, body, is_async) => {
+        let block = match body {
+          @ast.TsArrowBody::ArrowExpr(expr) =>
+            @ast.TsBlock::{
+              stmts: [@ast.TsStmt::Return(Some(expr))],
+              stmt_positions: [],
+            }
+          @ast.TsArrowBody::ArrowBlock(blk) => blk
+        }
+        @ast.TsExpr::FuncExpr({
+          name: "",
+          type_params: [],
+          const_type_params: [],
+          params,
+          return_type: ret,
+          body: block,
+          is_generator: false,
+          is_async,
+        })
+      }
+      _ => result
+    }
+  } else {
+    result
   }
 }
 
