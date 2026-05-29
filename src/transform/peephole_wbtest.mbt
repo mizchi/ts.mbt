@@ -881,3 +881,10 @@ test "peephole: empty trailing default case is dropped from switch" {
   let out = minify_one("switch(x){ case 1: doA(); break; default: break; }")
   assert_false(out.contains("default"), msg="expected no default, got: \{out}")
 }
+
+///|
+test "peephole: {...{a:1}} flattens object spread of literal" {
+  let out = minify_one("const r = { ...{a: 1, b: 2} };")
+  assert_false(out.contains("..."), msg="expected no spread, got: \{out}")
+  assert_true(out.contains("a:"), msg="expected a: entry, got: \{out}")
+}

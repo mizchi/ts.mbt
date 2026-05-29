@@ -40,6 +40,7 @@
 //   x && x[k]              -> x?.[k]
 //   x && x.method(args)    -> x?.method(args)
 //   switch { …; default: } -> switch { … }  (drop empty trailing cases)
+//   { ...{a,b} }           -> { a, b }     (flatten literal object spread)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -890,7 +891,31 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     ObjectLit(entries) => {
       let new_entries : Array[(String, @ast.TsExpr)] = []
       for ent in entries {
-        new_entries.push((ent.0, peep_expr(ent.1, ctx)))
+        let val_p = peep_expr(ent.1, ctx)
+        // `{ ...{a:1, b:2} }` → `{ a:1, b:2 }` — flatten literal-object
+        // spreads in-place. The spread of a literal is semantically
+        // equivalent to inlining its entries in order.
+        // The parser uses `("@@spread:N", expr)` for object spread;
+        // JSX runtime uses `("...", Spread(expr))`. Handle both.
+        let is_spread_entry = ent.0 == "..." || ent.0.has_prefix("@@spread:")
+        if is_spread_entry {
+          match val_p {
+            @ast.TsExpr::ObjectLit(inner_ents) => {
+              for ie in inner_ents {
+                new_entries.push(ie)
+              }
+              continue
+            }
+            @ast.TsExpr::Spread(@ast.TsExpr::ObjectLit(inner_ents)) => {
+              for ie in inner_ents {
+                new_entries.push(ie)
+              }
+              continue
+            }
+            _ => ()
+          }
+        }
+        new_entries.push((ent.0, val_p))
       }
       ObjectLit(new_entries)
     }
