@@ -1726,3 +1726,55 @@ test "iife_class_lift: closure variable hoisted before class" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "iife_class_lift: closure var referencing class name emitted after class (#31)" {
+  // `var _proto = Foo.prototype` references Foo (the class being lifted).
+  // Class declarations are NOT hoisted, so this variable must be emitted
+  // AFTER the class definition, not before it (ExtraBefore would be wrong).
+  // The fix checks whether the variable's RHS mentions the class name.
+  let src = #|var Foo = (function() {
+  #|  function Foo() {}
+  #|  Foo.prototype.run = function() { return 1; };
+  #|  var _proto = Foo.prototype;
+  #|  _proto.stop = function() { return 2; };
+  #|  return Foo;
+  #|}());
+  #|export default Foo;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The class must be lifted (not left as an IIFE).
+      assert_true(out.js.contains("class Foo"))
+      // `var _proto = Foo.prototype` must come AFTER class Foo, so
+      // that `Foo` is already initialized when the assignment runs.
+      let class_pos = out.js.index_of("class Foo")
+      let proto_pos = out.js.index_of("_proto")
+      if class_pos >= 0 && proto_pos >= 0 {
+        assert_true(proto_pos > class_pos)
+      }
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "iife_class_lift: non-class-name PropAssign lifted as Extra (#31)" {
+  // Assignments to other objects' properties inside an IIFE should not
+  // abort the class lift — they're side effects that can run after the class.
+  let src = #|var registry = {};
+  #|var Foo = (function() {
+  #|  function Foo() {}
+  #|  Foo.prototype.run = function() { return 1; };
+  #|  registry.Foo = Foo;
+  #|  return Foo;
+  #|}());
+  #|export default Foo;
+  let files = vfs([("entry.ts", src)])
+  let opts = BundleOptions::default()
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => assert_true(out.js.contains("class Foo"))
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

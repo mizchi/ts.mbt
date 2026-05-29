@@ -251,17 +251,25 @@ fn classify_iife_body_stmt(
         ExtraBefore(stmt)
       }
     // Non-function let/const/var — a closure variable captured by the
-    // class methods (e.g. `var _count = 0`). Emit before the class.
-    Let(@ast.TsBinding::Ident(n), _, _)
-    | Const(@ast.TsBinding::Ident(n), _, _)
-    | Var(@ast.TsBinding::Ident(n), _, _) =>
+    // class methods (e.g. `var _count = 0`). Emit before the class
+    // when the RHS does not reference the class name itself. If the
+    // RHS references the class (e.g. `var _proto = ClassName.prototype`)
+    // we must emit it AFTER the class definition instead, since class
+    // declarations are not hoisted the way function declarations are.
+    Let(@ast.TsBinding::Ident(n), _, rhs)
+    | Const(@ast.TsBinding::Ident(n), _, rhs)
+    | Var(@ast.TsBinding::Ident(n), _, rhs) =>
       if n == class_name {
         Unknown // non-function assignment to the class name — bail
+      } else if expr_refs_class_name(rhs, class_name) {
+        Extra(stmt) // rhs uses class — must come after the class decl
       } else {
         ExtraBefore(stmt)
       }
     // `ClassName.prototype.METHOD = function METHOD() {…};` —
-    // instance method.
+    // instance method. For non-class-name receivers this is a side
+    // effect (prototype augmentation of another class) that is safe
+    // to emit after the class declaration.
     PropAssign(
       @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
       method_name,
@@ -270,20 +278,24 @@ fn classify_iife_body_stmt(
       if n == class_name {
         Method(method_decl_from_func(method_name, f, false))
       } else {
-        Unknown
+        Extra(stmt)
       }
     // `ClassName.METHOD = function METHOD() {…};` — static method.
     // Filtered to exclude metadata keys (`__super_proto`,
-    // `__brand__`, etc.).
+    // `__brand__`, etc.). For non-class-name receivers this is a
+    // side effect (function assigned to another object's property)
+    // that is safe to emit after the class declaration.
     PropAssign(@ast.TsExpr::Var(n), prop_name, @ast.TsExpr::FuncExpr(f)) =>
       if n == class_name && not(is_class_metadata_key(prop_name)) {
         StaticMethod(method_decl_from_func(prop_name, f, true))
       } else if n == class_name {
         Skipped
       } else {
-        Unknown
+        Extra(stmt)
       }
     // `ClassName.prototype.METHOD.<meta> = …;` — chained metadata.
+    // For non-class-name targets this is chained metadata on another
+    // class — safe to emit after the class as a side effect.
     PropAssign(
       @ast.TsExpr::PropAccess(
         @ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), "prototype"),
@@ -291,26 +303,32 @@ fn classify_iife_body_stmt(
       ),
       _,
       _
-    ) => if n == class_name { Skipped } else { Unknown }
+    ) => if n == class_name { Skipped } else { Extra(stmt) }
     // `ClassName.METHOD.<meta> = …;` (chained static metadata).
+    // When `n` is some other variable, the chained prop-assign is a
+    // side-effect statement that doesn't affect the class shape.
     PropAssign(@ast.TsExpr::PropAccess(@ast.TsExpr::Var(n), _), _, _) =>
       if n == class_name {
         Skipped
       } else {
-        Unknown
+        Extra(stmt)
       }
     // `ClassName.<meta> = …;` — top-level class metadata or static
     // field initializer. Metadata keys are silently dropped; non-function
     // static field assignments (`ClassName.version = "1.0"`) are moved
     // AFTER the class declaration as `Extra` so the lift still succeeds.
+    // Assignments to other variables' properties are also side effects
+    // that don't affect the class shape — emit them after the class.
     PropAssign(@ast.TsExpr::Var(n), prop_name, _) =>
       if n == class_name && is_class_metadata_key(prop_name) {
         Skipped
       } else if n == class_name {
         Extra(stmt)
       } else {
-        // Assignment to some other variable — ordering may matter.
-        Unknown
+        // Assignment to some other object — safe as a side effect after
+        // the class. Any ordering with respect to other Extra stmts is
+        // preserved since all Extra stmts are emitted in source order.
+        Extra(stmt)
       }
     // Prototype-chain setup for `extends` — skip all of these forms:
     // `ClassName.prototype.__proto__ = _Super.prototype`
@@ -416,6 +434,102 @@ fn is_class_metadata_key(name : String) -> Bool {
   name == "__super_proto" ||
   name == "__brand__" ||
   name.has_prefix("__private_brand__")
+}
+
+///|
+/// Returns `true` when `expr` contains a `Var(name)` reference at any
+/// depth. Used to detect closure-variable declarations whose RHS reads
+/// the class being lifted (e.g. `var _proto = ClassName.prototype`),
+/// which must be emitted AFTER the class declaration rather than
+/// before it.
+fn expr_refs_class_name(expr : @ast.TsExpr, name : String) -> Bool {
+  match expr {
+    @ast.TsExpr::Var(n) => n == name
+    @ast.TsExpr::PropAccess(recv, _) => expr_refs_class_name(recv, name)
+    @ast.TsExpr::IndexAccess(recv, idx) =>
+      expr_refs_class_name(recv, name) || expr_refs_class_name(idx, name)
+    @ast.TsExpr::Call(n, args) => {
+      if n == name {
+        return true
+      }
+      for a in args {
+        if expr_refs_class_name(a, name) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::CallExpr(callee, args) => {
+      if expr_refs_class_name(callee, name) {
+        return true
+      }
+      for a in args {
+        if expr_refs_class_name(a, name) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::New(n, args) => {
+      if n == name {
+        return true
+      }
+      for a in args {
+        if expr_refs_class_name(a, name) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::NewExpr(callee, args) => {
+      if expr_refs_class_name(callee, name) {
+        return true
+      }
+      for a in args {
+        if expr_refs_class_name(a, name) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::MethodCall(recv, _, args) => {
+      if expr_refs_class_name(recv, name) {
+        return true
+      }
+      for a in args {
+        if expr_refs_class_name(a, name) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::BinOp(_, l, r) =>
+      expr_refs_class_name(l, name) || expr_refs_class_name(r, name)
+    @ast.TsExpr::UnaryOp(_, inner) => expr_refs_class_name(inner, name)
+    @ast.TsExpr::Cond(c, t, e) =>
+      expr_refs_class_name(c, name) ||
+      expr_refs_class_name(t, name) ||
+      expr_refs_class_name(e, name)
+    @ast.TsExpr::ArrayLit(items) => {
+      for item in items {
+        if expr_refs_class_name(item, name) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::ObjectLit(entries) => {
+      for ent in entries {
+        if expr_refs_class_name(ent.1, name) {
+          return true
+        }
+      }
+      false
+    }
+    @ast.TsExpr::AssignExpr(_, rhs) => expr_refs_class_name(rhs, name)
+    @ast.TsExpr::Spread(inner) => expr_refs_class_name(inner, name)
+    _ => false
+  }
 }
 
 ///|
