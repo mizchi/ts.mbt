@@ -1519,3 +1519,37 @@ test "fold: !!x in return is NOT stripped (value semantics preserved)" {
   // since it coerces to a boolean while `x` might not be.
   assert_true(out.contains("!!"), "expected !! kept in return: \{out}")
 }
+
+///|
+test "fold: `call() && void 0;` in stmt position simplifies to `call()`" {
+  // The right operand `void 0` is pure (no side effects), so it can be
+  // dropped. In statement position `call() && void 0;` ≡ `call();`.
+  let out = fold_one("call() && void 0;\n")
+  assert_true(out.contains("call()"), "expected call() retained: \{out}")
+  assert_false(out.contains("&&"), "expected && dropped: \{out}")
+  assert_false(out.contains("void"), "expected void 0 dropped: \{out}")
+}
+
+///|
+test "fold: `call() || void 0;` in stmt position simplifies to `call()`" {
+  let out = fold_one("call() || void 0;\n")
+  assert_true(out.contains("call()"), "expected call() retained: \{out}")
+  assert_false(out.contains("||"), "expected || dropped: \{out}")
+}
+
+///|
+test "fold: `call() && 1;` in stmt position simplifies to `call()`" {
+  // `1` is a pure value — safe to drop the whole && rhs.
+  let out = fold_one("call() && 1;\n")
+  assert_true(out.contains("call()"), "expected call() retained: \{out}")
+  assert_false(out.contains("&&"), "expected && dropped: \{out}")
+}
+
+///|
+test "fold: `call() && sideEffect();` keeps both (rhs not pure)" {
+  // sideEffect() is a call — not pure, so the rhs must be kept.
+  let out = fold_one("call() && sideEffect();\n")
+  assert_true(out.contains("call()"), "expected call() retained: \{out}")
+  assert_true(out.contains("sideEffect()"), "expected sideEffect() retained: \{out}")
+  assert_true(out.contains("&&"), "expected && kept: \{out}")
+}

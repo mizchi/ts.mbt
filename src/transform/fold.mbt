@@ -622,6 +622,15 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
             if not(is_pure_value(inner)) {
               stack.push(inner)
             }
+          // `x && pure;` / `x || pure;` in statement position → `x;`.
+          // The right operand has no side effects so whether it runs or
+          // not makes no difference; only the left side needs to be kept.
+          // Also handles `pure && x;` / `pure || x;` when lhs is pure
+          // (the whole expression is pure and gets dropped entirely by
+          // the check below, which is already correct).
+          BinOp(@ast.TsBinOp::And, lhs, rhs) | BinOp(@ast.TsBinOp::Or, lhs, rhs)
+            if is_pure_value(rhs) =>
+            stack.push(lhs)
           _ => if not(is_pure_value(part)) { out.push(Expr(part)) }
         }
       }
