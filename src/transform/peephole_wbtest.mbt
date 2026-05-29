@@ -976,3 +976,27 @@ test "peephole: void f() as statement drops void" {
   assert_false(out.contains("void"), msg="expected no void, got: \{out}")
   assert_true(out.contains("sideEffect"), msg="expected sideEffect, got: \{out}")
 }
+
+///|
+test "peephole: typeof x === 'undefined' → x === void 0" {
+  let out = minify_one(#|const r = typeof x === "undefined";
+  )
+  assert_false(out.contains("typeof"), msg="expected no typeof, got: \{out}")
+  assert_true(out.contains("void 0"), msg="expected void 0, got: \{out}")
+}
+
+///|
+test "peephole: typeof x !== 'undefined' → x !== void 0" {
+  let out = minify_one(#|const r = typeof x !== "undefined";
+  )
+  assert_false(out.contains("typeof"), msg="expected no typeof, got: \{out}")
+  assert_true(out.contains("void 0"), msg="expected void 0, got: \{out}")
+}
+
+///|
+test "peephole: 'undefined' === typeof x (swapped form)" {
+  let out = minify_one(#|const r = "undefined" === typeof x;
+  )
+  assert_false(out.contains("typeof"), msg="expected no typeof, got: \{out}")
+  assert_true(out.contains("void 0"), msg="expected void 0, got: \{out}")
+}

@@ -59,6 +59,8 @@
 //   x ? x : y                     -> x || y          (saves 3 bytes)
 //   x ? y : x                     -> x && y          (saves 3 bytes)
 //   this.x=void 0;…;this.x=val  -> this.x=val  (drop TS class-field placeholders)
+//   typeof x === "undefined"    -> x === void 0  (saves ~9 bytes; combines with x==null rule)
+//   typeof x !== "undefined"    -> x !== void 0
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -620,6 +622,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             (IntLit(0), PropAccess(_, "length"))
             | (IntLit(0), PropAccess(_, "size")) =>
               UnaryOp(@ast.TsUnaryOp::Not, rp)
+            // `typeof x === "undefined"` → `x === void 0`  (saves ~9 bytes)
+            // `"undefined" === typeof x` → `x === void 0`
+            (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
+            | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
+              BinOp(@ast.TsBinOp::BinEq, x, UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)))
             (lp, rp) => BinOp(op, lp, rp)
           }
         BinNe =>
@@ -632,6 +639,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             (IntLit(0), PropAccess(_, "length"))
             | (IntLit(0), PropAccess(_, "size")) =>
               UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
+            // `typeof x !== "undefined"` → `x !== void 0`  (saves ~9 bytes)
+            (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
+            | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
+              BinOp(@ast.TsBinOp::BinNe, x, UnaryOp(@ast.TsUnaryOp::Void, IntLit(0)))
             (lp, rp) => BinOp(op, lp, rp)
           }
         // `x.length > 0` → `!!x.length`  (saves ~3 bytes; length is non-negative)
