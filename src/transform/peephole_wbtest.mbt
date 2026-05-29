@@ -1078,3 +1078,17 @@ test "emit: consecutive let declarations merged in minify mode" {
   assert_false(out.contains("let a") && out.contains("let b"), msg="expected merged let, got: \{out}")
   assert_true(out.contains("a") && out.contains("b") && out.contains("c"), msg="expected a,b,c, got: \{out}")
 }
+
+///|
+test "peephole: catch(e) where e unused → catch without binding" {
+  let out = minify_one("try { x(); } catch (e) { fallback(); }")
+  assert_false(out.contains("catch("), msg="expected no catch binding, got: \{out}")
+  assert_true(out.contains("catch"), msg="expected catch, got: \{out}")
+  assert_true(out.contains("fallback"), msg="expected fallback, got: \{out}")
+}
+
+///|
+test "peephole: catch(e) where e is used → binding kept" {
+  let out = minify_one("try { x(); } catch (e) { console.log(e); }")
+  assert_true(out.contains("catch("), msg="expected catch binding kept, got: \{out}")
+}

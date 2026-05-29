@@ -69,6 +69,7 @@
 //   Array.prototype.slice.call(x,0) -> [...x]   (saves ~24 bytes; 0-start copy)
 //   switch(x){case a:S}           -> if(x===a){S}   (enables further if→ternary folds)
 //   switch(x){case a:S default:T} -> if(x===a){S}else{T}
+//   catch(e){…not using e…}     -> catch{…}   (saves 3 bytes; ES2019 optional binding)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -424,19 +425,29 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         _ => Switch(ep, final_cases)
       }
     }
-    Try(b, bnd, cb, fb) =>
+    Try(b, bnd, cb, fb) => {
+      let cb_p = match cb {
+        Some(blk) => Some(peep_block(blk, ctx))
+        None => None
+      }
+      // `catch (e) { … }` → `catch { … }` when the binding variable is
+      // never referenced in the catch body (saves 3 bytes: `(e)`).
+      // ES2019 optional catch binding is supported by all modern runtimes.
+      let bnd_p = match (bnd, cb_p) {
+        (Some(@ast.TsBinding::Ident(name)), Some(catch_blk)) =>
+          if block_references_name(catch_blk, name) { bnd } else { None }
+        _ => bnd
+      }
       Try(
         peep_block(b, ctx),
-        bnd,
-        match cb {
-          Some(blk) => Some(peep_block(blk, ctx))
-          None => None
-        },
+        bnd_p,
+        cb_p,
         match fb {
           Some(blk) => Some(peep_block(blk, ctx))
           None => None
         },
       )
+    }
     Label(name, inner) => Label(name, peep_stmt(inner, ctx))
     Block(b) => Block(peep_block(b, ctx))
     NativeClassStmt(decl, ctor) => {
