@@ -1234,3 +1234,17 @@ test "peephole: double negation stripped from if condition" {
   assert_false(out.contains("!!"), msg="expected no !! in condition, got: \{out}")
   assert_true(out.contains("x&&"), msg="expected x&&, got: \{out}")
 }
+
+///|
+test "peephole: x.toString() → '' + x" {
+  let out = minify_one("const s = x.toString();")
+  assert_false(out.contains("toString"), msg="expected no toString(), got: \{out}")
+  assert_true(out.contains("\"\""), msg="expected empty string prefix, got: \{out}")
+}
+
+///|
+test "peephole: (0, fn)(args) indirect call → fn(args)" {
+  let out = minify_one("(0, myFn)(a, b);")
+  assert_false(out.contains("(0,"), msg="expected no (0, indirect call, got: \{out}")
+  assert_true(out.contains("myFn("), msg="expected direct call, got: \{out}")
+}

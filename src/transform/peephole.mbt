@@ -82,6 +82,8 @@
 //   x !== false                 -> x            (saves 7 bytes)
 //   Object.prototype.hasOwnProperty.call(o,k) -> Object.hasOwn(o,k)  (saves ~22 bytes; ES2022)
 //   x.hasOwnProperty(k)                       -> Object.hasOwn(x,k)  (saves ~8 bytes; ES2022)
+//   x.toString()                -> ""+x         (saves ~9 bytes; same as String(x))
+//   (0, fn)(args)               -> fn(args)      (saves 4 bytes; indirect call in ESM is redundant)
 //   "a" + "b"                -> "ab"           (string literal concatenation folding)
 //   0 + x / x + 0           -> x              (additive identity for integers)
 //   n + m / n - m / n * m   -> <result>       (integer literal arithmetic)
@@ -1111,7 +1113,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       for a in args {
         new_args.push(peep_expr(a, ctx))
       }
-      CallExpr(peep_expr(callee, ctx), new_args)
+      let callee_p = peep_expr(callee, ctx)
+      // `(0, fn)(args)` → `fn(args)`  (indirect call pattern; saves 4 bytes).
+      // TypeScript emits `(0, expr)()` to avoid binding `this` to the callee.
+      // In ES modules (which bundled code always produces), a bare `fn()`
+      // call already has `this=undefined`, so the indirection is redundant.
+      // Only fold when the indirected expression is a bare identifier.
+      let callee_p = match callee_p {
+        Seq(@ast.TsExpr::IntLit(0), @ast.TsExpr::Var(_) as fn_expr) => fn_expr
+        _ => callee_p
+      }
+      CallExpr(callee_p, new_args)
     }
     New(name, args) => {
       let new_args : Array[@ast.TsExpr] = []
@@ -1305,6 +1317,12 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // and non-zero-start forms can't be simplified to a spread.
       if m == "slice" && new_args.length() == 1 && exprs_eq(new_args[0], @ast.TsExpr::IntLit(0)) {
         return ArrayLit([Spread(recv_p)])
+      }
+      // `x.toString()` → `""+x`  (saves ~9 bytes; same as String(x)).
+      // Safe for all non-Symbol values which is the common case in bundled code.
+      // The no-arg form only — `.toString(radix)` must be preserved.
+      if m == "toString" && new_args.length() == 0 {
+        return BinOp(@ast.TsBinOp::Add, StringLit(""), recv_p)
       }
       MethodCall(recv_p, m, new_args)
     }
