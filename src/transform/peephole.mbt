@@ -500,6 +500,28 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
     Satisfies(inner, ty) => Satisfies(peep_expr(inner, ctx), ty)
     NonNull(inner) => NonNull(peep_expr(inner, ctx))
     OptionalChain(inner) => OptionalChain(peep_expr(inner, ctx))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) => Some({ ..f, body: peep_block(f.body, ctx) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(peep_block(b, ctx))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push((sf.0, peep_expr(sf.1, ctx)))
+      }
+      NativeClassExpr(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
