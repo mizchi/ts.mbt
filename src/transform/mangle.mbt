@@ -370,7 +370,28 @@ fn collect_props_in_stmt(stmt : @ast.TsStmt, out : Map[String, Bool]) -> Unit {
       collect_property_names(body, out)
     }
     Break(_) | Continue(_) | Empty | Debugger => ()
-    NativeClassStmt(_, _) => ()
+    NativeClassStmt(decl, ctor) => {
+      // Collect method names so they become candidates in the rename
+      // map and are also shortened when called via `this.method()`.
+      for m in decl.methods {
+        out[m.name] = true
+        match m.body {
+          Some(b) => collect_property_names(b, out)
+          None => ()
+        }
+      }
+      for p in decl.properties {
+        out[p.name] = true
+      }
+      for sf in decl.static_field_inits {
+        out[sf.0] = true
+        collect_props_in_expr(sf.1, out)
+      }
+      match ctor {
+        Some(f) => collect_property_names(f.body, out)
+        None => ()
+      }
+    }
   }
 }
 
@@ -516,6 +537,26 @@ fn collect_props_in_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
     | Satisfies(inner, _)
     | NonNull(inner)
     | OptionalChain(inner) => collect_props_in_expr(inner, out)
+    NativeClassExpr(decl, ctor) => {
+      for m in decl.methods {
+        out[m.name] = true
+        match m.body {
+          Some(b) => collect_property_names(b, out)
+          None => ()
+        }
+      }
+      for p in decl.properties {
+        out[p.name] = true
+      }
+      for sf in decl.static_field_inits {
+        out[sf.0] = true
+        collect_props_in_expr(sf.1, out)
+      }
+      match ctor {
+        Some(f) => collect_property_names(f.body, out)
+        None => ()
+      }
+    }
     _ => ()
   }
 }
