@@ -170,6 +170,25 @@ fn collect_sinks_stmt(
     }
     Label(_, inner) => collect_sinks_stmt(inner, externals, out)
     Block(b) => collect_sinks_block(b, externals, out)
+    NativeClassStmt(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_sinks_expr(b, externals, out)
+        None => ()
+      }
+      match ctor {
+        Some(f) => collect_sinks_block(f.body, externals, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_sinks_block(b, externals, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_sinks_expr(sf.1, externals, out)
+      }
+    }
     _ => ()
   }
 }
@@ -363,6 +382,10 @@ fn collect_sinks_expr(
         collect_sinks_expr(e, externals, out)
       }
     NativeClassExpr(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => collect_sinks_expr(b, externals, out)
+        None => ()
+      }
       match ctor {
         Some(f) => collect_sinks_block(f.body, externals, out)
         None => ()

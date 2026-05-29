@@ -618,8 +618,12 @@ pub fn lower_jsx_in_stmt(cfg : JsxConfig, stmt : @ast.TsStmt) -> @ast.TsStmt {
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, lower_jsx_in_expr(cfg, sf.1)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(lower_jsx_in_expr(cfg, b))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }
@@ -761,8 +765,12 @@ pub fn lower_jsx_in_expr(cfg : JsxConfig, expr : @ast.TsExpr) -> @ast.TsExpr {
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, lower_jsx_in_expr(cfg, sf.1)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(lower_jsx_in_expr(cfg, b))
+        None => None
+      }
       NativeClassExpr(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }
