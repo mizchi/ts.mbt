@@ -93,3 +93,26 @@ test "treeshake + mangle compose into a smaller bundle than mangle alone" {
   // Tree-shake should remove the three dead declarations entirely.
   assert_true(b.js.length() < a.js.length())
 }
+
+///|
+test "treeshake: template-literal initializer is pure and can be dropped" {
+  let files = ts_vfs([
+    (
+      "entry.ts",
+      (
+        #|const prefix = "hello";
+        #|const unused_msg = `${prefix}, world!`;
+        #|console.log(prefix);
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default().with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // `unused_msg` binding should be dropped since it's never referenced.
+      assert_false(out.js.contains("unused_msg"))
+      assert_true(out.js.contains("hello"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}

@@ -200,6 +200,22 @@ fn is_pure_init(expr : @ast.TsExpr) -> Bool {
     // `/* @__PURE__ */ f(...)` — the user asserted purity, so
     // treeshake can drop the binding when the result is unused.
     PureCall(_) => true
+    // Template literals are pure when every interpolated expression
+    // is pure (the tag-less form just concatenates strings).
+    TemplateLiteral(_, exprs) => {
+      for e in exprs {
+        if not(is_pure_init(e)) {
+          return false
+        }
+      }
+      true
+    }
+    // TypeScript cast / non-null / optional-chain wrappers don't
+    // introduce side effects on their own.
+    As(inner, _) | Satisfies(inner, _) | NonNull(inner) | OptionalChain(inner) =>
+      is_pure_init(inner)
+    // Spread of a pure value is itself pure (used in array literals).
+    Spread(inner) => is_pure_init(inner)
     _ => false
   }
 }
