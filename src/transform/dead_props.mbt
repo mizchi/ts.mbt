@@ -324,6 +324,21 @@ fn collect_read_property_names_expr(
       for e in exprs {
         collect_read_property_names_expr(e, out)
       }
+    NativeClassExpr(decl, ctor) => {
+      match ctor {
+        Some(f) => collect_read_property_names_block(f.body, out)
+        None => ()
+      }
+      for m in decl.methods {
+        match m.body {
+          Some(b) => collect_read_property_names_block(b, out)
+          None => ()
+        }
+      }
+      for sf in decl.static_field_inits {
+        collect_read_property_names_expr(sf.1, out)
+      }
+    }
     _ => ()
   }
 }
@@ -677,6 +692,31 @@ fn drop_dead_props_expr(
     NonNull(inner) => NonNull(drop_dead_props_expr(inner, reserved, read_props))
     OptionalChain(inner) =>
       OptionalChain(drop_dead_props_expr(inner, reserved, read_props))
+    NativeClassExpr(decl, ctor) => {
+      let new_ctor = match ctor {
+        Some(f) =>
+          Some({ ..f, body: drop_dead_props_block(f.body, reserved, read_props) })
+        None => None
+      }
+      let new_methods : Array[@ast.TsClassMethodDecl] = []
+      for m in decl.methods {
+        let new_body = match m.body {
+          Some(b) => Some(drop_dead_props_block(b, reserved, read_props))
+          None => None
+        }
+        new_methods.push({ ..m, body: new_body })
+      }
+      let new_static_fields : Array[(String, @ast.TsExpr)] = []
+      for sf in decl.static_field_inits {
+        new_static_fields.push(
+          (sf.0, drop_dead_props_expr(sf.1, reserved, read_props)),
+        )
+      }
+      NativeClassExpr(
+        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        new_ctor,
+      )
+    }
     _ => expr
   }
 }
