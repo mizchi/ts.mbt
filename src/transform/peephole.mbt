@@ -74,6 +74,7 @@
 //   switch(x){case a:S}           -> if(x===a){S}   (enables further if→ternary folds)
 //   switch(x){case a:S default:T} -> if(x===a){S}else{T}
 //   catch(e){…not using e…}     -> catch{…}   (saves 3 bytes; ES2019 optional binding)
+//   if(x==null){x=y}            -> x??=y       (saves ~10 bytes; ES2021 CoalesceAssign)
 //
 // The compound-assign rewrite touches both expression-level
 // `AssignExpr` and statement-level `Assign`. The `undefined ->
@@ -279,6 +280,22 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         // `if (c) expr_a; else expr_b;` → `c ? expr_a : expr_b;`
         ([Expr(a)], Some({ stmts: [Expr(b)], .. })) =>
           Expr(peep_expr(Cond(cp, a, b), ctx))
+        // `if (x == null) { x = y; }` → `x ??= y` (saves ~10 bytes; ES2021)
+        ([Expr(@ast.TsExpr::AssignExpr(n, v))], None) => {
+          let coalesce_assign : @ast.TsStmt? = match cp {
+            BinOp(@ast.TsBinOp::AbstractEq, @ast.TsExpr::Var(check_n), NullLit) =>
+              if check_n == n {
+                Some(@ast.TsStmt::Expr(@ast.TsExpr::CompoundAssignExpr(@ast.TsExpr::Var(n), @ast.TsCompoundOp::CoalesceAssign, v)))
+              } else {
+                None
+              }
+            _ => None
+          }
+          match coalesce_assign {
+            Some(s) => s
+            None => @ast.TsStmt::Expr(peep_expr(BinOp(@ast.TsBinOp::And, cp, @ast.TsExpr::AssignExpr(n, v)), ctx))
+          }
+        }
         // `if (c) expr;` (no else) → `c && expr;` (short-circuit)
         ([Expr(a)], None) =>
           Expr(peep_expr(BinOp(@ast.TsBinOp::And, cp, a), ctx))

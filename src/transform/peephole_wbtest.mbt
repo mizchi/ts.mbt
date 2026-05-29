@@ -1141,3 +1141,10 @@ test "peephole: nested if(c){if(d){...}} → if(c&&d){...}" {
   }
   assert_true(if_count <= 1, msg="expected at most one if, got: \{out}")
 }
+
+///|
+test "peephole: if(x==null){x=y} → x??=y" {
+  let out = minify_one("if (x == null) { x = y; }")
+  assert_true(out.contains("??="), msg="expected ??= operator, got: \{out}")
+  assert_false(out.contains("if"), msg="expected no if, got: \{out}")
+}
