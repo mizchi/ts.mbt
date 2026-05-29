@@ -615,9 +615,18 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, fold_expr(sf.1)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(fold_expr(b))
+        None => None
+      }
       out.push(
         NativeClassStmt(
-          { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+          {
+            ..decl,
+            base_expr: new_base_expr,
+            methods: new_methods,
+            static_field_inits: new_static_fields,
+          },
           new_ctor,
         ),
       )
@@ -1249,8 +1258,12 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, fold_expr(sf.1)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(fold_expr(b))
+        None => None
+      }
       NativeClassExpr(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        { ..decl, base_expr: new_base_expr, methods: new_methods, static_field_inits: new_static_fields },
         new_ctor,
       )
     }
