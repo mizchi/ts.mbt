@@ -1895,6 +1895,36 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             e.space()
             emit_func_body(e, f.body)
           }
+          // Peephole may convert a FuncExpr getter/setter body to an ArrowFunc
+          // (e.g. `get exports() { return a }` → `@@get:exports: () => a`).
+          // Must still emit as `get exports() { return a }` — plain object
+          // key syntax `{"@@get:exports": …}` doesn't wire up the accessor
+          // and CJS `module.exports = X` interop silently breaks.
+          (key, ArrowFunc(params, _, body, _)) if key.has_prefix("@@get:") ||
+            key.has_prefix("@@set:") => {
+            let accessor = if key.has_prefix("@@get:") { "get" } else { "set" }
+            let real_name = key.substring(start=6, end=key.length()).to_string()
+            e.write(accessor)
+            e.write(" ")
+            emit_object_key(e, real_name)
+            e.write("(")
+            emit_runtime_params(e, params)
+            e.write(")")
+            e.space()
+            match body {
+              @ast.TsArrowBody::ArrowExpr(expr) => {
+                e.write("{")
+                e.space()
+                e.write("return")
+                e.space()
+                emit_expr(e, expr, 2)
+                e.semi()
+                e.space()
+                e.write("}")
+              }
+              @ast.TsArrowBody::ArrowBlock(blk) => emit_block(e, blk)
+            }
+          }
           (key, FuncExpr(f)) if f.name == key && key != "" => {
             // Method shorthand: `key(args) {...}`. The parser stores
             // method shorthand as `(key, FuncExpr {name: key, ...})`.

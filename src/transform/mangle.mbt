@@ -709,10 +709,14 @@ fn ScopeFrame::function_child(
   // param allocator skips it.
   let used : Map[String, Bool] = {}
   for name, _ in refs {
-    let short = parent.resolve(name)
-    if short != name {
-      used[short] = true
-    }
+    // Mark the resolved short name (even when unchanged) so inner-scope
+    // param allocation never shadows an outer free variable. Without this,
+    // a var like `a` that the parent kept as `a` is NOT added to `used`,
+    // and a nested function's first parameter gets renamed to `a`, silently
+    // shadowing the captured outer `a`. E.g. Effect's `dual/case 3`:
+    //   function(a, c, d) { ... function(a) { b(a, a, c) } } // BUG
+    // The inner param `a` shadows outer `a`; `b(a,a,c)` passes self twice.
+    used[parent.resolve(name)] = true
   }
   {
     parent: Some(parent),
@@ -1389,42 +1393,13 @@ fn rename_stmt(
       // the function-level rename.
       Var(rename_binding_lhs(b, scope), t, rename_expr(init, scope))
     Let(b, t, init) =>
-      // Named-function-declaration form: `let g = function() { … }`
-      // After renaming the binding to e.g. `g`, the FuncExpr's internal
-      // `name` must also be updated to `g` — otherwise it stays `""` (or
-      // the original source name) and downstream peephole sees an
-      // anonymous FuncExpr, converts it to an arrow, and the emit merges
-      // it into a multi-decl sequence (`let a=1,g=()=>…`), stripping the
-      // hoistable function-declaration form and causing a TDZ.
-      match (rename_binding_decl(b, scope, reserved), init) {
-        (@ast.TsBinding::Ident(new_name), @ast.TsExpr::FuncExpr(_)) =>
-          Let(
-            @ast.TsBinding::Ident(new_name),
-            t,
-            match rename_expr(init, scope) {
-              @ast.TsExpr::FuncExpr(rf) =>
-                @ast.TsExpr::FuncExpr({ ..rf, name: new_name })
-              renamed => renamed
-            },
-          )
-        (new_b, _) => Let(new_b, t, rename_expr(init, scope))
-      }
+      Let(rename_binding_decl(b, scope, reserved), t, rename_expr(init, scope))
     Const(b, t, init) =>
-      // Same FuncExpr-name preservation as the Let branch above.
-      match (rename_binding_decl(b, scope, reserved), init) {
-        (@ast.TsBinding::Ident(new_name), @ast.TsExpr::FuncExpr(_)) =>
-          Const(
-            @ast.TsBinding::Ident(new_name),
-            t,
-            match rename_expr(init, scope) {
-              @ast.TsExpr::FuncExpr(rf) =>
-                @ast.TsExpr::FuncExpr({ ..rf, name: new_name })
-              renamed => renamed
-            },
-          )
-        (new_b, _) =>
-          Const(new_b, t, rename_expr(init, scope))
-      }
+      Const(
+        rename_binding_decl(b, scope, reserved),
+        t,
+        rename_expr(init, scope),
+      )
     Expr(e) => Expr(rename_expr(e, scope))
     Return(opt) =>
       match opt {
@@ -1676,20 +1651,33 @@ fn rename_block_inline_in(
   // binding and split the var name into two renames (e.g. the var
   // body becomes `var a = 1` but post-block `return counter` looks
   // up the function-frame name `b` instead).
-  for s in block.stmts {
-    match s {
-      Let(@ast.TsBinding::Ident(name), _, _)
-      | Const(@ast.TsBinding::Ident(name), _, _) =>
-        if not(scope.renames.contains(name)) {
-          let _ = scope.bind(name, reserved)
-        }
-      NativeClassStmt(decl, _) =>
-        if decl.name != "" && not(scope.renames.contains(decl.name)) {
-          let _ = scope.bind(decl.name, reserved)
-        }
-      _ => ()
+  fn prebind_stmts(stmts : Array[@ast.TsStmt]) -> Unit {
+    for s in stmts {
+      match s {
+        Let(@ast.TsBinding::Ident(name), _, _)
+        | Const(@ast.TsBinding::Ident(name), _, _) =>
+          if not(scope.renames.contains(name)) {
+            let _ = scope.bind(name, reserved)
+          }
+        NativeClassStmt(decl, _) =>
+          if decl.name != "" && not(scope.renames.contains(decl.name)) {
+            let _ = scope.bind(decl.name, reserved)
+          }
+        // Synthetic multi-decl blocks (e.g. `let a = 1, b = 2`) are wrapped
+        // in a Block whose stmts are all the same lexical-decl kind. Recurse
+        // so the enclosed names are pre-bound in the outer scope before the
+        // body walk begins — otherwise a closure defined earlier in the block
+        // captures the unshortened name while the declaration gets a short
+        // name, producing a ReferenceError at runtime.
+        Block(b) =>
+          if is_synthetic_multi_decl_block(b) {
+            prebind_stmts(b.stmts)
+          }
+        _ => ()
+      }
     }
   }
+  prebind_stmts(block.stmts)
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(rename_stmt(s, scope, reserved))
