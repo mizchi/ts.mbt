@@ -240,6 +240,10 @@ fn scan_stmt_for_unsafe_uses(
         scan_stmt_for_unsafe_uses(s, candidates)
       }
     NativeClassStmt(decl, ctor) => {
+      match decl.base_expr {
+        Some(b) => scan_expr_for_unsafe_uses(b, candidates)
+        None => ()
+      }
       match ctor {
         Some(f) =>
           for s in f.body.stmts {
@@ -644,8 +648,17 @@ fn rewrite_stmt(
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, rewrite_expr(sf.1, table)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(rewrite_expr(b, table))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }

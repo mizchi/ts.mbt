@@ -333,8 +333,17 @@ fn switch_fold_stmt(stmt : @ast.TsStmt, table : SwitchFoldTable) -> @ast.TsStmt 
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, switch_fold_expr(sf.1, table)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(switch_fold_expr(b, table))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }

@@ -143,6 +143,10 @@ fn stmt_needs_type_fold(stmt : @ast.TsStmt) -> Bool {
     Label(_, inner) => stmt_needs_type_fold(inner)
     Block(b) => block_needs_type_fold(b)
     NativeClassStmt(decl, ctor_body) => {
+      match decl.base_expr {
+        Some(b) => if expr_needs_type_fold(b) { return true }
+        None => ()
+      }
       for m in decl.methods {
         match m.body {
           Some(b) => if block_needs_type_fold(b) { return true }
@@ -462,8 +466,17 @@ fn type_fold_stmt(
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, type_fold_expr(sf.1, scope)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(type_fold_expr(b, scope))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }

@@ -243,8 +243,17 @@ fn inline_predicates_stmt(
       for sf in decl.static_field_inits {
         new_static_fields.push((sf.0, inline_predicates_expr(sf.1, table)))
       }
+      let new_base_expr = match decl.base_expr {
+        Some(b) => Some(inline_predicates_expr(b, table))
+        None => None
+      }
       NativeClassStmt(
-        { ..decl, methods: new_methods, static_field_inits: new_static_fields },
+        {
+          ..decl,
+          base_expr: new_base_expr,
+          methods: new_methods,
+          static_field_inits: new_static_fields,
+        },
         new_ctor,
       )
     }
