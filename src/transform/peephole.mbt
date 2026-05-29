@@ -42,6 +42,7 @@
 //   switch { …; default: } -> switch { … }  (drop empty trailing cases)
 //   { ...{a,b} }           -> { a, b }     (flatten literal object spread)
 //   [...a,...[1,2],...b]   -> [...a,1,2,...b] (flatten literal array spread)
+//   x==null ? void 0 : x.p  -> x?.p         (flipped optional chain)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -712,13 +713,33 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               }
             }
             // `x == null ? y : x` → `x ?? y` (flipped nullish coalescing).
+            // `x == null ? void 0 : x.prop` → `x?.prop` (flipped optional chain).
+            // `x == null ? void 0 : x[key]` → `x?.[key]`
+            // `x == null ? void 0 : x.method(args)` → `x?.method(args)`
             // TypeScript sometimes emits the eq-form for null-default patterns.
-            BinOp(@ast.TsBinOp::AbstractEq, check_x, NullLit) =>
+            BinOp(@ast.TsBinOp::AbstractEq, check_x, NullLit) => {
+              let is_void_then = match t_val {
+                UnaryOp(@ast.TsUnaryOp::Void, _) => true
+                Var("undefined") if not(ctx.undefined_shadowed) => true
+                _ => false
+              }
               if exprs_eq(check_x, e_val) {
                 BinOp(@ast.TsBinOp::Coalesce, check_x, t_val)
+              } else if is_void_then {
+                // `x == null ? void 0 : x.prop` → `x?.prop`
+                match e_val {
+                  PropAccess(recv, prop) if exprs_eq(check_x, recv) =>
+                    OptionalChain(PropAccess(check_x, prop))
+                  IndexAccess(recv, idx) if exprs_eq(check_x, recv) =>
+                    OptionalChain(IndexAccess(check_x, idx))
+                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
+                    OptionalChain(MethodCall(check_x, method, args))
+                  _ => Cond(cp, t_val, e_val)
+                }
               } else {
                 Cond(cp, t_val, e_val)
               }
+            }
             // `c ? (x = a) : (x = b)` → `x = c ? a : b`.
             // Hoists the assignment outside the ternary; saves `x=` bytes
             // in the then-branch and enables further folding on the condition.

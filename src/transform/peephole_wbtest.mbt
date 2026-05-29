@@ -896,3 +896,16 @@ test "peephole: [...a, ...[1,2], ...b] flattens literal array spread" {
   assert_true(out.contains("1,2"), msg="expected 1,2 inlined, got: \{out}")
   assert_false(out.contains("...["), msg="expected no ...[, got: \{out}")
 }
+
+///|
+test "peephole: x == null ? void 0 : x.prop → x?.prop (flipped optional chain)" {
+  let out = minify_one("const r = x == null ? void 0 : x.prop;")
+  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+  assert_false(out.contains("==null"), msg="expected no ==null, got: \{out}")
+}
+
+///|
+test "peephole: x == null ? void 0 : x.method(a) → x?.method(a)" {
+  let out = minify_one("const r = x == null ? void 0 : x.method(a);")
+  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+}
