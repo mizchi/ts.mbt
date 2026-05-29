@@ -749,14 +749,44 @@ fn is_useful_type(ty : @ast.TsType) -> Bool {
 }
 
 ///|
-/// Infer a primitive TsType from an RHS literal expression.
-/// Returns `Any` for non-literals so callers can fall through.
+/// Infer a primitive TsType from an RHS expression.
+/// Returns `Any` when the type can't be determined statically.
 fn infer_type_from_literal(expr : @ast.TsExpr) -> @ast.TsType {
   match expr {
     IntLit(_) | NumberLit(_) => @ast.TsType::Number
     StringLit(_) => @ast.TsType::String_
     BoolLit(_) => @ast.TsType::Boolean
     BigIntLit(_) => @ast.TsType::BigInt
+    // `typeof x` always produces a string.
+    UnaryOp(@ast.TsUnaryOp::Typeof, _) => @ast.TsType::String_
+    // `.length` on arrays/strings is always a number.
+    PropAccess(_, "length") => @ast.TsType::Number
+    // `.indexOf(...)` / `.lastIndexOf(...)` / `.findIndex(...)` always return number.
+    MethodCall(_, "indexOf", _)
+    | MethodCall(_, "lastIndexOf", _)
+    | MethodCall(_, "findIndex", _)
+    | MethodCall(_, "search", _) => @ast.TsType::Number
+    // `.toString()` / `.toUpperCase()` etc. always return string.
+    MethodCall(_, "toString", _)
+    | MethodCall(_, "toUpperCase", _)
+    | MethodCall(_, "toLowerCase", _)
+    | MethodCall(_, "trim", _)
+    | MethodCall(_, "trimStart", _)
+    | MethodCall(_, "trimEnd", _)
+    | MethodCall(_, "slice", _)
+    | MethodCall(_, "substring", _)
+    | MethodCall(_, "replace", _)
+    | MethodCall(_, "replaceAll", _) => @ast.TsType::String_
+    // Arithmetic operators on two numbers yield number.
+    BinOp(@ast.TsBinOp::Add, l, r)
+    | BinOp(@ast.TsBinOp::Sub, l, r)
+    | BinOp(@ast.TsBinOp::Mul, l, r)
+    | BinOp(@ast.TsBinOp::Div, l, r)
+    | BinOp(@ast.TsBinOp::Mod, l, r) =>
+      match (infer_type_from_literal(l), infer_type_from_literal(r)) {
+        (@ast.TsType::Number, @ast.TsType::Number) => @ast.TsType::Number
+        _ => @ast.TsType::Any
+      }
     _ => @ast.TsType::Any
   }
 }

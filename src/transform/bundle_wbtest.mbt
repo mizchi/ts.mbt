@@ -2251,3 +2251,48 @@ test "type_fold: JSDoc-typed param enables typeof folding in untyped JS" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "type_fold: typeof(expr) RHS infers String_ so typeof check folds" {
+  // `const t = typeof x` always has type String. A downstream
+  // `typeof t === "string"` should therefore fold to true.
+  let src =
+    #|const x: number = 42;
+    #|const t = typeof x;
+    #|if (typeof t === "string") {
+    #|  console.log("yes");
+    #|} else {
+    #|  console.log("no");
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts_fold = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts_fold) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "type_fold: .length RHS infers Number so typeof check folds" {
+  // `const n = arr.length` always has type Number.
+  let src =
+    #|const arr = [1, 2, 3];
+    #|const n = arr.length;
+    #|if (typeof n === "number") {
+    #|  console.log("yes");
+    #|} else {
+    #|  console.log("no");
+    #|}
+  let files = vfs([("entry.ts", src)])
+  let opts_fold = BundleOptions::default().with_fold(true)
+  match bundle_modules(files, "entry.ts", opts_fold) {
+    Ok(out) => {
+      assert_true(out.js.contains("yes"))
+      assert_false(out.js.contains("no"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
