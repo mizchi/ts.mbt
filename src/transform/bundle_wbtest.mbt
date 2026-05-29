@@ -2136,3 +2136,48 @@ test "bundler: export * from two sources both resolve" {
     Err(e) => fail("bundle error: \{e}")
   }
 }
+
+///|
+test "bundler: export * as ns synthesizes namespace object for downstream import" {
+  // Issue #33: `export * as util from "./util"` must synthesize a real
+  // `const util = { x: resolved_x, … }` binding so that
+  // `import { util } from "./core"; util.x` resolves correctly.
+  let files = vfs([
+    ("util.ts", "export const x = 1;\nexport const y = 2;\n"),
+    ("core.ts", "export * as util from \"./util\";\n"),
+    ("entry.ts", "import { util } from \"./core\";\nconsole.log(util.x);\n"),
+  ])
+  match bundle_modules(files, "entry.ts", BundleOptions::default()) {
+    Ok(out) => {
+      // The namespace object must appear.
+      assert_true(out.js.contains("x: x") || out.js.contains("x:x"))
+      // util.x access must be present.
+      assert_true(out.js.contains("util.x"))
+      assert_false(out.js.contains("@@"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
+test "bundler: export * as ns treeshake drops unused top-level decls" {
+  // When only util.x is used, the synthesized namespace object still
+  // references y, so y is kept. But an unrelated unused top-level
+  // binding (dead) that doesn't feed into the namespace must be dropped.
+  let files = vfs([
+    ("util.ts", "export const x = 1;\nexport const y = 2;\n"),
+    ("core.ts", "export * as util from \"./util\";\n"),
+    ("entry.ts",
+      "import { util } from \"./core\";\nconst dead = 99;\nconsole.log(util.x);\n"),
+  ])
+  let opts = BundleOptions::default().with_fold(true).with_treeshake(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      assert_true(out.js.contains("1"))
+      // dead is unreachable and must be dropped.
+      assert_false(out.js.contains("dead"))
+      assert_false(out.js.contains("99"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
