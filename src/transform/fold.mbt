@@ -700,6 +700,11 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
           StringLit("function")
         (Typeof, ArrayLit(_)) | (Typeof, ObjectLit(_)) => StringLit("object")
         (Typeof, BigIntLit(_)) => StringLit("bigint")
+        // Tag-less template literals always produce a string.
+        (Typeof, TemplateLiteral(_, _)) => StringLit("string")
+        // `new` always returns an object; class expression is a function.
+        (Typeof, New(_, _)) | (Typeof, NewExpr(_, _)) => StringLit("object")
+        (Typeof, NativeClassExpr(_, _)) => StringLit("function")
         _ => UnaryOp(op, inner_f)
       }
     }
@@ -2771,6 +2776,8 @@ fn is_js_truthy(expr : @ast.TsExpr) -> Bool {
     FuncExpr(_) | ArrowFunc(_, _, _, _) => true
     ArrayLit(_) | ObjectLit(_) => true
     BigIntLit(_) => true
+    // Class expressions evaluate to a function object — always truthy.
+    NativeClassExpr(_, _) => true
     _ => false
   }
 }
