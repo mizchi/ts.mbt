@@ -840,3 +840,10 @@ test "peephole: [].concat([1,2], [3,4]) flattens to [1,2,3,4]" {
   assert_true(out.contains("1,2,3,4"), msg="expected flattened array, got: \{out}")
   assert_false(out.contains("concat"), msg="expected no concat, got: \{out}")
 }
+
+///|
+test "peephole: !!x ? a : b strips double negation in condition" {
+  let out = minify_one("const r = !!x ? a : b;")
+  assert_false(out.contains("!!"), msg="expected no !!, got: \{out}")
+  assert_true(out.contains("?"), msg="expected ternary kept, got: \{out}")
+}

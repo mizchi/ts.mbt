@@ -35,6 +35,7 @@
 //   new Array(0) / new Array() -> []    (saves up to 11 bytes)
 //   new Object()           -> {}        (saves up to 12 bytes)
 //   [].concat(a,b)         -> [...a,...b] (saves ~5 bytes per element)
+//   !!x ? a : b            -> x ? a : b  (double negation in cond is no-op)
 //   x.length !== 0        -> !!x.length  (saves ~4 bytes; also .size)
 //   x.size === 0          -> !x.size
 //   x!=null ? x.p : void 0       -> x?.p         (optional chaining, saves ~14 bytes)
@@ -612,6 +613,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       let cp = peep_expr(c, ctx)
       let tp = peep_expr(t, ctx)
       let ep = peep_expr(e, ctx)
+      // `!!x ? a : b` → `x ? a : b` (double negation in condition is a no-op
+      // in a ternary since the truthiness test already coerces to boolean).
+      // Saves 2 bytes per occurrence. Unwrap any number of `!!` layers.
+      let cp = match cp {
+        UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, inner)) =>
+          inner
+        _ => cp
+      }
       // `x ? x : y` → `x || y` (saves 3 bytes: `? x :` → `||`)
       // `x ? y : x` → `x && y` (saves 3 bytes: `? y :` → `&&`)
       // Only safe when the condition and the matching branch are the same
