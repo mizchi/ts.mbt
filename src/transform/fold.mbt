@@ -1698,11 +1698,25 @@ fn fold_math_call(
             return Some(ArrayLit(vals))
           }
           ("entries", ObjectLit(entries)) => {
-            let pairs : Array[@ast.TsExpr] = []
+            // Bail out if any entry has a computed key (@@computed: sentinel)
+            // — the actual key expression is inside ComputedProp and cannot
+            // be represented as a string literal in the output pairs.
+            let mut has_computed = false
             for ent in entries {
-              pairs.push(ArrayLit([StringLit(ent.0), ent.1]))
+              if ent.0.has_prefix("@@computed:") ||
+                ent.0.has_prefix("@@spread:") ||
+                ent.0 == "..." {
+                has_computed = true
+                break
+              }
             }
-            return Some(ArrayLit(pairs))
+            if not(has_computed) {
+              let pairs : Array[@ast.TsExpr] = []
+              for ent in entries {
+                pairs.push(ArrayLit([StringLit(ent.0), ent.1]))
+              }
+              return Some(ArrayLit(pairs))
+            }
           }
           // `Object.freeze({...})` and `Object.seal({...})` are no-ops
           // for bundled output: the frozen/sealed state is observable only
@@ -2788,18 +2802,71 @@ fn try_lower_single_case_switch(
 }
 
 ///|
+/// Returns true if the block contains a `break` (without label) that would
+/// target the enclosing switch — i.e., any break not protected by an inner
+/// switch or loop. Used to bail out of switch→if conversion when the case
+/// body has a mid-body or nested bare break.
+fn block_has_bare_break(block : @ast.TsBlock) -> Bool {
+  for s in block.stmts {
+    if stmt_has_bare_break(s) {
+      return true
+    }
+  }
+  false
+}
+
+fn stmt_has_bare_break(s : @ast.TsStmt) -> Bool {
+  match s {
+    Break(None) => true
+    Break(_) => false // labeled break targets an outer label, not this switch
+    // These introduce a new break-target, so bare breaks inside are NOT ours:
+    Switch(_, _) => false
+    For(_, _, _, _) | ForIn(_, _, _, _, _) | ForOf(_, _, _, _, _)
+    | ForAwaitOf(_, _, _, _, _) | While(_, _) | DoWhile(_, _) => false
+    // These propagate bare breaks up to our switch:
+    Block(inner) => block_has_bare_break(inner)
+    If(_, then, else_) => {
+      if block_has_bare_break(then) {
+        return true
+      }
+      match else_ {
+        Some(e) => block_has_bare_break(e)
+        None => false
+      }
+    }
+    Try(b, _, cb, fb) => {
+      if block_has_bare_break(b) {
+        return true
+      }
+      match cb {
+        Some(c) => if block_has_bare_break(c) { return true }
+        None => ()
+      }
+      match fb {
+        Some(f) => block_has_bare_break(f)
+        None => false
+      }
+    }
+    _ => false
+  }
+}
+
 fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
   let n = block.stmts.length()
   if n == 0 {
     return []
   }
-  // Reject if any break (other than the trailing one) exists — that would be
-  // a mid-body break targeting the switch itself.
+  // Bail out if any statement contains a bare break targeting the switch.
+  // We allow only a single trailing Break(None) at the top level.
   for i, s in block.stmts {
     match s {
       Break(None) if i == n - 1 => ()
       Break(_) | Continue(_) => return [] // bail out
-      _ => ()
+      _ =>
+        // Check for nested bare breaks (e.g., break inside a Block or If)
+        if stmt_has_bare_break(s) {
+          return []
+        }
     }
   }
   let last = block.stmts[n - 1]
