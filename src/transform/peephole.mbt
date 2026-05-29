@@ -1222,8 +1222,11 @@ fn is_bool_expr(e : @ast.TsExpr) -> Bool {
 fn exprs_eq(a : @ast.TsExpr, b : @ast.TsExpr) -> Bool {
   match (a, b) {
     (Var(n1), Var(n2)) => n1 == n2
-    (PropAccess(Var(r1), p1), PropAccess(Var(r2), p2)) => r1 == r2 && p1 == p2
+    (PropAccess(r1, p1), PropAccess(r2, p2)) => p1 == p2 && exprs_eq(r1, r2)
+    (IndexAccess(r1, i1), IndexAccess(r2, i2)) =>
+      exprs_eq(r1, r2) && exprs_eq(i1, i2)
     (NullLit, NullLit) | (IntLit(0), IntLit(0)) => true
+    (StringLit(s1), StringLit(s2)) => s1 == s2
     _ => false
   }
 }

@@ -784,3 +784,10 @@ test "peephole: String(x) folds to \"\"+x" {
   assert_true(out.contains("\"\""), msg="expected empty string concat, got: \{out}")
   assert_false(out.contains("String("), msg="expected no String(), got: \{out}")
 }
+
+///|
+test "peephole: x.y != null ? x.y.z : void 0 → x.y?.z (chained optional)" {
+  // Extended exprs_eq allows PropAccess chain comparison.
+  let out = minify_one("const r = x.y != null ? x.y.z : void 0;")
+  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+}
