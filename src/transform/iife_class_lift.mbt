@@ -433,16 +433,11 @@ fn classify_iife_body_stmt(
     // `name = expr;` — plain assignment to a variable (not prop).
     // If the variable is the class name itself, bail (the IIFE is
     // reassigning the class, e.g. decorator wrapping). Otherwise
-    // treat as a side-effect: emit before the class when the RHS
-    // doesn't reference the class, or after when it does.
-    Assign(n, rhs) =>
-      if n == class_name {
-        Unknown
-      } else if expr_refs_class_name(rhs, class_name) {
-        Extra(stmt)
-      } else {
-        ExtraBefore(stmt)
-      }
+    // treat as a side-effect emitted AFTER the class. We don't hoist
+    // assignments before the class even when the RHS is independent —
+    // the original IIFE ran them after the constructor definition.
+    Assign(n, _) =>
+      if n == class_name { Unknown } else { Extra(stmt) }
     // `name op= expr;` — compound assignment. Same ordering logic as
     // plain Assign: abort if it touches the class binding, otherwise
     // emit as a side effect (after, since the RHS might implicitly use
