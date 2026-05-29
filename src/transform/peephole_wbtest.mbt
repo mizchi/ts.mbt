@@ -868,3 +868,10 @@ test "peephole: x && x.method(a) → x?.method(a) (optional call from && guard)"
   assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
   assert_false(out.contains("&&"), msg="expected no &&, got: \{out}")
 }
+
+///|
+test "peephole: a.b.c === null || a.b.c === undefined → a.b.c == null" {
+  let out = minify_one("const r = a.b.c === null || a.b.c === undefined;")
+  assert_true(out.contains("==null"), msg="expected ==null, got: \{out}")
+  assert_false(out.contains("==="), msg="expected no ===, got: \{out}")
+}
