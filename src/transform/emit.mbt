@@ -3038,21 +3038,46 @@ fn regex_literal_safe(s : String) -> Bool {
   if s.length() == 0 {
     return false
   }
+  // Reject control chars and newlines (never valid inside a regex literal).
   for c in s {
-    // Reject `/`: escaping it as `\/` is unsafe when preceded by `\`
-    // (produces `\\/` which closes the regex).  Reject control chars too.
-    if c == '/' || c == '\n' || c == '\r' || c.to_int() < 32 {
+    if c == '\n' || c == '\r' || c.to_int() < 32 {
       return false
     }
+  }
+  // Reject if the pattern ends with an odd number of backslashes: the
+  // trailing `\` would escape the `/` delimiter we add to close the literal,
+  // producing an unclosed regex.
+  let mut trailing_bs = 0
+  for c in s {
+    if c == '\\' {
+      trailing_bs = trailing_bs + 1
+    } else {
+      trailing_bs = 0
+    }
+  }
+  if trailing_bs % 2 != 0 {
+    return false
   }
   true
 }
 
 // Emit the runtime string value `s` as the body of a regex literal.
+// Bare `/` (not part of an existing `\/` escape sequence) is written
+// as `\/` to avoid closing the regex prematurely.
 // Caller must have verified regex_literal_safe(s).
 fn emit_regex_body(e : Emitter, s : String) -> Unit {
+  // Iterate using `for c in s` (char-level). Track whether the previous
+  // character was a backslash so we can tell a bare `/` from an already-
+  // escaped `\/` (the `\` was already emitted, so we just emit `/`).
+  let mut prev_was_bs = false
   for c in s {
-    e.write(c.to_string())
+    if c == '/' && not(prev_was_bs) {
+      // Bare slash — escape it so it does not close the regex literal.
+      e.write("\\/")
+    } else {
+      e.write(c.to_string())
+    }
+    prev_was_bs = c == '\\'
   }
 }
 
