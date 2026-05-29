@@ -34,6 +34,7 @@
 //   `prefix${x}`          -> "prefix"+x (saves 2 bytes; non-empty prefix OK)
 //   +new Date()           -> Date.now() (saves 1 byte; same timestamp semantics)
 //   arr.slice(0)          -> [...arr]   (saves ~5 bytes; 0-start shallow copy)
+//   if(c){if(d){S}}      -> if(c&&d){S}  (merge nested no-else ifs; saves ~8 bytes)
 //   Object.assign({},a,b)     -> {...a,...b}     (saves ~12 bytes)
 //   Object.assign({x:1},a,b) -> {x:1,...a,...b}  (literal target also safe)
 //   new Array(0) / new Array() -> []    (saves up to 11 bytes)
@@ -290,6 +291,14 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           )
         // `if (c) { stmts } else {}` → `if (c) { stmts }` (drop empty else)
         (_, Some({ stmts: [], .. })) => If(cp, tp, None)
+        // `if (c) { if (d) { stmts } }` → `if (c && d) { stmts }`
+        // Merge nested no-else ifs into a conjunction. Saves `if (`, `) {`,
+        // `}` and indentation — roughly 8 bytes per merge, more in pretty mode.
+        ([If(d, inner_block, None)], None) =>
+          peep_stmt(
+            If(peep_expr(BinOp(@ast.TsBinOp::And, cp, d), ctx), inner_block, None),
+            ctx,
+          )
         _ => If(cp, tp, ep)
       }
     }

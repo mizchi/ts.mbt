@@ -1125,3 +1125,19 @@ test "emit: consecutive const and let merged as let in minify mode" {
   assert_false(out.contains("const"), msg="expected no const in minify mode, got: \{out}")
   assert_false(out.contains("let a") && out.contains("let b"), msg="expected merged, got: \{out}")
 }
+
+///|
+test "peephole: nested if(c){if(d){...}} → if(c&&d){...}" {
+  let out = minify_one("if (a) { if (b) { doWork(); } }")
+  // Should collapse to a single if with `a&&b` condition
+  assert_true(out.contains("&&") || out.contains("a") && out.contains("b"), msg="expected merged condition, got: \{out}")
+  // Should not have nested if structure
+  let if_count = {
+    let mut n = 0
+    for i = 0; i < out.length() - 1; i = i + 1 {
+      if out[i] == 'i' && out[i+1] == 'f' { n = n + 1 }
+    }
+    n
+  }
+  assert_true(if_count <= 1, msg="expected at most one if, got: \{out}")
+}
