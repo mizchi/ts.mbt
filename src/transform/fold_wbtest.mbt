@@ -1344,3 +1344,19 @@ test "fold: void on pure template literal collapses to void 0" {
   let out = fold_one("const t = void `${x} world`;\n")
   assert_true(out.contains("void 0"))
 }
+
+///|
+test "fold: template-literal ?? fallback is eliminated (template never nullish)" {
+  // TemplateLiteral can never be null/undefined, so `\`${x}\` ?? fallback`
+  // folds to just the template literal.
+  let out = fold_one("const t = `${x} world` ?? \"default\";\n")
+  assert_false(out.contains("default"))
+  assert_false(out.contains("??"))
+}
+
+///|
+test "fold: NonNull assertion ?? fallback is eliminated (x! never nullish)" {
+  let out = fold_one("const t = (x!) ?? \"fallback\";\n")
+  assert_false(out.contains("fallback"))
+  assert_false(out.contains("??"))
+}

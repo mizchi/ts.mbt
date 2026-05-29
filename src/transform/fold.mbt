@@ -2751,6 +2751,12 @@ fn can_be_nullish(expr : @ast.TsExpr) -> Bool {
     NumberLit(_) | IntLit(_) | BigIntLit(_) | BoolLit(_) | StringLit(_) => false
     FuncExpr(_) | ArrowFunc(_, _, _, _) => false
     ArrayLit(_) | ObjectLit(_) => false
+    // Tag-less template literals always produce a string, never null/undefined.
+    TemplateLiteral(_, _) => false
+    // TypeScript casts are transparent — delegate to the inner expression.
+    As(inner, _) | Satisfies(inner, _) => can_be_nullish(inner)
+    // `x!` asserts the value is non-null/undefined by definition.
+    NonNull(_) => false
     _ => true
   }
 }
