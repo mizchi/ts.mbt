@@ -763,3 +763,17 @@ test "peephole: c ? (x = a) : (x = b) → x = c ? a : b" {
   // The assignment should be hoisted outside the ternary.
   assert_true(out.contains("x="), msg="expected hoisted assignment, got: \{out}")
 }
+
+///|
+test "peephole: x ? x : y → x || y" {
+  let out = minify_one("const r = x ? x : fallback;")
+  assert_true(out.contains("||"), msg="expected ||, got: \{out}")
+  assert_false(out.contains("?"), msg="expected no ternary, got: \{out}")
+}
+
+///|
+test "peephole: x ? y : x → x && y" {
+  let out = minify_one("const r = x ? action : x;")
+  assert_true(out.contains("&&"), msg="expected &&, got: \{out}")
+  assert_false(out.contains("?"), msg="expected no ternary, got: \{out}")
+}

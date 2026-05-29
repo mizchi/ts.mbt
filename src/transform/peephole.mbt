@@ -35,6 +35,8 @@
 //   x!=null ? x[k] : void 0      -> x?.[k]
 //   x==null ? y : x               -> x ?? y       (flipped nullish coalescing)
 //   c ? (x=a) : (x=b)             -> x = c ? a : b  (hoist common assignment)
+//   x ? x : y                     -> x || y          (saves 3 bytes)
+//   x ? y : x                     -> x && y          (saves 3 bytes)
 //   this.x=void 0;…;this.x=val  -> this.x=val  (drop TS class-field placeholders)
 //
 // The compound-assign rewrite touches both expression-level
@@ -604,6 +606,16 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       let cp = peep_expr(c, ctx)
       let tp = peep_expr(t, ctx)
       let ep = peep_expr(e, ctx)
+      // `x ? x : y` → `x || y` (saves 3 bytes: `? x :` → `||`)
+      // `x ? y : x` → `x && y` (saves 3 bytes: `? y :` → `&&`)
+      // Only safe when the condition and the matching branch are the same
+      // pure expression (no double evaluation concern for vars/prop access).
+      if exprs_eq(cp, tp) {
+        return BinOp(@ast.TsBinOp::Or, cp, ep)
+      }
+      if exprs_eq(cp, ep) {
+        return BinOp(@ast.TsBinOp::And, cp, tp)
+      }
       // `c ? !0 : !1` → `!!c` (4 bytes saved; both evaluate to true/false).
       // After BoolLit → `!0`/`!1` rewrite, `true ? … : …` patterns land here.
       match (tp, ep) {
