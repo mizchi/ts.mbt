@@ -738,6 +738,35 @@ fn Resolver::lookup_field(
 }
 
 ///|
+/// Strip `null` and `undefined` members from a union type so nullable
+/// receivers degrade gracefully in field / method lookups. Returns the
+/// original type unchanged when no null/undefined members are present or when
+/// the result would be empty (all members were nullish).
+fn prune_nullish(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  match resolver.unwrap(ty) {
+    Union(parts) => {
+      let nn : Array[@ast.TsType] = []
+      for p in parts {
+        match p {
+          Null | Undefined => ()
+          _ => nn.push(p)
+        }
+      }
+      if nn.length() > 0 && nn.length() < parts.length() {
+        if nn.length() == 1 {
+          nn[0]
+        } else {
+          @ast.TsType::Union(nn)
+        }
+      } else {
+        ty
+      }
+    }
+    _ => ty
+  }
+}
+
+///|
 /// Look up the value type of an index signature on an interface or class
 /// for a dynamic (non-literal) key access `recv[idx]`. Returns `None` when
 /// the receiver has no matching index signature.
@@ -1913,7 +1942,9 @@ fn infer_expr(
           return @ast.TsType::Applied("Promise", [inner])
         _ => ()
       }
-      match resolver.lookup_method_sig(recv_ty, method) {
+      // Nullable receiver: strip null/undefined members and retry so
+      // `(arr | null).map(...)` still resolves the method return type.
+      match resolver.lookup_method_sig(prune_nullish(resolver, recv_ty), method) {
         Some((_params, ret)) => {
           for a in args {
             let _ = infer_expr(env, resolver, a)
@@ -2004,7 +2035,15 @@ fn infer_expr(
       let recv_ty = infer_expr(env, resolver, receiver)
       match resolver.lookup_field(recv_ty, name) {
         Some(t) => t
-        None => @ast.TsType::Any
+        None =>
+          // Union receiver: lookup_field requires ALL members to have the
+          // field. When null/undefined members make that fail, retry on the
+          // non-null members so `(obj | null).prop` still resolves to the
+          // field type instead of Any.
+          match resolver.lookup_field(prune_nullish(resolver, recv_ty), name) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
       }
     }
     IndexAccess(receiver, index_expr) => {
@@ -3117,6 +3156,15 @@ fn array_element_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType? {
   match resolver.unwrap(ty) {
     Array(elem) => Some(elem)
     Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) => Some(elem)
+    // `T[] | null` / `T[] | undefined` — strip nullish members and retry.
+    Union(_) => {
+      let pruned = prune_nullish(resolver, ty)
+      if pruned == ty {
+        None
+      } else {
+        array_element_type(resolver, pruned)
+      }
+    }
     _ => None
   }
 }
@@ -3663,12 +3711,34 @@ fn for_of_element_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
     String_ | Literal(_) => @ast.TsType::String_
     Applied(name, args) =>
       match (name, args.length()) {
+        ("Array", 1) | ("ReadonlyArray", 1) => args[0]
         ("Set", 1) | ("Iterable", 1) | ("IterableIterator", 1) => args[0]
         ("Generator", n) if n >= 1 => args[0]
         ("Map", 2) => @ast.TsType::Tuple([args[0], args[1]])
-        ("ReadonlyArray", 1) | ("ReadonlySet", 1) => args[0]
+        ("ReadonlySet", 1) => args[0]
         _ => @ast.TsType::Any
       }
+    // Union iterable: collect element types from each non-null member.
+    Union(parts) => {
+      let elems : Array[@ast.TsType] = []
+      for p in parts {
+        match p {
+          Null | Undefined => ()
+          _ => {
+            let e = for_of_element_type(resolver, p)
+            match e {
+              Any => ()
+              _ => elems.push(e)
+            }
+          }
+        }
+      }
+      if elems.length() == 0 {
+        @ast.TsType::Any
+      } else {
+        union_of(elems)
+      }
+    }
     _ => @ast.TsType::Any
   }
 }
@@ -5105,7 +5175,7 @@ fn check_call_args_in_expr(
       }
     }
     CallExpr(callee, args) => {
-      let callee_ty = infer_expr(env, ctx.resolver, callee)
+      let callee_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, callee))
       match callee_ty {
         Func(params, _) => check_arguments(env, params, args, ctx, "call")
         _ => ()
@@ -5131,7 +5201,10 @@ fn check_call_args_in_expr(
           check_arguments(env, params, args, ctx, "call `\{method}`")
         None => {
           let recv_ty = infer_expr(env, ctx.resolver, receiver)
-          match ctx.resolver.lookup_method_sig(recv_ty, method) {
+          match ctx.resolver.lookup_method_sig(
+            prune_nullish(ctx.resolver, recv_ty),
+            method,
+          ) {
             Some((params, _)) =>
               check_arguments(env, params, args, ctx, "call `\{method}`")
             None => ()
