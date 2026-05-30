@@ -173,10 +173,24 @@ fn Resolver::ingest_module(
       // single-Array-param shapes without needing an explicit Rest.
       param_types.push(p.1)
     }
-    r.globals[prefix + imp.name] = @ast.TsType::Func(
-      param_types,
-      imp.return_type,
-    )
+    let new_sig = @ast.TsType::Func(param_types, imp.return_type)
+    // When multiple `declare function f(...)` overloads share the same name,
+    // accumulate them as a Union of Func types so infer_call can pick the
+    // right branch at each call site.
+    let key = prefix + imp.name
+    match r.globals.get(key) {
+      Some(Func(_, _) as existing) =>
+        r.globals[key] = @ast.TsType::Union([existing, new_sig])
+      Some(Union(existing_parts)) => {
+        let parts = []
+        for p in existing_parts {
+          parts.push(p)
+        }
+        parts.push(new_sig)
+        r.globals[key] = @ast.TsType::Union(parts)
+      }
+      _ => r.globals[key] = new_sig
+    }
     // Also expose type parameters so generic-call inference picks up
     // `declare function f<T>(...)` imports — without this the inference
     // path skipped imports entirely.
@@ -212,7 +226,21 @@ fn Resolver::ingest_module(
     // Async functions expose `Promise<R>` to callers even when the body's
     // declared `return_type` is the un-wrapped `R`.
     let ret = wrap_async_return(f.is_async, f.return_type)
-    r.globals[prefix + f.name] = @ast.TsType::Func(param_types, ret)
+    let new_func_sig = @ast.TsType::Func(param_types, ret)
+    let func_key = prefix + f.name
+    match r.globals.get(func_key) {
+      Some(Func(_, _) as existing) =>
+        r.globals[func_key] = @ast.TsType::Union([existing, new_func_sig])
+      Some(Union(existing_parts)) => {
+        let parts = []
+        for p in existing_parts {
+          parts.push(p)
+        }
+        parts.push(new_func_sig)
+        r.globals[func_key] = @ast.TsType::Union(parts)
+      }
+      _ => r.globals[func_key] = new_func_sig
+    }
     r.signatures[prefix + f.name] = f.params
     r.func_type_params[prefix + f.name] = f.type_params
     r.func_const_type_params[prefix + f.name] = f.const_type_params
@@ -334,6 +362,15 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
             _ => keep_going = false
           }
         }
+      // Simplify mapped types to Object shapes so field lookups work.
+      MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) => {
+        let simplified = simplify_type(cur)
+        match simplified {
+          MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
+            keep_going = false // couldn't resolve — leave as-is
+          _ => cur = simplified
+        }
+      }
       _ => keep_going = false
     }
   }
