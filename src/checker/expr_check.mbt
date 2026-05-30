@@ -1671,8 +1671,8 @@ fn infer_expr(
           }
       }
     BinOp(op, l, r) => {
-      let lt = infer_expr(env, resolver, l)
-      let rt = infer_expr(env, resolver, r)
+      let lt = resolver.unwrap(infer_expr(env, resolver, l))
+      let rt = resolver.unwrap(infer_expr(env, resolver, r))
       infer_binop(op, lt, rt)
     }
     UnaryOp(op, inner) => {
@@ -1689,7 +1689,24 @@ fn infer_expr(
       let mut first = true
       for item in items {
         let t = match item {
-          Spread(_) => @ast.TsType::Any
+          // Spread: infer the spread arg's type and extract its element type
+          // so `[...arr]` where `arr: string[]` infers `string[]`, not `any[]`.
+          Spread(inner) =>
+            match resolver.unwrap(infer_expr(env, resolver, inner)) {
+              Array(inner_elem) => inner_elem
+              Applied("Array", [inner_elem])
+              | Applied("ReadonlyArray", [inner_elem]) => inner_elem
+              Tuple(parts) if parts.length() > 0 => {
+                let mut u = parts[0]
+                let mut i = 1
+                while i < parts.length() {
+                  u = narrow_union(u, parts[i])
+                  i = i + 1
+                }
+                u
+              }
+              _ => @ast.TsType::Any
+            }
           _ => infer_expr(env, resolver, item)
         }
         if first {
@@ -1923,7 +1940,20 @@ fn infer_expr(
         Applied("Promise", args) if args.length() == 1 => args[0]
         other => other
       }
-    Yield(_) | YieldStar(_) => @ast.TsType::Any
+    // `yield expr` — type is whatever the generator's `.next()` sends back
+    // (TNext), which we don't track. Walk the operand for side-effect checks;
+    // the expression-statement result is `any`.
+    Yield(operand_opt) => {
+      match operand_opt {
+        Some(e) => { let _ = infer_expr(env, resolver, e) }
+        None => ()
+      }
+      @ast.TsType::Any
+    }
+    YieldStar(inner) => {
+      let _ = infer_expr(env, resolver, inner)
+      @ast.TsType::Any
+    }
     DynamicImport(_, _) | ImportMeta => @ast.TsType::Any
     PropAccess(receiver, name) => {
       // Property-access narrowing: when the access is a `Var` /
@@ -2008,14 +2038,14 @@ fn infer_expr(
         param_types.push(p.type_)
       }
       // Prefer the explicit return-type annotation when one was supplied;
-      // fall back to inferring from the body expression for the
-      // `(x) => expr` shorthand.
+      // fall back to inferring from the body expression for `(x) => expr`
+      // or walking return statements for `(x) => { return expr; }` blocks.
       let ret = if is_checkable(declared_ret) {
         declared_ret
       } else {
         match body {
           ArrowExpr(e) => infer_expr(env, resolver, e)
-          ArrowBlock(_) => @ast.TsType::Any
+          ArrowBlock(block) => infer_block_return(env, resolver, block)
         }
       }
       @ast.TsType::Func(param_types, wrap_async_return(is_async, ret))
@@ -2025,10 +2055,14 @@ fn infer_expr(
       for p in f.params {
         param_types.push(p.type_)
       }
-      @ast.TsType::Func(
-        param_types,
-        wrap_async_return(f.is_async, f.return_type),
-      )
+      // When no explicit return-type annotation was given, walk the body for
+      // return statements — same strategy as ArrowBlock.
+      let ret = if is_checkable(f.return_type) {
+        f.return_type
+      } else {
+        infer_block_return(env, resolver, f.body)
+      }
+      @ast.TsType::Func(param_types, wrap_async_return(f.is_async, ret))
     }
     TaggedTemplate(tag, _, _, _) =>
       // `tag\`...\`` calls `tag(strings, ...exprs)` at runtime. We don't
@@ -2204,6 +2238,7 @@ fn infer_call(
   for a in args {
     let _ = infer_expr(env, resolver, a)
   }
+  let callee = resolver.unwrap(callee)
   match callee {
     // `paramName is T` is a boolean at the value level — calls to a type
     // predicate function return `Boolean`. The predicate effect is applied
@@ -2473,7 +2508,11 @@ fn check_expr_against(
   if !is_checkable(inferred) {
     return
   }
-  if !is_assignable_to(inferred, expected) {
+  // Unwrap type aliases before assignability check so `type Str = string`
+  // correctly assigns to `string` without a false mismatch.
+  let inferred_u = ctx.resolver.unwrap(inferred)
+  let expected_u = ctx.resolver.unwrap(expected)
+  if !is_assignable_to(inferred_u, expected_u) {
     let detail = "expected `\{type_display(expected)}` but got `\{type_display(inferred)}`"
     record(ctx, sub_path, detail)
   }
@@ -3382,7 +3421,17 @@ fn check_arguments_with_sig(
     rest_index < params.length() {
     match params[rest_index] {
       Array(elem) => elem
-      Tuple(_) => @ast.TsType::Any
+      // `...args: [string, number]` — rest is typed as a tuple; each
+      // individual rest argument is the union of all tuple element types.
+      Tuple(parts) if parts.length() > 0 => {
+        let mut u = parts[0]
+        let mut i = 1
+        while i < parts.length() {
+          u = narrow_union(u, parts[i])
+          i = i + 1
+        }
+        u
+      }
       _ => @ast.TsType::Any
     }
   } else {
