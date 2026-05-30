@@ -696,9 +696,11 @@ fn method_decl_from_func(
   // (Array[(String, TsType)]).
   let params : Array[(String, @ast.TsType)] = []
   let param_defaults : Array[@ast.TsExpr?] = []
+  let param_is_rest : Array[Bool] = []
   for p in f.params {
     params.push((p.name, p.type_))
     param_defaults.push(p.default)
+    param_is_rest.push(p.is_rest)
   }
   {
     name,
@@ -706,6 +708,7 @@ fn method_decl_from_func(
     type_param_bounds: [],
     params,
     param_defaults,
+    param_is_rest,
     return_type: f.return_type,
     is_static,
     body: Some(f.body),
@@ -726,9 +729,11 @@ fn method_decl_from_func_accessor(
 ) -> @ast.TsClassMethodDecl {
   let params : Array[(String, @ast.TsType)] = []
   let param_defaults : Array[@ast.TsExpr?] = []
+  let param_is_rest : Array[Bool] = []
   for p in f.params {
     params.push((p.name, p.type_))
     param_defaults.push(p.default)
+    param_is_rest.push(p.is_rest)
   }
   {
     name,
@@ -736,6 +741,7 @@ fn method_decl_from_func_accessor(
     type_param_bounds: [],
     params,
     param_defaults,
+    param_is_rest,
     return_type: f.return_type,
     is_static: false,
     body: Some(f.body),

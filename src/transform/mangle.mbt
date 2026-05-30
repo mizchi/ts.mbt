@@ -709,10 +709,14 @@ fn ScopeFrame::function_child(
   // param allocator skips it.
   let used : Map[String, Bool] = {}
   for name, _ in refs {
-    let short = parent.resolve(name)
-    if short != name {
-      used[short] = true
-    }
+    // Mark the resolved short name (even when unchanged) so inner-scope
+    // param allocation never shadows an outer free variable. Without this,
+    // a var like `a` that the parent kept as `a` is NOT added to `used`,
+    // and a nested function's first parameter gets renamed to `a`, silently
+    // shadowing the captured outer `a`. E.g. Effect's `dual/case 3`:
+    //   function(a, c, d) { ... function(a) { b(a, a, c) } } // BUG
+    // The inner param `a` shadows outer `a`; `b(a,a,c)` passes self twice.
+    used[parent.resolve(name)] = true
   }
   {
     parent: Some(parent),
@@ -913,9 +917,31 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
       collect_var_refs_expr(a, out)
       collect_var_refs_expr(b, out)
     }
-    // Do NOT recurse into function/arrow bodies — they have their own scope
-    ArrowFunc(_, _, _, _) => ()
-    FuncExpr(_) => ()
+    // Recurse into function/arrow bodies to collect outer-scope references
+    // that inner closures capture. This is used by function_child to pre-
+    // occupy short names of outer bindings that inner closures reference —
+    // preventing the inner closure's local name from shadowing the outer name.
+    ArrowFunc(params, _, body, _) => {
+      for p in params {
+        match p.default {
+          Some(d) => collect_var_refs_expr(d, out)
+          None => ()
+        }
+      }
+      match body {
+        ArrowExpr(e) => collect_var_refs_expr(e, out)
+        ArrowBlock(b) => collect_var_refs_block(b, out)
+      }
+    }
+    FuncExpr(f) => {
+      for p in f.params {
+        match p.default {
+          Some(d) => collect_var_refs_expr(d, out)
+          None => ()
+        }
+      }
+      collect_var_refs_block(f.body, out)
+    }
     Await(e) => collect_var_refs_expr(e, out)
     Yield(Some(e)) => collect_var_refs_expr(e, out)
     YieldStar(e) => collect_var_refs_expr(e, out)
@@ -1639,20 +1665,33 @@ fn rename_block_inline_in(
   // binding and split the var name into two renames (e.g. the var
   // body becomes `var a = 1` but post-block `return counter` looks
   // up the function-frame name `b` instead).
-  for s in block.stmts {
-    match s {
-      Let(@ast.TsBinding::Ident(name), _, _)
-      | Const(@ast.TsBinding::Ident(name), _, _) =>
-        if not(scope.renames.contains(name)) {
-          let _ = scope.bind(name, reserved)
-        }
-      NativeClassStmt(decl, _) =>
-        if decl.name != "" && not(scope.renames.contains(decl.name)) {
-          let _ = scope.bind(decl.name, reserved)
-        }
-      _ => ()
+  fn prebind_stmts(stmts : Array[@ast.TsStmt]) -> Unit {
+    for s in stmts {
+      match s {
+        Let(@ast.TsBinding::Ident(name), _, _)
+        | Const(@ast.TsBinding::Ident(name), _, _) =>
+          if not(scope.renames.contains(name)) {
+            let _ = scope.bind(name, reserved)
+          }
+        NativeClassStmt(decl, _) =>
+          if decl.name != "" && not(scope.renames.contains(decl.name)) {
+            let _ = scope.bind(decl.name, reserved)
+          }
+        // Synthetic multi-decl blocks (e.g. `let a = 1, b = 2`) are wrapped
+        // in a Block whose stmts are all the same lexical-decl kind. Recurse
+        // so the enclosed names are pre-bound in the outer scope before the
+        // body walk begins — otherwise a closure defined earlier in the block
+        // captures the unshortened name while the declaration gets a short
+        // name, producing a ReferenceError at runtime.
+        Block(b) =>
+          if is_synthetic_multi_decl_block(b) {
+            prebind_stmts(b.stmts)
+          }
+        _ => ()
+      }
     }
   }
+  prebind_stmts(block.stmts)
   let stmts : Array[@ast.TsStmt] = []
   for s in block.stmts {
     stmts.push(rename_stmt(s, scope, reserved))
@@ -2058,6 +2097,8 @@ fn rename_class_decl_idents(
       body: new_body,
       params: new_params,
       param_defaults: new_defaults,
+      // param_is_rest is positional and purely structural — renaming
+      // doesn't affect which params are rest params.
       key_expr: new_key_expr,
     })
   }

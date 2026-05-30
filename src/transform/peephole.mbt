@@ -163,9 +163,9 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
       }
       Assign(name, rhs_p)
     }
-    Var(b, t, rhs) => Var(b, t, peep_expr(rhs, ctx))
-    Let(b, t, rhs) => Let(b, t, peep_expr(rhs, ctx))
-    Const(b, t, rhs) => Const(b, t, peep_expr(rhs, ctx))
+    Var(b, t, rhs) => Var(b, t, peep_decl_rhs(b, rhs, ctx))
+    Let(b, t, rhs) => Let(b, t, peep_decl_rhs(b, rhs, ctx))
+    Const(b, t, rhs) => Const(b, t, peep_decl_rhs(b, rhs, ctx))
     CompoundAssign(n, op, rhs) => {
       let rhs_p = peep_expr(rhs, ctx)
       // `x += 1` → `x++` (saves 3 bytes in statement position)
@@ -514,12 +514,14 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         [{ test_expr: Some(case_e), body: case_body }] => {
           // A `break` terminator is only valid inside a switch / loop, so
           // don't lift a single-case switch to `if` when the body ends with
-          // `break` — the resulting `if(…){…;break}` would be a SyntaxError
-          // outside a switch or loop context.
-          let is_non_fall_through = match case_body.stmts.last() {
+          // `break` or contains an internal bare break — the resulting
+          // `if(…){…;break}` would be a SyntaxError outside a switch/loop.
+          let has_bare_break = block_has_bare_break(case_body)
+          let last_is_terminator = match case_body.stmts.last() {
             Some(Return(_)) | Some(Throw(_)) => true
             _ => false
           }
+          let is_non_fall_through = not(has_bare_break) && last_is_terminator
           if is_non_fall_through {
             let if_stmt = peep_stmt(
               If(BinOp(@ast.TsBinOp::BinEq, ep, case_e), case_body, None),
@@ -534,10 +536,12 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
           { test_expr: Some(case_e), body: case_body },
           { test_expr: None, body: default_body },
         ] => {
-          let is_non_fall_through = match case_body.stmts.last() {
+          let has_bare_break2 = block_has_bare_break(case_body)
+          let last_is_term2 = match case_body.stmts.last() {
             Some(Return(_)) | Some(Throw(_)) => true
             _ => false
           }
+          let is_non_fall_through = not(has_bare_break2) && last_is_term2
           if is_non_fall_through {
             let if_stmt = peep_stmt(
               If(
@@ -559,12 +563,20 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
         // The resulting if-else chain then collapses via the
         // `if(c)return a; return b;` block-level fold into ternaries.
         _ => {
-          // Check all named cases end with a terminator.
+          // Check all named cases end with a terminator and have no
+          // internal bare breaks (a bare break inside a case targets the
+          // switch; lifting to if would make it a SyntaxError).
           let all_non_fall_through = {
             let mut ok = final_cases.length() > 1
             for c in final_cases {
               match c.test_expr {
-                Some(_) =>
+                Some(_) => {
+                  // Also bail out if the body has any mid-body bare break —
+                  // those target the switch and become illegal in an if-else.
+                  if block_has_bare_break(c.body) {
+                    ok = false
+                    break
+                  }
                   match c.body.stmts.last() {
                     // Break is only valid inside switch/loop — don't
                     // lift to if-else where it would be a SyntaxError.
@@ -574,6 +586,7 @@ fn peep_stmt(stmt : @ast.TsStmt, ctx : PeepCtx) -> @ast.TsStmt {
                       break
                     }
                   }
+                }
                 None => () // default — no terminator required
               }
             }
@@ -771,6 +784,270 @@ fn block_ends_with_terminator(b : @ast.TsBlock) -> Bool {
 }
 
 ///|
+fn arrow_body_uses_super(body : @ast.TsArrowBody) -> Bool {
+  match body {
+    @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_super(inner)
+    @ast.TsArrowBody::ArrowBlock(blk) => block_uses_super(blk)
+  }
+}
+
+///|
+fn arrow_body_uses_this(body : @ast.TsArrowBody) -> Bool {
+  match body {
+    @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_this(inner)
+    @ast.TsArrowBody::ArrowBlock(blk) => block_uses_this(blk)
+  }
+}
+
+///|
+fn expr_uses_this(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("this") => true
+    BinOp(_, a, b) => expr_uses_this(a) || expr_uses_this(b)
+    UnaryOp(_, a) => expr_uses_this(a)
+    CallExpr(f, args) => expr_uses_this(f) || args.iter().any(expr_uses_this)
+    Call(_, args) => args.iter().any(expr_uses_this)
+    Cond(c, t, f) => expr_uses_this(c) || expr_uses_this(t) || expr_uses_this(f)
+    ArrayLit(elems) => elems.iter().any(expr_uses_this)
+    Spread(a) => expr_uses_this(a)
+    ObjectLit(ents) => ents.iter().any(fn(kv) { expr_uses_this(kv.1) })
+    ComputedProp(k, v) => expr_uses_this(k) || expr_uses_this(v)
+    IndexAccess(a, b) => expr_uses_this(a) || expr_uses_this(b)
+    PropAccess(a, _) => expr_uses_this(a)
+    New(_, args) => args.iter().any(expr_uses_this)
+    NewExpr(f, args) => expr_uses_this(f) || args.iter().any(expr_uses_this)
+    MethodCall(recv, _, args) =>
+      expr_uses_this(recv) || args.iter().any(expr_uses_this)
+    AssignExpr(_, v) => expr_uses_this(v)
+    AssignPattern(_, v) => expr_uses_this(v)
+    CompoundAssignExpr(a, _, b) => expr_uses_this(a) || expr_uses_this(b)
+    PropAssignExpr(a, _, b) => expr_uses_this(a) || expr_uses_this(b)
+    IndexAssignExpr(a, b, c) =>
+      expr_uses_this(a) || expr_uses_this(b) || expr_uses_this(c)
+    Seq(a, b) => expr_uses_this(a) || expr_uses_this(b)
+    // Arrow functions share `this` with their enclosing context — recurse.
+    ArrowFunc(_, _, body, _) => arrow_body_uses_this(body)
+    // Regular functions and classes introduce their own `this` — don't descend.
+    FuncExpr(_) | NativeClassExpr(_, _) => false
+    PureCall(inner) => expr_uses_this(inner)
+    Yield(Some(inner)) => expr_uses_this(inner)
+    YieldStar(inner) => expr_uses_this(inner)
+    Await(inner) => expr_uses_this(inner)
+    DynamicImport(a, b) => expr_uses_this(a) || b.map_or(false, expr_uses_this)
+    TaggedTemplate(tag, _, _, exprs) =>
+      expr_uses_this(tag) || exprs.iter().any(expr_uses_this)
+    TemplateLiteral(_, exprs) => exprs.iter().any(expr_uses_this)
+    As(inner, _) => expr_uses_this(inner)
+    _ => false
+  }
+}
+
+///|
+fn block_uses_this(blk : @ast.TsBlock) -> Bool {
+  blk.stmts.iter().any(stmt_uses_this)
+}
+
+///|
+fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
+  match s {
+    @ast.TsStmt::Expr(e) => expr_uses_this(e)
+    @ast.TsStmt::Return(Some(e)) => expr_uses_this(e)
+    @ast.TsStmt::Return(None) => false
+    @ast.TsStmt::Var(_, _, e)
+    | @ast.TsStmt::Let(_, _, e)
+    | @ast.TsStmt::Const(_, _, e) => expr_uses_this(e)
+    @ast.TsStmt::Assign(_, e) => expr_uses_this(e)
+    @ast.TsStmt::CompoundAssign(_, _, e) => expr_uses_this(e)
+    @ast.TsStmt::If(c, t, e) =>
+      expr_uses_this(c) ||
+      block_uses_this(t) ||
+      e.map_or(false, block_uses_this)
+    @ast.TsStmt::While(c, b) => expr_uses_this(c) || block_uses_this(b)
+    @ast.TsStmt::DoWhile(c, b) => expr_uses_this(c) || block_uses_this(b)
+    @ast.TsStmt::For(init, cond, update, body) =>
+      init.map_or(false, stmt_uses_this) ||
+      cond.map_or(false, expr_uses_this) ||
+      update.map_or(false, stmt_uses_this) ||
+      block_uses_this(body)
+    @ast.TsStmt::ForOf(_, _, _, iter, body) =>
+      expr_uses_this(iter) || block_uses_this(body)
+    @ast.TsStmt::ForAwaitOf(_, _, _, iter, body) =>
+      expr_uses_this(iter) || block_uses_this(body)
+    @ast.TsStmt::ForIn(_, _, _, iter, body) =>
+      expr_uses_this(iter) || block_uses_this(body)
+    @ast.TsStmt::Block(b) => block_uses_this(b)
+    @ast.TsStmt::Throw(e) => expr_uses_this(e)
+    @ast.TsStmt::Try(b, _, cb, fb) =>
+      block_uses_this(b) ||
+      cb.map_or(false, block_uses_this) ||
+      fb.map_or(false, block_uses_this)
+    @ast.TsStmt::Switch(e, cases) =>
+      expr_uses_this(e) || cases.iter().any(fn(c) { block_uses_this(c.body) })
+    @ast.TsStmt::Label(_, inner) => stmt_uses_this(inner)
+    // FuncDecl/NativeClassStmt introduce their own `this` — don't descend.
+    _ => false
+  }
+}
+
+// Returns true if the expression contains a `super` reference that would be
+// captured by an enclosing arrow function (i.e., not shielded by a
+// non-arrow function boundary). Used to prevent the arrow→FuncExpr conversion
+// that breaks `super` inside arrow bodies.
+
+///|
+fn expr_uses_super(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("super") => true
+    Call("super", _) => true
+    BinOp(_, a, b) => expr_uses_super(a) || expr_uses_super(b)
+    UnaryOp(_, a) => expr_uses_super(a)
+    CallExpr(f, args) => expr_uses_super(f) || args.iter().any(expr_uses_super)
+    Cond(c, t, f) =>
+      expr_uses_super(c) || expr_uses_super(t) || expr_uses_super(f)
+    ArrayLit(elems) => elems.iter().any(expr_uses_super)
+    Spread(a) => expr_uses_super(a)
+    ObjectLit(ents) => ents.iter().any(fn(kv) { expr_uses_super(kv.1) })
+    ComputedProp(k, v) => expr_uses_super(k) || expr_uses_super(v)
+    IndexAccess(a, b) => expr_uses_super(a) || expr_uses_super(b)
+    PropAccess(a, _) => expr_uses_super(a)
+    New(_, args) => args.iter().any(expr_uses_super)
+    NewExpr(f, args) => expr_uses_super(f) || args.iter().any(expr_uses_super)
+    MethodCall(recv, _, args) =>
+      expr_uses_super(recv) || args.iter().any(expr_uses_super)
+    AssignExpr(_, v) => expr_uses_super(v)
+    AssignPattern(_, v) => expr_uses_super(v)
+    CompoundAssignExpr(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
+    PropAssignExpr(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
+    IndexAssignExpr(a, b, c) =>
+      expr_uses_super(a) || expr_uses_super(b) || expr_uses_super(c)
+    Seq(a, b) => expr_uses_super(a) || expr_uses_super(b)
+    // Arrow functions DO share super with their enclosing context
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_super(inner)
+        @ast.TsArrowBody::ArrowBlock(blk) => block_uses_super(blk)
+      }
+    // Regular function expressions and class expressions introduce their own
+    // super binding — do NOT descend into them.
+    FuncExpr(_) | NativeClassExpr(_, _) => false
+    PureCall(inner) => expr_uses_super(inner)
+    Yield(Some(inner)) => expr_uses_super(inner)
+    YieldStar(inner) => expr_uses_super(inner)
+    Await(inner) => expr_uses_super(inner)
+    DynamicImport(a, b) =>
+      expr_uses_super(a) || b.map_or(false, expr_uses_super)
+    TaggedTemplate(tag, _, _, exprs) =>
+      expr_uses_super(tag) || exprs.iter().any(expr_uses_super)
+    TemplateLiteral(_, exprs) => exprs.iter().any(expr_uses_super)
+    As(inner, _) => expr_uses_super(inner)
+    _ => false
+  }
+}
+
+///|
+fn block_uses_super(blk : @ast.TsBlock) -> Bool {
+  blk.stmts.iter().any(stmt_uses_super)
+}
+
+///|
+fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
+  match s {
+    Expr(e) => expr_uses_super(e)
+    Return(Some(e)) => expr_uses_super(e)
+    Throw(e) => expr_uses_super(e)
+    Let(_, _, e) | Const(_, _, e) | Var(_, _, e) => expr_uses_super(e)
+    Assign(_, e) => expr_uses_super(e)
+    CompoundAssign(_, _, e) => expr_uses_super(e)
+    IndexAssign(a, b, c) =>
+      expr_uses_super(a) || expr_uses_super(b) || expr_uses_super(c)
+    PropAssign(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
+    If(c, t, Some(f)) =>
+      expr_uses_super(c) || block_uses_super(t) || block_uses_super(f)
+    If(c, t, None) => expr_uses_super(c) || block_uses_super(t)
+    While(c, b) => expr_uses_super(c) || block_uses_super(b)
+    DoWhile(c, b) => expr_uses_super(c) || block_uses_super(b)
+    For(init, cond, update, body) =>
+      init.map_or(false, stmt_uses_super) ||
+      cond.map_or(false, expr_uses_super) ||
+      update.map_or(false, stmt_uses_super) ||
+      block_uses_super(body)
+    ForOf(_, _, _, iter, body) | ForIn(_, _, _, iter, body) =>
+      expr_uses_super(iter) || block_uses_super(body)
+    ForAwaitOf(_, _, _, iter, body) =>
+      expr_uses_super(iter) || block_uses_super(body)
+    Try(b, _, catch_b, finally_b) =>
+      block_uses_super(b) ||
+      catch_b.map_or(false, block_uses_super) ||
+      finally_b.map_or(false, block_uses_super)
+    Switch(e, cases) =>
+      expr_uses_super(e) || cases.iter().any(fn(c) { block_uses_super(c.body) })
+    Block(b) => block_uses_super(b)
+    Label(_, s) => stmt_uses_super(s)
+    With(e, b) => expr_uses_super(e) || block_uses_super(b)
+    _ => false
+  }
+}
+
+// Peephole a declaration RHS with special handling for named function bindings.
+// Goals:
+//   1. `let f = function(){}` must NOT become an arrow — keep FuncExpr so
+//      try_emit_function_decl can hoist it as `function f(){}`.
+//   2. `let f = (...) => { block }` (block-body arrow) also converts to FuncExpr
+//      for the same hoisting reason; block arrows are never shorter than the
+//      equivalent function expression, and hoisting avoids TDZ issues in bundles.
+//   3. `let f = x => x+1` and `let f = (x) => { return x+1; }` stay arrows
+//      after peep_expr folds them to concise form (smaller, no hoisting needed).
+
+///|
+fn peep_decl_rhs(
+  binding : @ast.TsBinding,
+  rhs : @ast.TsExpr,
+  ctx : PeepCtx,
+) -> @ast.TsExpr {
+  let name = match binding {
+    @ast.TsBinding::Ident(n) => n
+    _ => ""
+  }
+  if name != "" {
+    match rhs {
+      // `let f = function() {}` — fold the body but keep it as FuncExpr.
+      @ast.TsExpr::FuncExpr(f) => {
+        let folded = peep_block(f.body, ctx)
+        return @ast.TsExpr::FuncExpr({ ..f, body: folded })
+      }
+      _ => ()
+    }
+  }
+  let result = peep_expr(rhs, ctx)
+  if name != "" {
+    match result {
+      // Block-body arrow after peephole: convert to FuncExpr for hoisting.
+      // Concise arrows (ArrowExpr body) were either already concise or folded
+      // from `{return expr}` — those stay arrows.
+      @ast.TsExpr::ArrowFunc(
+        params,
+        ret,
+        @ast.TsArrowBody::ArrowBlock(blk),
+        is_async
+      ) if not(block_uses_super(blk) || block_uses_this(blk)) =>
+        @ast.TsExpr::FuncExpr({
+          name: "",
+          type_params: [],
+          const_type_params: [],
+          params,
+          return_type: ret,
+          body: blk,
+          is_generator: false,
+          is_async,
+        })
+      _ => result
+    }
+  } else {
+    result
+  }
+}
+
+///|
 fn peep_block(block : @ast.TsBlock, ctx : PeepCtx) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
   // Emit statements, stopping after the first hard terminator
@@ -957,7 +1234,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
         And =>
           match fold_null_undef_and(lp, rp) {
             Some(e) => e
-            None => fold_and_optional_chain(lp, rp)
+            // NOTE: `x && x.prop` → `x?.prop` is NOT applied here.
+            // Optional chaining short-circuits only on null/undefined, but
+            // `x && x.prop` short-circuits on ANY falsy value. More critically,
+            // `null && null.prop` returns `null` while `null?.prop` returns
+            // `undefined` — downstream code that uses `=== null` to distinguish
+            // the two cases (e.g. yjs's `compareIDs`) will silently misbehave.
+            None => BinOp(op, lp, rp)
           }
         BinEq =>
           // `x.length === 0` → `!x.length`  (saves 4 bytes; .length is
@@ -980,6 +1263,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               UnaryOp(@ast.TsUnaryOp::Not, rp)
             // `typeof x === "undefined"` → `x === void 0`  (saves ~9 bytes)
             // `"undefined" === typeof x` → `x === void 0`
+            // Only safe when x is not a bare Var — undeclared globals like
+            // `document`, `window`, `DOMParser` throw ReferenceError when
+            // accessed directly; `typeof` is the safe guard for those.
+            (
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
+              StringLit("undefined"),
+            )
+            | (
+              StringLit("undefined"),
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
+            ) => BinOp(op, lp, rp)
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1017,6 +1311,17 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             | (IntLit(0), PropAccess(_, "size")) =>
               UnaryOp(@ast.TsUnaryOp::Not, UnaryOp(@ast.TsUnaryOp::Not, rp))
             // `typeof x !== "undefined"` → `x !== void 0`  (saves ~9 bytes)
+            // Only safe when x is not a bare Var — undeclared globals like
+            // `document`, `window`, `DOMParser` throw ReferenceError when
+            // accessed directly; `typeof` is the safe guard for those.
+            (
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
+              StringLit("undefined"),
+            )
+            | (
+              StringLit("undefined"),
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
+            ) => BinOp(op, lp, rp)
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1202,8 +1507,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     OptionalChain(PropAccess(check_x, prop))
                   IndexAccess(recv, idx) if exprs_eq(check_x, recv) =>
                     OptionalChain(IndexAccess(check_x, idx))
-                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
-                    OptionalChain(MethodCall(check_x, method, args))
                   // `x != null ? x() : void 0` → `x?.()` (optional call)
                   Call(fn_name, args) =>
                     if exprs_eq(check_x, Var(fn_name)) {
@@ -1211,6 +1514,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     } else {
                       Cond(cp, t_val, e_val)
                     }
+                  // NOTE: `x != null ? x.method(a) : void 0` is NOT converted to
+                  // `x?.method(a)` — `OptionalChain(MethodCall)` emits as
+                  // `x.method?.(a)` (optional call), not `x?.method(a)` (optional
+                  // access). These differ when x is undefined: `x.method?.(a)`
+                  // throws accessing `.method` on undefined.
                   CallExpr(callee, args) if exprs_eq(check_x, callee) =>
                     OptionalChain(CallExpr(check_x, args))
                   _ => Cond(cp, t_val, e_val)
@@ -1222,7 +1530,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             // `x == null ? y : x` → `x ?? y` (flipped nullish coalescing).
             // `x == null ? void 0 : x.prop` → `x?.prop` (flipped optional chain).
             // `x == null ? void 0 : x[key]` → `x?.[key]`
-            // `x == null ? void 0 : x.method(args)` → `x?.method(args)`
             // TypeScript sometimes emits the eq-form for null-default patterns.
             BinOp(@ast.TsBinOp::AbstractEq, check_x, NullLit) => {
               let is_void_then = match t_val {
@@ -1239,14 +1546,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     OptionalChain(PropAccess(check_x, prop))
                   IndexAccess(recv, idx) if exprs_eq(check_x, recv) =>
                     OptionalChain(IndexAccess(check_x, idx))
-                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
-                    OptionalChain(MethodCall(check_x, method, args))
                   Call(fn_name, args) =>
                     if exprs_eq(check_x, Var(fn_name)) {
                       OptionalChain(Call(fn_name, args))
                     } else {
                       Cond(cp, t_val, e_val)
                     }
+                  // NOTE: MethodCall not converted — see note above for AbstractNe.
                   CallExpr(callee, args) if exprs_eq(check_x, callee) =>
                     OptionalChain(CallExpr(check_x, args))
                   _ => Cond(cp, t_val, e_val)
@@ -1262,13 +1568,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               match (t_val, e_val) {
                 (AssignExpr(n1, v1), AssignExpr(n2, v2)) if n1 == n2 =>
                   AssignExpr(n1, peep_expr(Cond(cp, v1, v2), ctx))
-                // `c ? expr : void 0` → `c && expr`  (saves ~7 bytes).
-                // When the else-branch is undefined/void the ternary is
-                // equivalent to a short-circuit `&&`. The `!x ? b : a`
-                // flip already turns `c ? void 0 : expr` into `!c ? expr : void 0`
-                // which then lands here.
-                (t_expr, UnaryOp(@ast.TsUnaryOp::Void, _)) =>
-                  BinOp(@ast.TsBinOp::And, cp, t_expr)
+                // NOTE: `c ? expr : void 0` → `c && expr` is NOT applied here.
+                // `c && expr` returns `c` (not undefined) when c is falsy.
+                // `null ? x : void 0` returns undefined, but `null && x` returns null.
+                // Code that distinguishes null/undefined would silently misbehave.
                 _ => Cond(cp, t_val, e_val)
               }
           }
@@ -1459,25 +1762,38 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       if m == "assign" && new_args.length() >= 2 {
         match (recv_p, new_args[0]) {
           (Var("Object"), @ast.TsExpr::ObjectLit(init_ents)) => {
-            let entries : Array[(String, @ast.TsExpr)] = []
-            for ie in init_ents {
-              entries.push(ie)
-            }
-            for i, a in new_args {
-              if i == 0 {
-                continue
+            // Bail if any source is a Spread call-arg. `Object.assign({}, ...arr, x)`
+            // expands `arr` as multiple arguments at call time (each element merged
+            // separately), which is NOT the same as `{...arr, ...x}` where `arr` is
+            // spread as a numeric-keyed object. Only convert when all sources are
+            // plain expressions.
+            let has_spread_arg = new_args
+              .iter()
+              .drop(1)
+              .any(fn(a) { a is Spread(_) })
+            if has_spread_arg {
+              ()
+            } else {
+              let entries : Array[(String, @ast.TsExpr)] = []
+              for ie in init_ents {
+                entries.push(ie)
               }
-              match a {
-                ObjectLit(ents) =>
-                  for e in ents {
-                    entries.push(e)
-                  }
-                // Non-ObjectLit sources: spread them in. `("...", Spread(e))`
-                // is the sentinel that ObjectLit emit uses for `...e`.
-                _ => entries.push(("...", Spread(a)))
+              for i, a in new_args {
+                if i == 0 {
+                  continue
+                }
+                match a {
+                  ObjectLit(ents) =>
+                    for e in ents {
+                      entries.push(e)
+                    }
+                  // Non-ObjectLit sources: spread them in. `("...", Spread(e))`
+                  // is the sentinel that ObjectLit emit uses for `...e`.
+                  _ => entries.push(("...", Spread(a)))
+                }
               }
+              return ObjectLit(entries)
             }
-            return ObjectLit(entries)
           }
           _ => ()
         }
@@ -1552,7 +1868,13 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       // `x.toString()` → `""+x`  (saves ~9 bytes; same as String(x)).
       // Safe for all non-Symbol values which is the common case in bundled code.
       // The no-arg form only — `.toString(radix)` must be preserved.
-      if m == "toString" && new_args.length() == 0 {
+      // Never apply to `super.toString()` — `super` is not a valid expression
+      // value in JS; `"" + super` is a SyntaxError outside class methods.
+      let is_super_recv = match recv_p {
+        @ast.TsExpr::Var("super") => true
+        _ => false
+      }
+      if m == "toString" && new_args.length() == 0 && not(is_super_recv) {
         return BinOp(@ast.TsBinOp::Add, StringLit(""), recv_p)
       }
       MethodCall(recv_p, m, new_args)
@@ -1712,10 +2034,18 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       //   - Body doesn't reference `this` or `arguments` (arrow functions capture these lexically).
       //   - Not named (or the name isn't used inside the body as a recursive ref).
       //   - Not async (async arrows are fine syntax-wise, but we only need to handle the common case).
+      // Only convert ANONYMOUS function expressions to arrows.  Named
+      // FuncExprs (`let foo = function foo(){...}`) are the parser's
+      // representation of `function foo(){}` declarations, which are
+      // hoisted in JS. Converting to an arrow would prevent
+      // `try_emit_function_decl` from emitting a real function declaration
+      // and break forward references.  Also guard against empty-body
+      // functions used as constructor bases (arrows lack `.prototype`).
       let can_arrow = not(f.is_generator) &&
+        f.name == "" &&
+        not(folded.stmts.is_empty()) &&
         not(block_references_name(folded, "this")) &&
-        not(block_references_name(folded, "arguments")) &&
-        (f.name == "" || not(block_references_name(folded, f.name)))
+        not(block_references_name(folded, "arguments"))
       if can_arrow {
         let arrow_body = match folded.stmts {
           [Return(Some(inner))] => @ast.TsArrowBody::ArrowExpr(inner)

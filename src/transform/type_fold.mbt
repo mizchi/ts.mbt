@@ -636,6 +636,10 @@ fn type_fold_expr(
         local[entry.0] = entry.1
       }
       for p in params {
+        // Parameters always shadow outer bindings with the same name.
+        // Remove any outer type first so the outer type is not used
+        // inside the function body when the param has no annotation.
+        local.remove(p.name)
         if is_useful_type(p.type_) {
           local[p.name] = p.type_
         }
@@ -653,6 +657,10 @@ fn type_fold_expr(
         local[entry.0] = entry.1
       }
       for p in f.params {
+        // Parameters always shadow outer bindings with the same name.
+        // Remove any outer type first so the outer type is not used
+        // inside the function body when the param has no annotation.
+        local.remove(p.name)
         if is_useful_type(p.type_) {
           local[p.name] = p.type_
         }

@@ -206,6 +206,11 @@ priv struct ModuleNode {
   // tag-rewrite / dts-emit / future cross-module type-driven
   // passes consult these.
   type_aliases : Array[@ast.TsTypeAlias]
+  // For CJS-wrapped modules (esbuild-style `((module)=>{...})({get exports(){return X;}, ...})`),
+  // the top-level variable that holds the module's exports after the wrapper runs.
+  // Named imports from such a module that can't be resolved via export_specs fall
+  // back to property accesses on this variable: `transpileModule` → `X.transpileModule`.
+  cjs_exports_var : String?
 }
 
 // ---------------------------------------------------------------------------
@@ -740,6 +745,51 @@ pub fn bundle_modules(
   Ok({ js: e.to_string(), sourcemap: sm_json, modules: module_paths, warnings })
 }
 
+// Detect the esbuild-style CJS-wrapper pattern:
+//   `var X = {}; ((module) => { ... })(  {get exports(){return X;}, ...}  )`
+// and return `X` (the top-level variable that holds the module's exports).
+
+///|
+fn detect_cjs_exports_var(block : @ast.TsBlock) -> String? {
+  for stmt in block.stmts {
+    let call_args = match stmt {
+      @ast.TsStmt::Expr(@ast.TsExpr::CallExpr(_, args)) => args
+      _ => continue
+    }
+    if call_args.length() != 1 {
+      continue
+    }
+    let props = match call_args[0] {
+      @ast.TsExpr::ObjectLit(p) => p
+      _ => continue
+    }
+    for prop in props {
+      let key = prop.0
+      if key != "@@get:exports" {
+        continue
+      }
+      let get_body = match prop.1 {
+        @ast.TsExpr::FuncExpr(f) => f.body
+        @ast.TsExpr::ArrowFunc(_, _, @ast.TsArrowBody::ArrowBlock(b), _) => b
+        @ast.TsExpr::ArrowFunc(
+          _,
+          _,
+          @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var(v)),
+          _
+        ) => return Some(v)
+        _ => continue
+      }
+      for s in get_body.stmts {
+        match s {
+          @ast.TsStmt::Return(Some(@ast.TsExpr::Var(v))) => return Some(v)
+          _ => ()
+        }
+      }
+    }
+  }
+  None
+}
+
 ///|
 fn load_module_graph(
   files : Map[String, String],
@@ -814,6 +864,7 @@ fn load_module_graph(
     type_aliases: mb.type_aliases,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
+    cjs_exports_var: detect_cjs_exports_var(lowered),
   }
   // Walk imports, recurse into relative paths, accumulate bare ones.
   let resolved : Map[String, String] = {}
@@ -932,6 +983,7 @@ fn load_module_graph(
     }
   }
   // Finalize the entry with the resolved-imports map populated.
+  let cjs_exports_var = detect_cjs_exports_var(lowered)
   modules[path] = {
     path,
     source,
@@ -942,6 +994,7 @@ fn load_module_graph(
     type_aliases: mb.type_aliases,
     export_specs: mb.exports,
     reexport_specs: mb.reexports,
+    cjs_exports_var,
   }
   Ok(())
 }

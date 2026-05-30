@@ -427,6 +427,19 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
       }
       match decl_kind {
         Some(kind) => {
+          // FuncExpr-initialised declarations must not be merged — emit them
+          // as real function declarations so JS hoisting semantics are preserved.
+          let is_func_init = match stmt {
+            @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+            _ => false
+          }
+          if is_func_init {
+            emit_stmt(e, stmt)
+            i = i + 1
+            continue
+          }
           // Collect this and all following same-kind declarations into a group.
           let group : Array[@ast.TsStmt] = [stmt]
           let mut j = i + 1
@@ -438,7 +451,13 @@ fn emit_block(e : Emitter, block : @ast.TsBlock) -> Unit {
               @ast.TsStmt::Var(_, _, _) => Some("var")
               _ => None
             }
-            if next_kind == Some(kind) {
+            let next_is_func = match next {
+              @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+              | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+              | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+              _ => false
+            }
+            if next_kind == Some(kind) && not(next_is_func) {
               group.push(next)
               j = j + 1
             } else {
@@ -518,6 +537,20 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
       }
       match decl_kind {
         Some(kind) => {
+          // FuncExpr-initialised declarations must be emitted as function
+          // declarations (`function foo(){}`) — not merged into a multi-decl
+          // — so that JS hoisting semantics are preserved.
+          let is_func_init = match stmt {
+            @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+            | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+            _ => false
+          }
+          if is_func_init {
+            emit_stmt(e, stmt)
+            i = i + 1
+            continue
+          }
           let group : Array[@ast.TsStmt] = [stmt]
           let mut j = i + 1
           while j < n {
@@ -528,7 +561,14 @@ fn emit_stmts_merged(e : Emitter, stmts : Array[@ast.TsStmt]) -> Unit {
               @ast.TsStmt::Var(_, _, _) => Some("var")
               _ => None
             }
-            if next_kind == Some(kind) {
+            // Also stop accumulating when the next stmt has a FuncExpr init.
+            let next_is_func = match next {
+              @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_))
+              | @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_))
+              | @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => true
+              _ => false
+            }
+            if next_kind == Some(kind) && not(next_is_func) {
               group.push(next)
               j = j + 1
             } else {
@@ -1855,6 +1895,36 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             e.space()
             emit_func_body(e, f.body)
           }
+          // Peephole may convert a FuncExpr getter/setter body to an ArrowFunc
+          // (e.g. `get exports() { return a }` → `@@get:exports: () => a`).
+          // Must still emit as `get exports() { return a }` — plain object
+          // key syntax `{"@@get:exports": …}` doesn't wire up the accessor
+          // and CJS `module.exports = X` interop silently breaks.
+          (key, ArrowFunc(params, _, body, _)) if key.has_prefix("@@get:") ||
+            key.has_prefix("@@set:") => {
+            let accessor = if key.has_prefix("@@get:") { "get" } else { "set" }
+            let real_name = key.substring(start=6, end=key.length()).to_string()
+            e.write(accessor)
+            e.write(" ")
+            emit_object_key(e, real_name)
+            e.write("(")
+            emit_runtime_params(e, params)
+            e.write(")")
+            e.space()
+            match body {
+              @ast.TsArrowBody::ArrowExpr(expr) => {
+                e.write("{")
+                e.space()
+                e.write("return")
+                e.sep_after_word(expr_leading_byte(expr))
+                emit_expr(e, expr, 2)
+                e.semi()
+                e.space()
+                e.write("}")
+              }
+              @ast.TsArrowBody::ArrowBlock(blk) => emit_block(e, blk)
+            }
+          }
           (key, FuncExpr(f)) if f.name == key && key != "" => {
             // Method shorthand: `key(args) {...}`. The parser stores
             // method shorthand as `(key, FuncExpr {name: key, ...})`.
@@ -1889,6 +1959,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             // `{key}` instead of `{key: key}` (saves 2 bytes).
             let use_shorthand = not(e.pretty) &&
               is_valid_js_ident(entry.0) &&
+              not(is_js_reserved_word(entry.0)) &&
               (match entry.1 {
                 Var(n) => n == entry.0
                 _ => false
@@ -2002,6 +2073,10 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       // parse as `new a()` followed by `(b)`.
       let needs_paren = match callee {
         Call(_, _) | CallExpr(_, _) | New(_, _) | NewExpr(_, _) => true
+        // MethodCall(recv, m, args) emits as `recv.m(args)` which is a call
+        // expression. `new recv.m(args)(newargs)` parses as
+        // `(new recv.m(args))(newargs)` — wrong — so we need parens.
+        MethodCall(_, _, _) => true
         ArrowFunc(_, _, _, _) | FuncExpr(_) => true
         BinOp(_, _, _) | Cond(_, _, _) | Seq(_, _) => true
         UnaryOp(_, _) | AssignExpr(_, _) | CompoundAssignExpr(_, _, _) => true
@@ -3003,6 +3078,51 @@ fn is_valid_js_ident(s : String) -> Bool {
 }
 
 ///|
+fn is_js_reserved_word(s : String) -> Bool {
+  match s {
+    "break"
+    | "case"
+    | "catch"
+    | "class"
+    | "const"
+    | "continue"
+    | "debugger"
+    | "default"
+    | "delete"
+    | "do"
+    | "else"
+    | "export"
+    | "extends"
+    | "false"
+    | "finally"
+    | "for"
+    | "function"
+    | "if"
+    | "import"
+    | "in"
+    | "instanceof"
+    | "let"
+    | "new"
+    | "null"
+    | "return"
+    | "static"
+    | "super"
+    | "switch"
+    | "this"
+    | "throw"
+    | "true"
+    | "try"
+    | "typeof"
+    | "var"
+    | "void"
+    | "while"
+    | "with"
+    | "yield" => true
+    _ => false
+  }
+}
+
+///|
 /// The class-desugar parser tags method-definition property keys with
 /// a synthetic `@@define:` prefix so the checker can distinguish them
 /// from plain property assignments. The runtime JS doesn't carry that
@@ -3500,6 +3620,9 @@ fn emit_native_class(
       if i > 0 {
         e.write(",")
         e.space()
+      }
+      if i < m.param_is_rest.length() && m.param_is_rest[i] {
+        e.write("...")
       }
       e.write(p.0)
       // Default-value initializer (`x = 5`) when the parser captured

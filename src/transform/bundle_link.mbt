@@ -168,6 +168,10 @@ fn link_module_graph(
   // into a bare reference.
   let import_subs : Map[String, Map[String, String]] = {}
   let namespace_subs_per_module : Map[String, Map[String, Map[String, String]]] = {}
+  // CJS property-access substitutions: for named imports from CJS-wrapped modules
+  // that have no export_specs, substitute `localAlias` with `cjsVar.importedName`.
+  // `cjs_prop_subs_per_module[path] = [(localAlias, cjsVar, importedName)]`
+  let cjs_prop_subs_per_module : Map[String, Array[(String, String, String)]] = {}
   for path in order {
     let m = match modules.get(path) {
       Some(node) => node
@@ -175,6 +179,7 @@ fn link_module_graph(
     }
     let subs : Map[String, String] = {}
     let namespace_subs : Map[String, Map[String, String]] = {}
+    let cjs_prop_subs : Array[(String, String, String)] = []
     for imp in m.import_decls {
       if imp.type_only || imp.side_effect_only {
         continue
@@ -215,7 +220,20 @@ fn link_module_graph(
             if resolved != local_alias {
               subs[local_alias] = resolved
             }
-          None => ()
+          None =>
+            // Module has no ESM export_specs. Fall back to CJS property access:
+            // substitute `localAlias` → `cjsVar.importedName` at runtime.
+            match dep.cjs_exports_var {
+              Some(cjs_var) => {
+                let actual_cjs_var = rename_per_module
+                  .get(dep_path)
+                  .unwrap_or({})
+                  .get(cjs_var)
+                  .unwrap_or(cjs_var)
+                cjs_prop_subs.push((local_alias, actual_cjs_var, imported_name))
+              }
+              None => ()
+            }
         }
       }
       // Namespace import: `import * as ns from "./a"`. Collect the
@@ -314,6 +332,9 @@ fn link_module_graph(
     }
     import_subs[path] = subs
     namespace_subs_per_module[path] = namespace_subs
+    if not(cjs_prop_subs.is_empty()) {
+      cjs_prop_subs_per_module[path] = cjs_prop_subs
+    }
   }
   // ---- Phase 3: apply substitution maps to each module's body ----
   // The walker takes both the flat rename map (local renames +
@@ -343,7 +364,8 @@ fn link_module_graph(
         combined_map[entry.0] = entry.1
       }
     }
-    if combined_map.is_empty() && ns_subs.is_empty() {
+    let has_cjs_subs = cjs_prop_subs_per_module.contains(path)
+    if combined_map.is_empty() && ns_subs.is_empty() && not(has_cjs_subs) {
       continue
     }
     // Detect `ns.X -> resolved` substitutions whose target `resolved`
@@ -427,12 +449,38 @@ fn link_module_graph(
     let synthesized = synthesize_namespace_bindings_for(
       escaping_namespaces, ns_subs, ns_locals,
     )
-    let final_block = if synthesized.is_empty() {
+    // Synthesize `const localAlias = cjsVar.importedName;` for each
+    // named import from a CJS-wrapped module (which has no export_specs).
+    let cjs_stmts : Array[@ast.TsStmt] = []
+    match cjs_prop_subs_per_module.get(path) {
+      Some(cjs_subs) =>
+        for sub in cjs_subs {
+          let local_alias = sub.0
+          let cjs_var = sub.1
+          let imported_name = sub.2
+          cjs_stmts.push(
+            @ast.TsStmt::Const(
+              @ast.TsBinding::Ident(local_alias),
+              @ast.TsType::Any,
+              @ast.TsExpr::PropAccess(@ast.TsExpr::Var(cjs_var), imported_name),
+            ),
+          )
+        }
+      None => ()
+    }
+    let all_prepend : Array[@ast.TsStmt] = []
+    for s in synthesized {
+      all_prepend.push(s)
+    }
+    for s in cjs_stmts {
+      all_prepend.push(s)
+    }
+    let final_block = if all_prepend.is_empty() {
       new_block
     } else {
       let merged_stmts : Array[@ast.TsStmt] = []
       let merged_positions : Array[Int] = []
-      for s in synthesized {
+      for s in all_prepend {
         merged_stmts.push(s)
         merged_positions.push(-1)
       }

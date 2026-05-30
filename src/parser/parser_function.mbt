@@ -2411,6 +2411,7 @@ fn Parser::parse_declare_class(
                   is_async: false,
                   is_generator: false,
                   param_defaults: [],
+                  param_is_rest: [],
                 })
               }
           }

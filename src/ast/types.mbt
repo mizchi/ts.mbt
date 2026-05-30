@@ -576,6 +576,9 @@ pub(all) struct TsClassMethodDecl {
   // marker never matches — `match(undefined)` is always false and the
   // top-level statement loop never terminates.
   param_defaults : Array[TsExpr?]
+  // Positionally aligned with `params`: true when the parameter is a rest
+  // parameter (`...name`). Empty array means no rest params.
+  param_is_rest : Array[Bool]
   return_type : TsType
   is_static : Bool
   // Method body, when the source supplied one. `None` for ambient class

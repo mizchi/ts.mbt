@@ -219,12 +219,29 @@ fn fold_func_body_once(block : @ast.TsBlock) -> @ast.TsBlock {
 /// `continue`) is silently dropped.
 pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let stmts : Array[@ast.TsStmt] = []
+  // Hoisted function declarations (Let/Var x = function...) that appear after
+  // a return — they must be inserted BEFORE the return to preserve JS
+  // semantics (the parser converts `function f(){}` to `let f = function f(){}`
+  // which loses hoisting, so we manually hoist them before the exit point).
+  let hoisted : Array[@ast.TsStmt] = []
   let positions : Array[Int] = []
   let has_positions = block.stmt_positions.length() == block.stmts.length()
   let mut exited = false
   for i, s in block.stmts {
+    let is_hoisted_func = match s {
+      Let(_, _, FuncExpr(_))
+      | Var(_, _, FuncExpr(_))
+      | Const(_, _, FuncExpr(_)) => true
+      _ => false
+    }
     if exited {
-      break
+      if is_hoisted_func {
+        // Collect hoisted funcs to splice in before the return.
+        let tmp : Array[@ast.TsStmt] = []
+        fold_stmt_into(s, tmp)
+        hoisted.append(tmp)
+      }
+      continue
     }
     let before_len = stmts.length()
     fold_stmt_into(s, stmts)
@@ -241,6 +258,19 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
         _ => ()
       }
     }
+  }
+  // Splice hoisted function declarations before the return/throw.
+  if hoisted.length() > 0 {
+    let exit_idx = stmts.length() - 1
+    let result : Array[@ast.TsStmt] = []
+    for j, st in stmts {
+      if j == exit_idx {
+        result.append(hoisted)
+      }
+      result.push(st)
+    }
+    let merged = merge_consecutive_decls(result)
+    return { stmts: merged, stmt_positions: [] }
   }
   let merged = merge_consecutive_decls(stmts)
   { stmts: merged, stmt_positions: positions }
@@ -317,9 +347,6 @@ fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
     return false
   }
   let kind = match block.stmts[0] {
-    @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => return false
-    @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_)) => return false
-    @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_)) => return false
     @ast.TsStmt::Var(_, _, _) => 0
     @ast.TsStmt::Let(_, _, _) => 1
     @ast.TsStmt::Const(_, _, _) => 2
@@ -327,9 +354,6 @@ fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
   }
   for s in block.stmts {
     match s {
-      @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => return false
-      @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_)) => return false
-      @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_)) => return false
       @ast.TsStmt::Var(_, _, _) => if kind != 0 { return false }
       @ast.TsStmt::Let(_, _, _) => if kind != 1 { return false }
       @ast.TsStmt::Const(_, _, _) => if kind != 2 { return false }
@@ -562,13 +586,16 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         _ => {
           // `let x; x = value;` → `let x = value;` (merge uninit decl + first assign).
           // Safe only when the previous statement is `let x = undefined` (the
-          // parser's representation of an uninitialised `let x;`).
+          // parser's representation of an uninitialised `let x;`) AND
+          // `value` does not reference `x` (otherwise `x` would be in TDZ
+          // when `value` is evaluated, causing a ReferenceError).
           let out_len = out.length()
           let merged = if out_len > 0 {
             match out[out_len - 1] {
               Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
               | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) if ln ==
-                n => true
+                n &&
+                not(expr_free_refs_name(rhs_f, n)) => true
               _ => false
             }
           } else {
@@ -636,6 +663,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           | BinOp(@ast.TsBinOp::Or, lhs, rhs) if is_pure_value(rhs) =>
             stack.push(lhs)
           // `let x; x = value;` → `let x = value;` when AssignExpr in stmt position.
+          // Guard: only safe when `value` does not reference `x` (otherwise TDZ).
           AssignExpr(n, v) => {
             let out_len = out.length()
             let merged = if out_len > 0 {
@@ -645,7 +673,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
                   @ast.TsBinding::Ident(ln),
                   _,
                   @ast.TsExpr::Var("undefined")
-                ) if ln == n => true
+                ) if ln == n && not(expr_free_refs_name(v, n)) => true
                 _ => false
               }
             } else {
@@ -1055,17 +1083,6 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             OptionalChain(PropAccess(Var(cn), prop))
           (
             BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit),
-            MethodCall(Var(tn), m, args),
-            _,
-          )
-          | (
-            BinOp(@ast.TsBinOp::AbstractNe, NullLit, Var(cn)),
-            MethodCall(Var(tn), m, args),
-            _,
-          ) if cn == tn && is_nullish_or_void(ef) =>
-            OptionalChain(MethodCall(Var(cn), m, args))
-          (
-            BinOp(@ast.TsBinOp::AbstractNe, Var(cn), NullLit),
             IndexAccess(Var(tn), idx),
             _,
           )
@@ -1097,17 +1114,6 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
             PropAccess(Var(tn), prop),
           ) if cn == tn && is_nullish_or_void(tf) =>
             OptionalChain(PropAccess(Var(cn), prop))
-          (
-            BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit),
-            _,
-            MethodCall(Var(tn), m, args),
-          )
-          | (
-            BinOp(@ast.TsBinOp::AbstractEq, NullLit, Var(cn)),
-            _,
-            MethodCall(Var(tn), m, args),
-          ) if cn == tn && is_nullish_or_void(tf) =>
-            OptionalChain(MethodCall(Var(cn), m, args))
           (
             BinOp(@ast.TsBinOp::AbstractEq, Var(cn), NullLit),
             _,
@@ -1367,7 +1373,11 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
       // `"str".length` / `[…].length` → integer literal
       match (recv_f, p) {
         (StringLit(s), "length") => IntLit(s.length())
-        (ArrayLit(items), "length") => IntLit(items.length())
+        // Only safe when no spread elements — `[...it].length` expands at
+        // runtime to the iterable's count, not 1.
+        (ArrayLit(items), "length") if items
+          .iter()
+          .all(fn(it) { not(it is Spread(_)) }) => IntLit(items.length())
         // Well-known Math / Number constants.
         (Var("Math"), "PI") => NumberLit(3.141592653589793)
         (Var("Math"), "E") => NumberLit(2.718281828459045)
@@ -1698,11 +1708,25 @@ fn fold_math_call(
             return Some(ArrayLit(vals))
           }
           ("entries", ObjectLit(entries)) => {
-            let pairs : Array[@ast.TsExpr] = []
+            // Bail out if any entry has a computed key (@@computed: sentinel)
+            // — the actual key expression is inside ComputedProp and cannot
+            // be represented as a string literal in the output pairs.
+            let mut has_computed = false
             for ent in entries {
-              pairs.push(ArrayLit([StringLit(ent.0), ent.1]))
+              if ent.0.has_prefix("@@computed:") ||
+                ent.0.has_prefix("@@spread:") ||
+                ent.0 == "..." {
+                has_computed = true
+                break
+              }
             }
-            return Some(ArrayLit(pairs))
+            if not(has_computed) {
+              let pairs : Array[@ast.TsExpr] = []
+              for ent in entries {
+                pairs.push(ArrayLit([StringLit(ent.0), ent.1]))
+              }
+              return Some(ArrayLit(pairs))
+            }
           }
           // `Object.freeze({...})` and `Object.seal({...})` are no-ops
           // for bundled output: the frozen/sealed state is observable only
@@ -2768,8 +2792,12 @@ fn try_lower_single_case_switch(
     None => return None
   }
   let then_stmts = strip_trailing_break(the_case.body)
-  // Only lower when the case body has no break/continue/fallthrough issues.
-  // strip_trailing_break returns None when there's a mid-body break.
+  // strip_trailing_break returns [] as a bail-out sentinel when the case body
+  // has a mid-body or nested bare break.  Detect bail-out: non-empty body
+  // returned as empty means bail out (don't lower the switch).
+  if then_stmts.is_empty() && not(the_case.body.stmts.is_empty()) {
+    return None
+  }
   let then_block : @ast.TsBlock = { stmts: then_stmts, stmt_positions: [] }
   let cond = @ast.TsExpr::BinOp(@ast.TsBinOp::BinEq, disc, case_test)
   let else_block : @ast.TsBlock? = match default_cases.length() {
@@ -2788,18 +2816,77 @@ fn try_lower_single_case_switch(
 }
 
 ///|
+/// Returns true if the block contains a `break` (without label) that would
+/// target the enclosing switch — i.e., any break not protected by an inner
+/// switch or loop. Used to bail out of switch→if conversion when the case
+/// body has a mid-body or nested bare break.
+fn block_has_bare_break(block : @ast.TsBlock) -> Bool {
+  for s in block.stmts {
+    if stmt_has_bare_break(s) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+fn stmt_has_bare_break(s : @ast.TsStmt) -> Bool {
+  match s {
+    Break(None) => true
+    Break(_) => false // labeled break targets an outer label, not this switch
+    // These introduce a new break-target, so bare breaks inside are NOT ours:
+    Switch(_, _) => false
+    For(_, _, _, _)
+    | ForIn(_, _, _, _, _)
+    | ForOf(_, _, _, _, _)
+    | ForAwaitOf(_, _, _, _, _)
+    | While(_, _)
+    | DoWhile(_, _) => false
+    // These propagate bare breaks up to our switch:
+    Block(inner) => block_has_bare_break(inner)
+    If(_, then, else_) => {
+      if block_has_bare_break(then) {
+        return true
+      }
+      match else_ {
+        Some(e) => block_has_bare_break(e)
+        None => false
+      }
+    }
+    Try(b, _, cb, fb) => {
+      if block_has_bare_break(b) {
+        return true
+      }
+      match cb {
+        Some(c) => if block_has_bare_break(c) { return true }
+        None => ()
+      }
+      match fb {
+        Some(f) => block_has_bare_break(f)
+        None => false
+      }
+    }
+    _ => false
+  }
+}
+
+///|
 fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
   let n = block.stmts.length()
   if n == 0 {
     return []
   }
-  // Reject if any break (other than the trailing one) exists — that would be
-  // a mid-body break targeting the switch itself.
+  // Bail out if any statement contains a bare break targeting the switch.
+  // We allow only a single trailing Break(None) at the top level.
   for i, s in block.stmts {
     match s {
       Break(None) if i == n - 1 => ()
       Break(_) | Continue(_) => return [] // bail out
-      _ => ()
+      _ =>
+        // Check for nested bare breaks (e.g., break inside a Block or If)
+        if stmt_has_bare_break(s) {
+          return []
+        }
     }
   }
   let last = block.stmts[n - 1]
@@ -3553,4 +3640,55 @@ fn substitute_vars_in_expr(
   }
 
   sub(expr)
+}
+
+///|
+/// Returns `true` when `expr` contains a free reference to `name`.
+/// Used to guard the `let x; x = f(x)` → `let x = f(x)` merge:
+/// if the RHS references `x`, merging would put `x` in TDZ.
+fn expr_free_refs_name(expr : @ast.TsExpr, name : String) -> Bool {
+  match expr {
+    @ast.TsExpr::Var(n) => n == name
+    @ast.TsExpr::BinOp(_, l, r) =>
+      expr_free_refs_name(l, name) || expr_free_refs_name(r, name)
+    @ast.TsExpr::UnaryOp(_, inner) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::Call(_, args) =>
+      args.iter().any(fn(a) { expr_free_refs_name(a, name) })
+    @ast.TsExpr::CallExpr(callee, args) =>
+      expr_free_refs_name(callee, name) ||
+      args.iter().any(fn(a) { expr_free_refs_name(a, name) })
+    @ast.TsExpr::New(_, args) =>
+      args.iter().any(fn(a) { expr_free_refs_name(a, name) })
+    @ast.TsExpr::PropAccess(obj, _) => expr_free_refs_name(obj, name)
+    @ast.TsExpr::IndexAccess(obj, idx) =>
+      expr_free_refs_name(obj, name) || expr_free_refs_name(idx, name)
+    @ast.TsExpr::Cond(c, t, e) =>
+      expr_free_refs_name(c, name) ||
+      expr_free_refs_name(t, name) ||
+      expr_free_refs_name(e, name)
+    @ast.TsExpr::AssignExpr(_, rhs) => expr_free_refs_name(rhs, name)
+    @ast.TsExpr::CompoundAssignExpr(lhs, _, rhs) =>
+      expr_free_refs_name(lhs, name) || expr_free_refs_name(rhs, name)
+    @ast.TsExpr::Seq(a, b) =>
+      expr_free_refs_name(a, name) || expr_free_refs_name(b, name)
+    @ast.TsExpr::Spread(inner) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::ArrayLit(elems) =>
+      elems.iter().any(fn(e) { expr_free_refs_name(e, name) })
+    @ast.TsExpr::ObjectLit(entries) =>
+      entries.iter().any(fn(kv) { expr_free_refs_name(kv.1, name) })
+    @ast.TsExpr::ComputedProp(k, v) =>
+      expr_free_refs_name(k, name) || expr_free_refs_name(v, name)
+    @ast.TsExpr::Await(inner) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::Yield(Some(inner)) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::YieldStar(inner) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::OptionalChain(inner) => expr_free_refs_name(inner, name)
+    // Function scopes create new bindings; `name` inside them refers to
+    // the inner binding if declared, not the outer one. For safety,
+    // we conservatively return true (block the merge) for any function
+    // body that references `name`, even though it may be the inner binding.
+    @ast.TsExpr::FuncExpr(_)
+    | @ast.TsExpr::ArrowFunc(_, _, _, _)
+    | @ast.TsExpr::NativeClassExpr(_) => false
+    _ => false
+  }
 }
