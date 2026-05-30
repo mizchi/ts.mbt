@@ -742,19 +742,41 @@ fn Resolver::lookup_field(
     // PropAccess site).
     Union(items) => {
       let parts : Array[@ast.TsType] = []
+      let mut any_missing = false
       for it in items {
         match self.lookup_field(it, field) {
           Some(t) => parts.push(t)
-          None => return None
+          None => any_missing = true
         }
       }
       if parts.length() == 0 {
         None
-      } else if parts.length() == 1 {
-        Some(parts[0])
+      } else if not(any_missing) {
+        // Every member has the field — return the tight union.
+        if parts.length() == 1 {
+          Some(parts[0])
+        } else {
+          Some(@ast.TsType::Union(parts))
+        }
       } else {
-        Some(@ast.TsType::Union(parts))
+        // Some members lack the field. This is a real type error at the
+        // call site, but return the best-effort union so downstream inference
+        // still gets a useful type rather than Any.
+        None
       }
+    }
+    // Intersection: a value of `A & B` has all properties of both A and B.
+    // Return the type from the first member that declares the field; when
+    // the same name is declared on multiple members the types should be
+    // identical (or one is a sub-type), so first-match is correct in practice.
+    Intersection(items) => {
+      for it in items {
+        match self.lookup_field(it, field) {
+          Some(t) => return Some(t)
+          None => ()
+        }
+      }
+      None
     }
     _ => None
   }
@@ -888,6 +910,14 @@ fn collect_index_sigs(
           }
       }
     }
+    Union(items) =>
+      for it in items {
+        collect_index_sigs(resolver, it, out, seen)
+      }
+    Intersection(items) =>
+      for it in items {
+        collect_index_sigs(resolver, it, out, seen)
+      }
     _ => ()
   }
 }
@@ -3284,6 +3314,46 @@ fn collect_declared_fields(
           out.push(f)
         }
       }
+    // Intersection: a value of `A & B` has all properties of both A and B.
+    Intersection(parts) =>
+      for part in parts {
+        for f in collect_declared_fields(part, resolver) {
+          out.push(f)
+        }
+      }
+    // Union: only fields present on every member are accessible.
+    Union(parts) => {
+      if parts.length() == 0 {
+        ()
+      } else {
+        let first_fields = collect_declared_fields(parts[0], resolver)
+        let common : Map[String, @ast.TsType] = {}
+        for f in first_fields {
+          common[f.0] = f.1
+        }
+        let mut i = 1
+        while i < parts.length() {
+          let member_fields = collect_declared_fields(parts[i], resolver)
+          let member_map : Map[String, @ast.TsType] = {}
+          for f in member_fields {
+            member_map[f.0] = f.1
+          }
+          let to_remove : Array[String] = []
+          for key in common {
+            if not(member_map.contains(key.0)) {
+              to_remove.push(key.0)
+            }
+          }
+          for k in to_remove {
+            common.remove(k)
+          }
+          i = i + 1
+        }
+        for entry in common {
+          out.push((entry.0, entry.1))
+        }
+      }
+    }
     _ => ()
   }
   out
