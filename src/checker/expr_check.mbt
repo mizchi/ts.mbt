@@ -2230,8 +2230,8 @@ fn infer_expr(
       @ast.TsType::Any
     }
     YieldStar(inner) => {
-      let _ = infer_expr(env, resolver, inner)
-      @ast.TsType::Any
+      let inner_ty = infer_expr(env, resolver, inner)
+      for_of_element_type(resolver, inner_ty)
     }
     DynamicImport(_, _) | ImportMeta => @ast.TsType::Any
     PropAccess(receiver, name) => {
@@ -4543,6 +4543,19 @@ fn collect_narrowing(
         collect_narrowing(env, resolver, l, then_binds, else_binds, true)
         collect_narrowing(env, resolver, r, then_binds, else_binds, true)
       }
+    BinOp(Coalesce, l, r) =>
+      // `x ?? y`: when truthy, x is non-nullish; when falsy, narrowing from r.
+      if then_sense {
+        collect_narrowing(env, resolver, l, then_binds, else_binds, true)
+      } else {
+        collect_narrowing(env, resolver, r, then_binds, else_binds, false)
+      }
+    // Sequence expression: only the final value matters for narrowing.
+    Seq(_, right) =>
+      collect_narrowing(env, resolver, right, then_binds, else_binds, then_sense)
+    // Await is transparent to narrowing: `if (await x instanceof C)` narrows x.
+    Await(inner) =>
+      collect_narrowing(env, resolver, inner, then_binds, else_binds, then_sense)
     UnaryOp(Not, inner) =>
       collect_narrowing(
         env,

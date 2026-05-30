@@ -204,6 +204,20 @@ fn is_assignable_to_inner(
     }
     (Object(s_fields), Object(t_fields)) =>
       is_object_assignable_inner(s_fields, t_fields, bivariant_params)
+    // Struct types are structurally compatible with Object types and each other.
+    (Struct(_, s_fields), Struct(_, t_fields)) => {
+      let s_obj = struct_fields_to_object(s_fields)
+      let t_obj = struct_fields_to_object(t_fields)
+      is_object_assignable_inner(s_obj, t_obj, bivariant_params)
+    }
+    (Struct(_, s_fields), Object(t_fields)) => {
+      let s_obj = struct_fields_to_object(s_fields)
+      is_object_assignable_inner(s_obj, t_fields, bivariant_params)
+    }
+    (Object(s_fields), Struct(_, t_fields)) => {
+      let t_obj = struct_fields_to_object(t_fields)
+      is_object_assignable_inner(s_fields, t_obj, bivariant_params)
+    }
     // Named/applied references are nominal: only equal names match.
     (Named(a), Named(b)) => a == b
     (Applied(a, args_a), Applied(b, args_b)) => {
@@ -219,6 +233,17 @@ fn is_assignable_to_inner(
     }
     _ => false
   }
+}
+
+///|
+fn struct_fields_to_object(
+  fields : Array[(String, @ast.TsType)],
+) -> Array[(@ast.TsType, @ast.TsType)] {
+  let out : Array[(@ast.TsType, @ast.TsType)] = []
+  for f in fields {
+    out.push((@ast.TsType::Literal(f.0), f.1))
+  }
+  out
 }
 
 ///|
