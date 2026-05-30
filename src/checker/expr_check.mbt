@@ -1842,8 +1842,11 @@ fn infer_expr(
       infer_binop(op, lt, rt)
     }
     UnaryOp(op, inner) => {
-      let _ = infer_expr(env, resolver, inner)
-      infer_unary(op)
+      let inner_ty = infer_expr(env, resolver, inner)
+      match op {
+        Typeof => infer_typeof_type(resolver, inner_ty)
+        _ => infer_unary(op)
+      }
     }
     Cond(_, then_, else_) =>
       narrow_union(
@@ -1938,28 +1941,37 @@ fn infer_expr(
         }
       }
     NewExpr(callee, args) => {
-      // For computed `new` expressions we can often recover the instance
-      // type when the callee is a simple identifier or a qualified name
-      // (`ns.ClassName`) that resolves to a known class.
-      let instance_ty = match callee {
-        Var(name) =>
-          match resolver.classes.get(name) {
-            Some(_) => @ast.TsType::Named(name)
-            None => @ast.TsType::Any
-          }
-        PropAccess(Var(ns_name), class_name) => {
-          let key = ns_name + "." + class_name
+      // Walk the callee expression to a dotted key string so we can look
+      // it up in resolver.classes and resolver.globals.
+      fn callee_key(e : @ast.TsExpr) -> String? {
+        match e {
+          Var(n) => Some(n)
+          PropAccess(inner, prop) =>
+            match callee_key(inner) {
+              Some(prefix) => Some(prefix + "." + prop)
+              None => None
+            }
+          _ => None
+        }
+      }
+      let instance_ty = match callee_key(callee) {
+        Some(key) =>
           match resolver.classes.get(key) {
             Some(_) => @ast.TsType::Named(key)
             None =>
-              // Fallback: maybe the class is also registered without prefix
-              match resolver.classes.get(class_name) {
-                Some(_) => @ast.TsType::Named(class_name)
+              // Try just the last segment (unqualified name) as fallback.
+              match key.rev_find(".") {
+                Some(dot) => {
+                  let short = key[dot + 1:key.length()].to_string()
+                  match resolver.classes.get(short) {
+                    Some(_) => @ast.TsType::Named(short)
+                    None => @ast.TsType::Any
+                  }
+                }
                 None => @ast.TsType::Any
               }
           }
-        }
-        _ => @ast.TsType::Any
+        None => @ast.TsType::Any
       }
       let _ = infer_expr(env, resolver, callee)
       for a in args {
@@ -2424,6 +2436,35 @@ fn infer_call(
     // narrowing effect applies to all statements after the call site.
     Func(_, AssertsPredicate(_, _)) => @ast.TsType::Void
     Func(_, ret) => ret
+    // Union of callable types: return the union of each branch's return type.
+    Union(parts) => {
+      let rets : Array[@ast.TsType] = []
+      for part in parts {
+        match resolver.unwrap(part) {
+          Func(_, TypePredicate(_, _)) => rets.push(@ast.TsType::Boolean)
+          Func(_, AssertsPredicate(_, _)) => rets.push(@ast.TsType::Void)
+          Func(_, ret) => rets.push(ret)
+          _ => return @ast.TsType::Any
+        }
+      }
+      if rets.length() == 1 {
+        rets[0]
+      } else {
+        @ast.TsType::Union(rets)
+      }
+    }
+    // Intersection: find the first callable member and use its return type.
+    Intersection(parts) => {
+      for part in parts {
+        match resolver.unwrap(part) {
+          Func(_, TypePredicate(_, _)) => return @ast.TsType::Boolean
+          Func(_, AssertsPredicate(_, _)) => return @ast.TsType::Void
+          Func(_, ret) => return ret
+          _ => ()
+        }
+      }
+      @ast.TsType::Any
+    }
     _ => @ast.TsType::Any
   }
 }
@@ -2557,6 +2598,43 @@ fn infer_unary(op : @ast.TsUnaryOp) -> @ast.TsType {
     Typeof => @ast.TsType::String_
     Void => @ast.TsType::Undefined
     Delete => @ast.TsType::Boolean
+  }
+}
+
+///|
+/// Return the narrow string-literal type that `typeof operand` produces when
+/// the operand's type is statically known. Falls back to `String_` (the widest
+/// possible typeof result) for unknown / mixed shapes.
+fn infer_typeof_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
+  let lit = fn(s : String) { @ast.TsType::Literal(s) }
+  match resolver.unwrap(ty) {
+    String_ | Literal(_) => lit("string")
+    Number | Int | NumberLiteral(_) => lit("number")
+    Boolean | BoolLiteral(_) => lit("boolean")
+    Null => lit("object")
+    Undefined => lit("undefined")
+    Func(_, _) => lit("function")
+    Union(parts) => {
+      let seen : Map[String, Bool] = {}
+      let tags : Array[@ast.TsType] = []
+      for p in parts {
+        let tag = infer_typeof_type(resolver, p)
+        let key = match tag {
+          Literal(s) => s
+          _ => "string"
+        }
+        if not(seen.contains(key)) {
+          seen[key] = true
+          tags.push(tag)
+        }
+      }
+      if tags.length() == 1 {
+        tags[0]
+      } else {
+        @ast.TsType::Union(tags)
+      }
+    }
+    _ => @ast.TsType::String_
   }
 }
 

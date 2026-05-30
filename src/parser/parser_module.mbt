@@ -2360,19 +2360,17 @@ fn Parser::parse_export_decl_for_module(
     }
     _ => ()
   }
-  if self.check(Const) &&
-    (match self.peek_at(1).kind {
-      Ident(name) => name == "enum"
-      _ => false
-    }) {
-    self.skip_declaration_block()
+  if self.is_const_enum_decl_start() {
+    let enum_ = self.parse_const_enum_decl(false)
+    exports.push({ local_name: enum_.name, export_name: enum_.name })
     return (stmts, exports, reexports)
   }
   if (match self.peek().kind {
       Ident(name) => name == "enum"
       _ => false
     }) {
-    self.skip_declaration_block()
+    let enum_ = self.parse_enum_decl_after_enum_keyword(false, false)
+    exports.push({ local_name: enum_.name, export_name: enum_.name })
     return (stmts, exports, reexports)
   }
   let is_declare = match self.peek().kind {
