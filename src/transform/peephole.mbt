@@ -983,11 +983,15 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
   }
 }
 
-// Peephole a declaration RHS. When the binding has a name (e.g. `let foo =
-// function(){}`) and the RHS is already a FuncExpr, peel through the body
-// without calling peep_expr on the whole thing — peep_expr would convert
-// FuncExpr→ArrowFunc, breaking `try_emit_function_decl`'s hoisting path.
-// For all other RHS shapes (including ArrowFunc) just delegate to peep_expr.
+// Peephole a declaration RHS with special handling for named function bindings.
+// Goals:
+//   1. `let f = function(){}` must NOT become an arrow — keep FuncExpr so
+//      try_emit_function_decl can hoist it as `function f(){}`.
+//   2. `let f = (...) => { block }` (block-body arrow) also converts to FuncExpr
+//      for the same hoisting reason; block arrows are never shorter than the
+//      equivalent function expression, and hoisting avoids TDZ issues in bundles.
+//   3. `let f = x => x+1` and `let f = (x) => { return x+1; }` stay arrows
+//      after peep_expr folds them to concise form (smaller, no hoisting needed).
 fn peep_decl_rhs(
   binding : @ast.TsBinding,
   rhs : @ast.TsExpr,
@@ -999,8 +1003,7 @@ fn peep_decl_rhs(
   }
   if name != "" {
     match rhs {
-      // `let f = function() {}` — fold the body but keep it as FuncExpr so
-      // try_emit_function_decl can hoist it to `function f() {}`.
+      // `let f = function() {}` — fold the body but keep it as FuncExpr.
       @ast.TsExpr::FuncExpr(f) => {
         let folded = peep_block(f.body, ctx)
         return @ast.TsExpr::FuncExpr({ ..f, body: folded })
@@ -1008,7 +1011,28 @@ fn peep_decl_rhs(
       _ => ()
     }
   }
-  peep_expr(rhs, ctx)
+  let result = peep_expr(rhs, ctx)
+  if name != "" {
+    match result {
+      // Block-body arrow after peephole: convert to FuncExpr for hoisting.
+      // Concise arrows (ArrowExpr body) were either already concise or folded
+      // from `{return expr}` — those stay arrows.
+      @ast.TsExpr::ArrowFunc(params, ret, @ast.TsArrowBody::ArrowBlock(blk), is_async) if not(block_uses_super(blk) || block_uses_this(blk)) =>
+        @ast.TsExpr::FuncExpr({
+          name: "",
+          type_params: [],
+          const_type_params: [],
+          params,
+          return_type: ret,
+          body: blk,
+          is_generator: false,
+          is_async,
+        })
+      _ => result
+    }
+  } else {
+    result
+  }
 }
 
 ///|
@@ -1468,8 +1492,11 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     } else {
                       Cond(cp, t_val, e_val)
                     }
-                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
-                    OptionalChain(MethodCall(check_x, method, args))
+                  // NOTE: `x != null ? x.method(a) : void 0` is NOT converted to
+                  // `x?.method(a)` — `OptionalChain(MethodCall)` emits as
+                  // `x.method?.(a)` (optional call), not `x?.method(a)` (optional
+                  // access). These differ when x is undefined: `x.method?.(a)`
+                  // throws accessing `.method` on undefined.
                   CallExpr(callee, args) if exprs_eq(check_x, callee) =>
                     OptionalChain(CallExpr(check_x, args))
                   _ => Cond(cp, t_val, e_val)
@@ -1481,7 +1508,6 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             // `x == null ? y : x` → `x ?? y` (flipped nullish coalescing).
             // `x == null ? void 0 : x.prop` → `x?.prop` (flipped optional chain).
             // `x == null ? void 0 : x[key]` → `x?.[key]`
-            // `x == null ? void 0 : x.method(args)` → `x?.method(args)`
             // TypeScript sometimes emits the eq-form for null-default patterns.
             BinOp(@ast.TsBinOp::AbstractEq, check_x, NullLit) => {
               let is_void_then = match t_val {
@@ -1504,8 +1530,7 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     } else {
                       Cond(cp, t_val, e_val)
                     }
-                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
-                    OptionalChain(MethodCall(check_x, method, args))
+                  // NOTE: MethodCall not converted — see note above for AbstractNe.
                   CallExpr(callee, args) if exprs_eq(check_x, callee) =>
                     OptionalChain(CallExpr(check_x, args))
                   _ => Cond(cp, t_val, e_val)

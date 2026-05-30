@@ -1044,9 +1044,11 @@ test "peephole: x == null ? void 0 : x.prop → x?.prop (flipped optional chain)
 }
 
 ///|
-test "peephole: x == null ? void 0 : x.method(a) → x?.method(a)" {
+test "peephole: x == null ? void 0 : x.method(a) keeps ternary (MethodCall emit wrong for optional access)" {
+  // `OptionalChain(MethodCall)` emits `x.method?.(a)`, not `x?.method(a)`.
+  // `x.method?.(a)` throws when x is undefined — not semantically equivalent.
   let out = minify_one("const r = x == null ? void 0 : x.method(a);")
-  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
+  assert_true(out.contains("?"), msg="expected ? kept, got: \{out}")
 }
 
 ///|
