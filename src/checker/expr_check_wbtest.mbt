@@ -4969,6 +4969,41 @@ test "expr_check: deliberate type violations are detected" {
         #|}
       ),
     ),
+    (
+      "null-passed-to-number-param",
+      (
+        #|function acceptsNumber(x: number): void {}
+        #|function f(): void {
+        #|  acceptsNumber(null);
+        #|}
+      ),
+    ),
+    (
+      "string-in-number-array",
+      (
+        #|function f(): void {
+        #|  const arr: number[] = [1, 2, "oops"];
+        #|}
+      ),
+    ),
+    (
+      "missing-required-parameter",
+      (
+        #|function required(x: number, y: number): void {}
+        #|function f(): void {
+        #|  required(1);
+        #|}
+      ),
+    ),
+    (
+      "union-mismatch-not-widened",
+      (
+        #|function acceptsString(x: string): void {}
+        #|function f(u: string | number): void {
+        #|  acceptsString(u);
+        #|}
+      ),
+    ),
   ]
   let mut misses = 0
   for c in cases {

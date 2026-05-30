@@ -948,8 +948,8 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
       } else {
         @ast.TsType::Any
       }
-      let _ = self.expect(Assign)
-      let init = self.parse_assign_expr()
+      let _ = self.expect(Eq)
+      let init = self.parse_expr()
       let _ = self.match_(Semicolon)
       // Parse the remaining statements in this block into the try body.
       let rest_stmts : Array[@ast.TsStmt] = []

@@ -2049,10 +2049,11 @@ test "parser: `using` declaration lowers to const + try-finally" {
     #|}
   match (try? Parser::from_source(src).parse_module()) {
     Ok(m) => {
-      // f's body: [Const(d1, ...), Try(body=[Const(d2, ...), Try(rest=[], ...finally)], ...finally)]
-      let func_body = match m.stmts[0] {
-        @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(f)) => f.body
-        _ => fail("expected function")
+      // f is in m.funcs
+      let func = m.funcs.iter().filter(fn(f) { f.name == "f" }).next()
+      let func_body = match func {
+        Some(f) => f.body
+        None => fail("function f not found")
       }
       // First stmt: `const d1 = ...`
       match func_body.stmts[0] {
@@ -7003,7 +7004,7 @@ test "parser: type alias in function body is collected into module type_aliases"
   let m = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
   assert_true(
     m.type_aliases.iter().any(fn(ta) { ta.name == "Point" }),
-    "expected Point type alias in module type_aliases",
+    msg="expected Point type alias in module type_aliases",
   )
 }
 
@@ -7015,10 +7016,10 @@ test "parser: type alias in module block is collected" {
   let m = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
   assert_true(
     m.type_aliases.iter().any(fn(ta) { ta.name == "StringOrNum" }),
-    "expected StringOrNum",
+    msg="expected StringOrNum",
   )
   assert_true(
     m.type_aliases.iter().any(fn(ta) { ta.name == "Callback" }),
-    "expected Callback",
+    msg="expected Callback",
   )
 }

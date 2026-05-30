@@ -166,15 +166,11 @@ fn Resolver::ingest_module(
     // Expose enum members as globals so `Color.Red` resolves via PropAccess.
     for m in e.members {
       let val_ty = match m.value {
-        Some(@ast.TsEnumMemberValue::Number(s)) =>
-          match @strconv.parse_double(s) {
-            Ok(f) => @ast.TsType::NumberLiteral(f)
-            Err(_) => @ast.TsType::Number
-          }
+        Some(@ast.TsEnumMemberValue::Number(s)) => @ast.TsType::NumberLiteral(s)
         Some(@ast.TsEnumMemberValue::String(s)) => @ast.TsType::Literal(s)
         Some(@ast.TsEnumMemberValue::BigInt(s)) => @ast.TsType::Literal(s)
         Some(@ast.TsEnumMemberValue::Bool(b)) =>
-          @ast.TsType::BoolLiteral(b)
+          @ast.TsType::BooleanLiteral(b)
         None => @ast.TsType::Number
       }
       r.globals[prefix + e.name + "." + m.name] = val_ty
@@ -2431,9 +2427,11 @@ fn infer_expr(
     NonNull(inner) => non_nullable(infer_expr(env, resolver, inner))
     // `a?.b…` — widen the result with `undefined` to reflect short-circuit.
     OptionalChain(inner) => {
-      // `?.` eliminates both null and undefined from the result type.
+      // `a?.b` — infer the chain result, then widen with `undefined` because
+      // the chain short-circuits to `undefined` when the receiver is nullish.
       let inner_ty = infer_expr(env, resolver, inner)
-      prune_nullish(resolver, inner_ty)
+      let base = prune_nullish(resolver, inner_ty)
+      narrow_union(base, @ast.TsType::Undefined)
     }
     // JSX element / fragment. The value itself is opaque at the type
     // level (we don't model React's `ReactNode` / `JSX.Element`), so
@@ -2780,7 +2778,7 @@ fn infer_typeof_type(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
   match resolver.unwrap(ty) {
     String_ | Literal(_) => lit("string")
     Number | Int | NumberLiteral(_) => lit("number")
-    Boolean | BoolLiteral(_) => lit("boolean")
+    Boolean | BooleanLiteral(_) => lit("boolean")
     Null => lit("object")
     Undefined => lit("undefined")
     Func(_, _) => lit("function")
