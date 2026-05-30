@@ -229,8 +229,9 @@ pub fn fold_block(block : @ast.TsBlock) -> @ast.TsBlock {
   let mut exited = false
   for i, s in block.stmts {
     let is_hoisted_func = match s {
-      Let(_, _, FuncExpr(_)) | Var(_, _, FuncExpr(_)) | Const(_, _, FuncExpr(_)) =>
-        true
+      Let(_, _, FuncExpr(_))
+      | Var(_, _, FuncExpr(_))
+      | Const(_, _, FuncExpr(_)) => true
       _ => false
     }
     if exited {
@@ -593,7 +594,8 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
             match out[out_len - 1] {
               Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
               | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) if ln ==
-                n && not(expr_free_refs_name(rhs_f, n)) => true
+                n &&
+                not(expr_free_refs_name(rhs_f, n)) => true
               _ => false
             }
           } else {
@@ -1373,8 +1375,9 @@ fn fold_expr(expr : @ast.TsExpr) -> @ast.TsExpr {
         (StringLit(s), "length") => IntLit(s.length())
         // Only safe when no spread elements — `[...it].length` expands at
         // runtime to the iterable's count, not 1.
-        (ArrayLit(items), "length") if items.iter().all(fn(it) { not(it is Spread(_)) }) =>
-          IntLit(items.length())
+        (ArrayLit(items), "length") if items
+          .iter()
+          .all(fn(it) { not(it is Spread(_)) }) => IntLit(items.length())
         // Well-known Math / Number constants.
         (Var("Math"), "PI") => NumberLit(3.141592653589793)
         (Var("Math"), "E") => NumberLit(2.718281828459045)
@@ -2826,14 +2829,19 @@ fn block_has_bare_break(block : @ast.TsBlock) -> Bool {
   false
 }
 
+///|
 fn stmt_has_bare_break(s : @ast.TsStmt) -> Bool {
   match s {
     Break(None) => true
     Break(_) => false // labeled break targets an outer label, not this switch
     // These introduce a new break-target, so bare breaks inside are NOT ours:
     Switch(_, _) => false
-    For(_, _, _, _) | ForIn(_, _, _, _, _) | ForOf(_, _, _, _, _)
-    | ForAwaitOf(_, _, _, _, _) | While(_, _) | DoWhile(_, _) => false
+    For(_, _, _, _)
+    | ForIn(_, _, _, _, _)
+    | ForOf(_, _, _, _, _)
+    | ForAwaitOf(_, _, _, _, _)
+    | While(_, _)
+    | DoWhile(_, _) => false
     // These propagate bare breaks up to our switch:
     Block(inner) => block_has_bare_break(inner)
     If(_, then, else_) => {
@@ -2862,6 +2870,7 @@ fn stmt_has_bare_break(s : @ast.TsStmt) -> Bool {
   }
 }
 
+///|
 fn strip_trailing_break(block : @ast.TsBlock) -> Array[@ast.TsStmt] {
   let n = block.stmts.length()
   if n == 0 {
@@ -3643,11 +3652,13 @@ fn expr_free_refs_name(expr : @ast.TsExpr, name : String) -> Bool {
     @ast.TsExpr::BinOp(_, l, r) =>
       expr_free_refs_name(l, name) || expr_free_refs_name(r, name)
     @ast.TsExpr::UnaryOp(_, inner) => expr_free_refs_name(inner, name)
-    @ast.TsExpr::Call(_, args) => args.iter().any(fn(a) { expr_free_refs_name(a, name) })
+    @ast.TsExpr::Call(_, args) =>
+      args.iter().any(fn(a) { expr_free_refs_name(a, name) })
     @ast.TsExpr::CallExpr(callee, args) =>
       expr_free_refs_name(callee, name) ||
       args.iter().any(fn(a) { expr_free_refs_name(a, name) })
-    @ast.TsExpr::New(_, args) => args.iter().any(fn(a) { expr_free_refs_name(a, name) })
+    @ast.TsExpr::New(_, args) =>
+      args.iter().any(fn(a) { expr_free_refs_name(a, name) })
     @ast.TsExpr::PropAccess(obj, _) => expr_free_refs_name(obj, name)
     @ast.TsExpr::IndexAccess(obj, idx) =>
       expr_free_refs_name(obj, name) || expr_free_refs_name(idx, name)
@@ -3675,8 +3686,9 @@ fn expr_free_refs_name(expr : @ast.TsExpr, name : String) -> Bool {
     // the inner binding if declared, not the outer one. For safety,
     // we conservatively return true (block the merge) for any function
     // body that references `name`, even though it may be the inner binding.
-    @ast.TsExpr::FuncExpr(_) | @ast.TsExpr::ArrowFunc(_, _, _, _) |
-    @ast.TsExpr::NativeClassExpr(_) => false
+    @ast.TsExpr::FuncExpr(_)
+    | @ast.TsExpr::ArrowFunc(_, _, _, _)
+    | @ast.TsExpr::NativeClassExpr(_) => false
     _ => false
   }
 }

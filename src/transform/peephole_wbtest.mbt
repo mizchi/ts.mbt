@@ -1514,8 +1514,5 @@ test "peephole: c ? expr : void 0 keeps ternary (c && expr has different falsy s
   // `null ? x : void 0` returns undefined, but `null && x` returns null.
   // Code that checks `=== null` after the expression would silently misbehave.
   let out = minify_one("const a = x > 0 ? doSomething(x) : undefined;")
-  assert_true(
-    out.contains("?"),
-    msg="expected ternary kept, got: \{out}",
-  )
+  assert_true(out.contains("?"), msg="expected ternary kept, got: \{out}")
 }

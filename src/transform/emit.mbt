@@ -3080,12 +3080,44 @@ fn is_valid_js_ident(s : String) -> Bool {
 ///|
 fn is_js_reserved_word(s : String) -> Bool {
   match s {
-    "break" | "case" | "catch" | "class" | "const" | "continue" | "debugger" |
-    "default" | "delete" | "do" | "else" | "export" | "extends" | "false" |
-    "finally" | "for" | "function" | "if" | "import" | "in" | "instanceof" |
-    "let" | "new" | "null" | "return" | "static" | "super" | "switch" |
-    "this" | "throw" | "true" | "try" | "typeof" | "var" | "void" | "while" |
-    "with" | "yield" => true
+    "break"
+    | "case"
+    | "catch"
+    | "class"
+    | "const"
+    | "continue"
+    | "debugger"
+    | "default"
+    | "delete"
+    | "do"
+    | "else"
+    | "export"
+    | "extends"
+    | "false"
+    | "finally"
+    | "for"
+    | "function"
+    | "if"
+    | "import"
+    | "in"
+    | "instanceof"
+    | "let"
+    | "new"
+    | "null"
+    | "return"
+    | "static"
+    | "super"
+    | "switch"
+    | "this"
+    | "throw"
+    | "true"
+    | "try"
+    | "typeof"
+    | "var"
+    | "void"
+    | "while"
+    | "with"
+    | "yield" => true
     _ => false
   }
 }

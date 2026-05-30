@@ -783,6 +783,7 @@ fn block_ends_with_terminator(b : @ast.TsBlock) -> Bool {
   }
 }
 
+///|
 fn arrow_body_uses_super(body : @ast.TsArrowBody) -> Bool {
   match body {
     @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_super(inner)
@@ -790,6 +791,7 @@ fn arrow_body_uses_super(body : @ast.TsArrowBody) -> Bool {
   }
 }
 
+///|
 fn arrow_body_uses_this(body : @ast.TsArrowBody) -> Bool {
   match body {
     @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_this(inner)
@@ -797,6 +799,7 @@ fn arrow_body_uses_this(body : @ast.TsArrowBody) -> Bool {
   }
 }
 
+///|
 fn expr_uses_this(e : @ast.TsExpr) -> Bool {
   match e {
     Var("this") => true
@@ -804,8 +807,7 @@ fn expr_uses_this(e : @ast.TsExpr) -> Bool {
     UnaryOp(_, a) => expr_uses_this(a)
     CallExpr(f, args) => expr_uses_this(f) || args.iter().any(expr_uses_this)
     Call(_, args) => args.iter().any(expr_uses_this)
-    Cond(c, t, f) =>
-      expr_uses_this(c) || expr_uses_this(t) || expr_uses_this(f)
+    Cond(c, t, f) => expr_uses_this(c) || expr_uses_this(t) || expr_uses_this(f)
     ArrayLit(elems) => elems.iter().any(expr_uses_this)
     Spread(a) => expr_uses_this(a)
     ObjectLit(ents) => ents.iter().any(fn(kv) { expr_uses_this(kv.1) })
@@ -840,10 +842,12 @@ fn expr_uses_this(e : @ast.TsExpr) -> Bool {
   }
 }
 
+///|
 fn block_uses_this(blk : @ast.TsBlock) -> Bool {
   blk.stmts.iter().any(stmt_uses_this)
 }
 
+///|
 fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
   match s {
     @ast.TsStmt::Expr(e) => expr_uses_this(e)
@@ -878,8 +882,7 @@ fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
       cb.map_or(false, block_uses_this) ||
       fb.map_or(false, block_uses_this)
     @ast.TsStmt::Switch(e, cases) =>
-      expr_uses_this(e) ||
-      cases.iter().any(fn(c) { block_uses_this(c.body) })
+      expr_uses_this(e) || cases.iter().any(fn(c) { block_uses_this(c.body) })
     @ast.TsStmt::Label(_, inner) => stmt_uses_this(inner)
     // FuncDecl/NativeClassStmt introduce their own `this` — don't descend.
     _ => false
@@ -890,14 +893,15 @@ fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
 // captured by an enclosing arrow function (i.e., not shielded by a
 // non-arrow function boundary). Used to prevent the arrow→FuncExpr conversion
 // that breaks `super` inside arrow bodies.
+
+///|
 fn expr_uses_super(e : @ast.TsExpr) -> Bool {
   match e {
     Var("super") => true
     Call("super", _) => true
     BinOp(_, a, b) => expr_uses_super(a) || expr_uses_super(b)
     UnaryOp(_, a) => expr_uses_super(a)
-    CallExpr(f, args) =>
-      expr_uses_super(f) || args.iter().any(expr_uses_super)
+    CallExpr(f, args) => expr_uses_super(f) || args.iter().any(expr_uses_super)
     Cond(c, t, f) =>
       expr_uses_super(c) || expr_uses_super(t) || expr_uses_super(f)
     ArrayLit(elems) => elems.iter().any(expr_uses_super)
@@ -940,10 +944,12 @@ fn expr_uses_super(e : @ast.TsExpr) -> Bool {
   }
 }
 
+///|
 fn block_uses_super(blk : @ast.TsBlock) -> Bool {
   blk.stmts.iter().any(stmt_uses_super)
 }
 
+///|
 fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
   match s {
     Expr(e) => expr_uses_super(e)
@@ -974,8 +980,7 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
       catch_b.map_or(false, block_uses_super) ||
       finally_b.map_or(false, block_uses_super)
     Switch(e, cases) =>
-      expr_uses_super(e) ||
-      cases.iter().any(fn(c) { block_uses_super(c.body) })
+      expr_uses_super(e) || cases.iter().any(fn(c) { block_uses_super(c.body) })
     Block(b) => block_uses_super(b)
     Label(_, s) => stmt_uses_super(s)
     With(e, b) => expr_uses_super(e) || block_uses_super(b)
@@ -992,10 +997,12 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
 //      equivalent function expression, and hoisting avoids TDZ issues in bundles.
 //   3. `let f = x => x+1` and `let f = (x) => { return x+1; }` stay arrows
 //      after peep_expr folds them to concise form (smaller, no hoisting needed).
+
+///|
 fn peep_decl_rhs(
   binding : @ast.TsBinding,
   rhs : @ast.TsExpr,
-  ctx : PeepCtx
+  ctx : PeepCtx,
 ) -> @ast.TsExpr {
   let name = match binding {
     @ast.TsBinding::Ident(n) => n
@@ -1017,7 +1024,12 @@ fn peep_decl_rhs(
       // Block-body arrow after peephole: convert to FuncExpr for hoisting.
       // Concise arrows (ArrowExpr body) were either already concise or folded
       // from `{return expr}` — those stay arrows.
-      @ast.TsExpr::ArrowFunc(params, ret, @ast.TsArrowBody::ArrowBlock(blk), is_async) if not(block_uses_super(blk) || block_uses_this(blk)) =>
+      @ast.TsExpr::ArrowFunc(
+        params,
+        ret,
+        @ast.TsArrowBody::ArrowBlock(blk),
+        is_async
+      ) if not(block_uses_super(blk) || block_uses_this(blk)) =>
         @ast.TsExpr::FuncExpr({
           name: "",
           type_params: [],
@@ -1254,9 +1266,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             // Only safe when x is not a bare Var — undeclared globals like
             // `document`, `window`, `DOMParser` throw ReferenceError when
             // accessed directly; `typeof` is the safe guard for those.
-            (UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)), StringLit("undefined"))
-            | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_))) =>
-              BinOp(op, lp, rp)
+            (
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
+              StringLit("undefined"),
+            )
+            | (
+              StringLit("undefined"),
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
+            ) => BinOp(op, lp, rp)
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1297,9 +1314,14 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             // Only safe when x is not a bare Var — undeclared globals like
             // `document`, `window`, `DOMParser` throw ReferenceError when
             // accessed directly; `typeof` is the safe guard for those.
-            (UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)), StringLit("undefined"))
-            | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_))) =>
-              BinOp(op, lp, rp)
+            (
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
+              StringLit("undefined"),
+            )
+            | (
+              StringLit("undefined"),
+              UnaryOp(@ast.TsUnaryOp::Typeof, @ast.TsExpr::Var(_)),
+            ) => BinOp(op, lp, rp)
             (UnaryOp(@ast.TsUnaryOp::Typeof, x), StringLit("undefined"))
             | (StringLit("undefined"), UnaryOp(@ast.TsUnaryOp::Typeof, x)) =>
               BinOp(
@@ -1745,7 +1767,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
             // separately), which is NOT the same as `{...arr, ...x}` where `arr` is
             // spread as a numeric-keyed object. Only convert when all sources are
             // plain expressions.
-            let has_spread_arg = new_args.iter().drop(1).any(fn(a) { a is Spread(_) })
+            let has_spread_arg = new_args
+              .iter()
+              .drop(1)
+              .any(fn(a) { a is Spread(_) })
             if has_spread_arg {
               ()
             } else {

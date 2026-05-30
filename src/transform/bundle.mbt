@@ -748,6 +748,8 @@ pub fn bundle_modules(
 // Detect the esbuild-style CJS-wrapper pattern:
 //   `var X = {}; ((module) => { ... })(  {get exports(){return X;}, ...}  )`
 // and return `X` (the top-level variable that holds the module's exports).
+
+///|
 fn detect_cjs_exports_var(block : @ast.TsBlock) -> String? {
   for stmt in block.stmts {
     let call_args = match stmt {
@@ -773,7 +775,7 @@ fn detect_cjs_exports_var(block : @ast.TsBlock) -> String? {
           _,
           _,
           @ast.TsArrowBody::ArrowExpr(@ast.TsExpr::Var(v)),
-          _,
+          _
         ) => return Some(v)
         _ => continue
       }

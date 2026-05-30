@@ -462,10 +462,7 @@ fn link_module_graph(
             @ast.TsStmt::Const(
               @ast.TsBinding::Ident(local_alias),
               @ast.TsType::Any,
-              @ast.TsExpr::PropAccess(
-                @ast.TsExpr::Var(cjs_var),
-                imported_name,
-              ),
+              @ast.TsExpr::PropAccess(@ast.TsExpr::Var(cjs_var), imported_name),
             ),
           )
         }
