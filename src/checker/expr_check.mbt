@@ -218,7 +218,14 @@ fn Resolver::ingest_module(
     r.func_const_type_params[prefix + f.name] = f.const_type_params
   }
   for ns in module_.namespaces {
-    let ns_prefix = prefix + ns.name + "."
+    // `<global>` is the synthetic namespace emitted for `declare global {}`
+    // augmentation blocks. Its declarations belong to the global scope so
+    // they are ingested at the current prefix rather than under a sub-prefix.
+    let ns_prefix = if ns.name == "<global>" {
+      prefix
+    } else {
+      prefix + ns.name + "."
+    }
     Resolver::ingest_module(r, ns.module_, ns_prefix)
     // Namespace + class static-side merging: when a `namespace X` is
     // declared alongside `class X`, the namespace's exports are
@@ -226,8 +233,10 @@ fn Resolver::ingest_module(
     // function / value / class into the class lookup by also
     // registering them under the `<Class>.<member>` key so PropAccess
     // resolution that goes through the class shape can find them.
-    let cls_key = prefix + ns.name
-    let _ = r.classes.get(cls_key) // existence check; presence is enough
+    if ns.name != "<global>" {
+      let cls_key = prefix + ns.name
+      let _ = r.classes.get(cls_key) // existence check; presence is enough
+    }
     // (`r.globals[ns_prefix + name]` is already set above by the
     // recursive ingest; the qualified key is what lookup_class_field
     // would walk through.)
@@ -2214,8 +2223,19 @@ fn infer_expr(
     ObjectLit(entries) => {
       let fields : Array[(@ast.TsType, @ast.TsType)] = []
       for entry in entries {
-        let val_ty = infer_expr(env, resolver, entry.1)
-        fields.push((@ast.TsType::Literal(entry.0), val_ty))
+        // Object spread `{ ...expr }` is encoded by the parser with key
+        // "@@spread:N". Infer the spread source type and merge its declared
+        // fields into the result object type rather than adding a literal
+        // "@@spread:N" key.
+        if entry.0.has_prefix("@@spread:") {
+          let spread_ty = infer_expr(env, resolver, entry.1)
+          for f in collect_declared_fields(spread_ty, resolver) {
+            fields.push((@ast.TsType::Literal(f.0), f.1))
+          }
+        } else {
+          let val_ty = infer_expr(env, resolver, entry.1)
+          fields.push((@ast.TsType::Literal(entry.0), val_ty))
+        }
       }
       @ast.TsType::Object(fields)
     }
@@ -3189,6 +3209,11 @@ fn check_object_lit_against_target(
   for entry in entries {
     let key = entry.0
     let value = entry.1
+    // Spread entries (`@@spread:N`) are not individual properties — skip them
+    // in the excess-property check; their fields are checked via infer_expr.
+    if key.has_prefix("@@spread:") {
+      continue
+    }
     match resolver.lookup_field(target, key) {
       Some(declared) =>
         check_expr_against(env, value, declared, ctx, "\{sub_path}.\{key}")
@@ -3210,7 +3235,9 @@ fn check_object_lit_against_target(
   let declared = collect_declared_fields(target, resolver)
   let provided : Map[String, Bool] = {}
   for entry in entries {
-    provided[entry.0] = true
+    if not(entry.0.has_prefix("@@spread:")) {
+      provided[entry.0] = true
+    }
   }
   for d in declared {
     let name = d.0
@@ -3929,7 +3956,37 @@ fn bind_object_pattern(
   for prop in ob.props {
     let field_ty = match ctx.resolver.lookup_field(source, prop.key) {
       Some(t) => t
-      None => @ast.TsType::Any
+      None =>
+        // Union receiver: distribute field lookup across each member and
+        // union the results so `{ kind } = (A | B)` gives "a" | "b" when
+        // every member declares `kind`.
+        match ctx.resolver.unwrap(source) {
+          Union(parts) => {
+            let member_types : Array[@ast.TsType] = []
+            let mut all_found = true
+            for part in parts {
+              match ctx.resolver.lookup_field(part, prop.key) {
+                Some(t) => member_types.push(t)
+                None => all_found = false
+              }
+            }
+            if member_types.length() == 0 {
+              @ast.TsType::Any
+            } else if member_types.length() == 1 {
+              if all_found { member_types[0] } else { narrow_union(member_types[0], @ast.TsType::Undefined) }
+            } else {
+              let acc = member_types[0]
+              let mut u = acc
+              let mut i = 1
+              while i < member_types.length() {
+                u = narrow_union(u, member_types[i])
+                i = i + 1
+              }
+              if all_found { u } else { narrow_union(u, @ast.TsType::Undefined) }
+            }
+          }
+          _ => @ast.TsType::Any
+        }
     }
     bind_pattern(env, ctx, prop.binding, field_ty)
   }

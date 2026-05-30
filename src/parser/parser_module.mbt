@@ -571,8 +571,19 @@ fn Parser::parse_namespace_decl_with_mode(
   }
   let _ = self.advance()
   if keyword == "global" {
-    self.skip_declaration_block()
-    return Some((None, None))
+    // `declare global { ... }` — ambient global augmentation. Parse the
+    // block as a mini-module and expose declarations as a synthetic
+    // namespace so downstream resolvers can see augmented globals.
+    if self.check(LBrace) {
+      let body_source = self.parse_declaration_block_source()
+      let augmented = parse_ambient_external_module_source(body_source)
+      let ns : @ast.TsNamespaceDecl = { name: "<global>", module_: augmented }
+      return Some((None, Some(ns)))
+    } else {
+      // bare `global` without a block — just skip to semicolon
+      self.skip_until_semicolon()
+      return Some((None, None))
+    }
   }
   let name = if self.is_qualified_type_name_part(0) {
     Some(self.parse_binding_ident())
