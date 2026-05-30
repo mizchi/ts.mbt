@@ -1192,9 +1192,18 @@ started.
   - Class member overload signatures with mismatched access
     modifiers (`public … protected … constructor`). Edge-case
     grammar, one fixture each.
-- [ ] Measure issue-count precision (not just crash rate) on the
+- [x] Measure issue-count precision (not just crash rate) on the
   corpus so checker regressions surface before they reach real-world
   generation.
+  - `scripts/checker_precision.sh` sweeps available TypeScript files
+    (TypeScript compiler source when submodule is populated, bench +
+    fixture files always), records issue counts per file as JSON.
+  - `scripts/checker_precision_compare.py` diffs two JSON baselines
+    and exits 1 on any regression (issue-count increase on a
+    previously-clean file).
+  - Usage: `scripts/checker_precision.sh --out _build/checker_baseline.json`
+    to capture; `scripts/checker_precision.sh --compare _build/checker_baseline.json`
+    to detect regressions in CI.
 
 ### Priorities (by real-world ROI) — STATUS
 
