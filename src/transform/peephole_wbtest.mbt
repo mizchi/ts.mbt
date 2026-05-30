@@ -988,24 +988,24 @@ test "peephole: !!x ? a : b strips double negation in condition" {
 }
 
 ///|
-test "peephole: x && x.prop → x?.prop (optional chain from && guard)" {
+test "peephole: x && x.prop keeps && (not converted to x?.prop — falsy semantics differ)" {
+  // `x && x.prop` short-circuits on ANY falsy value and returns x when falsy.
+  // `x?.prop` short-circuits only on null/undefined and returns undefined.
+  // Converting would break code that checks the return value against null.
   let out = minify_one("const r = x && x.prop;")
-  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
-  assert_false(out.contains("&&"), msg="expected no &&, got: \{out}")
+  assert_true(out.contains("&&"), msg="expected && kept, got: \{out}")
 }
 
 ///|
-test "peephole: x && x[key] → x?.[key] (optional index from && guard)" {
+test "peephole: x && x[key] keeps && (not converted to x?.[key])" {
   let out = minify_one("const r = x && x[key];")
-  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
-  assert_false(out.contains("&&"), msg="expected no &&, got: \{out}")
+  assert_true(out.contains("&&"), msg="expected && kept, got: \{out}")
 }
 
 ///|
-test "peephole: x && x.method(a) → x?.method(a) (optional call from && guard)" {
+test "peephole: x && x.method(a) keeps && (not converted to x?.method(a))" {
   let out = minify_one("const r = x && x.method(a);")
-  assert_true(out.contains("?."), msg="expected optional chain, got: \{out}")
-  assert_false(out.contains("&&"), msg="expected no &&, got: \{out}")
+  assert_true(out.contains("&&"), msg="expected && kept, got: \{out}")
 }
 
 ///|
@@ -1120,36 +1120,35 @@ test "peephole: void f() as statement drops void" {
 }
 
 ///|
-test "peephole: typeof x === 'undefined' → x === void 0" {
+test "peephole: typeof x === 'undefined' keeps typeof for bare Var (undeclared global guard)" {
+  // Bare `typeof x` must NOT be converted: `x` might be an undeclared global
+  // (e.g. `typeof window !== "undefined"` for feature detection).
   let out = minify_one(
     (
       #|const r = typeof x === "undefined";
     ),
   )
-  assert_false(out.contains("typeof"), msg="expected no typeof, got: \{out}")
-  assert_true(out.contains("void 0"), msg="expected void 0, got: \{out}")
+  assert_true(out.contains("typeof"), msg="expected typeof kept, got: \{out}")
 }
 
 ///|
-test "peephole: typeof x !== 'undefined' → x !== void 0" {
+test "peephole: typeof x !== 'undefined' keeps typeof for bare Var (undeclared global guard)" {
   let out = minify_one(
     (
       #|const r = typeof x !== "undefined";
     ),
   )
-  assert_false(out.contains("typeof"), msg="expected no typeof, got: \{out}")
-  assert_true(out.contains("void 0"), msg="expected void 0, got: \{out}")
+  assert_true(out.contains("typeof"), msg="expected typeof kept, got: \{out}")
 }
 
 ///|
-test "peephole: 'undefined' === typeof x (swapped form)" {
+test "peephole: 'undefined' === typeof x (swapped form) keeps typeof for bare Var" {
   let out = minify_one(
     (
       #|const r = "undefined" === typeof x;
     ),
   )
-  assert_false(out.contains("typeof"), msg="expected no typeof, got: \{out}")
-  assert_true(out.contains("void 0"), msg="expected void 0, got: \{out}")
+  assert_true(out.contains("typeof"), msg="expected typeof kept, got: \{out}")
 }
 
 ///|
@@ -1509,11 +1508,12 @@ test "peephole: Array.prototype.METHOD.call(arr, ...) → arr.METHOD(...)" {
 }
 
 ///|
-test "peephole: c ? expr : void 0 → c && expr" {
+test "peephole: c ? expr : void 0 keeps ternary (c && expr has different falsy semantics)" {
+  // `null ? x : void 0` returns undefined, but `null && x` returns null.
+  // Code that checks `=== null` after the expression would silently misbehave.
   let out = minify_one("const a = x > 0 ? doSomething(x) : undefined;")
-  assert_false(
-    out.contains("void 0") || out.contains("undefined"),
-    msg="expected no void 0, got: \{out}",
+  assert_true(
+    out.contains("?"),
+    msg="expected ternary kept, got: \{out}",
   )
-  assert_true(out.contains("&&"), msg="expected && operator, got: \{out}")
 }

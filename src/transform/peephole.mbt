@@ -983,9 +983,11 @@ fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
   }
 }
 
-// Peephole a declaration RHS. Named bindings (`let foo = function(){}`) must
-// not be converted to ArrowFunc — `try_emit_function_decl` relies on FuncExpr
-// to emit a hoisted `function foo(){}` declaration.
+// Peephole a declaration RHS. When the binding has a name (e.g. `let foo =
+// function(){}`) and the RHS is already a FuncExpr, peel through the body
+// without calling peep_expr on the whole thing — peep_expr would convert
+// FuncExpr→ArrowFunc, breaking `try_emit_function_decl`'s hoisting path.
+// For all other RHS shapes (including ArrowFunc) just delegate to peep_expr.
 fn peep_decl_rhs(
   binding : @ast.TsBinding,
   rhs : @ast.TsExpr,
@@ -995,37 +997,18 @@ fn peep_decl_rhs(
     @ast.TsBinding::Ident(n) => n
     _ => ""
   }
-  let result = peep_expr(rhs, ctx)
   if name != "" {
-    match result {
-      // Guard: do NOT convert arrow→function when the body uses `super` or
-      // `this`. Arrow functions inherit both from their enclosing context;
-      // converting to a regular function drops those bindings.
-      @ast.TsExpr::ArrowFunc(params, ret, body, is_async) if not(arrow_body_uses_super(body) || arrow_body_uses_this(body)) => {
-        let block = match body {
-          @ast.TsArrowBody::ArrowExpr(expr) =>
-            @ast.TsBlock::{
-              stmts: [@ast.TsStmt::Return(Some(expr))],
-              stmt_positions: [],
-            }
-          @ast.TsArrowBody::ArrowBlock(blk) => blk
-        }
-        @ast.TsExpr::FuncExpr({
-          name: "",
-          type_params: [],
-          const_type_params: [],
-          params,
-          return_type: ret,
-          body: block,
-          is_generator: false,
-          is_async,
-        })
+    match rhs {
+      // `let f = function() {}` — fold the body but keep it as FuncExpr so
+      // try_emit_function_decl can hoist it to `function f() {}`.
+      @ast.TsExpr::FuncExpr(f) => {
+        let folded = peep_block(f.body, ctx)
+        return @ast.TsExpr::FuncExpr({ ..f, body: folded })
       }
-      _ => result
+      _ => ()
     }
-  } else {
-    result
   }
+  peep_expr(rhs, ctx)
 }
 
 ///|
@@ -1485,6 +1468,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     } else {
                       Cond(cp, t_val, e_val)
                     }
+                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
+                    OptionalChain(MethodCall(check_x, method, args))
                   CallExpr(callee, args) if exprs_eq(check_x, callee) =>
                     OptionalChain(CallExpr(check_x, args))
                   _ => Cond(cp, t_val, e_val)
@@ -1519,6 +1504,8 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
                     } else {
                       Cond(cp, t_val, e_val)
                     }
+                  MethodCall(recv, method, args) if exprs_eq(check_x, recv) =>
+                    OptionalChain(MethodCall(check_x, method, args))
                   CallExpr(callee, args) if exprs_eq(check_x, callee) =>
                     OptionalChain(CallExpr(check_x, args))
                   _ => Cond(cp, t_val, e_val)
