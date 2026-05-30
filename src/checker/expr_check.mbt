@@ -302,6 +302,29 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
             None => keep_going = false
           }
         }
+      Applied(n, args) =>
+        if seen.contains(n) {
+          keep_going = false
+        } else {
+          match self.type_aliases.get(n) {
+            Some(alias) if alias.type_params.length() > 0 => {
+              seen[n] = true
+              let bindings : Map[String, @ast.TsType] = {}
+              let limit = if args.length() < alias.type_params.length() {
+                args.length()
+              } else {
+                alias.type_params.length()
+              }
+              let mut i = 0
+              while i < limit {
+                bindings[alias.type_params[i]] = args[i]
+                i = i + 1
+              }
+              cur = substitute_params(alias.type_, bindings)
+            }
+            _ => keep_going = false
+          }
+        }
       _ => keep_going = false
     }
   }
@@ -767,6 +790,109 @@ fn prune_nullish(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
 }
 
 ///|
+fn collect_index_sigs(
+  resolver : Resolver,
+  ty : @ast.TsType,
+  out : Array[(@ast.TsType, @ast.TsType)],
+  seen : Map[String, Bool],
+) -> Unit {
+  match resolver.unwrap(ty) {
+    Named(n) => {
+      if seen.contains(n) {
+        return
+      }
+      seen[n] = true
+      match resolver.interfaces.get(n) {
+        Some(iface) => {
+          for sig in iface.index_signatures {
+            out.push(sig)
+          }
+          let mut i = 0
+          while i < iface.extends_names.length() {
+            let base_name = iface.extends_names[i]
+            let base_args = if i < iface.extends_args.length() {
+              iface.extends_args[i]
+            } else {
+              []
+            }
+            let base_ty : @ast.TsType = if base_args.length() > 0 {
+              @ast.TsType::Applied(base_name, base_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            collect_index_sigs(resolver, base_ty, out, seen)
+            i = i + 1
+          }
+        }
+        None =>
+          match resolver.classes.get(n) {
+            Some(cls) => {
+              for sig in cls.index_signatures {
+                out.push(sig)
+              }
+            }
+            None => ()
+          }
+      }
+    }
+    Applied(n, args) => {
+      if seen.contains(n) {
+        return
+      }
+      seen[n] = true
+      match resolver.interfaces.get(n) {
+        Some(iface) => {
+          let bindings : Map[String, @ast.TsType] = {}
+          let limit = if args.length() < iface.type_params.length() {
+            args.length()
+          } else {
+            iface.type_params.length()
+          }
+          let mut i = 0
+          while i < limit {
+            bindings[iface.type_params[i]] = args[i]
+            i = i + 1
+          }
+          for sig in iface.index_signatures {
+            out.push((sig.0, substitute_params(sig.1, bindings)))
+          }
+          let mut j = 0
+          while j < iface.extends_names.length() {
+            let base_name = iface.extends_names[j]
+            let base_args = if j < iface.extends_args.length() {
+              iface.extends_args[j]
+            } else {
+              []
+            }
+            let substituted_args : Array[@ast.TsType] = []
+            for a in base_args {
+              substituted_args.push(substitute_params(a, bindings))
+            }
+            let base_ty : @ast.TsType = if substituted_args.length() > 0 {
+              @ast.TsType::Applied(base_name, substituted_args)
+            } else {
+              @ast.TsType::Named(base_name)
+            }
+            collect_index_sigs(resolver, base_ty, out, seen)
+            j = j + 1
+          }
+        }
+        None =>
+          match resolver.classes.get(n) {
+            Some(cls) => {
+              for sig in cls.index_signatures {
+                out.push(sig)
+              }
+            }
+            None => ()
+          }
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
 /// Look up the value type of an index signature on an interface or class
 /// for a dynamic (non-literal) key access `recv[idx]`. Returns `None` when
 /// the receiver has no matching index signature.
@@ -783,30 +909,11 @@ fn Resolver::lookup_index_sig(
     String_ | Literal(_) | Number | Int | NumberLiteral(_) => true
     _ => false
   }
-  let sigs : Array[(@ast.TsType, @ast.TsType)]? = match self.unwrap(recv) {
-    Named(n) =>
-      match self.interfaces.get(n) {
-        Some(iface) => Some(iface.index_signatures)
-        None =>
-          match self.classes.get(n) {
-            Some(cls) => Some(cls.index_signatures)
-            None => None
-          }
-      }
-    Applied(n, _) =>
-      match self.interfaces.get(n) {
-        Some(iface) => Some(iface.index_signatures)
-        None =>
-          match self.classes.get(n) {
-            Some(cls) => Some(cls.index_signatures)
-            None => None
-          }
-      }
-    _ => None
-  }
-  match sigs {
-    None => None
-    Some(signatures) => {
+  let all_sigs : Array[(@ast.TsType, @ast.TsType)] = []
+  collect_index_sigs(self, self.unwrap(recv), all_sigs, {})
+  match all_sigs {
+    [] => None
+    signatures => {
       let mut numeric_val : @ast.TsType? = None
       let mut string_val : @ast.TsType? = None
       for sig in signatures {
@@ -2478,6 +2585,23 @@ fn check_expr_against(
       check_array_lit_against_tuple(env, items, slots, ctx, sub_path)
       return
     }
+    (ArrayLit(items), Array(elem)) => {
+      for i, item in items {
+        check_expr_against(
+          env, item, elem, ctx, sub_path + "[" + i.to_string() + "]",
+        )
+      }
+      return
+    }
+    (ArrayLit(items), Applied("Array", [elem]))
+    | (ArrayLit(items), Applied("ReadonlyArray", [elem])) => {
+      for i, item in items {
+        check_expr_against(
+          env, item, elem, ctx, sub_path + "[" + i.to_string() + "]",
+        )
+      }
+      return
+    }
     _ => ()
   }
   // Contextual typing for object literals against a struct / interface /
@@ -3046,7 +3170,22 @@ fn collect_declared_fields(
             i = i + 1
           }
         }
-        None => ()
+        None =>
+          match resolver.classes.get(n) {
+            Some(cls) => {
+              for p in cls.properties {
+                if not(p.is_static) {
+                  out.push((p.name, p.type_))
+                }
+              }
+              for base_name in cls.base_names {
+                for f in collect_declared_fields(Named(base_name), resolver) {
+                  out.push(f)
+                }
+              }
+            }
+            None => ()
+          }
       }
     // Generic interface application: substitute type parameters before
     // returning each field type. `extends` chain isn't yet specialised —
@@ -3091,7 +3230,33 @@ fn collect_declared_fields(
             j = j + 1
           }
         }
-        None => ()
+        None =>
+          match resolver.classes.get(n) {
+            Some(cls) => {
+              let bindings : Map[String, @ast.TsType] = {}
+              let limit = if args.length() < cls.type_params.length() {
+                args.length()
+              } else {
+                cls.type_params.length()
+              }
+              let mut i = 0
+              while i < limit {
+                bindings[cls.type_params[i]] = args[i]
+                i = i + 1
+              }
+              for p in cls.properties {
+                if not(p.is_static) {
+                  out.push((p.name, substitute_params(p.type_, bindings)))
+                }
+              }
+              for base_name in cls.base_names {
+                for f in collect_declared_fields(Named(base_name), resolver) {
+                  out.push(f)
+                }
+              }
+            }
+            None => ()
+          }
       }
     // Utility-type field collection so object-literal contextual typing
     // (missing-required / excess-property) honours the same rules.
