@@ -4985,3 +4985,67 @@ test "expr_check: deliberate type violations are detected" {
     fail("\{misses} violation case(s) not detected by the checker")
   }
 }
+
+///|
+test "expr_check: array index with variable — infers element type" {
+  // `arr[i]` where arr: string[] and i: number should infer string, not Any.
+  let src =
+    #|function f(arr: string[], i: number): string {
+    #|  return arr[i];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: Array<T> generic — index yields element type" {
+  // `arr[i]` where arr: Array<number> should infer number.
+  let src =
+    #|function f(arr: Array<number>, i: number): number {
+    #|  return arr[i];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function f not found")
+  }
+}
+
+///|
+test "expr_check: new Var(args) infers class instance type" {
+  // `new Foo()` where Foo is a known class should infer Foo, not Any.
+  // If NewExpr returned Any the checker would flag a return type mismatch.
+  let src =
+    #|class Foo { x: number = 0 }
+    #|function f(): Foo {
+    #|  return new Foo();
+    #|}
+  let module_ = parse_module_or_empty(src)
+  let issues = check_module_function_bodies(module_)
+  // No return-type mismatch: new Foo() should resolve to Foo, not Any.
+  let return_issues = issues.filter(fn(i) { i.path.contains("return") })
+  assert_eq(return_issues.length(), 0)
+}
+
+///|
+test "expr_check: index signature variable key — returns value type" {
+  // `obj[key]` where obj: { [k: string]: number } and key: string → number.
+  let src =
+    #|function f(obj: Record<string, number>, key: string): number {
+    #|  return obj[key];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function f not found")
+  }
+}

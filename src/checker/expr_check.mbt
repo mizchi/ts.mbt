@@ -738,6 +738,73 @@ fn Resolver::lookup_field(
 }
 
 ///|
+/// Look up the value type of an index signature on an interface or class
+/// for a dynamic (non-literal) key access `recv[idx]`. Returns `None` when
+/// the receiver has no matching index signature.
+fn Resolver::lookup_index_sig(
+  self : Resolver,
+  recv : @ast.TsType,
+  idx : @ast.TsType,
+) -> @ast.TsType? {
+  let is_numeric = match idx {
+    Number | Int | NumberLiteral(_) => true
+    _ => false
+  }
+  let is_stringy = match idx {
+    String_ | Literal(_) | Number | Int | NumberLiteral(_) => true
+    _ => false
+  }
+  let sigs : Array[(@ast.TsType, @ast.TsType)]? = match self.unwrap(recv) {
+    Named(n) =>
+      match self.interfaces.get(n) {
+        Some(iface) => Some(iface.index_signatures)
+        None =>
+          match self.classes.get(n) {
+            Some(cls) => Some(cls.index_signatures)
+            None => None
+          }
+      }
+    Applied(n, _) =>
+      match self.interfaces.get(n) {
+        Some(iface) => Some(iface.index_signatures)
+        None =>
+          match self.classes.get(n) {
+            Some(cls) => Some(cls.index_signatures)
+            None => None
+          }
+      }
+    _ => None
+  }
+  match sigs {
+    None => None
+    Some(signatures) => {
+      let mut numeric_val : @ast.TsType? = None
+      let mut string_val : @ast.TsType? = None
+      for sig in signatures {
+        match sig.0 {
+          Number | Int => numeric_val = Some(sig.1)
+          String_ | Literal(_) => string_val = Some(sig.1)
+          _ => ()
+        }
+      }
+      if is_numeric {
+        match numeric_val {
+          Some(t) => return Some(t)
+          None => ()
+        }
+      }
+      if is_stringy {
+        match string_val {
+          Some(t) => return Some(t)
+          None => ()
+        }
+      }
+      None
+    }
+  }
+}
+
+///|
 /// Well-known `Promise.prototype.*` members. `inner` is the resolved-value
 /// type (the `T` in `Promise<T>`). The chainable `then` / `catch` /
 /// `finally` methods need callback-driven inference for the result type;
@@ -1688,11 +1755,34 @@ fn infer_expr(
         }
       }
     NewExpr(callee, args) => {
+      // For computed `new` expressions we can often recover the instance
+      // type when the callee is a simple identifier or a qualified name
+      // (`ns.ClassName`) that resolves to a known class.
+      let instance_ty = match callee {
+        Var(name) =>
+          match resolver.classes.get(name) {
+            Some(_) => @ast.TsType::Named(name)
+            None => @ast.TsType::Any
+          }
+        PropAccess(Var(ns_name), class_name) => {
+          let key = ns_name + "." + class_name
+          match resolver.classes.get(key) {
+            Some(_) => @ast.TsType::Named(key)
+            None =>
+              // Fallback: maybe the class is also registered without prefix
+              match resolver.classes.get(class_name) {
+                Some(_) => @ast.TsType::Named(class_name)
+                None => @ast.TsType::Any
+              }
+          }
+        }
+        _ => @ast.TsType::Any
+      }
       let _ = infer_expr(env, resolver, callee)
       for a in args {
         let _ = infer_expr(env, resolver, a)
       }
-      @ast.TsType::Any
+      instance_ty
     }
     MethodCall(receiver, method, args) => {
       // Static namespace dispatch: `Object.keys(...)`, `Math.max(...)`,
@@ -2134,8 +2224,21 @@ fn infer_index(
   idx : @ast.TsType,
   idx_expr : @ast.TsExpr,
 ) -> @ast.TsType {
+  // Unwrap type aliases before dispatch so `type Arr = string[]` resolves
+  // correctly for both `Array(elem)` and `Applied("Array", [elem])` shapes.
+  let recv = resolver.unwrap(recv)
   match recv {
     Array(elem) => elem
+    // `Array<T>` / `ReadonlyArray<T>` generic form — numeric index yields T.
+    Applied("Array", [elem]) | Applied("ReadonlyArray", [elem]) =>
+      match idx {
+        Number | Int | NumberLiteral(_) => elem
+        _ =>
+          match idx_expr {
+            IntLit(_) | NumberLit(_) => elem
+            _ => elem // arr[i] for any index still yields elem type
+          }
+      }
     Tuple(items) =>
       match idx_expr {
         IntLit(i) if i >= 0 && i < items.length() => items[i]
@@ -2166,10 +2269,10 @@ fn infer_index(
         Number | Int | NumberLiteral(_) => @ast.TsType::String_
         _ => @ast.TsType::Any
       }
-    // Interface receivers — `obj[key]` runs through `lookup_field` so
-    // string-literal indices match named fields and (failing that) the
-    // index signature. Non-literal indices on an interface fall through
-    // to the catch-all `Any` since we can't narrow the lookup.
+    // Interface / class receivers — string-literal indices match named
+    // fields (and the index signature as fallback). For non-literal
+    // indices, fall back to the interface's index signature value type
+    // so `obj[i]` on `{ [k: string]: V }` returns `V` instead of `Any`.
     Named(_) | Applied(_, _) =>
       match idx_expr {
         StringLit(key) =>
@@ -2182,7 +2285,12 @@ fn infer_index(
             Some(t) => t
             None => @ast.TsType::Any
           }
-        _ => @ast.TsType::Any
+        _ =>
+          // Variable index: consult the index signature of the interface/class.
+          match resolver.lookup_index_sig(recv, idx) {
+            Some(t) => t
+            None => @ast.TsType::Any
+          }
       }
     _ => @ast.TsType::Any
   }
