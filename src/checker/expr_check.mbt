@@ -41,6 +41,9 @@ priv struct Resolver {
   // should not widen the inferred literal type for that parameter.
   // Missing key / shorter array is treated as "all false".
   func_const_type_params : Map[String, Array[Bool]]
+  // Enum declarations keyed by name so `Color.Red` resolves to the member's
+  // literal value type rather than falling through to Any.
+  enums : Map[String, @ast.TsEnumDecl]
 }
 
 ///|
@@ -53,6 +56,7 @@ fn Resolver::empty() -> Resolver {
     signatures: {},
     func_type_params: {},
     func_const_type_params: {},
+    enums: {},
   }
 }
 
@@ -156,6 +160,25 @@ fn Resolver::ingest_module(
   }
   for c in module_.classes {
     r.classes[prefix + c.name] = c
+  }
+  for e in module_.enums {
+    r.enums[prefix + e.name] = e
+    // Expose enum members as globals so `Color.Red` resolves via PropAccess.
+    for m in e.members {
+      let val_ty = match m.value {
+        Some(@ast.TsEnumMemberValue::Number(s)) =>
+          match @strconv.parse_double(s) {
+            Ok(f) => @ast.TsType::NumberLiteral(f)
+            Err(_) => @ast.TsType::Number
+          }
+        Some(@ast.TsEnumMemberValue::String(s)) => @ast.TsType::Literal(s)
+        Some(@ast.TsEnumMemberValue::BigInt(s)) => @ast.TsType::Literal(s)
+        Some(@ast.TsEnumMemberValue::Bool(b)) =>
+          @ast.TsType::BoolLiteral(b)
+        None => @ast.TsType::Number
+      }
+      r.globals[prefix + e.name + "." + m.name] = val_ty
+    }
   }
   for ta in module_.type_aliases {
     r.type_aliases[prefix + ta.name] = ta
@@ -543,6 +566,28 @@ fn array_prototype_member(elem : @ast.TsType, field : String) -> @ast.TsType? {
           @ast.TsType::Any,
         ),
       )
+    // ES2023 non-mutating array methods — return a new array of the same element type.
+    "toReversed" => Some(@ast.TsType::Func([], arr_t))
+    "toSorted" =>
+      Some(
+        @ast.TsType::Func(
+          [
+            @ast.TsType::Union([
+              @ast.TsType::Func([elem, elem], @ast.TsType::Number),
+              @ast.TsType::Undefined,
+            ]),
+          ],
+          arr_t,
+        ),
+      )
+    "toSpliced" =>
+      Some(
+        @ast.TsType::Func(
+          [@ast.TsType::Number, @ast.TsType::Number],
+          arr_t,
+        ),
+      )
+    "with" => Some(@ast.TsType::Func([@ast.TsType::Number, elem], arr_t))
     _ => None
   }
 }
@@ -2386,8 +2431,9 @@ fn infer_expr(
     NonNull(inner) => non_nullable(infer_expr(env, resolver, inner))
     // `a?.b…` — widen the result with `undefined` to reflect short-circuit.
     OptionalChain(inner) => {
+      // `?.` eliminates both null and undefined from the result type.
       let inner_ty = infer_expr(env, resolver, inner)
-      narrow_union(inner_ty, @ast.TsType::Undefined)
+      prune_nullish(resolver, inner_ty)
     }
     // JSX element / fragment. The value itself is opaque at the type
     // level (we don't model React's `ReactNode` / `JSX.Element`), so
