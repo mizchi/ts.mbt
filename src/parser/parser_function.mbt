@@ -419,14 +419,14 @@ fn translate_jsdoc_type(raw : String) -> String {
   if s == "*" {
     return "any"
   }
-  // `?T` → `T | null` for the simple identifier case.
+  // `?T` → `T | null` for any type expression.
   if s.has_prefix("?") {
     let inner = s
       .substring(start=1, end=s.length())
       .to_string()
       .trim()
       .to_string()
-    if is_simple_type_ident(inner) {
+    if inner.length() > 0 {
       return "(\{inner} | null)"
     }
   }
@@ -444,7 +444,76 @@ fn translate_jsdoc_type(raw : String) -> String {
   if s.has_prefix("Object<") {
     return "Record" + s.substring(start=6, end=s.length()).to_string()
   }
+  // `function(T1, T2): R` → `(_0: T1, _1: T2) => R`
+  // `function(): R` → `() => R`
+  if s.has_prefix("function(") {
+    match translate_jsdoc_function_type(s) {
+      Some(ts) => return ts
+      None => ()
+    }
+  }
   s
+}
+
+///|
+/// Translate `function(P1, P2): R` → `(_0: P1, _1: P2) => R`.
+/// Returns `None` when the input doesn't match the expected shape.
+fn translate_jsdoc_function_type(s : String) -> String? {
+  // Find the closing `)` of the parameter list, respecting nesting.
+  let len = s.length()
+  // s starts with "function("
+  let start = 9 // length of "function("
+  let mut depth = 1
+  let mut i = start
+  while i < len && depth > 0 {
+    let c = s[i]
+    if c == '(' || c == '<' || c == '[' || c == '{' {
+      depth = depth + 1
+    } else if c == ')' || c == '>' || c == ']' || c == '}' {
+      depth = depth - 1
+    }
+    if depth > 0 {
+      i = i + 1
+    }
+  }
+  if depth != 0 {
+    return None
+  }
+  let params_str = s.substring(start=start, end=i).to_string().trim().to_string()
+  // Everything after `)` — optionally `: ReturnType`.
+  let rest = s.substring(start=i + 1, end=len).to_string().trim().to_string()
+  let return_type = if rest.has_prefix(":") {
+    rest.substring(start=1, end=rest.length()).to_string().trim().to_string()
+  } else {
+    "any"
+  }
+  // Split params on top-level `,`.
+  let params : Array[String] = []
+  if params_str.length() > 0 {
+    let mut depth2 = 0
+    let mut start2 = 0
+    for j in 0..<params_str.length() {
+      let c = params_str[j]
+      if c == '(' || c == '<' || c == '[' || c == '{' {
+        depth2 = depth2 + 1
+      } else if c == ')' || c == '>' || c == ']' || c == '}' {
+        depth2 = depth2 - 1
+      } else if c == ',' && depth2 == 0 {
+        params.push(params_str.substring(start=start2, end=j).to_string().trim().to_string())
+        start2 = j + 1
+      }
+    }
+    params.push(params_str.substring(start=start2, end=params_str.length()).to_string().trim().to_string())
+  }
+  // Build `(_0: P0, _1: P1, ...) => R`.
+  let mut ts_params = ""
+  for k, p in params {
+    if k > 0 {
+      ts_params = ts_params + ", "
+    }
+    ts_params = ts_params + "_\{k}: \{p}"
+  }
+  Some("(\{ts_params}) => \{return_type}")
 }
 
 ///|

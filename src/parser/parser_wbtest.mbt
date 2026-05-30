@@ -2039,17 +2039,34 @@ test "parser: class can `extends null`" {
 }
 
 ///|
-test "parser: `using` declaration parses as a let binding" {
-  // ES2023 `using x = expr;` — auto-disposal binding. Treated as `let`
-  // for parser / checker purposes; the runtime semantics don't change
-  // the type-level shape.
+test "parser: `using` declaration lowers to const + try-finally" {
+  // ES2023 `using x = expr;` — lowers to `const x = expr; try { rest }
+  // finally { x[Symbol.dispose]?.() }` so disposal runs at block exit.
   let src =
     #|function f() {
     #|  using d1 = { [Symbol.dispose]() {} };
     #|  using d2 = null;
     #|}
   match (try? Parser::from_source(src).parse_module()) {
-    Ok(_) => ()
+    Ok(m) => {
+      // f's body: [Const(d1, ...), Try(body=[Const(d2, ...), Try(rest=[], ...finally)], ...finally)]
+      let func_body = match m.stmts[0] {
+        @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(f)) => f.body
+        _ => fail("expected function")
+      }
+      // First stmt: `const d1 = ...`
+      match func_body.stmts[0] {
+        @ast.TsStmt::Const(@ast.TsBinding::Ident("d1"), _, _) => ()
+        _ => fail("expected Const(d1)")
+      }
+      // Second stmt: try { ... } finally { d1[Symbol.dispose]?.() }
+      match func_body.stmts[1] {
+        @ast.TsStmt::Try(_, None, None, Some(fb)) =>
+          // finally block has one statement: d1[Symbol.dispose]?.()
+          assert_eq(fb.stmts.length(), 1)
+        _ => fail("expected Try with finally for d1")
+      }
+    }
     Err(e) => fail("parse error: \{e}")
   }
 }

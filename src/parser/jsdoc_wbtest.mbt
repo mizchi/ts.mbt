@@ -194,3 +194,103 @@ test "jsdoc: @param / @returns overlay onto untyped JS function" {
     _ => fail("expected Let / FuncExpr")
   }
 }
+
+///|
+test "jsdoc: translate_jsdoc_function_type: function(string): void → arrow type" {
+  // `function(string): void` should become `(_0: string) => void`
+  // and parse to a valid TsType (FuncType shape).
+  let src =
+    (
+      #|/**
+      #| * @param {function(string): void} cb
+      #| */
+      #|function run(cb) { cb("x"); }
+    )
+  let block = parse_block_from_source(src)
+  match block.stmts[0] {
+    Let(_, _, @ast.TsExpr::FuncExpr(f)) => {
+      // cb's type should be a function type, not Any.
+      match f.params[0].type_ {
+        @ast.TsType::Any => fail("expected function type for cb, got Any")
+        _ => () // any non-Any type is a win
+      }
+    }
+    _ => fail("expected Let / FuncExpr")
+  }
+}
+
+///|
+test "jsdoc: translate_jsdoc_function_type: function(): boolean → () => boolean" {
+  // Zero-parameter JSDoc function type.
+  let src =
+    (
+      #|/**
+      #| * @param {function(): boolean} pred
+      #| * @returns {string}
+      #| */
+      #|function applyIf(pred, val) { return pred() ? val : ""; }
+    )
+  let block = parse_block_from_source(src)
+  match block.stmts[0] {
+    Let(_, _, @ast.TsExpr::FuncExpr(f)) => {
+      match f.params[0].type_ {
+        @ast.TsType::Any => fail("expected function type for pred, got Any")
+        _ => ()
+      }
+      match f.return_type {
+        @ast.TsType::String_ => ()
+        _ => fail("expected String_ for return")
+      }
+    }
+    _ => fail("expected Let / FuncExpr")
+  }
+}
+
+///|
+test "jsdoc: ?Array<string> translates to (Array<string> | null)" {
+  let src =
+    (
+      #|/**
+      #| * @param {?Array<string>} tags
+      #| * @returns {?number}
+      #| */
+      #|function process(tags) { return tags ? tags.length : null; }
+    )
+  let block = parse_block_from_source(src)
+  match block.stmts[0] {
+    Let(_, _, @ast.TsExpr::FuncExpr(f)) => {
+      // tags: Array<string> | null
+      match f.params[0].type_ {
+        @ast.TsType::Any => fail("expected Array|null for tags, got Any")
+        _ => ()
+      }
+      // return: number | null
+      match f.return_type {
+        @ast.TsType::Any => fail("expected number|null for return, got Any")
+        _ => ()
+      }
+    }
+    _ => fail("expected Let / FuncExpr")
+  }
+}
+
+///|
+test "jsdoc: ?{x:number} translates to ({x:number} | null)" {
+  let src =
+    (
+      #|/**
+      #| * @param {?{x: number, y: number}} pt
+      #| */
+      #|function draw(pt) { }
+    )
+  let block = parse_block_from_source(src)
+  match block.stmts[0] {
+    Let(_, _, @ast.TsExpr::FuncExpr(f)) => {
+      match f.params[0].type_ {
+        @ast.TsType::Any => fail("expected object|null for pt, got Any")
+        _ => ()
+      }
+    }
+    _ => fail("expected Let / FuncExpr")
+  }
+}
