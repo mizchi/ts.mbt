@@ -362,12 +362,57 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
             _ => keep_going = false
           }
         }
+      // `typeof varName` in type position — resolve the variable's current type.
+      TypeOf(name) =>
+        match self.globals.get(name) {
+          Some(resolved) => cur = resolved
+          None => keep_going = false
+        }
+      // `keyof T` where T is a Named interface/class — extract the union of
+      // field names so `keyof MyInterface` resolves to a string literal union.
+      Keyof(inner) => {
+        let resolved_inner = self.unwrap(inner)
+        let fields = collect_declared_fields(resolved_inner, self)
+        if fields.length() == 0 {
+          keep_going = false
+        } else {
+          let keys : Array[@ast.TsType] = []
+          for f in fields {
+            keys.push(@ast.TsType::Literal(f.0))
+          }
+          cur = if keys.length() == 1 {
+            keys[0]
+          } else {
+            @ast.TsType::Union(keys)
+          }
+        }
+      }
       // Simplify mapped types to Object shapes so field lookups work.
       MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) => {
         let simplified = simplify_type(cur)
         match simplified {
           MappedType(_, _, _, _) | MappedTypeRemap(_, _, _, _, _) =>
             keep_going = false // couldn't resolve — leave as-is
+          _ => cur = simplified
+        }
+      }
+      // `T[K]` indexed access — resolve via simplify_type first; if still
+      // unresolved, try lookup_field when the base is a Named/Applied type.
+      IndexedAccess(base, key) => {
+        let simplified = simplify_type(cur)
+        match simplified {
+          IndexedAccess(_, _) => {
+            // simplify couldn't resolve it; try resolver-aware field lookup.
+            let resolved_base = self.unwrap(base)
+            match key {
+              Literal(name) =>
+                match self.lookup_field(resolved_base, name) {
+                  Some(t) => cur = t
+                  None => keep_going = false
+                }
+              _ => keep_going = false
+            }
+          }
           _ => cur = simplified
         }
       }

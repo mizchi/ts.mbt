@@ -147,6 +147,41 @@ fn is_assignable_to_inner(
       }
       return true
     }
+    // Rest parameter types: `...args: T[]` — delegate to the inner array type.
+    (Rest(s), Rest(t)) => is_assignable_to_inner(s, t, bivariant_params)
+    (Rest(s), Array(t)) => is_assignable_to_inner(s, t, bivariant_params)
+    (Array(s), Rest(t)) => is_assignable_to_inner(s, t, bivariant_params)
+    // Constructor types: `new (...) => T`. Abstract constructors are a
+    // subtype of non-abstract constructors (conservative approximation).
+    (Constructor(s_params, s_ret, _), Constructor(t_params, t_ret, _)) => {
+      if s_params.length() != t_params.length() {
+        return false
+      }
+      for i in 0..<s_params.length() {
+        let ok = if bivariant_params {
+          is_assignable_to_inner(s_params[i], t_params[i], bivariant_params) ||
+          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
+        } else {
+          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
+        }
+        if !ok {
+          return false
+        }
+      }
+      is_assignable_to_inner(s_ret, t_ret, bivariant_params)
+    }
+    // A constructor type is callable as a function (via Reflect.construct etc.)
+    (Constructor(s_params, s_ret, _), Func(t_params, t_ret)) => {
+      if s_params.length() != t_params.length() {
+        return false
+      }
+      for i in 0..<s_params.length() {
+        if !is_assignable_to_inner(t_params[i], s_params[i], bivariant_params) {
+          return false
+        }
+      }
+      is_assignable_to_inner(s_ret, t_ret, bivariant_params)
+    }
     (Func(s_params, s_ret), Func(t_params, t_ret)) => {
       if s_params.length() != t_params.length() {
         return false
