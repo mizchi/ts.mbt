@@ -371,6 +371,14 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
           _ => cur = simplified
         }
       }
+      // Simplify template literal types to concrete Literal strings when possible.
+      TemplateLiteralType(_, _) => {
+        let simplified = simplify_type(cur)
+        match simplified {
+          TemplateLiteralType(_, _) => keep_going = false
+          _ => cur = simplified
+        }
+      }
       _ => keep_going = false
     }
   }

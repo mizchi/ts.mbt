@@ -112,6 +112,24 @@ fn is_assignable_to_inner(
   match (source, target) {
     // Literal subtyping: each literal kind narrows its primitive companion.
     (Literal(_), String_) => true
+    // Template literal types are a subtype of string (and of each other when
+    // they resolve to the same string set, which we approximate as true when
+    // both are TemplateLiteralType — a conservative over-approximation).
+    (TemplateLiteralType(_, _), String_) => true
+    (TemplateLiteralType(_, _), Literal(_)) => false
+    (TemplateLiteralType(s_parts, s_args), TemplateLiteralType(t_parts, t_args)) =>
+      s_parts == t_parts &&
+      s_args.length() == t_args.length() &&
+      {
+        let mut ok = true
+        for i in 0..<s_args.length() {
+          if !is_assignable_to_inner(s_args[i], t_args[i], bivariant_params) {
+            ok = false
+            break
+          }
+        }
+        ok
+      }
     (NumberLiteral(_), Number) => true
     (BigIntLiteral(_), BigInt) => true
     (BooleanLiteral(_), Boolean) => true
