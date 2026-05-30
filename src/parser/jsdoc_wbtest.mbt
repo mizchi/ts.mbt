@@ -245,3 +245,52 @@ test "jsdoc: translate_jsdoc_function_type: function(): boolean → () => boolea
     _ => fail("expected Let / FuncExpr")
   }
 }
+
+///|
+test "jsdoc: ?Array<string> translates to (Array<string> | null)" {
+  let src =
+    (
+      #|/**
+      #| * @param {?Array<string>} tags
+      #| * @returns {?number}
+      #| */
+      #|function process(tags) { return tags ? tags.length : null; }
+    )
+  let block = parse_block_from_source(src)
+  match block.stmts[0] {
+    Let(_, _, @ast.TsExpr::FuncExpr(f)) => {
+      // tags: Array<string> | null
+      match f.params[0].type_ {
+        @ast.TsType::Any => fail("expected Array|null for tags, got Any")
+        _ => ()
+      }
+      // return: number | null
+      match f.return_type {
+        @ast.TsType::Any => fail("expected number|null for return, got Any")
+        _ => ()
+      }
+    }
+    _ => fail("expected Let / FuncExpr")
+  }
+}
+
+///|
+test "jsdoc: ?{x:number} translates to ({x:number} | null)" {
+  let src =
+    (
+      #|/**
+      #| * @param {?{x: number, y: number}} pt
+      #| */
+      #|function draw(pt) { }
+    )
+  let block = parse_block_from_source(src)
+  match block.stmts[0] {
+    Let(_, _, @ast.TsExpr::FuncExpr(f)) => {
+      match f.params[0].type_ {
+        @ast.TsType::Any => fail("expected object|null for pt, got Any")
+        _ => ()
+      }
+    }
+    _ => fail("expected Let / FuncExpr")
+  }
+}

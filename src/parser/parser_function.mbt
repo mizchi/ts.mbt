@@ -419,14 +419,14 @@ fn translate_jsdoc_type(raw : String) -> String {
   if s == "*" {
     return "any"
   }
-  // `?T` → `T | null` for the simple identifier case.
+  // `?T` → `T | null` for any type expression.
   if s.has_prefix("?") {
     let inner = s
       .substring(start=1, end=s.length())
       .to_string()
       .trim()
       .to_string()
-    if is_simple_type_ident(inner) {
+    if inner.length() > 0 {
       return "(\{inner} | null)"
     }
   }

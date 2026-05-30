@@ -912,6 +912,70 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let prev_strict = self.in_strict
   let mut in_directive = true
   while !self.check(RBrace) && !self.check(Eof) {
+    // `using x = expr` / `await using x = expr` (ES2023). Lower to
+    // `const x = expr; try { ...rest } finally { x[Symbol.dispose]?.() }`
+    // so the disposal semantics survive in the emitted JS.
+    let is_using = self.is_using_declaration_start()
+    let is_await_using = if not(is_using) {
+      self.is_await_using_declaration_start()
+    } else {
+      false
+    }
+    if is_using || is_await_using {
+      let pos = self.peek().pos
+      if is_using {
+        let _ = self.advance() // `using`
+      } else {
+        let _ = self.advance() // `await`
+        let _ = self.advance() // `using`
+      }
+      let binding_name = self.parse_binding_ident()
+      let ty = if self.check(Colon) {
+        let _ = self.advance()
+        self.parse_type()
+      } else {
+        @ast.TsType::Any
+      }
+      let _ = self.expect(Assign)
+      let init = self.parse_assign_expr()
+      let _ = self.match_(Semicolon)
+      // Parse the remaining statements in this block into the try body.
+      let rest_stmts : Array[@ast.TsStmt] = []
+      let rest_positions : Array[Int] = []
+      while !self.check(RBrace) && !self.check(Eof) {
+        rest_positions.push(self.peek().pos)
+        rest_stmts.push(self.parse_stmt())
+      }
+      // Synthesize `x[Symbol.dispose]?.()` (or Symbol.asyncDispose).
+      let dispose_key = if is_await_using { "asyncDispose" } else { "dispose" }
+      let dispose_expr = @ast.TsExpr::OptionalChain(
+        @ast.TsExpr::CallExpr(
+          @ast.TsExpr::IndexAccess(
+            @ast.TsExpr::Var(binding_name),
+            @ast.TsExpr::PropAccess(@ast.TsExpr::Var("Symbol"), dispose_key),
+          ),
+          [],
+        ),
+      )
+      let finally_block : @ast.TsBlock = {
+        stmts: [@ast.TsStmt::Expr(dispose_expr)],
+        stmt_positions: [],
+      }
+      stmts.push(
+        @ast.TsStmt::Const(@ast.TsBinding::Ident(binding_name), ty, init),
+      )
+      stmts.push(
+        @ast.TsStmt::Try(
+          { stmts: rest_stmts, stmt_positions: rest_positions },
+          None,
+          None,
+          Some(finally_block),
+        ),
+      )
+      stmt_positions.push(pos)
+      stmt_positions.push(pos)
+      break
+    }
     stmt_positions.push(self.peek().pos)
     let stmt = self.parse_stmt()
     if in_directive {
