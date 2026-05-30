@@ -6992,3 +6992,33 @@ test "parser: boolean-literal object destructure keys" {
     #|const { true: metadata, false: decorators } = source;
   let _ = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
 }
+
+///|
+test "parser: type alias in function body is collected into module type_aliases" {
+  let src =
+    #|function foo(x: number): Point {
+    #|  type Point = { x: number; y: number };
+    #|  return { x, y: 0 };
+    #|}
+  let m = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
+  assert_true(
+    m.type_aliases.iter().any(fn(ta) { ta.name == "Point" }),
+    "expected Point type alias in module type_aliases",
+  )
+}
+
+///|
+test "parser: type alias in module block is collected" {
+  let src =
+    #|type StringOrNum = string | number;
+    #|type Callback = (x: number) => void;
+  let m = Parser::from_source(src).parse_module() catch { e => fail("\{e}") }
+  assert_true(
+    m.type_aliases.iter().any(fn(ta) { ta.name == "StringOrNum" }),
+    "expected StringOrNum",
+  )
+  assert_true(
+    m.type_aliases.iter().any(fn(ta) { ta.name == "Callback" }),
+    "expected Callback",
+  )
+}

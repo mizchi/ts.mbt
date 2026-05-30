@@ -89,10 +89,12 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
     }
     Type if self.peek_at(1).kind is Ident(_) => {
       // `type Foo = …` / `type Foo<…> = …` — type alias decl.
+      // Type aliases are erased at runtime; collect them so the
+      // checker / bridge passes can still resolve the name.
       // Other follow-ups (`type.foo = …`, `type[i] = …`, `type()`,
       // `type;`) leave `type` as a plain identifier so the
       // expression-statement parser below picks it up.
-      self.skip_type_alias()
+      self.collected_type_aliases.push(self.parse_type_alias())
       Empty
     }
     _ if self.is_namespace_decl_start() => {

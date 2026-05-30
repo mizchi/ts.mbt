@@ -3180,6 +3180,25 @@ fn Parser::parse_module_with_seeded_const_values_internal(
       )
     }
   }
+  // Merge type aliases collected from function-body / block-level `type T = …`
+  // declarations into the module's type-alias pool. These are erased at
+  // runtime but the checker needs them to resolve Named(T) references inside
+  // those bodies. Module-level declarations (already in `type_aliases`) take
+  // priority: only add a collected alias if the name isn't already registered.
+  let seen_aliases : Map[String, Bool] = {}
+  for ta in type_aliases {
+    seen_aliases[ta.name] = true
+  }
+  for ta in self.collected_type_aliases {
+    if not(seen_aliases.contains(ta.name)) {
+      type_aliases.push(ta)
+      seen_aliases[ta.name] = true
+      match type_alias_to_interface(ta) {
+        Some(iface) => interfaces.push(iface)
+        None => ()
+      }
+    }
+  }
   {
     funcs,
     interfaces,
@@ -3316,7 +3335,7 @@ fn Parser::parse_module_block_with_const_values(
         Class => {
           let _ = self.parse_declare_class(false)
         }
-        Type => self.skip_type_alias()
+        Type => self.collected_type_aliases.push(self.parse_type_alias())
         Ident(name) =>
           if name == "abstract" && self.peek_at(1).kind == Class {
             let _ = self.parse_declare_class_with_optional_abstract()
