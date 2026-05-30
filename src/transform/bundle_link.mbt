@@ -249,6 +249,10 @@ fn link_module_graph(
         Some(ns_local) => {
           let props : Map[String, String] = {}
           for spec in dep.export_specs {
+            // ESM: `import * as ns` does not include `default`.
+            if spec.export_name == "default" {
+              continue
+            }
             match
               resolve_export(
                 modules,
@@ -639,15 +643,19 @@ fn resolve_export_with_visited(
           }
         }
       All =>
-        // `export * from "./a"` re-exports every NAMED export of A.
-        // Try resolving `export_name` from the dependency.
-        match
-          resolve_export_with_visited(
-            modules, rename_per_module, namespace_local_renames, dep_path, export_name,
-            visited,
-          ) {
-          Some(r) => return Some(r)
-          None => ()
+        // `export * from "./a"` re-exports every NAMED export of A,
+        // but per ESM spec it does NOT re-export the `default` binding.
+        if export_name == "default" {
+          ()
+        } else {
+          match
+            resolve_export_with_visited(
+              modules, rename_per_module, namespace_local_renames, dep_path, export_name,
+              visited,
+            ) {
+            Some(r) => return Some(r)
+            None => ()
+          }
         }
       Namespace(ns_name) =>
         // `export * as ns from "./a"` exports a namespace object
@@ -700,6 +708,10 @@ fn enumerate_wildcard_reexports(
           None => continue
         }
         for spec in dep.export_specs {
+          // ESM: `export *` does not re-export `default`.
+          if spec.export_name == "default" {
+            continue
+          }
           if not(props.contains(spec.export_name)) {
             match
               resolve_export(

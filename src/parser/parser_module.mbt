@@ -2420,6 +2420,15 @@ fn Parser::parse_export_decl_for_module(
         }
         return (stmts, exports, reexports)
       }
+      Ident("using") => {
+        // `export declare using x: T` — treat like `const` declaration
+        let _ = self.advance()
+        let values = self.parse_declare_values()
+        for value in values {
+          exports.push({ local_name: value.name, export_name: value.name })
+        }
+        return (stmts, exports, reexports)
+      }
       Class => {
         let class_ = self.parse_declare_class(false)
         exports.push({ local_name: class_.name, export_name: class_.name })
@@ -2826,6 +2835,14 @@ fn Parser::parse_export_stmt(
         imports.push(self.parse_declare_function())
       }
       Var | Let | Const => {
+        let _ = self.advance()
+        let parsed_values = self.parse_declare_values()
+        for value in parsed_values {
+          values.push(value)
+        }
+      }
+      Ident("using") => {
+        // `declare using x: T` — treat like `const` declaration
         let _ = self.advance()
         let parsed_values = self.parse_declare_values()
         for value in parsed_values {
