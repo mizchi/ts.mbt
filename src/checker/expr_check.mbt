@@ -2631,6 +2631,8 @@ fn infer_index(
     String_ | Literal(_) =>
       match idx {
         Number | Int | NumberLiteral(_) => @ast.TsType::String_
+        // Non-numeric index on a string type: characters are still strings.
+        String_ | Literal(_) => @ast.TsType::String_
         _ => @ast.TsType::Any
       }
     // Interface / class receivers — string-literal indices match named
@@ -2642,12 +2644,22 @@ fn infer_index(
         StringLit(key) =>
           match resolver.lookup_field(recv, key) {
             Some(t) => t
-            None => @ast.TsType::Any
+            None =>
+              // Field not found by name — try the index signature as fallback
+              // so `obj["key"]` on `{ [k: string]: V }` returns `V`.
+              match resolver.lookup_index_sig(recv, @ast.TsType::String_) {
+                Some(t) => t
+                None => @ast.TsType::Any
+              }
           }
         IntLit(i) =>
           match resolver.lookup_field(recv, i.to_string()) {
             Some(t) => t
-            None => @ast.TsType::Any
+            None =>
+              match resolver.lookup_index_sig(recv, @ast.TsType::Number) {
+                Some(t) => t
+                None => @ast.TsType::Any
+              }
           }
         _ =>
           // Variable index: consult the index signature of the interface/class.
@@ -4005,10 +4017,13 @@ fn bind_array_pattern(
             if i < items.length() {
               items[i]
             } else {
-              @ast.TsType::Any
+              // Out-of-bounds tuple access: element is undefined at runtime.
+              @ast.TsType::Undefined
             }
           Array(t) => t
-          _ => @ast.TsType::Any
+          Applied("Array", [t]) | Applied("ReadonlyArray", [t]) => t
+          // Unknown iterable shape: infer undefined (element may not exist).
+          _ => @ast.TsType::Undefined
         }
         bind_pattern(env, ctx, elem.binding, elem_ty)
       }
@@ -4077,7 +4092,9 @@ fn bind_object_pattern(
               if all_found { u } else { narrow_union(u, @ast.TsType::Undefined) }
             }
           }
-          _ => @ast.TsType::Any
+          // Non-union source with no matching field: the property is absent,
+          // which in JS evaluates to `undefined` at runtime.
+          _ => @ast.TsType::Undefined
         }
     }
     bind_pattern(env, ctx, prop.binding, field_ty)
