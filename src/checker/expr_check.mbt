@@ -2455,7 +2455,9 @@ fn infer_call(
     // `asserts paramName [is T]` returns `void` at the value level — the
     // narrowing effect applies to all statements after the call site.
     Func(_, AssertsPredicate(_, _)) => @ast.TsType::Void
-    Func(_, ret) => ret
+    // Reduce conditional types in the return position so `NonNullable<T>`,
+    // `Awaited<T>` etc. evaluate to concrete types when possible.
+    Func(_, ret) => reduce_conditional(ret)
     // Union of callable types: return the union of each branch's return type.
     Union(parts) => {
       let rets : Array[@ast.TsType] = []
@@ -2463,7 +2465,7 @@ fn infer_call(
         match resolver.unwrap(part) {
           Func(_, TypePredicate(_, _)) => rets.push(@ast.TsType::Boolean)
           Func(_, AssertsPredicate(_, _)) => rets.push(@ast.TsType::Void)
-          Func(_, ret) => rets.push(ret)
+          Func(_, ret) => rets.push(reduce_conditional(ret))
           _ => return @ast.TsType::Any
         }
       }
@@ -2479,7 +2481,7 @@ fn infer_call(
         match resolver.unwrap(part) {
           Func(_, TypePredicate(_, _)) => return @ast.TsType::Boolean
           Func(_, AssertsPredicate(_, _)) => return @ast.TsType::Void
-          Func(_, ret) => return ret
+          Func(_, ret) => return reduce_conditional(ret)
           _ => ()
         }
       }
