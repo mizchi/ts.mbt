@@ -3589,6 +3589,9 @@ fn emit_native_class(
         e.write(",")
         e.space()
       }
+      if i < m.param_is_rest.length() && m.param_is_rest[i] {
+        e.write("...")
+      }
       e.write(p.0)
       // Default-value initializer (`x = 5`) when the parser captured
       // one — `param_defaults` is positionally aligned with `params`

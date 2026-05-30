@@ -8563,6 +8563,7 @@ fn clone_class_method_in_scope(
     is_async: class_method.is_async,
     is_generator: class_method.is_generator,
     param_defaults: class_method.param_defaults,
+    param_is_rest: class_method.param_is_rest,
   }
 }
 
@@ -8621,6 +8622,7 @@ fn callable_method_from_func_type(
     is_async: false,
     is_generator: false,
     param_defaults: [],
+    param_is_rest: [],
   }
 }
 

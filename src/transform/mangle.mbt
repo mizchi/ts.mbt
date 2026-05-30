@@ -2097,6 +2097,8 @@ fn rename_class_decl_idents(
       body: new_body,
       params: new_params,
       param_defaults: new_defaults,
+      // param_is_rest is positional and purely structural — renaming
+      // doesn't affect which params are rest params.
       key_expr: new_key_expr,
     })
   }

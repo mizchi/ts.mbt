@@ -74,9 +74,11 @@ fn build_runtime_class_decl(
           // whether to restore `get foo()` / `set foo(v)` syntax.
           let params : Array[(String, @ast.TsType)] = []
           let param_defaults : Array[@ast.TsExpr?] = []
+          let param_is_rest : Array[Bool] = []
           for index, param in func.params {
             params.push((runtime_class_param_name(param, index), param.type_))
             param_defaults.push(param.default)
+            param_is_rest.push(param.is_rest)
           }
           let accessor_tag = match accessor_kind {
             Some("get") => "get"
@@ -89,6 +91,7 @@ fn build_runtime_class_decl(
             type_param_bounds: [],
             params,
             param_defaults,
+            param_is_rest,
             return_type: func.return_type,
             is_static,
             body: if func.body.stmts.length() == 0 {
@@ -138,9 +141,11 @@ fn build_runtime_class_decl(
       Method(is_static, Computed(key_expr), accessor_kind, func) => {
         let params : Array[(String, @ast.TsType)] = []
         let param_defaults : Array[@ast.TsExpr?] = []
+        let param_is_rest : Array[Bool] = []
         for index, param in func.params {
           params.push((runtime_class_param_name(param, index), param.type_))
           param_defaults.push(param.default)
+          param_is_rest.push(param.is_rest)
         }
         let accessor_tag = match accessor_kind {
           Some("get") => "get"
@@ -153,6 +158,7 @@ fn build_runtime_class_decl(
           type_param_bounds: [],
           params,
           param_defaults,
+          param_is_rest,
           return_type: func.return_type,
           is_static,
           body: if func.body.stmts.length() == 0 {
