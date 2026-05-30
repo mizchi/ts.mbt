@@ -688,6 +688,131 @@ fn Parser::is_super_call_stmt(_self : Parser, stmt : @ast.TsStmt) -> Bool {
 }
 
 ///|
+// Returns true if the block contains a `super(...)` call anywhere (recursively).
+fn block_has_super_call(block : @ast.TsBlock) -> Bool {
+  block.stmts.iter().any(stmt_has_super_call)
+}
+
+///|
+fn stmt_has_super_call(stmt : @ast.TsStmt) -> Bool {
+  match stmt {
+    Expr(e) => expr_has_super_call(e)
+    If(_, then_b, else_b) =>
+      block_has_super_call(then_b) ||
+      (match else_b {
+        Some(eb) => block_has_super_call(eb)
+        None => false
+      })
+    Try(b, _, cb, fb) =>
+      block_has_super_call(b) ||
+      (match cb {
+        Some(cb2) => block_has_super_call(cb2)
+        None => false
+      }) ||
+      (match fb {
+        Some(fb2) => block_has_super_call(fb2)
+        None => false
+      })
+    Block(b) => block_has_super_call(b)
+    Label(_, s) => stmt_has_super_call(s)
+    _ => false
+  }
+}
+
+///|
+fn expr_has_super_call(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    Call("super", _) | CallExpr(@ast.TsExpr::Var("super"), _) => true
+    Seq(a, b) => expr_has_super_call(a) || expr_has_super_call(b)
+    Cond(c, t, e) =>
+      expr_has_super_call(c) || expr_has_super_call(t) || expr_has_super_call(e)
+    BinOp(_, a, b) => expr_has_super_call(a) || expr_has_super_call(b)
+    _ => false
+  }
+}
+
+///|
+// Inject `assigns` after every `super(...)` call in a block, recursively.
+fn inject_assigns_after_super_in_block(
+  block : @ast.TsBlock,
+  assigns : Array[@ast.TsStmt],
+) -> @ast.TsBlock {
+  let stmts : Array[@ast.TsStmt] = []
+  for s in block.stmts {
+    let expanded = inject_assigns_after_super_in_stmt(s, assigns)
+    for es in expanded {
+      stmts.push(es)
+    }
+  }
+  { stmts, stmt_positions: [] }
+}
+
+///|
+// Returns a list of statements that replace `stmt`, with `assigns` injected
+// after any `super(...)` call (top-level or nested in if/try/block).
+fn inject_assigns_after_super_in_stmt(
+  stmt : @ast.TsStmt,
+  assigns : Array[@ast.TsStmt],
+) -> Array[@ast.TsStmt] {
+  match stmt {
+    Expr(e) if expr_has_super_call(e) => {
+      let out = [stmt]
+      for a in assigns {
+        out.push(a)
+      }
+      out
+    }
+    If(cond, then_b, else_b) if stmt_has_super_call(stmt) => {
+      let new_then = if block_has_super_call(then_b) {
+        inject_assigns_after_super_in_block(then_b, assigns)
+      } else {
+        then_b
+      }
+      let new_else = match else_b {
+        Some(eb) if block_has_super_call(eb) =>
+          Some(inject_assigns_after_super_in_block(eb, assigns))
+        x => x
+      }
+      [If(cond, new_then, new_else)]
+    }
+    Try(b, handler, cb, fb) if stmt_has_super_call(stmt) => {
+      let new_b = if block_has_super_call(b) {
+        inject_assigns_after_super_in_block(b, assigns)
+      } else {
+        b
+      }
+      let new_cb = match cb {
+        Some(cb2) if block_has_super_call(cb2) =>
+          Some(inject_assigns_after_super_in_block(cb2, assigns))
+        x => x
+      }
+      let new_fb = match fb {
+        Some(fb2) if block_has_super_call(fb2) =>
+          Some(inject_assigns_after_super_in_block(fb2, assigns))
+        x => x
+      }
+      [Try(new_b, handler, new_cb, new_fb)]
+    }
+    Block(b) if block_has_super_call(b) =>
+      [Block(inject_assigns_after_super_in_block(b, assigns))]
+    Label(lbl, s) if stmt_has_super_call(s) => {
+      let expanded = inject_assigns_after_super_in_stmt(s, assigns)
+      match expanded {
+        [single] => [Label(lbl, single)]
+        _ => {
+          let out = []
+          for es in expanded {
+            out.push(es)
+          }
+          out
+        }
+      }
+    }
+    _ => [stmt]
+  }
+}
+
+///|
 // Skip a decorator (`@expr` or `@expr(args)`) precisely, matching only the
 // decorator expression itself and not anything that follows it on the same
 // line. The grammar we accept:
@@ -792,14 +917,20 @@ fn Parser::inject_instance_field_assigns(
       }
     }
     if !inserted {
-      let combined : Array[@ast.TsStmt] = []
-      for assign in assigns {
-        combined.push(assign)
+      // No top-level super() found. Try deep injection (super inside if/try).
+      // Only fall back to prepending if no super call exists anywhere.
+      if block_has_super_call(func.body) {
+        new_stmts = inject_assigns_after_super_in_block(func.body, assigns).stmts
+      } else {
+        let combined : Array[@ast.TsStmt] = []
+        for assign in assigns {
+          combined.push(assign)
+        }
+        for stmt in func.body.stmts {
+          combined.push(stmt)
+        }
+        new_stmts = combined
       }
-      for stmt in func.body.stmts {
-        combined.push(stmt)
-      }
-      new_stmts = combined
     }
   } else {
     for assign in assigns {

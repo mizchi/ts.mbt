@@ -783,6 +783,206 @@ fn block_ends_with_terminator(b : @ast.TsBlock) -> Bool {
   }
 }
 
+fn arrow_body_uses_super(body : @ast.TsArrowBody) -> Bool {
+  match body {
+    @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_super(inner)
+    @ast.TsArrowBody::ArrowBlock(blk) => block_uses_super(blk)
+  }
+}
+
+fn arrow_body_uses_this(body : @ast.TsArrowBody) -> Bool {
+  match body {
+    @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_this(inner)
+    @ast.TsArrowBody::ArrowBlock(blk) => block_uses_this(blk)
+  }
+}
+
+fn expr_uses_this(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("this") => true
+    BinOp(_, a, b) => expr_uses_this(a) || expr_uses_this(b)
+    UnaryOp(_, a) => expr_uses_this(a)
+    CallExpr(f, args) => expr_uses_this(f) || args.iter().any(expr_uses_this)
+    Call(_, args) => args.iter().any(expr_uses_this)
+    Cond(c, t, f) =>
+      expr_uses_this(c) || expr_uses_this(t) || expr_uses_this(f)
+    ArrayLit(elems) => elems.iter().any(expr_uses_this)
+    Spread(a) => expr_uses_this(a)
+    ObjectLit(ents) => ents.iter().any(fn(kv) { expr_uses_this(kv.1) })
+    ComputedProp(k, v) => expr_uses_this(k) || expr_uses_this(v)
+    IndexAccess(a, b) => expr_uses_this(a) || expr_uses_this(b)
+    PropAccess(a, _) => expr_uses_this(a)
+    New(_, args) => args.iter().any(expr_uses_this)
+    NewExpr(f, args) => expr_uses_this(f) || args.iter().any(expr_uses_this)
+    MethodCall(recv, _, args) =>
+      expr_uses_this(recv) || args.iter().any(expr_uses_this)
+    AssignExpr(_, v) => expr_uses_this(v)
+    AssignPattern(_, v) => expr_uses_this(v)
+    CompoundAssignExpr(a, _, b) => expr_uses_this(a) || expr_uses_this(b)
+    PropAssignExpr(a, _, b) => expr_uses_this(a) || expr_uses_this(b)
+    IndexAssignExpr(a, b, c) =>
+      expr_uses_this(a) || expr_uses_this(b) || expr_uses_this(c)
+    Seq(a, b) => expr_uses_this(a) || expr_uses_this(b)
+    // Arrow functions share `this` with their enclosing context — recurse.
+    ArrowFunc(_, _, body, _) => arrow_body_uses_this(body)
+    // Regular functions and classes introduce their own `this` — don't descend.
+    FuncExpr(_) | NativeClassExpr(_, _) => false
+    PureCall(inner) => expr_uses_this(inner)
+    Yield(Some(inner)) => expr_uses_this(inner)
+    YieldStar(inner) => expr_uses_this(inner)
+    Await(inner) => expr_uses_this(inner)
+    DynamicImport(a, b) => expr_uses_this(a) || b.map_or(false, expr_uses_this)
+    TaggedTemplate(tag, _, _, exprs) =>
+      expr_uses_this(tag) || exprs.iter().any(expr_uses_this)
+    TemplateLiteral(_, exprs) => exprs.iter().any(expr_uses_this)
+    As(inner, _) => expr_uses_this(inner)
+    _ => false
+  }
+}
+
+fn block_uses_this(blk : @ast.TsBlock) -> Bool {
+  blk.stmts.iter().any(stmt_uses_this)
+}
+
+fn stmt_uses_this(s : @ast.TsStmt) -> Bool {
+  match s {
+    @ast.TsStmt::Expr(e) => expr_uses_this(e)
+    @ast.TsStmt::Return(Some(e)) => expr_uses_this(e)
+    @ast.TsStmt::Return(None) => false
+    @ast.TsStmt::Var(_, _, e)
+    | @ast.TsStmt::Let(_, _, e)
+    | @ast.TsStmt::Const(_, _, e) => expr_uses_this(e)
+    @ast.TsStmt::Assign(_, e) => expr_uses_this(e)
+    @ast.TsStmt::CompoundAssign(_, _, e) => expr_uses_this(e)
+    @ast.TsStmt::If(c, t, e) =>
+      expr_uses_this(c) ||
+      block_uses_this(t) ||
+      e.map_or(false, block_uses_this)
+    @ast.TsStmt::While(c, b) => expr_uses_this(c) || block_uses_this(b)
+    @ast.TsStmt::DoWhile(c, b) => expr_uses_this(c) || block_uses_this(b)
+    @ast.TsStmt::For(init, cond, update, body) =>
+      init.map_or(false, stmt_uses_this) ||
+      cond.map_or(false, expr_uses_this) ||
+      update.map_or(false, stmt_uses_this) ||
+      block_uses_this(body)
+    @ast.TsStmt::ForOf(_, _, _, iter, body) =>
+      expr_uses_this(iter) || block_uses_this(body)
+    @ast.TsStmt::ForAwaitOf(_, _, _, iter, body) =>
+      expr_uses_this(iter) || block_uses_this(body)
+    @ast.TsStmt::ForIn(_, _, _, iter, body) =>
+      expr_uses_this(iter) || block_uses_this(body)
+    @ast.TsStmt::Block(b) => block_uses_this(b)
+    @ast.TsStmt::Throw(e) => expr_uses_this(e)
+    @ast.TsStmt::Try(b, _, cb, fb) =>
+      block_uses_this(b) ||
+      cb.map_or(false, block_uses_this) ||
+      fb.map_or(false, block_uses_this)
+    @ast.TsStmt::Switch(e, cases) =>
+      expr_uses_this(e) ||
+      cases.iter().any(fn(c) { block_uses_this(c.body) })
+    @ast.TsStmt::Label(_, inner) => stmt_uses_this(inner)
+    // FuncDecl/NativeClassStmt introduce their own `this` — don't descend.
+    _ => false
+  }
+}
+
+// Returns true if the expression contains a `super` reference that would be
+// captured by an enclosing arrow function (i.e., not shielded by a
+// non-arrow function boundary). Used to prevent the arrow→FuncExpr conversion
+// that breaks `super` inside arrow bodies.
+fn expr_uses_super(e : @ast.TsExpr) -> Bool {
+  match e {
+    Var("super") => true
+    Call("super", _) => true
+    BinOp(_, a, b) => expr_uses_super(a) || expr_uses_super(b)
+    UnaryOp(_, a) => expr_uses_super(a)
+    CallExpr(f, args) =>
+      expr_uses_super(f) || args.iter().any(expr_uses_super)
+    Cond(c, t, f) =>
+      expr_uses_super(c) || expr_uses_super(t) || expr_uses_super(f)
+    ArrayLit(elems) => elems.iter().any(expr_uses_super)
+    Spread(a) => expr_uses_super(a)
+    ObjectLit(ents) => ents.iter().any(fn(kv) { expr_uses_super(kv.1) })
+    ComputedProp(k, v) => expr_uses_super(k) || expr_uses_super(v)
+    IndexAccess(a, b) => expr_uses_super(a) || expr_uses_super(b)
+    PropAccess(a, _) => expr_uses_super(a)
+    New(_, args) => args.iter().any(expr_uses_super)
+    NewExpr(f, args) => expr_uses_super(f) || args.iter().any(expr_uses_super)
+    MethodCall(recv, _, args) =>
+      expr_uses_super(recv) || args.iter().any(expr_uses_super)
+    AssignExpr(_, v) => expr_uses_super(v)
+    AssignPattern(_, v) => expr_uses_super(v)
+    CompoundAssignExpr(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
+    PropAssignExpr(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
+    IndexAssignExpr(a, b, c) =>
+      expr_uses_super(a) || expr_uses_super(b) || expr_uses_super(c)
+    Seq(a, b) => expr_uses_super(a) || expr_uses_super(b)
+    // Arrow functions DO share super with their enclosing context
+    ArrowFunc(_, _, body, _) =>
+      match body {
+        @ast.TsArrowBody::ArrowExpr(inner) => expr_uses_super(inner)
+        @ast.TsArrowBody::ArrowBlock(blk) => block_uses_super(blk)
+      }
+    // Regular function expressions and class expressions introduce their own
+    // super binding — do NOT descend into them.
+    FuncExpr(_) | NativeClassExpr(_, _) => false
+    PureCall(inner) => expr_uses_super(inner)
+    Yield(Some(inner)) => expr_uses_super(inner)
+    YieldStar(inner) => expr_uses_super(inner)
+    Await(inner) => expr_uses_super(inner)
+    DynamicImport(a, b) =>
+      expr_uses_super(a) || b.map_or(false, expr_uses_super)
+    TaggedTemplate(tag, _, _, exprs) =>
+      expr_uses_super(tag) || exprs.iter().any(expr_uses_super)
+    TemplateLiteral(_, exprs) => exprs.iter().any(expr_uses_super)
+    As(inner, _) => expr_uses_super(inner)
+    _ => false
+  }
+}
+
+fn block_uses_super(blk : @ast.TsBlock) -> Bool {
+  blk.stmts.iter().any(stmt_uses_super)
+}
+
+fn stmt_uses_super(s : @ast.TsStmt) -> Bool {
+  match s {
+    Expr(e) => expr_uses_super(e)
+    Return(Some(e)) => expr_uses_super(e)
+    Throw(e) => expr_uses_super(e)
+    Let(_, _, e) | Const(_, _, e) | Var(_, _, e) => expr_uses_super(e)
+    Assign(_, e) => expr_uses_super(e)
+    CompoundAssign(_, _, e) => expr_uses_super(e)
+    IndexAssign(a, b, c) =>
+      expr_uses_super(a) || expr_uses_super(b) || expr_uses_super(c)
+    PropAssign(a, _, b) => expr_uses_super(a) || expr_uses_super(b)
+    If(c, t, Some(f)) =>
+      expr_uses_super(c) || block_uses_super(t) || block_uses_super(f)
+    If(c, t, None) => expr_uses_super(c) || block_uses_super(t)
+    While(c, b) => expr_uses_super(c) || block_uses_super(b)
+    DoWhile(c, b) => expr_uses_super(c) || block_uses_super(b)
+    For(init, cond, update, body) =>
+      init.map_or(false, stmt_uses_super) ||
+      cond.map_or(false, expr_uses_super) ||
+      update.map_or(false, stmt_uses_super) ||
+      block_uses_super(body)
+    ForOf(_, _, _, iter, body) | ForIn(_, _, _, iter, body) =>
+      expr_uses_super(iter) || block_uses_super(body)
+    ForAwaitOf(_, _, _, iter, body) =>
+      expr_uses_super(iter) || block_uses_super(body)
+    Try(b, _, catch_b, finally_b) =>
+      block_uses_super(b) ||
+      catch_b.map_or(false, block_uses_super) ||
+      finally_b.map_or(false, block_uses_super)
+    Switch(e, cases) =>
+      expr_uses_super(e) ||
+      cases.iter().any(fn(c) { block_uses_super(c.body) })
+    Block(b) => block_uses_super(b)
+    Label(_, s) => stmt_uses_super(s)
+    With(e, b) => expr_uses_super(e) || block_uses_super(b)
+    _ => false
+  }
+}
+
 // Peephole a declaration RHS. Named bindings (`let foo = function(){}`) must
 // not be converted to ArrowFunc — `try_emit_function_decl` relies on FuncExpr
 // to emit a hoisted `function foo(){}` declaration.
@@ -798,7 +998,10 @@ fn peep_decl_rhs(
   let result = peep_expr(rhs, ctx)
   if name != "" {
     match result {
-      @ast.TsExpr::ArrowFunc(params, ret, body, is_async) => {
+      // Guard: do NOT convert arrow→function when the body uses `super` or
+      // `this`. Arrow functions inherit both from their enclosing context;
+      // converting to a regular function drops those bindings.
+      @ast.TsExpr::ArrowFunc(params, ret, body, is_async) if not(arrow_body_uses_super(body) || arrow_body_uses_this(body)) => {
         let block = match body {
           @ast.TsArrowBody::ArrowExpr(expr) =>
             @ast.TsBlock::{
@@ -1331,13 +1534,10 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
               match (t_val, e_val) {
                 (AssignExpr(n1, v1), AssignExpr(n2, v2)) if n1 == n2 =>
                   AssignExpr(n1, peep_expr(Cond(cp, v1, v2), ctx))
-                // `c ? expr : void 0` → `c && expr`  (saves ~7 bytes).
-                // When the else-branch is undefined/void the ternary is
-                // equivalent to a short-circuit `&&`. The `!x ? b : a`
-                // flip already turns `c ? void 0 : expr` into `!c ? expr : void 0`
-                // which then lands here.
-                (t_expr, UnaryOp(@ast.TsUnaryOp::Void, _)) =>
-                  BinOp(@ast.TsBinOp::And, cp, t_expr)
+                // NOTE: `c ? expr : void 0` → `c && expr` is NOT applied here.
+                // `c && expr` returns `c` (not undefined) when c is falsy.
+                // `null ? x : void 0` returns undefined, but `null && x` returns null.
+                // Code that distinguishes null/undefined would silently misbehave.
                 _ => Cond(cp, t_val, e_val)
               }
           }
@@ -1528,25 +1728,35 @@ fn peep_expr(expr : @ast.TsExpr, ctx : PeepCtx) -> @ast.TsExpr {
       if m == "assign" && new_args.length() >= 2 {
         match (recv_p, new_args[0]) {
           (Var("Object"), @ast.TsExpr::ObjectLit(init_ents)) => {
-            let entries : Array[(String, @ast.TsExpr)] = []
-            for ie in init_ents {
-              entries.push(ie)
-            }
-            for i, a in new_args {
-              if i == 0 {
-                continue
+            // Bail if any source is a Spread call-arg. `Object.assign({}, ...arr, x)`
+            // expands `arr` as multiple arguments at call time (each element merged
+            // separately), which is NOT the same as `{...arr, ...x}` where `arr` is
+            // spread as a numeric-keyed object. Only convert when all sources are
+            // plain expressions.
+            let has_spread_arg = new_args.iter().drop(1).any(fn(a) { a is Spread(_) })
+            if has_spread_arg {
+              ()
+            } else {
+              let entries : Array[(String, @ast.TsExpr)] = []
+              for ie in init_ents {
+                entries.push(ie)
               }
-              match a {
-                ObjectLit(ents) =>
-                  for e in ents {
-                    entries.push(e)
-                  }
-                // Non-ObjectLit sources: spread them in. `("...", Spread(e))`
-                // is the sentinel that ObjectLit emit uses for `...e`.
-                _ => entries.push(("...", Spread(a)))
+              for i, a in new_args {
+                if i == 0 {
+                  continue
+                }
+                match a {
+                  ObjectLit(ents) =>
+                    for e in ents {
+                      entries.push(e)
+                    }
+                  // Non-ObjectLit sources: spread them in. `("...", Spread(e))`
+                  // is the sentinel that ObjectLit emit uses for `...e`.
+                  _ => entries.push(("...", Spread(a)))
+                }
               }
+              return ObjectLit(entries)
             }
-            return ObjectLit(entries)
           }
           _ => ()
         }

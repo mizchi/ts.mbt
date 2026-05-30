@@ -346,9 +346,6 @@ fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
     return false
   }
   let kind = match block.stmts[0] {
-    @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => return false
-    @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_)) => return false
-    @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_)) => return false
     @ast.TsStmt::Var(_, _, _) => 0
     @ast.TsStmt::Let(_, _, _) => 1
     @ast.TsStmt::Const(_, _, _) => 2
@@ -356,9 +353,6 @@ fn is_fold_multi_decl_block(block : @ast.TsBlock) -> Bool {
   }
   for s in block.stmts {
     match s {
-      @ast.TsStmt::Var(_, _, @ast.TsExpr::FuncExpr(_)) => return false
-      @ast.TsStmt::Const(_, _, @ast.TsExpr::FuncExpr(_)) => return false
-      @ast.TsStmt::Let(_, _, @ast.TsExpr::FuncExpr(_)) => return false
       @ast.TsStmt::Var(_, _, _) => if kind != 0 { return false }
       @ast.TsStmt::Let(_, _, _) => if kind != 1 { return false }
       @ast.TsStmt::Const(_, _, _) => if kind != 2 { return false }
@@ -591,13 +585,15 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
         _ => {
           // `let x; x = value;` → `let x = value;` (merge uninit decl + first assign).
           // Safe only when the previous statement is `let x = undefined` (the
-          // parser's representation of an uninitialised `let x;`).
+          // parser's representation of an uninitialised `let x;`) AND
+          // `value` does not reference `x` (otherwise `x` would be in TDZ
+          // when `value` is evaluated, causing a ReferenceError).
           let out_len = out.length()
           let merged = if out_len > 0 {
             match out[out_len - 1] {
               Let(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined"))
               | Var(@ast.TsBinding::Ident(ln), _, @ast.TsExpr::Var("undefined")) if ln ==
-                n => true
+                n && not(expr_free_refs_name(rhs_f, n)) => true
               _ => false
             }
           } else {
@@ -665,6 +661,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
           | BinOp(@ast.TsBinOp::Or, lhs, rhs) if is_pure_value(rhs) =>
             stack.push(lhs)
           // `let x; x = value;` → `let x = value;` when AssignExpr in stmt position.
+          // Guard: only safe when `value` does not reference `x` (otherwise TDZ).
           AssignExpr(n, v) => {
             let out_len = out.length()
             let merged = if out_len > 0 {
@@ -674,7 +671,7 @@ fn fold_stmt_into(stmt : @ast.TsStmt, out : Array[@ast.TsStmt]) -> Unit {
                   @ast.TsBinding::Ident(ln),
                   _,
                   @ast.TsExpr::Var("undefined")
-                ) if ln == n => true
+                ) if ln == n && not(expr_free_refs_name(v, n)) => true
                 _ => false
               }
             } else {
@@ -3634,4 +3631,52 @@ fn substitute_vars_in_expr(
   }
 
   sub(expr)
+}
+
+///|
+/// Returns `true` when `expr` contains a free reference to `name`.
+/// Used to guard the `let x; x = f(x)` → `let x = f(x)` merge:
+/// if the RHS references `x`, merging would put `x` in TDZ.
+fn expr_free_refs_name(expr : @ast.TsExpr, name : String) -> Bool {
+  match expr {
+    @ast.TsExpr::Var(n) => n == name
+    @ast.TsExpr::BinOp(_, l, r) =>
+      expr_free_refs_name(l, name) || expr_free_refs_name(r, name)
+    @ast.TsExpr::UnaryOp(_, inner) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::Call(_, args) => args.iter().any(fn(a) { expr_free_refs_name(a, name) })
+    @ast.TsExpr::CallExpr(callee, args) =>
+      expr_free_refs_name(callee, name) ||
+      args.iter().any(fn(a) { expr_free_refs_name(a, name) })
+    @ast.TsExpr::New(_, args) => args.iter().any(fn(a) { expr_free_refs_name(a, name) })
+    @ast.TsExpr::PropAccess(obj, _) => expr_free_refs_name(obj, name)
+    @ast.TsExpr::IndexAccess(obj, idx) =>
+      expr_free_refs_name(obj, name) || expr_free_refs_name(idx, name)
+    @ast.TsExpr::Cond(c, t, e) =>
+      expr_free_refs_name(c, name) ||
+      expr_free_refs_name(t, name) ||
+      expr_free_refs_name(e, name)
+    @ast.TsExpr::AssignExpr(_, rhs) => expr_free_refs_name(rhs, name)
+    @ast.TsExpr::CompoundAssignExpr(lhs, _, rhs) =>
+      expr_free_refs_name(lhs, name) || expr_free_refs_name(rhs, name)
+    @ast.TsExpr::Seq(a, b) =>
+      expr_free_refs_name(a, name) || expr_free_refs_name(b, name)
+    @ast.TsExpr::Spread(inner) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::ArrayLit(elems) =>
+      elems.iter().any(fn(e) { expr_free_refs_name(e, name) })
+    @ast.TsExpr::ObjectLit(entries) =>
+      entries.iter().any(fn(kv) { expr_free_refs_name(kv.1, name) })
+    @ast.TsExpr::ComputedProp(k, v) =>
+      expr_free_refs_name(k, name) || expr_free_refs_name(v, name)
+    @ast.TsExpr::Await(inner) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::Yield(Some(inner)) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::YieldStar(inner) => expr_free_refs_name(inner, name)
+    @ast.TsExpr::OptionalChain(inner) => expr_free_refs_name(inner, name)
+    // Function scopes create new bindings; `name` inside them refers to
+    // the inner binding if declared, not the outer one. For safety,
+    // we conservatively return true (block the merge) for any function
+    // body that references `name`, even though it may be the inner binding.
+    @ast.TsExpr::FuncExpr(_) | @ast.TsExpr::ArrowFunc(_, _, _, _) |
+    @ast.TsExpr::NativeClassExpr(_) => false
+    _ => false
+  }
 }

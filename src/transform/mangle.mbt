@@ -922,12 +922,26 @@ fn collect_var_refs_expr(expr : @ast.TsExpr, out : Map[String, Bool]) -> Unit {
     // occupy short names of outer bindings that inner closures reference —
     // preventing the inner closure's local name from shadowing the outer name.
     ArrowFunc(params, _, body, _) => {
+      for p in params {
+        match p.default {
+          Some(d) => collect_var_refs_expr(d, out)
+          None => ()
+        }
+      }
       match body {
         ArrowExpr(e) => collect_var_refs_expr(e, out)
         ArrowBlock(b) => collect_var_refs_block(b, out)
       }
     }
-    FuncExpr(f) => collect_var_refs_block(f.body, out)
+    FuncExpr(f) => {
+      for p in f.params {
+        match p.default {
+          Some(d) => collect_var_refs_expr(d, out)
+          None => ()
+        }
+      }
+      collect_var_refs_block(f.body, out)
+    }
     Await(e) => collect_var_refs_expr(e, out)
     Yield(Some(e)) => collect_var_refs_expr(e, out)
     YieldStar(e) => collect_var_refs_expr(e, out)

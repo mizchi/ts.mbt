@@ -1916,7 +1916,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
                 e.write("{")
                 e.space()
                 e.write("return")
-                e.space()
+                e.sep_after_word(expr_leading_byte(expr))
                 emit_expr(e, expr, 2)
                 e.semi()
                 e.space()
@@ -1959,6 +1959,7 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
             // `{key}` instead of `{key: key}` (saves 2 bytes).
             let use_shorthand = not(e.pretty) &&
               is_valid_js_ident(entry.0) &&
+              not(is_js_reserved_word(entry.0)) &&
               (match entry.1 {
                 Var(n) => n == entry.0
                 _ => false
@@ -2072,6 +2073,10 @@ fn emit_expr_body(e : Emitter, expr : @ast.TsExpr) -> Unit {
       // parse as `new a()` followed by `(b)`.
       let needs_paren = match callee {
         Call(_, _) | CallExpr(_, _) | New(_, _) | NewExpr(_, _) => true
+        // MethodCall(recv, m, args) emits as `recv.m(args)` which is a call
+        // expression. `new recv.m(args)(newargs)` parses as
+        // `(new recv.m(args))(newargs)` — wrong — so we need parens.
+        MethodCall(_, _, _) => true
         ArrowFunc(_, _, _, _) | FuncExpr(_) => true
         BinOp(_, _, _) | Cond(_, _, _) | Seq(_, _) => true
         UnaryOp(_, _) | AssignExpr(_, _) | CompoundAssignExpr(_, _, _) => true
@@ -3070,6 +3075,19 @@ fn is_valid_js_ident(s : String) -> Bool {
     }
   }
   true
+}
+
+///|
+fn is_js_reserved_word(s : String) -> Bool {
+  match s {
+    "break" | "case" | "catch" | "class" | "const" | "continue" | "debugger" |
+    "default" | "delete" | "do" | "else" | "export" | "extends" | "false" |
+    "finally" | "for" | "function" | "if" | "import" | "in" | "instanceof" |
+    "let" | "new" | "null" | "return" | "static" | "super" | "switch" |
+    "this" | "throw" | "true" | "try" | "typeof" | "var" | "void" | "while" |
+    "with" | "yield" => true
+    _ => false
+  }
 }
 
 ///|
