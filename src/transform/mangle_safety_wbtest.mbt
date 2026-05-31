@@ -132,6 +132,43 @@ test "phase3: local object literal handed to Object.keys reserves only its own k
 }
 
 ///|
+// End-to-end Phase 2: a literal-typed index into an external chain
+// previously reserved the wildcard (suppressing all property
+// mangling). With the index variable's TS type pinning the key
+// set, only those literal keys stay reserved and unrelated
+// internal properties are free to shrink.
+test "safety: external dynamic write with literal-typed index unlocks mangling" {
+  let files = safety_vfs([
+    (
+      "entry.ts",
+      (
+        #|import * as react from "react";
+        #|const k: "useState" | "useEffect" = "useState";
+        #|(react as any)[k] = 1;
+        #|const other = { internalIndexProp: 9 };
+        #|console.log(other.internalIndexProp);
+        #|
+      ),
+    ),
+  ])
+  let opts = BundleOptions::default()
+    .with_mangle(true)
+    .with_mangle_properties(true)
+    .with_minify(true)
+  match bundle_modules(files, "entry.ts", opts) {
+    Ok(out) => {
+      // The index variable's literal value survives in the runtime
+      // expression (`useState` is what `k` is initialised to).
+      assert_true(out.js.contains("useState"))
+      // The unrelated internal property is now manglable — without
+      // Phase 2 the wildcard would have reserved it alongside `*`.
+      assert_false(out.js.contains("internalIndexProp"))
+    }
+    Err(e) => fail("bundle error: \{e}")
+  }
+}
+
+///|
 // End-to-end: a typed local flowing to an external import previously
 // suppressed property mangling for the whole bundle (wildcard `*`).
 // With type-driven External narrowing the typed local's keys stay
@@ -241,6 +278,85 @@ test "safety: typed function parameter unlocks unrelated property mangling" {
     }
     Err(e) => fail("bundle error: \{e}")
   }
+}
+
+///|
+// Phase 2 — external-chain dynamic write with a literal-typed index
+// variable. `react[k] = v` where `k: "useState" | "useEffect"` only
+// affects those two members, so reserve those keys instead of the
+// wildcard that would block all property mangling.
+test "phase2: external IndexAssign narrows via literal-union index variable" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|const k: "useState" | "useEffect" = "useState";
+      #|react[k] = 1;
+      #|const other = { ccc: 3 };
+      #|console.log(other);
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["react"] = true
+  let result = collect_externally_visible_props(block, externals)
+  // Both literal members of the union are reserved.
+  assert_true(result.contains("useState"))
+  assert_true(result.contains("useEffect"))
+  // No wildcard — `ccc` stays manglable.
+  assert_false(result.contains("*"))
+}
+
+///|
+// Phase 2 — single-literal index variable narrows to a one-element
+// reservation, matching the StringLit fast path.
+test "phase2: external IndexAssign narrows via single-literal index variable" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|const k: "useState" = "useState";
+      #|react[k] = 1;
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["react"] = true
+  let result = collect_externally_visible_props(block, externals)
+  assert_true(result.contains("useState"))
+  assert_false(result.contains("*"))
+}
+
+///|
+// Phase 2 — `as`-cast tightens the index type at the write site.
+// `react[k as "useState"]` reserves just `useState` even when `k`
+// itself is typed `string`.
+test "phase2: external IndexAssign narrows via as-cast on index" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|let k: string = "useState";
+      #|react[k as "useState"] = 1;
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["react"] = true
+  let result = collect_externally_visible_props(block, externals)
+  assert_true(result.contains("useState"))
+  assert_false(result.contains("*"))
+}
+
+///|
+// Phase 2 — when the index is a plain `string` (no literal narrowing
+// available) the wildcard fallback still fires.
+test "phase2: external IndexAssign with bare string index keeps wildcard" {
+  let block = @parser.parse_block_from_source(
+    (
+      #|const k: string = "useState";
+      #|react[k] = 1;
+      #|
+    ),
+  )
+  let externals : Map[String, Bool] = {}
+  externals["react"] = true
+  let result = collect_externally_visible_props(block, externals)
+  assert_true(result.contains("*"))
 }
 
 ///|
