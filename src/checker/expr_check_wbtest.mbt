@@ -5294,3 +5294,51 @@ test "expr_check: strict equality on same types is ok" {
     None => fail("function not found")
   }
 }
+
+///|
+test "expr_check: index access on non-indexable type is flagged" {
+  // `(42)[0]` — you can't index into a number.
+  let src =
+    #|function f(n: number): void {
+    #|  const _ = n[0];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      let found = issues.iter().any(fn(i) { i.message.contains("cannot index") })
+      assert_true(found)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: index access on array is allowed" {
+  let src =
+    #|function f(arr: number[], i: number): number {
+    #|  return arr[i];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function not found")
+  }
+}
+
+///|
+test "expr_check: index access on string is allowed" {
+  // String indexing `s[0]` is valid.
+  let src =
+    #|function f(s: string, i: number): string {
+    #|  return s[i];
+    #|}
+  match parse_function_named(src, "f") {
+    Some(f) => {
+      let issues = check_function_body(f)
+      assert_eq(issues.length(), 0)
+    }
+    None => fail("function not found")
+  }
+}

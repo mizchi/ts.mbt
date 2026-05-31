@@ -1975,6 +1975,19 @@ fn is_arithmetic_compatible(ty : @ast.TsType) -> Bool {
 // Conservative: returns true (allows) when either side is Any, Never, a
 // union/intersection, a named reference, or an object shape (those are
 // structural and could overlap via subtypes).
+fn is_indexable_type(ty : @ast.TsType) -> Bool {
+  match ty {
+    Array(_) | Tuple(_) | String_ | Literal(_) | Any | Never => true
+    Applied("Array", _) | Applied("ReadonlyArray", _) => true
+    Applied("Record", _) | Applied("Map", _) => true
+    Object(_) | Struct(_, _) => true
+    Named(_) | Applied(_, _) => true
+    Union(members) => members.iter().any(fn(m) { is_indexable_type(m) })
+    _ => false
+  }
+}
+
+///|
 fn types_can_overlap(a : @ast.TsType, b : @ast.TsType) -> Bool {
   match (a, b) {
     (Any, _) | (_, Any) => true
@@ -6036,6 +6049,14 @@ fn check_call_args_in_expr(
     IndexAccess(recv, idx) => {
       check_call_args_in_expr(env, recv, ctx)
       check_call_args_in_expr(env, idx, ctx)
+      let recv_ty = ctx.resolver.unwrap(infer_expr(env, ctx.resolver, recv))
+      if is_checkable(recv_ty) && !is_indexable_type(recv_ty) {
+        record(
+          ctx,
+          "index access",
+          "cannot index into `\{type_display(recv_ty)}`",
+        )
+      }
     }
     AssignExpr(name, v) => {
       check_call_args_in_expr(env, v, ctx)
