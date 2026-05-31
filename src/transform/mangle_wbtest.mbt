@@ -361,7 +361,10 @@ test "mangle: shape-coloring keeps class fields and methods distinct" {
     #|const w = new Widget();
     #|sink(w.bump());
   let block = try @parser.parse_block_from_source(src) catch {
-    e => { fail("parse error: \{e}"); return }
+    e => {
+      fail("parse error: \{e}")
+      return
+    }
   } noraise {
     b => b
   }

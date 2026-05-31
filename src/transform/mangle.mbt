@@ -1206,12 +1206,11 @@ fn collect_this_member_names_in_expr(
   emit : (String) -> Unit,
 ) -> Unit {
   match expr {
-    PropAccess(recv, name) => {
+    PropAccess(recv, name) =>
       match recv {
         @ast.TsExpr::Var("this") => emit(name)
         _ => collect_this_member_names_in_expr(recv, emit)
       }
-    }
     MethodCall(recv, name, args) => {
       match recv {
         @ast.TsExpr::Var("this") => emit(name)
